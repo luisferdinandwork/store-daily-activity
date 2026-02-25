@@ -1,66 +1,97 @@
 'use client';
+// components/employee/EmployeeMobileNav.tsx
 
-import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { 
-  HomeIcon, 
-  CheckSquareIcon, 
-//   ExclamationTriangleIcon,
-  UserIcon 
-} from 'lucide-react';
+
+const NAV = [
+  { href: '/employee',         label: 'Home',    icon: '⌂' },
+  { href: '/employee/tasks',   label: 'Tasks',   icon: '✓' },
+  { href: '/employee/profile', label: 'Profile', icon: '◎' },
+];
 
 export default function EmployeeMobileNav() {
   const pathname = usePathname();
-  const [activeTab, setActiveTab] = useState(pathname);
-
-  const navigationItems = [
-    {
-      name: 'Dashboard',
-      href: '/employee',
-      icon: HomeIcon,
-    },
-    {
-      name: 'Tasks',
-      href: '/employee/tasks',
-      icon: CheckSquareIcon,
-    },
-    // {
-    //   name: 'Issues',
-    //   href: '/employee/issues',
-    //   icon: ExclamationTriangleIcon,
-    // },
-    {
-      name: 'Profile',
-      href: '/employee/profile',
-      icon: UserIcon,
-    },
-  ];
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 z-50">
-      <div className="grid grid-cols-4 gap-1">
-        {navigationItems.map((item) => {
-          const isActive = activeTab === item.href;
-          const Icon = item.icon;
-          
+    <>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Syne:wght@600;700&display=swap');
+
+        .mobile-nav {
+          position: fixed;
+          bottom: 0; left: 0; right: 0;
+          height: 64px;
+          background: #fff;
+          border-top: 1px solid #ebebeb;
+          display: flex;
+          z-index: 100;
+          padding: 0 8px;
+          padding-bottom: env(safe-area-inset-bottom);
+        }
+
+        .mobile-nav-item {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 3px;
+          text-decoration: none;
+          color: #aaa;
+          font-family: 'Syne', sans-serif;
+          font-size: 10px;
+          font-weight: 600;
+          letter-spacing: 0.04em;
+          position: relative;
+          transition: color 0.2s;
+          -webkit-tap-highlight-color: transparent;
+        }
+
+        .mobile-nav-item.active { color: #1a1a1a; }
+
+        .mobile-nav-icon {
+          font-size: 22px;
+          line-height: 1;
+          transition: transform 0.2s;
+        }
+
+        .mobile-nav-item.active .mobile-nav-icon {
+          transform: translateY(-1px);
+        }
+
+        .mobile-nav-dot {
+          position: absolute;
+          top: 8px;
+          width: 4px;
+          height: 4px;
+          border-radius: 50%;
+          background: #1a1a1a;
+          opacity: 0;
+          transition: opacity 0.2s;
+        }
+
+        .mobile-nav-item.active .mobile-nav-dot { opacity: 1; }
+      `}</style>
+
+      <nav className="mobile-nav">
+        {NAV.map(({ href, label, icon }) => {
+          const active = href === '/employee'
+            ? pathname === href
+            : pathname.startsWith(href);
           return (
             <Link
-              key={item.name}
-              href={item.href}
-              className={`flex flex-col items-center justify-center py-2 px-3 transition-colors ${
-                isActive
-                  ? 'text-blue-600'
-                  : 'text-gray-500 hover:text-gray-700'
-              }`}
-              onClick={() => setActiveTab(item.href)}
+              key={href}
+              href={href}
+              className={`mobile-nav-item${active ? ' active' : ''}`}
             >
-              <Icon className="h-6 w-6 mb-1" />
-              <span className="text-xs">{item.name}</span>
+              <div className="mobile-nav-dot" />
+              <span className="mobile-nav-icon">{icon}</span>
+              <span>{label}</span>
             </Link>
           );
         })}
-      </div>
-    </div>
+      </nav>
+    </>
   );
 }

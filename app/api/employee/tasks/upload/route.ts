@@ -6,78 +6,79 @@ import { writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
 
-// Only import @vercel/blob if it's available and we're in production
-let put: any;
-if (process.env.NODE_ENV === 'production' && process.env.VERCEL_ENV) {
+// Lazy-load Vercel Blob only in production
+let blobPut: ((path: string, file: File, opts: { access: 'public' }) => Promise<{ url: string }>) | null = null;
+if (process.env.VERCEL_ENV) {
   try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const blob = require('@vercel/blob');
-    put = blob.put;
-  } catch (error) {
-    console.error('Failed to load @vercel/blob:', error);
+    blobPut = blob.put;
+  } catch {
+    console.warn('[@vercel/blob] not available — falling back to local storage');
   }
 }
+
+const ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
+const MAX_SIZE_MB = 10;
 
 export async function POST(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
-    
+
     if (!session?.user?.id) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
-    
+
     const formData = await request.formData();
-    const file = formData.get('file') as File;
-    
+    const file = formData.get('file') as File | null;
+
     if (!file) {
+      return NextResponse.json({ error: 'No file provided' }, { status: 400 });
+    }
+
+    // Validate mime type
+    if (!ALLOWED_MIME.includes(file.type)) {
       return NextResponse.json(
-        { error: 'No file provided' },
-        { status: 400 }
+        { error: 'Only image files are allowed (JPEG, PNG, WebP, HEIC)' },
+        { status: 400 },
       );
     }
-    
-    // Get file bytes
-    const bytes = await file.arrayBuffer();
-    const buffer = Buffer.from(bytes);
-    
+
+    // Validate size
+    if (file.size > MAX_SIZE_MB * 1024 * 1024) {
+      return NextResponse.json(
+        { error: `File size must be under ${MAX_SIZE_MB}MB` },
+        { status: 400 },
+      );
+    }
+
+    const timestamp = Date.now();
+    const ext = file.name.split('.').pop() ?? 'jpg';
+    const safeName = `${session.user.id}-${timestamp}.${ext}`;
+
     let url: string;
-    
-    // Use Vercel Blob in production if available, otherwise use local storage
-    if (put && process.env.VERCEL_ENV) {
-      // Upload to Vercel Blob
-      const blob = await put(`tasks/${session.user.id}/${Date.now()}-${file.name}`, file, {
-        access: 'public',
-      });
+
+    if (blobPut && process.env.VERCEL_ENV) {
+      // Vercel Blob (production)
+      const blob = await blobPut(`tasks/${safeName}`, file, { access: 'public' });
       url = blob.url;
     } else {
-      // Use local storage
-      const timestamp = Date.now();
-      const filename = `${session.user.id}-${timestamp}-${file.name}`;
-      
-      // Define the upload directory path
+      // Local filesystem (development)
+      const bytes = await file.arrayBuffer();
+      const buffer = Buffer.from(bytes);
+
       const uploadDir = join(process.cwd(), 'public', 'uploads', 'tasks');
-      
-      // Create the directory if it doesn't exist
       if (!existsSync(uploadDir)) {
         await mkdir(uploadDir, { recursive: true });
       }
-      
-      // Write the file to the local filesystem
-      const filePath = join(uploadDir, filename);
-      await writeFile(filePath, buffer);
-      
-      // Return the URL that can be accessed from the frontend
-      url = `/uploads/tasks/${filename}`;
+
+      await writeFile(join(uploadDir, safeName), buffer);
+      url = `/uploads/tasks/${safeName}`;
     }
-    
+
     return NextResponse.json({ url });
   } catch (error) {
-    console.error('Error uploading file:', error);
-    return NextResponse.json(
-      { error: 'Failed to upload file' },
-      { status: 500 }
-    );
+    console.error('[POST /api/employee/tasks/upload]', error);
+    return NextResponse.json({ error: 'Failed to upload file' }, { status: 500 });
   }
 }

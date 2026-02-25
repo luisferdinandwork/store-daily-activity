@@ -3,6 +3,7 @@ CREATE TYPE "public"."employee_type" AS ENUM('pic', 'so');--> statement-breakpoi
 CREATE TYPE "public"."issue_status" AS ENUM('reported', 'in_review', 'resolved');--> statement-breakpoint
 CREATE TYPE "public"."report_status" AS ENUM('draft', 'submitted', 'verified', 'rejected');--> statement-breakpoint
 CREATE TYPE "public"."shift" AS ENUM('morning', 'evening');--> statement-breakpoint
+CREATE TYPE "public"."task_recurrence" AS ENUM('daily', 'weekly', 'monthly');--> statement-breakpoint
 CREATE TYPE "public"."task_status" AS ENUM('pending', 'in_progress', 'completed');--> statement-breakpoint
 CREATE TYPE "public"."user_role" AS ENUM('employee', 'ops', 'finance', 'admin');--> statement-breakpoint
 CREATE TABLE "attendance" (
@@ -109,7 +110,9 @@ CREATE TABLE "tasks" (
 	"role" "user_role" NOT NULL,
 	"employee_type" "employee_type",
 	"shift" "shift",
-	"is_daily" boolean DEFAULT true,
+	"recurrence" "task_recurrence" DEFAULT 'daily' NOT NULL,
+	"recurrence_days" text,
+	"is_active" boolean DEFAULT true NOT NULL,
 	"requires_form" boolean DEFAULT false,
 	"form_schema" text,
 	"requires_attachment" boolean DEFAULT false,

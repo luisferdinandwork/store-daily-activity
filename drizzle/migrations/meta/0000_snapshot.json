@@ -1,5 +1,5 @@
 {
-  "id": "4fd259b3-da49-491d-8bff-23299f7f8f37",
+  "id": "95305eed-4fcd-4107-bec1-80be121c898a",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -921,11 +921,25 @@
           "primaryKey": false,
           "notNull": false
         },
-        "is_daily": {
-          "name": "is_daily",
+        "recurrence": {
+          "name": "recurrence",
+          "type": "task_recurrence",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'daily'"
+        },
+        "recurrence_days": {
+          "name": "recurrence_days",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "is_active": {
+          "name": "is_active",
           "type": "boolean",
           "primaryKey": false,
-          "notNull": false,
+          "notNull": true,
           "default": true
         },
         "requires_form": {
@@ -1137,6 +1151,15 @@
       "values": [
         "morning",
         "evening"
+      ]
+    },
+    "public.task_recurrence": {
+      "name": "task_recurrence",
+      "schema": "public",
+      "values": [
+        "daily",
+        "weekly",
+        "monthly"
       ]
     },
     "public.task_status": {

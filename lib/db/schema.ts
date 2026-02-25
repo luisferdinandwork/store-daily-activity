@@ -10,6 +10,19 @@ export const issueStatusEnum = pgEnum('issue_status', ['reported', 'in_review', 
 export const reportStatusEnum = pgEnum('report_status', ['draft', 'submitted', 'verified', 'rejected']);
 export const attendanceStatusEnum = pgEnum('attendance_status', ['present', 'absent', 'late', 'excused']);
 
+/**
+ * Task Recurrence Type:
+ *  - 'daily'   → appears every day automatically
+ *  - 'weekly'  → OPS picks specific weekday(s) within the week (0=Sun … 6=Sat)
+ *                stored as JSON array in recurrenceDays, e.g. [1,3,5]
+ *  - 'monthly' → OPS picks specific calendar day(s) within the month (1–31)
+ *                stored as JSON array in recurrenceDays, e.g. [1,15]
+ *
+ * Both weekly and monthly tasks are NOT auto-generated — the engine checks
+ * recurrenceDays each day and only creates employeeTasks on matching days.
+ */
+export const taskRecurrenceEnum = pgEnum('task_recurrence', ['daily', 'weekly', 'monthly']);
+
 // Users table
 export const users = pgTable('users', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -45,7 +58,7 @@ export const schedules = pgTable('schedules', {
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
-// Attendance table - tracks actual attendance based on schedules
+// Attendance table
 export const attendance = pgTable('attendance', {
   id: uuid('id').primaryKey().defaultRandom(),
   scheduleId: uuid('schedule_id').references(() => schedules.id).notNull(),
@@ -57,31 +70,60 @@ export const attendance = pgTable('attendance', {
   checkInTime: timestamp('check_in_time'),
   checkOutTime: timestamp('check_out_time'),
   notes: text('notes'),
-  recordedBy: uuid('recorded_by').references(() => users.id), // OPS user who recorded it
+  recordedBy: uuid('recorded_by').references(() => users.id),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
-// Tasks table - Master list of daily tasks created by OPS
+/**
+ * Tasks table — Master task templates created by OPS.
+ *
+ * Recurrence fields:
+ *  recurrence       → 'daily' | 'weekly' | 'monthly'
+ *  recurrenceDays   → JSON array (string-encoded):
+ *                      daily   → null (ignored)
+ *                      weekly  → weekday numbers [0-6], e.g. "[1,3,5]"
+ *                      monthly → calendar days [1-31], e.g. "[1,15]"
+ *
+ * The old isDaily boolean is REPLACED by recurrence === 'daily'.
+ * A task can appear multiple times per week / per month because
+ * recurrenceDays can hold multiple values.
+ */
 export const tasks = pgTable('tasks', {
   id: uuid('id').primaryKey().defaultRandom(),
   title: text('title').notNull(),
   description: text('description'),
+
+  // Target audience
   role: userRoleEnum('role').notNull(),
-  employeeType: employeeTypeEnum('employee_type'),
-  shift: shiftEnum('shift'),
-  isDaily: boolean('is_daily').default(true),
-  // Form configuration for task completion
+  employeeType: employeeTypeEnum('employee_type'),  // null = all types
+  shift: shiftEnum('shift'),                         // null = both shifts
+
+  // Recurrence
+  recurrence: taskRecurrenceEnum('recurrence').default('daily').notNull(),
+  /**
+   * JSON-encoded number array.
+   * daily   → null
+   * weekly  → [0-6]  (0=Sunday)
+   * monthly → [1-31]
+   */
+  recurrenceDays: text('recurrence_days'),
+
+  // Active / inactive flag (soft delete)
+  isActive: boolean('is_active').default(true).notNull(),
+
+  // Form configuration
   requiresForm: boolean('requires_form').default(false),
-  formSchema: text('form_schema'), // JSON schema defining form fields
+  formSchema: text('form_schema'),       // JSON schema string
   requiresAttachment: boolean('requires_attachment').default(false),
   maxAttachments: integer('max_attachments').default(1),
-  createdBy: uuid('created_by').references(() => users.id), // OPS user who created it
+
+  createdBy: uuid('created_by').references(() => users.id),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
-// Employee Tasks table (junction table for tasks assigned to employees)
+// Employee Tasks table (junction — one row per task instance per shift)
 export const employeeTasks = pgTable('employee_tasks', {
   id: uuid('id').primaryKey().defaultRandom(),
   taskId: uuid('task_id').references(() => tasks.id).notNull(),
@@ -93,11 +135,10 @@ export const employeeTasks = pgTable('employee_tasks', {
   shift: shiftEnum('shift').notNull(),
   status: taskStatusEnum('status').default('pending').notNull(),
   completedAt: timestamp('completed_at'),
-  // Form submission fields
-  formData: text('form_data'), // JSON string for form responses
-  attachmentUrls: text('attachment_urls'), // JSON array of file URLs
+  formData: text('form_data'),           // JSON
+  attachmentUrls: text('attachment_urls'), // JSON array
   notes: text('notes'),
-  verifiedBy: uuid('verified_by').references(() => users.id), // OPS user who verified completion
+  verifiedBy: uuid('verified_by').references(() => users.id),
   verifiedAt: timestamp('verified_at'),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -179,3 +220,16 @@ export type PettyCashTransaction = typeof pettyCashTransactions.$inferSelect;
 export type NewPettyCashTransaction = typeof pettyCashTransactions.$inferInsert;
 export type DailyReport = typeof dailyReports.$inferSelect;
 export type NewDailyReport = typeof dailyReports.$inferInsert;
+
+// Convenience type helpers
+export type TaskRecurrence = 'daily' | 'weekly' | 'monthly';
+export type TaskFormField = {
+  id: string;
+  type: 'text' | 'number' | 'textarea' | 'select' | 'checkbox' | 'date' | 'time';
+  label: string;
+  required: boolean;
+  options?: string[];
+  placeholder?: string;
+  validation?: { min?: number; max?: number; pattern?: string };
+};
+export type TaskFormSchema = { fields: TaskFormField[] };
