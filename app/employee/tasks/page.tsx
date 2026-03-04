@@ -1,11 +1,33 @@
-'use client';
 // app/employee/tasks/page.tsx
+'use client';
 
 import { useEffect, useState, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
+import { Card, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import {
+  CheckCircle2,
+  Circle,
+  Clock,
+  Paperclip,
+  FileText,
+  ChevronRight,
+  Inbox,
+} from 'lucide-react';
+import { cn } from '@/lib/utils';
 import TaskDetailView from '@/components/employee/TaskDetailView';
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ─── Shared types ─────────────────────────────────────────────────────────────
+export interface FormField {
+  id: string;
+  type: 'text' | 'number' | 'textarea' | 'select' | 'checkbox' | 'date' | 'time';
+  label: string;
+  required: boolean;
+  options?: string[];
+  placeholder?: string;
+  validation?: { min?: number; max?: number };
+}
+
 export interface TaskTemplate {
   id: string;
   title: string;
@@ -18,16 +40,6 @@ export interface TaskTemplate {
   requiresAttachment: boolean;
   maxAttachments: number;
   formSchema: { fields: FormField[] } | null;
-}
-
-export interface FormField {
-  id: string;
-  type: 'text' | 'number' | 'textarea' | 'select' | 'checkbox' | 'date' | 'time';
-  label: string;
-  required: boolean;
-  options?: string[];
-  placeholder?: string;
-  validation?: { min?: number; max?: number };
 }
 
 export interface EmployeeTask {
@@ -52,7 +64,19 @@ export interface AssignedTask {
 
 type Filter = 'all' | 'pending' | 'in_progress' | 'completed';
 
-// ─── Main ─────────────────────────────────────────────────────────────────────
+const STATUS_CFG = {
+  pending:     { Icon: Circle,       label: 'Pending',  iconCls: 'text-amber-500', bg: 'bg-amber-50'   },
+  in_progress: { Icon: Clock,        label: 'Active',   iconCls: 'text-primary',   bg: 'bg-primary/5'  },
+  completed:   { Icon: CheckCircle2, label: 'Done',     iconCls: 'text-green-600', bg: 'bg-green-50'   },
+} as const;
+
+const FILTERS: { key: Filter; label: string }[] = [
+  { key: 'all',         label: 'All' },
+  { key: 'pending',     label: 'Pending' },
+  { key: 'in_progress', label: 'Active' },
+  { key: 'completed',   label: 'Done' },
+];
+
 export default function EmployeeTasksPage() {
   const { data: session } = useSession();
   const [tasks, setTasks] = useState<AssignedTask[]>([]);
@@ -80,302 +104,196 @@ export default function EmployeeTasksPage() {
     if (session?.user) load();
   }, [session, load]);
 
-  // After task completes / starts, refresh list
   const handleTaskUpdate = () => {
     load();
     setSelected(null);
   };
 
-  // Tap a card → open detail view (also marks in_progress)
   const openTask = async (item: AssignedTask) => {
+    if (item.employeeTask.status === 'completed') return;
+
     if (item.employeeTask.status === 'pending') {
-      // Optimistic update
+      const updated = {
+        ...item,
+        employeeTask: { ...item.employeeTask, status: 'in_progress' as const },
+      };
       setTasks((prev) =>
-        prev.map((t) =>
-          t.employeeTask.id === item.employeeTask.id
-            ? { ...t, employeeTask: { ...t.employeeTask, status: 'in_progress' } }
-            : t,
-        ),
+        prev.map((t) => (t.employeeTask.id === item.employeeTask.id ? updated : t)),
       );
+      setSelected(updated);
       await fetch('/api/employee/tasks', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ taskId: item.employeeTask.id, status: 'in_progress' }),
       });
-      setSelected({ ...item, employeeTask: { ...item.employeeTask, status: 'in_progress' } });
     } else {
       setSelected(item);
     }
   };
 
-  const filtered = tasks.filter((t) => filter === 'all' || t.employeeTask.status === filter);
-  const count = (s: Filter) =>
-    s === 'all' ? tasks.length : tasks.filter((t) => t.employeeTask.status === s).length;
+  const count = (f: Filter) =>
+    f === 'all' ? tasks.length : tasks.filter((t) => t.employeeTask.status === f).length;
 
-  if (selected) {
-    return <TaskDetailView task={selected} onBack={handleTaskUpdate} />;
-  }
+  const filtered = tasks.filter((t) => filter === 'all' || t.employeeTask.status === filter);
+
+  if (selected) return <TaskDetailView task={selected} onBack={handleTaskUpdate} />;
 
   return (
-    <>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@300;400;500&display=swap');
-
-        :root {
-          --sand: #f8f7f5;
-          --ink: #1a1a1a;
-          --mid: #6b6b6b;
-          --light: #e8e6e1;
-          --accent: #ff6b35;
-          --green: #2d9e6b;
-          --amber: #e8a020;
-        }
-
-        .tasks-page { background: var(--sand); min-height: 100dvh; font-family: 'DM Sans', sans-serif; }
-
-        .tasks-hero {
-          background: var(--ink); color: #fff;
-          padding: 48px 24px 24px;
-        }
-
-        .tasks-hero h1 {
-          font-family: 'Syne', sans-serif;
-          font-size: 28px; font-weight: 800;
-          letter-spacing: -0.02em;
-        }
-
-        .tasks-hero p { font-size: 13px; color: rgba(255,255,255,0.4); margin-top: 4px; }
-
-        /* Filter tabs */
-        .filter-wrap {
-          display: flex;
-          gap: 6px;
-          padding: 16px 16px 0;
-          overflow-x: auto;
-          -webkit-overflow-scrolling: touch;
-          scrollbar-width: none;
-        }
-        .filter-wrap::-webkit-scrollbar { display: none; }
-
-        .filter-tab {
-          flex-shrink: 0;
-          display: inline-flex; align-items: center; gap: 6px;
-          padding: 7px 14px;
-          border-radius: 99px;
-          font-family: 'Syne', sans-serif;
-          font-size: 12px; font-weight: 700;
-          border: 1.5px solid var(--light);
-          background: #fff;
-          color: var(--mid);
-          cursor: pointer;
-          transition: all 0.15s;
-          -webkit-tap-highlight-color: transparent;
-        }
-
-        .filter-tab.active { border-color: var(--ink); background: var(--ink); color: #fff; }
-
-        .filter-count {
-          background: rgba(255,255,255,0.15);
-          border-radius: 99px;
-          padding: 0 6px;
-          font-size: 10px;
-        }
-
-        .filter-tab:not(.active) .filter-count {
-          background: rgba(0,0,0,0.07);
-          color: var(--ink);
-        }
-
-        /* Task list */
-        .task-list { padding: 16px; display: flex; flex-direction: column; gap: 10px; }
-
-        .task-card {
-          background: #fff;
-          border-radius: 16px;
-          overflow: hidden;
-          box-shadow: 0 1px 4px rgba(0,0,0,0.06);
-          cursor: pointer;
-          -webkit-tap-highlight-color: transparent;
-          transition: transform 0.1s, box-shadow 0.1s;
-        }
-        .task-card:active { transform: scale(0.99); box-shadow: none; }
-
-        .task-card-inner { padding: 16px; }
-
-        .task-card-top {
-          display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
-        }
-
-        .task-card-left { display: flex; align-items: flex-start; gap: 12px; flex: 1; min-width: 0; }
-
-        .task-status-icon {
-          width: 36px; height: 36px; border-radius: 10px;
-          display: flex; align-items: center; justify-content: center;
-          font-size: 16px; flex-shrink: 0;
-        }
-        .status-pending   .task-status-icon { background: rgba(232,160,32,0.1);  }
-        .status-progress  .task-status-icon { background: rgba(255,107,53,0.1);  }
-        .status-completed .task-status-icon { background: rgba(45,158,107,0.1);  }
-
-        .task-title {
-          font-family: 'Syne', sans-serif;
-          font-size: 14px; font-weight: 700;
-          color: var(--ink);
-          margin-bottom: 3px;
-          white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-        }
-
-        .task-desc { font-size: 12px; color: var(--mid); }
-
-        .task-status-badge {
-          flex-shrink: 0;
-          font-size: 10px; font-weight: 700;
-          font-family: 'Syne', sans-serif;
-          padding: 3px 10px;
-          border-radius: 99px;
-          text-transform: uppercase;
-          letter-spacing: 0.05em;
-        }
-
-        .badge-pending   { background: rgba(232,160,32,0.1);  color: var(--amber); }
-        .badge-progress  { background: rgba(255,107,53,0.1);  color: var(--accent); }
-        .badge-completed { background: rgba(45,158,107,0.1);  color: var(--green); }
-
-        .task-meta {
-          display: flex; gap: 8px; align-items: center;
-          margin-top: 10px; padding-top: 10px;
-          border-top: 1px solid #f4f4f0;
-          flex-wrap: wrap;
-        }
-
-        .meta-chip {
-          display: inline-flex; align-items: center; gap: 4px;
-          font-size: 10px; color: var(--mid); font-weight: 500;
-        }
-
-        .progress-bar {
-          height: 3px;
-          background: linear-gradient(to right, var(--accent), #ff9a6c);
-          animation: progress-pulse 1.5s ease-in-out infinite;
-        }
-
-        @keyframes progress-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
-
-        .completed-bar { height: 3px; background: var(--green); }
-
-        /* Empty */
-        .empty { text-align: center; padding: 60px 20px; color: var(--mid); }
-        .empty-icon { font-size: 48px; margin-bottom: 12px; }
-        .empty h3 { font-family: 'Syne', sans-serif; font-size: 16px; font-weight: 700; color: var(--ink); margin-bottom: 4px; }
-
-        /* Skeleton */
-        @keyframes shimmer { 0%,100% { opacity: 0.5; } 50% { opacity: 1; } }
-        .skel { background: #eee; border-radius: 8px; animation: shimmer 1.4s ease-in-out infinite; }
-      `}</style>
-
-      <div className="tasks-page">
-        <div className="tasks-hero">
-          <h1>My Tasks</h1>
-          <p>{new Date().toLocaleDateString('en-ID', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
+    <div className="flex flex-col">
+      {/* ── Header ── */}
+      <div className="relative overflow-hidden bg-primary px-6 pb-6 pt-12">
+        <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-white/5" />
+        <div className="relative">
+          <p className="text-xs font-semibold uppercase tracking-widest text-primary-foreground/60">
+            Today
+          </p>
+          <h1 className="mt-0.5 text-2xl font-bold text-primary-foreground">My Tasks</h1>
+          <p className="mt-1 text-xs text-primary-foreground/50">
+            {new Date().toLocaleDateString('en-ID', {
+              weekday: 'long', day: 'numeric', month: 'long',
+            })}
+          </p>
         </div>
+      </div>
 
-        {/* Filter tabs */}
-        <div className="filter-wrap">
-          {(['all', 'pending', 'in_progress', 'completed'] as Filter[]).map((f) => (
+      {/* ── Filter tabs ── */}
+      <div className="sticky top-0 z-10 border-b border-border bg-card px-4 py-2.5">
+        <div className="flex gap-1.5 overflow-x-auto scrollbar-none pb-0.5">
+          {FILTERS.map(({ key, label }) => (
             <button
-              key={f}
-              className={`filter-tab${filter === f ? ' active' : ''}`}
-              onClick={() => setFilter(f)}
+              key={key}
+              onClick={() => setFilter(key)}
+              className={cn(
+                'flex flex-shrink-0 items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-semibold uppercase tracking-wide transition-all',
+                filter === key
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'bg-secondary text-muted-foreground hover:bg-border',
+              )}
             >
-              {f === 'all' ? 'All' : f === 'in_progress' ? 'Active' : f.charAt(0).toUpperCase() + f.slice(1)}
-              <span className="filter-count">{count(f)}</span>
+              {label}
+              <span
+                className={cn(
+                  'flex h-4 min-w-[1rem] items-center justify-center rounded-full px-1 text-[10px] font-bold',
+                  filter === key
+                    ? 'bg-white/20 text-primary-foreground'
+                    : 'bg-border text-foreground',
+                )}
+              >
+                {count(key)}
+              </span>
             </button>
           ))}
         </div>
+      </div>
 
-        {/* List */}
-        <div className="task-list">
-          {loading ? (
-            Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="skel" style={{ height: 80 }} />
-            ))
-          ) : filtered.length === 0 ? (
-            <div className="empty">
-              <div className="empty-icon">📭</div>
-              <h3>No tasks here</h3>
-              <p>You're all caught up!</p>
-            </div>
-          ) : (
-            filtered.map((item) => {
-              const { status } = item.employeeTask;
-              const cls =
-                status === 'completed'
-                  ? 'status-completed'
-                  : status === 'in_progress'
-                  ? 'status-progress'
-                  : 'status-pending';
-              const badgeCls =
-                status === 'completed'
-                  ? 'badge-completed'
-                  : status === 'in_progress'
-                  ? 'badge-progress'
-                  : 'badge-pending';
-              const icon =
-                status === 'completed' ? '✓' : status === 'in_progress' ? '↻' : '○';
+      {/* ── List ── */}
+      <div className="space-y-2.5 p-4">
+        {loading ? (
+          Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="h-20 animate-pulse rounded-xl bg-secondary" />
+          ))
+        ) : filtered.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <Inbox className="mb-3 h-10 w-10 text-muted-foreground/40" />
+            <p className="text-sm font-semibold text-foreground">No tasks here</p>
+            <p className="mt-1 text-xs text-muted-foreground">You&apos;re all caught up!</p>
+          </div>
+        ) : (
+          filtered.map((item) => {
+            const { status } = item.employeeTask;
+            const cfg = STATUS_CFG[status];
+            const StatusIcon = cfg.Icon;
+            const isCompleted = status === 'completed';
 
-              return (
-                <div
-                  key={item.employeeTask.id}
-                  className={`task-card ${cls}`}
-                  onClick={() => status !== 'completed' && openTask(item)}
-                >
-                  {status === 'in_progress' && <div className="progress-bar" />}
-                  {status === 'completed' && <div className="completed-bar" />}
+            return (
+              <Card
+                key={item.employeeTask.id}
+                className={cn(
+                  'overflow-hidden border-border shadow-sm transition-all',
+                  !isCompleted && 'cursor-pointer active:scale-[0.99]',
+                  isCompleted && 'opacity-70',
+                )}
+                onClick={() => openTask(item)}
+              >
+                {status === 'in_progress' && (
+                  <div className="h-0.5 w-full animate-pulse bg-primary" />
+                )}
+                {status === 'completed' && (
+                  <div className="h-0.5 w-full bg-green-500" />
+                )}
 
-                  <div className="task-card-inner">
-                    <div className="task-card-top">
-                      <div className="task-card-left">
-                        <div className="task-status-icon">{icon}</div>
-                        <div style={{ minWidth: 0 }}>
-                          <div className="task-title">{item.task.title}</div>
-                          {item.task.description && (
-                            <div className="task-desc">{item.task.description}</div>
-                          )}
-                        </div>
-                      </div>
-                      <span className={`task-status-badge ${badgeCls}`}>
-                        {status === 'in_progress' ? 'Active' : status}
-                      </span>
+                <CardContent className="p-4">
+                  <div className="flex items-start gap-3">
+                    <div
+                      className={cn(
+                        'mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl',
+                        cfg.bg,
+                      )}
+                    >
+                      <StatusIcon className={cn('h-4 w-4', cfg.iconCls)} strokeWidth={2.5} />
                     </div>
 
-                    <div className="task-meta">
-                      {item.task.shift && (
-                        <span className="meta-chip">
-                          🕐 {item.task.shift}
-                        </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="text-sm font-semibold leading-tight text-foreground">
+                          {item.task.title}
+                        </p>
+                        {isCompleted && item.employeeTask.completedAt ? (
+                          <span className="flex-shrink-0 text-[10px] font-medium text-green-600">
+                            ✓{' '}
+                            {new Date(item.employeeTask.completedAt).toLocaleTimeString('en-ID', {
+                              hour: '2-digit', minute: '2-digit',
+                            })}
+                          </span>
+                        ) : (
+                          !isCompleted && (
+                            <ChevronRight className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+                          )
+                        )}
+                      </div>
+
+                      {item.task.description && (
+                        <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">
+                          {item.task.description}
+                        </p>
                       )}
-                      {item.task.requiresForm && (
-                        <span className="meta-chip">📝 Form</span>
-                      )}
-                      {item.task.requiresAttachment && (
-                        <span className="meta-chip">📷 Photo required</span>
-                      )}
-                      {item.task.recurrence !== 'daily' && (
-                        <span className="meta-chip">🔁 {item.task.recurrence}</span>
-                      )}
-                      {status === 'completed' && item.employeeTask.completedAt && (
-                        <span className="meta-chip" style={{ marginLeft: 'auto', color: 'var(--green)' }}>
-                          ✓ {new Date(item.employeeTask.completedAt).toLocaleTimeString('en-ID', { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                      )}
+
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {status === 'in_progress' && (
+                          <Badge className="h-4 gap-1 bg-primary/10 px-1.5 text-[10px] font-semibold text-primary hover:bg-primary/10">
+                            <Clock className="h-2.5 w-2.5" />
+                            In Progress
+                          </Badge>
+                        )}
+                        {item.task.requiresForm && (
+                          <Badge variant="outline" className="h-4 gap-1 px-1.5 text-[10px]">
+                            <FileText className="h-2.5 w-2.5" />
+                            Form
+                          </Badge>
+                        )}
+                        {item.task.requiresAttachment && (
+                          <Badge variant="outline" className="h-4 gap-1 px-1.5 text-[10px]">
+                            <Paperclip className="h-2.5 w-2.5" />
+                            Photo
+                          </Badge>
+                        )}
+                        {item.task.shift && (
+                          <Badge
+                            variant="secondary"
+                            className="h-4 px-1.5 text-[10px] capitalize"
+                          >
+                            {item.task.shift}
+                          </Badge>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })
-          )}
-        </div>
+                </CardContent>
+              </Card>
+            );
+          })
+        )}
       </div>
-    </>
+    </div>
   );
 }

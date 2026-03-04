@@ -1,15 +1,38 @@
-'use client';
 // app/employee/page.tsx
+'use client';
 
 import { useEffect, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import Link from 'next/link';
+import { Card, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import {
+  CheckSquare,
+  ChevronRight,
+  UserCircle,
+  Sun,
+  Moon,
+  LogIn,
+  CalendarDays,
+  CheckCircle2,
+  Clock,
+  XCircle,
+  AlertCircle,
+} from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 interface Stats {
   pending: number;
   inProgress: number;
   completed: number;
   total: number;
+}
+
+interface AttRecord {
+  status: 'present' | 'late' | 'absent' | 'excused';
+  shift: 'morning' | 'evening';
+  checkInTime: string | null;
+  checkOutTime: string | null;
 }
 
 function greeting() {
@@ -21,329 +44,231 @@ function greeting() {
 
 function todayLabel() {
   return new Date().toLocaleDateString('en-ID', {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
+    weekday: 'long', day: 'numeric', month: 'long',
   });
 }
 
+function fmtTime(iso: string | null) {
+  if (!iso) return null;
+  return new Date(iso).toLocaleTimeString('en-ID', { hour: '2-digit', minute: '2-digit' });
+}
+
+function RingProgress({ pct }: { pct: number }) {
+  const r    = 44;
+  const circ = 2 * Math.PI * r;
+  const offset = circ * (1 - pct / 100);
+  return (
+    <svg width={104} height={104} viewBox="0 0 104 104" className="-rotate-90">
+      <circle cx={52} cy={52} r={r} fill="none" stroke="currentColor"
+        strokeWidth={8} className="text-primary-foreground/15" />
+      <circle
+        cx={52} cy={52} r={r} fill="none" stroke="currentColor"
+        strokeWidth={8} strokeLinecap="round"
+        strokeDasharray={circ} strokeDashoffset={offset}
+        className="text-primary-foreground transition-all duration-700"
+      />
+    </svg>
+  );
+}
+
+const ATT_CFG = {
+  present: { Icon: CheckCircle2, label: 'Present',  textClass: 'text-green-400', bg: 'bg-white/10' },
+  late:    { Icon: Clock,        label: 'Late',     textClass: 'text-amber-300', bg: 'bg-white/10' },
+  absent:  { Icon: XCircle,      label: 'Absent',   textClass: 'text-red-400',   bg: 'bg-white/10' },
+  excused: { Icon: AlertCircle,  label: 'Excused',  textClass: 'text-white/60',  bg: 'bg-white/10' },
+};
+
 export default function EmployeeDashboard() {
   const { data: session } = useSession();
-  const [stats, setStats] = useState<Stats>({ pending: 0, inProgress: 0, completed: 0, total: 0 });
-  const [loading, setLoading] = useState(true);
+  const [stats,    setStats]    = useState<Stats>({ pending: 0, inProgress: 0, completed: 0, total: 0 });
+  const [attRec,   setAttRec]   = useState<AttRecord | null>(null);
+  const [loading,  setLoading]  = useState(true);
+
+  const user    = session?.user as any;
+  const storeId = user?.storeId ?? '';
 
   useEffect(() => {
-    if (!session?.user) return;
-    const storeId = (session.user as any).storeId ?? '';
+    if (!storeId) return;
 
-    fetch(`/api/employee/tasks?storeId=${storeId}`)
-      .then((r) => r.json())
-      .then((data) => {
-        const tasks: any[] = data.assignedTasks ?? [];
+    Promise.all([
+      fetch(`/api/employee/tasks?storeId=${storeId}`).then((r) => r.json()),
+      fetch('/api/employee/attendance').then((r) => r.json()),
+    ])
+      .then(([taskData, attData]) => {
+        const tasks: any[] = taskData.assignedTasks ?? [];
         setStats({
-          pending: tasks.filter((t) => t.employeeTask.status === 'pending').length,
+          pending:    tasks.filter((t) => t.employeeTask.status === 'pending').length,
           inProgress: tasks.filter((t) => t.employeeTask.status === 'in_progress').length,
-          completed: tasks.filter((t) => t.employeeTask.status === 'completed').length,
-          total: tasks.length,
+          completed:  tasks.filter((t) => t.employeeTask.status === 'completed').length,
+          total:      tasks.length,
         });
+        if (attData.data) setAttRec(attData.data);
       })
       .catch(console.error)
       .finally(() => setLoading(false));
-  }, [session]);
+  }, [storeId]);
 
-  const pct = stats.total > 0 ? Math.round((stats.completed / stats.total) * 100) : 0;
-  const firstName = session?.user?.name?.split(' ')[0] ?? 'there';
+  const pct        = stats.total > 0 ? Math.round((stats.completed / stats.total) * 100) : 0;
+  const firstName  = user?.name?.split(' ')[0] ?? 'there';
+  const isEvening  = user?.shift === 'evening';
+  const attCfg     = attRec ? ATT_CFG[attRec.status] : null;
 
   return (
-    <>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap');
+    <div className="flex flex-col">
+      {/* ── Hero ── */}
+      <div className="relative overflow-hidden bg-primary px-6 pb-8 pt-12">
+        <div className="pointer-events-none absolute -right-12 -top-12 h-48 w-48 rounded-full bg-white/5" />
+        <div className="pointer-events-none absolute -right-4 top-4 h-28 w-28 rounded-full bg-white/5" />
 
-        :root {
-          --sand: #f8f7f5;
-          --ink: #1a1a1a;
-          --mid: #6b6b6b;
-          --light: #e8e6e1;
-          --accent: #ff6b35;
-          --green: #2d9e6b;
-          --amber: #e8a020;
-        }
+        <div className="relative">
+          <p className="text-xs font-semibold uppercase tracking-widest text-primary-foreground/60">
+            {greeting()}
+          </p>
+          <h1 className="mt-0.5 text-2xl font-bold text-primary-foreground">
+            {firstName} 👋
+          </h1>
+          <p className="mt-1 text-xs text-primary-foreground/50">{todayLabel()}</p>
 
-        .dash-page {
-          background: var(--sand);
-          min-height: 100dvh;
-          font-family: 'DM Sans', sans-serif;
-        }
-
-        /* Hero */
-        .dash-hero {
-          background: var(--ink);
-          color: #fff;
-          padding: 48px 24px 40px;
-          position: relative;
-          overflow: hidden;
-        }
-
-        .dash-hero::before {
-          content: '';
-          position: absolute;
-          top: -60px; right: -60px;
-          width: 220px; height: 220px;
-          border-radius: 50%;
-          background: radial-gradient(circle, rgba(255,107,53,0.25) 0%, transparent 70%);
-          pointer-events: none;
-        }
-
-        .dash-greeting {
-          font-family: 'Syne', sans-serif;
-          font-size: 13px;
-          font-weight: 600;
-          letter-spacing: 0.12em;
-          text-transform: uppercase;
-          color: rgba(255,255,255,0.5);
-          margin-bottom: 4px;
-        }
-
-        .dash-name {
-          font-family: 'Syne', sans-serif;
-          font-size: 28px;
-          font-weight: 800;
-          letter-spacing: -0.02em;
-          margin-bottom: 4px;
-        }
-
-        .dash-date {
-          font-size: 13px;
-          color: rgba(255,255,255,0.4);
-        }
-
-        /* Ring progress */
-        .ring-wrap {
-          margin-top: 28px;
-          display: flex;
-          align-items: center;
-          gap: 20px;
-        }
-
-        .ring-svg { flex-shrink: 0; }
-
-        .ring-bg  { fill: none; stroke: rgba(255,255,255,0.08); stroke-width: 6; }
-        .ring-val { fill: none; stroke: var(--accent); stroke-width: 6; stroke-linecap: round;
-                    transition: stroke-dashoffset 1s ease; transform: rotate(-90deg); transform-origin: 50% 50%; }
-
-        .ring-label {
-          font-family: 'Syne', sans-serif;
-          font-size: 11px;
-          font-weight: 700;
-          fill: rgba(255,255,255,0.4);
-          text-transform: uppercase;
-          letter-spacing: 0.08em;
-        }
-
-        .ring-pct {
-          font-family: 'Syne', sans-serif;
-          font-size: 18px;
-          font-weight: 800;
-          fill: #fff;
-        }
-
-        .ring-info { color: rgba(255,255,255,0.7); font-size: 13px; }
-        .ring-info strong { color: #fff; font-size: 22px; font-family: 'Syne', sans-serif; font-weight: 800; display: block; }
-
-        /* Stat chips */
-        .stat-chips {
-          display: grid;
-          grid-template-columns: 1fr 1fr 1fr;
-          gap: 10px;
-          padding: 20px 16px 0;
-          margin-top: -1px;
-        }
-
-        .stat-chip {
-          background: #fff;
-          border-radius: 14px;
-          padding: 14px 12px;
-          text-align: center;
-          box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-        }
-
-        .stat-chip .n {
-          font-family: 'Syne', sans-serif;
-          font-size: 24px;
-          font-weight: 800;
-          color: var(--ink);
-          line-height: 1;
-        }
-
-        .stat-chip .lbl {
-          font-size: 10px;
-          color: var(--mid);
-          margin-top: 4px;
-          font-weight: 500;
-          text-transform: uppercase;
-          letter-spacing: 0.05em;
-        }
-
-        .stat-chip.amber .n { color: var(--amber); }
-        .stat-chip.green .n { color: var(--green); }
-        .stat-chip.accent .n { color: var(--accent); }
-
-        /* Quick actions */
-        .section {
-          padding: 24px 16px 0;
-        }
-
-        .section-label {
-          font-family: 'Syne', sans-serif;
-          font-size: 11px;
-          font-weight: 700;
-          letter-spacing: 0.1em;
-          text-transform: uppercase;
-          color: var(--mid);
-          margin-bottom: 12px;
-        }
-
-        .action-card {
-          display: flex;
-          align-items: center;
-          gap: 14px;
-          background: #fff;
-          border-radius: 14px;
-          padding: 16px;
-          text-decoration: none;
-          color: var(--ink);
-          box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-          margin-bottom: 10px;
-          transition: transform 0.15s, box-shadow 0.15s;
-          -webkit-tap-highlight-color: transparent;
-        }
-
-        .action-card:active { transform: scale(0.98); box-shadow: none; }
-
-        .action-icon {
-          width: 44px; height: 44px; border-radius: 12px;
-          display: flex; align-items: center; justify-content: center;
-          font-size: 20px; flex-shrink: 0;
-        }
-
-        .action-icon.orange { background: rgba(255,107,53,0.1); }
-        .action-icon.green  { background: rgba(45,158,107,0.1); }
-
-        .action-title {
-          font-family: 'Syne', sans-serif;
-          font-size: 14px;
-          font-weight: 700;
-        }
-
-        .action-sub {
-          font-size: 12px;
-          color: var(--mid);
-          margin-top: 2px;
-        }
-
-        .action-arrow {
-          margin-left: auto;
-          color: var(--light);
-          font-size: 18px;
-        }
-
-        /* Shift badge */
-        .shift-badge {
-          display: inline-flex;
-          align-items: center;
-          gap: 6px;
-          background: rgba(255,255,255,0.08);
-          border: 1px solid rgba(255,255,255,0.12);
-          border-radius: 99px;
-          padding: 4px 12px;
-          font-size: 11px;
-          color: rgba(255,255,255,0.6);
-          margin-top: 16px;
-        }
-
-        .shift-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
-
-        /* Skeleton */
-        @keyframes shimmer { 0%,100% { opacity: 0.4; } 50% { opacity: 0.8; } }
-        .skel { background: rgba(255,255,255,0.08); border-radius: 6px; animation: shimmer 1.4s ease-in-out infinite; }
-      `}</style>
-
-      <div className="dash-page">
-        {/* Hero */}
-        <div className="dash-hero">
-          <div className="dash-greeting">{greeting()}</div>
-          <div className="dash-name">{firstName} 👋</div>
-          <div className="dash-date">{todayLabel()}</div>
-
-          <div className="shift-badge">
-            <span className="shift-dot" />
-            {(session?.user as any)?.shift === 'evening' ? 'Evening shift' : 'Morning shift'}
-          </div>
-
-          {/* Ring */}
-          <div className="ring-wrap">
-            <svg className="ring-svg" width="80" height="80" viewBox="0 0 80 80">
-              <circle className="ring-bg" cx="40" cy="40" r="32" />
-              <circle
-                className="ring-val"
-                cx="40" cy="40" r="32"
-                strokeDasharray={`${2 * Math.PI * 32}`}
-                strokeDashoffset={`${2 * Math.PI * 32 * (1 - pct / 100)}`}
-              />
-              <text x="50%" y="45%" textAnchor="middle" className="ring-pct" dy=".1em">
-                {loading ? '—' : `${pct}%`}
-              </text>
-              <text x="50%" y="62%" textAnchor="middle" className="ring-label">done</text>
-            </svg>
-
-            <div className="ring-info">
-              <strong>{loading ? '—' : stats.total}</strong>
-              tasks assigned today
+          {/* Shift + attendance status row */}
+          <div className="mt-4 flex flex-wrap gap-2">
+            <div className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-xs font-medium text-primary-foreground/80">
+              {isEvening ? <Moon className="h-3 w-3" /> : <Sun className="h-3 w-3" />}
+              {isEvening ? 'Evening shift' : 'Morning shift'}
             </div>
-          </div>
-        </div>
-
-        {/* Stat chips */}
-        <div className="stat-chips">
-          <div className="stat-chip amber">
-            <div className="n">{loading ? '—' : stats.pending}</div>
-            <div className="lbl">Pending</div>
-          </div>
-          <div className="stat-chip accent">
-            <div className="n">{loading ? '—' : stats.inProgress}</div>
-            <div className="lbl">Active</div>
-          </div>
-          <div className="stat-chip green">
-            <div className="n">{loading ? '—' : stats.completed}</div>
-            <div className="lbl">Done</div>
-          </div>
-        </div>
-
-        {/* Quick actions */}
-        <div className="section">
-          <div className="section-label">Quick Actions</div>
-
-          <Link href="/employee/tasks" className="action-card">
-            <div className="action-icon orange">✓</div>
-            <div>
-              <div className="action-title">My Tasks</div>
-              <div className="action-sub">
-                {loading ? 'Loading…' : `${stats.pending} pending · ${stats.inProgress} in progress`}
+            {attRec && attCfg ? (
+              <div className={cn(
+                'inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium',
+                attCfg.bg, attCfg.textClass,
+              )}>
+                <attCfg.Icon className="h-3 w-3" />
+                {attCfg.label}
+                {attRec.checkInTime && (
+                  <span className="opacity-70">· In {fmtTime(attRec.checkInTime)}</span>
+                )}
               </div>
+            ) : !loading ? (
+              <div className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-xs font-medium text-primary-foreground/60">
+                <LogIn className="h-3 w-3" />
+                Not checked in
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        {/* Ring progress */}
+        <div className="relative mt-5 flex items-center gap-5">
+          <div className="relative flex-shrink-0">
+            <RingProgress pct={loading ? 0 : pct} />
+            <div className="absolute inset-0 flex flex-col items-center justify-center">
+              <span className="text-xl font-bold text-primary-foreground">
+                {loading ? '—' : `${pct}%`}
+              </span>
+              <span className="text-[9px] font-semibold uppercase tracking-wider text-primary-foreground/50">
+                done
+              </span>
             </div>
-            <span className="action-arrow">›</span>
+          </div>
+          <div>
+            <p className="text-3xl font-bold text-primary-foreground">
+              {loading ? '—' : stats.total}
+            </p>
+            <p className="text-xs text-primary-foreground/60">tasks assigned today</p>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Stat chips ── */}
+      <div className="-mt-4 grid grid-cols-3 gap-3 px-4">
+        {[
+          { label: 'Pending',  value: stats.pending,    textColor: 'text-amber-600',  bg: 'bg-amber-50',  border: 'border-amber-100'    },
+          { label: 'Active',   value: stats.inProgress, textColor: 'text-primary',    bg: 'bg-primary/5', border: 'border-primary/10'   },
+          { label: 'Done',     value: stats.completed,  textColor: 'text-green-600',  bg: 'bg-green-50',  border: 'border-green-100'    },
+        ].map(({ label, value, textColor, bg, border }) => (
+          <div
+            key={label}
+            className={`rounded-xl border ${border} ${bg} px-3 py-3 text-center shadow-sm`}
+          >
+            <p className={`text-2xl font-bold ${textColor}`}>{loading ? '—' : value}</p>
+            <p className="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              {label}
+            </p>
+          </div>
+        ))}
+      </div>
+
+      {/* ── Quick actions ── */}
+      <div className="mt-5 px-4 pb-4">
+        <p className="mb-3 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+          Quick Actions
+        </p>
+
+        <div className="space-y-2.5">
+          <Link href="/employee/tasks">
+            <Card className="border-border shadow-sm transition-all active:scale-[0.98]">
+              <CardContent className="flex items-center gap-3 p-4">
+                <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-primary/10">
+                  <CheckSquare className="h-5 w-5 text-primary" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-foreground">My Tasks</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {loading
+                      ? 'Loading…'
+                      : `${stats.pending} pending · ${stats.inProgress} in progress`}
+                  </p>
+                </div>
+                <ChevronRight className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+              </CardContent>
+            </Card>
           </Link>
 
-          <Link href="/employee/profile" className="action-card">
-            <div className="action-icon green">◎</div>
-            <div>
-              <div className="action-title">My Profile</div>
-              <div className="action-sub">View schedule & attendance</div>
-            </div>
-            <span className="action-arrow">›</span>
+          <Link href="/employee/attendance">
+            <Card className="border-border shadow-sm transition-all active:scale-[0.98]">
+              <CardContent className="flex items-center gap-3 p-4">
+                <div className={cn(
+                  'flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl',
+                  attRec ? 'bg-green-100' : 'bg-amber-50',
+                )}>
+                  <CalendarDays className={cn('h-5 w-5', attRec ? 'text-green-600' : 'text-amber-600')} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-foreground">Attendance</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {loading
+                      ? 'Loading…'
+                      : attRec
+                      ? `${attCfg?.label} · ${attRec.checkOutTime ? 'Shift complete' : 'Check-out when done'}`
+                      : 'Tap to check in for your shift'}
+                  </p>
+                </div>
+                {!attRec && !loading && (
+                  <Badge className="flex-shrink-0 bg-amber-100 text-amber-700 hover:bg-amber-100 text-[10px]">
+                    Action needed
+                  </Badge>
+                )}
+                <ChevronRight className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+              </CardContent>
+            </Card>
+          </Link>
+
+          <Link href="/employee/profile">
+            <Card className="border-border shadow-sm transition-all active:scale-[0.98]">
+              <CardContent className="flex items-center gap-3 p-4">
+                <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-secondary">
+                  <UserCircle className="h-5 w-5 text-muted-foreground" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-foreground">My Profile</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    View schedule &amp; account info
+                  </p>
+                </div>
+                <ChevronRight className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+              </CardContent>
+            </Card>
           </Link>
         </div>
       </div>
-    </>
+    </div>
   );
 }

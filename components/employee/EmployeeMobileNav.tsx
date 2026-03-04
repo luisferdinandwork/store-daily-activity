@@ -1,97 +1,63 @@
-'use client';
 // components/employee/EmployeeMobileNav.tsx
+'use client';
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useSession } from 'next-auth/react';
+import { Home, CheckSquare, CalendarDays, UserCircle, LayoutGrid } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
-const NAV = [
-  { href: '/employee',         label: 'Home',    icon: '⌂' },
-  { href: '/employee/tasks',   label: 'Tasks',   icon: '✓' },
-  { href: '/employee/profile', label: 'Profile', icon: '◎' },
+const BASE_NAV = [
+  { href: '/employee',            label: 'Home',       Icon: Home         },
+  { href: '/employee/tasks',      label: 'Tasks',      Icon: CheckSquare  },
+  { href: '/employee/attendance', label: 'Attendance', Icon: CalendarDays },
+  { href: '/employee/profile',    label: 'Profile',    Icon: UserCircle   },
 ];
+
+const PIC1_NAV_ITEM = {
+  href:  '/employee/schedule',
+  label: 'Schedule',
+  Icon:  LayoutGrid,
+};
 
 export default function EmployeeMobileNav() {
   const pathname = usePathname();
+  const { data: session } = useSession();
+  const employeeType = (session?.user as any)?.employeeType as string | null;
+
+  // PIC 1 gets an extra "Schedule" tab inserted before Profile
+  const navItems = employeeType === 'pic_1'
+    ? [...BASE_NAV.slice(0, 3), PIC1_NAV_ITEM, BASE_NAV[3]]
+    : BASE_NAV;
 
   return (
-    <>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Syne:wght@600;700&display=swap');
-
-        .mobile-nav {
-          position: fixed;
-          bottom: 0; left: 0; right: 0;
-          height: 64px;
-          background: #fff;
-          border-top: 1px solid #ebebeb;
-          display: flex;
-          z-index: 100;
-          padding: 0 8px;
-          padding-bottom: env(safe-area-inset-bottom);
-        }
-
-        .mobile-nav-item {
-          flex: 1;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          gap: 3px;
-          text-decoration: none;
-          color: #aaa;
-          font-family: 'Syne', sans-serif;
-          font-size: 10px;
-          font-weight: 600;
-          letter-spacing: 0.04em;
-          position: relative;
-          transition: color 0.2s;
-          -webkit-tap-highlight-color: transparent;
-        }
-
-        .mobile-nav-item.active { color: #1a1a1a; }
-
-        .mobile-nav-icon {
-          font-size: 22px;
-          line-height: 1;
-          transition: transform 0.2s;
-        }
-
-        .mobile-nav-item.active .mobile-nav-icon {
-          transform: translateY(-1px);
-        }
-
-        .mobile-nav-dot {
-          position: absolute;
-          top: 8px;
-          width: 4px;
-          height: 4px;
-          border-radius: 50%;
-          background: #1a1a1a;
-          opacity: 0;
-          transition: opacity 0.2s;
-        }
-
-        .mobile-nav-item.active .mobile-nav-dot { opacity: 1; }
-      `}</style>
-
-      <nav className="mobile-nav">
-        {NAV.map(({ href, label, icon }) => {
-          const active = href === '/employee'
-            ? pathname === href
-            : pathname.startsWith(href);
-          return (
-            <Link
-              key={href}
-              href={href}
-              className={`mobile-nav-item${active ? ' active' : ''}`}
-            >
-              <div className="mobile-nav-dot" />
-              <span className="mobile-nav-icon">{icon}</span>
-              <span>{label}</span>
-            </Link>
-          );
-        })}
-      </nav>
-    </>
+    <nav className="fixed bottom-0 left-0 right-0 z-50 flex h-16 items-stretch border-t border-border bg-card md:hidden">
+      {navItems.map(({ href, label, Icon }) => {
+        const active =
+          href === '/employee' ? pathname === href : pathname.startsWith(href);
+        return (
+          <Link
+            key={href}
+            href={href}
+            className={cn(
+              'flex flex-1 flex-col items-center justify-center gap-1 text-[10px] font-semibold uppercase tracking-widest transition-colors',
+              active ? 'text-primary' : 'text-muted-foreground hover:text-foreground',
+            )}
+          >
+            <span
+              className={cn(
+                'mb-0.5 h-1 w-1 rounded-full transition-opacity',
+                active ? 'bg-primary opacity-100' : 'opacity-0',
+              )}
+            />
+            <Icon
+              className={cn('h-5 w-5', active ? 'text-primary' : 'text-muted-foreground')}
+              strokeWidth={active ? 2.5 : 1.75}
+            />
+            <span>{label}</span>
+          </Link>
+        );
+      })}
+    </nav>
   );
 }

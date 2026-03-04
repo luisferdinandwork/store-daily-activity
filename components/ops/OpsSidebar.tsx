@@ -3,6 +3,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useSession, signOut } from 'next-auth/react'; // Import auth hooks
 import { cn } from '@/lib/utils';
 import {
   LayoutDashboard,
@@ -12,6 +13,7 @@ import {
   ClipboardCheck,
   Store,
   ChevronRight,
+  LogOut, // Import LogOut icon
 } from 'lucide-react';
 
 const NAV = [
@@ -44,6 +46,7 @@ interface Props {
 
 export default function OpsSidebar({ storeName = 'Store Manager' }: Props) {
   const pathname = usePathname();
+  const { data: session } = useSession(); // Get session data
 
   const isActive = (href: string, exact?: boolean) =>
     exact ? pathname === href : pathname.startsWith(href);
@@ -100,12 +103,26 @@ export default function OpsSidebar({ storeName = 'Store Manager' }: Props) {
       <div className="border-t border-border px-3 py-3">
         <div className="flex items-center gap-2.5 rounded-md px-2.5 py-2">
           <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-secondary text-xs font-semibold text-secondary-foreground">
-            OP
+            {/* Display first letter of name or 'O' if not available */}
+            {session?.user?.name?.charAt(0).toUpperCase() ?? 'O'}
           </div>
-          <div className="min-w-0">
-            <p className="truncate text-xs font-medium text-foreground">OPS Manager</p>
-            <p className="text-[10px] text-muted-foreground">ops@store.com</p>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-xs font-medium text-foreground">
+              {session?.user?.name ?? 'OPS Manager'}
+            </p>
+            <p className="truncate text-[10px] text-muted-foreground">
+              {session?.user?.email ?? 'ops@store.com'}
+            </p>
           </div>
+          
+          {/* Logout Button */}
+          <button
+            onClick={() => signOut({ callbackUrl: '/login' })}
+            className="rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+            title="Log out"
+          >
+            <LogOut className="h-4 w-4" />
+          </button>
         </div>
       </div>
     </aside>

@@ -9,12 +9,12 @@ import { getServerSession } from 'next-auth/next';
 
 export const authOptions: NextAuthOptions = {
   secret: process.env.NEXTAUTH_SECRET,
-  
+
   providers: [
     CredentialsProvider({
       name: 'credentials',
       credentials: {
-        email: { label: 'Email', type: 'email' },
+        email:    { label: 'Email',    type: 'email'    },
         password: { label: 'Password', type: 'password' },
       },
       async authorize(credentials) {
@@ -26,7 +26,6 @@ export const authOptions: NextAuthOptions = {
             return null;
           }
 
-          // Check database connection and user
           const userResult = await db
             .select()
             .from(users)
@@ -42,16 +41,18 @@ export const authOptions: NextAuthOptions = {
 
           const user = userResult[0];
           console.log('🔍 User details:', {
-            id: user.id,
-            email: user.email,
-            role: user.role,
-            hasPassword: !!user.password
+            id:           user.id,
+            email:        user.email,
+            role:         user.role,
+            employeeType: user.employeeType,
+            storeId:      user.storeId,
+            areaId:       user.areaId,
+            hasPassword:  !!user.password,
           });
 
-          // Verify password
           const isPasswordValid = await bcrypt.compare(
             credentials.password,
-            user.password
+            user.password,
           );
 
           console.log('🔑 Password valid:', isPasswordValid);
@@ -64,12 +65,13 @@ export const authOptions: NextAuthOptions = {
           console.log('✅ Login successful for:', credentials.email);
 
           return {
-            id: user.id,
-            name: user.name,
-            email: user.email,
-            role: user.role,
-            employeeType: user.employeeType || undefined,
-            storeId: user.storeId || undefined,
+            id:           user.id,
+            name:         user.name,
+            email:        user.email,
+            role:         user.role,
+            employeeType: user.employeeType ?? undefined,
+            storeId:      user.storeId      ?? undefined,
+            areaId:       user.areaId       ?? undefined,  // ← ADDED
           };
         } catch (error) {
           console.error('💥 Authorization error:', error);
@@ -78,32 +80,39 @@ export const authOptions: NextAuthOptions = {
       },
     }),
   ],
+
   session: {
     strategy: 'jwt',
     maxAge: 30 * 24 * 60 * 60,
   },
+
   callbacks: {
     async jwt({ token, user }) {
       if (user) {
-        token.role = user.role;
+        token.role         = user.role;
         token.employeeType = user.employeeType;
-        token.storeId = user.storeId;
+        token.storeId      = user.storeId;
+        token.areaId       = (user as any).areaId ?? null;  // ← ADDED
       }
       return token;
     },
+
     async session({ session, token }) {
       if (token && session.user) {
-        session.user.id = token.sub!;
-        session.user.role = token.role as string;
+        session.user.id           = token.sub!;
+        session.user.role         = token.role         as string;
         session.user.employeeType = token.employeeType as string | undefined;
-        session.user.storeId = token.storeId as string | undefined;
+        session.user.storeId      = token.storeId      as string | undefined;
+        (session.user as any).areaId = token.areaId    as string | null;  // ← ADDED
       }
       return session;
     },
   },
+
   pages: {
     signIn: '/login',
   },
+
   debug: process.env.NODE_ENV === 'development',
 };
 

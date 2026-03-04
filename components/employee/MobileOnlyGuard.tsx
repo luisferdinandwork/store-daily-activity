@@ -1,79 +1,23 @@
-'use client';
 // components/employee/MobileOnlyGuard.tsx
-// This element is shown on desktop screens, hiding the mobile app content.
+'use client';
+
+import { Smartphone } from 'lucide-react';
 
 export default function MobileOnlyGuard() {
   return (
-    <>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&display=swap');
-
-        .desktop-block {
-          display: none;
-          position: fixed;
-          inset: 0;
-          z-index: 9999;
-          background: #0a0a0a;
-          color: #fff;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          text-align: center;
-          padding: 40px;
-          font-family: 'Syne', sans-serif;
-        }
-
-        @media (min-width: 768px) {
-          .desktop-block { display: flex; }
-        }
-
-        .desktop-block-icon {
-          font-size: 64px;
-          margin-bottom: 24px;
-          animation: bounce 2s ease-in-out infinite;
-        }
-
-        @keyframes bounce {
-          0%, 100% { transform: translateY(0); }
-          50%       { transform: translateY(-8px); }
-        }
-
-        .desktop-block h1 {
-          font-size: 28px;
-          font-weight: 800;
-          letter-spacing: -0.02em;
-          margin-bottom: 12px;
-          color: #fff;
-        }
-
-        .desktop-block p {
-          font-size: 15px;
-          color: rgba(255,255,255,0.5);
-          max-width: 360px;
-          line-height: 1.6;
-        }
-
-        .desktop-block .pill {
-          margin-top: 32px;
-          display: inline-flex;
-          align-items: center;
-          gap: 8px;
-          border: 1px solid rgba(255,255,255,0.15);
-          border-radius: 99px;
-          padding: 8px 20px;
-          font-size: 13px;
-          color: rgba(255,255,255,0.6);
-        }
-      `}</style>
-
-      <div className="desktop-block">
-        <div className="desktop-block-icon">📱</div>
-        <h1>Mobile Only</h1>
-        <p>The employee portal is designed exclusively for mobile devices. Please open this page on your phone.</p>
-        <div className="pill">
-          <span>●</span> Scan QR or open on mobile
-        </div>
+    <div className="fixed inset-0 z-[9999] hidden md:flex flex-col items-center justify-center bg-foreground text-center px-10">
+      <div className="mb-6 flex h-20 w-20 animate-bounce items-center justify-center rounded-2xl bg-primary/20">
+        <Smartphone className="h-10 w-10 text-primary" />
       </div>
-    </>
+      <h1 className="text-2xl font-bold tracking-tight text-background">Mobile Only</h1>
+      <p className="mt-3 max-w-sm text-sm text-background/50 leading-relaxed">
+        The employee portal is designed exclusively for mobile devices. Please open this page on
+        your phone or tablet.
+      </p>
+      <div className="mt-8 flex items-center gap-2 rounded-full border border-background/20 px-5 py-2 text-xs text-background/40">
+        <span className="h-1.5 w-1.5 rounded-full bg-primary" />
+        Scan QR or open on mobile
+      </div>
+    </div>
   );
 }

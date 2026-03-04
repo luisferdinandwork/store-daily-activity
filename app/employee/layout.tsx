@@ -8,42 +8,18 @@ import MobileOnlyGuard from '@/components/employee/MobileOnlyGuard';
 
 export default async function EmployeeLayout({ children }: { children: ReactNode }) {
   const session = await getServerSession(authOptions);
-
-  if (!session) {
-    redirect('/login');
-  }
+  if (!session) redirect('/login');
 
   return (
     <>
-      {/* Desktop block - shown only on lg+ via CSS */}
+      {/* Shown only on desktop — covers the entire viewport */}
       <MobileOnlyGuard />
 
-      {/* Mobile layout */}
-      <div className="employee-shell">
-        <main className="employee-main">{children}</main>
+      {/* Mobile shell — hidden on md+ so the guard takes over */}
+      <div className="flex min-h-dvh flex-col bg-secondary md:hidden">
+        <main className="flex-1 overflow-x-hidden pb-16">{children}</main>
         <EmployeeMobileNav />
       </div>
-
-      <style>{`
-        /* Show the mobile shell only on small screens */
-        .employee-shell {
-          display: flex;
-          flex-direction: column;
-          min-height: 100dvh;
-          background: #f8f7f5;
-        }
-
-        .employee-main {
-          flex: 1;
-          padding-bottom: 72px; /* room for fixed bottom nav */
-          overflow-x: hidden;
-        }
-
-        /* On desktop: hide the entire employee UI */
-        @media (min-width: 768px) {
-          .employee-shell { display: none; }
-        }
-      `}</style>
     </>
   );
 }

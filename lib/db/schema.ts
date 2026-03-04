@@ -1,228 +1,299 @@
 // lib/db/schema.ts
-import { pgTable, text, timestamp, integer, boolean, decimal, uuid, pgEnum } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, integer, boolean, decimal, uuid, pgEnum, unique } from 'drizzle-orm/pg-core';
 
-// Enums
-export const userRoleEnum = pgEnum('user_role', ['employee', 'ops', 'finance', 'admin']);
-export const employeeTypeEnum = pgEnum('employee_type', ['pic', 'so']);
-export const shiftEnum = pgEnum('shift', ['morning', 'evening']);
-export const taskStatusEnum = pgEnum('task_status', ['pending', 'in_progress', 'completed']);
-export const issueStatusEnum = pgEnum('issue_status', ['reported', 'in_review', 'resolved']);
-export const reportStatusEnum = pgEnum('report_status', ['draft', 'submitted', 'verified', 'rejected']);
+// ─── Enums ────────────────────────────────────────────────────────────────────
+export const userRoleEnum         = pgEnum('user_role',         ['employee', 'ops', 'finance', 'admin']);
+export const employeeTypeEnum     = pgEnum('employee_type',     ['pic_1', 'pic_2', 'so']);  // PIC split into pic_1 / pic_2
+export const shiftEnum            = pgEnum('shift',             ['morning', 'evening']);
+export const weekdayEnum          = pgEnum('weekday',           ['0', '1', '2', '3', '4', '5', '6']);
+export const taskStatusEnum       = pgEnum('task_status',       ['pending', 'in_progress', 'completed']);
+export const issueStatusEnum      = pgEnum('issue_status',      ['reported', 'in_review', 'resolved']);
+export const reportStatusEnum     = pgEnum('report_status',     ['draft', 'submitted', 'verified', 'rejected']);
 export const attendanceStatusEnum = pgEnum('attendance_status', ['present', 'absent', 'late', 'excused']);
+export const taskRecurrenceEnum   = pgEnum('task_recurrence',   ['daily', 'weekly', 'monthly']);
 
 /**
- * Task Recurrence Type:
- *  - 'daily'   → appears every day automatically
- *  - 'weekly'  → OPS picks specific weekday(s) within the week (0=Sun … 6=Sat)
- *                stored as JSON array in recurrenceDays, e.g. [1,3,5]
- *  - 'monthly' → OPS picks specific calendar day(s) within the month (1–31)
- *                stored as JSON array in recurrenceDays, e.g. [1,15]
- *
- * Both weekly and monthly tasks are NOT auto-generated — the engine checks
- * recurrenceDays each day and only creates employeeTasks on matching days.
+ * Break type:
+ *  - 'lunch'  → available during morning shift (08:00–17:00)
+ *  - 'dinner' → available during evening shift (13:00–22:00)
  */
-export const taskRecurrenceEnum = pgEnum('task_recurrence', ['daily', 'weekly', 'monthly']);
+export const breakTypeEnum = pgEnum('break_type', ['lunch', 'dinner']);
 
-// Users table
+// ─── Area ─────────────────────────────────────────────────────────────────────
+/**
+ * An Area groups one or more Stores under a single OPS manager.
+ * One OPS user is assigned to exactly one area (users.areaId).
+ * OPS can manage schedules for ALL stores in their area, but only
+ * with oversight — PIC 1 of each store is the day-to-day schedule owner.
+ */
+export const areas = pgTable('areas', {
+  id:        uuid('id').primaryKey().defaultRandom(),
+  name:      text('name').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+// ─── Core ─────────────────────────────────────────────────────────────────────
+
 export const users = pgTable('users', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  name: text('name').notNull(),
-  email: text('email').notNull().unique(),
-  password: text('password').notNull(),
-  role: userRoleEnum('role').notNull(),
-  employeeType: employeeTypeEnum('employee_type'),
-  storeId: uuid('store_id').references(() => stores.id),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  id:           uuid('id').primaryKey().defaultRandom(),
+  name:         text('name').notNull(),
+  email:        text('email').notNull().unique(),
+  password:     text('password').notNull(),
+  role:         userRoleEnum('role').notNull(),
+  employeeType: employeeTypeEnum('employee_type'), // 'pic_1' | 'pic_2' | 'so' | null (for ops/finance/admin)
+  storeId:      uuid('store_id').references(() => stores.id),
+  /**
+   * areaId is set for OPS users — links them to the area they oversee.
+   * Non-OPS users leave this null; their store already implies the area.
+   */
+  areaId:       uuid('area_id').references(() => areas.id),
+  createdAt:    timestamp('created_at').defaultNow().notNull(),
+  updatedAt:    timestamp('updated_at').defaultNow().notNull(),
 });
 
-// Stores table
 export const stores = pgTable('stores', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  name: text('name').notNull(),
-  address: text('address').notNull(),
+  id:               uuid('id').primaryKey().defaultRandom(),
+  name:             text('name').notNull(),
+  address:          text('address').notNull(),
+  /**
+   * Every store belongs to exactly one area.
+   * OPS users assigned to that area can manage this store.
+   */
+  areaId:           uuid('area_id').references(() => areas.id).notNull(),
   pettyCashBalance: decimal('petty_cash_balance', { precision: 10, scale: 2 }).default('1000000'),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  createdAt:        timestamp('created_at').defaultNow().notNull(),
+  updatedAt:        timestamp('updated_at').defaultNow().notNull(),
 });
 
-// Schedules table
-export const schedules = pgTable('schedules', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  userId: uuid('user_id').references(() => users.id).notNull(),
-  storeId: uuid('store_id').references(() => stores.id).notNull(),
-  shift: shiftEnum('shift').notNull(),
-  date: timestamp('date').notNull(),
-  isHoliday: boolean('is_holiday').default(false),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
-});
-
-// Attendance table
-export const attendance = pgTable('attendance', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  scheduleId: uuid('schedule_id').references(() => schedules.id).notNull(),
-  userId: uuid('user_id').references(() => users.id).notNull(),
-  storeId: uuid('store_id').references(() => stores.id).notNull(),
-  date: timestamp('date').notNull(),
-  shift: shiftEnum('shift').notNull(),
-  status: attendanceStatusEnum('status').default('present').notNull(),
-  checkInTime: timestamp('check_in_time'),
-  checkOutTime: timestamp('check_out_time'),
-  notes: text('notes'),
-  recordedBy: uuid('recorded_by').references(() => users.id),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+// ─── Weekly Schedule Templates ────────────────────────────────────────────────
+/**
+ * PIC 1 (or an OPS user for their area) creates ONE active template per
+ * employee per store. The template defines WHICH weekdays + shift the employee
+ * works each week.
+ *
+ * Authorization rules enforced in application layer:
+ *   - Only users with role='ops' (for stores in their area) OR
+ *     employeeType='pic_1' (for their own store) may create/update templates.
+ *   - PIC 2 and SO employees cannot manage templates.
+ *
+ * This template is PERMANENT — it repeats every week automatically.
+ * Schedules are auto-generated rolling 4 weeks ahead (see ensureSchedulesUpToDate).
+ * No manual "Publish Week" needed. When the template changes, future schedules
+ * are regenerated from the change date onward; past schedules are untouched.
+ *
+ * lastScheduledThrough: tracks how far ahead schedules have been generated.
+ */
+export const weeklyScheduleTemplates = pgTable('weekly_schedule_templates', {
+  id:                   uuid('id').primaryKey().defaultRandom(),
+  userId:               uuid('user_id').references(() => users.id).notNull(),
+  storeId:              uuid('store_id').references(() => stores.id).notNull(),
+  isActive:             boolean('is_active').default(true).notNull(),
+  note:                 text('note'),
+  /**
+   * The user who created/last modified this template.
+   * May be a PIC 1 (for their own store) or an OPS user (for their area).
+   */
+  createdBy:            uuid('created_by').references(() => users.id),
+  /**
+   * The furthest date for which schedules have been generated from this template.
+   * NULL means no schedules have been generated yet.
+   */
+  lastScheduledThrough: timestamp('last_scheduled_through'),
+  createdAt:            timestamp('created_at').defaultNow().notNull(),
+  updatedAt:            timestamp('updated_at').defaultNow().notNull(),
 });
 
 /**
- * Tasks table — Master task templates created by OPS.
- *
- * Recurrence fields:
- *  recurrence       → 'daily' | 'weekly' | 'monthly'
- *  recurrenceDays   → JSON array (string-encoded):
- *                      daily   → null (ignored)
- *                      weekly  → weekday numbers [0-6], e.g. "[1,3,5]"
- *                      monthly → calendar days [1-31], e.g. "[1,15]"
- *
- * The old isDaily boolean is REPLACED by recurrence === 'daily'.
- * A task can appear multiple times per week / per month because
- * recurrenceDays can hold multiple values.
+ * One row per working slot in the template.
+ * weekday: 0=Sun, 1=Mon … 6=Sat  (JS Date.getDay() convention).
  */
+export const weeklyScheduleEntries = pgTable('weekly_schedule_entries', {
+  id:         uuid('id').primaryKey().defaultRandom(),
+  templateId: uuid('template_id').references(() => weeklyScheduleTemplates.id, { onDelete: 'cascade' }).notNull(),
+  weekday:    weekdayEnum('weekday').notNull(), // '0'=Sun … '6'=Sat
+  shift:      shiftEnum('shift').notNull(),
+  createdAt:  timestamp('created_at').defaultNow().notNull(),
+});
+
+// ─── Daily Schedules (auto-generated from templates) ──────────────────────────
+/**
+ * Concrete per-day schedule rows generated by ensureSchedulesUpToDate().
+ * Past schedules are never deleted when a template changes.
+ */
+export const schedules = pgTable('schedules', {
+  id:              uuid('id').primaryKey().defaultRandom(),
+  userId:          uuid('user_id').references(() => users.id).notNull(),
+  storeId:         uuid('store_id').references(() => stores.id).notNull(),
+  shift:           shiftEnum('shift').notNull(),
+  date:            timestamp('date').notNull(),
+  templateEntryId: uuid('template_entry_id').references(() => weeklyScheduleEntries.id),
+  isHoliday:       boolean('is_holiday').default(false),
+  createdAt:       timestamp('created_at').defaultNow().notNull(),
+  updatedAt:       timestamp('updated_at').defaultNow().notNull(),
+});
+
+// ─── Attendance ───────────────────────────────────────────────────────────────
+/**
+ * Shift hours:
+ *   morning → 08:00 – 17:00  (late if check-in after 08:30)
+ *   evening → 13:00 – 22:00  (late if check-in after 13:30)
+ *
+ * One row per schedule (unique on scheduleId).
+ */
+export const attendance = pgTable('attendance', {
+  id:           uuid('id').primaryKey().defaultRandom(),
+  scheduleId:   uuid('schedule_id').references(() => schedules.id).notNull().unique(),
+  userId:       uuid('user_id').references(() => users.id).notNull(),
+  storeId:      uuid('store_id').references(() => stores.id).notNull(),
+  date:         timestamp('date').notNull(),
+  shift:        shiftEnum('shift').notNull(),
+  status:       attendanceStatusEnum('status').default('present').notNull(),
+  checkInTime:  timestamp('check_in_time'),
+  checkOutTime: timestamp('check_out_time'),
+  onBreak:      boolean('on_break').default(false).notNull(),
+  notes:        text('notes'),
+  recordedBy:   uuid('recorded_by').references(() => users.id),
+  createdAt:    timestamp('created_at').defaultNow().notNull(),
+  updatedAt:    timestamp('updated_at').defaultNow().notNull(),
+});
+
+// ─── Break Sessions ───────────────────────────────────────────────────────────
+export const breakSessions = pgTable('break_sessions', {
+  id:           uuid('id').primaryKey().defaultRandom(),
+  attendanceId: uuid('attendance_id').references(() => attendance.id, { onDelete: 'cascade' }).notNull(),
+  userId:       uuid('user_id').references(() => users.id).notNull(),
+  storeId:      uuid('store_id').references(() => stores.id).notNull(),
+  breakType:    breakTypeEnum('break_type').notNull(),
+  breakOutTime: timestamp('break_out_time').notNull(),
+  returnTime:   timestamp('return_time'),
+  createdAt:    timestamp('created_at').defaultNow().notNull(),
+  updatedAt:    timestamp('updated_at').defaultNow().notNull(),
+});
+
+// ─── Tasks ────────────────────────────────────────────────────────────────────
 export const tasks = pgTable('tasks', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  title: text('title').notNull(),
+  id:          uuid('id').primaryKey().defaultRandom(),
+  title:       text('title').notNull(),
   description: text('description'),
 
-  // Target audience
-  role: userRoleEnum('role').notNull(),
-  employeeType: employeeTypeEnum('employee_type'),  // null = all types
-  shift: shiftEnum('shift'),                         // null = both shifts
+  role:         userRoleEnum('role').notNull(),
+  employeeType: employeeTypeEnum('employee_type'),
+  shift:        shiftEnum('shift'),
 
-  // Recurrence
-  recurrence: taskRecurrenceEnum('recurrence').default('daily').notNull(),
-  /**
-   * JSON-encoded number array.
-   * daily   → null
-   * weekly  → [0-6]  (0=Sunday)
-   * monthly → [1-31]
-   */
+  recurrence:     taskRecurrenceEnum('recurrence').default('daily').notNull(),
   recurrenceDays: text('recurrence_days'),
 
-  // Active / inactive flag (soft delete)
   isActive: boolean('is_active').default(true).notNull(),
 
-  // Form configuration
-  requiresForm: boolean('requires_form').default(false),
-  formSchema: text('form_schema'),       // JSON schema string
+  requiresForm:       boolean('requires_form').default(false),
+  formSchema:         text('form_schema'),
   requiresAttachment: boolean('requires_attachment').default(false),
-  maxAttachments: integer('max_attachments').default(1),
+  maxAttachments:     integer('max_attachments').default(1),
 
   createdBy: uuid('created_by').references(() => users.id),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
-// Employee Tasks table (junction — one row per task instance per shift)
+// ─── Employee Task Instances ──────────────────────────────────────────────────
 export const employeeTasks = pgTable('employee_tasks', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  taskId: uuid('task_id').references(() => tasks.id).notNull(),
-  userId: uuid('user_id').references(() => users.id).notNull(),
-  storeId: uuid('store_id').references(() => stores.id).notNull(),
-  scheduleId: uuid('schedule_id').references(() => schedules.id),
-  attendanceId: uuid('attendance_id').references(() => attendance.id),
-  date: timestamp('date').notNull(),
-  shift: shiftEnum('shift').notNull(),
-  status: taskStatusEnum('status').default('pending').notNull(),
-  completedAt: timestamp('completed_at'),
-  formData: text('form_data'),           // JSON
-  attachmentUrls: text('attachment_urls'), // JSON array
-  notes: text('notes'),
-  verifiedBy: uuid('verified_by').references(() => users.id),
-  verifiedAt: timestamp('verified_at'),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  id:             uuid('id').primaryKey().defaultRandom(),
+  taskId:         uuid('task_id').references(() => tasks.id).notNull(),
+  userId:         uuid('user_id').references(() => users.id).notNull(),
+  storeId:        uuid('store_id').references(() => stores.id).notNull(),
+  scheduleId:     uuid('schedule_id').references(() => schedules.id),
+  attendanceId:   uuid('attendance_id').references(() => attendance.id),
+  date:           timestamp('date').notNull(),
+  shift:          shiftEnum('shift').notNull(),
+  status:         taskStatusEnum('status').default('pending').notNull(),
+  completedAt:    timestamp('completed_at'),
+  formData:       text('form_data'),
+  attachmentUrls: text('attachment_urls'),
+  notes:          text('notes'),
+  verifiedBy:     uuid('verified_by').references(() => users.id),
+  verifiedAt:     timestamp('verified_at'),
+  createdAt:      timestamp('created_at').defaultNow().notNull(),
+  updatedAt:      timestamp('updated_at').defaultNow().notNull(),
 });
 
-// Issues table
+// ─── Other tables ─────────────────────────────────────────────────────────────
 export const issues = pgTable('issues', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  title: text('title').notNull(),
+  id:          uuid('id').primaryKey().defaultRandom(),
+  title:       text('title').notNull(),
   description: text('description').notNull(),
-  userId: uuid('user_id').references(() => users.id).notNull(),
-  storeId: uuid('store_id').references(() => stores.id).notNull(),
-  status: issueStatusEnum('status').default('reported').notNull(),
-  reviewedBy: uuid('reviewed_by').references(() => users.id),
-  reviewedAt: timestamp('reviewed_at'),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  userId:      uuid('user_id').references(() => users.id).notNull(),
+  storeId:     uuid('store_id').references(() => stores.id).notNull(),
+  status:      issueStatusEnum('status').default('reported').notNull(),
+  reviewedBy:  uuid('reviewed_by').references(() => users.id),
+  reviewedAt:  timestamp('reviewed_at'),
+  createdAt:   timestamp('created_at').defaultNow().notNull(),
+  updatedAt:   timestamp('updated_at').defaultNow().notNull(),
 });
 
-// Petty Cash Transactions table
 export const pettyCashTransactions = pgTable('petty_cash_transactions', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  amount: decimal('amount', { precision: 10, scale: 2 }).notNull(),
+  id:          uuid('id').primaryKey().defaultRandom(),
+  amount:      decimal('amount', { precision: 10, scale: 2 }).notNull(),
   description: text('description').notNull(),
-  userId: uuid('user_id').references(() => users.id).notNull(),
-  storeId: uuid('store_id').references(() => stores.id).notNull(),
-  approvedBy: uuid('approved_by').references(() => users.id),
-  approvedAt: timestamp('approved_at'),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  userId:      uuid('user_id').references(() => users.id).notNull(),
+  storeId:     uuid('store_id').references(() => stores.id).notNull(),
+  approvedBy:  uuid('approved_by').references(() => users.id),
+  approvedAt:  timestamp('approved_at'),
+  createdAt:   timestamp('created_at').defaultNow().notNull(),
+  updatedAt:   timestamp('updated_at').defaultNow().notNull(),
 });
 
-// Daily Reports table (BOD/EOD)
 export const dailyReports = pgTable('daily_reports', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  type: text('type').notNull(), // 'BOD' or 'EOD'
-  date: timestamp('date').notNull(),
-  actualAmount: decimal('actual_amount', { precision: 10, scale: 2 }).notNull(),
+  id:            uuid('id').primaryKey().defaultRandom(),
+  type:          text('type').notNull(),
+  date:          timestamp('date').notNull(),
+  actualAmount:  decimal('actual_amount',  { precision: 10, scale: 2 }).notNull(),
   roundedAmount: decimal('rounded_amount', { precision: 10, scale: 2 }).notNull(),
-  userId: uuid('user_id').references(() => users.id).notNull(),
-  storeId: uuid('store_id').references(() => stores.id).notNull(),
-  issueId: uuid('issue_id').references(() => issues.id),
-  status: reportStatusEnum('status').default('draft').notNull(),
-  verifiedBy: uuid('verified_by').references(() => users.id),
-  verifiedAt: timestamp('verified_at'),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  userId:        uuid('user_id').references(() => users.id).notNull(),
+  storeId:       uuid('store_id').references(() => stores.id).notNull(),
+  issueId:       uuid('issue_id').references(() => issues.id),
+  status:        reportStatusEnum('status').default('draft').notNull(),
+  verifiedBy:    uuid('verified_by').references(() => users.id),
+  verifiedAt:    timestamp('verified_at'),
+  createdAt:     timestamp('created_at').defaultNow().notNull(),
+  updatedAt:     timestamp('updated_at').defaultNow().notNull(),
 });
 
-// Export all tables
+// ─── Exports ──────────────────────────────────────────────────────────────────
 export const schema = {
-  users,
-  stores,
-  schedules,
-  attendance,
-  tasks,
-  employeeTasks,
-  issues,
-  pettyCashTransactions,
-  dailyReports,
+  areas,
+  users, stores,
+  weeklyScheduleTemplates, weeklyScheduleEntries,
+  schedules, attendance,
+  breakSessions,
+  tasks, employeeTasks,
+  issues, pettyCashTransactions, dailyReports,
 };
 
-// Export types
-export type User = typeof users.$inferSelect;
-export type NewUser = typeof users.$inferInsert;
-export type Store = typeof stores.$inferSelect;
-export type NewStore = typeof stores.$inferInsert;
-export type Schedule = typeof schedules.$inferSelect;
-export type NewSchedule = typeof schedules.$inferInsert;
-export type Attendance = typeof attendance.$inferSelect;
-export type NewAttendance = typeof attendance.$inferInsert;
-export type Task = typeof tasks.$inferSelect;
-export type NewTask = typeof tasks.$inferInsert;
-export type EmployeeTask = typeof employeeTasks.$inferSelect;
-export type NewEmployeeTask = typeof employeeTasks.$inferInsert;
-export type Issue = typeof issues.$inferSelect;
-export type NewIssue = typeof issues.$inferInsert;
-export type PettyCashTransaction = typeof pettyCashTransactions.$inferSelect;
-export type NewPettyCashTransaction = typeof pettyCashTransactions.$inferInsert;
-export type DailyReport = typeof dailyReports.$inferSelect;
-export type NewDailyReport = typeof dailyReports.$inferInsert;
+export type Area                      = typeof areas.$inferSelect;
+export type User                      = typeof users.$inferSelect;
+export type Store                     = typeof stores.$inferSelect;
+export type WeeklyScheduleTemplate    = typeof weeklyScheduleTemplates.$inferSelect;
+export type NewWeeklyScheduleTemplate = typeof weeklyScheduleTemplates.$inferInsert;
+export type WeeklyScheduleEntry       = typeof weeklyScheduleEntries.$inferSelect;
+export type NewWeeklyScheduleEntry    = typeof weeklyScheduleEntries.$inferInsert;
+export type Schedule                  = typeof schedules.$inferSelect;
+export type Attendance                = typeof attendance.$inferSelect;
+export type BreakSession              = typeof breakSessions.$inferSelect;
+export type Task                      = typeof tasks.$inferSelect;
+export type EmployeeTask              = typeof employeeTasks.$inferSelect;
+export type Issue                     = typeof issues.$inferSelect;
 
-// Convenience type helpers
+export type BreakType      = 'lunch' | 'dinner';
 export type TaskRecurrence = 'daily' | 'weekly' | 'monthly';
+
+/**
+ * 'pic_1' → store schedule owner; can create/edit templates for their store
+ * 'pic_2' → senior employee; no schedule management permissions
+ * 'so'    → standard operator
+ */
+export type EmployeeType = 'pic_1' | 'pic_2' | 'so';
+
 export type TaskFormField = {
   id: string;
   type: 'text' | 'number' | 'textarea' | 'select' | 'checkbox' | 'date' | 'time';
