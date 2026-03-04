@@ -8,6 +8,13 @@
       "when": 1772592846743,
       "tag": "0000_bouncy_giant_man",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1772610184089,
+      "tag": "0001_chief_butterfly",
+      "breakpoints": true
     }
   ]
 }

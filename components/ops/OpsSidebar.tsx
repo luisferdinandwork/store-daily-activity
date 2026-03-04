@@ -3,7 +3,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useSession, signOut } from 'next-auth/react'; // Import auth hooks
+import { useSession, signOut } from 'next-auth/react';
 import { cn } from '@/lib/utils';
 import {
   LayoutDashboard,
@@ -13,29 +13,36 @@ import {
   ClipboardCheck,
   Store,
   ChevronRight,
-  LogOut, // Import LogOut icon
+  LogOut,
+  AlertTriangle,
 } from 'lucide-react';
 
 const NAV = [
   {
     section: 'Overview',
     items: [
-      { href: '/ops', label: 'Dashboard', icon: LayoutDashboard, exact: true },
-      { href: '/ops/stores', label: 'Stores', icon: Store },
+      { href: '/ops',        label: 'Dashboard', icon: LayoutDashboard, exact: true },
+      { href: '/ops/stores', label: 'Stores',    icon: Store },
     ],
   },
   {
     section: 'Tasks',
     items: [
-      { href: '/ops/tasks', label: 'Task Library', icon: ListTodo },
-      { href: '/ops/tasks/new', label: 'Create Task', icon: PlusCircle },
+      { href: '/ops/tasks',     label: 'Task Library', icon: ListTodo   },
+      { href: '/ops/tasks/new', label: 'Create Task',  icon: PlusCircle },
     ],
   },
   {
     section: 'People',
     items: [
-      { href: '/ops/schedules', label: 'Schedules', icon: Calendar },
+      { href: '/ops/schedules',  label: 'Schedules',  icon: Calendar      },
       { href: '/ops/attendance', label: 'Attendance', icon: ClipboardCheck },
+    ],
+  },
+  {
+    section: 'Operations',
+    items: [
+      { href: '/ops/issues', label: 'Issues', icon: AlertTriangle },
     ],
   },
 ];
@@ -46,7 +53,7 @@ interface Props {
 
 export default function OpsSidebar({ storeName = 'Store Manager' }: Props) {
   const pathname = usePathname();
-  const { data: session } = useSession(); // Get session data
+  const { data: session } = useSession();
 
   const isActive = (href: string, exact?: boolean) =>
     exact ? pathname === href : pathname.startsWith(href);
@@ -103,7 +110,6 @@ export default function OpsSidebar({ storeName = 'Store Manager' }: Props) {
       <div className="border-t border-border px-3 py-3">
         <div className="flex items-center gap-2.5 rounded-md px-2.5 py-2">
           <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-secondary text-xs font-semibold text-secondary-foreground">
-            {/* Display first letter of name or 'O' if not available */}
             {session?.user?.name?.charAt(0).toUpperCase() ?? 'O'}
           </div>
           <div className="min-w-0 flex-1">
@@ -114,8 +120,7 @@ export default function OpsSidebar({ storeName = 'Store Manager' }: Props) {
               {session?.user?.email ?? 'ops@store.com'}
             </p>
           </div>
-          
-          {/* Logout Button */}
+
           <button
             onClick={() => signOut({ callbackUrl: '/login' })}
             className="rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"

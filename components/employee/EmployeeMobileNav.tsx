@@ -4,13 +4,14 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useSession } from 'next-auth/react';
-import { Home, CheckSquare, CalendarDays, UserCircle, LayoutGrid } from 'lucide-react';
+import { Home, CheckSquare, CalendarDays, UserCircle, LayoutGrid, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const BASE_NAV = [
   { href: '/employee',            label: 'Home',       Icon: Home         },
   { href: '/employee/tasks',      label: 'Tasks',      Icon: CheckSquare  },
   { href: '/employee/attendance', label: 'Attendance', Icon: CalendarDays },
+  { href: '/employee/issues',     label: 'Issues',     Icon: AlertTriangle },
   { href: '/employee/profile',    label: 'Profile',    Icon: UserCircle   },
 ];
 
@@ -25,9 +26,16 @@ export default function EmployeeMobileNav() {
   const { data: session } = useSession();
   const employeeType = (session?.user as any)?.employeeType as string | null;
 
-  // PIC 1 gets an extra "Schedule" tab inserted before Profile
+  // PIC 1 gets an extra "Schedule" tab inserted before Issues
   const navItems = employeeType === 'pic_1'
-    ? [...BASE_NAV.slice(0, 3), PIC1_NAV_ITEM, BASE_NAV[3]]
+    ? [
+        BASE_NAV[0],                        // Home
+        BASE_NAV[1],                        // Tasks
+        BASE_NAV[2],                        // Attendance
+        PIC1_NAV_ITEM,                      // Schedule (PIC 1 only)
+        BASE_NAV[3],                        // Issues
+        BASE_NAV[4],                        // Profile
+      ]
     : BASE_NAV;
 
   return (

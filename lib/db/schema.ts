@@ -219,16 +219,17 @@ export const employeeTasks = pgTable('employee_tasks', {
 
 // ─── Other tables ─────────────────────────────────────────────────────────────
 export const issues = pgTable('issues', {
-  id:          uuid('id').primaryKey().defaultRandom(),
-  title:       text('title').notNull(),
-  description: text('description').notNull(),
-  userId:      uuid('user_id').references(() => users.id).notNull(),
-  storeId:     uuid('store_id').references(() => stores.id).notNull(),
-  status:      issueStatusEnum('status').default('reported').notNull(),
-  reviewedBy:  uuid('reviewed_by').references(() => users.id),
-  reviewedAt:  timestamp('reviewed_at'),
-  createdAt:   timestamp('created_at').defaultNow().notNull(),
-  updatedAt:   timestamp('updated_at').defaultNow().notNull(),
+  id:             uuid('id').primaryKey().defaultRandom(),
+  title:          text('title').notNull(),
+  description:    text('description').notNull(),
+  userId:         uuid('user_id').references(() => users.id).notNull(),
+  storeId:        uuid('store_id').references(() => stores.id).notNull(),
+  status:         issueStatusEnum('status').default('reported').notNull(),
+  attachmentUrls: text('attachment_urls'),          // ← NEW: JSON array of /issue-report/ paths
+  reviewedBy:     uuid('reviewed_by').references(() => users.id),
+  reviewedAt:     timestamp('reviewed_at'),
+  createdAt:      timestamp('created_at').defaultNow().notNull(),
+  updatedAt:      timestamp('updated_at').defaultNow().notNull(),
 });
 
 export const pettyCashTransactions = pgTable('petty_cash_transactions', {
