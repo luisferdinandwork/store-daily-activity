@@ -12,7 +12,6 @@ const BASE_NAV = [
   { href: '/employee/tasks',      label: 'Tasks',      Icon: CheckSquare  },
   { href: '/employee/attendance', label: 'Attendance', Icon: CalendarDays },
   { href: '/employee/issues',     label: 'Issues',     Icon: AlertTriangle },
-  { href: '/employee/profile',    label: 'Profile',    Icon: UserCircle   },
 ];
 
 const PIC1_NAV_ITEM = {
@@ -34,7 +33,6 @@ export default function EmployeeMobileNav() {
         BASE_NAV[2],                        // Attendance
         PIC1_NAV_ITEM,                      // Schedule (PIC 1 only)
         BASE_NAV[3],                        // Issues
-        BASE_NAV[4],                        // Profile
       ]
     : BASE_NAV;
 
@@ -52,12 +50,6 @@ export default function EmployeeMobileNav() {
               active ? 'text-primary' : 'text-muted-foreground hover:text-foreground',
             )}
           >
-            <span
-              className={cn(
-                'mb-0.5 h-1 w-1 rounded-full transition-opacity',
-                active ? 'bg-primary opacity-100' : 'opacity-0',
-              )}
-            />
             <Icon
               className={cn('h-5 w-5', active ? 'text-primary' : 'text-muted-foreground')}
               strokeWidth={active ? 2.5 : 1.75}

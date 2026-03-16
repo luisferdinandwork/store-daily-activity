@@ -1,68 +1,46 @@
 // lib/schedule-utils.ts
 /**
- * Weekly schedule management.
+ * Monthly schedule management.
  *
  * ── AUTHORIZATION MODEL ───────────────────────────────────────────────────────
  *
  * Who can manage schedules:
- *   • PIC 1  (employeeType = 'pic_1') → PRIMARY owner. Creates and maintains all
- *                                       schedule templates for their own store.
- *   • OPS    (role = 'ops')           → OVERSIGHT role. Can review schedules for all
- *                                       stores in their area, and can override/correct
- *                                       mistakes — but does NOT normally create schedules.
- *                                       Normal flow: PIC 1 creates → OPS reviews/fixes.
- *   • PIC 2 / SO                      → read-only; cannot create or modify templates.
+ *   • PIC 1  (employeeType = 'pic_1') → Creates and maintains monthly schedules
+ *                                       for their home store.
+ *   • OPS    (role = 'ops')           → Can manage/review schedules for all
+ *                                       stores in their area.
+ *   • PIC 2 / SO                      → read-only.
  *
- * Area structure:
- *   • An Area groups multiple Stores (stores.areaId → areas.id).
- *   • Each OPS user is assigned to one area (users.areaId → areas.id).
- *   • OPS can call any schedule function by passing a storeId that belongs to their area.
- *   • Authorization is checked with canManageSchedule() before any mutating operation.
+ * ── MONTHLY SCHEDULE LIFECYCLE ───────────────────────────────────────────────
  *
- * ── SCHEDULE GENERATION ───────────────────────────────────────────────────────
+ *  1. Import Excel → creates MonthlySchedule + MonthlyScheduleEntries for store+month.
+ *  2. PIC/OPS can edit individual day entries at any time.
+ *  3. materialiseSchedules() converts entries into `schedules` rows + task rows.
+ *  4. Past months are preserved as historical records.
+ *  5. To replace a month: call replaceMonthlySchedule() which deletes all
+ *     future unattended schedules then re-materialises.
  *
- * Templates are PERMANENT and self-repeating.
- * PIC 1 (or OPS) sets a template ONCE → it automatically repeats every week.
+ * ── TASK GENERATION ───────────────────────────────────────────────────────────
  *
- * Rolling generation:
- *   • ensureSchedulesUpToDate(storeId) extends schedules ROLLING_WEEKS_AHEAD ahead.
- *   • Safe to call frequently — skips already-existing rows (idempotent).
- *   • Called lazily on page load, on check-in, or via a nightly cron job.
- *   • When a template changes, applyTemplateChange() deletes future unattended
- *     schedules and re-runs generation with the new pattern.
- *   • Past schedules are NEVER touched.
+ *   storeOpeningTask → morning shift ONLY, one per schedule row
+ *   groomingTask     → every shift, one per schedule row
  *
- * SHIFT HOURS
- * ──────────────────────────────────────────────
- *  morning : 08:00 – 17:00  (late if check-in > 08:30)
- *  evening : 13:00 – 22:00  (late if check-in > 13:30)
+ * ── SHIFT HOURS ───────────────────────────────────────────────────────────────
+ *   morning : 08:00 – 17:00  (late if check-in > 08:30)
+ *   evening : 13:00 – 22:00  (late if check-in > 13:30)
  */
 
 import { db } from '@/lib/db';
 import {
-  areas,
-  weeklyScheduleTemplates,
-  weeklyScheduleEntries,
-  schedules,
-  attendance,
-  breakSessions,
-  users,
-  stores,
-  employeeTasks,
-  tasks,
-  type Area,
-  type WeeklyScheduleTemplate,
-  type WeeklyScheduleEntry,
-  type Task,
-  type BreakType,
-  type TaskRecurrence,
+  areas, users, stores,
+  monthlySchedules, monthlyScheduleEntries,
+  schedules, attendance, breakSessions,
+  storeOpeningTasks, groomingTasks,
+  type Area, type MonthlySchedule, type MonthlyScheduleEntry, type BreakType,
 } from '@/lib/db/schema';
-import { eq, and, gte, lte, inArray, isNull } from 'drizzle-orm';
-import { shouldTaskRunOnDate } from '@/lib/daily-task-utils';
+import { eq, and, gte, lte, inArray, isNull, sql } from 'drizzle-orm';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-
-const ROLLING_WEEKS_AHEAD = 4;
 
 export const SHIFT_CONFIG = {
   morning: { startHour: 8,  endHour: 17, lateAfterMinutes: 30, breakType: 'lunch'  as BreakType },
@@ -73,561 +51,494 @@ export const SHIFT_CONFIG = {
 
 export type Shift = 'morning' | 'evening';
 
-export interface TemplateEntry {
-  weekday: number;
-  shift: Shift;
-}
-
-export interface CreateTemplateInput {
-  /** The employee whose schedule is being defined. */
-  userId: string;
+export interface DayAssignment {
+  userId:  string;
   storeId: string;
-  entries: TemplateEntry[];
-  note?: string;
-  /** The user performing this action (PIC 1 of the store, or OPS for the area). */
-  createdBy: string;
+  date:    Date;
+  shift:   Shift | null;
+  isOff:   boolean;
+  isLeave: boolean;
 }
 
-export interface TemplateWithUser {
-  template: WeeklyScheduleTemplate;
-  entries: WeeklyScheduleEntry[];
-  user: {
-    id: string;
-    name: string;
-    role: string;
-    employeeType: string | null;
-  } | null;
+export interface CreateMonthlyScheduleInput {
+  storeId:     string;
+  yearMonth:   string;             // "YYYY-MM"
+  entries:     DayAssignment[];
+  note?:       string;
+  importedBy:  string;
 }
 
-// ─── Authorization helpers ────────────────────────────────────────────────────
+export interface MonthlyScheduleWithEntries {
+  schedule: MonthlySchedule;
+  entries:  (MonthlyScheduleEntry & { userName: string | null; userEmployeeType: string | null })[];
+}
 
-/**
- * Resolves the area that a given store belongs to.
- */
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+export function startOfDay(d: Date): Date {
+  const r = new Date(d); r.setHours(0, 0, 0, 0); return r;
+}
+export function endOfDay(d: Date): Date {
+  const r = new Date(d); r.setHours(23, 59, 59, 999); return r;
+}
+
+/** "YYYY-MM" → first day of that month as Date */
+export function yearMonthToDate(ym: string): Date {
+  const [y, m] = ym.split('-').map(Number);
+  return new Date(y, m - 1, 1, 0, 0, 0, 0);
+}
+
+/** Date → "YYYY-MM" */
+export function dateToYearMonth(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+// ─── Authorization ────────────────────────────────────────────────────────────
+
 export async function getStoreArea(storeId: string): Promise<Area | null> {
-  const [store] = await db
-    .select({ areaId: stores.areaId })
-    .from(stores)
-    .where(eq(stores.id, storeId))
-    .limit(1);
-
+  const [store] = await db.select({ areaId: stores.areaId }).from(stores).where(eq(stores.id, storeId)).limit(1);
   if (!store?.areaId) return null;
-
-  const [area] = await db
-    .select()
-    .from(areas)
-    .where(eq(areas.id, store.areaId))
-    .limit(1);
-
+  const [area] = await db.select().from(areas).where(eq(areas.id, store.areaId)).limit(1);
   return area ?? null;
 }
 
-/**
- * Returns all stores in the area that an OPS user is assigned to.
- */
 export async function getStoresForOps(opsUserId: string): Promise<string[]> {
-  const [opsUser] = await db
-    .select({ areaId: users.areaId })
-    .from(users)
-    .where(eq(users.id, opsUserId))
-    .limit(1);
-
+  const [opsUser] = await db.select({ areaId: users.areaId }).from(users).where(eq(users.id, opsUserId)).limit(1);
   if (!opsUser?.areaId) return [];
-
-  const areaStores = await db
-    .select({ id: stores.id })
-    .from(stores)
-    .where(eq(stores.areaId, opsUser.areaId));
-
-  return areaStores.map((s) => s.id);
+  const areaStores = await db.select({ id: stores.id }).from(stores).where(eq(stores.areaId, opsUser.areaId));
+  return areaStores.map(s => s.id);
 }
 
-/**
- * Central authorization check for any schedule-mutating operation.
- *
- * Returns { allowed: true } when:
- *   - actorId is an OPS user whose area contains storeId, OR
- *   - actorId is a PIC 1 whose own store matches storeId.
- *
- * Everyone else (PIC 2, SO, finance, etc.) is denied.
- */
 export async function canManageSchedule(
   actorId: string,
   storeId: string,
 ): Promise<{ allowed: boolean; reason?: string }> {
   const [actor] = await db
-    .select({ role: users.role, employeeType: users.employeeType, storeId: users.storeId, areaId: users.areaId })
-    .from(users)
-    .where(eq(users.id, actorId))
-    .limit(1);
+    .select({ role: users.role, employeeType: users.employeeType, homeStoreId: users.homeStoreId, areaId: users.areaId })
+    .from(users).where(eq(users.id, actorId)).limit(1);
 
-  if (!actor) return { allowed: false, reason: 'Actor user not found.' };
+  if (!actor) return { allowed: false, reason: 'Actor not found.' };
 
-  // OPS: allowed if the target store is in their area
   if (actor.role === 'ops') {
     if (!actor.areaId) return { allowed: false, reason: 'OPS user has no area assigned.' };
-
-    const [targetStore] = await db
-      .select({ areaId: stores.areaId })
-      .from(stores)
-      .where(eq(stores.id, storeId))
-      .limit(1);
-
+    const [targetStore] = await db.select({ areaId: stores.areaId }).from(stores).where(eq(stores.id, storeId)).limit(1);
     if (!targetStore) return { allowed: false, reason: 'Store not found.' };
-
-    if (targetStore.areaId !== actor.areaId) {
-      return { allowed: false, reason: 'This store is not in your area.' };
-    }
-
+    if (targetStore.areaId !== actor.areaId) return { allowed: false, reason: 'This store is not in your area.' };
     return { allowed: true };
   }
 
-  // PIC 1: allowed only for their own store
   if (actor.employeeType === 'pic_1') {
-    if (actor.storeId !== storeId) {
-      return { allowed: false, reason: 'PIC 1 can only manage schedules for their own store.' };
-    }
+    if (actor.homeStoreId !== storeId) return { allowed: false, reason: 'PIC 1 can only manage schedules for their home store.' };
     return { allowed: true };
   }
 
-  // Everyone else is denied
-  return {
-    allowed: false,
-    reason: 'Only OPS (for their area) or PIC 1 (for their own store) can manage schedules.',
-  };
+  return { allowed: false, reason: 'Only OPS (for their area) or PIC 1 (for their store) can manage schedules.' };
 }
 
-// ─── Template CRUD ────────────────────────────────────────────────────────────
+// ─── Monthly Schedule CRUD ────────────────────────────────────────────────────
 
 /**
- * Upsert: deactivates any previous active template for the same employee+store,
- * then creates a fresh one with the given entries.
+ * Create (or fully replace) a monthly schedule for a store+month.
  *
- * Authorization is checked against `data.createdBy` — must be OPS (for their area)
- * or PIC 1 (for their own store).
+ * If a schedule already exists for that store+month:
+ *   - All entries without attendance records are deleted.
+ *   - The new entries are inserted.
+ *   - Schedules/tasks for days without attendance are rebuilt.
  */
-export async function createOrReplaceTemplate(
-  data: CreateTemplateInput,
-): Promise<{ success: boolean; templateId?: string; error?: string }> {
+export async function createOrReplaceMonthlySchedule(
+  data: CreateMonthlyScheduleInput,
+): Promise<{ success: boolean; scheduleId?: string; error?: string }> {
   try {
-    // ── Auth check ─────────────────────────────────────────────────────────────
-    const auth = await canManageSchedule(data.createdBy, data.storeId);
+    const auth = await canManageSchedule(data.importedBy, data.storeId);
     if (!auth.allowed) return { success: false, error: auth.reason };
 
-    if (!data.entries.length) {
-      return { success: false, error: 'At least one working-day entry is required.' };
-    }
-    for (const e of data.entries) {
-      if (e.weekday < 0 || e.weekday > 6)
-        return { success: false, error: `Invalid weekday ${e.weekday}` };
-    }
+    if (!data.entries.length) return { success: false, error: 'No entries provided.' };
 
-    // Deactivate old template for this employee+store
-    const old = await db
-      .select({ id: weeklyScheduleTemplates.id })
-      .from(weeklyScheduleTemplates)
-      .where(
-        and(
-          eq(weeklyScheduleTemplates.userId,   data.userId),
-          eq(weeklyScheduleTemplates.storeId,  data.storeId),
-          eq(weeklyScheduleTemplates.isActive, true),
-        ),
-      );
-
-    if (old.length > 0) {
-      await db
-        .update(weeklyScheduleTemplates)
-        .set({ isActive: false, updatedAt: new Date() })
-        .where(inArray(weeklyScheduleTemplates.id, old.map((r) => r.id)));
-    }
-
-    // Create new template
-    const [tmpl] = await db
-      .insert(weeklyScheduleTemplates)
-      .values({
-        userId:    data.userId,
-        storeId:   data.storeId,
-        note:      data.note,
-        createdBy: data.createdBy,
-      })
-      .returning({ id: weeklyScheduleTemplates.id });
-
-    await db.insert(weeklyScheduleEntries).values(
-      data.entries.map((e) => ({
-        templateId: tmpl.id,
-        weekday:    String(e.weekday) as '0'|'1'|'2'|'3'|'4'|'5'|'6',
-        shift:      e.shift,
-      })),
-    );
-
-    // Roll schedules forward immediately
-    await ensureSchedulesUpToDate(data.storeId);
-
-    return { success: true, templateId: tmpl.id };
-  } catch (err) {
-    return { success: false, error: `createOrReplaceTemplate: ${err}` };
-  }
-}
-
-/**
- * Patch entries / note / isActive of an existing template.
- *
- * @param actorId - Must be OPS (for their area) or PIC 1 (for their store).
- */
-export async function updateTemplate(
-  templateId: string,
-  patch: { entries?: TemplateEntry[]; note?: string; isActive?: boolean },
-  actorId: string,
-): Promise<{ success: boolean; error?: string }> {
-  try {
-    // Resolve storeId for the template so we can auth-check
-    const [tmpl] = await db
-      .select({ storeId: weeklyScheduleTemplates.storeId })
-      .from(weeklyScheduleTemplates)
-      .where(eq(weeklyScheduleTemplates.id, templateId))
+    // Check if a schedule already exists for this store+month
+    const [existing] = await db
+      .select({ id: monthlySchedules.id })
+      .from(monthlySchedules)
+      .where(and(eq(monthlySchedules.storeId, data.storeId), eq(monthlySchedules.yearMonth, data.yearMonth)))
       .limit(1);
 
-    if (!tmpl) return { success: false, error: 'Template not found.' };
+    let monthlyScheduleId: string;
 
-    const auth = await canManageSchedule(actorId, tmpl.storeId);
-    if (!auth.allowed) return { success: false, error: auth.reason };
+    if (existing) {
+      monthlyScheduleId = existing.id;
 
-    const headerPatch: Partial<typeof weeklyScheduleTemplates.$inferInsert> = {
-      updatedAt: new Date(),
-      // Track the last person to touch this template
-      createdBy: actorId,
-    };
-    if (patch.note     !== undefined) headerPatch.note     = patch.note;
-    if (patch.isActive !== undefined) headerPatch.isActive = patch.isActive;
+      // Delete entries that do NOT have an attendance record yet
+      // (entries tied to past attended schedules must stay)
+      const entriesToCheck = await db
+        .select({
+          id:      monthlyScheduleEntries.id,
+          date:    monthlyScheduleEntries.date,
+          shift:   monthlyScheduleEntries.shift,
+          userId:  monthlyScheduleEntries.userId,
+          isOff:   monthlyScheduleEntries.isOff,
+          isLeave: monthlyScheduleEntries.isLeave,
+        })
+        .from(monthlyScheduleEntries)
+        .where(eq(monthlyScheduleEntries.monthlyScheduleId, monthlyScheduleId));
 
-    await db
-      .update(weeklyScheduleTemplates)
-      .set(headerPatch)
-      .where(eq(weeklyScheduleTemplates.id, templateId));
+      const deletableIds: string[] = [];
+      for (const entry of entriesToCheck) {
+        if (entry.isOff || entry.isLeave || !entry.shift) {
+          deletableIds.push(entry.id);
+          continue;
+        }
+        // Check if there's an attendance record for this entry's schedule
+        const [sched] = await db
+          .select({ id: schedules.id })
+          .from(schedules)
+          .where(eq(schedules.monthlyScheduleEntryId, entry.id))
+          .limit(1);
+        if (!sched) { deletableIds.push(entry.id); continue; }
 
-    if (patch.entries) {
-      await db
-        .delete(weeklyScheduleEntries)
-        .where(eq(weeklyScheduleEntries.templateId, templateId));
-
-      if (patch.entries.length > 0) {
-        await db.insert(weeklyScheduleEntries).values(
-          patch.entries.map((e) => ({
-            templateId,
-            weekday: String(e.weekday) as '0'|'1'|'2'|'3'|'4'|'5'|'6',
-            shift:   e.shift,
-          })),
-        );
+        const [att] = await db
+          .select({ id: attendance.id })
+          .from(attendance)
+          .where(eq(attendance.scheduleId, sched.id))
+          .limit(1);
+        if (!att) deletableIds.push(entry.id);
       }
 
-      await applyTemplateChange(templateId);
+      if (deletableIds.length > 0) {
+        // Delete associated pending schedules + tasks first
+        const entrySchedules = await db
+          .select({ id: schedules.id })
+          .from(schedules)
+          .where(inArray(schedules.monthlyScheduleEntryId, deletableIds));
+
+        if (entrySchedules.length > 0) {
+          const schedIds = entrySchedules.map(s => s.id);
+          await db.delete(storeOpeningTasks).where(and(inArray(storeOpeningTasks.scheduleId, schedIds), eq(storeOpeningTasks.status, 'pending')));
+          await db.delete(groomingTasks).where(and(inArray(groomingTasks.scheduleId, schedIds), eq(groomingTasks.status, 'pending')));
+          await db.delete(schedules).where(inArray(schedules.id, schedIds));
+        }
+
+        await db.delete(monthlyScheduleEntries).where(inArray(monthlyScheduleEntries.id, deletableIds));
+      }
+
+      await db.update(monthlySchedules).set({ note: data.note, updatedAt: new Date() }).where(eq(monthlySchedules.id, monthlyScheduleId));
+    } else {
+      const [ms] = await db
+        .insert(monthlySchedules)
+        .values({ storeId: data.storeId, yearMonth: data.yearMonth, importedBy: data.importedBy, note: data.note })
+        .returning({ id: monthlySchedules.id });
+      monthlyScheduleId = ms.id;
+    }
+
+    // Insert new entries
+    const workingEntries = data.entries.filter(e => !e.isOff && !e.isLeave && e.shift);
+
+    if (workingEntries.length > 0) {
+      await db.insert(monthlyScheduleEntries).values(
+        data.entries.map(e => ({
+          monthlyScheduleId,
+          userId:  e.userId,
+          storeId: e.storeId,
+          date:    startOfDay(e.date),
+          shift:   e.shift ?? undefined,
+          isOff:   e.isOff,
+          isLeave: e.isLeave,
+        }))
+      ).onConflictDoNothing();
+    }
+
+    // Materialise schedules + tasks for the new entries
+    await materialiseSchedulesForMonth(data.storeId, data.yearMonth);
+
+    return { success: true, scheduleId: monthlyScheduleId };
+  } catch (err) {
+    return { success: false, error: `createOrReplaceMonthlySchedule: ${err}` };
+  }
+}
+
+/**
+ * Update a single day entry (e.g. change shift, mark leave, etc.)
+ * If a schedule row exists without attendance, it is replaced.
+ */
+export async function updateMonthlyScheduleEntry(
+  entryId:  string,
+  patch:    { shift?: Shift | null; isOff?: boolean; isLeave?: boolean },
+  actorId:  string,
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    // Fetch all columns explicitly so TypeScript knows the full shape
+    const [entry] = await db
+      .select({
+        id:                monthlyScheduleEntries.id,
+        monthlyScheduleId: monthlyScheduleEntries.monthlyScheduleId,
+        userId:            monthlyScheduleEntries.userId,
+        storeId:           monthlyScheduleEntries.storeId,
+        date:              monthlyScheduleEntries.date,
+        shift:             monthlyScheduleEntries.shift,
+        isOff:             monthlyScheduleEntries.isOff,
+        isLeave:           monthlyScheduleEntries.isLeave,
+        createdAt:         monthlyScheduleEntries.createdAt,
+        updatedAt:         monthlyScheduleEntries.updatedAt,
+      })
+      .from(monthlyScheduleEntries)
+      .where(eq(monthlyScheduleEntries.id, entryId))
+      .limit(1);
+
+    if (!entry) return { success: false, error: 'Entry not found.' };
+
+    const auth = await canManageSchedule(actorId, entry.storeId);
+    if (!auth.allowed) return { success: false, error: auth.reason };
+
+    // Check if this day is already attended — cannot edit
+    const [sched] = await db.select({ id: schedules.id }).from(schedules).where(eq(schedules.monthlyScheduleEntryId, entryId)).limit(1);
+    if (sched) {
+      const [att] = await db.select({ id: attendance.id }).from(attendance).where(eq(attendance.scheduleId, sched.id)).limit(1);
+      if (att) return { success: false, error: 'Cannot edit a schedule day that already has an attendance record.' };
+
+      // Delete the unattended schedule + tasks so they can be rebuilt
+      await db.delete(storeOpeningTasks).where(and(eq(storeOpeningTasks.scheduleId, sched.id), eq(storeOpeningTasks.status, 'pending')));
+      await db.delete(groomingTasks).where(and(eq(groomingTasks.scheduleId, sched.id), eq(groomingTasks.status, 'pending')));
+      await db.delete(schedules).where(eq(schedules.id, sched.id));
+    }
+
+    await db.update(monthlyScheduleEntries).set({ ...patch, updatedAt: new Date() }).where(eq(monthlyScheduleEntries.id, entryId));
+
+    // Rebuild schedule row if the entry is now a working shift
+    const updatedIsOff   = patch.isOff   !== undefined ? patch.isOff   : (entry.isOff   ?? false);
+    const updatedIsLeave = patch.isLeave !== undefined ? patch.isLeave : (entry.isLeave ?? false);
+    const updatedShift   = patch.shift   !== undefined ? patch.shift   : entry.shift;
+
+    if (!updatedIsOff && !updatedIsLeave && updatedShift) {
+      const [ms] = await db
+        .select({ storeId: monthlySchedules.storeId, yearMonth: monthlySchedules.yearMonth })
+        .from(monthlySchedules)
+        .where(eq(monthlySchedules.id, entry.monthlyScheduleId))
+        .limit(1);
+      if (ms) await materialiseSchedulesForMonth(ms.storeId, ms.yearMonth);
     }
 
     return { success: true };
   } catch (err) {
-    return { success: false, error: `updateTemplate: ${err}` };
+    return { success: false, error: `updateMonthlyScheduleEntry: ${err}` };
   }
 }
 
 /**
- * List all templates for a store, joined with entries + user info.
- *
- * Readable by:
- *   - OPS users whose area includes this store.
- *   - PIC 1 of the store (sees all templates in their store).
- *   - PIC 2 / SO of the store (read-only; can view but not modify).
- *
- * (Filtering by viewer permissions is left to the calling layer if needed.)
+ * Completely remove a monthly schedule for a store+month.
+ * Only entries/schedules without attendance can be removed.
+ * Returns the count of entries that could NOT be removed (attended days).
  */
-export async function getTemplatesForStore(
-  storeId: string,
-  activeOnly = true,
-): Promise<TemplateWithUser[]> {
-  const cond = activeOnly
-    ? and(eq(weeklyScheduleTemplates.storeId, storeId), eq(weeklyScheduleTemplates.isActive, true))
-    : eq(weeklyScheduleTemplates.storeId, storeId);
+export async function deleteMonthlySchedule(
+  storeId:    string,
+  yearMonth:  string,
+  actorId:    string,
+): Promise<{ success: boolean; lockedCount?: number; error?: string }> {
+  try {
+    const auth = await canManageSchedule(actorId, storeId);
+    if (!auth.allowed) return { success: false, error: auth.reason };
 
-  const rows = await db
-    .select({ template: weeklyScheduleTemplates, user: users })
-    .from(weeklyScheduleTemplates)
-    .leftJoin(users, eq(weeklyScheduleTemplates.userId, users.id))
-    .where(cond)
-    .orderBy(users.name);
+    const [ms] = await db
+      .select({ id: monthlySchedules.id })
+      .from(monthlySchedules)
+      .where(and(eq(monthlySchedules.storeId, storeId), eq(monthlySchedules.yearMonth, yearMonth)))
+      .limit(1);
 
-  return Promise.all(
-    rows.map(async ({ template, user }) => {
-      const entries = await db
-        .select()
-        .from(weeklyScheduleEntries)
-        .where(eq(weeklyScheduleEntries.templateId, template.id))
-        .orderBy(weeklyScheduleEntries.weekday);
+    if (!ms) return { success: false, error: 'Monthly schedule not found.' };
 
-      return {
-        template,
-        entries,
-        user: user
-          ? { id: user.id, name: user.name, role: user.role, employeeType: user.employeeType }
-          : null,
-      };
-    }),
-  );
-}
+    const allEntries = await db
+      .select({ id: monthlyScheduleEntries.id })
+      .from(monthlyScheduleEntries)
+      .where(eq(monthlyScheduleEntries.monthlyScheduleId, ms.id));
 
-/**
- * List templates for ALL stores in an OPS user's area.
- * Convenience wrapper — used on the OPS multi-store dashboard.
- */
-export async function getTemplatesForOpsArea(
-  opsUserId: string,
-  activeOnly = true,
-): Promise<{ storeId: string; templates: TemplateWithUser[] }[]> {
-  const storeIds = await getStoresForOps(opsUserId);
-  if (!storeIds.length) return [];
+    const entryIds = allEntries.map(e => e.id);
 
-  return Promise.all(
-    storeIds.map(async (storeId) => ({
-      storeId,
-      templates: await getTemplatesForStore(storeId, activeOnly),
-    })),
-  );
-}
+    // Find schedules for these entries
+    const entrySchedules = entryIds.length > 0
+      ? await db.select({ id: schedules.id, entryId: schedules.monthlyScheduleEntryId })
+          .from(schedules).where(inArray(schedules.monthlyScheduleEntryId, entryIds))
+      : [];
 
-// ─── Rolling schedule generation ──────────────────────────────────────────────
+    let lockedCount = 0;
+    const deletableSchedIds: string[] = [];
 
-/**
- * MAIN ENTRY POINT — ensures all active templates for a store have schedules
- * generated at least ROLLING_WEEKS_AHEAD weeks into the future.
- *
- * Safe to call frequently — checks lastScheduledThrough and only creates
- * what's missing (idempotent).
- *
- * Recommended call sites:
- *   • On store dashboard / schedule page load
- *   • Inside employeeCheckIn()
- *   • Via a nightly cron job
- */
-export async function ensureSchedulesUpToDate(
-  storeId: string,
-): Promise<{ schedulesCreated: number; tasksCreated: number; errors: string[] }> {
-  const horizon = new Date();
-  horizon.setDate(horizon.getDate() + ROLLING_WEEKS_AHEAD * 7);
-
-  const templates = await getTemplatesForStore(storeId, true);
-  if (!templates.length) return { schedulesCreated: 0, tasksCreated: 0, errors: [] };
-
-  const allActiveTasks: Task[] = await db
-    .select()
-    .from(tasks)
-    .where(eq(tasks.isActive, true));
-
-  let schedulesCreated = 0;
-  let tasksCreated = 0;
-  const errors: string[] = [];
-
-  for (const { template, entries, user } of templates) {
-    if (!user || !entries.length) continue;
-
-    const resumeFrom = template.lastScheduledThrough
-      ? new Date(template.lastScheduledThrough.getTime() + 86_400_000)
-      : startOfDay(new Date());
-
-    if (resumeFrom > horizon) continue;
-
-    for (const date of eachDay(resumeFrom, horizon)) {
-      const weekday = date.getDay();
-      const todayEntries = entries.filter((e) => Number(e.weekday) === weekday);
-
-      for (const entry of todayEntries) {
-        try {
-          const result = await createScheduleAndTasks({
-            template,
-            entry,
-            user,
-            date,
-            storeId,
-            allActiveTasks,
-          });
-          schedulesCreated += result.scheduleCreated ? 1 : 0;
-          tasksCreated     += result.tasksCreated;
-        } catch (err) {
-          errors.push(`${user.name} ${date.toISOString().slice(0, 10)}: ${err}`);
-        }
-      }
+    for (const s of entrySchedules) {
+      const [att] = await db.select({ id: attendance.id }).from(attendance).where(eq(attendance.scheduleId, s.id)).limit(1);
+      if (att) { lockedCount++; }
+      else { deletableSchedIds.push(s.id); }
     }
 
-    await db
-      .update(weeklyScheduleTemplates)
-      .set({ lastScheduledThrough: horizon, updatedAt: new Date() })
-      .where(eq(weeklyScheduleTemplates.id, template.id));
+    if (deletableSchedIds.length > 0) {
+      await db.delete(storeOpeningTasks).where(inArray(storeOpeningTasks.scheduleId, deletableSchedIds));
+      await db.delete(groomingTasks).where(inArray(groomingTasks.scheduleId, deletableSchedIds));
+      await db.delete(schedules).where(inArray(schedules.id, deletableSchedIds));
+    }
+
+    if (lockedCount === 0) {
+      // Safe to delete all entries + the schedule header
+      if (entryIds.length > 0) await db.delete(monthlyScheduleEntries).where(inArray(monthlyScheduleEntries.id, entryIds));
+      await db.delete(monthlySchedules).where(eq(monthlySchedules.id, ms.id));
+    } else {
+      // Partial delete: remove only unattended entries
+      const attendedSchedIds = new Set(entrySchedules.filter(s => !deletableSchedIds.includes(s.id)).map(s => s.id));
+      const attendedEntryIds = new Set(
+        entrySchedules.filter(s => attendedSchedIds.has(s.id)).map(s => s.entryId).filter(Boolean)
+      );
+      const toDeleteEntries = entryIds.filter(id => !attendedEntryIds.has(id));
+      if (toDeleteEntries.length > 0) await db.delete(monthlyScheduleEntries).where(inArray(monthlyScheduleEntries.id, toDeleteEntries));
+    }
+
+    return { success: true, lockedCount };
+  } catch (err) {
+    return { success: false, error: `deleteMonthlySchedule: ${err}` };
   }
-
-  return { schedulesCreated, tasksCreated, errors };
 }
 
 /**
- * Convenience: ensure schedules are up-to-date for ALL stores in an OPS user's area.
- * Useful for the OPS multi-store overview page.
+ * Get a monthly schedule with all entries and user info for a store+month.
  */
-export async function ensureSchedulesUpToDateForOps(
-  opsUserId: string,
-): Promise<{ storeId: string; schedulesCreated: number; tasksCreated: number; errors: string[] }[]> {
-  const storeIds = await getStoresForOps(opsUserId);
-  return Promise.all(
-    storeIds.map(async (storeId) => ({
-      storeId,
-      ...(await ensureSchedulesUpToDate(storeId)),
-    })),
-  );
-}
-
-/**
- * Called by updateTemplate() when entries change.
- * Deletes future unattended schedules, resets lastScheduledThrough,
- * then re-runs ensureSchedulesUpToDate().
- */
-export async function applyTemplateChange(
-  templateId: string,
-): Promise<{ schedulesCreated: number; tasksCreated: number; errors: string[] }> {
-  const [tmpl] = await db
+export async function getMonthlySchedule(
+  storeId:   string,
+  yearMonth: string,
+): Promise<MonthlyScheduleWithEntries | null> {
+  const [ms] = await db
     .select()
-    .from(weeklyScheduleTemplates)
-    .where(eq(weeklyScheduleTemplates.id, templateId))
+    .from(monthlySchedules)
+    .where(and(eq(monthlySchedules.storeId, storeId), eq(monthlySchedules.yearMonth, yearMonth)))
     .limit(1);
 
-  if (!tmpl) return { schedulesCreated: 0, tasksCreated: 0, errors: ['Template not found'] };
+  if (!ms) return null;
 
-  const today = startOfDay(new Date());
+  const rawEntries = await db
+    .select({ entry: monthlyScheduleEntries, user: users })
+    .from(monthlyScheduleEntries)
+    .leftJoin(users, eq(monthlyScheduleEntries.userId, users.id))
+    .where(eq(monthlyScheduleEntries.monthlyScheduleId, ms.id))
+    .orderBy(monthlyScheduleEntries.date, users.name);
 
-  const futureSchedules = await db
-    .select({ id: schedules.id })
-    .from(schedules)
-    .leftJoin(attendance, eq(attendance.scheduleId, schedules.id))
-    .where(
-      and(
-        eq(schedules.userId,  tmpl.userId),
-        eq(schedules.storeId, tmpl.storeId),
-        gte(schedules.date,   today),
-        isNull(attendance.id),
-      ),
-    );
-
-  if (futureSchedules.length > 0) {
-    await db
-      .delete(employeeTasks)
-      .where(
-        and(
-          inArray(employeeTasks.scheduleId, futureSchedules.map((s) => s.id)),
-          eq(employeeTasks.status, 'pending'),
-        ),
-      );
-
-    await db
-      .delete(schedules)
-      .where(inArray(schedules.id, futureSchedules.map((s) => s.id)));
-  }
-
-  const yesterday = new Date(today.getTime() - 86_400_000);
-  await db
-    .update(weeklyScheduleTemplates)
-    .set({ lastScheduledThrough: yesterday, updatedAt: new Date() })
-    .where(eq(weeklyScheduleTemplates.id, templateId));
-
-  return ensureSchedulesUpToDate(tmpl.storeId);
+  return {
+    schedule: ms,
+    entries: rawEntries.map(r => ({
+      ...r.entry,
+      userName:         r.user?.name ?? null,
+      userEmployeeType: r.user?.employeeType ?? null,
+    })),
+  };
 }
 
-// ─── Internal: create one schedule + its tasks ────────────────────────────────
+/**
+ * List all monthly schedules for a store, newest first.
+ */
+export async function listMonthlySchedules(storeId: string): Promise<MonthlySchedule[]> {
+  return db
+    .select()
+    .from(monthlySchedules)
+    .where(eq(monthlySchedules.storeId, storeId))
+    .orderBy(sql`${monthlySchedules.yearMonth} DESC`);
+}
 
-async function createScheduleAndTasks({
-  template,
-  entry,
-  user,
-  date,
-  storeId,
-  allActiveTasks,
-}: {
-  template: WeeklyScheduleTemplate;
-  entry: WeeklyScheduleEntry;
-  user: { id: string; role: string; employeeType: string | null };
-  date: Date;
-  storeId: string;
-  allActiveTasks: Task[];
-}): Promise<{ scheduleCreated: boolean; tasksCreated: number }> {
+// ─── Materialisation ──────────────────────────────────────────────────────────
+
+/**
+ * Converts all working MonthlyScheduleEntries for a store+month into
+ * `schedules` rows and their associated task rows.
+ *
+ * Idempotent — skips days already present in `schedules`.
+ * Does NOT touch days with existing attendance records.
+ */
+export async function materialiseSchedulesForMonth(
+  storeId:   string,
+  yearMonth: string,
+): Promise<{ schedulesCreated: number; openingTasksCreated: number; groomingTasksCreated: number; errors: string[] }> {
+  let schedulesCreated     = 0;
+  let openingTasksCreated  = 0;
+  let groomingTasksCreated = 0;
+  const errors: string[]   = [];
+
+  const [ms] = await db
+    .select({ id: monthlySchedules.id })
+    .from(monthlySchedules)
+    .where(and(eq(monthlySchedules.storeId, storeId), eq(monthlySchedules.yearMonth, yearMonth)))
+    .limit(1);
+
+  if (!ms) return { schedulesCreated, openingTasksCreated, groomingTasksCreated, errors: ['Monthly schedule not found'] };
+
+  const entries = await db
+    .select()
+    .from(monthlyScheduleEntries)
+    .where(and(
+      eq(monthlyScheduleEntries.monthlyScheduleId, ms.id),
+      eq(monthlyScheduleEntries.isOff,   false),
+      eq(monthlyScheduleEntries.isLeave, false),
+    ));
+
+  for (const entry of entries) {
+    if (!entry.shift) continue;
+    try {
+      const result = await createScheduleAndTasks(entry);
+      schedulesCreated     += result.scheduleCreated     ? 1 : 0;
+      openingTasksCreated  += result.openingTaskCreated  ? 1 : 0;
+      groomingTasksCreated += result.groomingTaskCreated ? 1 : 0;
+    } catch (err) {
+      errors.push(`Entry ${entry.id}: ${err}`);
+    }
+  }
+
+  return { schedulesCreated, openingTasksCreated, groomingTasksCreated, errors };
+}
+
+// ─── Internal: create one schedule + task rows ────────────────────────────────
+
+async function createScheduleAndTasks(
+  entry: MonthlyScheduleEntry,
+): Promise<{ scheduleCreated: boolean; openingTaskCreated: boolean; groomingTaskCreated: boolean }> {
+  const shift = entry.shift as Shift;
+  const date  = startOfDay(entry.date);
+
+  // Idempotency check
   const existing = await db
     .select({ id: schedules.id })
     .from(schedules)
-    .where(
-      and(
-        eq(schedules.userId,  template.userId),
-        eq(schedules.storeId, storeId),
-        eq(schedules.shift,   entry.shift),
-        gte(schedules.date,   startOfDay(date)),
-        lte(schedules.date,   endOfDay(date)),
-      ),
-    )
+    .where(and(
+      eq(schedules.userId,                 entry.userId),
+      eq(schedules.storeId,                entry.storeId),
+      eq(schedules.shift,                  shift),
+      gte(schedules.date,                  startOfDay(date)),
+      lte(schedules.date,                  endOfDay(date)),
+    ))
     .limit(1);
 
-  if (existing.length > 0) return { scheduleCreated: false, tasksCreated: 0 };
+  if (existing.length > 0) {
+    return { scheduleCreated: false, openingTaskCreated: false, groomingTaskCreated: false };
+  }
 
   const [newSched] = await db
     .insert(schedules)
-    .values({
-      userId:          template.userId,
-      storeId,
-      shift:           entry.shift,
-      date:            startOfDay(date),
-      templateEntryId: entry.id,
-      isHoliday:       false,
-    })
+    .values({ userId: entry.userId, storeId: entry.storeId, shift, date, monthlyScheduleEntryId: entry.id, isHoliday: false })
     .returning({ id: schedules.id });
 
-  let tasksCreated = 0;
+  const schedId = newSched.id;
 
-  const matching = allActiveTasks.filter(
-    (t) =>
-      shouldTaskRunOnDate(t.recurrence as TaskRecurrence, t.recurrenceDays, date) &&
-      taskMatchesEmployee(t, user, entry.shift),
-  );
-
-  for (const task of matching) {
-    const dupCheck = await db
-      .select({ id: employeeTasks.id })
-      .from(employeeTasks)
-      .where(
-        and(
-          eq(employeeTasks.taskId,     task.id),
-          eq(employeeTasks.userId,     template.userId),
-          eq(employeeTasks.scheduleId, newSched.id),
-        ),
-      )
-      .limit(1);
-
-    if (dupCheck.length > 0) continue;
-
-    await db.insert(employeeTasks).values({
-      taskId:     task.id,
-      userId:     template.userId,
-      storeId,
-      scheduleId: newSched.id,
-      date:       startOfDay(date),
-      shift:      entry.shift,
-      status:     'pending',
-    });
-    tasksCreated++;
+  let openingTaskCreated = false;
+  if (shift === 'morning') {
+    await db.insert(storeOpeningTasks).values({ userId: entry.userId, storeId: entry.storeId, scheduleId: schedId, date, shift, status: 'pending' });
+    openingTaskCreated = true;
   }
 
-  return { scheduleCreated: true, tasksCreated };
+  await db.insert(groomingTasks).values({ userId: entry.userId, storeId: entry.storeId, scheduleId: schedId, date, shift, status: 'pending' });
+
+  return { scheduleCreated: true, openingTaskCreated, groomingTaskCreated: true };
 }
 
-// ─── Employee self-service ────────────────────────────────────────────────────
+// ─── Employee check-in / check-out ────────────────────────────────────────────
 
 /**
  * Employee checks in — or returns from a break if one is currently open.
- * Also calls ensureSchedulesUpToDate() to keep rolling generation current.
+ *
+ * Looks up today's schedule by userId + storeId + shift.
+ * The storeId here is the WORKING store for today (may differ from homeStoreId).
  */
 export async function employeeCheckIn(
-  userId: string,
+  userId:  string,
   storeId: string,
-  shift: Shift,
+  shift:   Shift,
 ): Promise<{
   success: boolean;
   action?: 'checked_in' | 'returned_from_break';
@@ -637,8 +548,6 @@ export async function employeeCheckIn(
   error?: string;
 }> {
   try {
-    await ensureSchedulesUpToDate(storeId);
-
     const now      = new Date();
     const dayStart = startOfDay(now);
     const dayEnd   = endOfDay(now);
@@ -646,83 +555,41 @@ export async function employeeCheckIn(
     const [sched] = await db
       .select()
       .from(schedules)
-      .where(
-        and(
-          eq(schedules.userId,    userId),
-          eq(schedules.storeId,   storeId),
-          eq(schedules.shift,     shift),
-          eq(schedules.isHoliday, false),
-          gte(schedules.date,     dayStart),
-          lte(schedules.date,     dayEnd),
-        ),
-      )
+      .where(and(
+        eq(schedules.userId,    userId),
+        eq(schedules.storeId,   storeId),
+        eq(schedules.shift,     shift),
+        eq(schedules.isHoliday, false),
+        gte(schedules.date,     dayStart),
+        lte(schedules.date,     dayEnd),
+      ))
       .limit(1);
 
     if (!sched) {
-      return {
-        success: false,
-        error: 'You are not scheduled for this shift today. Please contact your PIC 1 or OPS manager.',
-      };
+      return { success: false, error: 'You are not scheduled for this shift today. Please contact your PIC 1 or OPS manager.' };
     }
 
-    const [existing] = await db
-      .select()
-      .from(attendance)
-      .where(eq(attendance.scheduleId, sched.id))
-      .limit(1);
+    const [existing] = await db.select().from(attendance).where(eq(attendance.scheduleId, sched.id)).limit(1);
 
     if (!existing) {
-      const cfg        = SHIFT_CONFIG[shift];
-      const shiftStart = new Date(now);
-      shiftStart.setHours(cfg.startHour, 0, 0, 0);
-
-      const lateThreshold = new Date(shiftStart);
-      lateThreshold.setMinutes(cfg.lateAfterMinutes);
-
-      const attStatus = now > lateThreshold ? 'late' : 'present';
+      const cfg           = SHIFT_CONFIG[shift];
+      const shiftStart    = new Date(now); shiftStart.setHours(cfg.startHour, 0, 0, 0);
+      const lateThreshold = new Date(shiftStart); lateThreshold.setMinutes(cfg.lateAfterMinutes);
+      const attStatus     = now > lateThreshold ? 'late' : 'present';
 
       const [att] = await db
         .insert(attendance)
-        .values({
-          scheduleId:  sched.id,
-          userId,
-          storeId,
-          date:        sched.date,
-          shift:       sched.shift,
-          status:      attStatus,
-          checkInTime: now,
-          onBreak:     false,
-          recordedBy:  userId,
-        })
+        .values({ scheduleId: sched.id, userId, storeId, date: sched.date, shift: sched.shift, status: attStatus, checkInTime: now, onBreak: false, recordedBy: userId })
         .returning({ id: attendance.id });
 
-      await db
-        .update(employeeTasks)
-        .set({ attendanceId: att.id, updatedAt: new Date() })
-        .where(
-          and(
-            eq(employeeTasks.scheduleId, sched.id),
-            eq(employeeTasks.userId,     userId),
-          ),
-        );
+      await db.update(storeOpeningTasks).set({ attendanceId: att.id, updatedAt: new Date() }).where(eq(storeOpeningTasks.scheduleId, sched.id));
+      await db.update(groomingTasks).set({ attendanceId: att.id, updatedAt: new Date() }).where(eq(groomingTasks.scheduleId, sched.id));
 
-      return {
-        success:      true,
-        action:       'checked_in',
-        attendanceId: att.id,
-        scheduleId:   sched.id,
-        status:       attStatus,
-      };
+      return { success: true, action: 'checked_in', attendanceId: att.id, scheduleId: sched.id, status: attStatus };
     }
 
     if (!existing.onBreak) {
-      return {
-        success:      true,
-        action:       'checked_in',
-        attendanceId: existing.id,
-        scheduleId:   sched.id,
-        status:       existing.status,
-      };
+      return { success: true, action: 'checked_in', attendanceId: existing.id, scheduleId: sched.id, status: existing.status };
     }
 
     return endBreak(userId, storeId, existing.id);
@@ -731,49 +598,30 @@ export async function employeeCheckIn(
   }
 }
 
-/** Employee checks out at end of shift. */
 export async function employeeCheckOut(
-  userId: string,
+  userId:  string,
   storeId: string,
-  shift: Shift,
+  shift:   Shift,
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const now      = new Date();
-    const dayStart = startOfDay(now);
-    const dayEnd   = endOfDay(now);
-
+    const now = new Date();
     const [sched] = await db
       .select({ id: schedules.id })
       .from(schedules)
-      .where(
-        and(
-          eq(schedules.userId,    userId),
-          eq(schedules.storeId,   storeId),
-          eq(schedules.shift,     shift),
-          eq(schedules.isHoliday, false),
-          gte(schedules.date,     dayStart),
-          lte(schedules.date,     dayEnd),
-        ),
-      )
+      .where(and(
+        eq(schedules.userId, userId), eq(schedules.storeId, storeId), eq(schedules.shift, shift),
+        eq(schedules.isHoliday, false), gte(schedules.date, startOfDay(now)), lte(schedules.date, endOfDay(now)),
+      ))
       .limit(1);
 
     if (!sched) return { success: false, error: `No ${shift} schedule found for today.` };
 
-    const [att] = await db
-      .select()
-      .from(attendance)
-      .where(eq(attendance.scheduleId, sched.id))
-      .limit(1);
+    const [att] = await db.select().from(attendance).where(eq(attendance.scheduleId, sched.id)).limit(1);
+    if (!att)             return { success: false, error: 'No check-in record found.' };
+    if (att.checkOutTime) return { success: false, error: 'Already checked out.' };
+    if (att.onBreak)      return { success: false, error: 'Currently on break. Please return first.' };
 
-    if (!att)             return { success: false, error: 'No check-in record found for today.' };
-    if (att.checkOutTime) return { success: false, error: 'Already checked out for this shift.' };
-    if (att.onBreak)      return { success: false, error: 'You are currently on a break. Please return from your break before checking out.' };
-
-    await db
-      .update(attendance)
-      .set({ checkOutTime: now, updatedAt: new Date() })
-      .where(eq(attendance.id, att.id));
-
+    await db.update(attendance).set({ checkOutTime: now, updatedAt: new Date() }).where(eq(attendance.id, att.id));
     return { success: true };
   } catch (err) {
     return { success: false, error: `Check-out failed: ${err}` };
@@ -782,107 +630,62 @@ export async function employeeCheckOut(
 
 // ─── Break management ─────────────────────────────────────────────────────────
 
-/** Start a break (lunch for morning, dinner for evening). */
 export async function startBreak(
-  userId: string,
+  userId:  string,
   storeId: string,
-  shift: Shift,
+  shift:   Shift,
 ): Promise<{ success: boolean; breakSessionId?: string; breakType?: BreakType; error?: string }> {
   try {
-    const now      = new Date();
-    const dayStart = startOfDay(now);
-    const dayEnd   = endOfDay(now);
-
+    const now = new Date();
     const [sched] = await db
       .select({ id: schedules.id })
       .from(schedules)
-      .where(
-        and(
-          eq(schedules.userId,    userId),
-          eq(schedules.storeId,   storeId),
-          eq(schedules.shift,     shift),
-          eq(schedules.isHoliday, false),
-          gte(schedules.date,     dayStart),
-          lte(schedules.date,     dayEnd),
-        ),
-      )
+      .where(and(
+        eq(schedules.userId, userId), eq(schedules.storeId, storeId), eq(schedules.shift, shift),
+        eq(schedules.isHoliday, false), gte(schedules.date, startOfDay(now)), lte(schedules.date, endOfDay(now)),
+      ))
       .limit(1);
 
     if (!sched) return { success: false, error: `No ${shift} schedule found for today.` };
 
-    const [att] = await db
-      .select()
-      .from(attendance)
-      .where(eq(attendance.scheduleId, sched.id))
-      .limit(1);
+    const [att] = await db.select().from(attendance).where(eq(attendance.scheduleId, sched.id)).limit(1);
+    if (!att)             return { success: false, error: 'Not checked in.' };
+    if (!att.checkInTime) return { success: false, error: 'Not checked in yet.' };
+    if (att.checkOutTime) return { success: false, error: 'Already checked out.' };
+    if (att.onBreak)      return { success: false, error: 'Already on break.' };
 
-    if (!att)             return { success: false, error: 'No check-in record found for today.' };
-    if (!att.checkInTime) return { success: false, error: 'You have not checked in yet.' };
-    if (att.checkOutTime) return { success: false, error: 'You have already checked out for this shift.' };
-    if (att.onBreak)      return { success: false, error: 'You are already on a break.' };
-
-    const breakType = SHIFT_CONFIG[shift].breakType;
-
-    const priorBreaks = await db
-      .select({ id: breakSessions.id })
-      .from(breakSessions)
-      .where(eq(breakSessions.attendanceId, att.id));
-
-    if (priorBreaks.length > 0) {
-      const label = breakType === 'lunch' ? 'lunch' : 'dinner';
-      return { success: false, error: `You have already used your ${label} break for this shift.` };
-    }
+    const breakType   = SHIFT_CONFIG[shift].breakType;
+    const priorBreaks = await db.select({ id: breakSessions.id }).from(breakSessions).where(eq(breakSessions.attendanceId, att.id));
+    if (priorBreaks.length > 0) return { success: false, error: `Already used ${breakType} break for this shift.` };
 
     const [session] = await db
       .insert(breakSessions)
       .values({ attendanceId: att.id, userId, storeId, breakType, breakOutTime: now })
       .returning({ id: breakSessions.id });
 
-    await db
-      .update(attendance)
-      .set({ onBreak: true, updatedAt: new Date() })
-      .where(eq(attendance.id, att.id));
-
+    await db.update(attendance).set({ onBreak: true, updatedAt: new Date() }).where(eq(attendance.id, att.id));
     return { success: true, breakSessionId: session.id, breakType };
   } catch (err) {
     return { success: false, error: `startBreak failed: ${err}` };
   }
 }
 
-/** End an active break — called directly or via employeeCheckIn() when onBreak=true. */
 export async function endBreak(
-  userId: string,
-  storeId: string,
+  userId:       string,
+  storeId:      string,
   attendanceId: string,
-): Promise<{
-  success: boolean;
-  action?: 'returned_from_break';
-  attendanceId?: string;
-  scheduleId?: string;
-  status?: string;
-  error?: string;
-}> {
+): Promise<{ success: boolean; action?: 'returned_from_break'; attendanceId?: string; scheduleId?: string; status?: string; error?: string }> {
   try {
     const now = new Date();
-
     const [openBreak] = await db
       .select()
       .from(breakSessions)
-      .where(
-        and(
-          eq(breakSessions.attendanceId, attendanceId),
-          eq(breakSessions.userId,       userId),
-          isNull(breakSessions.returnTime),
-        ),
-      )
+      .where(and(eq(breakSessions.attendanceId, attendanceId), eq(breakSessions.userId, userId), isNull(breakSessions.returnTime)))
       .limit(1);
 
     if (!openBreak) return { success: false, error: 'No active break session found.' };
 
-    await db
-      .update(breakSessions)
-      .set({ returnTime: now, updatedAt: new Date() })
-      .where(eq(breakSessions.id, openBreak.id));
+    await db.update(breakSessions).set({ returnTime: now, updatedAt: new Date() }).where(eq(breakSessions.id, openBreak.id));
 
     const [updatedAtt] = await db
       .update(attendance)
@@ -890,182 +693,71 @@ export async function endBreak(
       .where(eq(attendance.id, attendanceId))
       .returning({ id: attendance.id, scheduleId: attendance.scheduleId, status: attendance.status });
 
-    return {
-      success:      true,
-      action:       'returned_from_break',
-      attendanceId: updatedAtt.id,
-      scheduleId:   updatedAtt.scheduleId,
-      status:       updatedAtt.status,
-    };
+    return { success: true, action: 'returned_from_break', attendanceId: updatedAtt.id, scheduleId: updatedAtt.scheduleId, status: updatedAtt.status };
   } catch (err) {
     return { success: false, error: `endBreak failed: ${err}` };
   }
 }
 
-/** Get today's attendance record for an employee, including any break sessions. */
 export async function getTodayAttendance(userId: string, storeId: string) {
-  const now = new Date();
-
+  const now  = new Date();
   const rows = await db
     .select({ att: attendance, schedule: schedules })
     .from(attendance)
     .leftJoin(schedules, eq(attendance.scheduleId, schedules.id))
-    .where(
-      and(
-        eq(attendance.userId,  userId),
-        eq(attendance.storeId, storeId),
-        gte(attendance.date,   startOfDay(now)),
-        lte(attendance.date,   endOfDay(now)),
-      ),
-    )
+    .where(and(eq(attendance.userId, userId), eq(attendance.storeId, storeId), gte(attendance.date, startOfDay(now)), lte(attendance.date, endOfDay(now))))
     .limit(1);
 
   if (!rows[0]) return null;
-
-  const breaks = await db
-    .select()
-    .from(breakSessions)
-    .where(eq(breakSessions.attendanceId, rows[0].att.id))
-    .orderBy(breakSessions.breakOutTime);
-
+  const breaks = await db.select().from(breakSessions).where(eq(breakSessions.attendanceId, rows[0].att.id)).orderBy(breakSessions.breakOutTime);
   return { ...rows[0], breaks };
 }
 
-/** Get all break sessions for a given attendance record. */
-export async function getBreakSessions(attendanceId: string) {
-  return db
-    .select()
-    .from(breakSessions)
-    .where(eq(breakSessions.attendanceId, attendanceId))
-    .orderBy(breakSessions.breakOutTime);
-}
-
-// ─── OPS attendance management ────────────────────────────────────────────────
-
-/**
- * Get all schedules + attendance status for a store on a date.
- * OPS can call this for any store in their area.
- */
 export async function getAttendanceForDate(storeId: string, date: Date) {
-  await ensureSchedulesUpToDate(storeId);
-
   return db
-    .select({
-      schedule:   schedules,
-      user:       users,
-      attendance: attendance,
-    })
+    .select({ schedule: schedules, user: users, attendance: attendance })
     .from(schedules)
-    .leftJoin(users,      eq(schedules.userId,      users.id))
+    .leftJoin(users, eq(schedules.userId, users.id))
     .leftJoin(attendance, eq(attendance.scheduleId, schedules.id))
-    .where(
-      and(
-        eq(schedules.storeId,   storeId),
-        eq(schedules.isHoliday, false),
-        gte(schedules.date,     startOfDay(date)),
-        lte(schedules.date,     endOfDay(date)),
-      ),
-    )
+    .where(and(
+      eq(schedules.storeId, storeId), eq(schedules.isHoliday, false),
+      gte(schedules.date, startOfDay(date)), lte(schedules.date, endOfDay(date)),
+    ))
     .orderBy(schedules.shift, users.name);
 }
 
-/**
- * OPS manually sets / overrides attendance status for a schedule.
- * actorId must pass canManageSchedule() for the store.
- */
 export async function opsMarkAttendance(
   scheduleId: string,
-  status: 'present' | 'absent' | 'late' | 'excused',
-  actorId: string,
-  notes?: string,
+  status:     'present' | 'absent' | 'late' | 'excused',
+  actorId:    string,
+  notes?:     string,
 ): Promise<{ success: boolean; attendanceId?: string; error?: string }> {
   try {
-    const [sched] = await db
-      .select()
-      .from(schedules)
-      .where(eq(schedules.id, scheduleId))
-      .limit(1);
+    const [sched] = await db.select().from(schedules).where(eq(schedules.id, scheduleId)).limit(1);
+    if (!sched) return { success: false, error: 'Schedule not found.' };
 
-    if (!sched) return { success: false, error: 'Schedule not found' };
-
-    // Auth check
     const auth = await canManageSchedule(actorId, sched.storeId);
     if (!auth.allowed) return { success: false, error: auth.reason };
 
-    const [existing] = await db
-      .select()
-      .from(attendance)
-      .where(eq(attendance.scheduleId, scheduleId))
-      .limit(1);
-
+    const [existing] = await db.select().from(attendance).where(eq(attendance.scheduleId, scheduleId)).limit(1);
     let attendanceId: string;
 
     if (existing) {
-      await db
-        .update(attendance)
-        .set({ status, notes, recordedBy: actorId, updatedAt: new Date() })
-        .where(eq(attendance.id, existing.id));
+      await db.update(attendance).set({ status, notes, recordedBy: actorId, updatedAt: new Date() }).where(eq(attendance.id, existing.id));
       attendanceId = existing.id;
     } else {
       const [att] = await db
         .insert(attendance)
-        .values({
-          scheduleId,
-          userId:     sched.userId,
-          storeId:    sched.storeId,
-          date:       sched.date,
-          shift:      sched.shift,
-          status,
-          onBreak:    false,
-          notes,
-          recordedBy: actorId,
-        })
+        .values({ scheduleId, userId: sched.userId, storeId: sched.storeId, date: sched.date, shift: sched.shift, status, onBreak: false, notes, recordedBy: actorId })
         .returning({ id: attendance.id });
       attendanceId = att.id;
 
-      await db
-        .update(employeeTasks)
-        .set({ attendanceId, updatedAt: new Date() })
-        .where(
-          and(
-            eq(employeeTasks.scheduleId, scheduleId),
-            eq(employeeTasks.userId,     sched.userId),
-          ),
-        );
+      await db.update(storeOpeningTasks).set({ attendanceId, updatedAt: new Date() }).where(eq(storeOpeningTasks.scheduleId, scheduleId));
+      await db.update(groomingTasks).set({ attendanceId, updatedAt: new Date() }).where(eq(groomingTasks.scheduleId, scheduleId));
     }
 
     return { success: true, attendanceId };
   } catch (err) {
     return { success: false, error: `opsMarkAttendance: ${err}` };
   }
-}
-
-// ─── Private helpers ──────────────────────────────────────────────────────────
-
-function startOfDay(d: Date): Date {
-  const r = new Date(d); r.setHours(0, 0, 0, 0); return r;
-}
-function endOfDay(d: Date): Date {
-  const r = new Date(d); r.setHours(23, 59, 59, 999); return r;
-}
-function* eachDay(start: Date, end: Date): Generator<Date> {
-  const cur = startOfDay(start);
-  const fin = startOfDay(end);
-  while (cur <= fin) {
-    yield new Date(cur);
-    cur.setDate(cur.getDate() + 1);
-  }
-}
-function taskMatchesEmployee(
-  task: { role: string; employeeType: string | null; shift: string | null },
-  user: { role: string; employeeType: string | null },
-  shift: string,
-): boolean {
-  // pic_1 and pic_2 are both PIC-role employees; tasks targeting 'pic_1' or 'pic_2'
-  // are matched exactly. Tasks with employeeType=null match all types for that role.
-  return (
-    task.role === user.role &&
-    (!task.employeeType || task.employeeType === user.employeeType) &&
-    (!task.shift || task.shift === shift)
-  );
 }

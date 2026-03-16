@@ -1,58 +1,95 @@
 // scripts/seed-schedules.ts
-// Generates rolling schedules + simulates past attendance for the last 14 days.
-// Safe to re-run — idempotent (skips already-existing rows).
-// Run with: tsx scripts/seed-schedules.ts
+/**
+ * Generates monthly schedules for March 2026 only.
+ * Creates:
+ *   - One MonthlySchedule per store
+ *   - MonthlyScheduleEntries (daily shift assignments per employee)
+ *   - schedules rows (one per working shift entry)
+ *
+ * Tasks are NOT seeded here — they are created on check-in.
+ * Attendance is NOT seeded — employees check in via the app.
+ *
+ * Safe to re-run — idempotent (skips already-existing rows).
+ * Run with: tsx scripts/seed-schedules.ts
+ */
+
+import { config } from 'dotenv';
+config({ path: '.env.local' });
 
 import { db } from '@/lib/db';
 import {
   users, stores, areas,
-  weeklyScheduleTemplates, weeklyScheduleEntries,
-  schedules, attendance, employeeTasks, breakSessions, tasks,
+  monthlySchedules, monthlyScheduleEntries,
+  schedules,
 } from '@/lib/db/schema';
-import { eq, and, gte, lte, isNull } from 'drizzle-orm';
-import { shouldTaskRunOnDate } from '@/lib/daily-task-utils';
+import { eq, and, gte, lte } from 'drizzle-orm';
 
-// ─── Config ───────────────────────────────────────────────────────────────────
-
-/** How many days into the past to backfill attendance. */
-const BACKFILL_DAYS = 14;
-/** How many weeks ahead to pre-generate schedules. */
-const ROLLING_WEEKS_AHEAD = 4;
-
-const SHIFT_CONFIG = {
-  morning: { startHour: 8,  endHour: 17, lateAfterMinutes: 30 },
-  evening: { startHour: 13, endHour: 22, lateAfterMinutes: 30 },
-} as const;
+// ─── Target month ─────────────────────────────────────────────────────────────
+const YEAR       = 2026;
+const MONTH      = 2;   // 0-indexed: 2 = March
+const YEAR_MONTH = '2026-03';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function startOfDay(d: Date) { const r = new Date(d); r.setHours(0,0,0,0); return r; }
-function endOfDay(d: Date)   { const r = new Date(d); r.setHours(23,59,59,999); return r; }
-
-function* eachDay(start: Date, end: Date): Generator<Date> {
-  const cur = startOfDay(start);
-  const fin = startOfDay(end);
-  while (cur <= fin) { yield new Date(cur); cur.setDate(cur.getDate() + 1); }
+function startOfDay(d: Date): Date {
+  const r = new Date(d);
+  r.setHours(0, 0, 0, 0);
+  return r;
 }
 
-function taskMatchesEmployee(
-  task: { role: string; employeeType: string | null; shift: string | null },
-  user: { role: string; employeeType: string | null },
-  shift: string,
-) {
-  return (
-    task.role === user.role &&
-    (!task.employeeType || task.employeeType === user.employeeType) &&
-    (!task.shift || task.shift === shift)
-  );
+function endOfDay(d: Date): Date {
+  const r = new Date(d);
+  r.setHours(23, 59, 59, 999);
+  return r;
+}
+
+function* eachDayOfMonth(year: number, month: number): Generator<Date> {
+  const count = new Date(year, month + 1, 0).getDate();
+  for (let d = 1; d <= count; d++) {
+    yield new Date(year, month, d, 0, 0, 0, 0);
+  }
+}
+
+/**
+ * Build flat list of day entries for one employee based on a weekly pattern.
+ * pattern: 7-element array indexed by getDay() (0=Sun … 6=Sat)
+ *   'E'   = morning shift
+ *   'L'   = evening shift
+ *   'OFF' = day off
+ */
+function buildDayEntries(
+  userId:  string,
+  storeId: string,
+  year:    number,
+  month:   number,
+  pattern: string[],
+): Array<{
+  userId:  string;
+  storeId: string;
+  date:    Date;
+  shift:   'morning' | 'evening' | null;
+  isOff:   boolean;
+  isLeave: boolean;
+}> {
+  const entries = [];
+  for (const date of eachDayOfMonth(year, month)) {
+    const code = pattern[date.getDay()] ?? 'OFF';
+    if (code === 'E') {
+      entries.push({ userId, storeId, date, shift: 'morning' as const, isOff: false, isLeave: false });
+    } else if (code === 'L') {
+      entries.push({ userId, storeId, date, shift: 'evening' as const, isOff: false, isLeave: false });
+    } else {
+      entries.push({ userId, storeId, date, shift: null, isOff: true, isLeave: false });
+    }
+  }
+  return entries;
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function seedSchedules() {
-  console.log('📅  seed-schedules: generating schedules + simulating attendance\n');
+  console.log(`📅  seed-schedules: ${YEAR_MONTH} (March ${YEAR})\n`);
 
-  // Fetch all stores (with their area, for logging)
   const allStores = await db
     .select({ store: stores, area: areas })
     .from(stores)
@@ -64,291 +101,172 @@ async function seedSchedules() {
     process.exit(1);
   }
 
-  const allActiveTasks = await db
-    .select()
-    .from(tasks)
-    .where(eq(tasks.isActive, true));
-
-  console.log(`Found ${allStores.length} store(s) across ${new Set(allStores.map(s => s.area?.id)).size} area(s)\n`);
-
-  const today    = startOfDay(new Date());
-  const horizon  = new Date(today); horizon.setDate(today.getDate() + ROLLING_WEEKS_AHEAD * 7);
-  const pastFrom = new Date(today); pastFrom.setDate(today.getDate() - BACKFILL_DAYS);
-
-  let totalSchedules = 0;
-  let totalTasks     = 0;
-  let totalAttendance = 0;
+  let totalMonthlySchedules  = 0;
+  let totalEntries           = 0;
+  let totalScheduleRows      = 0;
 
   for (const { store, area } of allStores) {
-    console.log(`\n── ${store.name} (${area?.name ?? 'no area'}) ──────────────────────────`);
+    console.log(`\n── ${store.name} (${area?.name ?? 'no area'}) ────────────────────`);
 
-    // Fetch active templates for this store
-    const templateRows = await db
-      .select({ tmpl: weeklyScheduleTemplates, user: users })
-      .from(weeklyScheduleTemplates)
-      .leftJoin(users, eq(weeklyScheduleTemplates.userId, users.id))
-      .where(
-        and(
-          eq(weeklyScheduleTemplates.storeId,  store.id),
-          eq(weeklyScheduleTemplates.isActive, true),
-        )
-      )
-      .orderBy(users.name);
+    // Get all employees whose home store is this store
+    const employees = await db
+      .select()
+      .from(users)
+      .where(eq(users.homeStoreId, store.id));
 
-    if (!templateRows.length) {
-      console.log('   ⚠️  No active templates — skipping');
+    if (!employees.length) {
+      console.log('   ⚠️  No employees assigned to this store — skipping');
       continue;
     }
 
-    for (const { tmpl, user } of templateRows) {
-      if (!user) continue;
+    // ── Find or create the MonthlySchedule header ───────────────────────────
+    const [existingMs] = await db
+      .select({ id: monthlySchedules.id })
+      .from(monthlySchedules)
+      .where(
+        and(
+          eq(monthlySchedules.storeId,   store.id),
+          eq(monthlySchedules.yearMonth, YEAR_MONTH),
+        ),
+      )
+      .limit(1);
 
-      const entries = await db
-        .select()
-        .from(weeklyScheduleEntries)
-        .where(eq(weeklyScheduleEntries.templateId, tmpl.id));
+    let msId: string;
 
-      if (!entries.length) continue;
+    if (existingMs) {
+      msId = existingMs.id;
+      console.log(`   ↩️  Monthly schedule already exists (${msId}) — reusing`);
+    } else {
+      const pic1 = employees.find(e => e.employeeType === 'pic_1') ?? employees[0];
+      const [ms] = await db
+        .insert(monthlySchedules)
+        .values({
+          storeId:    store.id,
+          yearMonth:  YEAR_MONTH,
+          importedBy: pic1.id,
+          note:       'Seeded for March 2026',
+        })
+        .returning({ id: monthlySchedules.id });
+      msId = ms.id;
+      totalMonthlySchedules++;
+      console.log(`   ✅ Created MonthlySchedule ${msId}`);
+    }
 
-      console.log(`\n   👤 ${user.name} (${user.employeeType ?? user.role})`);
-
-      let schedsCreated = 0;
-      let tasksCreated  = 0;
-      let attCreated    = 0;
-
-      // Generate from (backfill start OR lastScheduledThrough+1) up to horizon
-      const resumeFrom = tmpl.lastScheduledThrough
-        ? new Date(tmpl.lastScheduledThrough.getTime() + 86_400_000)
-        : pastFrom;
-
-      const genFrom = resumeFrom < pastFrom ? pastFrom : resumeFrom;
-
-      for (const date of eachDay(genFrom, horizon)) {
-        const weekday     = date.getDay();
-        const todayEntries = entries.filter(e => Number(e.weekday) === weekday);
-
-        for (const entry of todayEntries) {
-          const shift = entry.shift as 'morning' | 'evening';
-
-          // ── Idempotency: skip if schedule exists ─────────────────────────
-          const existing = await db
-            .select({ id: schedules.id })
-            .from(schedules)
-            .where(
-              and(
-                eq(schedules.userId,  tmpl.userId),
-                eq(schedules.storeId, store.id),
-                eq(schedules.shift,   shift),
-                gte(schedules.date,   startOfDay(date)),
-                lte(schedules.date,   endOfDay(date)),
-              )
-            )
-            .limit(1);
-
-          let schedId: string;
-
-          if (existing.length > 0) {
-            schedId = existing[0].id;
-          } else {
-            const [newSched] = await db
-              .insert(schedules)
-              .values({
-                userId:          tmpl.userId,
-                storeId:         store.id,
-                shift,
-                date:            startOfDay(date),
-                templateEntryId: entry.id,
-                isHoliday:       false,
-              })
-              .returning({ id: schedules.id });
-
-            schedId = newSched.id;
-            schedsCreated++;
-
-            // Create task instances for this schedule
-            const matchingTasks = allActiveTasks.filter(t =>
-              shouldTaskRunOnDate(t.recurrence as any, t.recurrenceDays, date) &&
-              taskMatchesEmployee(t, user, shift)
-            );
-
-            for (const task of matchingTasks) {
-              const dup = await db
-                .select({ id: employeeTasks.id })
-                .from(employeeTasks)
-                .where(
-                  and(
-                    eq(employeeTasks.taskId,     task.id),
-                    eq(employeeTasks.userId,     tmpl.userId),
-                    eq(employeeTasks.scheduleId, schedId),
-                  )
-                )
-                .limit(1);
-
-              if (dup.length > 0) continue;
-
-              await db.insert(employeeTasks).values({
-                taskId:     task.id,
-                userId:     tmpl.userId,
-                storeId:    store.id,
-                scheduleId: schedId,
-                date:       startOfDay(date),
-                shift,
-                status:     'pending',
-              });
-              tasksCreated++;
-            }
-          }
-
-          // ── Simulate attendance for past dates only ───────────────────────
-          const isPast = date < today;
-          if (!isPast) continue;
-
-          const existingAtt = await db
-            .select({ id: attendance.id })
-            .from(attendance)
-            .where(eq(attendance.scheduleId, schedId))
-            .limit(1);
-
-          if (existingAtt.length > 0) continue;
-
-          const cfg        = SHIFT_CONFIG[shift];
-          const shiftStart = new Date(date);
-          shiftStart.setHours(cfg.startHour, 0, 0, 0);
-
-          // Simulate: 85% present on time, 10% late, 5% absent
-          const roll = Math.random();
-
-          if (roll < 0.05) {
-            // Absent
-            await db.insert(attendance).values({
-              scheduleId:  schedId,
-              userId:      tmpl.userId,
-              storeId:     store.id,
-              date:        startOfDay(date),
-              shift,
-              status:      'absent',
-              onBreak:     false,
-              recordedBy:  tmpl.userId,
-            });
-          } else {
-            // Present or late — generate a realistic check-in time
-            const lateMinutes  = roll < 0.15 ? Math.floor(Math.random() * 30) + 31 : 0; // 10% late
-            const earlyMinutes = roll >= 0.15 ? Math.floor(Math.random() * 20) : 0;      // up to 20 min early
-
-            const checkIn = new Date(shiftStart);
-            checkIn.setMinutes(lateMinutes > 0 ? lateMinutes : -earlyMinutes);
-
-            const lateThreshold = new Date(shiftStart);
-            lateThreshold.setMinutes(cfg.lateAfterMinutes);
-            const attStatus = checkIn > lateThreshold ? 'late' : 'present';
-
-            // Check out 15–30 min after shift end (or exactly on time)
-            const shiftEnd  = new Date(date);
-            shiftEnd.setHours(cfg.endHour, 0, 0, 0);
-            const checkOut = new Date(shiftEnd);
-            checkOut.setMinutes(Math.floor(Math.random() * 30));
-
-            const [att] = await db
-              .insert(attendance)
-              .values({
-                scheduleId:   schedId,
-                userId:       tmpl.userId,
-                storeId:      store.id,
-                date:         startOfDay(date),
-                shift,
-                status:       attStatus,
-                checkInTime:  checkIn,
-                checkOutTime: checkOut,
-                onBreak:      false,
-                recordedBy:   tmpl.userId,
-              })
-              .returning({ id: attendance.id });
-
-            attCreated++;
-
-            // Link attendance to tasks
-            await db
-              .update(employeeTasks)
-              .set({ attendanceId: att.id, updatedAt: new Date() })
-              .where(
-                and(
-                  eq(employeeTasks.scheduleId, schedId),
-                  eq(employeeTasks.userId,     tmpl.userId),
-                )
-              );
-
-            // Mark tasks complete (90% chance each)
-            const pendingTasks = await db
-              .select()
-              .from(employeeTasks)
-              .where(
-                and(
-                  eq(employeeTasks.scheduleId, schedId),
-                  eq(employeeTasks.userId,     tmpl.userId),
-                  eq(employeeTasks.status,     'pending'),
-                )
-              );
-
-            for (const et of pendingTasks) {
-              if (Math.random() < 0.90) {
-                const completedAt = new Date(checkIn);
-                completedAt.setMinutes(completedAt.getMinutes() + Math.floor(Math.random() * 60) + 10);
-                await db
-                  .update(employeeTasks)
-                  .set({ status: 'completed', completedAt, updatedAt: new Date() })
-                  .where(eq(employeeTasks.id, et.id));
-              }
-            }
-
-            // Simulate a break session (80% chance)
-            if (Math.random() < 0.80) {
-              const breakStart = new Date(checkIn);
-              breakStart.setHours(
-                shift === 'morning' ? 12 : 17,
-                Math.floor(Math.random() * 30),
-                0, 0
-              );
-              const breakEnd = new Date(breakStart);
-              breakEnd.setMinutes(breakEnd.getMinutes() + 30 + Math.floor(Math.random() * 15));
-
-              await db.insert(breakSessions).values({
-                attendanceId: att.id,
-                userId:       tmpl.userId,
-                storeId:      store.id,
-                breakType:    shift === 'morning' ? 'lunch' : 'dinner',
-                breakOutTime: breakStart,
-                returnTime:   breakEnd,
-              });
-            }
-          }
-
-          attCreated++;
-        }
+    // ── Seed entries + schedule rows per employee ───────────────────────────
+    for (const emp of employees) {
+      // Shift pattern by employee type
+      // Sun=0, Mon=1, Tue=2, Wed=3, Thu=4, Fri=5, Sat=6
+      let pattern: string[];
+      if (emp.employeeType === 'pic_1') {
+        // Mon–Fri morning, weekend off
+        pattern = ['OFF', 'E', 'E', 'E', 'E', 'E', 'OFF'];
+      } else if (emp.employeeType === 'pic_2') {
+        // Mon/Wed/Fri morning, Tue/Thu/Sat evening, Sun off
+        pattern = ['OFF', 'E', 'L', 'E', 'L', 'E', 'L'];
+      } else {
+        // SO: Tue–Sat evening, Sun/Mon off
+        pattern = ['OFF', 'OFF', 'L', 'L', 'L', 'L', 'L'];
       }
 
-      // Update watermark
-      await db
-        .update(weeklyScheduleTemplates)
-        .set({ lastScheduledThrough: horizon, updatedAt: new Date() })
-        .where(eq(weeklyScheduleTemplates.id, tmpl.id));
+      const dayEntries = buildDayEntries(emp.id, store.id, YEAR, MONTH, pattern);
 
-      totalSchedules += schedsCreated;
-      totalTasks     += tasksCreated;
-      totalAttendance += attCreated;
+      let empEntries  = 0;
+      let empSchedules = 0;
 
-      console.log(`      schedules: +${schedsCreated}  tasks: +${tasksCreated}  attendance: +${attCreated}`);
+      for (const entry of dayEntries) {
+        // ── Insert MonthlyScheduleEntry (skip on conflict) ─────────────────
+        const [mse] = await db
+          .insert(monthlyScheduleEntries)
+          .values({
+            monthlyScheduleId: msId,
+            userId:            entry.userId,
+            storeId:           entry.storeId,
+            date:              startOfDay(entry.date),
+            shift:             entry.shift ?? undefined,
+            isOff:             entry.isOff,
+            isLeave:           entry.isLeave,
+          })
+          .onConflictDoNothing()
+          .returning({ id: monthlyScheduleEntries.id });
+
+        if (mse) empEntries++;
+
+        // Only working days get a schedule row
+        if (entry.isOff || entry.isLeave || !entry.shift) continue;
+
+        const shift = entry.shift;
+        const date  = startOfDay(entry.date);
+
+        // Idempotency: skip if schedule row already exists for this slot
+        const [existingSched] = await db
+          .select({ id: schedules.id })
+          .from(schedules)
+          .where(
+            and(
+              eq(schedules.userId,  emp.id),
+              eq(schedules.storeId, store.id),
+              eq(schedules.shift,   shift),
+              gte(schedules.date,   startOfDay(date)),
+              lte(schedules.date,   endOfDay(date)),
+            ),
+          )
+          .limit(1);
+
+        if (existingSched) continue;
+
+        // Need the MSE id for the FK — use the one just inserted or look it up
+        const mseId = mse?.id ?? (await db
+          .select({ id: monthlyScheduleEntries.id })
+          .from(monthlyScheduleEntries)
+          .where(
+            and(
+              eq(monthlyScheduleEntries.monthlyScheduleId, msId),
+              eq(monthlyScheduleEntries.userId,            emp.id),
+              gte(monthlyScheduleEntries.date,             startOfDay(date)),
+              lte(monthlyScheduleEntries.date,             endOfDay(date)),
+            ),
+          )
+          .limit(1)
+          .then(rows => rows[0]?.id));
+
+        if (!mseId) {
+          console.warn(`   ⚠️  Could not resolve MSE id for ${emp.name} on ${date.toISOString().slice(0, 10)} — skipping schedule row`);
+          continue;
+        }
+
+        await db
+          .insert(schedules)
+          .values({
+            userId:                 emp.id,
+            storeId:                store.id,
+            shift,
+            date,
+            monthlyScheduleEntryId: mseId,
+            isHoliday:              false,
+          });
+
+        empSchedules++;
+      }
+
+      totalEntries      += empEntries;
+      totalScheduleRows += empSchedules;
+
+      console.log(
+        `   👤 ${emp.name.padEnd(18)} (${(emp.employeeType ?? 'ops').padEnd(5)})` +
+        `  entries+${empEntries}  scheduleRows+${empSchedules}`,
+      );
     }
   }
 
   console.log('\n═══════════════════════════════════════════════════════════');
   console.log('✅  seed-schedules complete!\n');
-  console.log(`   Schedules created : ${totalSchedules}`);
-  console.log(`   Tasks created     : ${totalTasks}`);
-  console.log(`   Attendance seeded : ${totalAttendance}`);
-  console.log(`   Range             : ${pastFrom.toDateString()} → ${horizon.toDateString()}`);
+  console.log(`   MonthlySchedules created : ${totalMonthlySchedules}`);
+  console.log(`   Entries inserted         : ${totalEntries}`);
+  console.log(`   Schedule rows created    : ${totalScheduleRows}`);
+  console.log(`   Month                    : ${YEAR_MONTH}`);
   console.log('═══════════════════════════════════════════════════════════');
 }
 
 seedSchedules()
   .then(() => process.exit(0))
-  .catch((err) => { console.error('❌  seed-schedules failed:', err); process.exit(1); });
+  .catch(err => { console.error('❌  seed-schedules failed:', err); process.exit(1); });

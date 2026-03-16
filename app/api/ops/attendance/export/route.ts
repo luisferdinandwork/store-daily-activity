@@ -3,45 +3,36 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
-import { schedules, attendance, users, stores } from '@/lib/db/schema';
-import { eq, and, gte, lte } from 'drizzle-orm';
-import { canManageSchedule } from '@/lib/schedule-utils';
+import { attendance, schedules, users, stores, breakSessions } from '@/lib/db/schema';
+import { eq, and, gte, lte, inArray } from 'drizzle-orm';
+import { getStoresForOps } from '@/lib/schedule-utils';
 import * as XLSX from 'xlsx';
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-const MONTH_NAMES_ID = [
-  'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
-  'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember',
-];
-const WEEKDAYS_ID = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
-
 // ─── Date helpers ─────────────────────────────────────────────────────────────
-function startOfMonth(d: Date) {
-  return new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
-}
-function endOfMonth(d: Date) {
-  return new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
-}
+
+function startOfDay(d: Date) { const r = new Date(d); r.setHours(0,0,0,0);        return r; }
+function endOfDay(d: Date)   { const r = new Date(d); r.setHours(23,59,59,999);   return r; }
 
 // ─── Formatting helpers ───────────────────────────────────────────────────────
-function fmtTime(iso: string | null): string {
-  if (!iso) return '';
+
+function fmtTime(iso: string | null | undefined): string {
+  if (!iso) return '—';
   const d = new Date(iso);
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  return `${hh}:${mm}`;
+  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
 }
 
 function fmtDate(iso: string): string {
   const d = new Date(iso);
-  return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+  return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
 }
 
-function weekdayName(iso: string): string {
-  return WEEKDAYS_ID[new Date(iso).getDay()];
+function fmtDateLong(iso: string): string {
+  return new Date(iso).toLocaleDateString('en-ID', {
+    weekday: 'short', day: 'numeric', month: 'short', year: 'numeric',
+  });
 }
 
-function lateMinutes(checkInIso: string | null, shift: string): number {
+function lateMinutes(checkInIso: string | null | undefined, shift: string): number {
   if (!checkInIso) return 0;
   const dt = new Date(checkInIso);
   const threshold = new Date(dt);
@@ -50,78 +41,72 @@ function lateMinutes(checkInIso: string | null, shift: string): number {
   return diff > 0 ? diff : 0;
 }
 
-function keterangan(status: string | null, notes: string | null): string {
-  const map: Record<string, string> = {
-    present: 'Hadir',
-    late:    'Terlambat',
-    absent:  'Tidak Hadir',
-    excused: 'Izin',
-  };
-  const base = status ? (map[status] ?? status) : '—';
-  return notes ? `${base} – ${notes}` : base;
-}
+// ─── Style constants ──────────────────────────────────────────────────────────
 
-// ─── Style objects ────────────────────────────────────────────────────────────
-const thinBorder = {
-  top:    { style: 'thin' },
-  bottom: { style: 'thin' },
-  left:   { style: 'thin' },
-  right:  { style: 'thin' },
-};
+const thin = { style: 'thin' } as const;
+const BORDER = { top: thin, bottom: thin, left: thin, right: thin };
 
-const centerAlign = { horizontal: 'center', vertical: 'center', wrapText: true };
-const leftAlign   = { horizontal: 'left',   vertical: 'center', wrapText: true };
+const CENTER: XLSX.ExcelDataType = 'n'; // used for type clarity below
+const centerAlign = { horizontal: 'center', vertical: 'center', wrapText: true  } as const;
+const leftAlign   = { horizontal: 'left',   vertical: 'center', wrapText: false } as const;
 
 const STYLES = {
   title: {
     font:      { name: 'Arial', bold: true, sz: 14, color: { rgb: 'FFFFFF' } },
-    fill:      { fgColor: { rgb: '1F4E79' }, patternType: 'solid' },
+    fill:      { fgColor: { rgb: '1E293B' }, patternType: 'solid' },
     alignment: centerAlign,
   },
-  metaLabel: {
-    font:      { name: 'Arial', bold: true, sz: 10 },
+  meta: {
+    font:      { name: 'Arial', bold: false, sz: 9 },
+    fill:      { fgColor: { rgb: 'F1F5F9' }, patternType: 'solid' },
     alignment: leftAlign,
   },
-  metaVal: {
-    font:      { name: 'Arial', sz: 10 },
+  metaBold: {
+    font:      { name: 'Arial', bold: true, sz: 9 },
+    fill:      { fgColor: { rgb: 'F1F5F9' }, patternType: 'solid' },
     alignment: leftAlign,
   },
   tableHeader: {
-    font:      { name: 'Arial', bold: true, sz: 10, color: { rgb: 'FFFFFF' } },
-    fill:      { fgColor: { rgb: '2E75B6' }, patternType: 'solid' },
+    font:      { name: 'Arial', bold: true,  sz: 10, color: { rgb: 'FFFFFF' } },
+    fill:      { fgColor: { rgb: '6366F1' }, patternType: 'solid' },
     alignment: centerAlign,
-    border:    thinBorder,
+    border:    BORDER,
   },
   summaryLabel: {
-    font:      { name: 'Arial', bold: true, sz: 10, color: { rgb: 'FFFFFF' } },
-    fill:      { fgColor: { rgb: '1F4E79' }, patternType: 'solid' },
+    font:      { name: 'Arial', bold: true,  sz: 10, color: { rgb: 'FFFFFF' } },
+    fill:      { fgColor: { rgb: '334155' }, patternType: 'solid' },
     alignment: centerAlign,
-    border:    thinBorder,
+    border:    BORDER,
   },
   summaryVal: {
-    font:      { name: 'Arial', bold: true, sz: 10 },
-    fill:      { fgColor: { rgb: 'BDD7EE' }, patternType: 'solid' },
+    font:      { name: 'Arial', bold: true,  sz: 10, color: { rgb: '6366F1' } },
+    fill:      { fgColor: { rgb: 'EEF2FF' }, patternType: 'solid' },
     alignment: centerAlign,
-    border:    thinBorder,
+    border:    BORDER,
   },
+} as const;
+
+// Row fill colours per status
+const STATUS_FILL: Record<string, string> = {
+  present: 'F0FDF4',
+  late:    'FFFBEB',
+  absent:  'FEF2F2',
+  excused: 'EFF6FF',
 };
 
-function rowDataStyle(status: string | null, rowIdx: number, center = true) {
-  let fillColor = rowIdx % 2 === 0 ? 'DEEAF1' : 'FFFFFF';
-  if (status === 'absent') fillColor = 'FFCCCC';
-  if (status === 'late')   fillColor = 'FFF2CC';
+function rowStyle(status: string | null, col: number, colLetter: string) {
+  const bg = STATUS_FILL[status ?? ''] ?? 'FFFFFF';
   return {
-    font:      { name: 'Arial', sz: 10 },
-    fill:      { fgColor: { rgb: fillColor }, patternType: 'solid' },
-    alignment: center ? centerAlign : leftAlign,
-    border:    thinBorder,
+    font:      { name: 'Arial', sz: 9 },
+    fill:      { fgColor: { rgb: bg }, patternType: 'solid' },
+    alignment: ['A','E','F','G','H','I','J','K'].includes(colLetter) ? centerAlign : leftAlign,
+    border:    BORDER,
   };
 }
 
-// ─── Cell writer ──────────────────────────────────────────────────────────────
-function C(r: number, c: number) {
-  return XLSX.utils.encode_cell({ r, c });
-}
+// ─── Cell helper ──────────────────────────────────────────────────────────────
+
+function C(r: number, c: number) { return XLSX.utils.encode_cell({ r, c }); }
 
 function cell(
   ws: XLSX.WorkSheet,
@@ -136,235 +121,348 @@ function cell(
   };
 }
 
-// ─── Build one worksheet ──────────────────────────────────────────────────────
-type EmpRecord = {
+// ─── Row type ─────────────────────────────────────────────────────────────────
+
+type ExportRow = {
+  userId:       string;
+  userName:     string;
+  storeName:    string;
   date:         string;
   shift:        string;
   status:       string | null;
   checkInTime:  string | null;
   checkOutTime: string | null;
+  breakOutTime: string | null;
+  returnTime:   string | null;
   notes:        string | null;
 };
 
-function buildSheet(ws: XLSX.WorkSheet, params: {
-  storeName:    string;
-  month:        string;
-  year:         string;
-  name:         string;
-  nik:          string;
-  employeeType: string;
-  records:      EmpRecord[];
-}) {
-  const { storeName, month, year, name, nik, employeeType, records } = params;
+// ─── Sheet 1: Full attendance log ─────────────────────────────────────────────
+
+function buildLogSheet(
+  ws: XLSX.WorkSheet,
+  rows: ExportRow[],
+  params: {
+    storeName:  string;
+    fromDate:   string;
+    toDate:     string;
+    exportedBy: string;
+  },
+) {
   const merges: XLSX.Range[] = [];
+  const { storeName, fromDate, toDate, exportedBy } = params;
 
   ws['!cols'] = [
-    { wch: 5  }, // A No.
-    { wch: 12 }, // B Tanggal
-    { wch: 11 }, // C Hari
-    { wch: 11 }, // D Shift
-    { wch: 11 }, // E Jam Masuk
-    { wch: 11 }, // F Jam Pulang
-    { wch: 13 }, // G Telat (Menit)
-    { wch: 30 }, // H Keterangan
+    { wch: 5  }, // A  No.
+    { wch: 13 }, // B  Date
+    { wch: 22 }, // C  Employee
+    { wch: 20 }, // D  Store
+    { wch: 9  }, // E  Shift
+    { wch: 11 }, // F  Status
+    { wch: 10 }, // G  Check-In
+    { wch: 10 }, // H  Check-Out
+    { wch: 11 }, // I  Break Out
+    { wch: 11 }, // J  Break Return
+    { wch: 12 }, // K  Late (min)
+    { wch: 28 }, // L  Notes
   ];
   ws['!rows'] = [];
 
-  // Row 1 — Title
-  cell(ws, C(0, 0), 'BUKU ABSEN MANUAL', STYLES.title);
-  merges.push({ s: { r: 0, c: 0 }, e: { r: 0, c: 7 } });
-  ws['!rows'][0] = { hpt: 28 };
+  // ── Row 0: Title ──────────────────────────────────────────────────────────
+  cell(ws, C(0,0), 'ATTENDANCE REPORT', STYLES.title);
+  merges.push({ s: { r:0, c:0 }, e: { r:0, c:11 } });
+  ws['!rows'][0] = { hpt: 30 };
 
-  // Row 2 — CABANG / BULAN / TAHUN
-  cell(ws, C(1, 0), 'CABANG:', STYLES.metaLabel);
-  cell(ws, C(1, 2), storeName,  STYLES.metaVal);
-  cell(ws, C(1, 4), 'BULAN:',  STYLES.metaLabel);
-  cell(ws, C(1, 5), month,      STYLES.metaVal);
-  cell(ws, C(1, 6), 'TAHUN:',  STYLES.metaLabel);
-  cell(ws, C(1, 7), year,       STYLES.metaVal);
-  merges.push({ s: { r: 1, c: 0 }, e: { r: 1, c: 1 } });
-  merges.push({ s: { r: 1, c: 2 }, e: { r: 1, c: 3 } });
+  // ── Row 1: Meta ───────────────────────────────────────────────────────────
+  cell(ws, C(1,0), 'Store:',     STYLES.metaBold);
+  cell(ws, C(1,1), storeName,    STYLES.meta);
+  merges.push({ s: { r:1, c:1 }, e: { r:1, c:3 } });
+
+  cell(ws, C(1,4), 'Period:',    STYLES.metaBold);
+  cell(ws, C(1,5), `${fmtDate(fromDate + 'T00:00:00')}  –  ${fmtDate(toDate + 'T00:00:00')}`, STYLES.meta);
+  merges.push({ s: { r:1, c:5 }, e: { r:1, c:7 } });
+
+  cell(ws, C(1,8),  'Exported:',  STYLES.metaBold);
+  cell(ws, C(1,9),  exportedBy,   STYLES.meta);
+  merges.push({ s: { r:1, c:9 }, e: { r:1, c:11 } });
   ws['!rows'][1] = { hpt: 18 };
 
-  // Row 3 — NAMA / NIK / STATUS
-  cell(ws, C(2, 0), 'NAMA:',   STYLES.metaLabel);
-  cell(ws, C(2, 2), name,       STYLES.metaVal);
-  cell(ws, C(2, 4), 'NIK:',    STYLES.metaLabel);
-  cell(ws, C(2, 5), nik,        STYLES.metaVal);
-  cell(ws, C(2, 6), 'STATUS:', STYLES.metaLabel);
-  cell(ws, C(2, 7), employeeType.toUpperCase(), STYLES.metaVal);
-  merges.push({ s: { r: 2, c: 0 }, e: { r: 2, c: 1 } });
-  merges.push({ s: { r: 2, c: 2 }, e: { r: 2, c: 3 } });
-  ws['!rows'][2] = { hpt: 18 };
+  // ── Row 2: spacer ─────────────────────────────────────────────────────────
+  ws['!rows'][2] = { hpt: 5 };
 
-  // Row 4 — blank spacer
-  ws['!rows'][3] = { hpt: 6 };
+  // ── Row 3: Column headers ─────────────────────────────────────────────────
+  const HEADERS = ['No.','Date','Employee','Store','Shift','Status',
+                   'Check-In','Check-Out','Break Out','Break Return','Late (min)','Notes'];
+  HEADERS.forEach((h, i) => cell(ws, C(3, i), h, STYLES.tableHeader));
+  ws['!rows'][3] = { hpt: 22 };
 
-  // Row 5 — Table headers
-  const HEADERS = ['No.', 'Tanggal', 'Hari', 'Shift', 'Jam Masuk', 'Jam Pulang', 'Telat (Menit)', 'Keterangan'];
-  HEADERS.forEach((h, i) => cell(ws, C(4, i), h, STYLES.tableHeader));
-  ws['!rows'][4] = { hpt: 22 };
+  // ── Rows 4+: Data ─────────────────────────────────────────────────────────
+  const COL_LETTERS = ['A','B','C','D','E','F','G','H','I','J','K','L'];
 
-  // Data rows
-  records.forEach((rec, idx) => {
-    const r      = 5 + idx;
-    const status = rec.status;
-    const late   = lateMinutes(rec.checkInTime, rec.shift);
-    const shiftL = rec.shift === 'morning' ? 'Pagi' : rec.shift === 'evening' ? 'Sore' : rec.shift;
+  rows.forEach((row, idx) => {
+    const r      = 4 + idx;
+    const status = row.status;
+    const late   = lateMinutes(row.checkInTime, row.shift);
+    const shiftL = row.shift === 'morning' ? 'Morning' : row.shift === 'evening' ? 'Evening' : row.shift;
+    const statusL = status ? status.charAt(0).toUpperCase() + status.slice(1) : '—';
+    const noWork  = status === 'absent' || status === 'excused';
 
-    const notAbsentOrExcused = status !== 'absent' && status !== 'excused';
+    const values: (string | number | null)[] = [
+      idx + 1,
+      fmtDateLong(row.date),
+      row.userName,
+      row.storeName,
+      shiftL,
+      statusL,
+      fmtTime(row.checkInTime)  || (noWork ? '' : '—'),
+      fmtTime(row.checkOutTime) || (noWork ? '' : '—'),
+      fmtTime(row.breakOutTime) || '—',
+      fmtTime(row.returnTime)   || '—',
+      late > 0 ? late : (noWork ? '' : 0),
+      row.notes ?? '',
+    ];
 
-    cell(ws, C(r, 0), idx + 1,            rowDataStyle(status, idx, true));
-    cell(ws, C(r, 1), fmtDate(rec.date),  rowDataStyle(status, idx, true));
-    cell(ws, C(r, 2), weekdayName(rec.date), rowDataStyle(status, idx, true));
-    cell(ws, C(r, 3), shiftL,             rowDataStyle(status, idx, true));
-    cell(ws, C(r, 4), fmtTime(rec.checkInTime)  || (notAbsentOrExcused ? '—' : ''), rowDataStyle(status, idx, true));
-    cell(ws, C(r, 5), fmtTime(rec.checkOutTime) || (notAbsentOrExcused ? '—' : ''), rowDataStyle(status, idx, true));
-    cell(ws, C(r, 6), late > 0 ? late : (notAbsentOrExcused ? '—' : ''),            rowDataStyle(status, idx, true));
-    cell(ws, C(r, 7), keterangan(status, rec.notes), rowDataStyle(status, idx, false));
+    values.forEach((val, ci) => {
+      cell(ws, C(r, ci), val, rowStyle(status, ci, COL_LETTERS[ci]));
+    });
+
     ws['!rows']![r] = { hpt: 18 };
   });
 
-  // Summary row
-  const sr       = 5 + records.length;
-  const nPresent = records.filter((r) => r.status === 'present').length;
-  const nLate    = records.filter((r) => r.status === 'late').length;
-  const nAbsent  = records.filter((r) => r.status === 'absent').length;
-  const nExcused = records.filter((r) => r.status === 'excused').length;
+  // ── Summary footer ────────────────────────────────────────────────────────
+  const sr = 4 + rows.length + 1;
+  ws['!rows']![sr - 1] = { hpt: 6 }; // spacer
 
-  // Merged label cells A–D
-  for (let c = 0; c < 4; c++) {
-    cell(ws, C(sr, c), c === 0 ? 'RINGKASAN' : '', STYLES.summaryLabel);
+  const nPresent = rows.filter(r => r.status === 'present').length;
+  const nLate    = rows.filter(r => r.status === 'late').length;
+  const nAbsent  = rows.filter(r => r.status === 'absent').length;
+  const nExcused = rows.filter(r => r.status === 'excused').length;
+
+  cell(ws, C(sr,0), 'SUMMARY', STYLES.summaryLabel);
+  merges.push({ s: { r:sr, c:0 }, e: { r:sr, c:3 } });
+
+  cell(ws, C(sr,4), `Present: ${nPresent}`,   STYLES.summaryVal);
+  cell(ws, C(sr,5), `Late: ${nLate}`,          STYLES.summaryVal);
+  cell(ws, C(sr,6), `Absent: ${nAbsent}`,      STYLES.summaryVal);
+  cell(ws, C(sr,7), `Excused: ${nExcused}`,    STYLES.summaryVal);
+  cell(ws, C(sr,8), `Total: ${rows.length}`,   STYLES.summaryVal);
+  merges.push({ s: { r:sr, c:9 }, e: { r:sr, c:11 } });
+  ws['!rows']![sr] = { hpt: 22 };
+
+  ws['!ref']    = XLSX.utils.encode_range({ s: { r:0, c:0 }, e: { r:sr, c:11 } });
+  ws['!merges'] = merges;
+}
+
+// ─── Sheet 2: Per-employee pivot ──────────────────────────────────────────────
+
+type EmpStat = {
+  name: string; store: string;
+  present: number; late: number; absent: number; excused: number;
+};
+
+function buildEmployeeSheet(ws: XLSX.WorkSheet, rows: ExportRow[]) {
+  const merges: XLSX.Range[] = [];
+
+  ws['!cols'] = [
+    { wch: 24 }, // A Employee
+    { wch: 20 }, // B Store
+    { wch: 11 }, // C Total
+    { wch: 10 }, // D Present
+    { wch: 10 }, // E Late
+    { wch: 10 }, // F Absent
+    { wch: 10 }, // G Excused
+    { wch: 10 }, // H Late %
+  ];
+  ws['!rows'] = [];
+
+  // Title
+  cell(ws, C(0,0), 'Attendance by Employee', STYLES.title);
+  merges.push({ s: { r:0, c:0 }, e: { r:0, c:7 } });
+  ws['!rows'][0] = { hpt: 26 };
+
+  ws['!rows'][1] = { hpt: 5 };
+
+  // Headers
+  const HEADERS2 = ['Employee','Store','Total Days','Present','Late','Absent','Excused','Late %'];
+  HEADERS2.forEach((h, i) => cell(ws, C(2, i), h, STYLES.tableHeader));
+  ws['!rows'][2] = { hpt: 22 };
+
+  // Aggregate
+  const empMap = new Map<string, EmpStat>();
+  for (const row of rows) {
+    const key  = row.userId;
+    const prev = empMap.get(key) ?? { name: row.userName, store: row.storeName,
+                                       present: 0, late: 0, absent: 0, excused: 0 };
+    const s = (row.status ?? 'absent') as keyof Pick<EmpStat,'present'|'late'|'absent'|'excused'>;
+    if (s in prev) (prev[s] as number)++;
+    empMap.set(key, prev);
   }
-  merges.push({ s: { r: sr, c: 0 }, e: { r: sr, c: 3 } });
 
-  cell(ws, C(sr, 4), `Hadir: ${nPresent}`,        STYLES.summaryVal);
-  cell(ws, C(sr, 5), `Terlambat: ${nLate}`,        STYLES.summaryVal);
-  cell(ws, C(sr, 6), `Izin: ${nExcused}`,          STYLES.summaryVal);
-  cell(ws, C(sr, 7), `Tidak Hadir: ${nAbsent}`,    STYLES.summaryVal);
-  ws['!rows']![sr] = { hpt: 20 };
+  const empList = [...empMap.values()].sort((a, b) => a.name.localeCompare(b.name));
 
-  ws['!ref']    = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: sr, c: 7 } });
+  empList.forEach((emp, idx) => {
+    const r     = 3 + idx;
+    const total = emp.present + emp.late + emp.absent + emp.excused;
+    const latePct = total > 0 ? `${Math.round((emp.late / total) * 100)}%` : '0%';
+    const alt   = idx % 2 === 0 ? 'F8FAFC' : 'FFFFFF';
+
+    const rowS = (isLeft: boolean) => ({
+      font:      { name: 'Arial', sz: 9 },
+      fill:      { fgColor: { rgb: alt }, patternType: 'solid' },
+      alignment: isLeft ? leftAlign : centerAlign,
+      border:    BORDER,
+    });
+
+    [emp.name, emp.store, total, emp.present, emp.late, emp.absent, emp.excused, latePct]
+      .forEach((val, ci) => cell(ws, C(r, ci), val as string | number, rowS(ci < 2)));
+
+    ws['!rows']![r] = { hpt: 18 };
+  });
+
+  const lastR = 3 + empList.length;
+  ws['!ref']    = XLSX.utils.encode_range({ s: { r:0, c:0 }, e: { r: lastR, c:7 } });
   ws['!merges'] = merges;
 }
 
 // ─── Route handler ────────────────────────────────────────────────────────────
-export async function GET(req: NextRequest) {
+
+export async function GET(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const actorId = (session.user as any).id as string;
-    const storeId = req.nextUrl.searchParams.get('storeId');
-    const dateStr = req.nextUrl.searchParams.get('date');
+    const { searchParams } = new URL(request.url);
+    const fromDateParam = searchParams.get('fromDate');
+    const toDateParam   = searchParams.get('toDate');
+    const storeIdParam  = searchParams.get('storeId');
+    const shiftParam    = searchParams.get('shift');
+    const statusParam   = searchParams.get('status');
 
-    if (!storeId || !dateStr) {
-      return NextResponse.json({ success: false, error: 'storeId and date are required' }, { status: 400 });
+    if (!fromDateParam || !toDateParam) {
+      return NextResponse.json({ error: 'fromDate and toDate are required' }, { status: 400 });
     }
 
-    const auth = await canManageSchedule(actorId, storeId);
-    if (!auth.allowed) {
-      return NextResponse.json({ success: false, error: auth.reason }, { status: 403 });
+    const fromDate = startOfDay(new Date(fromDateParam + 'T00:00:00'));
+    const toDate   = endOfDay(new Date(toDateParam     + 'T00:00:00'));
+
+    if (isNaN(fromDate.getTime()) || isNaN(toDate.getTime())) {
+      return NextResponse.json({ error: 'Invalid date format' }, { status: 400 });
+    }
+    if (fromDate > toDate) {
+      return NextResponse.json({ error: 'fromDate must be before or equal to toDate' }, { status: 400 });
     }
 
-    const date       = new Date(dateStr);
-    const monthStart = startOfMonth(date);
-    const monthEnd   = endOfMonth(date);
-
-    const [store] = await db
-      .select({ name: stores.name })
-      .from(stores)
-      .where(eq(stores.id, storeId))
-      .limit(1);
-
-    if (!store) {
-      return NextResponse.json({ success: false, error: 'Store not found' }, { status: 404 });
+    const diffDays = (toDate.getTime() - fromDate.getTime()) / 86_400_000;
+    if (diffDays > 90) {
+      return NextResponse.json({ error: 'Date range cannot exceed 90 days' }, { status: 400 });
     }
+
+    // ── OPS store scope ────────────────────────────────────────────────────
+    const opsStoreIds = await getStoresForOps(session.user.id);
+    if (!opsStoreIds.length) {
+      return NextResponse.json({ error: 'No stores found for your area' }, { status: 403 });
+    }
+
+    const storeIds = storeIdParam && opsStoreIds.includes(storeIdParam)
+      ? [storeIdParam]
+      : opsStoreIds;
+
+    // ── Query attendance ───────────────────────────────────────────────────
+    const conditions = [
+      inArray(attendance.storeId, storeIds),
+      gte(attendance.date, fromDate),
+      lte(attendance.date, toDate),
+    ];
+    if (shiftParam)  conditions.push(eq(attendance.shift,  shiftParam as any));
+    if (statusParam) conditions.push(eq(attendance.status, statusParam as any));
 
     const rows = await db
-      .select({ schedule: schedules, user: users, attendance })
-      .from(schedules)
-      .leftJoin(users,      eq(schedules.userId,      users.id))
-      .leftJoin(attendance, eq(attendance.scheduleId, schedules.id))
-      .where(
-        and(
-          eq(schedules.storeId,   storeId),
-          eq(schedules.isHoliday, false),
-          gte(schedules.date,     monthStart),
-          lte(schedules.date,     monthEnd),
-        ),
-      )
-      .orderBy(users.name, schedules.date, schedules.shift);
+      .select({
+        att:   attendance,
+        user:  { id: users.id,  name: users.name  },
+        store: { id: stores.id, name: stores.name },
+      })
+      .from(attendance)
+      .leftJoin(users,  eq(attendance.userId,  users.id))
+      .leftJoin(stores, eq(attendance.storeId, stores.id))
+      .where(and(...conditions))
+      .orderBy(attendance.date, users.name);
 
-    // Group by employee
-    const employeeMap = new Map<string, {
-      name: string; nik: string; employeeType: string; records: EmpRecord[];
-    }>();
+    // First break session per attendance record
+    const attIds = rows.map(r => r.att.id);
+    const breaks = attIds.length
+      ? await db
+          .select()
+          .from(breakSessions)
+          .where(inArray(breakSessions.attendanceId, attIds))
+      : [];
 
-    for (const { schedule, user, attendance: att } of rows) {
-      if (!user) continue;
-      const entry = employeeMap.get(user.id) ?? {
-        name:         user.name,
-        nik:          user.id.slice(0, 8).toUpperCase(),
-        employeeType: user.employeeType ?? '',
-        records:      [],
+    const breakByAtt = new Map<string, typeof breaks[0]>();
+    for (const b of breaks) {
+      if (!breakByAtt.has(b.attendanceId)) breakByAtt.set(b.attendanceId, b);
+    }
+
+    // Store display name
+    let storeName = 'All Stores';
+    if (storeIds.length === 1) {
+      const [s] = await db
+        .select({ name: stores.name })
+        .from(stores)
+        .where(eq(stores.id, storeIds[0]))
+        .limit(1);
+      if (s) storeName = s.name;
+    }
+
+    // ── Build export rows ──────────────────────────────────────────────────
+    const exportRows: ExportRow[] = rows.map(({ att, user, store }) => {
+      const brk = breakByAtt.get(att.id);
+      return {
+        userId:       att.userId,
+        userName:     user?.name  ?? '—',
+        storeName:    store?.name ?? '—',
+        date:         att.date.toISOString(),
+        shift:        att.shift,
+        status:       att.status,
+        checkInTime:  att.checkInTime?.toISOString()   ?? null,
+        checkOutTime: att.checkOutTime?.toISOString()  ?? null,
+        breakOutTime: brk?.breakOutTime?.toISOString() ?? null,
+        returnTime:   brk?.returnTime?.toISOString()   ?? null,
+        notes:        att.notes ?? null,
       };
-      entry.records.push({
-        date:         schedule.date.toISOString(),
-        shift:        schedule.shift,
-        status:       att?.status     ?? null,
-        checkInTime:  att?.checkInTime?.toISOString()  ?? null,
-        checkOutTime: att?.checkOutTime?.toISOString() ?? null,
-        notes:        att?.notes ?? null,
-      });
-      employeeMap.set(user.id, entry);
-    }
+    });
 
-    if (employeeMap.size === 0) {
-      return NextResponse.json(
-        { success: false, error: 'No scheduled employees found for this month' },
-        { status: 404 },
-      );
-    }
-
-    const monthLabel = MONTH_NAMES_ID[date.getMonth()];
-    const yearLabel  = String(date.getFullYear());
-
+    // ── Build workbook ─────────────────────────────────────────────────────
     const wb = XLSX.utils.book_new();
 
-    let sheetIdx = 0;
-    for (const [, emp] of employeeMap) {
-      const ws: XLSX.WorkSheet = {};
-      buildSheet(ws, {
-        storeName:    store.name,
-        month:        monthLabel,
-        year:         yearLabel,
-        name:         emp.name,
-        nik:          emp.nik,
-        employeeType: emp.employeeType,
-        records:      emp.records,
-      });
-      // Sheet names: max 31 chars, must be unique
-      const sheetName = emp.name.slice(0, 28) + (sheetIdx > 0 ? ` ${sheetIdx}` : '');
-      XLSX.utils.book_append_sheet(wb, ws, sheetName);
-      sheetIdx++;
-    }
+    const ws1: XLSX.WorkSheet = {};
+    buildLogSheet(ws1, exportRows, {
+      storeName,
+      fromDate:   fromDateParam,
+      toDate:     toDateParam,
+      exportedBy: (session.user as any).name ?? session.user.id,
+    });
+    XLSX.utils.book_append_sheet(wb, ws1, 'Attendance Log');
+
+    const ws2: XLSX.WorkSheet = {};
+    buildEmployeeSheet(ws2, exportRows);
+    XLSX.utils.book_append_sheet(wb, ws2, 'By Employee');
 
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx', cellStyles: true });
 
-    const filename = `absen_${store.name.replace(/\s+/g, '_')}_${monthLabel}_${yearLabel}.xlsx`;
+    const filename = `attendance_${fromDateParam}_to_${toDateParam}.xlsx`;
 
     return new NextResponse(buf, {
       status: 200,
       headers: {
         'Content-Type':        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         'Content-Disposition': `attachment; filename="${filename}"`,
+        'Content-Length':      String(buf.length),
       },
     });
   } catch (err) {
-    console.error('export error:', err);
-    return NextResponse.json({ success: false, error: String(err) }, { status: 500 });
+    console.error('[GET /api/ops/attendance/export]', err);
+    return NextResponse.json({ error: 'Failed to generate export' }, { status: 500 });
   }
 }

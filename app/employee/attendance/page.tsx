@@ -1,5 +1,5 @@
-// app/employee/attendance/page.tsx
 'use client';
+// app/employee/attendance/page.tsx
 
 import { useState, useEffect, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
@@ -41,12 +41,12 @@ interface ShiftSlot {
   schedule: {
     scheduleId: string;
     shift:      Shift;
+    storeId:    string;   // actual working store (may differ from homeStoreId)
     date:       string;
   };
   attendance: AttRecord | null;
 }
 
-/** Returned by GET /api/employee/attendance */
 interface AttResponse {
   success: boolean;
   shifts:  ShiftSlot[];
@@ -118,20 +118,17 @@ function ShiftCard({ slot, onAction }: {
   const shift    = schedule.shift;
   const shiftCfg = SHIFT_CFG[shift];
 
-  const checkedIn  = Boolean(att?.checkInTime);
-  const checkedOut = Boolean(att?.checkOutTime);
-  const onBreak    = Boolean(att?.onBreak);
+  const checkedIn    = Boolean(att?.checkInTime);
+  const checkedOut   = Boolean(att?.checkOutTime);
+  const onBreak      = Boolean(att?.onBreak);
   const hasBreakLeft = att ? (att.breaks ?? []).length === 0 : false;
-  const openBreak  = att?.breaks?.find(b => !b.returnTime) ?? null;
-  const cfg        = att ? STATUS_CFG[att.status] : null;
+  const openBreak    = att?.breaks?.find(b => !b.returnTime) ?? null;
+  const cfg          = att ? STATUS_CFG[att.status] : null;
 
   async function act(action: string) {
     setActing(true);
-    try {
-      await onAction(action, shift);
-    } finally {
-      setActing(false);
-    }
+    try { await onAction(action, shift); }
+    finally { setActing(false); }
   }
 
   const shiftAccent = shift === 'morning'
@@ -140,7 +137,7 @@ function ShiftCard({ slot, onAction }: {
 
   return (
     <div className="space-y-3">
-      {/* ── Shift header ── */}
+      {/* Shift header */}
       <div className={cn('flex items-center gap-3 rounded-xl border px-3.5 py-3', shiftAccent.border, shiftAccent.bg)}>
         <shiftAccent.Icon className={cn('h-5 w-5 flex-shrink-0', shiftAccent.iconCls)} />
         <div className="flex-1">
@@ -151,7 +148,6 @@ function ShiftCard({ slot, onAction }: {
             {shiftCfg.startTime} – {shiftCfg.endTime} · {shiftCfg.breakLabel} break · Late after 30 min
           </p>
         </div>
-        {/* Status pill */}
         {cfg && (
           <span className={cn(
             'inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold',
@@ -164,7 +160,7 @@ function ShiftCard({ slot, onAction }: {
         )}
       </div>
 
-      {/* ── Not yet checked in ── */}
+      {/* Not yet checked in */}
       {!att && (
         <Card>
           <CardContent className="space-y-4 p-5">
@@ -182,16 +178,14 @@ function ShiftCard({ slot, onAction }: {
               onClick={() => act('checkin')}
               disabled={acting}
             >
-              {acting
-                ? <Loader2 className="h-4 w-4 animate-spin" />
-                : <LogIn   className="h-4 w-4" />}
+              {acting ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
               {acting ? 'Checking in…' : 'Check In Now'}
             </Button>
           </CardContent>
         </Card>
       )}
 
-      {/* ── Checked in ── */}
+      {/* Checked in */}
       {att && cfg && (
         <>
           {/* Big status block */}
@@ -237,9 +231,7 @@ function ShiftCard({ slot, onAction }: {
                   onClick={() => act('endbreak')}
                   disabled={acting}
                 >
-                  {acting
-                    ? <Loader2   className="h-4 w-4 animate-spin" />
-                    : <RotateCcw className="h-4 w-4" />}
+                  {acting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
                   {acting ? 'Returning…' : 'Return from Break'}
                 </Button>
               </CardContent>
@@ -330,9 +322,7 @@ function ShiftCard({ slot, onAction }: {
                   onClick={() => act('startbreak')}
                   disabled={acting}
                 >
-                  {acting
-                    ? <Loader2 className="h-4 w-4 animate-spin" />
-                    : <Coffee  className="h-4 w-4" />}
+                  {acting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Coffee className="h-4 w-4" />}
                   {acting ? 'Starting break…' : `Take ${shiftCfg.breakLabel} Break`}
                 </Button>
               )}
@@ -344,9 +334,7 @@ function ShiftCard({ slot, onAction }: {
                 disabled={acting || onBreak}
                 title={onBreak ? 'Return from break before checking out' : undefined}
               >
-                {acting
-                  ? <Loader2 className="h-4 w-4 animate-spin" />
-                  : <LogOut  className="h-4 w-4" />}
+                {acting ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />}
                 {acting ? 'Checking out…' : 'Check Out'}
               </Button>
 
@@ -380,10 +368,12 @@ export default function EmployeeAttendancePage() {
   const [shifts,  setShifts]  = useState<ShiftSlot[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const storeId = (session?.user as any)?.storeId ?? '';
+  // Use homeStoreId to guard the load — actual working store comes back
+  // inside each schedule slot from the API.
+  const homeStoreId = (session?.user as any)?.homeStoreId as string | undefined;
 
   const load = useCallback(async () => {
-    if (!storeId) return;
+    if (!homeStoreId) return;
     try {
       const res = await fetch('/api/employee/attendance');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -395,11 +385,11 @@ export default function EmployeeAttendancePage() {
     } finally {
       setLoading(false);
     }
-  }, [storeId]);
+  }, [homeStoreId]);
 
   useEffect(() => { if (session?.user) load(); }, [session, load]);
 
-  // Centralised action handler passed down to each ShiftCard
+  // Each action passes the shift only — the route resolves the working store itself.
   async function handleAction(action: string, shift: Shift) {
     try {
       const res  = await fetch('/api/employee/attendance', {
@@ -410,7 +400,6 @@ export default function EmployeeAttendancePage() {
       const json = await res.json();
       if (!json.success) throw new Error(json.error);
 
-      // Toast per action
       if (action === 'checkin') {
         if (json.action === 'returned_from_break') toast.success('Welcome back! Break ended.');
         else if (json.status === 'late')            toast.success('Checked in — marked as late.');
@@ -430,11 +419,9 @@ export default function EmployeeAttendancePage() {
     }
   }
 
-  const hasAnyShift = shifts.length > 0;
-
   return (
     <div className="flex flex-col">
-      {/* ── Purple header ── */}
+      {/* Purple header */}
       <div className="relative overflow-hidden bg-primary px-6 pb-8 pt-12">
         <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-white/5" />
         <div className="pointer-events-none absolute -right-4 bottom-0 h-24 w-24 rounded-full bg-white/5" />
@@ -446,7 +433,6 @@ export default function EmployeeAttendancePage() {
           <p className="mt-1 text-xs text-primary-foreground/50">{todayFull()}</p>
         </div>
 
-        {/* Shift pills in header */}
         {shifts.length > 0 && (
           <div className="relative mt-4 flex flex-wrap gap-2">
             {shifts.map(({ schedule, attendance: att }) => (
@@ -462,10 +448,10 @@ export default function EmployeeAttendancePage() {
                   <>
                     <span className="opacity-40">·</span>
                     <span className={cn(
-                      att.onBreak ? 'text-amber-300'
-                        : att.status === 'present' ? 'text-green-300'
-                        : att.status === 'late'    ? 'text-amber-300'
-                        : 'text-red-300',
+                      att.onBreak          ? 'text-amber-300'
+                      : att.status === 'present' ? 'text-green-300'
+                      : att.status === 'late'    ? 'text-amber-300'
+                      :                            'text-red-300',
                     )}>
                       {att.onBreak ? 'On Break' : att.status}
                     </span>
@@ -477,20 +463,18 @@ export default function EmployeeAttendancePage() {
         )}
       </div>
 
-      {/* ── Body ── */}
+      {/* Body */}
       <div className="space-y-6 p-4 pb-10">
 
-        {/* Loading */}
         {loading && (
           <div className="space-y-3">
-            {[1, 2].map((i) => (
+            {[1, 2].map(i => (
               <div key={i} className="h-40 animate-pulse rounded-xl bg-secondary" />
             ))}
           </div>
         )}
 
-        {/* Not scheduled */}
-        {!loading && !hasAnyShift && (
+        {!loading && shifts.length === 0 && (
           <Card>
             <CardContent className="flex flex-col items-center py-12 text-center">
               <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-secondary">
@@ -509,8 +493,7 @@ export default function EmployeeAttendancePage() {
           </Card>
         )}
 
-        {/* One card per shift */}
-        {!loading && shifts.map((slot) => (
+        {!loading && shifts.map(slot => (
           <ShiftCard
             key={slot.schedule.scheduleId}
             slot={slot}

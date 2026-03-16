@@ -7,14 +7,14 @@ import { useSession, signOut } from 'next-auth/react';
 import { cn } from '@/lib/utils';
 import {
   LayoutDashboard,
-  ListTodo,
-  PlusCircle,
-  Calendar,
   ClipboardCheck,
+  Calendar,
+  UserCheck,
   Store,
   ChevronRight,
   LogOut,
   AlertTriangle,
+  Wallet,
 } from 'lucide-react';
 
 const NAV = [
@@ -28,21 +28,22 @@ const NAV = [
   {
     section: 'Tasks',
     items: [
-      { href: '/ops/tasks',     label: 'Task Library', icon: ListTodo   },
-      { href: '/ops/tasks/new', label: 'Create Task',  icon: PlusCircle },
+      // Tasks are now fixed (store opening + grooming) — monitoring only
+      { href: '/ops/tasks', label: 'Task Monitor', icon: ClipboardCheck },
     ],
   },
   {
     section: 'People',
     items: [
-      { href: '/ops/schedules',  label: 'Schedules',  icon: Calendar      },
-      { href: '/ops/attendance', label: 'Attendance', icon: ClipboardCheck },
+      { href: '/ops/schedules',  label: 'Schedules',  icon: Calendar   },
+      { href: '/ops/attendance', label: 'Attendance', icon: UserCheck  },
     ],
   },
   {
     section: 'Operations',
     items: [
-      { href: '/ops/issues', label: 'Issues', icon: AlertTriangle },
+      { href: '/ops/issues',     label: 'Issues',     icon: AlertTriangle },
+      { href: '/ops/petty-cash', label: 'Petty Cash', icon: Wallet        },
     ],
   },
 ];
@@ -120,7 +121,6 @@ export default function OpsSidebar({ storeName = 'Store Manager' }: Props) {
               {session?.user?.email ?? 'ops@store.com'}
             </p>
           </div>
-
           <button
             onClick={() => signOut({ callbackUrl: '/login' })}
             className="rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"

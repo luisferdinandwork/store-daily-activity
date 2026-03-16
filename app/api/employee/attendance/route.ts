@@ -1,23 +1,51 @@
 // app/api/employee/attendance/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
+import { getServerSession }          from 'next-auth';
+import { authOptions }               from '@/lib/auth';
 import {
   employeeCheckIn,
   employeeCheckOut,
   startBreak,
   endBreak,
-} from '@/lib/schedule-utils';
-import { db } from '@/lib/db';
+}                                    from '@/lib/schedule-utils';
+import { db }                        from '@/lib/db';
 import { schedules, attendance, breakSessions } from '@/lib/db/schema';
-import { and, eq, gte, lte } from 'drizzle-orm';
+import { and, eq, gte, lte }         from 'drizzle-orm';
 
 function startOfDay(d: Date) { const r = new Date(d); r.setHours(0, 0, 0, 0);      return r; }
 function endOfDay(d: Date)   { const r = new Date(d); r.setHours(23, 59, 59, 999); return r; }
 
+/**
+ * Resolves the store the employee is actually working at TODAY.
+ *
+ * An employee's session carries their homeStoreId. But if they have been
+ * deployed to a different store this month, their schedule rows will have
+ * a different storeId. We look up their actual schedule for today and return
+ * that storeId so check-in/out targets the correct store.
+ *
+ * Falls back to homeStoreId if no schedule is found today (will result in
+ * the usual "not scheduled" error from employeeCheckIn).
+ */
+async function resolveWorkingStoreId(userId: string, homeStoreId: string): Promise<string> {
+  const now = new Date();
+  const [sched] = await db
+    .select({ storeId: schedules.storeId })
+    .from(schedules)
+    .where(
+      and(
+        eq(schedules.userId,    userId),
+        eq(schedules.isHoliday, false),
+        gte(schedules.date,     startOfDay(now)),
+        lte(schedules.date,     endOfDay(now)),
+      ),
+    )
+    .limit(1);
+
+  return sched?.storeId ?? homeStoreId;
+}
+
 // ─── GET /api/employee/attendance ─────────────────────────────────────────────
 // Returns ALL of today's schedules + their attendance records (one per shift).
-// An employee may have both morning and evening shifts on the same day.
 export async function GET(_req: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
@@ -25,34 +53,34 @@ export async function GET(_req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const userId  = (session.user as any).id      as string;
-    const storeId = (session.user as any).storeId  as string;
+    const userId      = (session.user as any).id          as string;
+    const homeStoreId = (session.user as any).homeStoreId as string | undefined;
 
-    if (!storeId) {
+    if (!homeStoreId) {
       return NextResponse.json(
-        { success: false, error: 'User is not assigned to a store' },
+        { success: false, error: 'User is not assigned to a store.' },
         { status: 400 },
       );
     }
 
     const now = new Date();
 
-    // All schedules today for this employee (may be 0, 1, or 2 — one per shift)
+    // All schedules today for this employee across ALL stores
+    // (employee may be deployed to a store other than their home store)
     const todaySchedules = await db
       .select()
       .from(schedules)
       .where(
         and(
           eq(schedules.userId,    userId),
-          eq(schedules.storeId,   storeId),
           eq(schedules.isHoliday, false),
           gte(schedules.date,     startOfDay(now)),
           lte(schedules.date,     endOfDay(now)),
         ),
       )
-      .orderBy(schedules.shift); // morning first, then evening
+      .orderBy(schedules.shift);   // morning first, then evening
 
-    // For each schedule, find attendance + breaks
+    // For each schedule, fetch attendance + break sessions
     const shifts = await Promise.all(
       todaySchedules.map(async (sched) => {
         const [att] = await db
@@ -73,6 +101,7 @@ export async function GET(_req: NextRequest) {
           schedule: {
             scheduleId: sched.id,
             shift:      sched.shift as 'morning' | 'evening',
+            storeId:    sched.storeId,
             date:       sched.date.toISOString(),
           },
           attendance: att
@@ -104,9 +133,7 @@ export async function GET(_req: NextRequest) {
 }
 
 // ─── POST /api/employee/attendance ────────────────────────────────────────────
-// Body: { action: 'checkin'|'checkout'|'startbreak'|'endbreak', shift?: 'morning'|'evening' }
-// `shift` is required for checkin; for checkout/break actions the server looks
-// up the attendance record from today's DB row so the client doesn't need to send it.
+// Body: { action: 'checkin'|'checkout'|'startbreak'|'endbreak', shift: 'morning'|'evening' }
 export async function POST(req: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
@@ -114,74 +141,58 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const userId  = (session.user as any).id      as string;
-    const storeId = (session.user as any).storeId  as string;
+    const userId      = (session.user as any).id          as string;
+    const homeStoreId = (session.user as any).homeStoreId as string | undefined;
 
-    if (!storeId) {
+    if (!homeStoreId) {
       return NextResponse.json(
-        { success: false, error: 'User is not assigned to a store' },
+        { success: false, error: 'User is not assigned to a store.' },
         { status: 400 },
       );
     }
 
     const { action, shift } = await req.json();
 
+    if (!shift || !['morning', 'evening'].includes(shift)) {
+      return NextResponse.json(
+        { success: false, error: 'shift must be "morning" or "evening".' },
+        { status: 400 },
+      );
+    }
+
+    // Resolve working store for this employee today (handles cross-store deployments)
+    const workingStoreId = await resolveWorkingStoreId(userId, homeStoreId);
+
     // ── Check In ──────────────────────────────────────────────────────────────
     if (action === 'checkin') {
-      if (!shift || !['morning', 'evening'].includes(shift)) {
-        return NextResponse.json(
-          { success: false, error: 'shift must be "morning" or "evening"' },
-          { status: 400 },
-        );
-      }
-      const result = await employeeCheckIn(userId, storeId, shift);
+      const result = await employeeCheckIn(userId, workingStoreId, shift);
       return NextResponse.json(result, { status: result.success ? 200 : 400 });
     }
 
     // ── Check Out ─────────────────────────────────────────────────────────────
-    // shift required so we check out the right shift when both are active
     if (action === 'checkout') {
-      if (!shift || !['morning', 'evening'].includes(shift)) {
-        return NextResponse.json(
-          { success: false, error: 'shift must be "morning" or "evening" for checkout' },
-          { status: 400 },
-        );
-      }
-      const result = await employeeCheckOut(userId, storeId, shift);
+      const result = await employeeCheckOut(userId, workingStoreId, shift);
       return NextResponse.json(result, { status: result.success ? 200 : 400 });
     }
 
     // ── Start Break ───────────────────────────────────────────────────────────
-    // shift required so we start break on the right shift
     if (action === 'startbreak') {
-      if (!shift || !['morning', 'evening'].includes(shift)) {
-        return NextResponse.json(
-          { success: false, error: 'shift must be "morning" or "evening" for startbreak' },
-          { status: 400 },
-        );
-      }
-      const result = await startBreak(userId, storeId, shift);
+      const result = await startBreak(userId, workingStoreId, shift);
       return NextResponse.json(result, { status: result.success ? 200 : 400 });
     }
 
     // ── End Break ─────────────────────────────────────────────────────────────
     if (action === 'endbreak') {
-      if (!shift || !['morning', 'evening'].includes(shift)) {
-        return NextResponse.json(
-          { success: false, error: 'shift must be "morning" or "evening" for endbreak' },
-          { status: 400 },
-        );
-      }
-
       const now = new Date();
-      // Find the attendance record for this specific shift today
+
+      // Look up today's schedule for this specific shift
       const [sched] = await db
         .select({ id: schedules.id })
         .from(schedules)
         .where(
           and(
             eq(schedules.userId,    userId),
-            eq(schedules.storeId,   storeId),
+            eq(schedules.storeId,   workingStoreId),
             eq(schedules.shift,     shift),
             eq(schedules.isHoliday, false),
             gte(schedules.date,     startOfDay(now)),
@@ -210,12 +221,12 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      const result = await endBreak(userId, storeId, att.id);
+      const result = await endBreak(userId, workingStoreId, att.id);
       return NextResponse.json(result, { status: result.success ? 200 : 400 });
     }
 
     return NextResponse.json(
-      { success: false, error: 'action must be "checkin", "checkout", "startbreak", or "endbreak"' },
+      { success: false, error: 'action must be "checkin", "checkout", "startbreak", or "endbreak".' },
       { status: 400 },
     );
   } catch (err) {

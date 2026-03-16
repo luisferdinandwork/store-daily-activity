@@ -2,116 +2,181 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { completeTask, getEmployeeTasksForDate } from '@/lib/daily-task-utils';
 import { db } from '@/lib/db';
-import { employeeTasks, tasks } from '@/lib/db/schema';
-import { eq, and } from 'drizzle-orm';
+import {
+  storeOpeningTasks,
+  groomingTasks,
+  schedules,
+  attendance,
+} from '@/lib/db/schema';
+import { eq, and, gte, lte } from 'drizzle-orm';
 
-// ─────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function startOfDay(d: Date) { const r = new Date(d); r.setHours(0,0,0,0); return r; }
+function endOfDay(d: Date)   { const r = new Date(d); r.setHours(23,59,59,999); return r; }
+
+function parsePhotos(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try { return JSON.parse(raw) as string[]; }
+  catch { return []; }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // GET /api/employee/tasks?storeId=&date=
-// Returns today's assigned tasks for the authenticated employee
-// ─────────────────────────────────────────────────────────────
+// Returns today's storeOpeningTask (morning only) + groomingTask for the
+// authenticated employee's scheduled shift.
+// ─────────────────────────────────────────────────────────────────────────────
 export async function GET(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
-
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     const { searchParams } = new URL(request.url);
-    const storeId = searchParams.get('storeId') ?? session.user.storeId;
+    const storeId   = searchParams.get('storeId') ?? (session.user as any).storeId;
     const dateParam = searchParams.get('date');
 
     if (!storeId) {
-      return NextResponse.json({ error: 'Store ID is required' }, { status: 400 });
+      return NextResponse.json({ error: 'storeId is required' }, { status: 400 });
     }
 
+    const userId     = session.user.id;
     const targetDate = dateParam ? new Date(dateParam) : new Date();
+    const dayStart   = startOfDay(targetDate);
+    const dayEnd     = endOfDay(targetDate);
 
-    const rows = await getEmployeeTasksForDate(session.user.id, storeId, targetDate);
+    // ── Fetch storeOpeningTasks (morning shift only) ────────────────────────
+    const openingRows = await db
+      .select()
+      .from(storeOpeningTasks)
+      .where(
+        and(
+          eq(storeOpeningTasks.userId,  userId),
+          eq(storeOpeningTasks.storeId, storeId),
+          gte(storeOpeningTasks.date,   dayStart),
+          lte(storeOpeningTasks.date,   dayEnd),
+          eq(storeOpeningTasks.shift,   'morning'),
+        ),
+      );
 
-    // Normalise and parse JSON columns
-    const assignedTasks = (rows as any[]).map((row) => ({
-      task: {
-        ...row.task,
-        // parse JSON fields the client doesn't need raw
-        recurrenceDays: row.task?.recurrenceDays
-          ? JSON.parse(row.task.recurrenceDays)
-          : null,
-        formSchema: row.task?.formSchema
-          ? JSON.parse(row.task.formSchema)
-          : null,
-      },
-      employeeTask: {
-        ...row.employeeTask,
-        attachmentUrls: row.employeeTask?.attachmentUrls
-          ? JSON.parse(row.employeeTask.attachmentUrls)
-          : [],
-        formData: row.employeeTask?.formData
-          ? JSON.parse(row.employeeTask.formData)
-          : null,
-      },
-      attendance: row.attendance ?? null,
-      schedule: row.schedule ?? null,
-    }));
+    // ── Fetch groomingTasks (all shifts) ───────────────────────────────────
+    const groomingRows = await db
+      .select()
+      .from(groomingTasks)
+      .where(
+        and(
+          eq(groomingTasks.userId,  userId),
+          eq(groomingTasks.storeId, storeId),
+          gte(groomingTasks.date,   dayStart),
+          lte(groomingTasks.date,   dayEnd),
+        ),
+      );
 
-    return NextResponse.json({ assignedTasks });
+    // ── Normalise into a unified task list ────────────────────────────────
+    const tasks = [
+      ...openingRows.map((row) => ({
+        type: 'store_opening' as const,
+        data: {
+          ...row,
+          date:             row.date.toISOString(),
+          completedAt:      row.completedAt?.toISOString()  ?? null,
+          verifiedAt:       row.verifiedAt?.toISOString()   ?? null,
+          storeFrontPhotos: parsePhotos(row.storeFrontPhotos),
+          cashDrawerPhotos: parsePhotos(row.cashDrawerPhotos),
+        },
+      })),
+      ...groomingRows.map((row) => ({
+        type: 'grooming' as const,
+        data: {
+          ...row,
+          date:        row.date.toISOString(),
+          completedAt: row.completedAt?.toISOString() ?? null,
+          verifiedAt:  row.verifiedAt?.toISOString()  ?? null,
+          selfiePhotos: parsePhotos(row.selfiePhotos),
+        },
+      })),
+    ];
+
+    // Sort: pending/in_progress first, completed last; then by shift
+    tasks.sort((a, b) => {
+      const order: Record<string, number> = { pending: 0, in_progress: 1, completed: 2 };
+      return (order[a.data.status] ?? 0) - (order[b.data.status] ?? 0);
+    });
+
+    return NextResponse.json({ tasks });
   } catch (error) {
     console.error('[GET /api/employee/tasks]', error);
     return NextResponse.json({ error: 'Failed to fetch tasks' }, { status: 500 });
   }
 }
 
-// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 // PATCH /api/employee/tasks
-// Update task status (pending → in_progress)
-// ─────────────────────────────────────────────────────────────
+// Transition status: pending → in_progress
+// Body: { taskId, taskType: 'store_opening' | 'grooming', status: 'in_progress' }
+// ─────────────────────────────────────────────────────────────────────────────
 export async function PATCH(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
-
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const body = await request.json();
-    const { taskId, status } = body;
+    const { taskId, taskType, status } = await request.json();
 
-    if (!taskId || !status) {
+    if (!taskId || !taskType || !status) {
       return NextResponse.json(
-        { error: 'taskId and status are required' },
+        { error: 'taskId, taskType, and status are required' },
         { status: 400 },
       );
     }
 
-    // Verify the task belongs to this employee
-    const [existing] = await db
-      .select({ id: employeeTasks.id, userId: employeeTasks.userId })
-      .from(employeeTasks)
-      .where(
-        and(
-          eq(employeeTasks.id, taskId),
-          eq(employeeTasks.userId, session.user.id),
-        ),
-      )
-      .limit(1);
-
-    if (!existing) {
+    if (status !== 'in_progress') {
       return NextResponse.json(
-        { error: 'Task not found or access denied' },
-        { status: 404 },
+        { error: 'PATCH only supports transitioning to in_progress. Use POST to complete.' },
+        { status: 400 },
       );
     }
 
-    await db
-      .update(employeeTasks)
-      .set({
-        status,
-        updatedAt: new Date(),
-        ...(status === 'completed' ? { completedAt: new Date() } : {}),
-      })
-      .where(eq(employeeTasks.id, taskId));
+    const userId = session.user.id;
+
+    if (taskType === 'store_opening') {
+      const [existing] = await db
+        .select({ id: storeOpeningTasks.id })
+        .from(storeOpeningTasks)
+        .where(and(eq(storeOpeningTasks.id, taskId), eq(storeOpeningTasks.userId, userId)))
+        .limit(1);
+
+      if (!existing) {
+        return NextResponse.json({ error: 'Task not found or access denied' }, { status: 404 });
+      }
+
+      await db
+        .update(storeOpeningTasks)
+        .set({ status: 'in_progress', updatedAt: new Date() })
+        .where(eq(storeOpeningTasks.id, taskId));
+
+    } else if (taskType === 'grooming') {
+      const [existing] = await db
+        .select({ id: groomingTasks.id })
+        .from(groomingTasks)
+        .where(and(eq(groomingTasks.id, taskId), eq(groomingTasks.userId, userId)))
+        .limit(1);
+
+      if (!existing) {
+        return NextResponse.json({ error: 'Task not found or access denied' }, { status: 404 });
+      }
+
+      await db
+        .update(groomingTasks)
+        .set({ status: 'in_progress', updatedAt: new Date() })
+        .where(eq(groomingTasks.id, taskId));
+
+    } else {
+      return NextResponse.json({ error: `Unknown taskType: ${taskType}` }, { status: 400 });
+    }
 
     return NextResponse.json({ success: true });
   } catch (error) {
@@ -120,69 +185,159 @@ export async function PATCH(request: NextRequest) {
   }
 }
 
-// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
 // POST /api/employee/tasks
-// Complete a task – supports form data AND attachments
-// Body: { employeeTaskId, formData?, attachmentUrls?, notes? }
-// ─────────────────────────────────────────────────────────────
+// Submit (complete) a task with form data + photo URLs.
+//
+// Body for store_opening:
+// {
+//   taskType: 'store_opening',
+//   taskId: string,
+//   cashDrawerAmount: number,
+//   allLightsOn: boolean,
+//   cleanlinessCheck: boolean,
+//   equipmentCheck: boolean,
+//   stockCheck: boolean,
+//   safetyCheck: boolean,
+//   openingNotes?: string,
+//   storeFrontPhotos: string[],   ← URLs from /api/employee/tasks/upload
+//   cashDrawerPhotos: string[],
+// }
+//
+// Body for grooming:
+// {
+//   taskType: 'grooming',
+//   taskId: string,
+//   uniformComplete: boolean,
+//   hairGroomed: boolean,
+//   nailsClean: boolean,
+//   accessoriesCompliant: boolean,
+//   shoeCompliant: boolean,
+//   groomingNotes?: string,
+//   selfiePhotos: string[],       ← URLs from /api/employee/tasks/upload
+// }
+// ─────────────────────────────────────────────────────────────────────────────
 export async function POST(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
-
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const body = await request.json();
-    const { employeeTaskId, formData, attachmentUrls, notes } = body;
+    const body     = await request.json();
+    const { taskType, taskId } = body;
+    const userId   = session.user.id;
 
-    if (!employeeTaskId) {
-      return NextResponse.json(
-        { error: 'employeeTaskId is required' },
-        { status: 400 },
-      );
+    if (!taskType || !taskId) {
+      return NextResponse.json({ error: 'taskType and taskId are required' }, { status: 400 });
     }
 
-    // Verify ownership
-    const [row] = await db
-      .select({ et: employeeTasks, t: tasks })
-      .from(employeeTasks)
-      .innerJoin(tasks, eq(employeeTasks.taskId, tasks.id))
-      .where(
-        and(
-          eq(employeeTasks.id, employeeTaskId),
-          eq(employeeTasks.userId, session.user.id),
-        ),
-      )
-      .limit(1);
+    // ── Store Opening ─────────────────────────────────────────────────────
+    if (taskType === 'store_opening') {
+      const [row] = await db
+        .select({ id: storeOpeningTasks.id, status: storeOpeningTasks.status })
+        .from(storeOpeningTasks)
+        .where(and(eq(storeOpeningTasks.id, taskId), eq(storeOpeningTasks.userId, userId)))
+        .limit(1);
 
-    if (!row) {
-      return NextResponse.json(
-        { error: 'Task not found or access denied' },
-        { status: 404 },
-      );
+      if (!row)                    return NextResponse.json({ error: 'Task not found or access denied' }, { status: 404 });
+      if (row.status === 'completed') return NextResponse.json({ error: 'Task already completed' }, { status: 400 });
+
+      const {
+        cashDrawerAmount, allLightsOn, cleanlinessCheck,
+        equipmentCheck, stockCheck, safetyCheck,
+        openingNotes, storeFrontPhotos, cashDrawerPhotos,
+      } = body;
+
+      // Basic validation
+      if (
+        cashDrawerAmount === undefined || cashDrawerAmount === null ||
+        allLightsOn      === undefined ||
+        cleanlinessCheck === undefined ||
+        equipmentCheck   === undefined ||
+        stockCheck       === undefined ||
+        safetyCheck      === undefined
+      ) {
+        return NextResponse.json({ error: 'All checklist fields are required' }, { status: 400 });
+      }
+      if (!Array.isArray(storeFrontPhotos) || storeFrontPhotos.length < 1) {
+        return NextResponse.json({ error: 'At least 1 store-front photo is required' }, { status: 400 });
+      }
+      if (!Array.isArray(cashDrawerPhotos) || cashDrawerPhotos.length < 1) {
+        return NextResponse.json({ error: 'At least 1 cash drawer photo is required' }, { status: 400 });
+      }
+
+      await db
+        .update(storeOpeningTasks)
+        .set({
+          cashDrawerAmount,
+          allLightsOn,
+          cleanlinessCheck,
+          equipmentCheck,
+          stockCheck,
+          safetyCheck,
+          openingNotes:     openingNotes ?? null,
+          storeFrontPhotos: JSON.stringify(storeFrontPhotos),
+          cashDrawerPhotos: JSON.stringify(cashDrawerPhotos),
+          status:           'completed',
+          completedAt:      new Date(),
+          updatedAt:        new Date(),
+        })
+        .where(eq(storeOpeningTasks.id, taskId));
+
+      return NextResponse.json({ success: true, message: 'Store opening task completed' });
     }
 
-    if (row.et.status === 'completed') {
-      return NextResponse.json(
-        { error: 'Task is already completed' },
-        { status: 400 },
-      );
+    // ── Grooming ──────────────────────────────────────────────────────────
+    if (taskType === 'grooming') {
+      const [row] = await db
+        .select({ id: groomingTasks.id, status: groomingTasks.status })
+        .from(groomingTasks)
+        .where(and(eq(groomingTasks.id, taskId), eq(groomingTasks.userId, userId)))
+        .limit(1);
+
+      if (!row)                    return NextResponse.json({ error: 'Task not found or access denied' }, { status: 404 });
+      if (row.status === 'completed') return NextResponse.json({ error: 'Task already completed' }, { status: 400 });
+
+      const {
+        uniformComplete, hairGroomed, nailsClean,
+        accessoriesCompliant, shoeCompliant,
+        groomingNotes, selfiePhotos,
+      } = body;
+
+      if (
+        uniformComplete      === undefined ||
+        hairGroomed          === undefined ||
+        nailsClean           === undefined ||
+        accessoriesCompliant === undefined ||
+        shoeCompliant        === undefined
+      ) {
+        return NextResponse.json({ error: 'All grooming checklist fields are required' }, { status: 400 });
+      }
+      if (!Array.isArray(selfiePhotos) || selfiePhotos.length < 1) {
+        return NextResponse.json({ error: 'At least 1 selfie photo is required' }, { status: 400 });
+      }
+
+      await db
+        .update(groomingTasks)
+        .set({
+          uniformComplete,
+          hairGroomed,
+          nailsClean,
+          accessoriesCompliant,
+          shoeCompliant,
+          groomingNotes: groomingNotes ?? null,
+          selfiePhotos:  JSON.stringify(selfiePhotos),
+          status:        'completed',
+          completedAt:   new Date(),
+          updatedAt:     new Date(),
+        })
+        .where(eq(groomingTasks.id, taskId));
+
+      return NextResponse.json({ success: true, message: 'Grooming task completed' });
     }
 
-    const result = await completeTask({
-      employeeTaskId,
-      formData,
-      attachmentUrls,
-      notes,
-      completedBy: session.user.id,
-    });
-
-    if (!result.success) {
-      return NextResponse.json({ error: result.error }, { status: 400 });
-    }
-
-    return NextResponse.json({ success: true, message: 'Task completed successfully' });
+    return NextResponse.json({ error: `Unknown taskType: ${taskType}` }, { status: 400 });
   } catch (error) {
     console.error('[POST /api/employee/tasks]', error);
     return NextResponse.json({ error: 'Failed to complete task' }, { status: 500 });

@@ -1,5 +1,5 @@
 {
-  "id": "d79ca31d-5283-4888-b660-8426ce2497c0",
+  "id": "0111f5cb-aa61-472d-8127-5c8f64b4adfd",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -469,8 +469,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.employee_tasks": {
-      "name": "employee_tasks",
+    "public.grooming_tasks": {
+      "name": "grooming_tasks",
       "schema": "",
       "columns": {
         "id": {
@@ -479,12 +479,6 @@
           "primaryKey": true,
           "notNull": true,
           "default": "gen_random_uuid()"
-        },
-        "task_id": {
-          "name": "task_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
         },
         "user_id": {
           "name": "user_id",
@@ -523,6 +517,48 @@
           "primaryKey": false,
           "notNull": true
         },
+        "uniform_complete": {
+          "name": "uniform_complete",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "hair_groomed": {
+          "name": "hair_groomed",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "nails_clean": {
+          "name": "nails_clean",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "accessories_compliant": {
+          "name": "accessories_compliant",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "shoe_compliant": {
+          "name": "shoe_compliant",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "grooming_notes": {
+          "name": "grooming_notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "selfie_photos": {
+          "name": "selfie_photos",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "status": {
           "name": "status",
           "type": "task_status",
@@ -534,24 +570,6 @@
         "completed_at": {
           "name": "completed_at",
           "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "form_data": {
-          "name": "form_data",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "attachment_urls": {
-          "name": "attachment_urls",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "notes": {
-          "name": "notes",
-          "type": "text",
           "primaryKey": false,
           "notNull": false
         },
@@ -584,22 +602,9 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "employee_tasks_task_id_tasks_id_fk": {
-          "name": "employee_tasks_task_id_tasks_id_fk",
-          "tableFrom": "employee_tasks",
-          "tableTo": "tasks",
-          "columnsFrom": [
-            "task_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "employee_tasks_user_id_users_id_fk": {
-          "name": "employee_tasks_user_id_users_id_fk",
-          "tableFrom": "employee_tasks",
+        "grooming_tasks_user_id_users_id_fk": {
+          "name": "grooming_tasks_user_id_users_id_fk",
+          "tableFrom": "grooming_tasks",
           "tableTo": "users",
           "columnsFrom": [
             "user_id"
@@ -610,9 +615,9 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "employee_tasks_store_id_stores_id_fk": {
-          "name": "employee_tasks_store_id_stores_id_fk",
-          "tableFrom": "employee_tasks",
+        "grooming_tasks_store_id_stores_id_fk": {
+          "name": "grooming_tasks_store_id_stores_id_fk",
+          "tableFrom": "grooming_tasks",
           "tableTo": "stores",
           "columnsFrom": [
             "store_id"
@@ -623,9 +628,9 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "employee_tasks_schedule_id_schedules_id_fk": {
-          "name": "employee_tasks_schedule_id_schedules_id_fk",
-          "tableFrom": "employee_tasks",
+        "grooming_tasks_schedule_id_schedules_id_fk": {
+          "name": "grooming_tasks_schedule_id_schedules_id_fk",
+          "tableFrom": "grooming_tasks",
           "tableTo": "schedules",
           "columnsFrom": [
             "schedule_id"
@@ -636,9 +641,9 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "employee_tasks_attendance_id_attendance_id_fk": {
-          "name": "employee_tasks_attendance_id_attendance_id_fk",
-          "tableFrom": "employee_tasks",
+        "grooming_tasks_attendance_id_attendance_id_fk": {
+          "name": "grooming_tasks_attendance_id_attendance_id_fk",
+          "tableFrom": "grooming_tasks",
           "tableTo": "attendance",
           "columnsFrom": [
             "attendance_id"
@@ -649,9 +654,9 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "employee_tasks_verified_by_users_id_fk": {
-          "name": "employee_tasks_verified_by_users_id_fk",
-          "tableFrom": "employee_tasks",
+        "grooming_tasks_verified_by_users_id_fk": {
+          "name": "grooming_tasks_verified_by_users_id_fk",
+          "tableFrom": "grooming_tasks",
           "tableTo": "users",
           "columnsFrom": [
             "verified_by"
@@ -711,6 +716,12 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'reported'"
+        },
+        "attachment_urls": {
+          "name": "attachment_urls",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "reviewed_by": {
           "name": "reviewed_by",
@@ -783,6 +794,229 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.monthly_schedule_entries": {
+      "name": "monthly_schedule_entries",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "monthly_schedule_id": {
+          "name": "monthly_schedule_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "store_id": {
+          "name": "store_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "date": {
+          "name": "date",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "shift": {
+          "name": "shift",
+          "type": "shift",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "is_off": {
+          "name": "is_off",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "is_leave": {
+          "name": "is_leave",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "monthly_schedule_entries_monthly_schedule_id_monthly_schedules_id_fk": {
+          "name": "monthly_schedule_entries_monthly_schedule_id_monthly_schedules_id_fk",
+          "tableFrom": "monthly_schedule_entries",
+          "tableTo": "monthly_schedules",
+          "columnsFrom": [
+            "monthly_schedule_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "monthly_schedule_entries_user_id_users_id_fk": {
+          "name": "monthly_schedule_entries_user_id_users_id_fk",
+          "tableFrom": "monthly_schedule_entries",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "monthly_schedule_entries_store_id_stores_id_fk": {
+          "name": "monthly_schedule_entries_store_id_stores_id_fk",
+          "tableFrom": "monthly_schedule_entries",
+          "tableTo": "stores",
+          "columnsFrom": [
+            "store_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "monthly_schedule_entries_monthly_schedule_id_user_id_date_unique": {
+          "name": "monthly_schedule_entries_monthly_schedule_id_user_id_date_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "monthly_schedule_id",
+            "user_id",
+            "date"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.monthly_schedules": {
+      "name": "monthly_schedules",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "store_id": {
+          "name": "store_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "year_month": {
+          "name": "year_month",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "imported_by": {
+          "name": "imported_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "note": {
+          "name": "note",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "monthly_schedules_store_id_stores_id_fk": {
+          "name": "monthly_schedules_store_id_stores_id_fk",
+          "tableFrom": "monthly_schedules",
+          "tableTo": "stores",
+          "columnsFrom": [
+            "store_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "monthly_schedules_imported_by_users_id_fk": {
+          "name": "monthly_schedules_imported_by_users_id_fk",
+          "tableFrom": "monthly_schedules",
+          "tableTo": "users",
+          "columnsFrom": [
+            "imported_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "monthly_schedules_store_id_year_month_unique": {
+          "name": "monthly_schedules_store_id_year_month_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "store_id",
+            "year_month"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -933,8 +1167,8 @@
           "primaryKey": false,
           "notNull": true
         },
-        "template_entry_id": {
-          "name": "template_entry_id",
+        "monthly_schedule_entry_id": {
+          "name": "monthly_schedule_entry_id",
           "type": "uuid",
           "primaryKey": false,
           "notNull": false
@@ -989,12 +1223,229 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "schedules_template_entry_id_weekly_schedule_entries_id_fk": {
-          "name": "schedules_template_entry_id_weekly_schedule_entries_id_fk",
+        "schedules_monthly_schedule_entry_id_monthly_schedule_entries_id_fk": {
+          "name": "schedules_monthly_schedule_entry_id_monthly_schedule_entries_id_fk",
           "tableFrom": "schedules",
-          "tableTo": "weekly_schedule_entries",
+          "tableTo": "monthly_schedule_entries",
           "columnsFrom": [
-            "template_entry_id"
+            "monthly_schedule_entry_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.store_opening_tasks": {
+      "name": "store_opening_tasks",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "store_id": {
+          "name": "store_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "schedule_id": {
+          "name": "schedule_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attendance_id": {
+          "name": "attendance_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "date": {
+          "name": "date",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "shift": {
+          "name": "shift",
+          "type": "shift",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cash_drawer_amount": {
+          "name": "cash_drawer_amount",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "all_lights_on": {
+          "name": "all_lights_on",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cleanliness_check": {
+          "name": "cleanliness_check",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "equipment_check": {
+          "name": "equipment_check",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "stock_check": {
+          "name": "stock_check",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "safety_check": {
+          "name": "safety_check",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "opening_notes": {
+          "name": "opening_notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "store_front_photos": {
+          "name": "store_front_photos",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cash_drawer_photos": {
+          "name": "cash_drawer_photos",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "task_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "verified_by": {
+          "name": "verified_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "verified_at": {
+          "name": "verified_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "store_opening_tasks_user_id_users_id_fk": {
+          "name": "store_opening_tasks_user_id_users_id_fk",
+          "tableFrom": "store_opening_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "store_opening_tasks_store_id_stores_id_fk": {
+          "name": "store_opening_tasks_store_id_stores_id_fk",
+          "tableFrom": "store_opening_tasks",
+          "tableTo": "stores",
+          "columnsFrom": [
+            "store_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "store_opening_tasks_schedule_id_schedules_id_fk": {
+          "name": "store_opening_tasks_schedule_id_schedules_id_fk",
+          "tableFrom": "store_opening_tasks",
+          "tableTo": "schedules",
+          "columnsFrom": [
+            "schedule_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "store_opening_tasks_attendance_id_attendance_id_fk": {
+          "name": "store_opening_tasks_attendance_id_attendance_id_fk",
+          "tableFrom": "store_opening_tasks",
+          "tableTo": "attendance",
+          "columnsFrom": [
+            "attendance_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "store_opening_tasks_verified_by_users_id_fk": {
+          "name": "store_opening_tasks_verified_by_users_id_fk",
+          "tableFrom": "store_opening_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "verified_by"
           ],
           "columnsTo": [
             "id"
@@ -1082,141 +1533,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.tasks": {
-      "name": "tasks",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "title": {
-          "name": "title",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "description": {
-          "name": "description",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "role": {
-          "name": "role",
-          "type": "user_role",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "employee_type": {
-          "name": "employee_type",
-          "type": "employee_type",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "shift": {
-          "name": "shift",
-          "type": "shift",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "recurrence": {
-          "name": "recurrence",
-          "type": "task_recurrence",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'daily'"
-        },
-        "recurrence_days": {
-          "name": "recurrence_days",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "is_active": {
-          "name": "is_active",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": true
-        },
-        "requires_form": {
-          "name": "requires_form",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": false,
-          "default": false
-        },
-        "form_schema": {
-          "name": "form_schema",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "requires_attachment": {
-          "name": "requires_attachment",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": false,
-          "default": false
-        },
-        "max_attachments": {
-          "name": "max_attachments",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "default": 1
-        },
-        "created_by": {
-          "name": "created_by",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "tasks_created_by_users_id_fk": {
-          "name": "tasks_created_by_users_id_fk",
-          "tableFrom": "tasks",
-          "tableTo": "users",
-          "columnsFrom": [
-            "created_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.users": {
       "name": "users",
       "schema": "",
@@ -1260,8 +1576,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "store_id": {
-          "name": "store_id",
+        "home_store_id": {
+          "name": "home_store_id",
           "type": "uuid",
           "primaryKey": false,
           "notNull": false
@@ -1289,12 +1605,12 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "users_store_id_stores_id_fk": {
-          "name": "users_store_id_stores_id_fk",
+        "users_home_store_id_stores_id_fk": {
+          "name": "users_home_store_id_stores_id_fk",
           "tableFrom": "users",
           "tableTo": "stores",
           "columnsFrom": [
-            "store_id"
+            "home_store_id"
           ],
           "columnsTo": [
             "id"
@@ -1326,178 +1642,6 @@
           ]
         }
       },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.weekly_schedule_entries": {
-      "name": "weekly_schedule_entries",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "template_id": {
-          "name": "template_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "weekday": {
-          "name": "weekday",
-          "type": "weekday",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "shift": {
-          "name": "shift",
-          "type": "shift",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "weekly_schedule_entries_template_id_weekly_schedule_templates_id_fk": {
-          "name": "weekly_schedule_entries_template_id_weekly_schedule_templates_id_fk",
-          "tableFrom": "weekly_schedule_entries",
-          "tableTo": "weekly_schedule_templates",
-          "columnsFrom": [
-            "template_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.weekly_schedule_templates": {
-      "name": "weekly_schedule_templates",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "uuid",
-          "primaryKey": true,
-          "notNull": true,
-          "default": "gen_random_uuid()"
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "store_id": {
-          "name": "store_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "is_active": {
-          "name": "is_active",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": true
-        },
-        "note": {
-          "name": "note",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_by": {
-          "name": "created_by",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "last_scheduled_through": {
-          "name": "last_scheduled_through",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "weekly_schedule_templates_user_id_users_id_fk": {
-          "name": "weekly_schedule_templates_user_id_users_id_fk",
-          "tableFrom": "weekly_schedule_templates",
-          "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "weekly_schedule_templates_store_id_stores_id_fk": {
-          "name": "weekly_schedule_templates_store_id_stores_id_fk",
-          "tableFrom": "weekly_schedule_templates",
-          "tableTo": "stores",
-          "columnsFrom": [
-            "store_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "weekly_schedule_templates_created_by_users_id_fk": {
-          "name": "weekly_schedule_templates_created_by_users_id_fk",
-          "tableFrom": "weekly_schedule_templates",
-          "tableTo": "users",
-          "columnsFrom": [
-            "created_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -1558,15 +1702,6 @@
         "evening"
       ]
     },
-    "public.task_recurrence": {
-      "name": "task_recurrence",
-      "schema": "public",
-      "values": [
-        "daily",
-        "weekly",
-        "monthly"
-      ]
-    },
     "public.task_status": {
       "name": "task_status",
       "schema": "public",
@@ -1584,19 +1719,6 @@
         "ops",
         "finance",
         "admin"
-      ]
-    },
-    "public.weekday": {
-      "name": "weekday",
-      "schema": "public",
-      "values": [
-        "0",
-        "1",
-        "2",
-        "3",
-        "4",
-        "5",
-        "6"
       ]
     }
   },

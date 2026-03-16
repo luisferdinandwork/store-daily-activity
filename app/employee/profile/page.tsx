@@ -1,32 +1,71 @@
-// app/employee/profile/page.tsx
 'use client';
+// app/employee/profile/page.tsx
 
 import { useSession, signOut } from 'next-auth/react';
+import { useEffect, useState } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import {
-  UserCircle,
-  Mail,
-  Briefcase,
-  Store,
-  Clock,
-  LogOut,
-  Sun,
-  Moon,
+  UserCircle, Mail, Briefcase, Store,
+  Clock, LogOut, Sun, Moon, Loader2,
 } from 'lucide-react';
+
+interface TodaySchedule {
+  shift: 'morning' | 'evening' | null;
+  storeName: string | null;
+}
 
 export default function EmployeeProfilePage() {
   const { data: session } = useSession();
   const user = session?.user as any;
-  const isEvening = user?.shift === 'evening';
+
+  const [todayData, setTodayData] = useState<TodaySchedule>({ shift: null, storeName: null });
+  const [loading,   setLoading]   = useState(true);
+
+  useEffect(() => {
+    if (!user?.homeStoreId) { setLoading(false); return; }
+    fetch('/api/employee/today-schedule')
+      .then(r => r.json())
+      .then(data => {
+        setTodayData({
+          shift:     data.shift     ?? null,
+          storeName: data.storeName ?? null,
+        });
+      })
+      .catch(() => {/* ignore, show fallback */})
+      .finally(() => setLoading(false));
+  }, [user?.homeStoreId]);
+
+  const shift     = todayData.shift;
+  const isEvening = shift === 'evening';
+
+  const EMP_TYPE_LABEL: Record<string, string> = {
+    pic_1: 'PIC 1', pic_2: 'PIC 2', so: 'SO',
+  };
 
   const infoRows = [
-    { icon: Mail,      label: 'Email',         value: user?.email ?? '—' },
-    { icon: Briefcase, label: 'Employee Type',  value: user?.employeeType?.toUpperCase() ?? '—' },
-    { icon: Store,     label: 'Store',          value: user?.storeName ?? user?.storeId ?? '—' },
-    { icon: Clock,     label: 'Shift',          value: user?.shift ? `${user.shift} shift` : '—' },
+    {
+      icon:  Mail,
+      label: 'Email',
+      value: user?.email ?? '—',
+    },
+    {
+      icon:  Briefcase,
+      label: 'Employee Type',
+      value: user?.employeeType ? (EMP_TYPE_LABEL[user.employeeType] ?? user.employeeType) : '—',
+    },
+    {
+      icon:  Store,
+      label: 'Store',
+      value: loading ? '…' : (todayData.storeName ?? '—'),
+    },
+    {
+      icon:  Clock,
+      label: "Today's Shift",
+      value: loading ? '…' : shift ? `${shift.charAt(0).toUpperCase() + shift.slice(1)} shift` : 'No shift today',
+    },
   ];
 
   return (
@@ -48,25 +87,28 @@ export default function EmployeeProfilePage() {
           {user?.role ?? 'Employee'}
         </p>
 
-        {/* Shift + type badges */}
-        <div className="relative mt-4 flex justify-center gap-2">
+        {/* Badges */}
+        <div className="relative mt-4 flex justify-center gap-2 flex-wrap">
           {user?.employeeType && (
             <Badge className="h-6 bg-white/10 px-3 text-[11px] font-bold uppercase text-primary-foreground hover:bg-white/10">
-              {user.employeeType}
+              {EMP_TYPE_LABEL[user.employeeType] ?? user.employeeType}
             </Badge>
           )}
-          {user?.shift && (
+          {loading ? (
+            <Badge className="h-6 gap-1 bg-white/10 px-3 text-[11px] text-primary-foreground hover:bg-white/10">
+              <Loader2 className="h-3 w-3 animate-spin" />
+            </Badge>
+          ) : shift ? (
             <Badge className="h-6 gap-1 bg-white/10 px-3 text-[11px] font-bold text-primary-foreground hover:bg-white/10">
               {isEvening ? <Moon className="h-3 w-3" /> : <Sun className="h-3 w-3" />}
-              {user.shift} shift
+              {shift} shift
             </Badge>
-          )}
+          ) : null}
         </div>
       </div>
 
       {/* ── Body ── */}
       <div className="space-y-3 p-4">
-        {/* Account info card */}
         <Card>
           <CardContent className="p-4">
             <p className="mb-3 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
@@ -77,7 +119,7 @@ export default function EmployeeProfilePage() {
                 <div key={label}>
                   <div className="flex items-center justify-between py-3">
                     <div className="flex items-center gap-2.5 text-muted-foreground">
-                      <Icon className="h-4 w-4 flex-shrink-0" strokeWidth={1.75} />
+                      <Icon className="h-4 w-4 shrink-0" strokeWidth={1.75} />
                       <span className="text-sm">{label}</span>
                     </div>
                     <span className="text-sm font-medium text-foreground">{value}</span>
@@ -89,7 +131,6 @@ export default function EmployeeProfilePage() {
           </CardContent>
         </Card>
 
-        {/* Sign out */}
         <Button
           variant="outline"
           className="h-12 w-full gap-2 border-border text-sm font-semibold text-muted-foreground hover:border-destructive hover:text-destructive"

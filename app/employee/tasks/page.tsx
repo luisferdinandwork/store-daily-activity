@@ -9,66 +9,105 @@ import {
   CheckCircle2,
   Circle,
   Clock,
-  Paperclip,
-  FileText,
+  Camera,
   ChevronRight,
   Inbox,
+  Store,
+  User,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import TaskDetailView from '@/components/employee/TaskDetailView';
+import StoreOpeningTaskDetail from '@/components/employee/StoreOpeningTaskDetail';
+import GroomingTaskDetail from '@/components/employee/GroomingTaskDetail'
 
-// ─── Shared types ─────────────────────────────────────────────────────────────
-export interface FormField {
-  id: string;
-  type: 'text' | 'number' | 'textarea' | 'select' | 'checkbox' | 'date' | 'time';
-  label: string;
-  required: boolean;
-  options?: string[];
-  placeholder?: string;
-  validation?: { min?: number; max?: number };
-}
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-export interface TaskTemplate {
-  id: string;
-  title: string;
-  description: string | null;
-  role: string;
-  employeeType: string | null;
-  shift: string | null;
-  recurrence: string;
-  requiresForm: boolean;
-  requiresAttachment: boolean;
-  maxAttachments: number;
-  formSchema: { fields: FormField[] } | null;
-}
+export type TaskType = 'store_opening' | 'grooming';
+export type TaskStatus = 'pending' | 'in_progress' | 'completed';
 
-export interface EmployeeTask {
+export interface StoreOpeningTask {
   id: string;
-  taskId: string;
   userId: string;
   storeId: string;
+  scheduleId: string | null;
+  attendanceId: string | null;
   date: string;
-  shift: string;
-  status: 'pending' | 'in_progress' | 'completed';
+  shift: 'morning' | 'evening';
+  // form fields
+  cashDrawerAmount: number | null;
+  allLightsOn: boolean | null;
+  cleanlinessCheck: boolean | null;
+  equipmentCheck: boolean | null;
+  stockCheck: boolean | null;
+  safetyCheck: boolean | null;
+  openingNotes: string | null;
+  // photos
+  storeFrontPhotos: string[];
+  cashDrawerPhotos: string[];
+  // meta
+  status: TaskStatus;
   completedAt: string | null;
-  attachmentUrls: string[];
-  formData: Record<string, unknown> | null;
-  notes: string | null;
+  verifiedBy: string | null;
+  verifiedAt: string | null;
 }
 
-export interface AssignedTask {
-  task: TaskTemplate;
-  employeeTask: EmployeeTask;
-  attendance: unknown;
+export interface GroomingTask {
+  id: string;
+  userId: string;
+  storeId: string;
+  scheduleId: string | null;
+  attendanceId: string | null;
+  date: string;
+  shift: 'morning' | 'evening';
+  // form fields
+  uniformComplete: boolean | null;
+  hairGroomed: boolean | null;
+  nailsClean: boolean | null;
+  accessoriesCompliant: boolean | null;
+  shoeCompliant: boolean | null;
+  groomingNotes: string | null;
+  // photos
+  selfiePhotos: string[];
+  // meta
+  status: TaskStatus;
+  completedAt: string | null;
+  verifiedBy: string | null;
+  verifiedAt: string | null;
 }
+
+export type TaskItem =
+  | { type: 'store_opening'; data: StoreOpeningTask }
+  | { type: 'grooming';      data: GroomingTask };
 
 type Filter = 'all' | 'pending' | 'in_progress' | 'completed';
 
-const STATUS_CFG = {
-  pending:     { Icon: Circle,       label: 'Pending',  iconCls: 'text-amber-500', bg: 'bg-amber-50'   },
-  in_progress: { Icon: Clock,        label: 'Active',   iconCls: 'text-primary',   bg: 'bg-primary/5'  },
-  completed:   { Icon: CheckCircle2, label: 'Done',     iconCls: 'text-green-600', bg: 'bg-green-50'   },
-} as const;
+// ─── Config ───────────────────────────────────────────────────────────────────
+
+const STATUS_CFG: Record<TaskStatus, {
+  Icon: React.ElementType; label: string; iconCls: string; bg: string;
+}> = {
+  pending:     { Icon: Circle,       label: 'Pending',     iconCls: 'text-amber-500', bg: 'bg-amber-50'  },
+  in_progress: { Icon: Clock,        label: 'In Progress', iconCls: 'text-primary',   bg: 'bg-primary/5' },
+  completed:   { Icon: CheckCircle2, label: 'Done',        iconCls: 'text-green-600', bg: 'bg-green-50'  },
+};
+
+const TASK_META: Record<TaskType, {
+  title: string;
+  description: string;
+  Icon: React.ElementType;
+  shift?: 'morning';       // undefined = any shift
+}> = {
+  store_opening: {
+    title:       'Store Opening',
+    description: 'Complete the opening checklist and upload photos.',
+    Icon:        Store,
+    shift:       'morning',
+  },
+  grooming: {
+    title:       'Grooming Check',
+    description: 'Confirm uniform compliance and upload a selfie.',
+    Icon:        User,
+  },
+};
 
 const FILTERS: { key: Filter; label: string }[] = [
   { key: 'all',         label: 'All' },
@@ -77,12 +116,14 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: 'completed',   label: 'Done' },
 ];
 
+// ─── Page ─────────────────────────────────────────────────────────────────────
+
 export default function EmployeeTasksPage() {
   const { data: session } = useSession();
-  const [tasks, setTasks] = useState<AssignedTask[]>([]);
+  const [tasks, setTasks]     = useState<TaskItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<Filter>('all');
-  const [selected, setSelected] = useState<AssignedTask | null>(null);
+  const [filter, setFilter]   = useState<Filter>('all');
+  const [selected, setSelected] = useState<TaskItem | null>(null);
 
   const storeId = (session?.user as any)?.storeId ?? '';
 
@@ -90,9 +131,9 @@ export default function EmployeeTasksPage() {
     if (!storeId) return;
     setLoading(true);
     try {
-      const res = await fetch(`/api/employee/tasks?storeId=${storeId}`);
+      const res  = await fetch(`/api/employee/tasks?storeId=${storeId}`);
       const data = await res.json();
-      setTasks(data.assignedTasks ?? []);
+      setTasks(data.tasks ?? []);
     } catch (e) {
       console.error(e);
     } finally {
@@ -100,47 +141,65 @@ export default function EmployeeTasksPage() {
     }
   }, [storeId]);
 
-  useEffect(() => {
-    if (session?.user) load();
-  }, [session, load]);
+  useEffect(() => { if (session?.user) load(); }, [session, load]);
 
-  const handleTaskUpdate = () => {
-    load();
-    setSelected(null);
-  };
+  // ── Open a task (set in_progress if pending) ────────────────────────────────
+  const openTask = async (item: TaskItem) => {
+    if (item.data.status === 'completed') return;
 
-  const openTask = async (item: AssignedTask) => {
-    if (item.employeeTask.status === 'completed') return;
+    const taskType    = item.type;
+    const taskId      = item.data.id;
+    const isPending   = item.data.status === 'pending';
 
-    if (item.employeeTask.status === 'pending') {
-      const updated = {
-        ...item,
-        employeeTask: { ...item.employeeTask, status: 'in_progress' as const },
-      };
-      setTasks((prev) =>
-        prev.map((t) => (t.employeeTask.id === item.employeeTask.id ? updated : t)),
-      );
+    if (isPending) {
+      // Optimistic update — branch by type so TypeScript keeps the discriminated union intact
+      const updated: TaskItem =
+        item.type === 'store_opening'
+          ? { type: 'store_opening', data: { ...item.data, status: 'in_progress' as const } }
+          : { type: 'grooming',      data: { ...item.data, status: 'in_progress' as const } };
+      setTasks((prev) => prev.map((t) => (t.data.id === taskId ? updated : t)));
       setSelected(updated);
+
       await fetch('/api/employee/tasks', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ taskId: item.employeeTask.id, status: 'in_progress' }),
+        body: JSON.stringify({ taskId, taskType, status: 'in_progress' }),
       });
     } else {
       setSelected(item);
     }
   };
 
+  const handleTaskUpdate = () => { load(); setSelected(null); };
+
+  // ── Counts ──────────────────────────────────────────────────────────────────
   const count = (f: Filter) =>
-    f === 'all' ? tasks.length : tasks.filter((t) => t.employeeTask.status === f).length;
+    f === 'all' ? tasks.length : tasks.filter((t) => t.data.status === f).length;
 
-  const filtered = tasks.filter((t) => filter === 'all' || t.employeeTask.status === filter);
+  const filtered = tasks.filter((t) => filter === 'all' || t.data.status === filter);
 
-  if (selected) return <TaskDetailView task={selected} onBack={handleTaskUpdate} />;
+  // ── Detail view ─────────────────────────────────────────────────────────────
+  if (selected?.type === 'store_opening') {
+    return (
+      <StoreOpeningTaskDetail
+        task={selected.data}
+        onBack={handleTaskUpdate}
+      />
+    );
+  }
+  if (selected?.type === 'grooming') {
+    return (
+      <GroomingTaskDetail
+        task={selected.data}
+        onBack={handleTaskUpdate}
+      />
+    );
+  }
 
+  // ── List view ────────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col">
-      {/* ── Header ── */}
+      {/* Header */}
       <div className="relative overflow-hidden bg-primary px-6 pb-6 pt-12">
         <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-white/5" />
         <div className="relative">
@@ -156,7 +215,7 @@ export default function EmployeeTasksPage() {
         </div>
       </div>
 
-      {/* ── Filter tabs ── */}
+      {/* Filter tabs */}
       <div className="sticky top-0 z-10 border-b border-border bg-card px-4 py-2.5">
         <div className="flex gap-1.5 overflow-x-auto scrollbar-none pb-0.5">
           {FILTERS.map(({ key, label }) => (
@@ -171,14 +230,10 @@ export default function EmployeeTasksPage() {
               )}
             >
               {label}
-              <span
-                className={cn(
-                  'flex h-4 min-w-[1rem] items-center justify-center rounded-full px-1 text-[10px] font-bold',
-                  filter === key
-                    ? 'bg-white/20 text-primary-foreground'
-                    : 'bg-border text-foreground',
-                )}
-              >
+              <span className={cn(
+                'flex h-4 min-w-[1rem] items-center justify-center rounded-full px-1 text-[10px] font-bold',
+                filter === key ? 'bg-white/20 text-primary-foreground' : 'bg-border text-foreground',
+              )}>
                 {count(key)}
               </span>
             </button>
@@ -186,10 +241,10 @@ export default function EmployeeTasksPage() {
         </div>
       </div>
 
-      {/* ── List ── */}
+      {/* Task list */}
       <div className="space-y-2.5 p-4">
         {loading ? (
-          Array.from({ length: 4 }).map((_, i) => (
+          Array.from({ length: 3 }).map((_, i) => (
             <div key={i} className="h-20 animate-pulse rounded-xl bg-secondary" />
           ))
         ) : filtered.length === 0 ? (
@@ -200,14 +255,16 @@ export default function EmployeeTasksPage() {
           </div>
         ) : (
           filtered.map((item) => {
-            const { status } = item.employeeTask;
-            const cfg = STATUS_CFG[status];
-            const StatusIcon = cfg.Icon;
-            const isCompleted = status === 'completed';
+            const { status }     = item.data;
+            const cfg            = STATUS_CFG[status];
+            const meta           = TASK_META[item.type];
+            const StatusIcon     = cfg.Icon;
+            const TaskIcon       = meta.Icon;
+            const isCompleted    = status === 'completed';
 
             return (
               <Card
-                key={item.employeeTask.id}
+                key={item.data.id}
                 className={cn(
                   'overflow-hidden border-border shadow-sm transition-all',
                   !isCompleted && 'cursor-pointer active:scale-[0.99]',
@@ -224,24 +281,20 @@ export default function EmployeeTasksPage() {
 
                 <CardContent className="p-4">
                   <div className="flex items-start gap-3">
-                    <div
-                      className={cn(
-                        'mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl',
-                        cfg.bg,
-                      )}
-                    >
-                      <StatusIcon className={cn('h-4 w-4', cfg.iconCls)} strokeWidth={2.5} />
+                    {/* Task type icon */}
+                    <div className="mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-secondary">
+                      <TaskIcon className="h-4 w-4 text-foreground" strokeWidth={2} />
                     </div>
 
                     <div className="min-w-0 flex-1">
                       <div className="flex items-start justify-between gap-2">
                         <p className="text-sm font-semibold leading-tight text-foreground">
-                          {item.task.title}
+                          {meta.title}
                         </p>
-                        {isCompleted && item.employeeTask.completedAt ? (
+                        {isCompleted && item.data.completedAt ? (
                           <span className="flex-shrink-0 text-[10px] font-medium text-green-600">
                             ✓{' '}
-                            {new Date(item.employeeTask.completedAt).toLocaleTimeString('en-ID', {
+                            {new Date(item.data.completedAt).toLocaleTimeString('en-ID', {
                               hour: '2-digit', minute: '2-digit',
                             })}
                           </span>
@@ -252,37 +305,39 @@ export default function EmployeeTasksPage() {
                         )}
                       </div>
 
-                      {item.task.description && (
-                        <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">
-                          {item.task.description}
-                        </p>
-                      )}
+                      <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">
+                        {meta.description}
+                      </p>
 
                       <div className="mt-2 flex flex-wrap gap-1.5">
-                        {status === 'in_progress' && (
-                          <Badge className="h-4 gap-1 bg-primary/10 px-1.5 text-[10px] font-semibold text-primary hover:bg-primary/10">
-                            <Clock className="h-2.5 w-2.5" />
-                            In Progress
-                          </Badge>
-                        )}
-                        {item.task.requiresForm && (
-                          <Badge variant="outline" className="h-4 gap-1 px-1.5 text-[10px]">
-                            <FileText className="h-2.5 w-2.5" />
-                            Form
-                          </Badge>
-                        )}
-                        {item.task.requiresAttachment && (
-                          <Badge variant="outline" className="h-4 gap-1 px-1.5 text-[10px]">
-                            <Paperclip className="h-2.5 w-2.5" />
-                            Photo
-                          </Badge>
-                        )}
-                        {item.task.shift && (
-                          <Badge
-                            variant="secondary"
-                            className="h-4 px-1.5 text-[10px] capitalize"
-                          >
-                            {item.task.shift}
+                        {/* Status badge */}
+                        <Badge
+                          className={cn(
+                            'h-4 gap-1 px-1.5 text-[10px] font-semibold',
+                            status === 'in_progress' && 'bg-primary/10 text-primary hover:bg-primary/10',
+                            status === 'pending'     && 'bg-amber-50 text-amber-600 hover:bg-amber-50',
+                            status === 'completed'   && 'bg-green-50 text-green-700 hover:bg-green-50',
+                          )}
+                        >
+                          <StatusIcon className="h-2.5 w-2.5" />
+                          {cfg.label}
+                        </Badge>
+
+                        {/* Always requires photos */}
+                        <Badge variant="outline" className="h-4 gap-1 px-1.5 text-[10px]">
+                          <Camera className="h-2.5 w-2.5" />
+                          Photo
+                        </Badge>
+
+                        {/* Shift badge */}
+                        <Badge variant="secondary" className="h-4 px-1.5 text-[10px] capitalize">
+                          {item.data.shift}
+                        </Badge>
+
+                        {/* Morning-only badge for store opening */}
+                        {item.type === 'store_opening' && (
+                          <Badge variant="outline" className="h-4 px-1.5 text-[10px]">
+                            Opening
                           </Badge>
                         )}
                       </div>

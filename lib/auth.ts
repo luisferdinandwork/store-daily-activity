@@ -45,7 +45,7 @@ export const authOptions: NextAuthOptions = {
             email:        user.email,
             role:         user.role,
             employeeType: user.employeeType,
-            storeId:      user.storeId,
+            homeStoreId:  user.homeStoreId,   // ← was storeId
             areaId:       user.areaId,
             hasPassword:  !!user.password,
           });
@@ -70,8 +70,8 @@ export const authOptions: NextAuthOptions = {
             email:        user.email,
             role:         user.role,
             employeeType: user.employeeType ?? undefined,
-            storeId:      user.storeId      ?? undefined,
-            areaId:       user.areaId       ?? undefined,  // ← ADDED
+            homeStoreId:  user.homeStoreId  ?? undefined,  // ← was storeId
+            areaId:       user.areaId       ?? undefined,
           };
         } catch (error) {
           console.error('💥 Authorization error:', error);
@@ -89,21 +89,21 @@ export const authOptions: NextAuthOptions = {
   callbacks: {
     async jwt({ token, user }) {
       if (user) {
-        token.role         = user.role;
-        token.employeeType = user.employeeType;
-        token.storeId      = user.storeId;
-        token.areaId       = (user as any).areaId ?? null;  // ← ADDED
+        token.role         = (user as any).role;
+        token.employeeType = (user as any).employeeType;
+        token.homeStoreId  = (user as any).homeStoreId;  // ← was storeId
+        token.areaId       = (user as any).areaId ?? null;
       }
       return token;
     },
 
     async session({ session, token }) {
       if (token && session.user) {
-        session.user.id           = token.sub!;
-        session.user.role         = token.role         as string;
-        session.user.employeeType = token.employeeType as string | undefined;
-        session.user.storeId      = token.storeId      as string | undefined;
-        (session.user as any).areaId = token.areaId    as string | null;  // ← ADDED
+        (session.user as any).id           = token.sub!;
+        (session.user as any).role         = token.role         as string;
+        (session.user as any).employeeType = token.employeeType as string | undefined;
+        (session.user as any).homeStoreId  = token.homeStoreId  as string | undefined;  // ← was storeId
+        (session.user as any).areaId       = token.areaId       as string | null;
       }
       return session;
     },

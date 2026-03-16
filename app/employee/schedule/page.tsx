@@ -1,674 +1,856 @@
-// app/employee/schedule/page.tsx
 'use client';
+// app/employee/schedule/page.tsx  (PIC 1 — calendar view)
 
-import { useState, useEffect, useCallback } from 'react';
-import { useSession } from 'next-auth/react';
-import { useRouter } from 'next/navigation';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useSession }  from 'next-auth/react';
+import { useRouter }   from 'next/navigation';
 import {
-  Calendar, ChevronRight, Plus, Pencil, Trash2,
-  Sun, Moon, Loader2, AlertCircle, Check, X,
-  Users, ChevronDown, ChevronUp, Shield,
+  Sun, Moon, Upload, Loader2, Trash2, RefreshCw,
+  Shield, Calendar, Users, X, ChevronLeft, ChevronRight,
+  CheckCircle2, AlertCircle, ChevronDown, ChevronUp,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-type Shift   = 'morning' | 'evening';
-type Weekday = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
-interface Entry { weekday: Weekday; shift: Shift }
+type Shift = 'morning' | 'evening';
 
-interface TemplateUser {
-  id:           string;
-  name:         string;
-  role:         string;
-  employeeType: string | null;
+interface DayEntry {
+  id:       string;
+  userId:   string;
+  userName: string | null;
+  userType: string | null;
+  date:     string;
+  shift:    Shift | null;
+  isOff:    boolean;
+  isLeave:  boolean;
 }
 
-interface Template {
+interface MonthlySchedule {
   id:        string;
+  storeId:   string;
+  yearMonth: string;
   note:      string | null;
-  isActive:  boolean;
-  entries:   Entry[];
   createdAt: string;
   updatedAt: string;
+  entries:   DayEntry[];
 }
 
-interface TemplateSlot {
-  template: Template;
-  user:     TemplateUser | null;
-}
-
-interface StoreEmployee {
-  id:           string;
-  name:         string;
-  email:        string;
-  employeeType: string | null;
+interface ImportResult {
+  success:          boolean;
+  schedulesCreated: number;
+  entriesCreated:   number;
+  skipped:          number;
+  errors:           string[];
+  notFound:         string[];
+  month?:           string;
+  sheet?:           string;
+  sections?:        string[];
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const DAYS: { label: string; short: string; day: Weekday }[] = [
-  { label: 'Sunday',    short: 'Sun', day: 0 },
-  { label: 'Monday',    short: 'Mon', day: 1 },
-  { label: 'Tuesday',   short: 'Tue', day: 2 },
-  { label: 'Wednesday', short: 'Wed', day: 3 },
-  { label: 'Thursday',  short: 'Thu', day: 4 },
-  { label: 'Friday',    short: 'Fri', day: 5 },
-  { label: 'Saturday',  short: 'Sat', day: 6 },
-];
 
-const SHIFT_CFG: Record<Shift, {
-  label: string; time: string;
-  Icon: React.FC<{ className?: string }>;
-  color: string; bg: string; border: string; pill: string;
-}> = {
-  morning: { label: 'Morning', time: '08:00 – 17:00', Icon: Sun,  color: 'text-amber-500',  bg: 'bg-amber-50',  border: 'border-amber-200',  pill: 'bg-amber-100 text-amber-700'  },
-  evening: { label: 'Evening', time: '13:00 – 22:00', Icon: Moon, color: 'text-violet-500', bg: 'bg-violet-50', border: 'border-violet-200', pill: 'bg-violet-100 text-violet-700' },
-};
+const MONTHS      = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const DAYS_HEADER = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+const EMP_LABEL: Record<string, string> = { pic_1: 'PIC 1', pic_2: 'PIC 2', so: 'SO' };
 
-const EMP_TYPE_LABEL: Record<string, string> = {
-  pic_1: 'PIC 1', pic_2: 'PIC 2', so: 'SO',
+// Shift visual config
+const SHIFT_CFG = {
+  morning: { label: 'E', bg: '#fff7ed', border: '#fed7aa', text: '#c2410c', dot: '#fb923c' },
+  evening: { label: 'L', bg: '#f5f3ff', border: '#ddd6fe', text: '#6d28d9', dot: '#a78bfa' },
+  leave:   { label: 'AL', bg: '#eef2ff', border: '#c7d2fe', text: '#3730a3', dot: '#818cf8' },
+  off:     { label: '',   bg: 'transparent', border: 'transparent', text: '#cbd5e1', dot: '#e2e8f0' },
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-function groupEntriesByDay(entries: Entry[]): Map<Weekday, Shift[]> {
-  const map = new Map<Weekday, Shift[]>();
-  for (const e of entries) {
-    if (!map.has(e.weekday)) map.set(e.weekday, []);
-    map.get(e.weekday)!.push(e.shift);
-  }
-  return map;
+
+function currentYearMonth() {
+  const n = new Date();
+  return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}`;
 }
 
-function SchedulePill({ shift }: { shift: Shift }) {
-  const cfg = SHIFT_CFG[shift];
-  const ShiftIcon = cfg.Icon;
-  return (
-    <span className={cn('inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide', cfg.pill)}>
-      <ShiftIcon className="h-2.5 w-2.5" />
-      {cfg.label}
-    </span>
-  );
+function formatYearMonth(ym: string | null | undefined): string {
+  if (!ym) return '—';
+  const [y, m] = ym.split('-').map(Number);
+  if (!y || !m) return ym;
+  return `${MONTHS[m - 1]} ${y}`;
 }
 
-// ─── WeekGrid — visual weekly schedule ───────────────────────────────────────
-function WeekGrid({ entries }: { entries: Entry[] }) {
-  const byDay = groupEntriesByDay(entries);
-  return (
-    <div className="grid grid-cols-7 gap-1">
-      {DAYS.map(({ short, day }) => {
-        const shifts = byDay.get(day) ?? [];
-        const hasMorning = shifts.includes('morning');
-        const hasEvening = shifts.includes('evening');
-        const active = shifts.length > 0;
-        return (
-          <div key={day} className="flex flex-col items-center gap-1">
-            <span className={cn('text-[9px] font-bold uppercase tracking-wide', active ? 'text-foreground' : 'text-muted-foreground/40')}>
-              {short}
-            </span>
-            <div className={cn(
-              'flex w-full flex-col gap-0.5 rounded-lg border p-0.5 transition-colors',
-              active ? 'border-border bg-card' : 'border-transparent bg-secondary/50',
-            )}>
-              <div className={cn('h-2 rounded-sm', hasMorning ? 'bg-amber-400' : 'bg-transparent')} />
-              <div className={cn('h-2 rounded-sm', hasEvening ? 'bg-violet-400' : 'bg-transparent')} />
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
+function isoDate(d: Date) { return d.toISOString().slice(0, 10); }
+
+/** Build the calendar grid: 6 weeks × 7 days, padded with nulls */
+function buildCalendarGrid(yearMonth: string): (Date | null)[] {
+  const [y, m] = yearMonth.split('-').map(Number);
+  const first  = new Date(y, m - 1, 1);
+  const days   = new Date(y, m, 0).getDate();
+  const grid: (Date | null)[] = [];
+  for (let i = 0; i < first.getDay(); i++) grid.push(null);
+  for (let d = 1; d <= days; d++) grid.push(new Date(y, m - 1, d));
+  while (grid.length % 7 !== 0) grid.push(null);
+  return grid;
 }
 
-// ─── TemplateEditor — create / edit a template ───────────────────────────────
-function TemplateEditor({
-  employees,
-  initial,
-  onSave,
-  onCancel,
-  saving,
-}: {
-  employees: StoreEmployee[];
-  initial?: { userId: string; entries: Entry[]; note: string };
-  onSave:   (userId: string, entries: Entry[], note: string) => Promise<void>;
-  onCancel: () => void;
-  saving:   boolean;
+function getShiftCfg(entry: DayEntry | undefined) {
+  if (!entry) return null;
+  if (entry.isLeave)              return SHIFT_CFG.leave;
+  if (entry.isOff || !entry.shift) return SHIFT_CFG.off;
+  return SHIFT_CFG[entry.shift];
+}
+
+// ─── DayDetailSheet ───────────────────────────────────────────────────────────
+// Bottom sheet showing all employees on a selected day
+
+function DayDetailSheet({ date, entries, onEdit, onClose }: {
+  date:    Date;
+  entries: DayEntry[];
+  onEdit:  (e: DayEntry) => void;
+  onClose: () => void;
 }) {
-  const [userId,  setUserId]  = useState(initial?.userId  ?? '');
-  const [entries, setEntries] = useState<Entry[]>(initial?.entries ?? []);
-  const [note,    setNote]    = useState(initial?.note    ?? '');
-
-  function toggleEntry(day: Weekday, shift: Shift) {
-    setEntries(prev => {
-      const exists = prev.some(e => e.weekday === day && e.shift === shift);
-      return exists
-        ? prev.filter(e => !(e.weekday === day && e.shift === shift))
-        : [...prev, { weekday: day, shift }];
-    });
-  }
-
-  function isSelected(day: Weekday, shift: Shift) {
-    return entries.some(e => e.weekday === day && e.shift === shift);
-  }
-
-  const canSave = userId && entries.length > 0;
+  const label = date.toLocaleDateString('en-ID', { weekday: 'long', day: 'numeric', month: 'long' });
+  const working = entries.filter(e => !e.isOff && !e.isLeave && e.shift);
+  const leave   = entries.filter(e => e.isLeave);
+  const off     = entries.filter(e => e.isOff && !e.isLeave);
 
   return (
-    <div className="space-y-5">
-      {/* Employee picker */}
-      {!initial && (
-        <div className="space-y-2">
-          <label className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">
-            Employee
-          </label>
-          <div className="relative">
-            <select
-              value={userId}
-              onChange={e => setUserId(e.target.value)}
-              className="w-full appearance-none rounded-xl border border-border bg-card px-4 py-3 pr-10 text-sm font-medium text-foreground outline-none focus:ring-2 focus:ring-primary/20"
-            >
-              <option value="">Select employee…</option>
-              {employees.map(emp => (
-                <option key={emp.id} value={emp.id}>
-                  {emp.name} ({EMP_TYPE_LABEL[emp.employeeType ?? ''] ?? emp.employeeType})
-                </option>
-              ))}
-            </select>
-            <ChevronDown className="pointer-events-none absolute right-3 top-3.5 h-4 w-4 text-muted-foreground" />
-          </div>
+    <div
+      className="fixed inset-0 z-99 flex items-end justify-center"
+      style={{ background: 'rgba(15,23,42,0.6)', backdropFilter: 'blur(6px)' }}
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md rounded-t-3xl bg-white pb-10 shadow-2xl"
+        style={{ animation: 'slideUp 0.28s cubic-bezier(0.34,1.4,0.64,1)', maxHeight: '80vh', overflow: 'auto' }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Handle */}
+        <div className="flex justify-center pt-3 pb-1">
+          <div className="h-1 w-10 rounded-full bg-slate-200" />
         </div>
-      )}
 
-      {/* Day × Shift grid */}
-      <div className="space-y-2">
-        <label className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">
-          Working Days & Shifts
-        </label>
-        <div className="overflow-hidden rounded-xl border border-border">
-          {/* Header */}
-          <div className="grid grid-cols-[80px_1fr_1fr] border-b border-border bg-secondary/50 px-3 py-2">
-            <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Day</span>
-            {(['morning', 'evening'] as Shift[]).map(shift => {
-              const ShiftIcon = SHIFT_CFG[shift].Icon;
-              return (
-              <div key={shift} className="flex items-center gap-1.5">
-                <ShiftIcon className={cn('h-3 w-3', SHIFT_CFG[shift].color)} />
-                <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-                  {SHIFT_CFG[shift].label}
-                </span>
-              </div>
-              );
-            })}
+        {/* Header */}
+        <div className="flex items-start justify-between px-5 pb-4 pt-2">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Schedule</p>
+            <p className="mt-0.5 text-lg font-bold text-slate-900">{label}</p>
           </div>
-          {/* Rows */}
-          {DAYS.map(({ label, short, day }, i) => (
-            <div
-              key={day}
-              className={cn(
-                'grid grid-cols-[80px_1fr_1fr] items-center px-3 py-2.5',
-                i < DAYS.length - 1 && 'border-b border-border/60',
-              )}
-            >
-              <span className="text-sm font-medium text-foreground">{short}</span>
-              {(['morning', 'evening'] as Shift[]).map(shift => {
-                const selected = isSelected(day, shift);
-                const cfg = SHIFT_CFG[shift];
-                return (
-                  <button
-                    key={shift}
-                    type="button"
-                    onClick={() => toggleEntry(day, shift)}
-                    className={cn(
-                      'mr-3 flex h-8 w-8 items-center justify-center rounded-lg border-2 transition-all',
-                      selected
-                        ? `${cfg.bg} ${cfg.border} ${cfg.color}`
-                        : 'border-border/50 bg-transparent text-muted-foreground/30 hover:border-border hover:bg-secondary',
-                    )}
-                  >
-                    {selected ? <Check className="h-4 w-4" strokeWidth={3} /> : <Plus className="h-3.5 w-3.5" />}
-                  </button>
-                );
-              })}
-            </div>
-          ))}
+          <button
+            onClick={onClose}
+            className="mt-1 flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-slate-400"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
-        {entries.length > 0 && (
-          <p className="text-[11px] text-muted-foreground">
-            {entries.length} slot{entries.length !== 1 ? 's' : ''} selected
-          </p>
+
+        {entries.length === 0 ? (
+          <div className="flex flex-col items-center gap-3 py-10 text-center px-6">
+            <Calendar className="h-8 w-8 text-slate-200" />
+            <p className="text-sm text-slate-400">No employees scheduled on this day.</p>
+          </div>
+        ) : (
+          <div className="space-y-1 px-4">
+            {/* Working */}
+            {working.length > 0 && (
+              <div className="mb-2">
+                <p className="mb-1.5 px-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">Working</p>
+                {working.map(entry => {
+                  const cfg = getShiftCfg(entry)!;
+                  return (
+                    <button
+                      key={entry.id}
+                      onClick={() => onEdit(entry)}
+                      className="flex w-full items-center gap-3 rounded-2xl border px-4 py-3 mb-2 text-left transition-all active:scale-[0.98]"
+                      style={{ borderColor: cfg.border, background: cfg.bg }}
+                    >
+                      <div
+                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-xs font-extrabold"
+                        style={{ background: cfg.dot + '30', color: cfg.text }}
+                      >
+                        {cfg.label}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-bold text-slate-800 truncate">{entry.userName}</p>
+                        <p className="text-[11px] text-slate-400">
+                          {EMP_LABEL[entry.userType ?? ''] ?? entry.userType ?? '—'} ·{' '}
+                          {entry.shift === 'morning' ? '08:00–17:00' : '13:00–22:00'}
+                        </p>
+                      </div>
+                      <div
+                        className="rounded-lg px-2 py-0.5 text-[10px] font-bold"
+                        style={{ background: cfg.dot + '20', color: cfg.text }}
+                      >
+                        {entry.shift === 'morning' ? 'Morning' : 'Evening'}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Leave */}
+            {leave.length > 0 && (
+              <div className="mb-2">
+                <p className="mb-1.5 px-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">On Leave</p>
+                {leave.map(entry => (
+                  <button
+                    key={entry.id}
+                    onClick={() => onEdit(entry)}
+                    className="flex w-full items-center gap-3 rounded-2xl border border-indigo-100 bg-indigo-50 px-4 py-3 mb-2 text-left active:scale-[0.98]"
+                  >
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-indigo-100 text-xs font-extrabold text-indigo-600">
+                      AL
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-bold text-slate-800 truncate">{entry.userName}</p>
+                      <p className="text-[11px] text-slate-400">{EMP_LABEL[entry.userType ?? ''] ?? '—'}</p>
+                    </div>
+                    <span className="rounded-lg bg-indigo-100 px-2 py-0.5 text-[10px] font-bold text-indigo-600">Leave</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Off */}
+            {off.length > 0 && (
+              <div className="mb-2">
+                <p className="mb-1.5 px-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">Day Off</p>
+                {off.map(entry => (
+                  <button
+                    key={entry.id}
+                    onClick={() => onEdit(entry)}
+                    className="flex w-full items-center gap-3 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 mb-2 text-left active:scale-[0.98]"
+                  >
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-xs font-bold text-slate-400">
+                      —
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-bold text-slate-500 truncate">{entry.userName}</p>
+                      <p className="text-[11px] text-slate-400">{EMP_LABEL[entry.userType ?? ''] ?? '—'}</p>
+                    </div>
+                    <span className="rounded-lg bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-400">Off</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         )}
       </div>
-
-      {/* Preview */}
-      {entries.length > 0 && (
-        <div className="space-y-2">
-          <label className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">
-            Preview
-          </label>
-          <div className="rounded-xl border border-border bg-card p-3">
-            <WeekGrid entries={entries} />
-            <div className="mt-3 flex flex-wrap gap-1.5">
-              {entries
-                .slice()
-                .sort((a, b) => a.weekday - b.weekday || a.shift.localeCompare(b.shift))
-                .map((e, i) => (
-                  <span key={i} className="flex items-center gap-1 rounded-full bg-secondary px-2 py-1 text-[11px] font-medium text-muted-foreground">
-                    {DAYS.find(d => d.day === e.weekday)?.short}
-                    <SchedulePill shift={e.shift} />
-                  </span>
-                ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Note */}
-      <div className="space-y-2">
-        <label className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">
-          Note <span className="font-normal normal-case">(optional)</span>
-        </label>
-        <input
-          type="text"
-          value={note}
-          onChange={e => setNote(e.target.value)}
-          placeholder="e.g. Mon–Fri morning shift"
-          className="w-full rounded-xl border border-border bg-card px-4 py-3 text-sm text-foreground outline-none placeholder:text-muted-foreground/50 focus:ring-2 focus:ring-primary/20"
-        />
-      </div>
-
-      {/* Actions */}
-      <div className="flex gap-2 pt-1">
-        <button
-          type="button"
-          onClick={onCancel}
-          className="flex h-12 flex-1 items-center justify-center gap-2 rounded-xl border border-border bg-card text-sm font-semibold text-foreground transition-colors hover:bg-secondary"
-        >
-          <X className="h-4 w-4" /> Cancel
-        </button>
-        <button
-          type="button"
-          onClick={() => onSave(userId, entries, note)}
-          disabled={!canSave || saving}
-          className={cn(
-            'flex h-12 flex-1 items-center justify-center gap-2 rounded-xl text-sm font-bold transition-colors',
-            canSave && !saving
-              ? 'bg-primary text-primary-foreground hover:bg-primary/90'
-              : 'bg-muted text-muted-foreground',
-          )}
-        >
-          {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-          {saving ? 'Saving…' : 'Save Schedule'}
-        </button>
-      </div>
+      <style>{`
+        @keyframes slideUp {
+          from { transform: translateY(100%); opacity: 0; }
+          to   { transform: translateY(0);    opacity: 1; }
+        }
+      `}</style>
     </div>
   );
 }
 
-// ─── TemplateCard — one employee's schedule ───────────────────────────────────
-function TemplateCard({
-  slot,
-  onEdit,
-  onDeactivate,
-}: {
-  slot:         TemplateSlot;
-  onEdit:       (slot: TemplateSlot) => void;
-  onDeactivate: (templateId: string) => Promise<void>;
+// ─── EditDayModal ─────────────────────────────────────────────────────────────
+
+function EditDayModal({ entry, onSave, onClose, saving }: {
+  entry:   DayEntry;
+  onSave:  (p: { shift: Shift | null; isOff: boolean; isLeave: boolean }) => Promise<void>;
+  onClose: () => void;
+  saving:  boolean;
 }) {
-  const [expanded,     setExpanded]     = useState(false);
-  const [deactivating, setDeactivating] = useState(false);
+  const [shift,   setShift]   = useState<Shift | null>(entry.shift);
+  const [isOff,   setIsOff]   = useState(entry.isOff);
+  const [isLeave, setIsLeave] = useState(entry.isLeave);
 
-  const { template, user } = slot;
-  const byDay = groupEntriesByDay(template.entries);
-  const empTypeLabel = EMP_TYPE_LABEL[user?.employeeType ?? ''] ?? user?.employeeType ?? '—';
+  const dateObj = new Date(entry.date);
+  const label   = dateObj.toLocaleDateString('en-ID', { weekday: 'long', day: 'numeric', month: 'long' });
 
-  async function handleDeactivate() {
-    if (!confirm(`Remove schedule for ${user?.name ?? 'this employee'}? Future unattended shifts will be deleted.`)) return;
-    setDeactivating(true);
-    try { await onDeactivate(template.id); }
-    finally { setDeactivating(false); }
+  function pick(mode: 'morning' | 'evening' | 'off' | 'leave') {
+    if (mode === 'morning') { setShift('morning'); setIsOff(false); setIsLeave(false); }
+    if (mode === 'evening') { setShift('evening'); setIsOff(false); setIsLeave(false); }
+    if (mode === 'off')     { setShift(null); setIsOff(true);  setIsLeave(false); }
+    if (mode === 'leave')   { setShift(null); setIsOff(false); setIsLeave(true);  }
+  }
+
+  const current = isLeave ? 'leave' : isOff ? 'off' : shift ?? 'off';
+
+  const options = [
+    { key: 'morning', label: 'Morning', sub: '08:00 – 17:00', icon: <Sun  className="h-5 w-5" />, accent: '#ea580c' },
+    { key: 'evening', label: 'Evening', sub: '13:00 – 22:00', icon: <Moon className="h-5 w-5" />, accent: '#7c3aed' },
+    { key: 'off',     label: 'Day Off',  sub: 'No work today',  icon: <X    className="h-5 w-5" />, accent: '#64748b' },
+    { key: 'leave',   label: 'Leave',    sub: 'AL / CU / Sick', icon: <Calendar className="h-5 w-5" />, accent: '#4338ca' },
+  ] as const;
+
+  return (
+    <div
+      className="fixed inset-0 z-99 flex items-end justify-center"
+      style={{ background: 'rgba(15,23,42,0.65)', backdropFilter: 'blur(6px)' }}
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md rounded-t-3xl bg-white px-5 pb-10 pt-4 shadow-2xl"
+        style={{ animation: 'slideUp 0.25s cubic-bezier(0.34,1.56,0.64,1)' }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-slate-200" />
+
+        <div className="mb-5 flex items-start justify-between">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Edit Shift</p>
+            <p className="mt-0.5 text-lg font-bold text-slate-900">{entry.userName}</p>
+            <p className="text-sm text-slate-500">{label}</p>
+          </div>
+          <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-slate-400">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2.5 mb-6">
+          {options.map(opt => {
+            const active = current === opt.key;
+            return (
+              <button
+                key={opt.key}
+                onClick={() => pick(opt.key)}
+                className="relative flex flex-col items-start gap-1.5 rounded-2xl border-2 px-4 py-3.5 text-left transition-all active:scale-[0.97]"
+                style={{
+                  borderColor: active ? opt.accent : '#e2e8f0',
+                  background:  active ? `${opt.accent}12` : '#f8fafc',
+                  boxShadow:   active ? `0 0 0 3px ${opt.accent}20` : 'none',
+                }}
+              >
+                <span style={{ color: active ? opt.accent : '#94a3b8' }}>{opt.icon}</span>
+                <div>
+                  <p className="text-sm font-bold" style={{ color: active ? opt.accent : '#334155' }}>{opt.label}</p>
+                  <p className="text-[10px] text-slate-400">{opt.sub}</p>
+                </div>
+                {active && (
+                  <span className="absolute right-2.5 top-2.5 flex h-4 w-4 items-center justify-center rounded-full" style={{ background: opt.accent }}>
+                    <CheckCircle2 className="h-3 w-3 text-white" />
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex gap-2.5">
+          <button
+            onClick={onClose}
+            className="flex h-12 flex-1 items-center justify-center rounded-2xl border border-slate-200 bg-white text-sm font-semibold text-slate-600 active:scale-[0.98]"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => onSave({ shift, isOff, isLeave })}
+            disabled={saving}
+            className="flex h-12 flex-[2] items-center justify-center gap-2 rounded-2xl text-sm font-bold text-white transition-all active:scale-[0.98] disabled:opacity-60"
+            style={{ background: 'linear-gradient(135deg, #4f46e5, #7c3aed)' }}
+          >
+            {saving ? <><Loader2 className="h-4 w-4 animate-spin" />Saving…</> : 'Save Changes'}
+          </button>
+        </div>
+      </div>
+      <style>{`@keyframes slideUp{from{transform:translateY(100%);opacity:0}to{transform:translateY(0);opacity:1}}`}</style>
+    </div>
+  );
+}
+
+// ─── ImportButton ─────────────────────────────────────────────────────────────
+
+function ImportButton({ onImported }: { onImported: () => void }) {
+  const inputRef                    = useRef<HTMLInputElement>(null);
+  const [importing,  setImporting]  = useState(false);
+  const [result,     setResult]     = useState<ImportResult | null>(null);
+  const [showErrors, setShowErrors] = useState(false);
+
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    setImporting(true); setResult(null);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const res  = await fetch('/api/pic/schedule/import', { method: 'POST', body: form });
+      const json = await res.json() as ImportResult;
+      setResult(json);
+      if (json.schedulesCreated > 0 && !json.errors.length) { toast.success(`Imported ${json.entriesCreated} entries`); onImported(); }
+      else if (json.schedulesCreated > 0) { toast.warning('Imported with warnings'); onImported(); }
+      else if (!json.success) toast.error('Import failed');
+      else toast.info('No new data imported');
+    } catch (err) {
+      setResult({ success: false, schedulesCreated: 0, entriesCreated: 0, skipped: 0, errors: [String(err)], notFound: [] });
+      toast.error('Network error');
+    } finally { setImporting(false); }
+  }
+
+  const hasWarnings = (result?.errors.length ?? 0) > 0 || (result?.notFound.length ?? 0) > 0;
+
+  return (
+    <div className="space-y-2">
+      <input ref={inputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleFile} />
+      <button
+        type="button"
+        onClick={() => { setResult(null); setShowErrors(false); inputRef.current?.click(); }}
+        disabled={importing}
+        className="flex h-11 w-full items-center justify-center gap-2 rounded-2xl border-2 border-dashed text-sm font-semibold transition-all active:scale-[0.98]"
+        style={{
+          borderColor: importing ? '#e2e8f0' : '#a5b4fc',
+          background:  importing ? '#f8fafc'  : '#eef2ff',
+          color:       importing ? '#94a3b8'  : '#4f46e5',
+        }}
+      >
+        {importing ? <><Loader2 className="h-4 w-4 animate-spin" />Importing…</> : <><Upload className="h-4 w-4" />Import Schedule (.xlsx)</>}
+      </button>
+
+      {result && (
+        <div className={cn('overflow-hidden rounded-2xl border text-sm',
+          result.success && !hasWarnings ? 'border-emerald-200 bg-emerald-50'
+          : hasWarnings ? 'border-amber-200 bg-amber-50' : 'border-red-200 bg-red-50')}>
+          <div className="flex items-center gap-3 px-4 py-3">
+            {result.success && !hasWarnings
+              ? <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
+              : <AlertCircle  className="h-4 w-4 shrink-0 text-amber-500" />}
+            <div className="flex-1 min-w-0">
+              <p className={cn('font-bold text-sm', result.success && !hasWarnings ? 'text-emerald-800' : hasWarnings ? 'text-amber-800' : 'text-red-800')}>
+                {result.success && !hasWarnings ? 'Import successful' : hasWarnings ? 'Imported with warnings' : 'Import failed'}
+              </p>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                {result.entriesCreated} entries · {result.schedulesCreated} store(s){result.month && ` · ${formatYearMonth(result.month)}`}
+              </p>
+            </div>
+            {hasWarnings && (
+              <button onClick={() => setShowErrors(v => !v)} className="text-[11px] font-semibold text-amber-700 flex items-center gap-0.5">
+                Details {showErrors ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+              </button>
+            )}
+            <button onClick={() => setResult(null)} className="text-slate-400"><X className="h-3.5 w-3.5" /></button>
+          </div>
+          {hasWarnings && showErrors && (
+            <div className="border-t border-amber-200 bg-white/60 px-4 py-3 space-y-2">
+              {result.notFound.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-amber-700 mb-1">Not found</p>
+                  <div className="flex flex-wrap gap-1">
+                    {result.notFound.map(n => <span key={n} className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">{n}</span>)}
+                  </div>
+                </div>
+              )}
+              {result.errors.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-red-700 mb-1">Errors</p>
+                  <ul className="max-h-28 overflow-y-auto space-y-0.5">
+                    {result.errors.map((e, i) => <li key={i} className="text-[11px] text-red-700 font-mono">{e}</li>)}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+      {!result && !importing && (
+        <p className="flex items-center gap-1.5 px-1 text-[10px] text-slate-400">
+          <FileSpreadsheet className="h-3 w-3 shrink-0" />E = Morning · L = Evening · AL/CU = Leave
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ─── CalendarGrid ─────────────────────────────────────────────────────────────
+
+function CalendarGrid({ schedule, yearMonth, onDayPress }: {
+  schedule:   MonthlySchedule;
+  yearMonth:  string;
+  onDayPress: (date: Date, entries: DayEntry[]) => void;
+}) {
+  const grid  = buildCalendarGrid(yearMonth);
+  const today = isoDate(new Date());
+
+  // Build a map: dateString → entries[]
+  const dayMap = new Map<string, DayEntry[]>();
+  for (const entry of schedule.entries) {
+    const ds = entry.date.slice(0, 10);
+    if (!dayMap.has(ds)) dayMap.set(ds, []);
+    dayMap.get(ds)!.push(entry);
   }
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
-      {/* Card header */}
-      <div className="flex items-center gap-3 px-4 py-3.5">
-        {/* Avatar */}
-        <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-primary/10 text-sm font-bold text-primary">
-          {user?.name?.charAt(0).toUpperCase() ?? '?'}
-        </div>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-bold text-foreground">{user?.name ?? 'Unknown'}</p>
-          <p className="text-xs text-muted-foreground">{empTypeLabel}</p>
-        </div>
-        {/* Expand toggle */}
-        <button
-          onClick={() => setExpanded(v => !v)}
-          className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary"
-        >
-          {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-        </button>
-      </div>
-
-      {/* Week grid — always visible */}
-      <div className="px-4 pb-3">
-        <WeekGrid entries={template.entries} />
-        {/* Shift summary chips */}
-        <div className="mt-2.5 flex flex-wrap gap-1.5">
-          {Array.from(byDay.entries())
-            .sort((a, b) => a[0] - b[0])
-            .map(([day, shifts]) =>
-              shifts.map(shift => (
-                <span key={`${day}-${shift}`} className="flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-                  {DAYS.find(d => d.day === day)?.short}
-                  <SchedulePill shift={shift} />
-                </span>
-              ))
-            )}
-        </div>
-      </div>
-
-      {/* Expanded detail + actions */}
-      {expanded && (
-        <div className="border-t border-border/60 bg-secondary/30 px-4 py-3.5 space-y-3">
-          {template.note && (
-            <p className="text-xs text-muted-foreground">
-              <span className="font-semibold">Note: </span>{template.note}
-            </p>
-          )}
-          <p className="text-[10px] text-muted-foreground">
-            Last updated {new Date(template.updatedAt).toLocaleDateString('en-ID', { day: 'numeric', month: 'short', year: 'numeric' })}
-          </p>
-          <div className="flex gap-2">
-            <button
-              onClick={() => onEdit(slot)}
-              className="flex h-9 flex-1 items-center justify-center gap-1.5 rounded-xl border border-border bg-card text-xs font-semibold text-foreground hover:bg-secondary"
-            >
-              <Pencil className="h-3.5 w-3.5" /> Edit Schedule
-            </button>
-            <button
-              onClick={handleDeactivate}
-              disabled={deactivating}
-              className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl border border-red-200 bg-red-50 text-destructive hover:bg-red-100 disabled:opacity-50"
-            >
-              {deactivating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-            </button>
+    <div className="rounded-2xl border border-slate-100 bg-white shadow-sm overflow-hidden">
+      {/* Day headers */}
+      <div className="grid grid-cols-7 border-b border-slate-100">
+        {DAYS_HEADER.map((d, i) => (
+          <div
+            key={d}
+            className="py-2 text-center text-[10px] font-bold uppercase tracking-wide"
+            style={{ color: i === 0 || i === 6 ? '#fca5a5' : '#94a3b8' }}
+          >
+            {d}
           </div>
-        </div>
-      )}
+        ))}
+      </div>
+
+      {/* Calendar cells */}
+      <div className="grid grid-cols-7">
+        {grid.map((date, idx) => {
+          if (!date) return (
+            <div key={`pad-${idx}`} className="aspect-square border-b border-r border-slate-50 last:border-r-0" />
+          );
+
+          const ds      = isoDate(date);
+          const entries = dayMap.get(ds) ?? [];
+          const dow     = date.getDay();
+          const isWkd   = dow === 0 || dow === 6;
+          const isTod   = ds === today;
+
+          // Summarise shifts for dot indicators
+          const hasMorning = entries.some(e => !e.isOff && !e.isLeave && e.shift === 'morning');
+          const hasEvening = entries.some(e => !e.isOff && !e.isLeave && e.shift === 'evening');
+          const hasLeave   = entries.some(e => e.isLeave);
+          const totalWork  = entries.filter(e => !e.isOff && !e.isLeave && e.shift).length;
+
+          // Column border — no right border on last of each row
+          const isLastInRow = (idx + 1) % 7 === 0;
+
+          return (
+            <button
+              key={ds}
+              onClick={() => entries.length > 0 && onDayPress(date, entries)}
+              className={cn(
+                'relative flex flex-col items-center py-2 transition-colors active:bg-slate-50',
+                'border-b border-slate-50',
+                !isLastInRow && 'border-r',
+                entries.length === 0 && 'cursor-default',
+              )}
+              style={{
+                background: isTod ? '#eef2ff' : isWkd ? '#fafafa' : 'white',
+              }}
+            >
+              {/* Date number */}
+              <span
+                className={cn(
+                  'flex h-6 w-6 items-center justify-center rounded-full text-[12px] font-bold',
+                  isTod ? 'bg-indigo-500 text-white' : '',
+                )}
+                style={{
+                  color: isTod ? undefined : isWkd ? '#fca5a5' : '#334155',
+                }}
+              >
+                {date.getDate()}
+              </span>
+
+              {/* Staff count badge */}
+              {totalWork > 0 && (
+                <span
+                  className="mt-0.5 rounded-full px-1.5 text-[8px] font-bold"
+                  style={{ background: '#f1f5f9', color: '#64748b' }}
+                >
+                  {totalWork}
+                </span>
+              )}
+
+              {/* Shift indicator dots */}
+              <div className="mt-1 flex gap-0.5">
+                {hasMorning && (
+                  <span className="h-1.5 w-1.5 rounded-full" style={{ background: '#fb923c' }} />
+                )}
+                {hasEvening && (
+                  <span className="h-1.5 w-1.5 rounded-full" style={{ background: '#a78bfa' }} />
+                )}
+                {hasLeave && (
+                  <span className="h-1.5 w-1.5 rounded-full" style={{ background: '#818cf8' }} />
+                )}
+                {/* Empty placeholder to keep height consistent */}
+                {!hasMorning && !hasEvening && !hasLeave && (
+                  <span className="h-1.5 w-1.5 opacity-0" />
+                )}
+              </div>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
-// ─── Main Page ────────────────────────────────────────────────────────────────
-type View = 'list' | 'create' | 'edit';
+// ─── Page ─────────────────────────────────────────────────────────────────────
 
-export default function ScheduleManagePage() {
+export default function SchedulePage() {
   const { data: session, status: authStatus } = useSession();
   const router = useRouter();
 
   const user         = session?.user as any;
   const employeeType = user?.employeeType as string | null;
-  const storeId      = user?.storeId     as string | null;
-  const userId       = user?.id          as string | null;
+  const storeId      = user?.homeStoreId  as string | null;
 
-  const [view,       setView]       = useState<View>('list');
-  const [templates,  setTemplates]  = useState<TemplateSlot[]>([]);
-  const [employees,  setEmployees]  = useState<StoreEmployee[]>([]);
-  const [loading,    setLoading]    = useState(true);
-  const [saving,     setSaving]     = useState(false);
-  const [editTarget, setEditTarget] = useState<TemplateSlot | null>(null);
+  const [selectedMonth, setSelectedMonth] = useState(currentYearMonth());
+  const [schedule,      setSchedule]      = useState<MonthlySchedule | null>(null);
+  const [loading,       setLoading]       = useState(false);
+  const [deleting,      setDeleting]      = useState(false);
 
-  // ── Auth guard: PIC 1 only ──────────────────────────────────────────────
+  // Day detail sheet state
+  const [detailDate,    setDetailDate]    = useState<Date | null>(null);
+  const [detailEntries, setDetailEntries] = useState<DayEntry[]>([]);
+
+  // Edit modal state (opened from within the day sheet)
+  const [editEntry,   setEditEntry]   = useState<DayEntry | null>(null);
+  const [savingEntry, setSavingEntry] = useState(false);
+
   const isPic1 = employeeType === 'pic_1';
 
   useEffect(() => {
     if (authStatus === 'loading') return;
     if (!session) { router.replace('/login'); return; }
-    if (!isPic1)  { router.replace('/employee'); }
+    if (!isPic1)  router.replace('/employee');
   }, [authStatus, session, isPic1, router]);
 
-  // ── Load data ────────────────────────────────────────────────────────────
-  const load = useCallback(async () => {
+  const loadSchedule = useCallback(async (ym: string) => {
     if (!storeId) return;
     setLoading(true);
     try {
-      const [tRes, eRes] = await Promise.all([
-        fetch('/api/pic/schedule/templates'),
-        fetch('/api/pic/schedule/employees'),
-      ]);
-      const [tJson, eJson] = await Promise.all([tRes.json(), eRes.json()]);
-      if (tJson.success) setTemplates(tJson.templates ?? []);
-      if (eJson.success) setEmployees(eJson.employees ?? []);
+      const res  = await fetch(`/api/pic/schedule/monthly?yearMonth=${ym}`);
+      const json = await res.json();
+      setSchedule(json.schedule ?? null);
     } catch {
-      toast.error('Failed to load schedule data');
+      toast.error('Failed to load schedule');
     } finally {
       setLoading(false);
     }
   }, [storeId]);
 
-  useEffect(() => { if (isPic1) load(); }, [isPic1, load]);
+  useEffect(() => {
+    if (isPic1) loadSchedule(selectedMonth);
+  }, [isPic1, selectedMonth, loadSchedule]);
 
-  // ── Employees without an active template ─────────────────────────────────
-  const scheduledUserIds = new Set(templates.map(t => t.user?.id).filter(Boolean));
-  const unscheduledEmps  = employees.filter(e => !scheduledUserIds.has(e.id));
-
-  // ── Save (create or update) ───────────────────────────────────────────────
-  async function handleSave(targetUserId: string, entries: Entry[], note: string) {
-    setSaving(true);
-    try {
-      if (view === 'create') {
-        const res  = await fetch('/api/pic/schedule/templates', {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ userId: targetUserId, entries, note }),
-        });
-        const json = await res.json();
-        if (!json.success) throw new Error(json.error);
-        toast.success('Schedule created!');
-      } else if (view === 'edit' && editTarget) {
-        const res  = await fetch(`/api/pic/schedule/templates/${editTarget.template.id}`, {
-          method:  'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ entries, note }),
-        });
-        const json = await res.json();
-        if (!json.success) throw new Error(json.error);
-        toast.success('Schedule updated!');
-      }
-      setView('list');
-      setEditTarget(null);
-      await load();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to save');
-    } finally {
-      setSaving(false);
-    }
+  function handleMonthChange(ym: string) {
+    setSelectedMonth(ym);
+    setDetailDate(null);
   }
 
-  // ── Deactivate ────────────────────────────────────────────────────────────
-  async function handleDeactivate(templateId: string) {
+  function handleDayPress(date: Date, entries: DayEntry[]) {
+    setDetailDate(date);
+    setDetailEntries(entries);
+  }
+
+  function handleEditFromSheet(entry: DayEntry) {
+    setEditEntry(entry);
+  }
+
+  async function handleDelete() {
+    if (!confirm(`Delete the ${formatYearMonth(selectedMonth)} schedule? Attended days are preserved.`)) return;
+    setDeleting(true);
     try {
-      const res  = await fetch(`/api/pic/schedule/templates/${templateId}`, {
-        method:  'DELETE',
+      const res  = await fetch(`/api/pic/schedule/monthly?yearMonth=${selectedMonth}`, { method: 'DELETE' });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error);
+      toast.success(json.lockedCount > 0 ? `Cleared — ${json.lockedCount} attended day(s) preserved` : 'Schedule deleted');
+      loadSchedule(selectedMonth);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Delete failed');
+    } finally { setDeleting(false); }
+  }
+
+  async function handleSaveEntry(patch: { shift: Shift | null; isOff: boolean; isLeave: boolean }) {
+    if (!editEntry) return;
+    setSavingEntry(true);
+    try {
+      const res  = await fetch(`/api/pic/schedule/entry/${editEntry.id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
       });
       const json = await res.json();
       if (!json.success) throw new Error(json.error);
-      toast.success('Schedule removed');
-      await load();
+      toast.success('Day updated');
+      setEditEntry(null);
+      setDetailDate(null);
+      loadSchedule(selectedMonth);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Failed to remove');
-    }
+      toast.error(e instanceof Error ? e.message : 'Update failed');
+    } finally { setSavingEntry(false); }
   }
 
-  // ── Guards ────────────────────────────────────────────────────────────────
-  if (authStatus === 'loading' || !session) {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+  // ── Auth guards ────────────────────────────────────────────────────────────
+
+  if (authStatus === 'loading' || !session) return (
+    <div className="flex min-h-screen items-center justify-center bg-white">
+      <Loader2 className="h-6 w-6 animate-spin text-indigo-400" />
+    </div>
+  );
+
+  if (!isPic1) return (
+    <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-white p-8 text-center">
+      <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-red-50">
+        <Shield className="h-8 w-8 text-red-500" />
       </div>
-    );
-  }
+      <p className="text-base font-bold text-slate-800">Access Restricted</p>
+      <p className="text-sm text-slate-500">Only PIC 1 can manage store schedules.</p>
+    </div>
+  );
 
-  if (!isPic1) {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-8 text-center">
-        <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-red-50">
-          <Shield className="h-8 w-8 text-destructive" />
-        </div>
-        <p className="text-base font-bold text-foreground">Access Restricted</p>
-        <p className="text-sm text-muted-foreground">Only PIC 1 can manage store schedules.</p>
-      </div>
-    );
-  }
+  // ── Stats ──────────────────────────────────────────────────────────────────
+  const totalEmployees = schedule ? new Set(schedule.entries.map(e => e.userId)).size : 0;
+  const workingDays    = schedule ? schedule.entries.filter(e => !e.isOff && !e.isLeave && e.shift).length : 0;
+  const leaveDays      = schedule ? schedule.entries.filter(e => e.isLeave).length : 0;
 
-  const isFormView = view === 'create' || view === 'edit';
+  const [y, m] = selectedMonth.split('-').map(Number);
 
   return (
-    <div className="flex flex-col">
+    <div className="flex min-h-screen flex-col bg-slate-50">
 
-      {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <div className="relative overflow-hidden bg-primary px-6 pb-8 pt-12">
-        <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-white/5" />
-        <div className="pointer-events-none absolute -right-4 bottom-0 h-24 w-24 rounded-full bg-white/5" />
-        <div className="relative">
-          <p className="text-xs font-semibold uppercase tracking-widest text-primary-foreground/60">
-            {isFormView
-              ? view === 'create' ? 'New Schedule' : 'Edit Schedule'
-              : 'Schedule Manager'}
-          </p>
-          <h1 className="mt-0.5 text-2xl font-bold text-primary-foreground">
-            {isFormView
-              ? view === 'create' ? 'Assign Shifts' : `Edit — ${editTarget?.user?.name ?? ''}`
-              : 'Staff Schedules'}
-          </h1>
-          {!isFormView && (
-            <p className="mt-1 text-xs text-primary-foreground/50">
-              {templates.length} active schedule{templates.length !== 1 ? 's' : ''} · your store only
-            </p>
-          )}
-        </div>
+      {/* ── Header ── */}
+      <div
+        className="relative overflow-hidden px-5 pb-6 pt-12"
+        style={{ background: 'linear-gradient(135deg, #4338ca 0%, #7c3aed 100%)' }}
+      >
+        <div className="pointer-events-none absolute -right-8 -top-8 h-40 w-40 rounded-full" style={{ background: 'rgba(255,255,255,0.07)' }} />
+        <div className="pointer-events-none absolute -left-4 bottom-0 h-24 w-24 rounded-full"  style={{ background: 'rgba(255,255,255,0.05)' }} />
 
-        {/* Stats pills */}
-        {!isFormView && !loading && (
-          <div className="relative mt-4 flex flex-wrap gap-2">
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-xs font-medium text-primary-foreground">
-              <Users className="h-3 w-3" />
-              {templates.length} scheduled
-            </span>
-            {unscheduledEmps.length > 0 && (
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-400/20 px-3 py-1.5 text-xs font-medium text-amber-200">
-                <AlertCircle className="h-3 w-3" />
-                {unscheduledEmps.length} unscheduled
-              </span>
-            )}
+        <div className="relative flex items-start justify-between">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-300">PIC 1 · Schedules</p>
+            <h1 className="mt-0.5 text-2xl font-bold text-white">Staff Schedule</h1>
           </div>
-        )}
-      </div>
-
-      {/* ── Body ───────────────────────────────────────────────────────────── */}
-      <div className="space-y-4 p-4 pb-10">
-
-        {/* ── Loading skeleton ── */}
-        {loading && view === 'list' && (
-          <div className="space-y-3">
-            {[1, 2, 3].map(i => (
-              <div key={i} className="h-32 animate-pulse rounded-2xl bg-secondary" />
-            ))}
-          </div>
-        )}
-
-        {/* ── LIST VIEW ── */}
-        {!loading && view === 'list' && (
-          <>
-            {/* Unscheduled employees banner */}
-            {unscheduledEmps.length > 0 && (
-              <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-3.5">
-                <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
-                <div className="flex-1 text-xs text-amber-800">
-                  <p className="font-bold">Employees without schedules:</p>
-                  <p className="mt-0.5">{unscheduledEmps.map(e => e.name).join(', ')}</p>
-                </div>
-              </div>
-            )}
-
-            {/* Legend */}
-            <div className="flex items-center gap-4 px-1">
-              {(['morning', 'evening'] as Shift[]).map(shift => (
-                <div key={shift} className="flex items-center gap-1.5">
-                  <div className={cn('h-2.5 w-2.5 rounded-sm', shift === 'morning' ? 'bg-amber-400' : 'bg-violet-400')} />
-                  <span className="text-[11px] font-medium text-muted-foreground">
-                    {SHIFT_CFG[shift].label} {SHIFT_CFG[shift].time}
-                  </span>
-                </div>
-              ))}
-            </div>
-
-            {/* Template cards */}
-            {templates.length === 0 && (
-              <div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-border bg-card py-12 text-center">
-                <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-secondary">
-                  <Calendar className="h-7 w-7 text-muted-foreground/40" />
-                </div>
-                <div>
-                  <p className="text-sm font-semibold text-foreground">No schedules yet</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Create a schedule for each employee in your store.
-                  </p>
-                </div>
-              </div>
-            )}
-
-            <div className="space-y-3">
-              {templates.map(slot => (
-                <TemplateCard
-                  key={slot.template.id}
-                  slot={slot}
-                  onEdit={s => { setEditTarget(s); setView('edit'); }}
-                  onDeactivate={handleDeactivate}
-                />
-              ))}
-            </div>
-
-            {/* Add new */}
-            {unscheduledEmps.length > 0 && (
+          <div className="flex gap-2 mt-1">
+            <button
+              onClick={() => loadSchedule(selectedMonth)}
+              className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white/70 hover:bg-white/20"
+            >
+              <RefreshCw className="h-4 w-4" />
+            </button>
+            {schedule && (
               <button
-                onClick={() => setView('create')}
-                className="flex h-14 w-full items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-primary/30 bg-primary/5 text-sm font-bold text-primary transition-colors hover:border-primary/50 hover:bg-primary/10"
+                onClick={handleDelete}
+                disabled={deleting}
+                className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white/70 hover:bg-red-400/30 disabled:opacity-40"
               >
-                <Plus className="h-5 w-5" />
-                Assign New Schedule
+                {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
               </button>
             )}
-          </>
-        )}
+          </div>
+        </div>
 
-        {/* ── CREATE VIEW ── */}
-        {view === 'create' && (
-          <TemplateEditor
-            employees={unscheduledEmps}
-            onSave={handleSave}
-            onCancel={() => setView('list')}
-            saving={saving}
-          />
-        )}
-
-        {/* ── EDIT VIEW ── */}
-        {view === 'edit' && editTarget && (
-          <TemplateEditor
-            employees={employees}
-            initial={{
-              userId:  editTarget.user?.id ?? '',
-              entries: editTarget.template.entries,
-              note:    editTarget.template.note ?? '',
+        {/* Month navigator */}
+        <div className="relative mt-5 flex items-center justify-between">
+          {/* Prev month */}
+          <button
+            onClick={() => {
+              const d = new Date(y, m - 2, 1);
+              handleMonthChange(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2,'0')}`);
             }}
-            onSave={(_, entries, note) =>
-              handleSave(editTarget.user?.id ?? '', entries, note)
-            }
-            onCancel={() => { setEditTarget(null); setView('list'); }}
-            saving={saving}
-          />
+            className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white/70 hover:bg-white/20"
+          >
+            <ChevronLeft className="h-5 w-5" />
+          </button>
+
+          <div className="text-center">
+            <p className="text-xl font-bold text-white">{MONTHS[m - 1]}</p>
+            <p className="text-[11px] font-medium text-indigo-300">{y}</p>
+          </div>
+
+          {/* Next month */}
+          <button
+            onClick={() => {
+              const d = new Date(y, m, 1);
+              handleMonthChange(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2,'0')}`);
+            }}
+            className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white/70 hover:bg-white/20"
+          >
+            <ChevronRight className="h-5 w-5" />
+          </button>
+        </div>
+      </div>
+
+      {/* ── Body ── */}
+      <div className="flex-1 space-y-3 p-4 pb-24">
+
+        {/* Import */}
+        <ImportButton onImported={() => loadSchedule(selectedMonth)} />
+
+        {/* Loading */}
+        {loading && (
+          <div className="flex items-center justify-center py-16">
+            <Loader2 className="h-6 w-6 animate-spin text-indigo-400" />
+          </div>
+        )}
+
+        {/* ── Schedule exists ── */}
+        {!loading && schedule && (
+          <div className="space-y-3">
+
+            {/* Stats */}
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { label: 'Staff',        value: totalEmployees, color: '#6366f1' },
+                { label: 'Work shifts',  value: workingDays,    color: '#10b981' },
+                { label: 'Leave days',   value: leaveDays,      color: '#f59e0b' },
+              ].map(({ label, value, color }) => (
+                <div key={label} className="rounded-2xl border border-slate-100 bg-white px-3 py-3 text-center shadow-sm">
+                  <p className="text-xl font-bold" style={{ color }}>{value}</p>
+                  <p className="mt-0.5 text-[9px] font-semibold uppercase tracking-wide text-slate-400">{label}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* Legend */}
+            <div className="flex items-center gap-3 px-1">
+              {[
+                { color: '#fb923c', label: 'Morning' },
+                { color: '#a78bfa', label: 'Evening' },
+                { color: '#818cf8', label: 'Leave'   },
+              ].map(({ color, label }) => (
+                <div key={label} className="flex items-center gap-1 text-[10px] text-slate-400">
+                  <span className="h-2 w-2 rounded-full" style={{ background: color }} />
+                  {label}
+                </div>
+              ))}
+              <span className="ml-auto text-[10px] text-slate-400">Tap a day to edit</span>
+            </div>
+
+            {/* Calendar */}
+            <CalendarGrid
+              schedule={schedule}
+              yearMonth={selectedMonth}
+              onDayPress={handleDayPress}
+            />
+
+            {schedule.note && (
+              <p className="px-1 text-[11px] italic text-slate-400">Note: "{schedule.note}"</p>
+            )}
+          </div>
+        )}
+
+        {/* ── No schedule ── */}
+        {!loading && !schedule && (
+          <div className="flex flex-col items-center gap-4 rounded-2xl border border-dashed border-slate-200 bg-white py-16 text-center">
+            <div
+              className="flex h-16 w-16 items-center justify-center rounded-2xl"
+              style={{ background: 'linear-gradient(135deg, #eef2ff, #f5f3ff)' }}
+            >
+              <Calendar className="h-8 w-8 text-indigo-300" />
+            </div>
+            <div>
+              <p className="text-sm font-bold text-slate-700">No schedule for {formatYearMonth(selectedMonth)}</p>
+              <p className="mt-1 text-xs text-slate-400">Import an Excel file above to get started.</p>
+            </div>
+          </div>
         )}
       </div>
+
+      {/* Day detail sheet */}
+      {detailDate && !editEntry && (
+        <DayDetailSheet
+          date={detailDate}
+          entries={detailEntries}
+          onEdit={handleEditFromSheet}
+          onClose={() => setDetailDate(null)}
+        />
+      )}
+
+      {/* Edit modal — stacked on top of detail sheet */}
+      {editEntry && (
+        <EditDayModal
+          entry={editEntry}
+          onSave={handleSaveEntry}
+          onClose={() => setEditEntry(null)}
+          saving={savingEntry}
+        />
+      )}
     </div>
   );
 }

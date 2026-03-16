@@ -85,7 +85,8 @@ export default function EmployeeDashboard() {
   const [loading,  setLoading]  = useState(true);
 
   const user    = session?.user as any;
-  const storeId = user?.storeId ?? '';
+  const storeId = user?.homeStoreId ?? '';
+  const employeeType = user?.employeeType as string | null;
 
   useEffect(() => {
     if (!storeId) return;

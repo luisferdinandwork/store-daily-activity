@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSession } from 'next-auth/react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -10,6 +10,7 @@ import {
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import StoreAttendanceDetail from '@/components/ops/StoreAttendanceDetail';
+import AttendanceExportModal from '@/components/ops/AttendanceExportModal';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface StoreAttendanceSummary {
@@ -256,6 +257,7 @@ export default function OpsAttendancePage() {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
+  const [exportOpen,    setExportOpen]    = useState(false);
   const [viewMonth,     setViewMonth]     = useState(new Date(today.getFullYear(), today.getMonth(), 1));
   const [cache,         setCache]         = useState<Record<string, StoreAttendanceSummary[]>>({});
   const [loadingMonth,  setLoadingMonth]  = useState(false);
@@ -291,6 +293,19 @@ export default function OpsAttendancePage() {
   }, []);
 
   useEffect(() => { fetchMonth(viewMonth); }, [viewMonth, fetchMonth]);
+
+  // Derive unique stores from cache for the Export Modal
+  const storeList = useMemo(() => {
+    const map = new Map<string, { id: string; name: string }>();
+    Object.values(cache).forEach((stores) => {
+      stores.forEach((s) => {
+        if (!map.has(s.storeId)) {
+          map.set(s.storeId, { id: s.storeId, name: s.storeName });
+        }
+      });
+    });
+    return Array.from(map.values());
+  }, [cache]);
 
   const year       = viewMonth.getFullYear();
   const month      = viewMonth.getMonth();
@@ -360,14 +375,27 @@ export default function OpsAttendancePage() {
           <h1 className="text-2xl font-bold tracking-tight text-foreground">Attendance</h1>
           <p className="mt-0.5 text-sm text-muted-foreground">Monthly overview — all stores</p>
         </div>
-        <Button
-          variant="outline" size="sm" className="gap-1.5"
-          onClick={() => fetchMonth(viewMonth)}
-          disabled={loadingMonth}
-        >
-          <RefreshCw className={cn('h-3.5 w-3.5', loadingMonth && 'animate-spin')} />
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline" 
+            size="sm" 
+            className="gap-1.5"
+            onClick={() => setExportOpen(true)}
+          >
+            <Download className="h-3.5 w-3.5" />
+            Export
+          </Button>
+          <Button
+            variant="outline" 
+            size="sm" 
+            className="gap-1.5"
+            onClick={() => fetchMonth(viewMonth)}
+            disabled={loadingMonth}
+          >
+            <RefreshCw className={cn('h-3.5 w-3.5', loadingMonth && 'animate-spin')} />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {/* Month stats bar */}
@@ -495,6 +523,13 @@ export default function OpsAttendancePage() {
           />
         </div>
       )}
+
+      {/* Export Modal */}
+      <AttendanceExportModal
+        open={exportOpen}
+        onClose={() => setExportOpen(false)}
+        stores={storeList}
+      />
     </div>
   );
 }
