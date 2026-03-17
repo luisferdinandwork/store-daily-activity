@@ -2,36 +2,27 @@
 //
 // GET /api/ops/schedules/area
 //
-// Returns the full area → stores → templates + employees tree for the
-// currently authenticated OPS user.
-//
-// Authorization:
-//   - Caller must have role = 'ops' and a non-null areaId.
-//   - Only stores belonging to that area are included.
-//   - Calls ensureSchedulesUpToDate() for each store so the rolling
-//     generator keeps schedules current on every page load.
+// Returns the full area → stores → monthly schedules + employees tree
+// for the currently authenticated OPS user.
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
-import { db } from '@/lib/db';
-import { users, stores, areas, weeklyScheduleTemplates, weeklyScheduleEntries } from '@/lib/db/schema';
-import { and, eq } from 'drizzle-orm';
-import { ensureSchedulesUpToDate } from '@/lib/schedule-utils';
+import { getServerSession }          from 'next-auth';
+import { authOptions }               from '@/lib/auth';
+import { db }                        from '@/lib/db';
+import { users, stores, areas, monthlySchedules, monthlyScheduleEntries } from '@/lib/db/schema';
+import { and, eq, desc }             from 'drizzle-orm';
 
 export async function GET(_req: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
-    const u = session?.user as any;
+    const u       = session?.user as any;
 
-    // ── Auth: OPS only ────────────────────────────────────────────────────────
     if (!u?.id || u?.role !== 'ops') {
       return NextResponse.json(
         { success: false, error: 'Only OPS users can access this resource.' },
         { status: 403 },
       );
     }
-
     if (!u?.areaId) {
       return NextResponse.json(
         { success: false, error: 'OPS user has no area assigned. Contact an admin.' },
@@ -39,8 +30,7 @@ export async function GET(_req: NextRequest) {
       );
     }
 
-    const areaId: string  = u.areaId;
-    const opsId:  string  = u.id;
+    const areaId: string = u.areaId;
 
     // ── 1. Fetch area ─────────────────────────────────────────────────────────
     const [area] = await db
@@ -50,10 +40,7 @@ export async function GET(_req: NextRequest) {
       .limit(1);
 
     if (!area) {
-      return NextResponse.json(
-        { success: false, error: 'Area not found.' },
-        { status: 404 },
-      );
+      return NextResponse.json({ success: false, error: 'Area not found.' }, { status: 404 });
     }
 
     // ── 2. Fetch all stores in this area ──────────────────────────────────────
@@ -63,72 +50,51 @@ export async function GET(_req: NextRequest) {
       .where(eq(stores.areaId, areaId))
       .orderBy(stores.name);
 
-    // ── 3. For each store: run rolling generator + fetch templates + employees ─
+    // ── 3. For each store: fetch latest monthly schedule + employees ───────────
     const storeResults = await Promise.all(
       areaStores.map(async (store) => {
-        // Trigger rolling schedule generation (lightweight if already up-to-date)
-        await ensureSchedulesUpToDate(store.id);
 
-        // Fetch active templates for this store
-        const templateRows = await db
-          .select({ tmpl: weeklyScheduleTemplates, user: users })
-          .from(weeklyScheduleTemplates)
-          .leftJoin(users, eq(weeklyScheduleTemplates.userId, users.id))
-          .where(
-            and(
-              eq(weeklyScheduleTemplates.storeId,  store.id),
-              eq(weeklyScheduleTemplates.isActive, true),
-            ),
-          )
-          .orderBy(users.name);
+        // Get the most recent monthly schedule for this store
+        const latestSchedules = await db
+          .select()
+          .from(monthlySchedules)
+          .where(eq(monthlySchedules.storeId, store.id))
+          .orderBy(desc(monthlySchedules.yearMonth))
+          .limit(3); // last 3 months
 
-        // Fetch entries for each template
-        const templates = await Promise.all(
-          templateRows.map(async ({ tmpl, user }) => {
+        // For each schedule, get entry summary (employee count, shift breakdown)
+        const scheduleSummaries = await Promise.all(
+          latestSchedules.map(async (ms) => {
             const entries = await db
               .select({
-                id:         weeklyScheduleEntries.id,
-                templateId: weeklyScheduleEntries.templateId,
-                weekday:    weeklyScheduleEntries.weekday,
-                shift:      weeklyScheduleEntries.shift,
-                createdAt:  weeklyScheduleEntries.createdAt,
+                entry: monthlyScheduleEntries,
+                user:  users,
               })
-              .from(weeklyScheduleEntries)
-              .where(eq(weeklyScheduleEntries.templateId, tmpl.id))
-              .orderBy(weeklyScheduleEntries.weekday);
+              .from(monthlyScheduleEntries)
+              .leftJoin(users, eq(monthlyScheduleEntries.userId, users.id))
+              .where(eq(monthlyScheduleEntries.monthlyScheduleId, ms.id));
+
+            const uniqueEmployees = new Set(entries.map(e => e.entry.userId)).size;
+            const morningShifts   = entries.filter(e => !e.entry.isOff && !e.entry.isLeave && e.entry.shift === 'morning').length;
+            const eveningShifts   = entries.filter(e => !e.entry.isOff && !e.entry.isLeave && e.entry.shift === 'evening').length;
+            const leaveDays       = entries.filter(e => e.entry.isLeave).length;
 
             return {
-              template: {
-                id:                   tmpl.id,
-                userId:               tmpl.userId,
-                storeId:              tmpl.storeId,
-                isActive:             tmpl.isActive,
-                note:                 tmpl.note ?? null,
-                createdBy:            tmpl.createdBy ?? null,
-                lastScheduledThrough: tmpl.lastScheduledThrough?.toISOString() ?? null,
-                createdAt:            tmpl.createdAt.toISOString(),
-                updatedAt:            tmpl.updatedAt.toISOString(),
-              },
-              entries: entries.map((e) => ({
-                id:         e.id,
-                templateId: e.templateId,
-                weekday:    Number(e.weekday), // pg enum '0'–'6' → number
-                shift:      e.shift,
-                createdAt:  e.createdAt.toISOString(),
-              })),
-              user: user
-                ? {
-                    id:           user.id,
-                    name:         user.name,
-                    role:         user.role,
-                    employeeType: user.employeeType ?? null,
-                  }
-                : null,
+              id:              ms.id,
+              yearMonth:       ms.yearMonth,
+              note:            ms.note ?? null,
+              createdAt:       ms.createdAt.toISOString(),
+              updatedAt:       ms.updatedAt.toISOString(),
+              uniqueEmployees,
+              morningShifts,
+              eveningShifts,
+              leaveDays,
+              totalEntries:    entries.length,
             };
           }),
         );
 
-        // Fetch all employee-role users for this store (for the override editor dropdown)
+        // Fetch all employees whose home store is this store
         const employees = await db
           .select({
             id:           users.id,
@@ -139,18 +105,31 @@ export async function GET(_req: NextRequest) {
           .from(users)
           .where(
             and(
-              eq(users.storeId, store.id),
-              eq(users.role,    'employee'),
+              eq(users.homeStoreId, store.id),
+              eq(users.role,        'employee'),
             ),
           )
           .orderBy(users.name);
 
+        // Check which employees appear in the latest schedule
+        const latestMs       = latestSchedules[0];
+        const scheduledUserIds = new Set<string>();
+        if (latestMs) {
+          const latestEntries = await db
+            .select({ userId: monthlyScheduleEntries.userId })
+            .from(monthlyScheduleEntries)
+            .where(eq(monthlyScheduleEntries.monthlyScheduleId, latestMs.id));
+          latestEntries.forEach(e => scheduledUserIds.add(e.userId));
+        }
+
         return {
-          storeId:   store.id,
-          storeName: store.name,
-          address:   store.address,
-          templates,
+          storeId:          store.id,
+          storeName:        store.name,
+          address:          store.address,
+          scheduleSummaries,
           employees,
+          scheduledUserIds: [...scheduledUserIds],
+          currentYearMonth: latestMs?.yearMonth ?? null,
         };
       }),
     );

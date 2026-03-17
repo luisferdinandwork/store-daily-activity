@@ -1,76 +1,117 @@
 // app/api/ops/schedules/route.ts
 //
 // POST /api/ops/schedules
-// Creates a new schedule template via OPS override.
-// Authorization delegated to createOrReplaceTemplate → canManageSchedule.
 //
-// The old GET on this route is replaced by GET /api/ops/schedules/area
-// which returns the full area tree. This file now only handles POST.
+// OPS can trigger a re-materialisation of schedules for a store+month,
+// or get the list of monthly schedules for a store.
+//
+// GET  /api/ops/schedules?storeId=...&yearMonth=...
+//   Returns the monthly schedule with all entries for a specific store+month.
+//
+// POST /api/ops/schedules
+//   Body: { storeId, yearMonth }
+//   Triggers materialiseSchedulesForMonth for that store+month.
+//   OPS can use this to fix missing schedule rows after a manual DB edit.
 
-import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
-import { createOrReplaceTemplate } from '@/lib/schedule-utils';
+import { NextRequest, NextResponse }        from 'next/server';
+import { getServerSession }                 from 'next-auth';
+import { authOptions }                      from '@/lib/auth';
+import {
+  getMonthlySchedule,
+  materialiseSchedulesForMonth,
+  canManageSchedule,
+} from '@/lib/schedule-utils';
 
-// ─── Auth guard: OPS only ─────────────────────────────────────────────────────
 function guardOps(session: any): { userId: string } | null {
   const u = session?.user as any;
   if (!u?.id || u?.role !== 'ops') return null;
   return { userId: u.id };
 }
 
-// ─── POST /api/ops/schedules ──────────────────────────────────────────────────
-// Body: { userId, storeId, entries: [{ weekday: number, shift }], note? }
-//
-// createOrReplaceTemplate() calls canManageSchedule(actorId, storeId) —
-// that function verifies the store belongs to the OPS user's area.
+// GET /api/ops/schedules?storeId=...&yearMonth=YYYY-MM
+export async function GET(req: NextRequest) {
+  try {
+    const session = await getServerSession(authOptions);
+    const actor   = guardOps(session);
+    if (!actor) {
+      return NextResponse.json(
+        { success: false, error: 'Only OPS users can access schedules.' },
+        { status: 403 },
+      );
+    }
+
+    const storeId   = req.nextUrl.searchParams.get('storeId');
+    const yearMonth = req.nextUrl.searchParams.get('yearMonth');
+
+    if (!storeId || !yearMonth) {
+      return NextResponse.json(
+        { success: false, error: 'storeId and yearMonth are required.' },
+        { status: 400 },
+      );
+    }
+
+    // Verify OPS has access to this store
+    const auth = await canManageSchedule(actor.userId, storeId);
+    if (!auth.allowed) {
+      return NextResponse.json({ success: false, error: auth.reason }, { status: 403 });
+    }
+
+    const result = await getMonthlySchedule(storeId, yearMonth);
+    if (!result) {
+      return NextResponse.json({ success: true, schedule: null });
+    }
+
+    return NextResponse.json({
+      success:  true,
+      schedule: {
+        ...result.schedule,
+        entries: result.entries.map(e => ({
+          id:       e.id,
+          userId:   e.userId,
+          userName: e.userName,
+          userType: e.userEmployeeType,
+          date:     e.date,
+          shift:    e.shift,
+          isOff:    e.isOff,
+          isLeave:  e.isLeave,
+        })),
+      },
+    });
+  } catch (err) {
+    return NextResponse.json({ success: false, error: String(err) }, { status: 500 });
+  }
+}
+
+// POST /api/ops/schedules
+// Body: { storeId, yearMonth }
+// Re-runs materialisation for the given store+month. Safe to call multiple times.
 export async function POST(req: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
     const actor   = guardOps(session);
     if (!actor) {
       return NextResponse.json(
-        { success: false, error: 'Only OPS users can create schedule overrides.' },
+        { success: false, error: 'Only OPS users can trigger materialisation.' },
         { status: 403 },
       );
     }
 
-    const body = await req.json();
-    const { userId, storeId, entries, note } = body;
+    const { storeId, yearMonth } = await req.json();
 
-    if (!userId || !storeId || !Array.isArray(entries) || entries.length === 0) {
+    if (!storeId || !yearMonth) {
       return NextResponse.json(
-        { success: false, error: 'userId, storeId, and at least one entry are required.' },
+        { success: false, error: 'storeId and yearMonth are required.' },
         { status: 400 },
       );
     }
 
-    const validShifts = ['morning', 'evening'];
-    for (const e of entries) {
-      if (typeof e.weekday !== 'number' || e.weekday < 0 || e.weekday > 6) {
-        return NextResponse.json(
-          { success: false, error: `Invalid weekday "${e.weekday}" — must be 0–6` },
-          { status: 400 },
-        );
-      }
-      if (!validShifts.includes(e.shift)) {
-        return NextResponse.json(
-          { success: false, error: `Invalid shift "${e.shift}"` },
-          { status: 400 },
-        );
-      }
+    const auth = await canManageSchedule(actor.userId, storeId);
+    if (!auth.allowed) {
+      return NextResponse.json({ success: false, error: auth.reason }, { status: 403 });
     }
 
-    // actorId = OPS user id → canManageSchedule checks area ownership
-    const result = await createOrReplaceTemplate({
-      userId,
-      storeId,
-      entries,
-      note,
-      createdBy: actor.userId,
-    });
-
-    return NextResponse.json(result, { status: result.success ? 201 : 400 });
+    const result = await materialiseSchedulesForMonth(storeId, yearMonth);
+    return NextResponse.json({ success: true, ...result });
   } catch (err) {
     return NextResponse.json({ success: false, error: String(err) }, { status: 500 });
   }

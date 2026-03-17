@@ -22,8 +22,8 @@
 
 import * as XLSX from 'xlsx';
 import { db }    from '@/lib/db';
-import { users, stores } from '@/lib/db/schema';
-import { sql, eq }       from 'drizzle-orm';
+import { users } from '@/lib/db/schema';
+import { sql }   from 'drizzle-orm';
 import {
   createOrReplaceMonthlySchedule,
   canManageSchedule,
@@ -41,44 +41,56 @@ export interface DayEntry {
 }
 
 export interface EmployeeScheduleRow {
-  name:        string;
-  pic:         string;       // PIC 1 / PIC 2 / SO label from Excel
-  section:     string;       // Store name as it appears in the Excel
-  days:        DayEntry[];
+  name:    string;
+  pic:     string;
+  section: string;
+  days:    DayEntry[];
 }
 
 export interface ParsedScheduleFile {
-  month:     Date;           // First day of the month
+  month:     Date;
   sheetName: string;
   employees: EmployeeScheduleRow[];
-  sections:  string[];       // Unique store section labels found
+  sections:  string[];
 }
 
 export interface ImportResult {
-  success:           boolean;
-  schedulesCreated:  number;
-  entriesCreated:    number;
-  skipped:           number;
-  errors:            string[];
-  notFound:          string[];
-  month?:            string;
-  sheet?:            string;
+  success:          boolean;
+  schedulesCreated: number;
+  entriesCreated:   number;
+  skipped:          number;
+  errors:           string[];
+  notFound:         string[];
+  month?:           string;
+  sheet?:           string;
 }
 
 // ─── Public parsers ───────────────────────────────────────────────────────────
 
-export async function parseScheduleExcel(file: File, sheetName?: string): Promise<ParsedScheduleFile> {
+export async function parseScheduleExcel(
+  file: File,
+  sheetName?: string,
+): Promise<ParsedScheduleFile> {
   return parseScheduleBuffer(await file.arrayBuffer(), sheetName);
 }
 
-export function parseScheduleBuffer(buffer: ArrayBuffer, sheetName?: string): ParsedScheduleFile {
+export function parseScheduleBuffer(
+  buffer: ArrayBuffer,
+  sheetName?: string,
+): ParsedScheduleFile {
   const wb    = XLSX.read(buffer, { type: 'array', cellDates: true });
   const sName = sheetName
-    ?? wb.SheetNames.find(n => /jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec/i.test(n))
+    ?? wb.SheetNames.find(n =>
+        /jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec/i.test(n),
+       )
     ?? wb.SheetNames[0];
 
   const ws  = wb.Sheets[sName];
-  const raw = XLSX.utils.sheet_to_json<any[]>(ws, { header: 1, defval: null, raw: false });
+  const raw = XLSX.utils.sheet_to_json<any[]>(ws, {
+    header: 1,
+    defval: null,
+    raw:    false,
+  });
 
   return parseSections(raw, sName);
 }
@@ -91,14 +103,9 @@ const SKIP_HEADER    = /^(month\s*:|no|pic|name)$/i;
 function parseSections(raw: any[][], sheetName: string): ParsedScheduleFile {
   const employees: EmployeeScheduleRow[] = [];
   const sections:  string[]              = [];
-  let   month: Date = new Date();
+  let   month: Date                      = new Date();
 
-  /**
-   * Section start detection:
-   * A row where col[0] has a non-null non-numeric value (store name)
-   * AND col[3] is null (no date data in that row).
-   * OR col[0] is null and col[1] is a meaningful label (old format).
-   */
+  // Find section start rows
   const sectionStarts: number[] = [];
   for (let r = 0; r < raw.length; r++) {
     const row  = raw[r];
@@ -106,7 +113,6 @@ function parseSections(raw: any[][], sheetName: string): ParsedScheduleFile {
     const col0 = String(row[0] ?? '').trim();
     const col3 = row[3];
 
-    // Pattern 1: col[0] has text that isn't a number or skip-label, col[3] is null
     const isStoreLabel =
       col0 &&
       !SKIP_HEADER.test(col0) &&
@@ -117,7 +123,11 @@ function parseSections(raw: any[][], sheetName: string): ParsedScheduleFile {
     if (isStoreLabel) sectionStarts.push(r);
   }
 
-  console.log('[parser] sectionStarts:', sectionStarts, sectionStarts.map(r => raw[r]?.[0]));
+  console.log(
+    '[parser] sectionStarts:',
+    sectionStarts,
+    sectionStarts.map(r => raw[r]?.[0]),
+  );
 
   for (const start of sectionStarts) {
     const sectionLabel = String(raw[start][0]).trim();
@@ -137,7 +147,10 @@ function parseSections(raw: any[][], sheetName: string): ParsedScheduleFile {
     const dateRow  = raw[start + 3] ?? [];
     const dayDates = buildDateMap(dateRow, month);
 
-    console.log(`[parser] section "${sectionLabel}" month=${month.toISOString().slice(0, 7)} dates=${Object.keys(dayDates).length}`);
+    console.log(
+      `[parser] section "${sectionLabel}" month=${month.toISOString().slice(0, 7)} ` +
+      `dates=${Object.keys(dayDates).length}`,
+    );
 
     const nextSection = sectionStarts.find(s => s > start) ?? raw.length;
 
@@ -163,7 +176,10 @@ function parseSections(raw: any[][], sheetName: string): ParsedScheduleFile {
       }
 
       employees.push({ name, pic, section: sectionLabel, days });
-      console.log(`[parser]   employee "${name}" (${pic}) working=${days.filter(d => d.shift !== 'off' && d.shift !== 'leave').length}`);
+      console.log(
+        `[parser]   employee "${name}" (${pic}) ` +
+        `working=${days.filter(d => d.shift !== 'off' && d.shift !== 'leave').length}`,
+      );
     }
   }
 
@@ -196,23 +212,15 @@ function buildDateMap(dateRow: any[], month: Date): Record<number, Date> {
 }
 
 function codeToShift(code: string): ImportShift {
-  if (code === 'E' || code === 'PAGI')               return 'morning';
-  if (code === 'L' || code === 'SIANG')              return 'evening';
-  if (code === 'F' || code === 'FULL' || code === 'D') return 'full';
-  if (code === 'AL' || code === 'CU' || code === 'SICK') return 'leave';
+  if (code === 'E' || code === 'PAGI')                    return 'morning';
+  if (code === 'L' || code === 'SIANG')                   return 'evening';
+  if (code === 'F' || code === 'FULL' || code === 'D')    return 'full';
+  if (code === 'AL' || code === 'CU' || code === 'SICK')  return 'leave';
   return 'off';
 }
 
 // ─── Importer ─────────────────────────────────────────────────────────────────
 
-/**
- * Import a parsed schedule file into the database.
- *
- * storeMap: { [sectionLabel]: storeId }
- *   Maps each section label in the Excel to a database store ID.
- *   For PIC 1 with a single store, all sections map to their store.
- *   For OPS with multiple stores, each section maps to its own store.
- */
 export async function importScheduleFromParsed(
   parsed:   ParsedScheduleFile,
   storeMap: Record<string, string>,
@@ -233,65 +241,79 @@ export async function importScheduleFromParsed(
     bySection.get(emp.section)!.push(emp);
   }
 
+  console.log('[importer] sections to process:', [...bySection.keys()]);
+  console.log('[importer] storeMap:', storeMap);
+
   for (const [section, employees] of bySection) {
     const storeId = storeMap[section];
     if (!storeId) {
-      console.log(`[importer] no storeId for section "${section}" — skipping ${employees.length} employees`);
+      console.warn(`[importer] no storeId for section "${section}" — skipping ${employees.length} employee(s)`);
       skipped += employees.length;
+      errors.push(`Section "${section}" not mapped to any store — skipped.`);
       continue;
     }
 
     const auth = await canManageSchedule(actorId, storeId);
     if (!auth.allowed) {
-      errors.push(`Not authorized for store "${section}" (${storeId}): ${auth.reason}`);
+      errors.push(`Not authorized for section "${section}" (${storeId}): ${auth.reason}`);
       continue;
     }
 
-    // Resolve all employee names to user IDs
     const assignments: DayAssignment[] = [];
 
     for (const emp of employees) {
+      // Look up user by name (case-insensitive, trimmed)
       const [dbUser] = await db
         .select({ id: users.id, name: users.name })
         .from(users)
-        .where(sql`UPPER(${users.name}) = ${emp.name}`)
+        .where(sql`UPPER(TRIM(${users.name})) = ${emp.name.trim()}`)
         .limit(1);
 
       if (!dbUser) {
-        console.log(`[importer] user not found: "${emp.name}"`);
+        console.warn(`[importer] user not found: "${emp.name}"`);
         if (!notFound.includes(emp.name)) notFound.push(emp.name);
         continue;
       }
 
-      // Expand each day into one or two DayAssignment rows
+      console.log(`[importer] resolved "${emp.name}" → userId ${dbUser.id}`);
+
+      // Expand each day into DayAssignment(s)
       for (const day of emp.days) {
-        const base: Omit<DayAssignment, 'shift'> = {
+        const base = {
           userId:  dbUser.id,
-          storeId: storeId,
+          storeId,
           date:    day.date,
-          isOff:   day.shift === 'off',
-          isLeave: day.shift === 'leave',
         };
 
         if (day.shift === 'full') {
           // Full day = morning + evening as two separate entries
           assignments.push({ ...base, shift: 'morning', isOff: false, isLeave: false });
           assignments.push({ ...base, shift: 'evening', isOff: false, isLeave: false });
+          entriesCreated += 2;
         } else if (day.shift === 'morning' || day.shift === 'evening') {
           assignments.push({ ...base, shift: day.shift, isOff: false, isLeave: false });
+          entriesCreated++;
+        } else if (day.shift === 'leave') {
+          assignments.push({ ...base, shift: null, isOff: false, isLeave: true });
+          entriesCreated++;
         } else {
-          // OFF or leave — store as isOff/isLeave, no shift
-          assignments.push({ ...base, shift: null });
+          // off
+          assignments.push({ ...base, shift: null, isOff: true, isLeave: false });
+          entriesCreated++;
         }
-
-        entriesCreated++;
       }
     }
 
     if (assignments.length === 0) {
+      console.warn(`[importer] no assignments built for section "${section}" — skipping`);
       skipped++;
       continue;
     }
+
+    console.log(
+      `[importer] section "${section}" → storeId=${storeId} ` +
+      `assignments=${assignments.length} (working=${assignments.filter(a => a.shift).length})`,
+    );
 
     const result = await createOrReplaceMonthlySchedule({
       storeId,
@@ -310,13 +332,13 @@ export async function importScheduleFromParsed(
   }
 
   return {
-    success:        errors.length === 0,
+    success: errors.length === 0,
     schedulesCreated,
     entriesCreated,
     skipped,
     errors,
     notFound,
-    month:          yearMonth,
-    sheet:          parsed.sheetName,
+    month: yearMonth,
+    sheet: parsed.sheetName,
   };
 }
