@@ -1,4 +1,3 @@
-// app/employee/tasks/page.tsx
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
@@ -17,7 +16,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import StoreOpeningTaskDetail from '@/components/employee/StoreOpeningTaskDetail';
-import GroomingTaskDetail from '@/components/employee/GroomingTaskDetail'
+import GroomingTaskDetail from '@/components/employee/GroomingTaskDetail';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -32,7 +31,6 @@ export interface StoreOpeningTask {
   attendanceId: string | null;
   date: string;
   shift: 'morning' | 'evening';
-  // form fields
   cashDrawerAmount: number | null;
   allLightsOn: boolean | null;
   cleanlinessCheck: boolean | null;
@@ -40,10 +38,8 @@ export interface StoreOpeningTask {
   stockCheck: boolean | null;
   safetyCheck: boolean | null;
   openingNotes: string | null;
-  // photos
   storeFrontPhotos: string[];
   cashDrawerPhotos: string[];
-  // meta
   status: TaskStatus;
   completedAt: string | null;
   verifiedBy: string | null;
@@ -58,16 +54,13 @@ export interface GroomingTask {
   attendanceId: string | null;
   date: string;
   shift: 'morning' | 'evening';
-  // form fields
   uniformComplete: boolean | null;
   hairGroomed: boolean | null;
   nailsClean: boolean | null;
   accessoriesCompliant: boolean | null;
   shoeCompliant: boolean | null;
   groomingNotes: string | null;
-  // photos
   selfiePhotos: string[];
-  // meta
   status: TaskStatus;
   completedAt: string | null;
   verifiedBy: string | null;
@@ -94,13 +87,11 @@ const TASK_META: Record<TaskType, {
   title: string;
   description: string;
   Icon: React.ElementType;
-  shift?: 'morning';       // undefined = any shift
 }> = {
   store_opening: {
     title:       'Store Opening',
     description: 'Complete the opening checklist and upload photos.',
     Icon:        Store,
-    shift:       'morning',
   },
   grooming: {
     title:       'Grooming Check',
@@ -119,51 +110,62 @@ const FILTERS: { key: Filter; label: string }[] = [
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function EmployeeTasksPage() {
-  const { data: session } = useSession();
-  const [tasks, setTasks]     = useState<TaskItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [filter, setFilter]   = useState<Filter>('all');
+  const { data: session, status: sessionStatus } = useSession();
+
+  const [tasks,    setTasks]    = useState<TaskItem[]>([]);
+  const [loading,  setLoading]  = useState(true);
+  const [filter,   setFilter]   = useState<Filter>('all');
   const [selected, setSelected] = useState<TaskItem | null>(null);
 
-  const storeId = (session?.user as any)?.storeId ?? '';
-
+  // ── Load tasks ──────────────────────────────────────────────────────────────
+  // FIX: old code guarded on `storeId` from session, which is not a standard
+  // NextAuth field and may be undefined. The API now filters by userId (from
+  // the server session cookie) so the client just calls the endpoint with no
+  // extra params. Guard on sessionStatus instead so we wait for auth to settle.
   const load = useCallback(async () => {
-    if (!storeId) return;
     setLoading(true);
     try {
-      const res  = await fetch(`/api/employee/tasks?storeId=${storeId}`);
+      const res  = await fetch('/api/employee/tasks');
       const data = await res.json();
       setTasks(data.tasks ?? []);
     } catch (e) {
-      console.error(e);
+      console.error('[EmployeeTasksPage] load error:', e);
     } finally {
       setLoading(false);
     }
-  }, [storeId]);
+  }, []); // no deps — the API reads userId from the server session cookie
 
-  useEffect(() => { if (session?.user) load(); }, [session, load]);
+  useEffect(() => {
+    // Wait until NextAuth has finished resolving the session before fetching.
+    // 'loading' status means auth is still in flight — don't fetch yet.
+    // 'unauthenticated' means no session — nothing to show.
+    if (sessionStatus === 'authenticated') {
+      load();
+    }
+  }, [sessionStatus, load]);
 
   // ── Open a task (set in_progress if pending) ────────────────────────────────
   const openTask = async (item: TaskItem) => {
     if (item.data.status === 'completed') return;
 
-    const taskType    = item.type;
-    const taskId      = item.data.id;
-    const isPending   = item.data.status === 'pending';
+    const taskType  = item.type;
+    const taskId    = item.data.id;
+    const isPending = item.data.status === 'pending';
 
     if (isPending) {
-      // Optimistic update — branch by type so TypeScript keeps the discriminated union intact
+      // Optimistic update
       const updated: TaskItem =
         item.type === 'store_opening'
           ? { type: 'store_opening', data: { ...item.data, status: 'in_progress' as const } }
           : { type: 'grooming',      data: { ...item.data, status: 'in_progress' as const } };
-      setTasks((prev) => prev.map((t) => (t.data.id === taskId ? updated : t)));
+
+      setTasks(prev => prev.map(t => (t.data.id === taskId ? updated : t)));
       setSelected(updated);
 
       await fetch('/api/employee/tasks', {
-        method: 'PATCH',
+        method:  'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ taskId, taskType, status: 'in_progress' }),
+        body:    JSON.stringify({ taskId, taskType, status: 'in_progress' }),
       });
     } else {
       setSelected(item);
@@ -174,26 +176,16 @@ export default function EmployeeTasksPage() {
 
   // ── Counts ──────────────────────────────────────────────────────────────────
   const count = (f: Filter) =>
-    f === 'all' ? tasks.length : tasks.filter((t) => t.data.status === f).length;
+    f === 'all' ? tasks.length : tasks.filter(t => t.data.status === f).length;
 
-  const filtered = tasks.filter((t) => filter === 'all' || t.data.status === filter);
+  const filtered = tasks.filter(t => filter === 'all' || t.data.status === filter);
 
   // ── Detail view ─────────────────────────────────────────────────────────────
   if (selected?.type === 'store_opening') {
-    return (
-      <StoreOpeningTaskDetail
-        task={selected.data}
-        onBack={handleTaskUpdate}
-      />
-    );
+    return <StoreOpeningTaskDetail task={selected.data} onBack={handleTaskUpdate} />;
   }
   if (selected?.type === 'grooming') {
-    return (
-      <GroomingTaskDetail
-        task={selected.data}
-        onBack={handleTaskUpdate}
-      />
-    );
+    return <GroomingTaskDetail task={selected.data} onBack={handleTaskUpdate} />;
   }
 
   // ── List view ────────────────────────────────────────────────────────────────
@@ -232,7 +224,9 @@ export default function EmployeeTasksPage() {
               {label}
               <span className={cn(
                 'flex h-4 min-w-[1rem] items-center justify-center rounded-full px-1 text-[10px] font-bold',
-                filter === key ? 'bg-white/20 text-primary-foreground' : 'bg-border text-foreground',
+                filter === key
+                  ? 'bg-white/20 text-primary-foreground'
+                  : 'bg-border text-foreground',
               )}>
                 {count(key)}
               </span>
@@ -254,13 +248,13 @@ export default function EmployeeTasksPage() {
             <p className="mt-1 text-xs text-muted-foreground">You&apos;re all caught up!</p>
           </div>
         ) : (
-          filtered.map((item) => {
-            const { status }     = item.data;
-            const cfg            = STATUS_CFG[status];
-            const meta           = TASK_META[item.type];
-            const StatusIcon     = cfg.Icon;
-            const TaskIcon       = meta.Icon;
-            const isCompleted    = status === 'completed';
+          filtered.map(item => {
+            const { status }  = item.data;
+            const cfg         = STATUS_CFG[status];
+            const meta        = TASK_META[item.type];
+            const StatusIcon  = cfg.Icon;
+            const TaskIcon    = meta.Icon;
+            const isCompleted = status === 'completed';
 
             return (
               <Card
@@ -281,7 +275,6 @@ export default function EmployeeTasksPage() {
 
                 <CardContent className="p-4">
                   <div className="flex items-start gap-3">
-                    {/* Task type icon */}
                     <div className="mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-secondary">
                       <TaskIcon className="h-4 w-4 text-foreground" strokeWidth={2} />
                     </div>
@@ -310,7 +303,7 @@ export default function EmployeeTasksPage() {
                       </p>
 
                       <div className="mt-2 flex flex-wrap gap-1.5">
-                        {/* Status badge */}
+                        {/* Status */}
                         <Badge
                           className={cn(
                             'h-4 gap-1 px-1.5 text-[10px] font-semibold',
@@ -323,18 +316,18 @@ export default function EmployeeTasksPage() {
                           {cfg.label}
                         </Badge>
 
-                        {/* Always requires photos */}
+                        {/* Photo required */}
                         <Badge variant="outline" className="h-4 gap-1 px-1.5 text-[10px]">
                           <Camera className="h-2.5 w-2.5" />
                           Photo
                         </Badge>
 
-                        {/* Shift badge */}
+                        {/* Shift */}
                         <Badge variant="secondary" className="h-4 px-1.5 text-[10px] capitalize">
                           {item.data.shift}
                         </Badge>
 
-                        {/* Morning-only badge for store opening */}
+                        {/* Opening-only label */}
                         {item.type === 'store_opening' && (
                           <Badge variant="outline" className="h-4 px-1.5 text-[10px]">
                             Opening

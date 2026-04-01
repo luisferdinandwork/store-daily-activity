@@ -138,9 +138,11 @@ export async function canManageSchedule(
 /**
  * Create (or fully replace) a monthly schedule for a store+month.
  *
- * FIX: the old code gated the INSERT on `workingEntries.length > 0` which
- * meant a schedule with only OFF/leave days was never written. Now we always
- * insert every entry that was passed in, regardless of type.
+ * FIX (Bug 3): Changed onConflictDoNothing → onConflictDoUpdate so that
+ * re-imports correctly update entries even when an attended entry already
+ * exists for that (monthlyScheduleId, userId, date) unique key. Previously
+ * attended entries were silently skipped, leaving employees with no updated
+ * task row after a schedule change.
  */
 export async function createOrReplaceMonthlySchedule(
   data: CreateMonthlyScheduleInput,
@@ -257,12 +259,11 @@ export async function createOrReplaceMonthlySchedule(
     }
 
     // ── Insert ALL entries (working, off, and leave) ───────────────────────
-    // FIX: previously gated on `workingEntries.length > 0` which dropped
-    //      the insert entirely when only OFF/leave entries were present,
-    //      and also skipped inserting OFF/leave entries for working schedules.
-    //      Now we always insert everything that was passed in.
+    // FIX (Bug 3): Use onConflictDoUpdate instead of onConflictDoNothing so
+    // that re-imports correctly update the shift/isOff/isLeave fields on
+    // entries that already exist (e.g. attended entries that couldn't be
+    // deleted). Previously these were silently skipped.
     if (data.entries.length > 0) {
-      // Insert in batches of 100 to avoid hitting DB parameter limits
       const BATCH = 100;
       for (let i = 0; i < data.entries.length; i += BATCH) {
         const batch = data.entries.slice(i, i + BATCH);
@@ -279,7 +280,20 @@ export async function createOrReplaceMonthlySchedule(
               isLeave: e.isLeave,
             })),
           )
-          .onConflictDoNothing(); // unique(monthlyScheduleId, userId, date)
+          .onConflictDoUpdate({
+            // unique(monthlyScheduleId, userId, date)
+            target: [
+              monthlyScheduleEntries.monthlyScheduleId,
+              monthlyScheduleEntries.userId,
+              monthlyScheduleEntries.date,
+            ],
+            set: {
+              shift:     sql`excluded.shift`,
+              isOff:     sql`excluded.is_off`,
+              isLeave:   sql`excluded.is_leave`,
+              updatedAt: new Date(),
+            },
+          });
       }
     }
 
@@ -591,25 +605,30 @@ export async function materialiseSchedulesForMonth(
 
 // ─── Internal: create one schedule + task rows ────────────────────────────────
 
+/**
+ * FIX (Bug 1): Idempotency check now uses monthlyScheduleEntryId instead of
+ * the composite (userId, storeId, shift, date) lookup. The old approach could
+ * find the wrong row after a re-materialise (old entry deleted, new one
+ * inserted with a different ID) causing either duplicate rows or incorrect skips.
+ *
+ * FIX (Bug 2): After inserting task rows, we immediately look for an existing
+ * attendance record on this schedule and backfill attendanceId on both task
+ * tables. This handles the re-materialise-after-checkin case where the new
+ * schedule row gets a new ID but the attendance record still references the
+ * original scheduleId — the tasks would otherwise sit permanently unlinked
+ * and invisible to both employee and ops views.
+ */
 async function createScheduleAndTasks(
   entry: MonthlyScheduleEntry,
 ): Promise<{ scheduleCreated: boolean; openingTaskCreated: boolean; groomingTaskCreated: boolean }> {
   const shift = entry.shift as Shift;
   const date  = startOfDay(entry.date);
 
-  // Idempotency check
+  // ── FIX (Bug 1): Key idempotency on the entry ID, not field combo ────────
   const [existing] = await db
     .select({ id: schedules.id })
     .from(schedules)
-    .where(
-      and(
-        eq(schedules.userId,  entry.userId),
-        eq(schedules.storeId, entry.storeId),
-        eq(schedules.shift,   shift),
-        gte(schedules.date,   startOfDay(date)),
-        lte(schedules.date,   endOfDay(date)),
-      ),
-    )
+    .where(eq(schedules.monthlyScheduleEntryId, entry.id))
     .limit(1);
 
   if (existing)
@@ -650,6 +669,44 @@ async function createScheduleAndTasks(
     shift,
     status:     'pending',
   });
+
+  // ── FIX (Bug 2): Backfill attendanceId if a checkin already exists ───────
+  // This handles re-materialise-after-checkin: the new schedule row has a
+  // fresh ID, but the attendance record was already created for the previous
+  // schedule row's ID. Without this, tasks are permanently unlinked and
+  // invisible on both the employee and ops pages.
+  const [existingAtt] = await db
+    .select({ id: attendance.id })
+    .from(attendance)
+    .where(
+      and(
+        eq(attendance.userId,  entry.userId),
+        eq(attendance.storeId, entry.storeId),
+        eq(attendance.shift,   shift),
+        gte(attendance.date,   startOfDay(date)),
+        lte(attendance.date,   endOfDay(date)),
+      ),
+    )
+    .limit(1);
+
+  if (existingAtt) {
+    // Also update the scheduleId on the attendance record itself so future
+    // check-out and break queries resolve correctly against the new row.
+    await db
+      .update(attendance)
+      .set({ scheduleId: schedId, updatedAt: new Date() })
+      .where(eq(attendance.id, existingAtt.id));
+
+    await db
+      .update(storeOpeningTasks)
+      .set({ attendanceId: existingAtt.id, updatedAt: new Date() })
+      .where(eq(storeOpeningTasks.scheduleId, schedId));
+
+    await db
+      .update(groomingTasks)
+      .set({ attendanceId: existingAtt.id, updatedAt: new Date() })
+      .where(eq(groomingTasks.scheduleId, schedId));
+  }
 
   return { scheduleCreated: true, openingTaskCreated, groomingTaskCreated: true };
 }

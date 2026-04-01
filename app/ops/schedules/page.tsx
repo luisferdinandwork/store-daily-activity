@@ -1,18 +1,13 @@
-// app/ops/schedules/page.tsx
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
 import { useSession }    from 'next-auth/react';
 import { Button }        from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge }         from '@/components/ui/badge';
-import {
-  Tabs, TabsContent, TabsList, TabsTrigger,
-} from '@/components/ui/tabs';
 import {
   RefreshCw, Sun, Moon, Users, AlertCircle,
-  Store, MapPin, Eye, Calendar, ChevronRight,
-  Trash2, Loader2, FileSpreadsheet,
+  Store, MapPin, Eye, Calendar,
+  Trash2, Loader2, FileSpreadsheet, ChevronDown,
 } from 'lucide-react';
 import { cn }    from '@/lib/utils';
 import { toast } from 'sonner';
@@ -204,6 +199,94 @@ function StoreSchedulePanel({
   );
 }
 
+// ─── StoreAccordionItem ───────────────────────────────────────────────────────
+
+function StoreAccordionItem({
+  store,
+  isOpen,
+  onToggle,
+  onDelete,
+  onRematerialise,
+}: {
+  store:           StoreData;
+  isOpen:          boolean;
+  onToggle:        () => void;
+  onDelete:        (id: string, storeName: string, yearMonth: string) => void;
+  onRematerialise: (storeId: string, yearMonth: string) => void;
+}) {
+  const unscheduledCount = store.employees.filter(
+    e => !store.scheduledUserIds.includes(e.id),
+  ).length;
+
+  const scheduleCount = store.scheduleSummaries.length;
+
+  return (
+    <div className={cn(
+      'rounded-xl border bg-card shadow-sm transition-all duration-200',
+      isOpen ? 'border-border' : 'border-border/60',
+    )}>
+      {/* Accordion header — always visible */}
+      <button
+        onClick={onToggle}
+        className="flex w-full items-center gap-3 px-4 py-3.5 text-left"
+      >
+        {/* Store icon */}
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-secondary">
+          <Store className="h-4 w-4 text-muted-foreground" />
+        </div>
+
+        {/* Store info */}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-semibold text-foreground">{store.storeName}</span>
+            {unscheduledCount > 0 && (
+              <span className="flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">
+                <AlertCircle className="h-2.5 w-2.5" />
+                {unscheduledCount} unscheduled
+              </span>
+            )}
+          </div>
+          <p className="mt-0.5 truncate text-xs text-muted-foreground">{store.address}</p>
+        </div>
+
+        {/* Right-side meta */}
+        <div className="flex shrink-0 items-center gap-3">
+          {/* Pill stats */}
+          <div className="hidden sm:flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="flex items-center gap-1 rounded-md bg-secondary px-2 py-1">
+              <Users className="h-3 w-3" />
+              {store.employees.length}
+            </span>
+            <span className="flex items-center gap-1 rounded-md bg-secondary px-2 py-1">
+              <Calendar className="h-3 w-3" />
+              {scheduleCount} schedule{scheduleCount !== 1 ? 's' : ''}
+            </span>
+          </div>
+
+          {/* Chevron */}
+          <ChevronDown
+            className={cn(
+              'h-4 w-4 text-muted-foreground transition-transform duration-200',
+              isOpen && 'rotate-180',
+            )}
+          />
+        </div>
+      </button>
+
+      {/* Accordion body */}
+      {isOpen && (
+        <div className="border-t border-border px-4 pb-4 pt-4">
+          <StoreSchedulePanel
+            store={store}
+            onDelete={onDelete}
+            onRematerialise={onRematerialise}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function OpsSchedulesPage() {
@@ -213,7 +296,7 @@ export default function OpsSchedulesPage() {
   const [areaData,    setAreaData]    = useState<AreaData | null>(null);
   const [loading,     setLoading]     = useState(true);
   const [loadError,   setLoadError]   = useState<string | null>(null);
-  const [activeStore, setActiveStore] = useState<string>('');
+  const [openStores,  setOpenStores]  = useState<Set<string>>(new Set());
   const [remating,    setRemating]    = useState(false);
 
   const load = useCallback(async () => {
@@ -226,8 +309,12 @@ export default function OpsSchedulesPage() {
       const json = await res.json();
       if (!json.success) throw new Error(json.error ?? 'Failed to load');
       setAreaData(json.area);
-      if (json.area?.stores?.length && !activeStore) {
-        setActiveStore(json.area.stores[0].storeId);
+      // Auto-open the first store on initial load
+      if (json.area?.stores?.length) {
+        setOpenStores(prev => {
+          if (prev.size === 0) return new Set([json.area.stores[0].storeId]);
+          return prev;
+        });
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -236,9 +323,27 @@ export default function OpsSchedulesPage() {
     } finally {
       setLoading(false);
     }
-  }, [opsUserId, activeStore]);
+  }, [opsUserId]);
 
   useEffect(() => { if (opsUserId) load(); }, [opsUserId]); // eslint-disable-line
+
+  function toggleStore(storeId: string) {
+    setOpenStores(prev => {
+      const next = new Set(prev);
+      if (next.has(storeId)) next.delete(storeId);
+      else next.add(storeId);
+      return next;
+    });
+  }
+
+  function expandAll() {
+    if (!areaData) return;
+    setOpenStores(new Set(areaData.stores.map(s => s.storeId)));
+  }
+
+  function collapseAll() {
+    setOpenStores(new Set());
+  }
 
   async function handleDelete(id: string, storeName: string, yearMonth: string) {
     if (!confirm(`Delete the ${formatYearMonth(yearMonth)} schedule for ${storeName}? Attended days are preserved.`)) return;
@@ -284,6 +389,9 @@ export default function OpsSchedulesPage() {
   const totalUnscheduled = areaData?.stores.reduce((n, s) => {
     return n + s.employees.filter(e => !s.scheduledUserIds.includes(e.id)).length;
   }, 0) ?? 0;
+
+  const allExpanded  = areaData ? openStores.size === areaData.stores.length : false;
+  const anyExpanded  = openStores.size > 0;
 
   return (
     <div className="space-y-6 p-6">
@@ -334,10 +442,10 @@ export default function OpsSchedulesPage() {
       {/* Area-wide stats */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         {[
-          { label: 'Stores in area',      value: areaData?.stores.length ?? 0, Icon: Store,  color: 'text-primary',     bg: 'bg-primary/10'  },
-          { label: 'Employees total',     value: totalEmployees,               Icon: Users,  color: 'text-emerald-600', bg: 'bg-emerald-50'  },
-          { label: 'Morning shifts',      value: totalMorning,                 Icon: Sun,    color: 'text-amber-600',   bg: 'bg-amber-50'    },
-          { label: 'Evening shifts',      value: totalEvening,                 Icon: Moon,   color: 'text-violet-600',  bg: 'bg-violet-50'   },
+          { label: 'Stores in area',  value: areaData?.stores.length ?? 0, Icon: Store,  color: 'text-primary',     bg: 'bg-primary/10'  },
+          { label: 'Employees total', value: totalEmployees,               Icon: Users,  color: 'text-emerald-600', bg: 'bg-emerald-50'  },
+          { label: 'Morning shifts',  value: totalMorning,                 Icon: Sun,    color: 'text-amber-600',   bg: 'bg-amber-50'    },
+          { label: 'Evening shifts',  value: totalEvening,                 Icon: Moon,   color: 'text-violet-600',  bg: 'bg-violet-50'   },
         ].map(({ label, value, Icon, color, bg }) => (
           <Card key={label}>
             <CardContent className="flex items-center gap-3 p-4">
@@ -369,59 +477,50 @@ export default function OpsSchedulesPage() {
       {/* Loading skeleton */}
       {loading && (
         <div className="space-y-3">
-          {[1, 2].map(i => (
-            <div key={i} className="h-48 animate-pulse rounded-xl bg-secondary" />
+          {[1, 2, 3].map(i => (
+            <div key={i} className="h-16 animate-pulse rounded-xl bg-secondary" />
           ))}
         </div>
       )}
 
-      {/* Per-store tabs */}
+      {/* Store accordion list */}
       {!loading && areaData && (
-        <Tabs value={activeStore} onValueChange={setActiveStore}>
-          <TabsList className="mb-4 h-auto w-full justify-start gap-1 rounded-xl bg-secondary p-1">
-            {areaData.stores.map(s => {
-              const unscheduledCount = s.employees.filter(
-                e => !s.scheduledUserIds.includes(e.id),
-              ).length;
-              return (
-                <TabsTrigger
-                  key={s.storeId}
-                  value={s.storeId}
-                  className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm"
-                >
-                  <Store className="h-3.5 w-3.5" />
-                  <span className="font-medium">{s.storeName}</span>
-                  {unscheduledCount > 0 && (
-                    <span className="flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-[9px] font-bold text-white">
-                      {unscheduledCount}
-                    </span>
-                  )}
-                </TabsTrigger>
-              );
-            })}
-          </TabsList>
+        <div className="space-y-3">
+          {/* Expand / Collapse all toolbar */}
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+              {areaData.stores.length} Store{areaData.stores.length !== 1 ? 's' : ''}
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={expandAll}
+                disabled={allExpanded}
+                className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-40 transition-colors"
+              >
+                Expand all
+              </button>
+              <span className="text-muted-foreground/40 text-xs">·</span>
+              <button
+                onClick={collapseAll}
+                disabled={!anyExpanded}
+                className="text-xs text-muted-foreground hover:text-foreground disabled:opacity-40 transition-colors"
+              >
+                Collapse all
+              </button>
+            </div>
+          </div>
 
           {areaData.stores.map(s => (
-            <TabsContent key={s.storeId} value={s.storeId} className="mt-0">
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <Store className="h-4 w-4 text-muted-foreground" />
-                    {s.storeName}
-                    <span className="ml-1 text-xs font-normal text-muted-foreground">{s.address}</span>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <StoreSchedulePanel
-                    store={s}
-                    onDelete={handleDelete}
-                    onRematerialise={handleRematerialise}
-                  />
-                </CardContent>
-              </Card>
-            </TabsContent>
+            <StoreAccordionItem
+              key={s.storeId}
+              store={s}
+              isOpen={openStores.has(s.storeId)}
+              onToggle={() => toggleStore(s.storeId)}
+              onDelete={handleDelete}
+              onRematerialise={handleRematerialise}
+            />
           ))}
-        </Tabs>
+        </div>
       )}
 
       {/* No area */}

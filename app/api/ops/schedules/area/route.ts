@@ -1,106 +1,145 @@
 // app/api/ops/schedules/area/route.ts
 //
-// GET /api/ops/schedules/area
+// Returns the OPS user's area + all stores in that area, with schedule
+// summaries, employee roster, and scheduled-user IDs for each store.
+// This is what OpsSchedulesPage fetches on load.
 //
-// Returns the full area → stores → monthly schedules + employees tree
-// for the currently authenticated OPS user.
+import { NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth';
+import { db } from '@/lib/db';
+import {
+  users, stores, areas,
+  monthlySchedules, monthlyScheduleEntries,
+} from '@/lib/db/schema';
+import { eq, and, sql } from 'drizzle-orm';
 
-import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession }          from 'next-auth';
-import { authOptions }               from '@/lib/auth';
-import { db }                        from '@/lib/db';
-import { users, stores, areas, monthlySchedules, monthlyScheduleEntries } from '@/lib/db/schema';
-import { and, eq, desc }             from 'drizzle-orm';
+export async function GET() {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
 
-export async function GET(_req: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
-    const u       = session?.user as any;
+    // ── 1. Find the OPS user's area ─────────────────────────────────────────
+    const [opsUser] = await db
+      .select({ areaId: users.areaId })
+      .from(users)
+      .where(eq(users.id, session.user.id))
+      .limit(1);
 
-    if (!u?.id || u?.role !== 'ops') {
-      return NextResponse.json(
-        { success: false, error: 'Only OPS users can access this resource.' },
-        { status: 403 },
-      );
-    }
-    if (!u?.areaId) {
-      return NextResponse.json(
-        { success: false, error: 'OPS user has no area assigned. Contact an admin.' },
-        { status: 400 },
-      );
+    if (!opsUser?.areaId) {
+      // Not assigned to any area yet — return null so the page shows the
+      // "No area assigned" empty state instead of crashing.
+      return NextResponse.json({ success: true, area: null });
     }
 
-    const areaId: string = u.areaId;
-
-    // ── 1. Fetch area ─────────────────────────────────────────────────────────
     const [area] = await db
-      .select()
+      .select({ id: areas.id, name: areas.name })
       .from(areas)
-      .where(eq(areas.id, areaId))
+      .where(eq(areas.id, opsUser.areaId))
       .limit(1);
 
     if (!area) {
-      return NextResponse.json({ success: false, error: 'Area not found.' }, { status: 404 });
+      return NextResponse.json({ success: true, area: null });
     }
 
-    // ── 2. Fetch all stores in this area ──────────────────────────────────────
+    // ── 2. Get all stores in this area ──────────────────────────────────────
     const areaStores = await db
-      .select()
+      .select({ id: stores.id, name: stores.name, address: stores.address })
       .from(stores)
-      .where(eq(stores.areaId, areaId))
+      .where(eq(stores.areaId, area.id))
       .orderBy(stores.name);
 
-    // ── 3. For each store: fetch latest monthly schedule + employees ───────────
-    const storeResults = await Promise.all(
+    if (!areaStores.length) {
+      return NextResponse.json({
+        success: true,
+        area: { areaId: area.id, areaName: area.name, stores: [] },
+      });
+    }
+
+    // ── 3. Build per-store data in parallel ─────────────────────────────────
+    const storeData = await Promise.all(
       areaStores.map(async (store) => {
 
-        // Get the most recent monthly schedule for this store
-        const latestSchedules = await db
-          .select()
+        // ── 3a. All monthly schedules for this store ────────────────────────
+        const scheduleRows = await db
+          .select({
+            id:        monthlySchedules.id,
+            yearMonth: monthlySchedules.yearMonth,
+            note:      monthlySchedules.note,
+            createdAt: monthlySchedules.createdAt,
+            updatedAt: monthlySchedules.updatedAt,
+          })
           .from(monthlySchedules)
           .where(eq(monthlySchedules.storeId, store.id))
-          .orderBy(desc(monthlySchedules.yearMonth))
-          .limit(3); // last 3 months
+          .orderBy(sql`${monthlySchedules.yearMonth} DESC`);
 
-        // For each schedule, get entry summary (employee count, shift breakdown)
+        // ── 3b. Build schedule summaries ────────────────────────────────────
         const scheduleSummaries = await Promise.all(
-          latestSchedules.map(async (ms) => {
+          scheduleRows.map(async (ms) => {
             const entries = await db
               .select({
-                entry: monthlyScheduleEntries,
-                user:  users,
+                userId:  monthlyScheduleEntries.userId,
+                shift:   monthlyScheduleEntries.shift,
+                isOff:   monthlyScheduleEntries.isOff,
+                isLeave: monthlyScheduleEntries.isLeave,
               })
               .from(monthlyScheduleEntries)
-              .leftJoin(users, eq(monthlyScheduleEntries.userId, users.id))
               .where(eq(monthlyScheduleEntries.monthlyScheduleId, ms.id));
 
-            const uniqueEmployees = new Set(entries.map(e => e.entry.userId)).size;
-            const morningShifts   = entries.filter(e => !e.entry.isOff && !e.entry.isLeave && e.entry.shift === 'morning').length;
-            const eveningShifts   = entries.filter(e => !e.entry.isOff && !e.entry.isLeave && e.entry.shift === 'evening').length;
-            const leaveDays       = entries.filter(e => e.entry.isLeave).length;
+            const uniqueEmployees = new Set(entries.map(e => e.userId)).size;
+            const morningShifts   = entries.filter(e => e.shift === 'morning' && !e.isOff && !e.isLeave).length;
+            const eveningShifts   = entries.filter(e => e.shift === 'evening' && !e.isOff && !e.isLeave).length;
+            const leaveDays       = entries.filter(e => e.isLeave).length;
+            const totalEntries    = entries.length;
 
             return {
               id:              ms.id,
               yearMonth:       ms.yearMonth,
-              note:            ms.note ?? null,
+              note:            ms.note,
               createdAt:       ms.createdAt.toISOString(),
               updatedAt:       ms.updatedAt.toISOString(),
               uniqueEmployees,
               morningShifts,
               eveningShifts,
               leaveDays,
-              totalEntries:    entries.length,
+              totalEntries,
             };
           }),
         );
 
-        // Fetch all employees whose home store is this store
-        const employees = await db
+        // ── 3c. Current month's scheduled user IDs ──────────────────────────
+        const now = new Date();
+        const currentYearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+        const [currentMs] = await db
+          .select({ id: monthlySchedules.id })
+          .from(monthlySchedules)
+          .where(
+            and(
+              eq(monthlySchedules.storeId,   store.id),
+              eq(monthlySchedules.yearMonth, currentYearMonth),
+            ),
+          )
+          .limit(1);
+
+        let scheduledUserIds: string[] = [];
+        if (currentMs) {
+          const currentEntries = await db
+            .select({ userId: monthlyScheduleEntries.userId })
+            .from(monthlyScheduleEntries)
+            .where(eq(monthlyScheduleEntries.monthlyScheduleId, currentMs.id));
+          scheduledUserIds = [...new Set(currentEntries.map(e => e.userId))];
+        }
+
+        // ── 3d. All employees whose homeStoreId is this store ───────────────
+        const storeEmployees = await db
           .select({
             id:           users.id,
             name:         users.name,
-            role:         users.role,
             employeeType: users.employeeType,
+            role:         users.role,
           })
           .from(users)
           .where(
@@ -111,25 +150,19 @@ export async function GET(_req: NextRequest) {
           )
           .orderBy(users.name);
 
-        // Check which employees appear in the latest schedule
-        const latestMs       = latestSchedules[0];
-        const scheduledUserIds = new Set<string>();
-        if (latestMs) {
-          const latestEntries = await db
-            .select({ userId: monthlyScheduleEntries.userId })
-            .from(monthlyScheduleEntries)
-            .where(eq(monthlyScheduleEntries.monthlyScheduleId, latestMs.id));
-          latestEntries.forEach(e => scheduledUserIds.add(e.userId));
-        }
-
         return {
           storeId:          store.id,
           storeName:        store.name,
           address:          store.address,
           scheduleSummaries,
-          employees,
-          scheduledUserIds: [...scheduledUserIds],
-          currentYearMonth: latestMs?.yearMonth ?? null,
+          employees:        storeEmployees.map(e => ({
+            id:           e.id,
+            name:         e.name,
+            employeeType: e.employeeType,
+            role:         e.role,
+          })),
+          scheduledUserIds,
+          currentYearMonth: currentMs ? currentYearMonth : null,
         };
       }),
     );
@@ -139,11 +172,15 @@ export async function GET(_req: NextRequest) {
       area: {
         areaId:   area.id,
         areaName: area.name,
-        stores:   storeResults,
+        stores:   storeData,
       },
     });
+
   } catch (err) {
     console.error('[GET /api/ops/schedules/area]', err);
-    return NextResponse.json({ success: false, error: String(err) }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: String(err) },
+      { status: 500 },
+    );
   }
 }
