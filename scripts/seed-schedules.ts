@@ -1,22 +1,29 @@
 // scripts/seed-schedules.ts
-/**
- * Generates monthly schedules for March 2026 only.
- * Creates:
- *   - One MonthlySchedule per store
- *   - MonthlyScheduleEntries (daily shift assignments per employee)
- *   - schedules rows (one per working shift entry)
- *
- * Tasks are NOT seeded here — they are created on check-in.
- * Attendance is NOT seeded — employees check in via the app.
- *
- * Safe to re-run — idempotent (skips already-existing rows).
- * Run with: tsx scripts/seed-schedules.ts
- */
+// ─────────────────────────────────────────────────────────────────────────────
+// Generates monthly schedules for March 2026.
+//
+// Creates per store:
+//   • One MonthlySchedule header row
+//   • MonthlyScheduleEntries — one per employee per calendar day
+//   • schedules rows          — one per working shift entry (no OFF/leave)
+//
+// Tasks are NOT seeded here — run seed-tasks.ts after this.
+// Attendance is NOT seeded — employees check in via the app.
+//
+// Changes from previous version
+// ──────────────────────────────
+//  • store.id / monthly_schedule.id / entry.id / schedule.id are integers
+//  • homeStoreId on users is integer — eq() comparison updated accordingly
+//  • monthlyScheduleEntryId FK on schedules is integer
+//
+// Safe to re-run — idempotent (skips already-existing rows).
+// Run with: tsx scripts/seed-schedules.ts
+// ─────────────────────────────────────────────────────────────────────────────
 
 import { config } from 'dotenv';
 config({ path: '.env.local' });
 
-import { db } from '@/lib/db';
+import { db }   from '@/lib/db';
 import {
   users, stores, areas,
   monthlySchedules, monthlyScheduleEntries,
@@ -25,22 +32,18 @@ import {
 import { eq, and, gte, lte } from 'drizzle-orm';
 
 // ─── Target month ─────────────────────────────────────────────────────────────
+
 const YEAR       = 2026;
-const MONTH      = 2;   // 0-indexed: 2 = March
+const MONTH      = 2;          // 0-indexed: 2 = March
 const YEAR_MONTH = '2026-03';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function startOfDay(d: Date): Date {
-  const r = new Date(d);
-  r.setHours(0, 0, 0, 0);
-  return r;
+  const r = new Date(d); r.setHours(0, 0, 0, 0); return r;
 }
-
 function endOfDay(d: Date): Date {
-  const r = new Date(d);
-  r.setHours(23, 59, 59, 999);
-  return r;
+  const r = new Date(d); r.setHours(23, 59, 59, 999); return r;
 }
 
 function* eachDayOfMonth(year: number, month: number): Generator<Date> {
@@ -51,39 +54,54 @@ function* eachDayOfMonth(year: number, month: number): Generator<Date> {
 }
 
 /**
- * Build flat list of day entries for one employee based on a weekly pattern.
- * pattern: 7-element array indexed by getDay() (0=Sun … 6=Sat)
- *   'E'   = morning shift
- *   'L'   = evening shift
- *   'OFF' = day off
+ * Build a flat list of day entries for one employee.
+ * `pattern` is a 7-element array indexed by Date.getDay() (0=Sun…6=Sat):
+ *   'E'   → morning shift
+ *   'L'   → evening shift
+ *   'OFF' → day off
  */
 function buildDayEntries(
   userId:  string,
-  storeId: string,
+  storeId: number,
   year:    number,
   month:   number,
   pattern: string[],
-): Array<{
-  userId:  string;
-  storeId: string;
-  date:    Date;
-  shift:   'morning' | 'evening' | null;
-  isOff:   boolean;
-  isLeave: boolean;
-}> {
-  const entries = [];
+) {
+  const entries: {
+    userId:  string;
+    storeId: number;
+    date:    Date;
+    shift:   'morning' | 'evening' | null;
+    isOff:   boolean;
+    isLeave: boolean;
+  }[] = [];
+
   for (const date of eachDayOfMonth(year, month)) {
     const code = pattern[date.getDay()] ?? 'OFF';
     if (code === 'E') {
-      entries.push({ userId, storeId, date, shift: 'morning' as const, isOff: false, isLeave: false });
+      entries.push({ userId, storeId, date, shift: 'morning', isOff: false, isLeave: false });
     } else if (code === 'L') {
-      entries.push({ userId, storeId, date, shift: 'evening' as const, isOff: false, isLeave: false });
+      entries.push({ userId, storeId, date, shift: 'evening', isOff: false, isLeave: false });
     } else {
-      entries.push({ userId, storeId, date, shift: null, isOff: true, isLeave: false });
+      entries.push({ userId, storeId, date, shift: null,      isOff: true,  isLeave: false });
     }
   }
   return entries;
 }
+
+// ─── Shift patterns by employee type ─────────────────────────────────────────
+// Index: 0=Sun 1=Mon 2=Tue 3=Wed 4=Thu 5=Fri 6=Sat
+
+const PATTERNS: Record<string, string[]> = {
+  // PIC 1: Mon–Fri morning, weekends off
+  pic_1: ['OFF', 'E', 'E', 'E', 'E', 'E', 'OFF'],
+  // PIC 2: alternating morning/evening Mon–Sat, Sun off
+  pic_2: ['OFF', 'E', 'L', 'E', 'L', 'E', 'L'],
+  // SO: Tue–Sat evening, Sun/Mon off
+  so:    ['OFF', 'OFF', 'L', 'L', 'L', 'L', 'L'],
+  // Fallback (ops etc.) — shouldn't appear in schedule but safe to have
+  default: ['OFF', 'OFF', 'OFF', 'OFF', 'OFF', 'OFF', 'OFF'],
+};
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
@@ -101,25 +119,25 @@ async function seedSchedules() {
     process.exit(1);
   }
 
-  let totalMonthlySchedules  = 0;
-  let totalEntries           = 0;
-  let totalScheduleRows      = 0;
+  let totalMs       = 0;
+  let totalEntries  = 0;
+  let totalSchedRows = 0;
 
   for (const { store, area } of allStores) {
-    console.log(`\n── ${store.name} (${area?.name ?? 'no area'}) ────────────────────`);
+    console.log(`\n── ${store.name} (${area?.name ?? 'no area'}) ──────────────────────`);
 
-    // Get all employees whose home store is this store
+    // All employees whose home store is this store
     const employees = await db
       .select()
       .from(users)
       .where(eq(users.homeStoreId, store.id));
 
     if (!employees.length) {
-      console.log('   ⚠️  No employees assigned to this store — skipping');
+      console.log('   ⚠️  No employees assigned — skipping');
       continue;
     }
 
-    // ── Find or create the MonthlySchedule header ───────────────────────────
+    // ── Find or create MonthlySchedule header ──────────────────────────────
     const [existingMs] = await db
       .select({ id: monthlySchedules.id })
       .from(monthlySchedules)
@@ -131,11 +149,11 @@ async function seedSchedules() {
       )
       .limit(1);
 
-    let msId: string;
+    let msId: number;
 
     if (existingMs) {
       msId = existingMs.id;
-      console.log(`   ↩️  Monthly schedule already exists (${msId}) — reusing`);
+      console.log(`   ↩️  MonthlySchedule already exists (id=${msId}) — reusing`);
     } else {
       const pic1 = employees.find(e => e.employeeType === 'pic_1') ?? employees[0];
       const [ms] = await db
@@ -144,44 +162,34 @@ async function seedSchedules() {
           storeId:    store.id,
           yearMonth:  YEAR_MONTH,
           importedBy: pic1.id,
-          note:       'Seeded for March 2026',
+          note:       `Seeded for March ${YEAR}`,
         })
         .returning({ id: monthlySchedules.id });
+
       msId = ms.id;
-      totalMonthlySchedules++;
-      console.log(`   ✅ Created MonthlySchedule ${msId}`);
+      totalMs++;
+      console.log(`   ✅ Created MonthlySchedule id=${msId}`);
     }
 
-    // ── Seed entries + schedule rows per employee ───────────────────────────
+    // ── Entries + schedule rows per employee ───────────────────────────────
     for (const emp of employees) {
-      // Shift pattern by employee type
-      // Sun=0, Mon=1, Tue=2, Wed=3, Thu=4, Fri=5, Sat=6
-      let pattern: string[];
-      if (emp.employeeType === 'pic_1') {
-        // Mon–Fri morning, weekend off
-        pattern = ['OFF', 'E', 'E', 'E', 'E', 'E', 'OFF'];
-      } else if (emp.employeeType === 'pic_2') {
-        // Mon/Wed/Fri morning, Tue/Thu/Sat evening, Sun off
-        pattern = ['OFF', 'E', 'L', 'E', 'L', 'E', 'L'];
-      } else {
-        // SO: Tue–Sat evening, Sun/Mon off
-        pattern = ['OFF', 'OFF', 'L', 'L', 'L', 'L', 'L'];
-      }
-
+      const pattern = PATTERNS[emp.employeeType ?? 'default'] ?? PATTERNS.default;
       const dayEntries = buildDayEntries(emp.id, store.id, YEAR, MONTH, pattern);
 
       let empEntries  = 0;
       let empSchedules = 0;
 
       for (const entry of dayEntries) {
-        // ── Insert MonthlyScheduleEntry (skip on conflict) ─────────────────
+        const dateVal = startOfDay(entry.date);
+
+        // ── Insert MonthlyScheduleEntry (skip conflict silently) ───────────
         const [mse] = await db
           .insert(monthlyScheduleEntries)
           .values({
             monthlyScheduleId: msId,
             userId:            entry.userId,
             storeId:           entry.storeId,
-            date:              startOfDay(entry.date),
+            date:              dateVal,
             shift:             entry.shift ?? undefined,
             isOff:             entry.isOff,
             isLeave:           entry.isLeave,
@@ -191,13 +199,10 @@ async function seedSchedules() {
 
         if (mse) empEntries++;
 
-        // Only working days get a schedule row
+        // OFF / leave → no schedule row needed
         if (entry.isOff || entry.isLeave || !entry.shift) continue;
 
-        const shift = entry.shift;
-        const date  = startOfDay(entry.date);
-
-        // Idempotency: skip if schedule row already exists for this slot
+        // ── Idempotency check for schedule row ─────────────────────────────
         const [existingSched] = await db
           .select({ id: schedules.id })
           .from(schedules)
@@ -205,54 +210,58 @@ async function seedSchedules() {
             and(
               eq(schedules.userId,  emp.id),
               eq(schedules.storeId, store.id),
-              eq(schedules.shift,   shift),
-              gte(schedules.date,   startOfDay(date)),
-              lte(schedules.date,   endOfDay(date)),
+              eq(schedules.shift,   entry.shift),
+              gte(schedules.date,   startOfDay(dateVal)),
+              lte(schedules.date,   endOfDay(dateVal)),
             ),
           )
           .limit(1);
 
         if (existingSched) continue;
 
-        // Need the MSE id for the FK — use the one just inserted or look it up
-        const mseId = mse?.id ?? (await db
-          .select({ id: monthlyScheduleEntries.id })
-          .from(monthlyScheduleEntries)
-          .where(
-            and(
-              eq(monthlyScheduleEntries.monthlyScheduleId, msId),
-              eq(monthlyScheduleEntries.userId,            emp.id),
-              gte(monthlyScheduleEntries.date,             startOfDay(date)),
-              lte(monthlyScheduleEntries.date,             endOfDay(date)),
-            ),
-          )
-          .limit(1)
-          .then(rows => rows[0]?.id));
+        // Resolve the MSE id (use just-inserted one or look it up)
+        const mseId: number | undefined = mse?.id ?? (
+          await db
+            .select({ id: monthlyScheduleEntries.id })
+            .from(monthlyScheduleEntries)
+            .where(
+              and(
+                eq(monthlyScheduleEntries.monthlyScheduleId, msId),
+                eq(monthlyScheduleEntries.userId,            emp.id),
+                gte(monthlyScheduleEntries.date,             startOfDay(dateVal)),
+                lte(monthlyScheduleEntries.date,             endOfDay(dateVal)),
+              ),
+            )
+            .limit(1)
+            .then(rows => rows[0]?.id)
+        );
 
         if (!mseId) {
-          console.warn(`   ⚠️  Could not resolve MSE id for ${emp.name} on ${date.toISOString().slice(0, 10)} — skipping schedule row`);
+          console.warn(
+            `   ⚠️  Cannot resolve MSE id for ${emp.name} ` +
+            `on ${dateVal.toISOString().slice(0, 10)} — skipping schedule row`,
+          );
           continue;
         }
 
-        await db
-          .insert(schedules)
-          .values({
-            userId:                 emp.id,
-            storeId:                store.id,
-            shift,
-            date,
-            monthlyScheduleEntryId: mseId,
-            isHoliday:              false,
-          });
+        await db.insert(schedules).values({
+          userId:                 emp.id,
+          storeId:                store.id,
+          shift:                  entry.shift,
+          date:                   dateVal,
+          monthlyScheduleEntryId: mseId,
+          isHoliday:              false,
+        });
 
         empSchedules++;
       }
 
-      totalEntries      += empEntries;
-      totalScheduleRows += empSchedules;
+      totalEntries   += empEntries;
+      totalSchedRows += empSchedules;
 
       console.log(
-        `   👤 ${emp.name.padEnd(18)} (${(emp.employeeType ?? 'ops').padEnd(5)})` +
+        `   👤 ${emp.name.padEnd(18)}` +
+        ` (${(emp.employeeType ?? 'ops').padEnd(5)})` +
         `  entries+${empEntries}  scheduleRows+${empSchedules}`,
       );
     }
@@ -260,10 +269,11 @@ async function seedSchedules() {
 
   console.log('\n═══════════════════════════════════════════════════════════');
   console.log('✅  seed-schedules complete!\n');
-  console.log(`   MonthlySchedules created : ${totalMonthlySchedules}`);
+  console.log(`   MonthlySchedules created : ${totalMs}`);
   console.log(`   Entries inserted         : ${totalEntries}`);
-  console.log(`   Schedule rows created    : ${totalScheduleRows}`);
+  console.log(`   Schedule rows created    : ${totalSchedRows}`);
   console.log(`   Month                    : ${YEAR_MONTH}`);
+  console.log('\n   Next step: tsx scripts/seed-tasks.ts');
   console.log('═══════════════════════════════════════════════════════════');
 }
 

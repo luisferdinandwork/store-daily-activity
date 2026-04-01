@@ -17,16 +17,9 @@ function endOfDay(d: Date)   { const r = new Date(d); r.setHours(23, 59, 59, 999
 
 /**
  * Resolves the store the employee is actually working at TODAY.
- *
- * An employee's session carries their homeStoreId. But if they have been
- * deployed to a different store this month, their schedule rows will have
- * a different storeId. We look up their actual schedule for today and return
- * that storeId so check-in/out targets the correct store.
- *
- * Falls back to homeStoreId if no schedule is found today (will result in
- * the usual "not scheduled" error from employeeCheckIn).
+ * Returns the storeId as a number (serial PK in schema).
  */
-async function resolveWorkingStoreId(userId: string, homeStoreId: string): Promise<string> {
+async function resolveWorkingStoreId(userId: string, homeStoreId: number): Promise<number> {
   const now = new Date();
   const [sched] = await db
     .select({ storeId: schedules.storeId })
@@ -45,7 +38,6 @@ async function resolveWorkingStoreId(userId: string, homeStoreId: string): Promi
 }
 
 // ─── GET /api/employee/attendance ─────────────────────────────────────────────
-// Returns ALL of today's schedules + their attendance records (one per shift).
 export async function GET(_req: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
@@ -53,20 +45,27 @@ export async function GET(_req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const userId      = (session.user as any).id          as string;
-    const homeStoreId = (session.user as any).homeStoreId as string | undefined;
+    const userId         = (session.user as any).id          as string;
+    const rawHomeStoreId = (session.user as any).homeStoreId as string | number | undefined;
 
-    if (!homeStoreId) {
+    if (!rawHomeStoreId) {
       return NextResponse.json(
         { success: false, error: 'User is not assigned to a store.' },
         { status: 400 },
       );
     }
 
+    // homeStoreId from session may arrive as a string — coerce to number
+    const homeStoreId = Number(rawHomeStoreId);
+    if (isNaN(homeStoreId)) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid homeStoreId in session.' },
+        { status: 400 },
+      );
+    }
+
     const now = new Date();
 
-    // All schedules today for this employee across ALL stores
-    // (employee may be deployed to a store other than their home store)
     const todaySchedules = await db
       .select()
       .from(schedules)
@@ -78,9 +77,8 @@ export async function GET(_req: NextRequest) {
           lte(schedules.date,     endOfDay(now)),
         ),
       )
-      .orderBy(schedules.shift);   // morning first, then evening
+      .orderBy(schedules.shift);
 
-    // For each schedule, fetch attendance + break sessions
     const shifts = await Promise.all(
       todaySchedules.map(async (sched) => {
         const [att] = await db
@@ -99,9 +97,9 @@ export async function GET(_req: NextRequest) {
 
         return {
           schedule: {
-            scheduleId: sched.id,
+            scheduleId: sched.id,           // number
             shift:      sched.shift as 'morning' | 'evening',
-            storeId:    sched.storeId,
+            storeId:    sched.storeId,      // number
             date:       sched.date.toISOString(),
           },
           attendance: att
@@ -141,12 +139,20 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const userId      = (session.user as any).id          as string;
-    const homeStoreId = (session.user as any).homeStoreId as string | undefined;
+    const userId         = (session.user as any).id          as string;
+    const rawHomeStoreId = (session.user as any).homeStoreId as string | number | undefined;
 
-    if (!homeStoreId) {
+    if (!rawHomeStoreId) {
       return NextResponse.json(
         { success: false, error: 'User is not assigned to a store.' },
+        { status: 400 },
+      );
+    }
+
+    const homeStoreId = Number(rawHomeStoreId);
+    if (isNaN(homeStoreId)) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid homeStoreId in session.' },
         { status: 400 },
       );
     }
@@ -160,32 +166,26 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Resolve working store for this employee today (handles cross-store deployments)
     const workingStoreId = await resolveWorkingStoreId(userId, homeStoreId);
 
-    // ── Check In ──────────────────────────────────────────────────────────────
     if (action === 'checkin') {
       const result = await employeeCheckIn(userId, workingStoreId, shift);
       return NextResponse.json(result, { status: result.success ? 200 : 400 });
     }
 
-    // ── Check Out ─────────────────────────────────────────────────────────────
     if (action === 'checkout') {
       const result = await employeeCheckOut(userId, workingStoreId, shift);
       return NextResponse.json(result, { status: result.success ? 200 : 400 });
     }
 
-    // ── Start Break ───────────────────────────────────────────────────────────
     if (action === 'startbreak') {
       const result = await startBreak(userId, workingStoreId, shift);
       return NextResponse.json(result, { status: result.success ? 200 : 400 });
     }
 
-    // ── End Break ─────────────────────────────────────────────────────────────
     if (action === 'endbreak') {
       const now = new Date();
 
-      // Look up today's schedule for this specific shift
       const [sched] = await db
         .select({ id: schedules.id })
         .from(schedules)

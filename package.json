@@ -15,6 +15,7 @@
     "db:reset": "tsx scripts/reset.ts",
     "seed:setup": "dotenv -e .env.local -- tsx scripts/seed-setup.ts",
     "seed:schedules": "dotenv -e .env.local -- tsx scripts/seed-schedules.ts",
+    "seed:month": "dotenv -e .env.local -- tsx scripts/seed-current-month.ts",
     "seed:attendance": "dotenv -e .env.local -- tsx scripts/seed-attendance.ts",
     "seed:tasks": "dotenv -e .env.local -- tsx scripts/seed-tasks.ts",
     "seed:all": "npm run seed:setup && npm run seed:schedules && npm run seed:attendance && npm run seed:tasks"

@@ -105,7 +105,6 @@ function parseSections(raw: any[][], sheetName: string): ParsedScheduleFile {
   const sections:  string[]              = [];
   let   month: Date                      = new Date();
 
-  // Find section start rows
   const sectionStarts: number[] = [];
   for (let r = 0; r < raw.length; r++) {
     const row  = raw[r];
@@ -133,7 +132,6 @@ function parseSections(raw: any[][], sheetName: string): ParsedScheduleFile {
     const sectionLabel = String(raw[start][0]).trim();
     sections.push(sectionLabel);
 
-    // Row +1: MONTH row — col[3] = "Mar-2026"
     const monthRow = raw[start + 1];
     if (monthRow) {
       const rawDate = monthRow[3];
@@ -143,7 +141,6 @@ function parseSections(raw: any[][], sheetName: string): ParsedScheduleFile {
       }
     }
 
-    // Row +3: date numbers (col 3 = day 1, col 4 = day 2, …)
     const dateRow  = raw[start + 3] ?? [];
     const dayDates = buildDateMap(dateRow, month);
 
@@ -221,9 +218,13 @@ function codeToShift(code: string): ImportShift {
 
 // ─── Importer ─────────────────────────────────────────────────────────────────
 
+/**
+ * storeMap maps Excel section labels to store IDs (numbers).
+ * Previously accepted strings — now accepts numbers to match serial PK.
+ */
 export async function importScheduleFromParsed(
   parsed:   ParsedScheduleFile,
-  storeMap: Record<string, string>,
+  storeMap: Record<string, number>,
   actorId:  string,
 ): Promise<ImportResult> {
   let schedulesCreated = 0;
@@ -246,7 +247,7 @@ export async function importScheduleFromParsed(
 
   for (const [section, employees] of bySection) {
     const storeId = storeMap[section];
-    if (!storeId) {
+    if (storeId == null) {
       console.warn(`[importer] no storeId for section "${section}" — skipping ${employees.length} employee(s)`);
       skipped += employees.length;
       errors.push(`Section "${section}" not mapped to any store — skipped.`);
@@ -262,7 +263,6 @@ export async function importScheduleFromParsed(
     const assignments: DayAssignment[] = [];
 
     for (const emp of employees) {
-      // Look up user by name (case-insensitive, trimmed)
       const [dbUser] = await db
         .select({ id: users.id, name: users.name })
         .from(users)
@@ -277,16 +277,14 @@ export async function importScheduleFromParsed(
 
       console.log(`[importer] resolved "${emp.name}" → userId ${dbUser.id}`);
 
-      // Expand each day into DayAssignment(s)
       for (const day of emp.days) {
         const base = {
           userId:  dbUser.id,
-          storeId,
+          storeId,           // number
           date:    day.date,
         };
 
         if (day.shift === 'full') {
-          // Full day = morning + evening as two separate entries
           assignments.push({ ...base, shift: 'morning', isOff: false, isLeave: false });
           assignments.push({ ...base, shift: 'evening', isOff: false, isLeave: false });
           entriesCreated += 2;
@@ -297,7 +295,6 @@ export async function importScheduleFromParsed(
           assignments.push({ ...base, shift: null, isOff: false, isLeave: true });
           entriesCreated++;
         } else {
-          // off
           assignments.push({ ...base, shift: null, isOff: true, isLeave: false });
           entriesCreated++;
         }

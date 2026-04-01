@@ -1,6 +1,10 @@
 // lib/schedule-utils.ts
 /**
- * Monthly schedule management.
+ * Monthly schedule management + attendance utilities.
+ *
+ * All store/schedule/entry PKs are serial integers (number) in the schema.
+ * Session values arriving as strings must be coerced with Number() at the
+ * API boundary before being passed into these functions.
  */
 
 import { db } from '@/lib/db';
@@ -8,10 +12,13 @@ import {
   areas, users, stores,
   monthlySchedules, monthlyScheduleEntries,
   schedules, attendance, breakSessions,
-  storeOpeningTasks, groomingTasks,
-  type Area, type MonthlySchedule, type MonthlyScheduleEntry, type BreakType,
+  type Area, type MonthlySchedule, type MonthlyScheduleEntry,
 } from '@/lib/db/schema';
 import { eq, and, gte, lte, inArray, isNull, sql } from 'drizzle-orm';
+
+// ─── Re-export BreakType from schema so callers can import it from here ───────
+export type { BreakType } from '@/lib/db/schema';
+import type { BreakType } from '@/lib/db/schema';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -26,7 +33,7 @@ export type Shift = 'morning' | 'evening';
 
 export interface DayAssignment {
   userId:  string;
-  storeId: string;
+  storeId: number;   // serial integer PK
   date:    Date;
   shift:   Shift | null;
   isOff:   boolean;
@@ -34,7 +41,7 @@ export interface DayAssignment {
 }
 
 export interface CreateMonthlyScheduleInput {
-  storeId:    string;
+  storeId:    number;   // serial integer PK
   yearMonth:  string;
   entries:    DayAssignment[];
   note?:      string;
@@ -54,19 +61,17 @@ export function startOfDay(d: Date): Date {
 export function endOfDay(d: Date): Date {
   const r = new Date(d); r.setHours(23, 59, 59, 999); return r;
 }
-
 export function yearMonthToDate(ym: string): Date {
   const [y, m] = ym.split('-').map(Number);
   return new Date(y, m - 1, 1, 0, 0, 0, 0);
 }
-
 export function dateToYearMonth(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
 // ─── Authorization ────────────────────────────────────────────────────────────
 
-export async function getStoreArea(storeId: string): Promise<Area | null> {
+export async function getStoreArea(storeId: number): Promise<Area | null> {
   const [store] = await db
     .select({ areaId: stores.areaId })
     .from(stores)
@@ -77,7 +82,7 @@ export async function getStoreArea(storeId: string): Promise<Area | null> {
   return area ?? null;
 }
 
-export async function getStoresForOps(opsUserId: string): Promise<string[]> {
+export async function getStoresForOps(opsUserId: string): Promise<number[]> {
   const [opsUser] = await db
     .select({ areaId: users.areaId })
     .from(users)
@@ -93,7 +98,7 @@ export async function getStoresForOps(opsUserId: string): Promise<string[]> {
 
 export async function canManageSchedule(
   actorId: string,
-  storeId: string,
+  storeId: number,
 ): Promise<{ allowed: boolean; reason?: string }> {
   const [actor] = await db
     .select({
@@ -135,25 +140,14 @@ export async function canManageSchedule(
 
 // ─── Monthly Schedule CRUD ────────────────────────────────────────────────────
 
-/**
- * Create (or fully replace) a monthly schedule for a store+month.
- *
- * FIX (Bug 3): Changed onConflictDoNothing → onConflictDoUpdate so that
- * re-imports correctly update entries even when an attended entry already
- * exists for that (monthlyScheduleId, userId, date) unique key. Previously
- * attended entries were silently skipped, leaving employees with no updated
- * task row after a schedule change.
- */
 export async function createOrReplaceMonthlySchedule(
   data: CreateMonthlyScheduleInput,
-): Promise<{ success: boolean; scheduleId?: string; error?: string }> {
+): Promise<{ success: boolean; scheduleId?: number; error?: string }> {
   try {
     const auth = await canManageSchedule(data.importedBy, data.storeId);
     if (!auth.allowed) return { success: false, error: auth.reason };
-
     if (!data.entries.length) return { success: false, error: 'No entries provided.' };
 
-    // ── Find or create the MonthlySchedule header ─────────────────────────
     const [existing] = await db
       .select({ id: monthlySchedules.id })
       .from(monthlySchedules)
@@ -165,12 +159,11 @@ export async function createOrReplaceMonthlySchedule(
       )
       .limit(1);
 
-    let monthlyScheduleId: string;
+    let monthlyScheduleId: number;
 
     if (existing) {
       monthlyScheduleId = existing.id;
 
-      // ── Delete entries that are NOT yet attended ─────────────────────────
       const entriesToCheck = await db
         .select({
           id:      monthlyScheduleEntries.id,
@@ -181,36 +174,26 @@ export async function createOrReplaceMonthlySchedule(
         .from(monthlyScheduleEntries)
         .where(eq(monthlyScheduleEntries.monthlyScheduleId, monthlyScheduleId));
 
-      const deletableIds: string[] = [];
+      const deletableIds: number[] = [];
       for (const entry of entriesToCheck) {
-        // OFF / leave entries never have a schedule row — always deletable
         if (entry.isOff || entry.isLeave || !entry.shift) {
           deletableIds.push(entry.id);
           continue;
         }
-        // Working entry: only deletable if it has no attendance record yet
         const [sched] = await db
           .select({ id: schedules.id })
           .from(schedules)
           .where(eq(schedules.monthlyScheduleEntryId, entry.id))
           .limit(1);
-
-        if (!sched) {
-          deletableIds.push(entry.id);
-          continue;
-        }
-
+        if (!sched) { deletableIds.push(entry.id); continue; }
         const [att] = await db
           .select({ id: attendance.id })
           .from(attendance)
           .where(eq(attendance.scheduleId, sched.id))
           .limit(1);
-
         if (!att) deletableIds.push(entry.id);
-        // If attended — leave it untouched (lockedCount handled in delete flow)
       }
 
-      // Delete pending schedule rows + tasks for deletable entries
       if (deletableIds.length > 0) {
         const entrySchedules = await db
           .select({ id: schedules.id })
@@ -219,21 +202,8 @@ export async function createOrReplaceMonthlySchedule(
 
         if (entrySchedules.length > 0) {
           const schedIds = entrySchedules.map(s => s.id);
-          await db.delete(storeOpeningTasks).where(
-            and(
-              inArray(storeOpeningTasks.scheduleId, schedIds),
-              eq(storeOpeningTasks.status, 'pending'),
-            ),
-          );
-          await db.delete(groomingTasks).where(
-            and(
-              inArray(groomingTasks.scheduleId, schedIds),
-              eq(groomingTasks.status, 'pending'),
-            ),
-          );
           await db.delete(schedules).where(inArray(schedules.id, schedIds));
         }
-
         await db
           .delete(monthlyScheduleEntries)
           .where(inArray(monthlyScheduleEntries.id, deletableIds));
@@ -243,9 +213,7 @@ export async function createOrReplaceMonthlySchedule(
         .update(monthlySchedules)
         .set({ note: data.note, updatedAt: new Date() })
         .where(eq(monthlySchedules.id, monthlyScheduleId));
-
     } else {
-      // Brand new schedule
       const [ms] = await db
         .insert(monthlySchedules)
         .values({
@@ -258,46 +226,37 @@ export async function createOrReplaceMonthlySchedule(
       monthlyScheduleId = ms.id;
     }
 
-    // ── Insert ALL entries (working, off, and leave) ───────────────────────
-    // FIX (Bug 3): Use onConflictDoUpdate instead of onConflictDoNothing so
-    // that re-imports correctly update the shift/isOff/isLeave fields on
-    // entries that already exist (e.g. attended entries that couldn't be
-    // deleted). Previously these were silently skipped.
-    if (data.entries.length > 0) {
-      const BATCH = 100;
-      for (let i = 0; i < data.entries.length; i += BATCH) {
-        const batch = data.entries.slice(i, i + BATCH);
-        await db
-          .insert(monthlyScheduleEntries)
-          .values(
-            batch.map(e => ({
-              monthlyScheduleId,
-              userId:  e.userId,
-              storeId: e.storeId,
-              date:    startOfDay(e.date),
-              shift:   e.shift ?? undefined,
-              isOff:   e.isOff,
-              isLeave: e.isLeave,
-            })),
-          )
-          .onConflictDoUpdate({
-            // unique(monthlyScheduleId, userId, date)
-            target: [
-              monthlyScheduleEntries.monthlyScheduleId,
-              monthlyScheduleEntries.userId,
-              monthlyScheduleEntries.date,
-            ],
-            set: {
-              shift:     sql`excluded.shift`,
-              isOff:     sql`excluded.is_off`,
-              isLeave:   sql`excluded.is_leave`,
-              updatedAt: new Date(),
-            },
-          });
-      }
+    const BATCH = 100;
+    for (let i = 0; i < data.entries.length; i += BATCH) {
+      const batch = data.entries.slice(i, i + BATCH);
+      await db
+        .insert(monthlyScheduleEntries)
+        .values(
+          batch.map(e => ({
+            monthlyScheduleId,
+            userId:  e.userId,
+            storeId: e.storeId,
+            date:    startOfDay(e.date),
+            shift:   e.shift ?? undefined,
+            isOff:   e.isOff,
+            isLeave: e.isLeave,
+          })),
+        )
+        .onConflictDoUpdate({
+          target: [
+            monthlyScheduleEntries.monthlyScheduleId,
+            monthlyScheduleEntries.userId,
+            monthlyScheduleEntries.date,
+          ],
+          set: {
+            shift:     sql`excluded.shift`,
+            isOff:     sql`excluded.is_off`,
+            isLeave:   sql`excluded.is_leave`,
+            updatedAt: new Date(),
+          },
+        });
     }
 
-    // ── Materialise schedules + tasks for working entries only ─────────────
     await materialiseSchedulesForMonth(data.storeId, data.yearMonth);
 
     return { success: true, scheduleId: monthlyScheduleId };
@@ -307,28 +266,14 @@ export async function createOrReplaceMonthlySchedule(
   }
 }
 
-/**
- * Update a single day entry (e.g. change shift, mark leave, etc.)
- */
 export async function updateMonthlyScheduleEntry(
-  entryId: string,
+  entryId: number,
   patch:   { shift?: Shift | null; isOff?: boolean; isLeave?: boolean },
   actorId: string,
 ): Promise<{ success: boolean; error?: string }> {
   try {
     const [entry] = await db
-      .select({
-        id:                monthlyScheduleEntries.id,
-        monthlyScheduleId: monthlyScheduleEntries.monthlyScheduleId,
-        userId:            monthlyScheduleEntries.userId,
-        storeId:           monthlyScheduleEntries.storeId,
-        date:              monthlyScheduleEntries.date,
-        shift:             monthlyScheduleEntries.shift,
-        isOff:             monthlyScheduleEntries.isOff,
-        isLeave:           monthlyScheduleEntries.isLeave,
-        createdAt:         monthlyScheduleEntries.createdAt,
-        updatedAt:         monthlyScheduleEntries.updatedAt,
-      })
+      .select()
       .from(monthlyScheduleEntries)
       .where(eq(monthlyScheduleEntries.id, entryId))
       .limit(1);
@@ -338,7 +283,6 @@ export async function updateMonthlyScheduleEntry(
     const auth = await canManageSchedule(actorId, entry.storeId);
     if (!auth.allowed) return { success: false, error: auth.reason };
 
-    // Block edits on attended days
     const [sched] = await db
       .select({ id: schedules.id })
       .from(schedules)
@@ -351,26 +295,7 @@ export async function updateMonthlyScheduleEntry(
         .from(attendance)
         .where(eq(attendance.scheduleId, sched.id))
         .limit(1);
-
-      if (att)
-        return {
-          success: false,
-          error:   'Cannot edit a schedule day that already has an attendance record.',
-        };
-
-      // Remove unattended schedule + tasks so they can be rebuilt
-      await db.delete(storeOpeningTasks).where(
-        and(
-          eq(storeOpeningTasks.scheduleId, sched.id),
-          eq(storeOpeningTasks.status, 'pending'),
-        ),
-      );
-      await db.delete(groomingTasks).where(
-        and(
-          eq(groomingTasks.scheduleId, sched.id),
-          eq(groomingTasks.status, 'pending'),
-        ),
-      );
+      if (att) return { success: false, error: 'Cannot edit a day that already has an attendance record.' };
       await db.delete(schedules).where(eq(schedules.id, sched.id));
     }
 
@@ -379,10 +304,9 @@ export async function updateMonthlyScheduleEntry(
       .set({ ...patch, updatedAt: new Date() })
       .where(eq(monthlyScheduleEntries.id, entryId));
 
-    // Rebuild schedule row if the entry is now a working shift
-    const updatedIsOff   = patch.isOff   !== undefined ? patch.isOff   : (entry.isOff   ?? false);
-    const updatedIsLeave = patch.isLeave !== undefined ? patch.isLeave : (entry.isLeave ?? false);
     const updatedShift   = patch.shift   !== undefined ? patch.shift   : entry.shift;
+    const updatedIsOff   = patch.isOff   !== undefined ? patch.isOff   : entry.isOff;
+    const updatedIsLeave = patch.isLeave !== undefined ? patch.isLeave : entry.isLeave;
 
     if (!updatedIsOff && !updatedIsLeave && updatedShift) {
       const [ms] = await db
@@ -399,12 +323,8 @@ export async function updateMonthlyScheduleEntry(
   }
 }
 
-/**
- * Delete a monthly schedule for a store+month.
- * Days with existing attendance are preserved (lockedCount returned).
- */
 export async function deleteMonthlySchedule(
-  storeId:   string,
+  storeId:   number,
   yearMonth: string,
   actorId:   string,
 ): Promise<{ success: boolean; lockedCount?: number; error?: string }> {
@@ -415,14 +335,8 @@ export async function deleteMonthlySchedule(
     const [ms] = await db
       .select({ id: monthlySchedules.id })
       .from(monthlySchedules)
-      .where(
-        and(
-          eq(monthlySchedules.storeId,   storeId),
-          eq(monthlySchedules.yearMonth, yearMonth),
-        ),
-      )
+      .where(and(eq(monthlySchedules.storeId, storeId), eq(monthlySchedules.yearMonth, yearMonth)))
       .limit(1);
-
     if (!ms) return { success: false, error: 'Monthly schedule not found.' };
 
     const allEntries = await db
@@ -431,7 +345,6 @@ export async function deleteMonthlySchedule(
       .where(eq(monthlyScheduleEntries.monthlyScheduleId, ms.id));
 
     const entryIds = allEntries.map(e => e.id);
-
     const entrySchedules = entryIds.length > 0
       ? await db
           .select({ id: schedules.id, entryId: schedules.monthlyScheduleEntryId })
@@ -440,7 +353,7 @@ export async function deleteMonthlySchedule(
       : [];
 
     let lockedCount = 0;
-    const deletableSchedIds: string[] = [];
+    const deletableSchedIds: number[] = [];
 
     for (const s of entrySchedules) {
       const [att] = await db
@@ -453,23 +366,14 @@ export async function deleteMonthlySchedule(
     }
 
     if (deletableSchedIds.length > 0) {
-      await db
-        .delete(storeOpeningTasks)
-        .where(inArray(storeOpeningTasks.scheduleId, deletableSchedIds));
-      await db
-        .delete(groomingTasks)
-        .where(inArray(groomingTasks.scheduleId, deletableSchedIds));
       await db.delete(schedules).where(inArray(schedules.id, deletableSchedIds));
     }
 
     if (lockedCount === 0) {
       if (entryIds.length > 0)
-        await db
-          .delete(monthlyScheduleEntries)
-          .where(inArray(monthlyScheduleEntries.id, entryIds));
+        await db.delete(monthlyScheduleEntries).where(inArray(monthlyScheduleEntries.id, entryIds));
       await db.delete(monthlySchedules).where(eq(monthlySchedules.id, ms.id));
     } else {
-      // Partial delete — remove only unattended entries
       const attendedSchedIds = new Set(
         entrySchedules.filter(s => !deletableSchedIds.includes(s.id)).map(s => s.id),
       );
@@ -477,13 +381,11 @@ export async function deleteMonthlySchedule(
         entrySchedules
           .filter(s => attendedSchedIds.has(s.id))
           .map(s => s.entryId)
-          .filter(Boolean),
+          .filter((id): id is number => id != null),
       );
       const toDeleteEntries = entryIds.filter(id => !attendedEntryIds.has(id));
       if (toDeleteEntries.length > 0)
-        await db
-          .delete(monthlyScheduleEntries)
-          .where(inArray(monthlyScheduleEntries.id, toDeleteEntries));
+        await db.delete(monthlyScheduleEntries).where(inArray(monthlyScheduleEntries.id, toDeleteEntries));
     }
 
     return { success: true, lockedCount };
@@ -492,24 +394,15 @@ export async function deleteMonthlySchedule(
   }
 }
 
-/**
- * Get a monthly schedule with all entries and user info.
- */
 export async function getMonthlySchedule(
-  storeId:   string,
+  storeId:   number,
   yearMonth: string,
 ): Promise<MonthlyScheduleWithEntries | null> {
   const [ms] = await db
     .select()
     .from(monthlySchedules)
-    .where(
-      and(
-        eq(monthlySchedules.storeId,   storeId),
-        eq(monthlySchedules.yearMonth, yearMonth),
-      ),
-    )
+    .where(and(eq(monthlySchedules.storeId, storeId), eq(monthlySchedules.yearMonth, yearMonth)))
     .limit(1);
-
   if (!ms) return null;
 
   const rawEntries = await db
@@ -529,7 +422,7 @@ export async function getMonthlySchedule(
   };
 }
 
-export async function listMonthlySchedules(storeId: string): Promise<MonthlySchedule[]> {
+export async function listMonthlySchedules(storeId: number): Promise<MonthlySchedule[]> {
   return db
     .select()
     .from(monthlySchedules)
@@ -539,43 +432,19 @@ export async function listMonthlySchedules(storeId: string): Promise<MonthlySche
 
 // ─── Materialisation ──────────────────────────────────────────────────────────
 
-/**
- * Convert all working MonthlyScheduleEntries for a store+month into
- * `schedules` rows and their associated task rows.
- * Idempotent — skips days already in `schedules`.
- */
 export async function materialiseSchedulesForMonth(
-  storeId:   string,
+  storeId:   number,
   yearMonth: string,
-): Promise<{
-  schedulesCreated:     number;
-  openingTasksCreated:  number;
-  groomingTasksCreated: number;
-  errors:               string[];
-}> {
-  let schedulesCreated     = 0;
-  let openingTasksCreated  = 0;
-  let groomingTasksCreated = 0;
-  const errors: string[]   = [];
+): Promise<{ schedulesCreated: number; errors: string[] }> {
+  let schedulesCreated = 0;
+  const errors: string[] = [];
 
   const [ms] = await db
     .select({ id: monthlySchedules.id })
     .from(monthlySchedules)
-    .where(
-      and(
-        eq(monthlySchedules.storeId,   storeId),
-        eq(monthlySchedules.yearMonth, yearMonth),
-      ),
-    )
+    .where(and(eq(monthlySchedules.storeId, storeId), eq(monthlySchedules.yearMonth, yearMonth)))
     .limit(1);
-
-  if (!ms)
-    return {
-      schedulesCreated,
-      openingTasksCreated,
-      groomingTasksCreated,
-      errors: ['Monthly schedule not found'],
-    };
+  if (!ms) return { schedulesCreated, errors: ['Monthly schedule not found'] };
 
   const entries = await db
     .select()
@@ -583,98 +452,45 @@ export async function materialiseSchedulesForMonth(
     .where(
       and(
         eq(monthlyScheduleEntries.monthlyScheduleId, ms.id),
-        eq(monthlyScheduleEntries.isOff,             false),
-        eq(monthlyScheduleEntries.isLeave,           false),
+        eq(monthlyScheduleEntries.isOff,   false),
+        eq(monthlyScheduleEntries.isLeave, false),
       ),
     );
 
   for (const entry of entries) {
     if (!entry.shift) continue;
     try {
-      const result = await createScheduleAndTasks(entry);
-      schedulesCreated     += result.scheduleCreated     ? 1 : 0;
-      openingTasksCreated  += result.openingTaskCreated  ? 1 : 0;
-      groomingTasksCreated += result.groomingTaskCreated ? 1 : 0;
+      const created = await createScheduleRow(entry);
+      if (created) schedulesCreated++;
     } catch (err) {
       errors.push(`Entry ${entry.id}: ${err}`);
     }
   }
 
-  return { schedulesCreated, openingTasksCreated, groomingTasksCreated, errors };
+  return { schedulesCreated, errors };
 }
 
-// ─── Internal: create one schedule + task rows ────────────────────────────────
-
-/**
- * FIX (Bug 1): Idempotency check now uses monthlyScheduleEntryId instead of
- * the composite (userId, storeId, shift, date) lookup. The old approach could
- * find the wrong row after a re-materialise (old entry deleted, new one
- * inserted with a different ID) causing either duplicate rows or incorrect skips.
- *
- * FIX (Bug 2): After inserting task rows, we immediately look for an existing
- * attendance record on this schedule and backfill attendanceId on both task
- * tables. This handles the re-materialise-after-checkin case where the new
- * schedule row gets a new ID but the attendance record still references the
- * original scheduleId — the tasks would otherwise sit permanently unlinked
- * and invisible to both employee and ops views.
- */
-async function createScheduleAndTasks(
-  entry: MonthlyScheduleEntry,
-): Promise<{ scheduleCreated: boolean; openingTaskCreated: boolean; groomingTaskCreated: boolean }> {
-  const shift = entry.shift as Shift;
-  const date  = startOfDay(entry.date);
-
-  // ── FIX (Bug 1): Key idempotency on the entry ID, not field combo ────────
+async function createScheduleRow(entry: MonthlyScheduleEntry): Promise<boolean> {
   const [existing] = await db
     .select({ id: schedules.id })
     .from(schedules)
     .where(eq(schedules.monthlyScheduleEntryId, entry.id))
     .limit(1);
-
-  if (existing)
-    return { scheduleCreated: false, openingTaskCreated: false, groomingTaskCreated: false };
+  if (existing) return false;
 
   const [newSched] = await db
     .insert(schedules)
     .values({
       userId:                 entry.userId,
       storeId:                entry.storeId,
-      shift,
-      date,
+      shift:                  entry.shift as Shift,
+      date:                   startOfDay(entry.date),
       monthlyScheduleEntryId: entry.id,
       isHoliday:              false,
     })
     .returning({ id: schedules.id });
 
-  const schedId = newSched.id;
-
-  let openingTaskCreated = false;
-  if (shift === 'morning') {
-    await db.insert(storeOpeningTasks).values({
-      userId:     entry.userId,
-      storeId:    entry.storeId,
-      scheduleId: schedId,
-      date,
-      shift,
-      status:     'pending',
-    });
-    openingTaskCreated = true;
-  }
-
-  await db.insert(groomingTasks).values({
-    userId:     entry.userId,
-    storeId:    entry.storeId,
-    scheduleId: schedId,
-    date,
-    shift,
-    status:     'pending',
-  });
-
-  // ── FIX (Bug 2): Backfill attendanceId if a checkin already exists ───────
-  // This handles re-materialise-after-checkin: the new schedule row has a
-  // fresh ID, but the attendance record was already created for the previous
-  // schedule row's ID. Without this, tasks are permanently unlinked and
-  // invisible on both the employee and ops pages.
+  // Backfill attendance link if a check-in already exists for this employee/shift/day
   const [existingAtt] = await db
     .select({ id: attendance.id })
     .from(attendance)
@@ -682,46 +498,34 @@ async function createScheduleAndTasks(
       and(
         eq(attendance.userId,  entry.userId),
         eq(attendance.storeId, entry.storeId),
-        eq(attendance.shift,   shift),
-        gte(attendance.date,   startOfDay(date)),
-        lte(attendance.date,   endOfDay(date)),
+        eq(attendance.shift,   entry.shift!),
+        gte(attendance.date,   startOfDay(entry.date)),
+        lte(attendance.date,   endOfDay(entry.date)),
       ),
     )
     .limit(1);
 
   if (existingAtt) {
-    // Also update the scheduleId on the attendance record itself so future
-    // check-out and break queries resolve correctly against the new row.
     await db
       .update(attendance)
-      .set({ scheduleId: schedId, updatedAt: new Date() })
+      .set({ scheduleId: newSched.id, updatedAt: new Date() })
       .where(eq(attendance.id, existingAtt.id));
-
-    await db
-      .update(storeOpeningTasks)
-      .set({ attendanceId: existingAtt.id, updatedAt: new Date() })
-      .where(eq(storeOpeningTasks.scheduleId, schedId));
-
-    await db
-      .update(groomingTasks)
-      .set({ attendanceId: existingAtt.id, updatedAt: new Date() })
-      .where(eq(groomingTasks.scheduleId, schedId));
   }
 
-  return { scheduleCreated: true, openingTaskCreated, groomingTaskCreated: true };
+  return true;
 }
 
-// ─── Check-in / check-out ─────────────────────────────────────────────────────
+// ─── Check-in / Check-out ─────────────────────────────────────────────────────
 
 export async function employeeCheckIn(
   userId:  string,
-  storeId: string,
+  storeId: number,
   shift:   Shift,
 ): Promise<{
   success:       boolean;
   action?:       'checked_in' | 'returned_from_break';
-  attendanceId?: string;
-  scheduleId?:   string;
+  attendanceId?: number;
+  scheduleId?:   number;
   status?:       string;
   error?:        string;
 }> {
@@ -778,15 +582,6 @@ export async function employeeCheckIn(
         })
         .returning({ id: attendance.id });
 
-      await db
-        .update(storeOpeningTasks)
-        .set({ attendanceId: att.id, updatedAt: new Date() })
-        .where(eq(storeOpeningTasks.scheduleId, sched.id));
-      await db
-        .update(groomingTasks)
-        .set({ attendanceId: att.id, updatedAt: new Date() })
-        .where(eq(groomingTasks.scheduleId, sched.id));
-
       return {
         success:      true,
         action:       'checked_in',
@@ -796,16 +591,18 @@ export async function employeeCheckIn(
       };
     }
 
-    if (!existing.onBreak)
-      return {
-        success:      true,
-        action:       'checked_in',
-        attendanceId: existing.id,
-        scheduleId:   sched.id,
-        status:       existing.status,
-      };
+    // Already checked in — if on break, end it; otherwise return current state
+    if (existing.onBreak) {
+      return endBreak(userId, storeId, existing.id);
+    }
 
-    return endBreak(userId, storeId, existing.id);
+    return {
+      success:      true,
+      action:       'checked_in',
+      attendanceId: existing.id,
+      scheduleId:   sched.id,
+      status:       existing.status,
+    };
   } catch (err) {
     return { success: false, error: `Check-in failed: ${err}` };
   }
@@ -813,7 +610,7 @@ export async function employeeCheckIn(
 
 export async function employeeCheckOut(
   userId:  string,
-  storeId: string,
+  storeId: number,
   shift:   Shift,
 ): Promise<{ success: boolean; error?: string }> {
   try {
@@ -861,9 +658,9 @@ export async function employeeCheckOut(
 
 export async function startBreak(
   userId:  string,
-  storeId: string,
+  storeId: number,
   shift:   Shift,
-): Promise<{ success: boolean; breakSessionId?: string; breakType?: BreakType; error?: string }> {
+): Promise<{ success: boolean; breakSessionId?: number; breakType?: BreakType; error?: string }> {
   try {
     const now = new Date();
 
@@ -922,13 +719,13 @@ export async function startBreak(
 
 export async function endBreak(
   userId:       string,
-  storeId:      string,
-  attendanceId: string,
+  storeId:      number,
+  attendanceId: number,
 ): Promise<{
   success:       boolean;
   action?:       'returned_from_break';
-  attendanceId?: string;
-  scheduleId?:   string;
+  attendanceId?: number;
+  scheduleId?:   number;
   status?:       string;
   error?:        string;
 }> {
@@ -978,7 +775,7 @@ export async function endBreak(
 
 // ─── Attendance helpers ───────────────────────────────────────────────────────
 
-export async function getTodayAttendance(userId: string, storeId: string) {
+export async function getTodayAttendance(userId: string, storeId: number) {
   const now  = new Date();
   const rows = await db
     .select({ att: attendance, schedule: schedules })
@@ -1005,7 +802,7 @@ export async function getTodayAttendance(userId: string, storeId: string) {
   return { ...rows[0], breaks };
 }
 
-export async function getAttendanceForDate(storeId: string, date: Date) {
+export async function getAttendanceForDate(storeId: number, date: Date) {
   return db
     .select({ schedule: schedules, user: users, attendance: attendance })
     .from(schedules)
@@ -1023,11 +820,11 @@ export async function getAttendanceForDate(storeId: string, date: Date) {
 }
 
 export async function opsMarkAttendance(
-  scheduleId: string,
+  scheduleId: number,
   status:     'present' | 'absent' | 'late' | 'excused',
   actorId:    string,
   notes?:     string,
-): Promise<{ success: boolean; attendanceId?: string; error?: string }> {
+): Promise<{ success: boolean; attendanceId?: number; error?: string }> {
   try {
     const [sched] = await db
       .select()
@@ -1046,7 +843,7 @@ export async function opsMarkAttendance(
       .where(eq(attendance.scheduleId, scheduleId))
       .limit(1);
 
-    let attendanceId: string;
+    let attendanceId: number;
 
     if (existing) {
       await db
@@ -1070,15 +867,6 @@ export async function opsMarkAttendance(
         })
         .returning({ id: attendance.id });
       attendanceId = att.id;
-
-      await db
-        .update(storeOpeningTasks)
-        .set({ attendanceId, updatedAt: new Date() })
-        .where(eq(storeOpeningTasks.scheduleId, scheduleId));
-      await db
-        .update(groomingTasks)
-        .set({ attendanceId, updatedAt: new Date() })
-        .where(eq(groomingTasks.scheduleId, scheduleId));
     }
 
     return { success: true, attendanceId };

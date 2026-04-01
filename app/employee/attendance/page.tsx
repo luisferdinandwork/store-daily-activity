@@ -19,15 +19,15 @@ type Shift     = 'morning' | 'evening';
 type BreakType = 'lunch' | 'dinner';
 
 interface BreakSession {
-  id:           string;
+  id:           number;
   breakType:    BreakType;
   breakOutTime: string;
   returnTime:   string | null;
 }
 
 interface AttRecord {
-  attendanceId:  string;
-  scheduleId:    string;
+  attendanceId:  number;
+  scheduleId:    number;
   status:        AttStatus;
   shift:         Shift;
   checkInTime:   string | null;
@@ -39,9 +39,9 @@ interface AttRecord {
 
 interface ShiftSlot {
   schedule: {
-    scheduleId: string;
+    scheduleId: number;
     shift:      Shift;
-    storeId:    string;   // actual working store (may differ from homeStoreId)
+    storeId:    number;
     date:       string;
   };
   attendance: AttRecord | null;
@@ -363,17 +363,18 @@ function ShiftCard({ slot, onAction }: {
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 export default function EmployeeAttendancePage() {
-  const { data: session } = useSession();
+  const { data: session, status: sessionStatus } = useSession();
 
   const [shifts,  setShifts]  = useState<ShiftSlot[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Use homeStoreId to guard the load — actual working store comes back
-  // inside each schedule slot from the API.
-  const homeStoreId = (session?.user as any)?.homeStoreId as string | undefined;
+  // Derive a stable primitive so the effect dependency doesn't re-fire on
+  // every session object re-render. Coerce to number since schema uses serial.
+  const user        = session?.user as any;
+  const homeStoreId = user?.homeStoreId != null ? Number(user.homeStoreId) : null;
 
   const load = useCallback(async () => {
-    if (!homeStoreId) return;
+    setLoading(true);
     try {
       const res = await fetch('/api/employee/attendance');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -385,11 +386,21 @@ export default function EmployeeAttendancePage() {
     } finally {
       setLoading(false);
     }
-  }, [homeStoreId]);
+  }, []);
 
-  useEffect(() => { if (session?.user) load(); }, [session, load]);
+  useEffect(() => {
+    // Wait until next-auth has finished resolving the session
+    if (sessionStatus === 'loading') return;
 
-  // Each action passes the shift only — the route resolves the working store itself.
+    if (sessionStatus === 'unauthenticated' || homeStoreId == null || isNaN(homeStoreId)) {
+      // No valid session or no store assigned — stop spinner, show empty state
+      setLoading(false);
+      return;
+    }
+
+    load();
+  }, [sessionStatus, homeStoreId, load]);
+
   async function handleAction(action: string, shift: Shift) {
     try {
       const res  = await fetch('/api/employee/attendance', {
@@ -417,6 +428,17 @@ export default function EmployeeAttendancePage() {
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Action failed');
     }
+  }
+
+  // Show skeleton while next-auth is still resolving
+  if (sessionStatus === 'loading') {
+    return (
+      <div className="space-y-3 p-4">
+        {[1, 2].map(i => (
+          <div key={i} className="h-40 animate-pulse rounded-xl bg-secondary" />
+        ))}
+      </div>
+    );
   }
 
   return (
@@ -448,7 +470,7 @@ export default function EmployeeAttendancePage() {
                   <>
                     <span className="opacity-40">·</span>
                     <span className={cn(
-                      att.onBreak          ? 'text-amber-300'
+                      att.onBreak                ? 'text-amber-300'
                       : att.status === 'present' ? 'text-green-300'
                       : att.status === 'late'    ? 'text-amber-300'
                       :                            'text-red-300',

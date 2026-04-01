@@ -13,32 +13,34 @@ export async function GET() {
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const user    = session.user as any;
-  const userId  = user.id          as string;
-  const storeId = user.homeStoreId as string | null;
+  const user           = session.user as any;
+  const userId         = user.id          as string;
+  const rawHomeStoreId = user.homeStoreId as string | number | null | undefined;
 
-  if (!storeId) return NextResponse.json({ shift: null, storeName: null });
+  if (!rawHomeStoreId) return NextResponse.json({ shift: null, storeName: null });
+
+  // homeStoreId from session may arrive as a string — coerce to number
+  const homeStoreId = Number(rawHomeStoreId);
+  if (isNaN(homeStoreId)) return NextResponse.json({ shift: null, storeName: null });
 
   const now = new Date();
 
-  // Get today's schedule row for this employee
   const [sched] = await db
     .select({ shift: schedules.shift, storeId: schedules.storeId })
     .from(schedules)
     .where(and(
       eq(schedules.userId,    userId),
-      eq(schedules.storeId,   storeId),
+      eq(schedules.storeId,   homeStoreId),
       eq(schedules.isHoliday, false),
       gte(schedules.date,     startOfDay(now)),
       lte(schedules.date,     endOfDay(now)),
     ))
     .limit(1);
 
-  // Get store name
   const [store] = await db
     .select({ name: stores.name })
     .from(stores)
-    .where(eq(stores.id, storeId))
+    .where(eq(stores.id, homeStoreId))
     .limit(1);
 
   return NextResponse.json({
