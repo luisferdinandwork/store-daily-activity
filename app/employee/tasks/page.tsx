@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useSession }    from 'next-auth/react';
+import { useRouter }     from 'next/navigation';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge }         from '@/components/ui/badge';
 import {
@@ -24,7 +25,6 @@ export type TaskType =
 
 export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'verified' | 'rejected';
 
-// ── Shared base fields every task has ─────────────────────────────────────────
 interface TaskBase {
   id:          string;
   scheduleId:  string;
@@ -39,7 +39,6 @@ interface TaskBase {
   verifiedAt:  string | null;
 }
 
-// ── Per-task data shapes ───────────────────────────────────────────────────────
 export interface StoreOpeningData extends TaskBase {
   loginPos: boolean; checkAbsenSunfish: boolean; tarikSohSales: boolean;
   fiveR: boolean; cekLamp: boolean; cekSoundSystem: boolean;
@@ -69,7 +68,6 @@ export interface GroomingData  extends TaskBase {
   shoeCompliant: boolean | null; selfiePhotos: string[];
 }
 
-// ── Discriminated union ────────────────────────────────────────────────────────
 export type TaskItem =
   | { type: 'store_opening';   shift: 'morning'; data: StoreOpeningData   }
   | { type: 'setoran';         shift: 'morning'; data: SetoranData         }
@@ -84,8 +82,6 @@ export type TaskItem =
   | { type: 'grooming';        shift: 'morning' | 'evening'; data: GroomingData };
 
 type Filter = 'all' | 'pending' | 'in_progress' | 'completed';
-
-// ─── Config ────────────────────────────────────────────────────────────────────
 
 const STATUS_CFG: Record<TaskStatus, {
   Icon: React.ElementType; label: string; cls: string;
@@ -123,17 +119,15 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: 'completed',   label: 'Done'   },
 ];
 
-// ─── Page ──────────────────────────────────────────────────────────────────────
-
 export default function EmployeeTasksPage() {
   const { status: sessionStatus } = useSession();
+  const router = useRouter();
 
   const [tasks,    setTasks]    = useState<TaskItem[]>([]);
   const [shift,    setShift]    = useState<'morning' | 'evening' | null>(null);
   const [loading,  setLoading]  = useState(true);
   const [filter,   setFilter]   = useState<Filter>('all');
 
-  // ── Load ────────────────────────────────────────────────────────────────────
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -152,69 +146,54 @@ export default function EmployeeTasksPage() {
     if (sessionStatus === 'authenticated') load();
   }, [sessionStatus, load]);
 
-  // ── Open / advance task ─────────────────────────────────────────────────────
   const openTask = async (item: TaskItem) => {
-    const { status } = item.data;
-    if (status === 'completed' || status === 'verified') return;
+    const { status, id } = item.data;
 
+    // Verified tasks are read-only — still navigate so employee can see details
     if (status === 'pending') {
-      // Optimistic update
+      // Optimistically advance to in_progress before navigating
       setTasks(prev =>
         prev.map(t =>
-          t.data.id === item.data.id
+          t.data.id === id
             ? { ...t, data: { ...t.data, status: 'in_progress' as const } } as TaskItem
             : t,
         ),
       );
-      await fetch('/api/employee/tasks', {
+      // Fire-and-forget — the detail page will show the updated state
+      fetch('/api/employee/tasks', {
         method:  'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ taskId: item.data.id, taskType: item.type, status: 'in_progress' }),
-      });
+        body:    JSON.stringify({ taskId: id, taskType: item.type, status: 'in_progress' }),
+      }).catch(console.error);
     }
 
-    // TODO: navigate to the task detail page for this type
-    // e.g. router.push(`/employee/tasks/${item.type}/${item.data.id}`)
-    console.log('Open task detail:', item.type, item.data.id);
+    router.push(`/employee/tasks/${item.type}/${id}`);
   };
 
-  // ── Helpers ─────────────────────────────────────────────────────────────────
   const countFilter = (f: Filter) =>
     f === 'all' ? tasks.length : tasks.filter(t => t.data.status === f).length;
 
   const filtered = tasks.filter(t => filter === 'all' || t.data.status === filter);
-
-  // Group filtered tasks by shift for display
   const morningTasks = filtered.filter(t => t.shift === 'morning');
   const eveningTasks = filtered.filter(t => t.shift === 'evening');
-
-  // ── No schedule ─────────────────────────────────────────────────────────────
   const notScheduled = !loading && tasks.length === 0;
 
   return (
     <div className="flex flex-col min-h-screen bg-background">
 
-      {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="relative overflow-hidden bg-primary px-6 pb-6 pt-12">
         <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-white/5" />
         <div className="relative">
-          <p className="text-xs font-semibold uppercase tracking-widest text-primary-foreground/60">
-            Today
-          </p>
+          <p className="text-xs font-semibold uppercase tracking-widest text-primary-foreground/60">Today</p>
           <h1 className="mt-0.5 text-2xl font-bold text-primary-foreground">My Tasks</h1>
           <p className="mt-1 text-xs text-primary-foreground/50">
-            {new Date().toLocaleDateString('id-ID', {
-              weekday: 'long', day: 'numeric', month: 'long',
-            })}
+            {new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long' })}
           </p>
-
-          {/* Shift badge */}
           {shift && (
             <div className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1">
               {shift === 'morning'
                 ? <Sun  className="h-3.5 w-3.5 text-yellow-300" />
-                : <Moon className="h-3.5 w-3.5 text-blue-300"   />
-              }
+                : <Moon className="h-3.5 w-3.5 text-blue-300"   />}
               <span className="text-xs font-semibold capitalize text-primary-foreground">
                 {shift === 'morning' ? 'Morning Shift' : 'Evening Shift'}
               </span>
@@ -223,7 +202,6 @@ export default function EmployeeTasksPage() {
         </div>
       </div>
 
-      {/* ── Filter tabs ────────────────────────────────────────────────────── */}
       <div className="sticky top-0 z-10 border-b border-border bg-card px-4 py-2.5">
         <div className="flex gap-1.5 overflow-x-auto pb-0.5 scrollbar-none">
           {FILTERS.map(({ key, label }) => (
@@ -249,45 +227,32 @@ export default function EmployeeTasksPage() {
         </div>
       </div>
 
-      {/* ── Content ────────────────────────────────────────────────────────── */}
       <div className="flex-1 p-4 space-y-6">
-
         {loading ? (
-          // Skeleton
           <div className="space-y-2.5">
             {Array.from({ length: 5 }).map((_, i) => (
               <div key={i} className="h-20 animate-pulse rounded-xl bg-secondary" />
             ))}
           </div>
-
         ) : notScheduled ? (
-          // Not scheduled today
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <Inbox className="mb-3 h-10 w-10 text-muted-foreground/40" />
             <p className="text-sm font-semibold text-foreground">No shift today</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              You are not scheduled for any shift today.
-            </p>
+            <p className="mt-1 text-xs text-muted-foreground">You are not scheduled for any shift today.</p>
           </div>
-
         ) : filtered.length === 0 ? (
-          // Filter active but nothing matches
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <CheckCircle2 className="mb-3 h-10 w-10 text-green-400" />
             <p className="text-sm font-semibold text-foreground">All clear!</p>
             <p className="mt-1 text-xs text-muted-foreground">No tasks in this category.</p>
           </div>
-
         ) : (
           <>
-            {/* Morning group */}
             {morningTasks.length > 0 && (
               <section>
                 <div className="mb-2 flex items-center gap-2">
                   <Sun className="h-4 w-4 text-amber-500" />
-                  <h2 className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
-                    Morning Shift
-                  </h2>
+                  <h2 className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Morning Shift</h2>
                   <div className="h-px flex-1 bg-border" />
                 </div>
                 <div className="space-y-2.5">
@@ -295,15 +260,11 @@ export default function EmployeeTasksPage() {
                 </div>
               </section>
             )}
-
-            {/* Evening group */}
             {eveningTasks.length > 0 && (
               <section>
                 <div className="mb-2 flex items-center gap-2">
                   <Moon className="h-4 w-4 text-blue-500" />
-                  <h2 className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
-                    Evening Shift
-                  </h2>
+                  <h2 className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Evening Shift</h2>
                   <div className="h-px flex-1 bg-border" />
                 </div>
                 <div className="space-y-2.5">
@@ -318,15 +279,7 @@ export default function EmployeeTasksPage() {
   );
 }
 
-// ─── Task Card ─────────────────────────────────────────────────────────────────
-
-function TaskCard({
-  item,
-  onOpen,
-}: {
-  item:   TaskItem;
-  onOpen: (item: TaskItem) => void;
-}) {
+function TaskCard({ item, onOpen }: { item: TaskItem; onOpen: (item: TaskItem) => void }) {
   const { status }  = item.data;
   const cfg         = STATUS_CFG[status];
   const meta        = TASK_META[item.type];
@@ -338,14 +291,12 @@ function TaskCard({
   return (
     <Card
       className={cn(
-        'overflow-hidden border-border shadow-sm transition-all',
-        !isTerminal && 'cursor-pointer active:scale-[0.99]',
+        'overflow-hidden border-border shadow-sm transition-all cursor-pointer active:scale-[0.99]',
         isTerminal  && 'opacity-75',
         isRejected  && 'border-red-200',
       )}
       onClick={() => onOpen(item)}
     >
-      {/* Status bar */}
       {status === 'in_progress' && <div className="h-0.5 w-full animate-pulse bg-primary" />}
       {status === 'completed'   && <div className="h-0.5 w-full bg-green-500" />}
       {status === 'verified'    && <div className="h-0.5 w-full bg-green-600" />}
@@ -353,60 +304,35 @@ function TaskCard({
 
       <CardContent className="p-4">
         <div className="flex items-start gap-3">
-          {/* Task icon */}
           <div className="mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-secondary">
             <TaskIcon className="h-4 w-4 text-foreground" strokeWidth={2} />
           </div>
-
           <div className="min-w-0 flex-1">
-            {/* Title row */}
             <div className="flex items-start justify-between gap-2">
-              <p className="text-sm font-semibold leading-tight text-foreground">
-                {meta.title}
-              </p>
+              <p className="text-sm font-semibold leading-tight text-foreground">{meta.title}</p>
               {isTerminal && item.data.completedAt ? (
                 <span className="flex-shrink-0 text-[10px] font-medium text-green-600">
-                  ✓ {new Date(item.data.completedAt).toLocaleTimeString('id-ID', {
-                    hour: '2-digit', minute: '2-digit',
-                  })}
+                  ✓ {new Date(item.data.completedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
                 </span>
-              ) : !isTerminal ? (
+              ) : (
                 <ChevronRight className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
-              ) : null}
+              )}
             </div>
-
-            {/* Description */}
-            <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">
-              {meta.description}
-            </p>
-
-            {/* Badges */}
+            <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{meta.description}</p>
             <div className="mt-2 flex flex-wrap gap-1.5">
               <Badge className={cn('h-4 gap-1 px-1.5 text-[10px] font-semibold', cfg.cls)}>
-                <StatusIcon className="h-2.5 w-2.5" />
-                {cfg.label}
+                <StatusIcon className="h-2.5 w-2.5" />{cfg.label}
               </Badge>
-
               {meta.hasPhoto && (
                 <Badge variant="outline" className="h-4 gap-1 px-1.5 text-[10px]">
-                  <Camera className="h-2.5 w-2.5" />
-                  Photo
+                  <Camera className="h-2.5 w-2.5" />Photo
                 </Badge>
               )}
-
-              <Badge variant="secondary" className="h-4 px-1.5 text-[10px] capitalize">
-                {item.shift}
-              </Badge>
-
-              {/* Shared / personal indicator */}
+              <Badge variant="secondary" className="h-4 px-1.5 text-[10px] capitalize">{item.shift}</Badge>
               {item.type === 'grooming' ? (
-                <Badge variant="outline" className="h-4 px-1.5 text-[10px] text-violet-600 border-violet-200">
-                  Personal
-                </Badge>
+                <Badge variant="outline" className="h-4 px-1.5 text-[10px] text-violet-600 border-violet-200">Personal</Badge>
               ) : (
-                <Badge variant="outline" className="h-4 px-1.5 text-[10px]">
-                  Shared
-                </Badge>
+                <Badge variant="outline" className="h-4 px-1.5 text-[10px]">Shared</Badge>
               )}
             </div>
           </div>

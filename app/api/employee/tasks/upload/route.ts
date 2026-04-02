@@ -6,39 +6,36 @@ import { writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
 
-// Lazy-load Vercel Blob only in production
-let blobPut: ((path: string, file: File, opts: { access: 'public' }) => Promise<{ url: string }>) | null = null;
-if (process.env.VERCEL_ENV) {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const blob = require('@vercel/blob');
-    blobPut = blob.put;
-  } catch {
-    console.warn('[@vercel/blob] not available — falling back to local storage');
-  }
-}
-
 const ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
 const MAX_SIZE_MB  = 10;
 
-/**
- * Valid photoType values and the folder they map to:
- *   store_front  → store-opening/store-front
- *   cash_drawer  → store-opening/cash-drawer
- *   selfie       → grooming/selfie
- */
-type PhotoType = 'store_front' | 'cash_drawer' | 'selfie';
+type PhotoType =
+  | 'store_front' | 'cash_drawer' | 'selfie'
+  | 'money' | 'receiving'
+  | 'edc_summary' | 'edc_settlement' | 'z_report' | 'open_statement';
 
 const PHOTO_FOLDER: Record<PhotoType, string> = {
-  store_front: 'store-opening/store-front',
-  cash_drawer: 'store-opening/cash-drawer',
-  selfie:      'grooming/selfie',
+  store_front:    'store-opening/store-front',
+  cash_drawer:    'store-opening/cash-drawer',
+  money:          'setoran/money',
+  receiving:      'receiving',
+  selfie:         'grooming/selfie',
+  edc_summary:    'edc/summary',
+  edc_settlement: 'edc/settlement',
+  z_report:       'eod/z-report',
+  open_statement: 'eod/open-statement',
 };
 
 const PHOTO_LIMITS: Record<PhotoType, number> = {
-  store_front: 3,
-  cash_drawer: 2,
-  selfie:      2,
+  store_front:    3,
+  cash_drawer:    2,
+  money:          3,
+  receiving:      5,
+  selfie:         2,
+  edc_summary:    3,
+  edc_settlement: 3,
+  z_report:       3,
+  open_statement: 3,
 };
 
 export async function POST(request: NextRequest) {
@@ -52,7 +49,6 @@ export async function POST(request: NextRequest) {
     const file      = formData.get('file')      as File   | null;
     const photoType = formData.get('photoType') as string | null;
 
-    // ── Validate file ───────────────────────────────────────────────────────
     if (!file) {
       return NextResponse.json({ error: 'No file provided' }, { status: 400 });
     }
@@ -69,7 +65,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // ── Validate photoType ─────────────────────────────────────────────────
     if (!photoType || !(photoType in PHOTO_FOLDER)) {
       return NextResponse.json(
         { error: `photoType must be one of: ${Object.keys(PHOTO_FOLDER).join(', ')}` },
@@ -77,20 +72,23 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const folder   = PHOTO_FOLDER[photoType as PhotoType];
-    const timestamp = Date.now();
-    const ext      = file.name.split('.').pop() ?? 'jpg';
-    const safeName = `${session.user.id}-${timestamp}.${ext}`;
+    const folder      = PHOTO_FOLDER[photoType as PhotoType];
+    const timestamp   = Date.now();
+    const ext         = file.name.split('.').pop() ?? 'jpg';
+    const safeName    = `${session.user.id}-${timestamp}.${ext}`;
     const storagePath = `tasks/${folder}/${safeName}`;
 
     let url: string;
 
-    if (blobPut && process.env.VERCEL_ENV) {
-      // ── Vercel Blob (production) ──────────────────────────────────────────
-      const blob = await blobPut(storagePath, file, { access: 'public' });
+    if (process.env.BLOB_READ_WRITE_TOKEN) {
+      // ── Vercel Blob (production) ─────────────────────────────────────────
+      // Dynamic import avoids the bundler trying to resolve the package at
+      // build time when it may not be installed locally.
+      const { put } = await import('@vercel/blob');
+      const blob    = await put(storagePath, file, { access: 'public' });
       url = blob.url;
     } else {
-      // ── Local filesystem (development) ────────────────────────────────────
+      // ── Local filesystem (development) ───────────────────────────────────
       const bytes     = await file.arrayBuffer();
       const buffer    = Buffer.from(bytes);
       const uploadDir = join(process.cwd(), 'public', 'uploads', 'tasks', folder);
