@@ -18,6 +18,7 @@ import { authOptions }               from '@/lib/auth';
 import { db }                        from '@/lib/db';
 import {
   schedules,
+  shifts,
   storeOpeningTasks, setoranTasks, cekBinTasks,
   productCheckTasks, receivingTasks, briefingTasks,
   edcSummaryTasks, edcSettlementTasks, eodZReportTasks,
@@ -40,6 +41,24 @@ function toIso(d: Date | null | undefined): string | null {
   return d ? d.toISOString() : null;
 }
 
+/** Cache shift id→code map */
+let _shiftCodeCache: Record<number, string> | null = null;
+async function getShiftCodeMap(): Promise<Record<number, string>> {
+  if (_shiftCodeCache) return _shiftCodeCache;
+  const rows = await db.select({ id: shifts.id, code: shifts.code }).from(shifts);
+  _shiftCodeCache = Object.fromEntries(rows.map(r => [r.id, r.code]));
+  return _shiftCodeCache!;
+}
+
+/** Cache shift code→id map */
+let _shiftIdCache: Record<string, number> | null = null;
+async function getShiftIdMap(): Promise<Record<string, number>> {
+  if (_shiftIdCache) return _shiftIdCache;
+  const rows = await db.select({ id: shifts.id, code: shifts.code }).from(shifts);
+  _shiftIdCache = Object.fromEntries(rows.map(r => [r.code, r.id]));
+  return _shiftIdCache!;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // GET
 // ─────────────────────────────────────────────────────────────────────────────
@@ -59,11 +78,8 @@ export async function GET(request: NextRequest) {
   const dayEnd     = endOfDay(targetDate);
 
   // ── 1. Find the employee's schedule(s) for today ───────────────────────────
-  // An employee can have at most one morning and one evening schedule per day.
-  // We need the storeId from the schedule to fetch shared tasks correctly —
-  // the employee may be cross-deployed to a different store than homeStoreId.
   const todaySchedules = await db
-    .select({ id: schedules.id, shift: schedules.shift, storeId: schedules.storeId })
+    .select({ id: schedules.id, shiftId: schedules.shiftId, storeId: schedules.storeId })
     .from(schedules)
     .where(
       and(
@@ -75,34 +91,21 @@ export async function GET(request: NextRequest) {
     );
 
   if (!todaySchedules.length) {
-    // No schedule today — return empty list so the UI can show "not scheduled"
     return NextResponse.json({ success: true, tasks: [], shift: null });
   }
 
-  // Collect all schedule IDs and unique store IDs for today
-  const scheduleIds = todaySchedules.map(s => s.id);
-  const storeIds    = [...new Set(todaySchedules.map(s => s.storeId))];
-  const shifts      = [...new Set(todaySchedules.map(s => s.shift))] as ('morning' | 'evening')[];
-  const primaryShift = shifts[0]; // used as metadata in the response
+  // Resolve shift codes from the lookup table
+  const shiftCodeMap = await getShiftCodeMap();
 
-  // Helper: true if this employee has a given shift today
-  const hasShift = (s: 'morning' | 'evening') => shifts.includes(s);
+  const scheduleIds  = todaySchedules.map(s => s.id);
+  const storeIds     = [...new Set(todaySchedules.map(s => s.storeId))];
+  const shiftCodes   = [...new Set(todaySchedules.map(s => shiftCodeMap[s.shiftId] ?? ''))]
+                         .filter(Boolean) as ('morning' | 'evening')[];
+  const primaryShift = shiftCodes[0] ?? null;
+
+  const hasShift = (s: 'morning' | 'evening') => shiftCodes.includes(s);
 
   // ── 2. Fetch all relevant tasks in parallel ────────────────────────────────
-  //
-  // Shared tasks: query by storeId + date (not by userId) because any
-  // employee on that shift can see and complete them.
-  //
-  // Personal tasks (grooming): query by scheduleId because each employee
-  // has their own row.
-
-  const storeFilter = (tbl: { storeId: typeof storeOpeningTasks.storeId; date: typeof storeOpeningTasks.date }) =>
-    and(
-      // In Drizzle we can't pass a dynamic list easily here, so we filter
-      // in JS below for multi-store edge cases. Single-store is the norm.
-      gte(tbl.date, dayStart),
-      lte(tbl.date, dayEnd),
-    );
 
   const [
     openingRows,
@@ -117,7 +120,6 @@ export async function GET(request: NextRequest) {
     openStatementRows,
     groomingRows,
   ] = await Promise.all([
-    // Morning shared tasks — only fetch if employee has a morning shift
     hasShift('morning')
       ? db.select().from(storeOpeningTasks)
           .where(and(gte(storeOpeningTasks.date, dayStart), lte(storeOpeningTasks.date, dayEnd)))
@@ -148,7 +150,6 @@ export async function GET(request: NextRequest) {
           .orderBy(desc(receivingTasks.date))
       : Promise.resolve([]),
 
-    // Evening shared tasks
     hasShift('evening')
       ? db.select().from(briefingTasks)
           .where(and(gte(briefingTasks.date, dayStart), lte(briefingTasks.date, dayEnd)))
@@ -179,7 +180,6 @@ export async function GET(request: NextRequest) {
           .orderBy(desc(openStatementTasks.date))
       : Promise.resolve([]),
 
-    // Personal: grooming — one per schedule row → filter by scheduleId
     scheduleIds.length
       ? db.select().from(groomingTasks)
           .where(and(
@@ -191,10 +191,10 @@ export async function GET(request: NextRequest) {
       : Promise.resolve([]),
   ]);
 
-  // Filter shared rows to only stores this employee is assigned to today
   const inStore = (storeId: number) => storeIds.includes(storeId);
 
   // ── 3. Shape into typed task items ────────────────────────────────────────
+
   const tasks = [
     // ── Morning ──────────────────────────────────────────────────────────────
     ...openingRows.filter(r => inStore(r.storeId)).map(t => ({
@@ -205,19 +205,16 @@ export async function GET(request: NextRequest) {
         scheduleId:        String(t.scheduleId),
         userId:            t.userId,
         storeId:           String(t.storeId),
-        shift:             t.shift,
+        shift:             'morning' as const,
         date:              t.date.toISOString(),
-        // checklist
         loginPos:          t.loginPos,
         checkAbsenSunfish: t.checkAbsenSunfish,
         tarikSohSales:     t.tarikSohSales,
         fiveR:             t.fiveR,
         cekLamp:           t.cekLamp,
         cekSoundSystem:    t.cekSoundSystem,
-        // photos
         storeFrontPhotos:  parsePhotos(t.storeFrontPhotos),
         cashDrawerPhotos:  parsePhotos(t.cashDrawerPhotos),
-        // lifecycle
         status:            t.status,
         notes:             t.notes,
         completedAt:       toIso(t.completedAt),
@@ -234,7 +231,7 @@ export async function GET(request: NextRequest) {
         scheduleId:  String(t.scheduleId),
         userId:      t.userId,
         storeId:     String(t.storeId),
-        shift:       t.shift,
+        shift:       'morning' as const,
         date:        t.date.toISOString(),
         amount:      t.amount,
         linkSetoran: t.linkSetoran,
@@ -255,7 +252,7 @@ export async function GET(request: NextRequest) {
         scheduleId:  String(t.scheduleId),
         userId:      t.userId,
         storeId:     String(t.storeId),
-        shift:       t.shift,
+        shift:       'morning' as const,
         date:        t.date.toISOString(),
         status:      t.status,
         notes:       t.notes,
@@ -273,7 +270,7 @@ export async function GET(request: NextRequest) {
         scheduleId:  String(t.scheduleId),
         userId:      t.userId,
         storeId:     String(t.storeId),
-        shift:       t.shift,
+        shift:       'morning' as const,
         date:        t.date.toISOString(),
         display:     t.display,
         price:       t.price,
@@ -297,7 +294,7 @@ export async function GET(request: NextRequest) {
         scheduleId:      String(t.scheduleId),
         userId:          t.userId,
         storeId:         String(t.storeId),
-        shift:           t.shift,
+        shift:           'morning' as const,
         date:            t.date.toISOString(),
         hasReceiving:    t.hasReceiving,
         receivingPhotos: parsePhotos(t.receivingPhotos),
@@ -318,7 +315,7 @@ export async function GET(request: NextRequest) {
         scheduleId:  String(t.scheduleId),
         userId:      t.userId,
         storeId:     String(t.storeId),
-        shift:       t.shift,
+        shift:       'evening' as const,
         date:        t.date.toISOString(),
         done:        t.done,
         status:      t.status,
@@ -337,7 +334,7 @@ export async function GET(request: NextRequest) {
         scheduleId:       String(t.scheduleId),
         userId:           t.userId,
         storeId:          String(t.storeId),
-        shift:            t.shift,
+        shift:            'evening' as const,
         date:             t.date.toISOString(),
         edcSummaryPhotos: parsePhotos(t.edcSummaryPhotos),
         status:           t.status,
@@ -356,7 +353,7 @@ export async function GET(request: NextRequest) {
         scheduleId:          String(t.scheduleId),
         userId:              t.userId,
         storeId:             String(t.storeId),
-        shift:               t.shift,
+        shift:               'evening' as const,
         date:                t.date.toISOString(),
         edcSettlementPhotos: parsePhotos(t.edcSettlementPhotos),
         status:              t.status,
@@ -375,7 +372,7 @@ export async function GET(request: NextRequest) {
         scheduleId:    String(t.scheduleId),
         userId:        t.userId,
         storeId:       String(t.storeId),
-        shift:         t.shift,
+        shift:         'evening' as const,
         date:          t.date.toISOString(),
         zReportPhotos: parsePhotos(t.zReportPhotos),
         status:        t.status,
@@ -394,7 +391,7 @@ export async function GET(request: NextRequest) {
         scheduleId:          String(t.scheduleId),
         userId:              t.userId,
         storeId:             String(t.storeId),
-        shift:               t.shift,
+        shift:               'evening' as const,
         date:                t.date.toISOString(),
         openStatementPhotos: parsePhotos(t.openStatementPhotos),
         status:              t.status,
@@ -406,36 +403,38 @@ export async function GET(request: NextRequest) {
     })),
 
     // ── Personal (both shifts) ────────────────────────────────────────────────
-    ...groomingRows.map(t => ({
-      type: 'grooming' as const,
-      shift: t.shift as 'morning' | 'evening',
-      data: {
-        id:                   String(t.id),
-        scheduleId:           String(t.scheduleId),
-        userId:               t.userId,
-        storeId:              String(t.storeId),
-        shift:                t.shift,
-        date:                 t.date.toISOString(),
-        // OPS activation flags
-        uniformActive:        t.uniformActive,
-        hairActive:           t.hairActive,
-        nailsActive:          t.nailsActive,
-        accessoriesActive:    t.accessoriesActive,
-        shoeActive:           t.shoeActive,
-        // employee answers
-        uniformComplete:      t.uniformComplete,
-        hairGroomed:          t.hairGroomed,
-        nailsClean:           t.nailsClean,
-        accessoriesCompliant: t.accessoriesCompliant,
-        shoeCompliant:        t.shoeCompliant,
-        selfiePhotos:         parsePhotos(t.selfiePhotos),
-        status:               t.status,
-        notes:                t.notes,
-        completedAt:          toIso(t.completedAt),
-        verifiedBy:           t.verifiedBy,
-        verifiedAt:           toIso(t.verifiedAt),
-      },
-    })),
+    ...groomingRows.map(t => {
+      // Resolve shift code from shiftId
+      const groomingShiftCode = (shiftCodeMap[t.shiftId] ?? 'morning') as 'morning' | 'evening';
+      return {
+        type: 'grooming' as const,
+        shift: groomingShiftCode,
+        data: {
+          id:                   String(t.id),
+          scheduleId:           String(t.scheduleId),
+          userId:               t.userId,
+          storeId:              String(t.storeId),
+          shift:                groomingShiftCode,
+          date:                 t.date.toISOString(),
+          uniformActive:        t.uniformActive,
+          hairActive:           t.hairActive,
+          nailsActive:          t.nailsActive,
+          accessoriesActive:    t.accessoriesActive,
+          shoeActive:           t.shoeActive,
+          uniformComplete:      t.uniformComplete,
+          hairGroomed:          t.hairGroomed,
+          nailsClean:           t.nailsClean,
+          accessoriesCompliant: t.accessoriesCompliant,
+          shoeCompliant:        t.shoeCompliant,
+          selfiePhotos:         parsePhotos(t.selfiePhotos),
+          status:               t.status,
+          notes:                t.notes,
+          completedAt:          toIso(t.completedAt),
+          verifiedBy:           t.verifiedBy,
+          verifiedAt:           toIso(t.verifiedAt),
+        },
+      };
+    }),
   ];
 
   // Sort: pending first, in_progress, completed last; within group by shift
@@ -445,7 +444,6 @@ export async function GET(request: NextRequest) {
   tasks.sort((a, b) => {
     const s = (STATUS_ORDER[a.data.status] ?? 9) - (STATUS_ORDER[b.data.status] ?? 9);
     if (s !== 0) return s;
-    // morning before evening within same status
     return (a.shift === 'morning' ? 0 : 1) - (b.shift === 'morning' ? 0 : 1);
   });
 
@@ -481,9 +479,6 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: 'taskId must be a number' }, { status: 400 });
   }
 
-  // Map of task type → { table, ownershipCheck }
-  // For shared tasks we skip strict userId check (any shift employee can act).
-  // For grooming we enforce ownership.
   const SHARED_TABLES: Record<string, {
     getRow: (id: number) => Promise<{ status: string | null } | undefined>;
     update: (id: number) => Promise<void>;
@@ -530,7 +525,6 @@ export async function PATCH(request: NextRequest) {
     },
   };
 
-  // Grooming is personal — enforce ownership
   if (taskType === 'grooming') {
     const [row] = await db
       .select({ userId: groomingTasks.userId, status: groomingTasks.status })
@@ -538,9 +532,9 @@ export async function PATCH(request: NextRequest) {
       .where(eq(groomingTasks.id, id))
       .limit(1);
 
-    if (!row)              return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+    if (!row)                  return NextResponse.json({ error: 'Task not found' }, { status: 404 });
     if (row.userId !== userId) return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    if (row.status !== 'pending') return NextResponse.json({ success: true }); // already advanced
+    if (row.status !== 'pending') return NextResponse.json({ success: true });
 
     await db.update(groomingTasks).set({ status: 'in_progress', updatedAt: new Date() }).where(eq(groomingTasks.id, id));
     return NextResponse.json({ success: true });
@@ -552,8 +546,8 @@ export async function PATCH(request: NextRequest) {
   }
 
   const row = await handler.getRow(id);
-  if (!row)                    return NextResponse.json({ error: 'Task not found' }, { status: 404 });
-  if (row.status !== 'pending') return NextResponse.json({ success: true }); // already advanced
+  if (!row)                     return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+  if (row.status !== 'pending') return NextResponse.json({ success: true });
 
   await handler.update(id);
   return NextResponse.json({ success: true });

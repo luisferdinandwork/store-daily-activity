@@ -1,34 +1,39 @@
 // types/next-auth.d.ts
-import NextAuth from 'next-auth';
+import { DefaultSession, DefaultUser } from 'next-auth';
+import { JWT as DefaultJWT } from 'next-auth/jwt';
 
 declare module 'next-auth' {
-  interface Session {
-    user: {
-      id: string;
-      name?: string | null;
-      email?: string | null;
-      image?: string | null;
-      role: string;
-      employeeType?: string;
-      storeId?: string;
-    };
+  interface User extends DefaultUser {
+    id:                string;
+    role:              string;          // role code, e.g. 'ops' — DB-driven now
+    roleLabel:         string;
+    employeeType:      string | null;   // e.g. 'pic_1' or null
+    employeeTypeLabel: string | null;
+    homeStoreId:       number | null;
+    areaId:            number | null;
   }
 
-  interface User {
-    id: string;
-    name?: string | null;
-    email?: string | null;
-    image?: string | null;
-    role: string;
-    employeeType?: string;
-    storeId?: string;
+  interface Session {
+    user: {
+      id:                string;
+      role:              string;
+      roleLabel:         string;
+      employeeType:      string | null;
+      employeeTypeLabel: string | null;
+      homeStoreId:       number | null;
+      areaId:            number | null;
+    } & DefaultSession['user'];
   }
 }
 
 declare module 'next-auth/jwt' {
-  interface JWT {
-    role: string;
-    employeeType?: string;
-    storeId?: string;
+  interface JWT extends DefaultJWT {
+    id:                string;
+    role:              string;
+    roleLabel:         string;
+    employeeType:      string | null;
+    employeeTypeLabel: string | null;
+    homeStoreId:       number | null;
+    areaId:            number | null;
   }
 }

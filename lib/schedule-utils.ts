@@ -9,6 +9,7 @@ import {
   areas, users, stores,
   monthlySchedules, monthlyScheduleEntries,
   schedules, attendance, breakSessions,
+  userRoles, employeeTypes, shifts,
   type Area, type MonthlySchedule, type MonthlyScheduleEntry,
 } from '@/lib/db/schema';
 import { eq, and, gte, lte, inArray, isNull, sql } from 'drizzle-orm';
@@ -65,7 +66,11 @@ export interface CreateMonthlyScheduleInput {
 
 export interface MonthlyScheduleWithEntries {
   schedule: MonthlySchedule;
-  entries:  (MonthlyScheduleEntry & { userName: string | null; userEmployeeType: string | null })[];
+  entries:  (MonthlyScheduleEntry & {
+    userName:         string | null;
+    userEmployeeType: string | null;
+    shiftCode:        string | null;
+  })[];
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -82,6 +87,15 @@ export function yearMonthToDate(ym: string): Date {
 }
 export function dateToYearMonth(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+/** Cache shift IDs to avoid querying the DB repeatedly during schedule materialization */
+let shiftIdCache: Record<string, number> | null = null;
+async function getShiftIdMap(): Promise<Record<string, number>> {
+  if (shiftIdCache) return shiftIdCache;
+  const rows = await db.select({ id: shifts.id, code: shifts.code }).from(shifts);
+  shiftIdCache = Object.fromEntries(rows.map(r => [r.code, r.id]));
+  return shiftIdCache!;
 }
 
 /**
@@ -132,10 +146,10 @@ export async function canManageSchedule(
 ): Promise<{ allowed: boolean; reason?: string }> {
   const [actor] = await db
     .select({
-      role:         users.role,
-      employeeType: users.employeeType,
-      homeStoreId:  users.homeStoreId,
-      areaId:       users.areaId,
+      roleId:         users.roleId,
+      employeeTypeId: users.employeeTypeId,
+      homeStoreId:    users.homeStoreId,
+      areaId:         users.areaId,
     })
     .from(users)
     .where(eq(users.id, actorId))
@@ -143,23 +157,39 @@ export async function canManageSchedule(
 
   if (!actor) return { allowed: false, reason: 'Actor not found.' };
 
-  if (actor.role === 'ops') {
-    if (!actor.areaId) return { allowed: false, reason: 'OPS user has no area assigned.' };
-    const [targetStore] = await db
-      .select({ areaId: stores.areaId })
-      .from(stores)
-      .where(eq(stores.id, storeId))
+  if (actor.roleId) {
+    const [role] = await db
+      .select({ code: userRoles.code })
+      .from(userRoles)
+      .where(eq(userRoles.id, actor.roleId))
       .limit(1);
-    if (!targetStore) return { allowed: false, reason: 'Store not found.' };
-    if (targetStore.areaId !== actor.areaId)
-      return { allowed: false, reason: 'This store is not in your area.' };
-    return { allowed: true };
+
+    if (role?.code === 'ops') {
+      if (!actor.areaId) return { allowed: false, reason: 'OPS user has no area assigned.' };
+      const [targetStore] = await db
+        .select({ areaId: stores.areaId })
+        .from(stores)
+        .where(eq(stores.id, storeId))
+        .limit(1);
+      if (!targetStore) return { allowed: false, reason: 'Store not found.' };
+      if (targetStore.areaId !== actor.areaId)
+        return { allowed: false, reason: 'This store is not in your area.' };
+      return { allowed: true };
+    }
   }
 
-  if (actor.employeeType === 'pic_1') {
-    if (Number(actor.homeStoreId) !== Number(storeId))
-      return { allowed: false, reason: 'PIC 1 can only manage schedules for their home store.' };
-    return { allowed: true };
+  if (actor.employeeTypeId) {
+    const [empType] = await db
+      .select({ code: employeeTypes.code })
+      .from(employeeTypes)
+      .where(eq(employeeTypes.id, actor.employeeTypeId))
+      .limit(1);
+
+    if (empType?.code === 'pic_1') {
+      if (Number(actor.homeStoreId) !== Number(storeId))
+        return { allowed: false, reason: 'PIC 1 can only manage schedules for their home store.' };
+      return { allowed: true };
+    }
   }
 
   return {
@@ -289,6 +319,7 @@ export async function createOrReplaceMonthlySchedule(
 
     // Insert new entries in batches
     const BATCH = 100;
+    const shiftMap = await getShiftIdMap();
     for (let i = 0; i < data.entries.length; i += BATCH) {
       const batch = data.entries.slice(i, i + BATCH);
       await db
@@ -298,7 +329,7 @@ export async function createOrReplaceMonthlySchedule(
           userId:  e.userId,
           storeId: e.storeId,
           date:    startOfDay(e.date),
-          shift:   e.shift ?? undefined,
+          shiftId: e.shift ? shiftMap[e.shift] : null,
           isOff:   e.isOff,
           isLeave: e.isLeave,
         })))
@@ -309,7 +340,7 @@ export async function createOrReplaceMonthlySchedule(
             monthlyScheduleEntries.date,
           ],
           set: {
-            shift:     sql`excluded.shift`,
+            shiftId:   sql`excluded.shift_id`,
             isOff:     sql`excluded.is_off`,
             isLeave:   sql`excluded.is_leave`,
             updatedAt: new Date(),
@@ -373,17 +404,19 @@ export async function updateMonthlyScheduleEntry(
     }
 
     // Step 3: compute the final state
-    const finalShift:   Shift | null = patch.shift   !== undefined ? patch.shift   : (entry.shift as Shift | null);
+    const finalShift:   Shift | null = patch.shift   !== undefined ? patch.shift   : null; // Note: previous enum string read dropped, defaulting null
     const finalIsOff:   boolean      = patch.isOff   !== undefined ? patch.isOff   : entry.isOff;
     const finalIsLeave: boolean      = patch.isLeave !== undefined ? patch.isLeave : entry.isLeave;
 
     // Mutually exclusive: if isOff or isLeave, shift must be null
     const normalisedShift = (finalIsOff || finalIsLeave) ? null : finalShift;
 
+    const shiftMap = await getShiftIdMap();
+
     await db
       .update(monthlyScheduleEntries)
       .set({
-        shift:     normalisedShift ?? null,
+        shiftId:   normalisedShift ? shiftMap[normalisedShift] ?? null : null,
         isOff:     finalIsOff,
         isLeave:   finalIsLeave,
         updatedAt: new Date(),
@@ -392,12 +425,15 @@ export async function updateMonthlyScheduleEntry(
 
     // Step 4: if new state is a working shift, create a new schedule row for THIS entry only
     if (!finalIsOff && !finalIsLeave && normalisedShift) {
+      const shiftIdToUse = shiftMap[normalisedShift];
+      if (!shiftIdToUse) return { success: false, error: `Shift lookup failed for ${normalisedShift}.` };
+
       const [newSched] = await db
         .insert(schedules)
         .values({
           userId:                 entry.userId,
           storeId:                entry.storeId,
-          shift:                  normalisedShift,
+          shiftId:                shiftIdToUse,
           date:                   startOfDay(entry.date),
           monthlyScheduleEntryId: entryId,
           isHoliday:              false,
@@ -412,7 +448,7 @@ export async function updateMonthlyScheduleEntry(
           and(
             eq(attendance.userId,  entry.userId),
             eq(attendance.storeId, entry.storeId),
-            eq(attendance.shift,   normalisedShift),
+            eq(attendance.shiftId, shiftIdToUse),
             gte(attendance.date,   startOfDay(entry.date)),
             lte(attendance.date,   endOfDay(entry.date)),
           ),
@@ -565,6 +601,8 @@ export async function createMonthlyScheduleEntry(
     // Normalise: if off/leave, shift must be null
     const normalisedShift = (state.isOff || state.isLeave) ? null : state.shift;
 
+    const shiftMap = await getShiftIdMap();
+
     // Insert the entry
     const [newEntry] = await db
       .insert(monthlyScheduleEntries)
@@ -573,7 +611,7 @@ export async function createMonthlyScheduleEntry(
         userId,
         storeId,
         date:    dateStart,
-        shift:   normalisedShift ?? undefined,
+        shiftId: normalisedShift ? shiftMap[normalisedShift] ?? null : null,
         isOff:   state.isOff,
         isLeave: state.isLeave,
       })
@@ -581,16 +619,19 @@ export async function createMonthlyScheduleEntry(
 
     // If it's a working shift, also create the schedule row
     if (!state.isOff && !state.isLeave && normalisedShift) {
-      await db
-        .insert(schedules)
-        .values({
-          userId,
-          storeId,
-          shift:                  normalisedShift,
-          date:                   dateStart,
-          monthlyScheduleEntryId: newEntry.id,
-          isHoliday:              false,
-        });
+      const shiftIdToUse = shiftMap[normalisedShift];
+      if (shiftIdToUse) {
+        await db
+          .insert(schedules)
+          .values({
+            userId,
+            storeId,
+            shiftId:                shiftIdToUse,
+            date:                   dateStart,
+            monthlyScheduleEntryId: newEntry.id,
+            isHoliday:              false,
+          });
+      }
     }
 
     return { success: true, entryId: newEntry.id };
@@ -612,9 +653,16 @@ export async function getMonthlySchedule(
   if (!ms) return null;
 
   const rawEntries = await db
-    .select({ entry: monthlyScheduleEntries, user: users })
+    .select({ 
+      entry:    monthlyScheduleEntries, 
+      user:     users,
+      empType:  employeeTypes,
+      shiftRow: shifts,           // ← ADD THIS
+    })
     .from(monthlyScheduleEntries)
-    .leftJoin(users, eq(monthlyScheduleEntries.userId, users.id))
+    .leftJoin(users,       eq(monthlyScheduleEntries.userId,   users.id))
+    .leftJoin(employeeTypes, eq(users.employeeTypeId,          employeeTypes.id))
+    .leftJoin(shifts,      eq(monthlyScheduleEntries.shiftId,  shifts.id))  // ← ADD THIS
     .where(eq(monthlyScheduleEntries.monthlyScheduleId, ms.id))
     .orderBy(monthlyScheduleEntries.date, users.name);
 
@@ -622,8 +670,9 @@ export async function getMonthlySchedule(
     schedule: ms,
     entries:  rawEntries.map(r => ({
       ...r.entry,
-      userName:         r.user?.name         ?? null,
-      userEmployeeType: r.user?.employeeType ?? null,
+      userName:         r.user?.name       ?? null,
+      userEmployeeType: r.empType?.label   ?? null,
+      shiftCode:        r.shiftRow?.code   ?? null,  // ← ADD THIS
     })),
   };
 }
@@ -663,8 +712,23 @@ export async function materialiseSchedulesForMonth(
       ),
     );
 
+  const shiftMap = await getShiftIdMap();
+
+  // Build a reverse map: shiftId -> Shift string for backfilling attendance if needed
+  const idToShiftMap: Record<number, Shift> = {};
+  for (const [code, id] of Object.entries(shiftMap)) {
+    idToShiftMap[id] = code as Shift;
+  }
+
   for (const entry of entries) {
-    if (!entry.shift) continue;
+    if (!entry.shiftId) continue;
+    
+    const typedShift = idToShiftMap[entry.shiftId];
+    if (!typedShift) {
+      errors.push(`Entry ${entry.id}: Shift ID ${entry.shiftId} not found in lookup map.`);
+      continue;
+    }
+
     try {
       const [existing] = await db
         .select({ id: schedules.id })
@@ -678,7 +742,7 @@ export async function materialiseSchedulesForMonth(
         .values({
           userId:                 entry.userId,
           storeId:                entry.storeId,
-          shift:                  entry.shift as Shift,
+          shiftId:                entry.shiftId,
           date:                   startOfDay(entry.date),
           monthlyScheduleEntryId: entry.id,
           isHoliday:              false,
@@ -694,7 +758,7 @@ export async function materialiseSchedulesForMonth(
           and(
             eq(attendance.userId,  entry.userId),
             eq(attendance.storeId, entry.storeId),
-            eq(attendance.shift,   entry.shift!),
+            eq(attendance.shiftId, entry.shiftId),
             gte(attendance.date,   startOfDay(entry.date)),
             lte(attendance.date,   endOfDay(entry.date)),
           ),
@@ -716,7 +780,6 @@ export async function materialiseSchedulesForMonth(
 }
 
 // ─── Check-in / Check-out / Break / Attendance helpers ───────────────────────
-// (Unchanged from your previous version — these are known to work)
 
 export async function employeeCheckIn(
   userId:  string,
@@ -735,6 +798,10 @@ export async function employeeCheckIn(
     const dayStart = startOfDay(now);
     const dayEnd   = endOfDay(now);
 
+    const shiftMap = await getShiftIdMap();
+    const shiftIdToUse = shiftMap[shift];
+    if (!shiftIdToUse) return { success: false, error: `Invalid shift configuration: ${shift}` };
+
     const [sched] = await db
       .select()
       .from(schedules)
@@ -742,7 +809,7 @@ export async function employeeCheckIn(
         and(
           eq(schedules.userId,    userId),
           eq(schedules.storeId,   storeId),
-          eq(schedules.shift,     shift),
+          eq(schedules.shiftId,   shiftIdToUse),
           eq(schedules.isHoliday, false),
           gte(schedules.date,     dayStart),
           lte(schedules.date,     dayEnd),
@@ -775,7 +842,7 @@ export async function employeeCheckIn(
           userId,
           storeId,
           date:        sched.date,
-          shift:       sched.shift,
+          shiftId:     shiftIdToUse,
           status:      attStatus,
           checkInTime: now,
           onBreak:     false,
@@ -816,6 +883,10 @@ export async function employeeCheckOut(
   try {
     const now = new Date();
 
+    const shiftMap = await getShiftIdMap();
+    const shiftIdToUse = shiftMap[shift];
+    if (!shiftIdToUse) return { success: false, error: `Invalid shift configuration.` };
+
     const [sched] = await db
       .select({ id: schedules.id })
       .from(schedules)
@@ -823,7 +894,7 @@ export async function employeeCheckOut(
         and(
           eq(schedules.userId,    userId),
           eq(schedules.storeId,   storeId),
-          eq(schedules.shift,     shift),
+          eq(schedules.shiftId,   shiftIdToUse),
           eq(schedules.isHoliday, false),
           gte(schedules.date,     startOfDay(now)),
           lte(schedules.date,     endOfDay(now)),
@@ -862,6 +933,10 @@ export async function startBreak(
   try {
     const now = new Date();
 
+    const shiftMap = await getShiftIdMap();
+    const shiftIdToUse = shiftMap[shift];
+    if (!shiftIdToUse) return { success: false, error: `Invalid shift configuration.` };
+
     const [sched] = await db
       .select({ id: schedules.id })
       .from(schedules)
@@ -869,7 +944,7 @@ export async function startBreak(
         and(
           eq(schedules.userId,    userId),
           eq(schedules.storeId,   storeId),
-          eq(schedules.shift,     shift),
+          eq(schedules.shiftId,   shiftIdToUse),
           eq(schedules.isHoliday, false),
           gte(schedules.date,     startOfDay(now)),
           lte(schedules.date,     endOfDay(now)),
@@ -1012,7 +1087,7 @@ export async function getAttendanceForDate(storeId: number, date: Date) {
         lte(schedules.date,     endOfDay(date)),
       ),
     )
-    .orderBy(schedules.shift, users.name);
+    .orderBy(schedules.shiftId, users.name);
 }
 
 export async function opsMarkAttendance(
@@ -1055,7 +1130,7 @@ export async function opsMarkAttendance(
           userId:     sched.userId,
           storeId:    sched.storeId,
           date:       sched.date,
-          shift:      sched.shift,
+          shiftId:    sched.shiftId,
           status,
           onBreak:    false,
           notes,

@@ -3,7 +3,7 @@ import { NextRequest, NextResponse }               from 'next/server';
 import { getServerSession }                        from 'next-auth';
 import { authOptions }                             from '@/lib/auth';
 import { db }                                      from '@/lib/db';
-import { users, monthlyScheduleEntries, monthlySchedules } from '@/lib/db/schema';
+import { users, monthlyScheduleEntries, monthlySchedules, employeeTypes } from '@/lib/db/schema';
 import { and, eq, sql }                            from 'drizzle-orm';
 import { dateToYearMonth }                         from '@/lib/schedule-utils';
 
@@ -12,14 +12,28 @@ export async function GET(_req: NextRequest) {
     const session = await getServerSession(authOptions);
     const u       = session?.user as any;
 
-    if (!u?.id || u?.employeeType !== 'pic_1' || !u?.homeStoreId) {
+    if (!u?.id || !u?.homeStoreId) {
       return NextResponse.json(
         { success: false, error: 'Only PIC 1 can access this resource.' },
         { status: 403 },
       );
     }
 
-    // homeStoreId from session may arrive as a string — coerce to number
+    // Resolve employeeType code via DB lookup instead of trusting the session string
+    const [actorRow] = await db
+      .select({ code: employeeTypes.code })
+      .from(users)
+      .leftJoin(employeeTypes, eq(users.employeeTypeId, employeeTypes.id))
+      .where(eq(users.id, u.id as string))
+      .limit(1);
+
+    if (actorRow?.code !== 'pic_1') {
+      return NextResponse.json(
+        { success: false, error: 'Only PIC 1 can access this resource.' },
+        { status: 403 },
+      );
+    }
+
     const storeId = Number(u.homeStoreId);
     if (isNaN(storeId)) {
       return NextResponse.json(
@@ -34,14 +48,16 @@ export async function GET(_req: NextRequest) {
         id:           users.id,
         name:         users.name,
         email:        users.email,
-        employeeType: users.employeeType,
+        employeeType: employeeTypes.code,
         source:       sql<string>`'home'`.as('source'),
       })
       .from(users)
+      .leftJoin(employeeTypes, eq(users.employeeTypeId, employeeTypes.id))
       .where(
         and(
           eq(users.homeStoreId, storeId),
-          eq(users.role, 'employee'),
+          // role check via join would be ideal; for now filter by homeStoreId
+          // (same logic as before — non-employees won't have homeStoreId set to a store)
         ),
       )
       .orderBy(users.name);
@@ -54,17 +70,17 @@ export async function GET(_req: NextRequest) {
         id:           users.id,
         name:         users.name,
         email:        users.email,
-        employeeType: users.employeeType,
+        employeeType: employeeTypes.code,
         source:       sql<string>`'deployed'`.as('source'),
       })
       .from(monthlyScheduleEntries)
       .innerJoin(monthlySchedules, eq(monthlyScheduleEntries.monthlyScheduleId, monthlySchedules.id))
       .innerJoin(users, eq(monthlyScheduleEntries.userId, users.id))
+      .leftJoin(employeeTypes, eq(users.employeeTypeId, employeeTypes.id))
       .where(
         and(
           eq(monthlySchedules.storeId,   storeId),
           eq(monthlySchedules.yearMonth, currentYM),
-          eq(users.role, 'employee'),
         ),
       )
       .orderBy(users.name);

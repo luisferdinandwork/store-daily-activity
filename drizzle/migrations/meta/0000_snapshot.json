@@ -1,5 +1,5 @@
 {
-  "id": "f21ae44e-7d59-4463-8db9-ca4604664311",
+  "id": "4f98f7c8-378e-4034-8ce6-89f0b4fc6b07",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -55,7 +55,7 @@
         },
         "schedule_id": {
           "name": "schedule_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -67,7 +67,7 @@
         },
         "store_id": {
           "name": "store_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -77,10 +77,9 @@
           "primaryKey": false,
           "notNull": true
         },
-        "shift": {
-          "name": "shift",
-          "type": "shift",
-          "typeSchema": "public",
+        "shift_id": {
+          "name": "shift_id",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -179,6 +178,19 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
+        "attendance_shift_id_shifts_id_fk": {
+          "name": "attendance_shift_id_shifts_id_fk",
+          "tableFrom": "attendance",
+          "tableTo": "shifts",
+          "columnsFrom": [
+            "shift_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "attendance_recorded_by_users_id_fk": {
           "name": "attendance_recorded_by_users_id_fk",
           "tableFrom": "attendance",
@@ -219,7 +231,7 @@
         },
         "attendance_id": {
           "name": "attendance_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -231,7 +243,7 @@
         },
         "store_id": {
           "name": "store_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -359,7 +371,7 @@
         },
         "store_id": {
           "name": "store_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -494,7 +506,7 @@
         },
         "store_id": {
           "name": "store_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -598,7 +610,7 @@
         },
         "monthly_schedule_id": {
           "name": "monthly_schedule_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -610,7 +622,7 @@
         },
         "store_id": {
           "name": "store_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -620,10 +632,9 @@
           "primaryKey": false,
           "notNull": true
         },
-        "shift": {
-          "name": "shift",
-          "type": "shift",
-          "typeSchema": "public",
+        "shift_id": {
+          "name": "shift_id",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false
         },
@@ -696,6 +707,19 @@
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
+        },
+        "monthly_schedule_entries_shift_id_shifts_id_fk": {
+          "name": "monthly_schedule_entries_shift_id_shifts_id_fk",
+          "tableFrom": "monthly_schedule_entries",
+          "tableTo": "shifts",
+          "columnsFrom": [
+            "shift_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -726,7 +750,7 @@
         },
         "store_id": {
           "name": "store_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -837,7 +861,7 @@
         },
         "store_id": {
           "name": "store_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -934,14 +958,13 @@
         },
         "store_id": {
           "name": "store_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
-        "shift": {
-          "name": "shift",
-          "type": "shift",
-          "typeSchema": "public",
+        "shift_id": {
+          "name": "shift_id",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -1000,6 +1023,19 @@
           "tableTo": "stores",
           "columnsFrom": [
             "store_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "schedules_shift_id_shifts_id_fk": {
+          "name": "schedules_shift_id_shifts_id_fk",
+          "tableFrom": "schedules",
+          "tableTo": "shifts",
+          "columnsFrom": [
+            "shift_id"
           ],
           "columnsTo": [
             "id"
@@ -1070,7 +1106,7 @@
         },
         "area_id": {
           "name": "area_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -1146,17 +1182,15 @@
           "primaryKey": false,
           "notNull": true
         },
-        "role": {
-          "name": "role",
-          "type": "user_role",
-          "typeSchema": "public",
+        "role_id": {
+          "name": "role_id",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
-        "employee_type": {
-          "name": "employee_type",
-          "type": "employee_type",
-          "typeSchema": "public",
+        "employee_type_id": {
+          "name": "employee_type_id",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false
         },
@@ -1189,6 +1223,32 @@
       },
       "indexes": {},
       "foreignKeys": {
+        "users_role_id_user_roles_id_fk": {
+          "name": "users_role_id_user_roles_id_fk",
+          "tableFrom": "users",
+          "tableTo": "user_roles",
+          "columnsFrom": [
+            "role_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "users_employee_type_id_employee_types_id_fk": {
+          "name": "users_employee_type_id_employee_types_id_fk",
+          "tableFrom": "users",
+          "tableTo": "employee_types",
+          "columnsFrom": [
+            "employee_type_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "users_home_store_id_stores_id_fk": {
           "name": "users_home_store_id_stores_id_fk",
           "tableFrom": "users",
@@ -1230,6 +1290,237 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.employee_types": {
+      "name": "employee_types",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "code": {
+          "name": "code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "label": {
+          "name": "label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "is_active": {
+          "name": "is_active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "sort_order": {
+          "name": "sort_order",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "employee_types_code_unique": {
+          "name": "employee_types_code_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "code"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.shifts": {
+      "name": "shifts",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "code": {
+          "name": "code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "label": {
+          "name": "label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "start_time": {
+          "name": "start_time",
+          "type": "time",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "end_time": {
+          "name": "end_time",
+          "type": "time",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "is_active": {
+          "name": "is_active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "sort_order": {
+          "name": "sort_order",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "shifts_code_unique": {
+          "name": "shifts_code_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "code"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.user_roles": {
+      "name": "user_roles",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "code": {
+          "name": "code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "label": {
+          "name": "label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "is_active": {
+          "name": "is_active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "sort_order": {
+          "name": "sort_order",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "user_roles_code_unique": {
+          "name": "user_roles_code_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "code"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.briefing_tasks": {
       "name": "briefing_tasks",
       "schema": "",
@@ -1242,7 +1533,7 @@
         },
         "schedule_id": {
           "name": "schedule_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -1254,17 +1545,15 @@
         },
         "store_id": {
           "name": "store_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
-        "shift": {
-          "name": "shift",
-          "type": "shift",
-          "typeSchema": "public",
+        "shift_id": {
+          "name": "shift_id",
+          "type": "integer",
           "primaryKey": false,
-          "notNull": true,
-          "default": "'evening'"
+          "notNull": true
         },
         "date": {
           "name": "date",
@@ -1379,6 +1668,19 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
+        "briefing_tasks_shift_id_shifts_id_fk": {
+          "name": "briefing_tasks_shift_id_shifts_id_fk",
+          "tableFrom": "briefing_tasks",
+          "tableTo": "shifts",
+          "columnsFrom": [
+            "shift_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "briefing_tasks_verified_by_users_id_fk": {
           "name": "briefing_tasks_verified_by_users_id_fk",
           "tableFrom": "briefing_tasks",
@@ -1420,7 +1722,7 @@
         },
         "schedule_id": {
           "name": "schedule_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -1432,17 +1734,15 @@
         },
         "store_id": {
           "name": "store_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
-        "shift": {
-          "name": "shift",
-          "type": "shift",
-          "typeSchema": "public",
+        "shift_id": {
+          "name": "shift_id",
+          "type": "integer",
           "primaryKey": false,
-          "notNull": true,
-          "default": "'morning'"
+          "notNull": true
         },
         "date": {
           "name": "date",
@@ -1550,6 +1850,19 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
+        "cek_bin_tasks_shift_id_shifts_id_fk": {
+          "name": "cek_bin_tasks_shift_id_shifts_id_fk",
+          "tableFrom": "cek_bin_tasks",
+          "tableTo": "shifts",
+          "columnsFrom": [
+            "shift_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "cek_bin_tasks_verified_by_users_id_fk": {
           "name": "cek_bin_tasks_verified_by_users_id_fk",
           "tableFrom": "cek_bin_tasks",
@@ -1591,7 +1904,7 @@
         },
         "schedule_id": {
           "name": "schedule_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -1603,17 +1916,15 @@
         },
         "store_id": {
           "name": "store_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
-        "shift": {
-          "name": "shift",
-          "type": "shift",
-          "typeSchema": "public",
+        "shift_id": {
+          "name": "shift_id",
+          "type": "integer",
           "primaryKey": false,
-          "notNull": true,
-          "default": "'evening'"
+          "notNull": true
         },
         "date": {
           "name": "date",
@@ -1727,6 +2038,19 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
+        "edc_settlement_tasks_shift_id_shifts_id_fk": {
+          "name": "edc_settlement_tasks_shift_id_shifts_id_fk",
+          "tableFrom": "edc_settlement_tasks",
+          "tableTo": "shifts",
+          "columnsFrom": [
+            "shift_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "edc_settlement_tasks_verified_by_users_id_fk": {
           "name": "edc_settlement_tasks_verified_by_users_id_fk",
           "tableFrom": "edc_settlement_tasks",
@@ -1768,7 +2092,7 @@
         },
         "schedule_id": {
           "name": "schedule_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -1780,17 +2104,15 @@
         },
         "store_id": {
           "name": "store_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
-        "shift": {
-          "name": "shift",
-          "type": "shift",
-          "typeSchema": "public",
+        "shift_id": {
+          "name": "shift_id",
+          "type": "integer",
           "primaryKey": false,
-          "notNull": true,
-          "default": "'evening'"
+          "notNull": true
         },
         "date": {
           "name": "date",
@@ -1904,6 +2226,19 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
+        "edc_summary_tasks_shift_id_shifts_id_fk": {
+          "name": "edc_summary_tasks_shift_id_shifts_id_fk",
+          "tableFrom": "edc_summary_tasks",
+          "tableTo": "shifts",
+          "columnsFrom": [
+            "shift_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "edc_summary_tasks_verified_by_users_id_fk": {
           "name": "edc_summary_tasks_verified_by_users_id_fk",
           "tableFrom": "edc_summary_tasks",
@@ -1945,7 +2280,7 @@
         },
         "schedule_id": {
           "name": "schedule_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -1957,17 +2292,15 @@
         },
         "store_id": {
           "name": "store_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
-        "shift": {
-          "name": "shift",
-          "type": "shift",
-          "typeSchema": "public",
+        "shift_id": {
+          "name": "shift_id",
+          "type": "integer",
           "primaryKey": false,
-          "notNull": true,
-          "default": "'evening'"
+          "notNull": true
         },
         "date": {
           "name": "date",
@@ -2081,6 +2414,19 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
+        "eod_z_report_tasks_shift_id_shifts_id_fk": {
+          "name": "eod_z_report_tasks_shift_id_shifts_id_fk",
+          "tableFrom": "eod_z_report_tasks",
+          "tableTo": "shifts",
+          "columnsFrom": [
+            "shift_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "eod_z_report_tasks_verified_by_users_id_fk": {
           "name": "eod_z_report_tasks_verified_by_users_id_fk",
           "tableFrom": "eod_z_report_tasks",
@@ -2122,7 +2468,7 @@
         },
         "schedule_id": {
           "name": "schedule_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -2134,14 +2480,13 @@
         },
         "store_id": {
           "name": "store_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
-        "shift": {
-          "name": "shift",
-          "type": "shift",
-          "typeSchema": "public",
+        "shift_id": {
+          "name": "shift_id",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -2322,6 +2667,19 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
+        "grooming_tasks_shift_id_shifts_id_fk": {
+          "name": "grooming_tasks_shift_id_shifts_id_fk",
+          "tableFrom": "grooming_tasks",
+          "tableTo": "shifts",
+          "columnsFrom": [
+            "shift_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "grooming_tasks_verified_by_users_id_fk": {
           "name": "grooming_tasks_verified_by_users_id_fk",
           "tableFrom": "grooming_tasks",
@@ -2362,7 +2720,7 @@
         },
         "schedule_id": {
           "name": "schedule_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -2374,17 +2732,15 @@
         },
         "store_id": {
           "name": "store_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
-        "shift": {
-          "name": "shift",
-          "type": "shift",
-          "typeSchema": "public",
+        "shift_id": {
+          "name": "shift_id",
+          "type": "integer",
           "primaryKey": false,
-          "notNull": true,
-          "default": "'evening'"
+          "notNull": true
         },
         "date": {
           "name": "date",
@@ -2498,6 +2854,19 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
+        "open_statement_tasks_shift_id_shifts_id_fk": {
+          "name": "open_statement_tasks_shift_id_shifts_id_fk",
+          "tableFrom": "open_statement_tasks",
+          "tableTo": "shifts",
+          "columnsFrom": [
+            "shift_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "open_statement_tasks_verified_by_users_id_fk": {
           "name": "open_statement_tasks_verified_by_users_id_fk",
           "tableFrom": "open_statement_tasks",
@@ -2539,7 +2908,7 @@
         },
         "schedule_id": {
           "name": "schedule_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -2551,17 +2920,15 @@
         },
         "store_id": {
           "name": "store_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
-        "shift": {
-          "name": "shift",
-          "type": "shift",
-          "typeSchema": "public",
+        "shift_id": {
+          "name": "shift_id",
+          "type": "integer",
           "primaryKey": false,
-          "notNull": true,
-          "default": "'morning'"
+          "notNull": true
         },
         "date": {
           "name": "date",
@@ -2711,6 +3078,19 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
+        "product_check_tasks_shift_id_shifts_id_fk": {
+          "name": "product_check_tasks_shift_id_shifts_id_fk",
+          "tableFrom": "product_check_tasks",
+          "tableTo": "shifts",
+          "columnsFrom": [
+            "shift_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "product_check_tasks_verified_by_users_id_fk": {
           "name": "product_check_tasks_verified_by_users_id_fk",
           "tableFrom": "product_check_tasks",
@@ -2752,7 +3132,7 @@
         },
         "schedule_id": {
           "name": "schedule_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -2764,17 +3144,15 @@
         },
         "store_id": {
           "name": "store_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
-        "shift": {
-          "name": "shift",
-          "type": "shift",
-          "typeSchema": "public",
+        "shift_id": {
+          "name": "shift_id",
+          "type": "integer",
           "primaryKey": false,
-          "notNull": true,
-          "default": "'morning'"
+          "notNull": true
         },
         "date": {
           "name": "date",
@@ -2895,6 +3273,19 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
+        "receiving_tasks_shift_id_shifts_id_fk": {
+          "name": "receiving_tasks_shift_id_shifts_id_fk",
+          "tableFrom": "receiving_tasks",
+          "tableTo": "shifts",
+          "columnsFrom": [
+            "shift_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "receiving_tasks_verified_by_users_id_fk": {
           "name": "receiving_tasks_verified_by_users_id_fk",
           "tableFrom": "receiving_tasks",
@@ -2936,7 +3327,7 @@
         },
         "schedule_id": {
           "name": "schedule_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -2948,17 +3339,15 @@
         },
         "store_id": {
           "name": "store_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
-        "shift": {
-          "name": "shift",
-          "type": "shift",
-          "typeSchema": "public",
+        "shift_id": {
+          "name": "shift_id",
+          "type": "integer",
           "primaryKey": false,
-          "notNull": true,
-          "default": "'morning'"
+          "notNull": true
         },
         "date": {
           "name": "date",
@@ -3084,6 +3473,19 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
+        "setoran_tasks_shift_id_shifts_id_fk": {
+          "name": "setoran_tasks_shift_id_shifts_id_fk",
+          "tableFrom": "setoran_tasks",
+          "tableTo": "shifts",
+          "columnsFrom": [
+            "shift_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "setoran_tasks_verified_by_users_id_fk": {
           "name": "setoran_tasks_verified_by_users_id_fk",
           "tableFrom": "setoran_tasks",
@@ -3125,7 +3527,7 @@
         },
         "schedule_id": {
           "name": "schedule_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
@@ -3137,17 +3539,15 @@
         },
         "store_id": {
           "name": "store_id",
-          "type": "serial",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
-        "shift": {
-          "name": "shift",
-          "type": "shift",
-          "typeSchema": "public",
+        "shift_id": {
+          "name": "shift_id",
+          "type": "integer",
           "primaryKey": false,
-          "notNull": true,
-          "default": "'morning'"
+          "notNull": true
         },
         "date": {
           "name": "date",
@@ -3309,6 +3709,19 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
+        "store_opening_tasks_shift_id_shifts_id_fk": {
+          "name": "store_opening_tasks_shift_id_shifts_id_fk",
+          "tableFrom": "store_opening_tasks",
+          "tableTo": "shifts",
+          "columnsFrom": [
+            "shift_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "store_opening_tasks_verified_by_users_id_fk": {
           "name": "store_opening_tasks_verified_by_users_id_fk",
           "tableFrom": "store_opening_tasks",
@@ -3358,15 +3771,6 @@
         "dinner"
       ]
     },
-    "public.employee_type": {
-      "name": "employee_type",
-      "schema": "public",
-      "values": [
-        "pic_1",
-        "pic_2",
-        "so"
-      ]
-    },
     "public.issue_status": {
       "name": "issue_status",
       "schema": "public",
@@ -3386,14 +3790,6 @@
         "rejected"
       ]
     },
-    "public.shift": {
-      "name": "shift",
-      "schema": "public",
-      "values": [
-        "morning",
-        "evening"
-      ]
-    },
     "public.task_status": {
       "name": "task_status",
       "schema": "public",
@@ -3403,16 +3799,6 @@
         "completed",
         "verified",
         "rejected"
-      ]
-    },
-    "public.user_role": {
-      "name": "user_role",
-      "schema": "public",
-      "values": [
-        "employee",
-        "ops",
-        "finance",
-        "admin"
       ]
     }
   },

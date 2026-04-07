@@ -53,10 +53,12 @@ import {
   timestamp,
   boolean,
   decimal,
+  integer,
   unique,
 } from 'drizzle-orm/pg-core';
-import { shiftEnum, taskStatusEnum } from './enums';
+import { taskStatusEnum } from './enums';
 import { schedules, users, stores } from './core';
+import { shifts } from './lookups';
 
 // ─── Shared base columns helper ───────────────────────────────────────────────
 // Not a real table; we repeat these columns per table because Drizzle ORM
@@ -99,13 +101,12 @@ import { schedules, users, stores } from './core';
  */
 export const storeOpeningTasks = pgTable('store_opening_tasks', {
   id:         serial('id').primaryKey(),
-  scheduleId: serial('schedule_id').references(() => schedules.id).notNull(),
+  scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
   userId:     text('user_id').references(() => users.id).notNull(),
-  storeId:    serial('store_id').references(() => stores.id).notNull(),
-  shift:      shiftEnum('shift').notNull().default('morning'),
+  storeId:    integer('store_id').references(() => stores.id).notNull(),
+  shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
   date:       timestamp('date').notNull(),
 
-  // ── Checklist ──────────────────────────────────────────────────────────────
   loginPos:          boolean('login_pos').default(false).notNull(),
   checkAbsenSunfish: boolean('check_absen_sunfish').default(false).notNull(),
   tarikSohSales:     boolean('tarik_soh_sales').default(false).notNull(),
@@ -113,15 +114,12 @@ export const storeOpeningTasks = pgTable('store_opening_tasks', {
   cekLamp:           boolean('cek_lamp').default(false).notNull(),
   cekSoundSystem:    boolean('cek_sound_system').default(false).notNull(),
 
-  // ── Photos (JSON arrays of local relative paths) ──────────────────────────
-  storeFrontPhotos: text('store_front_photos'),  // JSON: string[]
-  cashDrawerPhotos: text('cash_drawer_photos'),  // JSON: string[]
+  storeFrontPhotos: text('store_front_photos'),
+  cashDrawerPhotos: text('cash_drawer_photos'),
 
-  // ── Geo ────────────────────────────────────────────────────────────────────
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
 
-  // ── Lifecycle ──────────────────────────────────────────────────────────────
   status:      taskStatusEnum('status').default('pending').notNull(),
   notes:       text('notes'),
   completedAt: timestamp('completed_at'),
@@ -130,7 +128,6 @@ export const storeOpeningTasks = pgTable('store_opening_tasks', {
   createdAt:   timestamp('created_at').defaultNow().notNull(),
   updatedAt:   timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
-  // One opening task per store per day (shared by all morning-shift staff)
   uniqStoreDate: unique().on(t.storeId, t.date),
 }));
 
@@ -144,10 +141,10 @@ export const storeOpeningTasks = pgTable('store_opening_tasks', {
  */
 export const setoranTasks = pgTable('setoran_tasks', {
   id:         serial('id').primaryKey(),
-  scheduleId: serial('schedule_id').references(() => schedules.id).notNull(),
+  scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
   userId:     text('user_id').references(() => users.id).notNull(),
-  storeId:    serial('store_id').references(() => stores.id).notNull(),
-  shift:      shiftEnum('shift').notNull().default('morning'),
+  storeId:    integer('store_id').references(() => stores.id).notNull(),
+  shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
   date:       timestamp('date').notNull(),
 
   // ── Data ───────────────────────────────────────────────────────────────────
@@ -181,10 +178,10 @@ export const setoranTasks = pgTable('setoran_tasks', {
  */
 export const cekBinTasks = pgTable('cek_bin_tasks', {
   id:         serial('id').primaryKey(),
-  scheduleId: serial('schedule_id').references(() => schedules.id).notNull(),
+  scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
   userId:     text('user_id').references(() => users.id).notNull(),
-  storeId:    serial('store_id').references(() => stores.id).notNull(),
-  shift:      shiftEnum('shift').notNull().default('morning'),
+  storeId:    integer('store_id').references(() => stores.id).notNull(),
+  shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
   date:       timestamp('date').notNull(),
 
   // ── Geo ────────────────────────────────────────────────────────────────────
@@ -213,10 +210,10 @@ export const cekBinTasks = pgTable('cek_bin_tasks', {
  */
 export const productCheckTasks = pgTable('product_check_tasks', {
   id:         serial('id').primaryKey(),
-  scheduleId: serial('schedule_id').references(() => schedules.id).notNull(),
+  scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
   userId:     text('user_id').references(() => users.id).notNull(),
-  storeId:    serial('store_id').references(() => stores.id).notNull(),
-  shift:      shiftEnum('shift').notNull().default('morning'),
+  storeId:    integer('store_id').references(() => stores.id).notNull(),
+  shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
   date:       timestamp('date').notNull(),
 
   // ── Checklist ──────────────────────────────────────────────────────────────
@@ -254,10 +251,10 @@ export const productCheckTasks = pgTable('product_check_tasks', {
  */
 export const receivingTasks = pgTable('receiving_tasks', {
   id:         serial('id').primaryKey(),
-  scheduleId: serial('schedule_id').references(() => schedules.id).notNull(),
+  scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
   userId:     text('user_id').references(() => users.id).notNull(),
-  storeId:    serial('store_id').references(() => stores.id).notNull(),
-  shift:      shiftEnum('shift').notNull().default('morning'),
+  storeId:    integer('store_id').references(() => stores.id).notNull(),
+  shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
   date:       timestamp('date').notNull(),
 
   // ── Data ───────────────────────────────────────────────────────────────────
@@ -292,14 +289,14 @@ export const receivingTasks = pgTable('receiving_tasks', {
  */
 export const briefingTasks = pgTable('briefing_tasks', {
   id:         serial('id').primaryKey(),
-  scheduleId: serial('schedule_id').references(() => schedules.id).notNull(),
+  scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
   /**
    * userId here is the morning-shift employee who conducted the briefing
    * (not the evening-shift employee receiving it).
    */
   userId:     text('user_id').references(() => users.id).notNull(),
-  storeId:    serial('store_id').references(() => stores.id).notNull(),
-  shift:      shiftEnum('shift').notNull().default('evening'),
+  storeId:    integer('store_id').references(() => stores.id).notNull(),
+  shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
   date:       timestamp('date').notNull(),
 
   // ── Data ───────────────────────────────────────────────────────────────────
@@ -329,10 +326,10 @@ export const briefingTasks = pgTable('briefing_tasks', {
  */
 export const edcSummaryTasks = pgTable('edc_summary_tasks', {
   id:         serial('id').primaryKey(),
-  scheduleId: serial('schedule_id').references(() => schedules.id).notNull(),
+  scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
   userId:     text('user_id').references(() => users.id).notNull(),
-  storeId:    serial('store_id').references(() => stores.id).notNull(),
-  shift:      shiftEnum('shift').notNull().default('evening'),
+  storeId:    integer('store_id').references(() => stores.id).notNull(),
+  shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
   date:       timestamp('date').notNull(),
 
   // ── Photos ─────────────────────────────────────────────────────────────────
@@ -361,10 +358,10 @@ export const edcSummaryTasks = pgTable('edc_summary_tasks', {
  */
 export const edcSettlementTasks = pgTable('edc_settlement_tasks', {
   id:         serial('id').primaryKey(),
-  scheduleId: serial('schedule_id').references(() => schedules.id).notNull(),
+  scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
   userId:     text('user_id').references(() => users.id).notNull(),
-  storeId:    serial('store_id').references(() => stores.id).notNull(),
-  shift:      shiftEnum('shift').notNull().default('evening'),
+  storeId:    integer('store_id').references(() => stores.id).notNull(),
+  shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
   date:       timestamp('date').notNull(),
 
   edcSettlementPhotos: text('edc_settlement_photos'),  // JSON: string[]
@@ -390,10 +387,10 @@ export const edcSettlementTasks = pgTable('edc_settlement_tasks', {
  */
 export const eodZReportTasks = pgTable('eod_z_report_tasks', {
   id:         serial('id').primaryKey(),
-  scheduleId: serial('schedule_id').references(() => schedules.id).notNull(),
+  scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
   userId:     text('user_id').references(() => users.id).notNull(),
-  storeId:    serial('store_id').references(() => stores.id).notNull(),
-  shift:      shiftEnum('shift').notNull().default('evening'),
+  storeId:    integer('store_id').references(() => stores.id).notNull(),
+  shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
   date:       timestamp('date').notNull(),
 
   zReportPhotos: text('z_report_photos'),  // JSON: string[]
@@ -419,10 +416,10 @@ export const eodZReportTasks = pgTable('eod_z_report_tasks', {
  */
 export const openStatementTasks = pgTable('open_statement_tasks', {
   id:         serial('id').primaryKey(),
-  scheduleId: serial('schedule_id').references(() => schedules.id).notNull(),
+  scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
   userId:     text('user_id').references(() => users.id).notNull(),
-  storeId:    serial('store_id').references(() => stores.id).notNull(),
-  shift:      shiftEnum('shift').notNull().default('evening'),
+  storeId:    integer('store_id').references(() => stores.id).notNull(),
+  shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
   date:       timestamp('date').notNull(),
 
   openStatementPhotos: text('open_statement_photos'),  // JSON: string[]
@@ -464,10 +461,9 @@ export const openStatementTasks = pgTable('open_statement_tasks', {
  */
 export const groomingTasks = pgTable('grooming_tasks', {
   id:         serial('id').primaryKey(),
-  scheduleId: serial('schedule_id').references(() => schedules.id).notNull().unique(),  // personal: 1 per schedule
-  userId:     text('user_id').references(() => users.id).notNull(),
-  storeId:    serial('store_id').references(() => stores.id).notNull(),
-  shift:      shiftEnum('shift').notNull(),
+scheduleId: integer('schedule_id').references(() => schedules.id).notNull().unique(),  userId:     text('user_id').references(() => users.id).notNull(),
+  storeId:    integer('store_id').references(() => stores.id).notNull(),
+  shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
   date:       timestamp('date').notNull(),
 
   // ── OPS-controlled activation flags ───────────────────────────────────────

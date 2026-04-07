@@ -2,37 +2,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Seeds all task rows for every existing schedule row.
 //
-// Task matrix
-// ────────────
-//  Morning shift (shared — one per store per day):
-//    store_opening_tasks, setoran_tasks, cek_bin_tasks,
-//    product_check_tasks, receiving_tasks
-//
-//  Evening shift (shared — one per store per day):
-//    briefing_tasks, edc_summary_tasks, edc_settlement_tasks,
-//    eod_z_report_tasks, open_statement_tasks
-//
-//  Both shifts (personal — one per employee per schedule):
-//    grooming_tasks
-//
-// "Shared" means only ONE row per store per date regardless of how many
-// employees are on that shift. The first schedule row encountered for a
-// store+date wins; subsequent employees on the same day are skipped for
-// that task type.
-//
-// Safe to re-run — every insert checks for an existing row first.
-//
-// Changes from previous version
-// ──────────────────────────────
-//  • All IDs are now integers (serial), not uuids
-//  • attendanceId column removed from task tables — tasks are now linked
-//    only via scheduleId; the attendance FK was an unnecessary coupling
-//  • 9 new task tables added (setoran, cekBin, productCheck, receiving,
-//    briefing, edcSummary, edcSettlement, eodZReport, openStatement)
-//  • storeOpeningTask columns renamed to match new schema
-//    (cashDrawerAmount → removed; new boolean checklist columns)
-//
-// Run with: tsx scripts/seed-tasks.ts
+// Updated for lookup-table schema:
+//   • schedules.shift → schedules.shiftId (FK to shifts table)
+//   • users.employeeType → users.employeeTypeId (FK to employee_types)
+//   • Shift code ('morning'/'evening') is resolved via JOIN against shifts.code
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { config } from 'dotenv';
@@ -40,7 +13,7 @@ config({ path: '.env.local' });
 
 import { db }   from '@/lib/db';
 import {
-  schedules, users, stores, areas,
+  schedules, users, stores, areas, shifts,
   storeOpeningTasks, setoranTasks, cekBinTasks,
   productCheckTasks, receivingTasks, briefingTasks,
   edcSummaryTasks, edcSettlementTasks, eodZReportTasks,
@@ -54,7 +27,6 @@ function startOfDay(d: Date): Date {
   const r = new Date(d); r.setHours(0, 0, 0, 0); return r;
 }
 
-/** True if an existing row was found (i.e. skip). */
 async function exists(
   table: typeof storeOpeningTasks,
   scheduleId: number,
@@ -67,7 +39,6 @@ async function exists(
   return !!row;
 }
 
-/** True if a shared task already exists for this store+date. */
 async function sharedExists(
   table: typeof storeOpeningTasks,
   storeId: number,
@@ -107,19 +78,22 @@ const counts = {
 async function seedTasks() {
   console.log('🗂️   seed-tasks: all 11 task types\n');
 
-  // Load all schedule rows with context
+  // Load all schedule rows joined with the shift table so we can read the
+  // shift CODE ('morning'/'evening') instead of the numeric id for branching.
   const allSchedules = await db
     .select({
-      sched: schedules,
-      user:  { id: users.id, name: users.name, employeeType: users.employeeType },
-      store: { id: stores.id, name: stores.name },
-      area:  { name: areas.name },
+      sched:     schedules,
+      shiftCode: shifts.code,
+      user:      { id: users.id, name: users.name },
+      store:     { id: stores.id, name: stores.name },
+      area:      { name: areas.name },
     })
     .from(schedules)
+    .innerJoin(shifts, eq(schedules.shiftId, shifts.id))
     .leftJoin(users,  eq(schedules.userId,  users.id))
     .leftJoin(stores, eq(schedules.storeId, stores.id))
     .leftJoin(areas,  eq(stores.areaId,     areas.id))
-    .orderBy(areas.name, stores.name, schedules.date, schedules.shift);
+    .orderBy(areas.name, stores.name, schedules.date, shifts.sortOrder);
 
   if (!allSchedules.length) {
     console.error('❌  No schedule rows found. Run seed-schedules.ts first.');
@@ -130,28 +104,28 @@ async function seedTasks() {
 
   let errors = 0;
 
-  for (const { sched, user, store, area } of allSchedules) {
+  for (const { sched, shiftCode, user, store, area } of allSchedules) {
     const label =
       `${(area?.name  ?? '?').padEnd(12)} | ` +
       `${(store?.name ?? '?').padEnd(16)} | ` +
       `${(user?.name  ?? '?').padEnd(18)} | ` +
-      `${(sched.shift ?? '?').padEnd(7)} | ` +
+      `${shiftCode.padEnd(7)} | ` +
       `${sched.date.toISOString().slice(0, 10)}`;
 
+    // Note: tasks store shiftId (FK), not the code
     const base = {
       scheduleId: sched.id,
       userId:     sched.userId,
       storeId:    sched.storeId,
-      shift:      sched.shift as 'morning' | 'evening',
+      shiftId:    sched.shiftId,
       date:       startOfDay(sched.date),
       status:     'pending' as const,
     };
 
     try {
       // ── MORNING TASKS ─────────────────────────────────────────────────────
-      if (sched.shift === 'morning') {
+      if (shiftCode === 'morning') {
 
-        // store_opening_tasks — shared
         if (await sharedExists(storeOpeningTasks as any, sched.storeId, sched.date)) {
           counts.storeOpening.skipped++;
         } else {
@@ -160,7 +134,6 @@ async function seedTasks() {
           console.log(`   ✅ storeOpening  ${label}`);
         }
 
-        // setoran_tasks — shared
         if (await sharedExists(setoranTasks as any, sched.storeId, sched.date)) {
           counts.setoran.skipped++;
         } else {
@@ -169,7 +142,6 @@ async function seedTasks() {
           console.log(`   ✅ setoran       ${label}`);
         }
 
-        // cek_bin_tasks — shared (stub)
         if (await sharedExists(cekBinTasks as any, sched.storeId, sched.date)) {
           counts.cekBin.skipped++;
         } else {
@@ -178,7 +150,6 @@ async function seedTasks() {
           console.log(`   ✅ cekBin        ${label}`);
         }
 
-        // product_check_tasks — shared
         if (await sharedExists(productCheckTasks as any, sched.storeId, sched.date)) {
           counts.productCheck.skipped++;
         } else {
@@ -187,7 +158,6 @@ async function seedTasks() {
           console.log(`   ✅ productCheck  ${label}`);
         }
 
-        // receiving_tasks — shared
         if (await sharedExists(receivingTasks as any, sched.storeId, sched.date)) {
           counts.receiving.skipped++;
         } else {
@@ -198,9 +168,8 @@ async function seedTasks() {
       }
 
       // ── EVENING TASKS ─────────────────────────────────────────────────────
-      if (sched.shift === 'evening') {
+      if (shiftCode === 'evening') {
 
-        // briefing_tasks — shared
         if (await sharedExists(briefingTasks as any, sched.storeId, sched.date)) {
           counts.briefing.skipped++;
         } else {
@@ -209,7 +178,6 @@ async function seedTasks() {
           console.log(`   ✅ briefing      ${label}`);
         }
 
-        // edc_summary_tasks — shared
         if (await sharedExists(edcSummaryTasks as any, sched.storeId, sched.date)) {
           counts.edcSummary.skipped++;
         } else {
@@ -218,7 +186,6 @@ async function seedTasks() {
           console.log(`   ✅ edcSummary    ${label}`);
         }
 
-        // edc_settlement_tasks — shared
         if (await sharedExists(edcSettlementTasks as any, sched.storeId, sched.date)) {
           counts.edcSettlement.skipped++;
         } else {
@@ -227,7 +194,6 @@ async function seedTasks() {
           console.log(`   ✅ edcSettlement ${label}`);
         }
 
-        // eod_z_report_tasks — shared
         if (await sharedExists(eodZReportTasks as any, sched.storeId, sched.date)) {
           counts.eodZReport.skipped++;
         } else {
@@ -236,7 +202,6 @@ async function seedTasks() {
           console.log(`   ✅ eodZReport    ${label}`);
         }
 
-        // open_statement_tasks — shared
         if (await sharedExists(openStatementTasks as any, sched.storeId, sched.date)) {
           counts.openStatement.skipped++;
         } else {

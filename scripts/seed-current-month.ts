@@ -1,17 +1,7 @@
 // scripts/seed-current-month.ts
 // ─────────────────────────────────────────────────────────────────────────────
 // Seeds schedules + tasks for the CURRENT calendar month.
-//
-// Unlike seed-schedules.ts (which is hardcoded to March 2026), this script
-// always uses today's year and month. Safe to re-run — fully idempotent.
-//
-// Run order (first time):
-//   tsx scripts/seed-setup.ts          ← only needed once
-//   tsx scripts/seed-current-month.ts  ← run this every month
-//
-// Re-running mid-month is safe — already-seeded days are skipped.
-//
-// Run with: tsx scripts/seed-current-month.ts
+// Updated for lookup-table schema (shifts, employeeTypes are now tables).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { config } from 'dotenv';
@@ -19,7 +9,7 @@ config({ path: '.env.local' });
 
 import { db } from '@/lib/db';
 import {
-  users, stores, areas,
+  users, stores, areas, shifts, employeeTypes,
   monthlySchedules, monthlyScheduleEntries, schedules,
   storeOpeningTasks, setoranTasks, cekBinTasks,
   productCheckTasks, receivingTasks, briefingTasks,
@@ -35,7 +25,8 @@ const YEAR       = NOW.getFullYear();
 const MONTH      = NOW.getMonth();          // 0-indexed
 const YEAR_MONTH = `${YEAR}-${String(MONTH + 1).padStart(2, '0')}`;
 
-// ─── Shift patterns (same as seed-schedules.ts) ───────────────────────────────
+// ─── Shift patterns (keyed by employee type CODE) ─────────────────────────────
+// 'E' = morning shift, 'L' = evening shift, 'OFF' = day off
 
 const PATTERNS: Record<string, string[]> = {
   pic_1:   ['OFF', 'E',   'E',   'E',   'E',   'E',   'OFF'],
@@ -54,7 +45,6 @@ function* eachDayOfMonth(year: number, month: number): Generator<Date> {
   for (let d = 1; d <= days; d++) yield new Date(year, month, d, 0, 0, 0, 0);
 }
 
-/** True if a shared task already exists for this store+date */
 async function sharedExists(
   table: typeof storeOpeningTasks,
   storeId: number,
@@ -68,7 +58,6 @@ async function sharedExists(
   return !!r;
 }
 
-/** True if a personal task already exists for this scheduleId */
 async function personalExists(
   table: typeof groomingTasks,
   scheduleId: number,
@@ -85,6 +74,18 @@ async function personalExists(
 
 async function seedCurrentMonth() {
   console.log(`\n📅  seed-current-month: ${YEAR_MONTH}\n`);
+
+  // ── Resolve lookup ids up front ─────────────────────────────────────────────
+  const allShifts    = await db.select().from(shifts);
+  const allEmpTypes  = await db.select().from(employeeTypes);
+
+  const shiftIdByCode  = Object.fromEntries(allShifts.map(s => [s.code, s.id])) as Record<string, number>;
+  const empTypeCodeById = Object.fromEntries(allEmpTypes.map(e => [e.id, e.code])) as Record<number, string>;
+
+  if (!shiftIdByCode.morning || !shiftIdByCode.evening) {
+    console.error('❌  Required shifts (morning, evening) not found. Run seed-setup.ts first.');
+    process.exit(1);
+  }
 
   const allStores = await db
     .select({ store: stores, area: areas })
@@ -106,7 +107,6 @@ async function seedCurrentMonth() {
     briefing: 0, edcSummary: 0, edcSettlement: 0, eodZReport: 0, openStatement: 0,
     grooming: 0,
   };
-  let taskErrors = 0;
 
   for (const { store, area } of allStores) {
     console.log(`\n── ${store.name} (${area?.name ?? 'no area'}) ──────────────────────`);
@@ -134,7 +134,12 @@ async function seedCurrentMonth() {
       msId = existingMs.id;
       console.log(`   ↩️  MonthlySchedule exists (id=${msId})`);
     } else {
-      const pic1 = employees.find(e => e.employeeType === 'pic_1') ?? employees[0];
+      // Find a PIC1 to attribute the import to
+      const pic1Code = 'pic_1';
+      const pic1 = employees.find(
+        e => e.employeeTypeId != null && empTypeCodeById[e.employeeTypeId] === pic1Code,
+      ) ?? employees[0];
+
       const [ms] = await db
         .insert(monthlySchedules)
         .values({ storeId: store.id, yearMonth: YEAR_MONTH, importedBy: pic1.id, note: `Auto-seeded ${YEAR_MONTH}` })
@@ -146,15 +151,20 @@ async function seedCurrentMonth() {
 
     // ── Per-employee entries + schedule rows ───────────────────────────────
     for (const emp of employees) {
-      const pattern = PATTERNS[emp.employeeType ?? 'default'] ?? PATTERNS.default;
+      const empTypeCode = emp.employeeTypeId != null
+        ? empTypeCodeById[emp.employeeTypeId] ?? 'default'
+        : 'default';
+      const pattern = PATTERNS[empTypeCode] ?? PATTERNS.default;
+
       let empEntries   = 0;
       let empSchedules = 0;
 
       for (const date of eachDayOfMonth(YEAR, MONTH)) {
-        const code    = pattern[date.getDay()] ?? 'OFF';
-        const shift   = code === 'E' ? 'morning' : code === 'L' ? 'evening' : null;
-        const isOff   = !shift;
-        const dateVal = startOfDay(date);
+        const code      = pattern[date.getDay()] ?? 'OFF';
+        const shiftCode = code === 'E' ? 'morning' : code === 'L' ? 'evening' : null;
+        const isOff     = !shiftCode;
+        const shiftId   = shiftCode ? shiftIdByCode[shiftCode] : null;
+        const dateVal   = startOfDay(date);
 
         // MonthlyScheduleEntry
         const [mse] = await db
@@ -164,7 +174,7 @@ async function seedCurrentMonth() {
             userId:  emp.id,
             storeId: store.id,
             date:    dateVal,
-            shift:   shift ?? undefined,
+            shiftId: shiftId ?? undefined,
             isOff,
             isLeave: false,
           })
@@ -172,7 +182,7 @@ async function seedCurrentMonth() {
           .returning({ id: monthlyScheduleEntries.id });
 
         if (mse) empEntries++;
-        if (isOff || !shift) continue;
+        if (isOff || !shiftId) continue;
 
         // Idempotency check for schedule row
         const [existingSched] = await db
@@ -181,15 +191,14 @@ async function seedCurrentMonth() {
           .where(and(
             eq(schedules.userId,  emp.id),
             eq(schedules.storeId, store.id),
-            eq(schedules.shift,   shift),
+            eq(schedules.shiftId, shiftId),
             gte(schedules.date,   startOfDay(dateVal)),
             lte(schedules.date,   endOfDay(dateVal)),
           ))
           .limit(1);
 
         if (existingSched) {
-          // Schedule exists — still seed tasks for it (idempotent)
-          await seedTasksForSchedule(existingSched.id, emp.id, store.id, shift, dateVal, taskCounts);
+          await seedTasksForSchedule(existingSched.id, emp.id, store.id, shiftId, shiftCode!, dateVal, taskCounts);
           continue;
         }
 
@@ -215,18 +224,25 @@ async function seedCurrentMonth() {
 
         const [newSched] = await db
           .insert(schedules)
-          .values({ userId: emp.id, storeId: store.id, shift, date: dateVal, monthlyScheduleEntryId: mseId, isHoliday: false })
+          .values({
+            userId:  emp.id,
+            storeId: store.id,
+            shiftId,
+            date:    dateVal,
+            monthlyScheduleEntryId: mseId,
+            isHoliday: false,
+          })
           .returning({ id: schedules.id });
 
         empSchedules++;
         totalSchedRows++;
 
-        await seedTasksForSchedule(newSched.id, emp.id, store.id, shift, dateVal, taskCounts);
+        await seedTasksForSchedule(newSched.id, emp.id, store.id, shiftId, shiftCode!, dateVal, taskCounts);
       }
 
       totalEntries += empEntries;
       console.log(
-        `   👤 ${emp.name.padEnd(18)} (${(emp.employeeType ?? 'ops').padEnd(5)})` +
+        `   👤 ${emp.name.padEnd(18)} (${empTypeCode.padEnd(7)})` +
         `  entries+${empEntries}  schedRows+${empSchedules}`,
       );
     }
@@ -242,7 +258,6 @@ async function seedCurrentMonth() {
   for (const [name, n] of Object.entries(taskCounts)) {
     console.log(`     ↳ ${name.padEnd(16)}: ${n}`);
   }
-  if (taskErrors > 0) console.log(`\n   ⚠️  Task errors: ${taskErrors}`);
   console.log('═══════════════════════════════════════════════════════════\n');
 }
 
@@ -252,21 +267,22 @@ async function seedTasksForSchedule(
   scheduleId: number,
   userId:     string,
   storeId:    number,
-  shift:      'morning' | 'evening',
+  shiftId:    number,
+  shiftCode:  string,
   date:       Date,
   counts:     Record<string, number>,
 ) {
-  const base = { scheduleId, userId, storeId, shift, date, status: 'pending' as const };
+  const base = { scheduleId, userId, storeId, shiftId, date, status: 'pending' as const };
 
   try {
-    if (shift === 'morning') {
+    if (shiftCode === 'morning') {
       if (!await sharedExists(storeOpeningTasks  as any, storeId, date)) { await db.insert(storeOpeningTasks).values(base);  counts.storeOpening++; }
       if (!await sharedExists(setoranTasks       as any, storeId, date)) { await db.insert(setoranTasks).values(base);       counts.setoran++;      }
       if (!await sharedExists(cekBinTasks        as any, storeId, date)) { await db.insert(cekBinTasks).values(base);        counts.cekBin++;       }
       if (!await sharedExists(productCheckTasks  as any, storeId, date)) { await db.insert(productCheckTasks).values(base);  counts.productCheck++; }
       if (!await sharedExists(receivingTasks     as any, storeId, date)) { await db.insert(receivingTasks).values(base);     counts.receiving++;    }
     }
-    if (shift === 'evening') {
+    if (shiftCode === 'evening') {
       if (!await sharedExists(briefingTasks      as any, storeId, date)) { await db.insert(briefingTasks).values(base);      counts.briefing++;      }
       if (!await sharedExists(edcSummaryTasks    as any, storeId, date)) { await db.insert(edcSummaryTasks).values(base);    counts.edcSummary++;    }
       if (!await sharedExists(edcSettlementTasks as any, storeId, date)) { await db.insert(edcSettlementTasks).values(base); counts.edcSettlement++; }

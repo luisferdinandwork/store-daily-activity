@@ -3,6 +3,20 @@ import { NextRequest, NextResponse }    from 'next/server';
 import { getServerSession }             from 'next-auth';
 import { authOptions }                  from '@/lib/auth';
 import { updateMonthlyScheduleEntry }   from '@/lib/schedule-utils';
+import { db }                           from '@/lib/db';
+import { users, userRoles, employeeTypes } from '@/lib/db/schema';
+import { eq }                           from 'drizzle-orm';
+
+async function resolveActorCodes(userId: string): Promise<{ role: string | null; empType: string | null }> {
+  const [row] = await db
+    .select({ roleCode: userRoles.code, empTypeCode: employeeTypes.code })
+    .from(users)
+    .leftJoin(userRoles,     eq(users.roleId,         userRoles.id))
+    .leftJoin(employeeTypes, eq(users.employeeTypeId, employeeTypes.id))
+    .where(eq(users.id, userId))
+    .limit(1);
+  return { role: row?.roleCode ?? null, empType: row?.empTypeCode ?? null };
+}
 
 export async function PATCH(
   req: NextRequest,
@@ -11,12 +25,11 @@ export async function PATCH(
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
-  const user         = session.user as any;
-  const actorId      = user.id          as string;
-  const employeeType = user.employeeType as string | null;
-  const role         = user.role         as string;
+  const user    = session.user as any;
+  const actorId = user.id as string;
 
-  if (role !== 'ops' && employeeType !== 'pic_1') {
+  const { role, empType } = await resolveActorCodes(actorId);
+  if (role !== 'ops' && empType !== 'pic_1') {
     return NextResponse.json(
       { success: false, error: 'Only OPS or PIC 1 can edit schedule entries.' },
       { status: 403 },
@@ -31,8 +44,6 @@ export async function PATCH(
 
   const body = await req.json();
 
-  // Only forward fields that were explicitly sent, so util can distinguish
-  // "not provided" from "explicitly null".
   const patch: { shift?: 'morning' | 'evening' | null; isOff?: boolean; isLeave?: boolean } = {};
   if ('shift'   in body) patch.shift   = body.shift;
   if ('isOff'   in body) patch.isOff   = !!body.isOff;

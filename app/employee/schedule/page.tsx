@@ -19,14 +19,15 @@ import { toast } from 'sonner';
 type Shift = 'morning' | 'evening';
 
 interface DayEntry {
-  id:       string;
-  userId:   string;
-  userName: string | null;
-  userType: string | null;
-  date:     string;
-  shift:    Shift | null;
-  isOff:    boolean;
-  isLeave:  boolean;
+  id:         string;
+  userId:     string;
+  userName:   string | null;
+  userType:   string | null; // Maps to userEmployeeType from API
+  date:       string;
+  shiftId:    number | null;
+  shift:      Shift | null;  // Now reliably populated from API
+  isOff:      boolean;
+  isLeave:    boolean;
 }
 
 interface MonthlySchedule {
@@ -74,6 +75,21 @@ const SHIFT_CFG = {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+/**
+ * Convert any date-ish input (Date, ISO string from server, YYYY-MM-DD)
+ * into a local YYYY-MM-DD string. Server timestamps come back as UTC ISO
+ * (e.g. "2026-05-14T17:00:00.000Z") which represents May 15 in Jakarta —
+ * we must convert to LOCAL time before extracting the date portion.
+ */
+function toLocalDateKey(input: Date | string): string {
+  const d = typeof input === 'string' ? new Date(input) : input;
+  if (isNaN(d.getTime())) return '';
+  const y   = d.getFullYear();
+  const m   = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 function currentYearMonth() {
   const n = new Date();
   return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}`;
@@ -86,7 +102,14 @@ function formatYearMonth(ym: string | null | undefined): string {
   return `${MONTHS[m - 1]} ${y}`;
 }
 
-function isoDate(d: Date) { return d.toISOString().slice(0, 10); }
+function isoDate(d: Date): string {
+  // Use LOCAL date components, not UTC. toISOString() converts to UTC which
+  // shifts the day boundary in non-UTC timezones.
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
 
 /** Build the calendar grid: 6 weeks × 7 days, padded with nulls */
 function buildCalendarGrid(yearMonth: string): (Date | null)[] {
@@ -745,13 +768,31 @@ function CalendarGrid({ schedule, yearMonth, onDayPress }: {
   yearMonth:  string;
   onDayPress: (date: Date, entries: DayEntry[]) => void;
 }) {
-  const grid  = buildCalendarGrid(yearMonth);
-  const today = isoDate(new Date());
+  const grid = buildCalendarGrid(yearMonth);
+
+  // `today` must update across midnight, otherwise the highlight gets stuck
+  // on yesterday until the user refreshes the page.
+  const [today, setToday] = useState(() => isoDate(new Date()));
+  useEffect(() => {
+    const tick = () => setToday(isoDate(new Date()));
+    // Compute ms until next local midnight
+    const now = new Date();
+    const nextMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 5);
+    const msUntilMidnight = nextMidnight.getTime() - now.getTime();
+    const t = setTimeout(() => {
+      tick();
+      // After the first midnight tick, re-tick every 24h
+      const daily = setInterval(tick, 24 * 60 * 60 * 1000);
+      return () => clearInterval(daily);
+    }, msUntilMidnight);
+    return () => clearTimeout(t);
+  }, []);
 
   // Build a map: dateString → entries[]
   const dayMap = new Map<string, DayEntry[]>();
   for (const entry of schedule.entries) {
-    const ds = entry.date.slice(0, 10);
+    const ds = toLocalDateKey(entry.date);
+    if (!ds) continue;
     if (!dayMap.has(ds)) dayMap.set(ds, []);
     dayMap.get(ds)!.push(entry);
   }
@@ -1005,11 +1046,13 @@ export default function SchedulePage() {
         }),
       });
       const json = await res.json();
-      if (!json.success) throw new Error(json.error);
+      console.log('[handleSaveNewEntry] response:', res.status, json);
+      if (!json.success) throw new Error(json.error || `HTTP ${res.status}`);
       toast.success('Employee added to this day');
       setAddingDate(null);
       loadSchedule(selectedMonth);
     } catch (e) {
+      console.error('[handleSaveNewEntry] error:', e);
       toast.error(e instanceof Error ? e.message : 'Add failed');
     } finally {
       setAddingEntry(false);
@@ -1200,7 +1243,7 @@ export default function SchedulePage() {
           employees={employees}
           existingUserIds={new Set(
             (schedule?.entries ?? [])
-              .filter(e => e.date.slice(0, 10) === isoDate(addingDate))
+              .filter(e => toLocalDateKey(e.date) === isoDate(addingDate))
               .map(e => e.userId),
           )}
           onSave={handleSaveNewEntry}

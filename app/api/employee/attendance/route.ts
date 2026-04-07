@@ -9,11 +9,26 @@ import {
   endBreak,
 }                                    from '@/lib/schedule-utils';
 import { db }                        from '@/lib/db';
-import { schedules, attendance, breakSessions } from '@/lib/db/schema';
+import { schedules, attendance, breakSessions, shifts } from '@/lib/db/schema';
 import { and, eq, gte, lte }         from 'drizzle-orm';
 
 function startOfDay(d: Date) { const r = new Date(d); r.setHours(0, 0, 0, 0);      return r; }
 function endOfDay(d: Date)   { const r = new Date(d); r.setHours(23, 59, 59, 999); return r; }
+
+/** Cache shift code→id map */
+let _shiftCache: Record<string, number> | null = null;
+async function getShiftIdMap(): Promise<Record<string, number>> {
+  if (_shiftCache) return _shiftCache;
+  const rows = await db.select({ id: shifts.id, code: shifts.code }).from(shifts);
+  _shiftCache = Object.fromEntries(rows.map(r => [r.code, r.id]));
+  return _shiftCache!;
+}
+
+/** Build reverse map: id → code */
+async function getShiftCodeMap(): Promise<Record<number, string>> {
+  const fwd = await getShiftIdMap();
+  return Object.fromEntries(Object.entries(fwd).map(([code, id]) => [id, code]));
+}
 
 /**
  * Resolves the store the employee is actually working at TODAY.
@@ -55,7 +70,6 @@ export async function GET(_req: NextRequest) {
       );
     }
 
-    // homeStoreId from session may arrive as a string — coerce to number
     const homeStoreId = Number(rawHomeStoreId);
     if (isNaN(homeStoreId)) {
       return NextResponse.json(
@@ -65,6 +79,7 @@ export async function GET(_req: NextRequest) {
     }
 
     const now = new Date();
+    const shiftCodeMap = await getShiftCodeMap();
 
     const todaySchedules = await db
       .select()
@@ -77,10 +92,15 @@ export async function GET(_req: NextRequest) {
           lte(schedules.date,     endOfDay(now)),
         ),
       )
-      .orderBy(schedules.shift);
+      .orderBy(schedules.shiftId);
 
-    const shifts = await Promise.all(
+    const shiftValues = ['morning', 'evening'] as const;
+    type ShiftCode = typeof shiftValues[number];
+
+    const shifts_result = await Promise.all(
       todaySchedules.map(async (sched) => {
+        const shiftCode = (shiftCodeMap[sched.shiftId] ?? 'morning') as ShiftCode;
+
         const [att] = await db
           .select()
           .from(attendance)
@@ -95,11 +115,13 @@ export async function GET(_req: NextRequest) {
               .orderBy(breakSessions.breakOutTime)
           : [];
 
+        const attShiftCode = att ? (shiftCodeMap[att.shiftId] ?? shiftCode) as ShiftCode : shiftCode;
+
         return {
           schedule: {
-            scheduleId: sched.id,           // number
-            shift:      sched.shift as 'morning' | 'evening',
-            storeId:    sched.storeId,      // number
+            scheduleId: sched.id,
+            shift:      shiftCode,
+            storeId:    sched.storeId,
             date:       sched.date.toISOString(),
           },
           attendance: att
@@ -107,7 +129,7 @@ export async function GET(_req: NextRequest) {
                 attendanceId:  att.id,
                 scheduleId:    att.scheduleId,
                 status:        att.status,
-                shift:         att.shift,
+                shift:         attShiftCode,
                 checkInTime:   att.checkInTime?.toISOString()  ?? null,
                 checkOutTime:  att.checkOutTime?.toISOString() ?? null,
                 onBreak:       att.onBreak,
@@ -124,7 +146,7 @@ export async function GET(_req: NextRequest) {
       }),
     );
 
-    return NextResponse.json({ success: true, shifts });
+    return NextResponse.json({ success: true, shifts: shifts_result });
   } catch (err) {
     return NextResponse.json({ success: false, error: String(err) }, { status: 500 });
   }
@@ -185,6 +207,15 @@ export async function POST(req: NextRequest) {
 
     if (action === 'endbreak') {
       const now = new Date();
+      const shiftMap = await getShiftIdMap();
+      const shiftIdToUse = shiftMap[shift];
+
+      if (!shiftIdToUse) {
+        return NextResponse.json(
+          { success: false, error: `Invalid shift: ${shift}` },
+          { status: 400 },
+        );
+      }
 
       const [sched] = await db
         .select({ id: schedules.id })
@@ -193,7 +224,7 @@ export async function POST(req: NextRequest) {
           and(
             eq(schedules.userId,    userId),
             eq(schedules.storeId,   workingStoreId),
-            eq(schedules.shift,     shift),
+            eq(schedules.shiftId,   shiftIdToUse),
             eq(schedules.isHoliday, false),
             gte(schedules.date,     startOfDay(now)),
             lte(schedules.date,     endOfDay(now)),

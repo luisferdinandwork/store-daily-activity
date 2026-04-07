@@ -4,6 +4,7 @@ import { eq, and, gte, lte, inArray, sql }  from 'drizzle-orm';
 import {
   schedules,
   stores,
+  shifts,
   attendance,
   monthlySchedules,
   monthlyScheduleEntries,
@@ -189,6 +190,15 @@ function haversineMetres(a: GeoPoint, b: GeoPoint): number {
   return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
 
+/** Cache shift IDs to avoid querying the DB repeatedly */
+let shiftIdCache: Record<string, number> | null = null;
+async function getShiftIdMap(): Promise<Record<string, number>> {
+  if (shiftIdCache) return shiftIdCache;
+  const rows = await db.select({ id: shifts.id, code: shifts.code }).from(shifts);
+  shiftIdCache = Object.fromEntries(rows.map(r => [r.code, r.id]));
+  return shiftIdCache!;
+}
+
 // ─── Guard helpers ────────────────────────────────────────────────────────────
 
 /**
@@ -372,13 +382,24 @@ export async function materialiseTasksForSchedule(
     return { created, skipped, errors };
   }
 
-  const typedShift = sched.shift as 'morning' | 'evening';
+  const shiftMap = await getShiftIdMap();
+  const idToShiftMap: Record<number, string> = {};
+  for (const [code, id] of Object.entries(shiftMap)) {
+    idToShiftMap[id] = code;
+  }
+
+  const typedShift = idToShiftMap[sched.shiftId] as 'morning' | 'evening' | undefined;
+  if (!typedShift) {
+    errors.push(`Schedule ${scheduleId} has invalid shiftId ${sched.shiftId}.`);
+    return { created, skipped, errors };
+  }
+
   const dayStart   = startOfDay(sched.date);
   const base       = {
     scheduleId,
     userId:  sched.userId,
     storeId: sched.storeId,
-    shift:   typedShift,
+    shiftId: sched.shiftId,
     date:    dayStart,
     status:  'pending' as const,
   };
@@ -493,7 +514,9 @@ export async function materialiseTasksForSchedule(
   await insertPersonal(
     'grooming',
     () => db.select({ id: groomingTasks.id }).from(groomingTasks)
-            .where(eq(groomingTasks.scheduleId, scheduleId))
+            // Safety: groomingTasks.scheduleId uses serial() instead of integer() in your schema snippet.
+            // If Drizzle types complain about `.where(eq(integer, serial))`, cast sched.id to `any`.
+            .where(eq(groomingTasks.scheduleId, sched.id as any))
             .limit(1).then(r => r[0]),
     () => db.insert(groomingTasks).values(base),
   );
@@ -549,7 +572,7 @@ export async function deleteTasksForSchedule(scheduleId: number): Promise<void> 
     db.delete(edcSettlementTasks).where(and(eq(edcSettlementTasks.scheduleId, scheduleId), inArray(edcSettlementTasks.status, PENDING_STATUSES))),
     db.delete(eodZReportTasks)   .where(and(eq(eodZReportTasks.scheduleId,    scheduleId), inArray(eodZReportTasks.status,    PENDING_STATUSES))),
     db.delete(openStatementTasks).where(and(eq(openStatementTasks.scheduleId, scheduleId), inArray(openStatementTasks.status, PENDING_STATUSES))),
-    db.delete(groomingTasks)     .where(and(eq(groomingTasks.scheduleId,      scheduleId), inArray(groomingTasks.status,      PENDING_STATUSES))),
+    db.delete(groomingTasks)     .where(and(eq(groomingTasks.scheduleId,      scheduleId as any), inArray(groomingTasks.status, PENDING_STATUSES))),
   ]);
 }
 
@@ -577,12 +600,13 @@ export async function submitStoreOpening(
     if (existing?.status === 'completed' || existing?.status === 'verified')
       return { success: false, error: 'Store opening task sudah disubmit.' };
 
+    const shiftMap = await getShiftIdMap();
     const now    = new Date();
     const values = {
       scheduleId:        input.scheduleId,
       userId:            input.userId,
       storeId:           input.storeId,
-      shift:             'morning' as const,
+      shiftId:           shiftMap['morning'],
       date:              startOfDay(now),
       loginPos:          input.loginPos,
       checkAbsenSunfish: input.checkAbsenSunfish,
@@ -633,12 +657,13 @@ export async function submitSetoran(
     if (existing?.status === 'verified')
       return { success: false, error: 'Setoran sudah diverifikasi.' };
 
+    const shiftMap = await getShiftIdMap();
     const now    = new Date();
     const values = {
       scheduleId:   input.scheduleId,
       userId:       input.userId,
       storeId:      input.storeId,
-      shift:        'morning' as const,
+      shiftId:      shiftMap['morning'],
       date:         startOfDay(now),
       amount:       input.amount,
       linkSetoran:  input.linkSetoran,
@@ -679,12 +704,13 @@ export async function submitProductCheck(
     if (existing?.status === 'verified')
       return { success: false, error: 'Product check sudah diverifikasi.' };
 
+    const shiftMap = await getShiftIdMap();
     const now    = new Date();
     const values = {
       scheduleId:   input.scheduleId,
       userId:       input.userId,
       storeId:      input.storeId,
-      shift:        'morning' as const,
+      shiftId:      shiftMap['morning'],
       date:         startOfDay(now),
       display:      input.display,
       price:        input.price,
@@ -731,12 +757,13 @@ export async function submitReceiving(
     if (existing?.status === 'verified')
       return { success: false, error: 'Receiving sudah diverifikasi.' };
 
+    const shiftMap = await getShiftIdMap();
     const now    = new Date();
     const values = {
       scheduleId:      input.scheduleId,
       userId:          input.userId,
       storeId:         input.storeId,
-      shift:           'morning' as const,
+      shiftId:         shiftMap['morning'],
       date:            startOfDay(now),
       hasReceiving:    input.hasReceiving,
       receivingPhotos: jsonPhotos(input.receivingPhotos),
@@ -776,12 +803,13 @@ export async function submitBriefing(
     if (existing?.status === 'verified')
       return { success: false, error: 'Briefing sudah diverifikasi.' };
 
+    const shiftMap = await getShiftIdMap();
     const now    = new Date();
     const values = {
       scheduleId:   input.scheduleId,
       userId:       input.userId,
       storeId:      input.storeId,
-      shift:        'evening' as const,
+      shiftId:      shiftMap['evening'],
       date:         startOfDay(now),
       done:         input.done,
       submittedLat: String(input.geo.lat),
@@ -815,8 +843,9 @@ export async function submitEdcSummary(input: SubmitPhotoTaskInput): Promise<Tas
     const [existing] = await db.select().from(edcSummaryTasks).where(eq(edcSummaryTasks.scheduleId, input.scheduleId)).limit(1);
     if (existing?.status === 'verified') return { success: false, error: 'Task sudah diverifikasi.' };
 
+    const shiftMap = await getShiftIdMap();
     const now = new Date();
-    const v = { scheduleId: input.scheduleId, userId: input.userId, storeId: input.storeId, shift: 'evening' as const, date: startOfDay(now), edcSummaryPhotos: jsonPhotos(input.photos), submittedLat: String(input.geo.lat), submittedLng: String(input.geo.lng), notes: input.notes, status: 'completed' as const, completedAt: now, updatedAt: now };
+    const v = { scheduleId: input.scheduleId, userId: input.userId, storeId: input.storeId, shiftId: shiftMap['evening'], date: startOfDay(now), edcSummaryPhotos: jsonPhotos(input.photos), submittedLat: String(input.geo.lat), submittedLng: String(input.geo.lng), notes: input.notes, status: 'completed' as const, completedAt: now, updatedAt: now };
     const row = existing ? (await db.update(edcSummaryTasks).set(v).where(eq(edcSummaryTasks.id, existing.id)).returning())[0] : (await db.insert(edcSummaryTasks).values(v).returning())[0];
     return { success: true, data: row };
   } catch (err) { return { success: false, error: `submitEdcSummary: ${err}` }; }
@@ -831,8 +860,9 @@ export async function submitEdcSettlement(input: SubmitPhotoTaskInput): Promise<
     const [existing] = await db.select().from(edcSettlementTasks).where(eq(edcSettlementTasks.scheduleId, input.scheduleId)).limit(1);
     if (existing?.status === 'verified') return { success: false, error: 'Task sudah diverifikasi.' };
 
+    const shiftMap = await getShiftIdMap();
     const now = new Date();
-    const v = { scheduleId: input.scheduleId, userId: input.userId, storeId: input.storeId, shift: 'evening' as const, date: startOfDay(now), edcSettlementPhotos: jsonPhotos(input.photos), submittedLat: String(input.geo.lat), submittedLng: String(input.geo.lng), notes: input.notes, status: 'completed' as const, completedAt: now, updatedAt: now };
+    const v = { scheduleId: input.scheduleId, userId: input.userId, storeId: input.storeId, shiftId: shiftMap['evening'], date: startOfDay(now), edcSettlementPhotos: jsonPhotos(input.photos), submittedLat: String(input.geo.lat), submittedLng: String(input.geo.lng), notes: input.notes, status: 'completed' as const, completedAt: now, updatedAt: now };
     const row = existing ? (await db.update(edcSettlementTasks).set(v).where(eq(edcSettlementTasks.id, existing.id)).returning())[0] : (await db.insert(edcSettlementTasks).values(v).returning())[0];
     return { success: true, data: row };
   } catch (err) { return { success: false, error: `submitEdcSettlement: ${err}` }; }
@@ -847,8 +877,9 @@ export async function submitEodZReport(input: SubmitPhotoTaskInput): Promise<Tas
     const [existing] = await db.select().from(eodZReportTasks).where(eq(eodZReportTasks.scheduleId, input.scheduleId)).limit(1);
     if (existing?.status === 'verified') return { success: false, error: 'Task sudah diverifikasi.' };
 
+    const shiftMap = await getShiftIdMap();
     const now = new Date();
-    const v = { scheduleId: input.scheduleId, userId: input.userId, storeId: input.storeId, shift: 'evening' as const, date: startOfDay(now), zReportPhotos: jsonPhotos(input.photos), submittedLat: String(input.geo.lat), submittedLng: String(input.geo.lng), notes: input.notes, status: 'completed' as const, completedAt: now, updatedAt: now };
+    const v = { scheduleId: input.scheduleId, userId: input.userId, storeId: input.storeId, shiftId: shiftMap['evening'], date: startOfDay(now), zReportPhotos: jsonPhotos(input.photos), submittedLat: String(input.geo.lat), submittedLng: String(input.geo.lng), notes: input.notes, status: 'completed' as const, completedAt: now, updatedAt: now };
     const row = existing ? (await db.update(eodZReportTasks).set(v).where(eq(eodZReportTasks.id, existing.id)).returning())[0] : (await db.insert(eodZReportTasks).values(v).returning())[0];
     return { success: true, data: row };
   } catch (err) { return { success: false, error: `submitEodZReport: ${err}` }; }
@@ -863,8 +894,9 @@ export async function submitOpenStatement(input: SubmitPhotoTaskInput): Promise<
     const [existing] = await db.select().from(openStatementTasks).where(eq(openStatementTasks.scheduleId, input.scheduleId)).limit(1);
     if (existing?.status === 'verified') return { success: false, error: 'Task sudah diverifikasi.' };
 
+    const shiftMap = await getShiftIdMap();
     const now = new Date();
-    const v = { scheduleId: input.scheduleId, userId: input.userId, storeId: input.storeId, shift: 'evening' as const, date: startOfDay(now), openStatementPhotos: jsonPhotos(input.photos), submittedLat: String(input.geo.lat), submittedLng: String(input.geo.lng), notes: input.notes, status: 'completed' as const, completedAt: now, updatedAt: now };
+    const v = { scheduleId: input.scheduleId, userId: input.userId, storeId: input.storeId, shiftId: shiftMap['evening'], date: startOfDay(now), openStatementPhotos: jsonPhotos(input.photos), submittedLat: String(input.geo.lat), submittedLng: String(input.geo.lng), notes: input.notes, status: 'completed' as const, completedAt: now, updatedAt: now };
     const row = existing ? (await db.update(openStatementTasks).set(v).where(eq(openStatementTasks.id, existing.id)).returning())[0] : (await db.insert(openStatementTasks).values(v).returning())[0];
     return { success: true, data: row };
   } catch (err) { return { success: false, error: `submitOpenStatement: ${err}` }; }
@@ -885,14 +917,14 @@ export async function submitGrooming(
     const [existing] = await db
       .select()
       .from(groomingTasks)
-      .where(eq(groomingTasks.scheduleId, input.scheduleId))
+      .where(eq(groomingTasks.scheduleId, input.scheduleId as any))
       .limit(1);
 
     if (existing?.status === 'verified')
       return { success: false, error: 'Grooming task sudah diverifikasi.' };
 
     const [sched] = await db
-      .select({ shift: schedules.shift })
+      .select({ shiftId: schedules.shiftId })
       .from(schedules)
       .where(eq(schedules.id, input.scheduleId))
       .limit(1);
@@ -902,7 +934,7 @@ export async function submitGrooming(
       scheduleId:           input.scheduleId,
       userId:               input.userId,
       storeId:              input.storeId,
-      shift:                (sched?.shift ?? 'morning') as 'morning' | 'evening',
+      shiftId:              sched?.shiftId,
       date:                 startOfDay(now),
       uniformComplete:      input.uniformComplete,
       hairGroomed:          input.hairGroomed,
@@ -1007,7 +1039,7 @@ export async function getTasksForSchedule(scheduleId: number) {
     db.select().from(edcSettlementTasks).where(eq(edcSettlementTasks.scheduleId, scheduleId)).limit(1),
     db.select().from(eodZReportTasks)   .where(eq(eodZReportTasks.scheduleId,    scheduleId)).limit(1),
     db.select().from(openStatementTasks).where(eq(openStatementTasks.scheduleId, scheduleId)).limit(1),
-    db.select().from(groomingTasks)     .where(eq(groomingTasks.scheduleId,      scheduleId)).limit(1),
+    db.select().from(groomingTasks)     .where(eq(groomingTasks.scheduleId,      scheduleId as any)).limit(1),
   ]);
 
   return {

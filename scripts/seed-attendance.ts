@@ -1,32 +1,7 @@
 // scripts/seed-attendance.ts
 // ─────────────────────────────────────────────────────────────────────────────
 // Seeds attendance records for March 1 → March 17, 2026.
-//
-// For each schedule row in that range:
-//   5%  → absent   (no check-in)
-//   10% → late     (31–60 min after shift start)
-//   85% → present  (0–15 min before shift start)
-//
-// Also seeds:
-//   • break sessions     (80% of attended shifts)
-//   • storeOpeningTask   completed (morning, 90% chance) — new checklist columns
-//   • groomingTask       completed (all shifts, 95% chance)
-//   • evening tasks      completed at 70% rate each (briefing, EDC, EOD, statement)
-//   • setoran + productCheck + receiving  completed at 80% rate (morning)
-//
-// Changes from previous version
-// ──────────────────────────────
-//  • All IDs now integers — serial() PKs returned as numbers
-//  • storeOpeningTask columns:
-//      cashDrawerAmount/allLightsOn/cleanlinessCheck/… → replaced by
-//      loginPos / checkAbsenSunfish / tarikSohSales / fiveR / cekLamp / cekSoundSystem
-//  • groomingTask columns: groomingNotes → notes
-//  • No attendanceId on task tables — removed from schema
-//  • New task tables seeded: setoran, productCheck, receiving,
-//    briefing, edcSummary, edcSettlement, eodZReport, openStatement
-//
-// Safe to re-run — skips schedules that already have an attendance record.
-// Run with: tsx scripts/seed-attendance.ts
+// Updated for lookup-table schema (shift is now an FK to the shifts table).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { config } from 'dotenv';
@@ -35,7 +10,7 @@ config({ path: '.env.local' });
 import { db }   from '@/lib/db';
 import {
   schedules, attendance, breakSessions,
-  users, stores,
+  users, stores, shifts,
   storeOpeningTasks, setoranTasks, productCheckTasks,
   receivingTasks, briefingTasks, edcSummaryTasks,
   edcSettlementTasks, eodZReportTasks, openStatementTasks,
@@ -50,18 +25,18 @@ const END_DATE   = new Date(2026, 2, 17, 23, 59, 59, 999);   // March 17
 
 const SHIFT_CONFIG = {
   morning: {
-    startHour:         8,
-    endHour:           17,
-    lateAfterMinutes:  30,
-    breakHour:         12,
-    breakType:         'lunch'  as const,
+    startHour:        8,
+    endHour:          17,
+    lateAfterMinutes: 30,
+    breakHour:        12,
+    breakType:        'lunch'  as const,
   },
   evening: {
-    startHour:         13,
-    endHour:           22,
-    lateAfterMinutes:  30,
-    breakHour:         17,
-    breakType:         'dinner' as const,
+    startHour:        13,
+    endHour:          22,
+    lateAfterMinutes: 30,
+    breakHour:        17,
+    breakType:        'dinner' as const,
   },
 };
 
@@ -72,19 +47,23 @@ function endOfDay  (d: Date): Date { const r = new Date(d); r.setHours(23, 59, 5
 function rand(min: number, max: number): number { return min + Math.floor(Math.random() * (max - min + 1)); }
 function chance(pct: number): boolean { return Math.random() < pct; }
 
-/** Minutes from midnight to a time object */
-function minutesSinceMidnight(h: number, m: number): number { return h * 60 + m; }
-
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function seedAttendance() {
   console.log('📋  seed-attendance: March 1 → March 17, 2026\n');
 
+  // Join schedules with shifts so we can read the shift CODE per row.
   const scheduleRows = await db
-    .select({ sched: schedules, user: users, store: stores })
+    .select({
+      sched:     schedules,
+      shiftCode: shifts.code,
+      user:      users,
+      store:     stores,
+    })
     .from(schedules)
-    .leftJoin(users,  eq(schedules.userId,  users.id))
-    .leftJoin(stores, eq(schedules.storeId, stores.id))
+    .innerJoin(shifts, eq(schedules.shiftId, shifts.id))
+    .leftJoin(users,   eq(schedules.userId,  users.id))
+    .leftJoin(stores,  eq(schedules.storeId, stores.id))
     .where(
       and(
         gte(schedules.date, startOfDay(START_DATE)),
@@ -92,25 +71,30 @@ async function seedAttendance() {
         eq(schedules.isHoliday, false),
       ),
     )
-    .orderBy(schedules.date, schedules.shift);
+    .orderBy(schedules.date, shifts.sortOrder);
 
   console.log(`   Found ${scheduleRows.length} schedule rows in range\n`);
 
-  let created   = 0;
-  let skipped   = 0;
-  let cntAbsent = 0;
-  let cntLate   = 0;
+  let created    = 0;
+  let skipped    = 0;
+  let cntAbsent  = 0;
+  let cntLate    = 0;
   let cntPresent = 0;
   let cntBreaks  = 0;
 
-  // Per-task counters
   const taskDone: Record<string, number> = {
     storeOpening: 0, setoran: 0, productCheck: 0, receiving: 0,
     briefing: 0, edcSummary: 0, edcSettlement: 0, eodZReport: 0, openStatement: 0,
     grooming: 0,
   };
 
-  for (const { sched } of scheduleRows) {
+  for (const { sched, shiftCode } of scheduleRows) {
+    // Validate shift code is one we know how to handle
+    if (shiftCode !== 'morning' && shiftCode !== 'evening') {
+      console.warn(`   ⚠️  Unknown shift code "${shiftCode}" on schedule ${sched.id} — skipping`);
+      continue;
+    }
+
     // ── Skip if attendance already exists ────────────────────────────────────
     const [existingAtt] = await db
       .select({ id: attendance.id })
@@ -120,13 +104,11 @@ async function seedAttendance() {
 
     if (existingAtt) { skipped++; continue; }
 
-    const cfg        = SHIFT_CONFIG[sched.shift as 'morning' | 'evening'];
+    const cfg        = SHIFT_CONFIG[shiftCode];
     const shiftStart = new Date(sched.date);
     shiftStart.setHours(cfg.startHour, 0, 0, 0);
     const shiftEnd = new Date(sched.date);
     shiftEnd.setHours(cfg.endHour, 0, 0, 0);
-    const lateThreshold = new Date(shiftStart);
-    lateThreshold.setMinutes(cfg.lateAfterMinutes);
 
     const roll = Math.random();
 
@@ -137,7 +119,7 @@ async function seedAttendance() {
         userId:      sched.userId,
         storeId:     sched.storeId,
         date:        startOfDay(sched.date),
-        shift:       sched.shift,
+        shiftId:     sched.shiftId,
         status:      'absent',
         onBreak:     false,
         recordedBy:  sched.userId,
@@ -152,20 +134,17 @@ async function seedAttendance() {
     let attStatus: 'present' | 'late';
 
     if (roll < 0.15) {
-      // Late: 31–60 min after shift start
       checkIn   = new Date(shiftStart);
       checkIn.setMinutes(checkIn.getMinutes() + rand(31, 60));
       attStatus = 'late';
       cntLate++;
     } else {
-      // Present: 0–15 min early
       checkIn   = new Date(shiftStart);
       checkIn.setMinutes(checkIn.getMinutes() - rand(0, 15));
       attStatus = 'present';
       cntPresent++;
     }
 
-    // Check out near shift end (0–20 min over)
     const checkOut = new Date(shiftEnd);
     checkOut.setMinutes(checkOut.getMinutes() + rand(0, 20));
 
@@ -177,7 +156,7 @@ async function seedAttendance() {
         userId:       sched.userId,
         storeId:      sched.storeId,
         date:         startOfDay(sched.date),
-        shift:        sched.shift,
+        shiftId:      sched.shiftId,
         status:       attStatus,
         checkInTime:  checkIn,
         checkOutTime: checkOut,
@@ -209,8 +188,7 @@ async function seedAttendance() {
     }
 
     // ── Complete task rows ────────────────────────────────────────────────────
-    // Helper: mark a task row as completed (by scheduleId match)
-    async function completeTask<T extends { scheduleId: number; status: string | null }>(
+    async function completeTask(
       table:     typeof storeOpeningTasks,
       extraSet:  Record<string, unknown>,
       taskName:  keyof typeof taskDone,
@@ -230,17 +208,16 @@ async function seedAttendance() {
         .update(table)
         .set({
           ...extraSet,
-          status:      'completed',
+          status:     'completed',
           completedAt,
-          updatedAt:   new Date(),
+          updatedAt:  new Date(),
         } as any)
         .where(eq(table.id, row.id));
 
       taskDone[taskName]++;
     }
 
-    if (sched.shift === 'morning') {
-      // Store Opening (90% done)
+    if (shiftCode === 'morning') {
       if (chance(0.90)) {
         await completeTask(
           storeOpeningTasks as any,
@@ -259,7 +236,6 @@ async function seedAttendance() {
         );
       }
 
-      // Setoran (80% done)
       if (chance(0.80)) {
         const amount = (500_000 + rand(0, 10) * 50_000).toString();
         await completeTask(
@@ -274,7 +250,6 @@ async function seedAttendance() {
         );
       }
 
-      // Product Check (80% done)
       if (chance(0.80)) {
         await completeTask(
           productCheckTasks as any,
@@ -291,7 +266,6 @@ async function seedAttendance() {
         );
       }
 
-      // Receiving (80% done — 30% have an actual delivery)
       if (chance(0.80)) {
         const hasReceiving = chance(0.30);
         await completeTask(
@@ -310,8 +284,7 @@ async function seedAttendance() {
       }
     }
 
-    if (sched.shift === 'evening') {
-      // Briefing (70% done)
+    if (shiftCode === 'evening') {
       if (chance(0.70)) {
         await completeTask(
           briefingTasks as any,
@@ -320,7 +293,6 @@ async function seedAttendance() {
         );
       }
 
-      // EDC Summary (70% done)
       if (chance(0.70)) {
         await completeTask(
           edcSummaryTasks as any,
@@ -332,7 +304,6 @@ async function seedAttendance() {
         );
       }
 
-      // EDC Settlement (70% done)
       if (chance(0.70)) {
         await completeTask(
           edcSettlementTasks as any,
@@ -344,7 +315,6 @@ async function seedAttendance() {
         );
       }
 
-      // EOD Z-Report (70% done)
       if (chance(0.70)) {
         await completeTask(
           eodZReportTasks as any,
@@ -356,7 +326,6 @@ async function seedAttendance() {
         );
       }
 
-      // Open Statement (70% done)
       if (chance(0.70)) {
         await completeTask(
           openStatementTasks as any,

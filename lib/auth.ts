@@ -2,10 +2,13 @@
 import { NextAuthOptions } from 'next-auth';
 import CredentialsProvider from 'next-auth/providers/credentials';
 import { db } from '@/lib/db';
-import { users } from '@/lib/db/schema';
+import { users, userRoles, employeeTypes } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
 import { getServerSession } from 'next-auth/next';
+
+const isDev = process.env.NODE_ENV === 'development';
+const log = (...args: unknown[]) => { if (isDev) console.log(...args); };
 
 export const authOptions: NextAuthOptions = {
   secret: process.env.NEXTAUTH_SECRET,
@@ -19,59 +22,61 @@ export const authOptions: NextAuthOptions = {
       },
       async authorize(credentials) {
         try {
-          console.log('🔐 Login attempt for:', credentials?.email);
+          if (!credentials?.email || !credentials?.password) return null;
 
-          if (!credentials?.email || !credentials?.password) {
-            console.log('❌ Missing credentials');
-            return null;
-          }
-
-          const userResult = await db
-            .select()
+          // Join users → userRoles, left-join employeeTypes (nullable for ops/admin)
+          const result = await db
+            .select({
+              id:               users.id,
+              name:             users.name,
+              email:            users.email,
+              password:         users.password,
+              homeStoreId:      users.homeStoreId,
+              areaId:           users.areaId,
+              roleId:           users.roleId,
+              roleCode:         userRoles.code,
+              roleLabel:        userRoles.label,
+              roleActive:       userRoles.isActive,
+              employeeTypeId:   users.employeeTypeId,
+              employeeTypeCode: employeeTypes.code,
+              employeeTypeLabel:employeeTypes.label,
+            })
             .from(users)
+            .innerJoin(userRoles, eq(userRoles.id, users.roleId))
+            .leftJoin(employeeTypes, eq(employeeTypes.id, users.employeeTypeId))
             .where(eq(users.email, credentials.email))
             .limit(1);
 
-          console.log('👤 User found:', userResult.length > 0);
-
-          if (!userResult.length) {
-            console.log('❌ No user found with email:', credentials.email);
+          if (!result.length) {
+            log('❌ No user found:', credentials.email);
             return null;
           }
 
-          const user = userResult[0];
-          console.log('🔍 User details:', {
-            id:           user.id,
-            email:        user.email,
-            role:         user.role,
-            employeeType: user.employeeType,
-            homeStoreId:  user.homeStoreId,   // ← was storeId
-            areaId:       user.areaId,
-            hasPassword:  !!user.password,
-          });
+          const u = result[0];
 
-          const isPasswordValid = await bcrypt.compare(
-            credentials.password,
-            user.password,
-          );
-
-          console.log('🔑 Password valid:', isPasswordValid);
-
-          if (!isPasswordValid) {
-            console.log('❌ Invalid password for user:', credentials.email);
+          if (!u.roleActive) {
+            log('❌ Role disabled for user:', credentials.email);
             return null;
           }
 
-          console.log('✅ Login successful for:', credentials.email);
+          const ok = await bcrypt.compare(credentials.password, u.password);
+          if (!ok) {
+            log('❌ Invalid password:', credentials.email);
+            return null;
+          }
+
+          log('✅ Login OK:', credentials.email);
 
           return {
-            id:           user.id,
-            name:         user.name,
-            email:        user.email,
-            role:         user.role,
-            employeeType: user.employeeType ?? undefined,
-            homeStoreId:  user.homeStoreId  ?? undefined,  // ← was storeId
-            areaId:       user.areaId       ?? undefined,
+            id:                u.id,
+            name:              u.name,
+            email:             u.email,
+            role:              u.roleCode,                    // stable code, e.g. 'ops'
+            roleLabel:         u.roleLabel,
+            employeeType:      u.employeeTypeCode ?? null,    // e.g. 'pic_1' or null
+            employeeTypeLabel: u.employeeTypeLabel ?? null,
+            homeStoreId:       u.homeStoreId ?? null,
+            areaId:            u.areaId ?? null,
           };
         } catch (error) {
           console.error('💥 Authorization error:', error);
@@ -89,31 +94,33 @@ export const authOptions: NextAuthOptions = {
   callbacks: {
     async jwt({ token, user }) {
       if (user) {
-        token.role         = (user as any).role;
-        token.employeeType = (user as any).employeeType;
-        token.homeStoreId  = (user as any).homeStoreId;  // ← was storeId
-        token.areaId       = (user as any).areaId ?? null;
+        token.id                = user.id;
+        token.role              = user.role;
+        token.roleLabel         = user.roleLabel;
+        token.employeeType      = user.employeeType;
+        token.employeeTypeLabel = user.employeeTypeLabel;
+        token.homeStoreId       = user.homeStoreId;
+        token.areaId            = user.areaId;
       }
       return token;
     },
 
     async session({ session, token }) {
       if (token && session.user) {
-        (session.user as any).id           = token.sub!;
-        (session.user as any).role         = token.role         as string;
-        (session.user as any).employeeType = token.employeeType as string | undefined;
-        (session.user as any).homeStoreId  = token.homeStoreId  as string | undefined;  // ← was storeId
-        (session.user as any).areaId       = token.areaId       as string | null;
+        session.user.id                = token.id;
+        session.user.role              = token.role;
+        session.user.roleLabel         = token.roleLabel;
+        session.user.employeeType      = token.employeeType;
+        session.user.employeeTypeLabel = token.employeeTypeLabel;
+        session.user.homeStoreId       = token.homeStoreId;
+        session.user.areaId            = token.areaId;
       }
       return session;
     },
   },
 
-  pages: {
-    signIn: '/login',
-  },
-
-  debug: process.env.NODE_ENV === 'development',
+  pages: { signIn: '/login' },
+  debug: isDev,
 };
 
 export const auth = () => getServerSession(authOptions);
