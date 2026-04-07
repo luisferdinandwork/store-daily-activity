@@ -23,23 +23,29 @@ export async function PATCH(
     );
   }
 
-  // Next.js 15: params is a Promise and must be awaited
   const { id } = await params;
   const entryId = Number(id);
   if (isNaN(entryId)) {
-    return NextResponse.json(
-      { success: false, error: 'Invalid entry id.' },
-      { status: 400 },
-    );
+    return NextResponse.json({ success: false, error: 'Invalid entry id.' }, { status: 400 });
   }
 
-  const body  = await req.json();
-  const patch = {
-    shift:   body.shift   ?? null,
-    isOff:   body.isOff   ?? false,
-    isLeave: body.isLeave ?? false,
-  };
+  const body = await req.json();
+
+  // Only forward fields that were explicitly sent, so util can distinguish
+  // "not provided" from "explicitly null".
+  const patch: { shift?: 'morning' | 'evening' | null; isOff?: boolean; isLeave?: boolean } = {};
+  if ('shift'   in body) patch.shift   = body.shift;
+  if ('isOff'   in body) patch.isOff   = !!body.isOff;
+  if ('isLeave' in body) patch.isLeave = !!body.isLeave;
+
+  console.log('[PATCH entry]', entryId, patch);
 
   const result = await updateMonthlyScheduleEntry(entryId, patch, actorId);
+
+  console.log('[PATCH entry] result:', result);
+
+  if (!result.success) {
+    return NextResponse.json(result, { status: 400 });
+  }
   return NextResponse.json(result);
 }

@@ -4,6 +4,7 @@ import { eq, and, gte, lte, inArray, sql }  from 'drizzle-orm';
 import {
   schedules,
   stores,
+  attendance,
   monthlySchedules,
   monthlyScheduleEntries,
   storeOpeningTasks,
@@ -28,7 +29,7 @@ import {
   type OpenStatementTask,
   type GroomingTask,
 } from '@/lib/db/schema';
-import { canManageSchedule } from './schedule';
+import { canManageSchedule } from '@/lib/schedule-utils';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -46,6 +47,22 @@ export interface GeoPoint {
   lat: number;
   lng: number;
 }
+
+/**
+ * Describes WHY a task is locked from the employee's perspective.
+ * Used by the frontend to show the correct blocking UI.
+ *
+ *   'ok'           → employee may view AND interact with the task
+ *   'not_checked_in' → employee has not checked in for their shift yet
+ *   'outside_geofence' → employee is physically outside the store geofence
+ *   'geo_unavailable'  → geolocation could not be obtained (treat as warning,
+ *                         not a hard block — matches skipGeo behaviour)
+ */
+export type TaskAccessStatus =
+  | { status: 'ok' }
+  | { status: 'not_checked_in' }
+  | { status: 'outside_geofence'; distanceM: number; radiusM: number }
+  | { status: 'geo_unavailable' };
 
 export interface SubmitStoreOpeningInput {
   scheduleId:        number;
@@ -172,6 +189,37 @@ function haversineMetres(a: GeoPoint, b: GeoPoint): number {
   return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
 
+// ─── Guard helpers ────────────────────────────────────────────────────────────
+
+/**
+ * Verify that the employee has checked in for this schedule.
+ * Returns an error string if not, or null if OK.
+ *
+ * An attendance row must exist for the schedule AND have a non-null checkInTime.
+ * A row with status 'absent' / 'excused' and no checkInTime counts as not checked in.
+ */
+async function assertCheckedIn(scheduleId: number): Promise<string | null> {
+  const [att] = await db
+    .select({ checkInTime: attendance.checkInTime, status: attendance.status })
+    .from(attendance)
+    .where(eq(attendance.scheduleId, scheduleId))
+    .limit(1);
+
+  if (!att) {
+    return 'Kamu belum absen masuk. Lakukan absensi masuk terlebih dahulu sebelum mengerjakan task.';
+  }
+  if (!att.checkInTime) {
+    return 'Kamu belum absen masuk. Lakukan absensi masuk terlebih dahulu sebelum mengerjakan task.';
+  }
+  return null;
+}
+
+/**
+ * Verify the employee is within the store geofence.
+ * Returns an error string (Indonesian) if outside, or null if OK.
+ *
+ * When the store has no coordinates configured this check is skipped (returns null).
+ */
 async function assertInGeofence(
   storeId: number,
   geo:     GeoPoint,
@@ -182,15 +230,77 @@ async function assertInGeofence(
     .where(eq(stores.id, storeId))
     .limit(1);
 
-  if (!store)                   return 'Store not found.';
+  if (!store)                   return 'Toko tidak ditemukan.';
   if (!store.lat || !store.lng) return null; // coordinates not configured — skip
 
   const dist   = haversineMetres(geo, { lat: parseFloat(store.lat), lng: parseFloat(store.lng) });
   const radius = store.radius ? parseFloat(store.radius) : DEFAULT_GEOFENCE_RADIUS_M;
 
   return dist > radius
-    ? `You are ${Math.round(dist)}m from the store (limit: ${radius}m). Please move closer and try again.`
+    ? `Kamu berada ${Math.round(dist)}m dari toko (batas: ${radius}m). Pastikan kamu berada di dalam toko dan coba lagi.`
     : null;
+}
+
+/**
+ * Combined gate applied before ANY task can be progressed (auto-saved or submitted).
+ *
+ * Order:
+ *   1. Check-in gate  — hard block, always enforced regardless of skipGeo
+ *   2. Geofence gate  — enforced unless skipGeo === true
+ *
+ * Returns null when all checks pass, or an error string to surface to the caller.
+ */
+async function assertCanProgressTask(
+  scheduleId: number,
+  storeId:    number,
+  geo:        GeoPoint,
+  skipGeo?:   boolean,
+): Promise<string | null> {
+  // 1. Must be checked in — no skipGeo override for this gate
+  const checkInErr = await assertCheckedIn(scheduleId);
+  if (checkInErr) return checkInErr;
+
+  // 2. Must be within geofence (unless client explicitly skips — e.g. geo unavailable)
+  if (!skipGeo) {
+    const geoErr = await assertInGeofence(storeId, geo);
+    if (geoErr) return geoErr;
+  }
+
+  return null;
+}
+
+/**
+ * Public read helper — returns the access status for a task without mutating
+ * anything. The frontend calls this to decide which blocking banner to show.
+ *
+ * Pass geo = null when the client could not obtain a position.
+ */
+export async function getTaskAccessStatus(
+  scheduleId: number,
+  storeId:    number,
+  geo:        GeoPoint | null,
+): Promise<TaskAccessStatus> {
+  // 1. Check-in gate
+  const checkInErr = await assertCheckedIn(scheduleId);
+  if (checkInErr) return { status: 'not_checked_in' };
+
+  // 2. Geo unavailable → warn but don't hard-block (mirrors skipGeo submit behaviour)
+  if (!geo) return { status: 'geo_unavailable' };
+
+  // 3. Geofence gate
+  const [store] = await db
+    .select({ lat: stores.latitude, lng: stores.longitude, radius: stores.geofenceRadiusM })
+    .from(stores)
+    .where(eq(stores.id, storeId))
+    .limit(1);
+
+  if (store?.lat && store?.lng) {
+    const radiusM = store.radius ? parseFloat(store.radius) : DEFAULT_GEOFENCE_RADIUS_M;
+    const distM   = haversineMetres(geo, { lat: parseFloat(store.lat), lng: parseFloat(store.lng) });
+    if (distM > radiusM) return { status: 'outside_geofence', distanceM: Math.round(distM), radiusM };
+  }
+
+  return { status: 'ok' };
 }
 
 function jsonPhotos(paths: string[] | undefined): string | undefined {
@@ -200,9 +310,6 @@ function jsonPhotos(paths: string[] | undefined): string | undefined {
 /**
  * Shared verify logic expressed as callbacks so no table reference is passed
  * through a generic/union type parameter.
- *
- * Each `verify*` export supplies its own `fetchRow` and `updateRow` closures
- * that directly reference their table — keeping types fully concrete.
  */
 type VerifyPatch = {
   status:     'verified' | 'rejected';
@@ -222,8 +329,8 @@ async function runVerify(
     if (!auth.allowed) return { success: false, error: auth.reason! };
 
     const row = await fetchRow(input.taskId);
-    if (!row)                       return { success: false, error: 'Task not found.' };
-    if (row.status !== 'completed') return { success: false, error: `Cannot verify a task with status "${row.status}".` };
+    if (!row)                       return { success: false, error: 'Task tidak ditemukan.' };
+    if (row.status !== 'completed') return { success: false, error: `Tidak bisa verifikasi task dengan status "${row.status}".` };
 
     await updateRow(input.taskId, {
       status:     input.approve ? 'verified' : 'rejected',
@@ -276,23 +383,7 @@ export async function materialiseTasksForSchedule(
     status:  'pending' as const,
   };
 
-  /** Insert a shared task (one per store per day). */
   async function insertShared(
-    name:     string,
-    check:    () => Promise<{ id: number } | undefined>,
-    insert:   () => Promise<unknown>,
-  ) {
-    try {
-      if (await check()) { skipped.push(name); return; }
-      await insert();
-      created.push(name);
-    } catch (err) {
-      errors.push(`${name}: ${err}`);
-    }
-  }
-
-  /** Insert a personal task (one per employee per schedule). */
-  async function insertPersonal(
     name:   string,
     check:  () => Promise<{ id: number } | undefined>,
     insert: () => Promise<unknown>,
@@ -306,9 +397,19 @@ export async function materialiseTasksForSchedule(
     }
   }
 
-  const byStore = (col: { storeId: number; date: Date }) =>
-    and(eq(storeOpeningTasks.storeId, sched.storeId), eq(storeOpeningTasks.date, dayStart));
-  // (col parameter unused — each call references its own table directly)
+  async function insertPersonal(
+    name:   string,
+    check:  () => Promise<{ id: number } | undefined>,
+    insert: () => Promise<unknown>,
+  ) {
+    try {
+      if (await check()) { skipped.push(name); return; }
+      await insert();
+      created.push(name);
+    } catch (err) {
+      errors.push(`${name}: ${err}`);
+    }
+  }
 
   // ── Morning tasks ─────────────────────────────────────────────────────────
   if (typedShift === 'morning') {
@@ -454,16 +555,18 @@ export async function deleteTasksForSchedule(scheduleId: number): Promise<void> 
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SUBMIT
+// All submit functions now run assertCanProgressTask before any mutation.
+// The gate checks:
+//   1. Employee is checked in       (hard block — no override)
+//   2. Employee is within geofence  (soft block — overridden by skipGeo)
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function submitStoreOpening(
   input: SubmitStoreOpeningInput,
 ): Promise<TaskResult<StoreOpeningTask>> {
   try {
-    if (!input.skipGeo) {
-      const geoErr = await assertInGeofence(input.storeId, input.geo);
-      if (geoErr) return { success: false, error: geoErr };
-    }
+    const gateErr = await assertCanProgressTask(input.scheduleId, input.storeId, input.geo, input.skipGeo);
+    if (gateErr) return { success: false, error: gateErr };
 
     const [existing] = await db
       .select()
@@ -472,7 +575,7 @@ export async function submitStoreOpening(
       .limit(1);
 
     if (existing?.status === 'completed' || existing?.status === 'verified')
-      return { success: false, error: 'Store opening task already submitted.' };
+      return { success: false, error: 'Store opening task sudah disubmit.' };
 
     const now    = new Date();
     const values = {
@@ -513,14 +616,13 @@ export async function submitSetoran(
   input: SubmitSetoranInput,
 ): Promise<TaskResult<SetoranTask>> {
   try {
-    if (!input.skipGeo) {
-      const geoErr = await assertInGeofence(input.storeId, input.geo);
-      if (geoErr) return { success: false, error: geoErr };
-    }
+    const gateErr = await assertCanProgressTask(input.scheduleId, input.storeId, input.geo, input.skipGeo);
+    if (gateErr) return { success: false, error: gateErr };
+
     if (!input.moneyPhotos?.length)
-      return { success: false, error: 'At least one photo of the money is required.' };
+      return { success: false, error: 'Minimal 1 foto uang wajib diupload.' };
     if (!input.linkSetoran)
-      return { success: false, error: 'Link setoran is required.' };
+      return { success: false, error: 'Link setoran wajib diisi.' };
 
     const [existing] = await db
       .select()
@@ -529,7 +631,7 @@ export async function submitSetoran(
       .limit(1);
 
     if (existing?.status === 'verified')
-      return { success: false, error: 'Setoran already verified.' };
+      return { success: false, error: 'Setoran sudah diverifikasi.' };
 
     const now    = new Date();
     const values = {
@@ -565,10 +667,8 @@ export async function submitProductCheck(
   input: SubmitProductCheckInput,
 ): Promise<TaskResult<ProductCheckTask>> {
   try {
-    if (!input.skipGeo) {
-      const geoErr = await assertInGeofence(input.storeId, input.geo);
-      if (geoErr) return { success: false, error: geoErr };
-    }
+    const gateErr = await assertCanProgressTask(input.scheduleId, input.storeId, input.geo, input.skipGeo);
+    if (gateErr) return { success: false, error: gateErr };
 
     const [existing] = await db
       .select()
@@ -577,7 +677,7 @@ export async function submitProductCheck(
       .limit(1);
 
     if (existing?.status === 'verified')
-      return { success: false, error: 'Product check already verified.' };
+      return { success: false, error: 'Product check sudah diverifikasi.' };
 
     const now    = new Date();
     const values = {
@@ -616,12 +716,11 @@ export async function submitReceiving(
   input: SubmitReceivingInput,
 ): Promise<TaskResult<ReceivingTask>> {
   try {
-    if (!input.skipGeo) {
-      const geoErr = await assertInGeofence(input.storeId, input.geo);
-      if (geoErr) return { success: false, error: geoErr };
-    }
+    const gateErr = await assertCanProgressTask(input.scheduleId, input.storeId, input.geo, input.skipGeo);
+    if (gateErr) return { success: false, error: gateErr };
+
     if (input.hasReceiving && !input.receivingPhotos?.length)
-      return { success: false, error: 'Photos are required when receiving is marked as yes.' };
+      return { success: false, error: 'Foto wajib diupload jika ada penerimaan barang.' };
 
     const [existing] = await db
       .select()
@@ -630,7 +729,7 @@ export async function submitReceiving(
       .limit(1);
 
     if (existing?.status === 'verified')
-      return { success: false, error: 'Receiving already verified.' };
+      return { success: false, error: 'Receiving sudah diverifikasi.' };
 
     const now    = new Date();
     const values = {
@@ -665,10 +764,8 @@ export async function submitBriefing(
   input: SubmitBriefingInput,
 ): Promise<TaskResult<BriefingTask>> {
   try {
-    if (!input.skipGeo) {
-      const geoErr = await assertInGeofence(input.storeId, input.geo);
-      if (geoErr) return { success: false, error: geoErr };
-    }
+    const gateErr = await assertCanProgressTask(input.scheduleId, input.storeId, input.geo, input.skipGeo);
+    if (gateErr) return { success: false, error: gateErr };
 
     const [existing] = await db
       .select()
@@ -677,7 +774,7 @@ export async function submitBriefing(
       .limit(1);
 
     if (existing?.status === 'verified')
-      return { success: false, error: 'Briefing already verified.' };
+      return { success: false, error: 'Briefing sudah diverifikasi.' };
 
     const now    = new Date();
     const values = {
@@ -706,18 +803,17 @@ export async function submitBriefing(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Photo-only evening tasks — each written out explicitly.
-// No shared generic: Drizzle tables are nominally typed and cannot be
-// passed through a single typed parameter without `as unknown as` hacks.
+// Photo-only evening tasks
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function submitEdcSummary(input: SubmitPhotoTaskInput): Promise<TaskResult<EdcSummaryTask>> {
   try {
-    if (!input.skipGeo) { const e = await assertInGeofence(input.storeId, input.geo); if (e) return { success: false, error: e }; }
-    if (!input.photos?.length) return { success: false, error: 'At least one photo is required.' };
+    const gateErr = await assertCanProgressTask(input.scheduleId, input.storeId, input.geo, input.skipGeo);
+    if (gateErr) return { success: false, error: gateErr };
+    if (!input.photos?.length) return { success: false, error: 'Minimal 1 foto wajib diupload.' };
 
     const [existing] = await db.select().from(edcSummaryTasks).where(eq(edcSummaryTasks.scheduleId, input.scheduleId)).limit(1);
-    if (existing?.status === 'verified') return { success: false, error: 'Task already verified.' };
+    if (existing?.status === 'verified') return { success: false, error: 'Task sudah diverifikasi.' };
 
     const now = new Date();
     const v = { scheduleId: input.scheduleId, userId: input.userId, storeId: input.storeId, shift: 'evening' as const, date: startOfDay(now), edcSummaryPhotos: jsonPhotos(input.photos), submittedLat: String(input.geo.lat), submittedLng: String(input.geo.lng), notes: input.notes, status: 'completed' as const, completedAt: now, updatedAt: now };
@@ -728,11 +824,12 @@ export async function submitEdcSummary(input: SubmitPhotoTaskInput): Promise<Tas
 
 export async function submitEdcSettlement(input: SubmitPhotoTaskInput): Promise<TaskResult<EdcSettlementTask>> {
   try {
-    if (!input.skipGeo) { const e = await assertInGeofence(input.storeId, input.geo); if (e) return { success: false, error: e }; }
-    if (!input.photos?.length) return { success: false, error: 'At least one photo is required.' };
+    const gateErr = await assertCanProgressTask(input.scheduleId, input.storeId, input.geo, input.skipGeo);
+    if (gateErr) return { success: false, error: gateErr };
+    if (!input.photos?.length) return { success: false, error: 'Minimal 1 foto wajib diupload.' };
 
     const [existing] = await db.select().from(edcSettlementTasks).where(eq(edcSettlementTasks.scheduleId, input.scheduleId)).limit(1);
-    if (existing?.status === 'verified') return { success: false, error: 'Task already verified.' };
+    if (existing?.status === 'verified') return { success: false, error: 'Task sudah diverifikasi.' };
 
     const now = new Date();
     const v = { scheduleId: input.scheduleId, userId: input.userId, storeId: input.storeId, shift: 'evening' as const, date: startOfDay(now), edcSettlementPhotos: jsonPhotos(input.photos), submittedLat: String(input.geo.lat), submittedLng: String(input.geo.lng), notes: input.notes, status: 'completed' as const, completedAt: now, updatedAt: now };
@@ -743,11 +840,12 @@ export async function submitEdcSettlement(input: SubmitPhotoTaskInput): Promise<
 
 export async function submitEodZReport(input: SubmitPhotoTaskInput): Promise<TaskResult<EodZReportTask>> {
   try {
-    if (!input.skipGeo) { const e = await assertInGeofence(input.storeId, input.geo); if (e) return { success: false, error: e }; }
-    if (!input.photos?.length) return { success: false, error: 'At least one photo is required.' };
+    const gateErr = await assertCanProgressTask(input.scheduleId, input.storeId, input.geo, input.skipGeo);
+    if (gateErr) return { success: false, error: gateErr };
+    if (!input.photos?.length) return { success: false, error: 'Minimal 1 foto wajib diupload.' };
 
     const [existing] = await db.select().from(eodZReportTasks).where(eq(eodZReportTasks.scheduleId, input.scheduleId)).limit(1);
-    if (existing?.status === 'verified') return { success: false, error: 'Task already verified.' };
+    if (existing?.status === 'verified') return { success: false, error: 'Task sudah diverifikasi.' };
 
     const now = new Date();
     const v = { scheduleId: input.scheduleId, userId: input.userId, storeId: input.storeId, shift: 'evening' as const, date: startOfDay(now), zReportPhotos: jsonPhotos(input.photos), submittedLat: String(input.geo.lat), submittedLng: String(input.geo.lng), notes: input.notes, status: 'completed' as const, completedAt: now, updatedAt: now };
@@ -758,11 +856,12 @@ export async function submitEodZReport(input: SubmitPhotoTaskInput): Promise<Tas
 
 export async function submitOpenStatement(input: SubmitPhotoTaskInput): Promise<TaskResult<OpenStatementTask>> {
   try {
-    if (!input.skipGeo) { const e = await assertInGeofence(input.storeId, input.geo); if (e) return { success: false, error: e }; }
-    if (!input.photos?.length) return { success: false, error: 'At least one photo is required.' };
+    const gateErr = await assertCanProgressTask(input.scheduleId, input.storeId, input.geo, input.skipGeo);
+    if (gateErr) return { success: false, error: gateErr };
+    if (!input.photos?.length) return { success: false, error: 'Minimal 1 foto wajib diupload.' };
 
     const [existing] = await db.select().from(openStatementTasks).where(eq(openStatementTasks.scheduleId, input.scheduleId)).limit(1);
-    if (existing?.status === 'verified') return { success: false, error: 'Task already verified.' };
+    if (existing?.status === 'verified') return { success: false, error: 'Task sudah diverifikasi.' };
 
     const now = new Date();
     const v = { scheduleId: input.scheduleId, userId: input.userId, storeId: input.storeId, shift: 'evening' as const, date: startOfDay(now), openStatementPhotos: jsonPhotos(input.photos), submittedLat: String(input.geo.lat), submittedLng: String(input.geo.lng), notes: input.notes, status: 'completed' as const, completedAt: now, updatedAt: now };
@@ -777,12 +876,11 @@ export async function submitGrooming(
   input: SubmitGroomingInput,
 ): Promise<TaskResult<GroomingTask>> {
   try {
-    if (!input.skipGeo) {
-      const geoErr = await assertInGeofence(input.storeId, input.geo);
-      if (geoErr) return { success: false, error: geoErr };
-    }
+    const gateErr = await assertCanProgressTask(input.scheduleId, input.storeId, input.geo, input.skipGeo);
+    if (gateErr) return { success: false, error: gateErr };
+
     if (!input.selfiePhotos?.length)
-      return { success: false, error: 'A full-body selfie photo is required.' };
+      return { success: false, error: 'Foto selfie full body wajib diupload.' };
 
     const [existing] = await db
       .select()
@@ -791,7 +889,7 @@ export async function submitGrooming(
       .limit(1);
 
     if (existing?.status === 'verified')
-      return { success: false, error: 'Grooming task already verified.' };
+      return { success: false, error: 'Grooming task sudah diverifikasi.' };
 
     const [sched] = await db
       .select({ shift: schedules.shift })
@@ -934,7 +1032,6 @@ export async function getDailyTaskSummary(storeId: number, date: Date) {
   const dayStart = startOfDay(date);
   const dayEnd   = endOfDay(date);
 
-  // Each table queried with its own fully-typed columns — no shared table ref.
   function summarise(rows: { status: string | null; count: number }[]) {
     return {
       pending:    rows.find(r => r.status === 'pending')?.count     ?? 0,

@@ -5,6 +5,7 @@ import { authOptions }               from '@/lib/auth';
 import {
   parseScheduleBuffer,
   importScheduleFromParsed,
+  ScheduleImportValidationError,
 } from '@/lib/schedule-import';
 
 export async function POST(req: NextRequest) {
@@ -45,8 +46,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'No file uploaded.' }, { status: 400 });
     }
 
-    // storeMap values come in as strings from form data — coerce to numbers
-    // Format from client: { [sectionLabelInExcel]: storeId (string or number) }
     let storeMap: Record<string, number> = {};
     if (rawMap) {
       try {
@@ -61,12 +60,23 @@ export async function POST(req: NextRequest) {
     }
 
     const buffer = await file.arrayBuffer();
-    const parsed = parseScheduleBuffer(buffer, sheet);
 
-    console.log('[import] sections in file:', parsed.sections);
-    console.log('[import] employees found:',  parsed.employees.length);
-    console.log('[import] actorStoreId:',     actorStoreId);
-    console.log('[import] explicit storeMap:', storeMap);
+    let parsed;
+    try {
+      parsed = parseScheduleBuffer(buffer, sheet);
+    } catch (err) {
+      if (err instanceof ScheduleImportValidationError) {
+        return NextResponse.json(
+          {
+            success:    false,
+            error:      'The Excel file has incorrect dates. Please fix and re-upload.',
+            dateErrors: err.dateErrors,
+          },
+          { status: 400 },
+        );
+      }
+      throw err;
+    }
 
     if (actorStoreId == null && Object.keys(storeMap).length === 0) {
       return NextResponse.json(
@@ -75,7 +85,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Build normalized map: explicit storeMap wins, fallback to actorStoreId
     const normalized: Record<string, number> = {};
     for (const section of parsed.sections) {
       if (storeMap[section] != null) {
@@ -85,10 +94,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    console.log('[import] normalized storeMap:', normalized);
-
     const result = await importScheduleFromParsed(parsed, normalized, actorId);
-    console.log('[import] result:', JSON.stringify(result));
 
     return NextResponse.json({
       success:          result.errors.length === 0,

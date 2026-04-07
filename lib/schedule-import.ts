@@ -95,15 +95,34 @@ export function parseScheduleBuffer(
   return parseSections(raw, sName);
 }
 
+export class ScheduleImportValidationError extends Error {
+  public dateErrors: string[];
+  constructor(dateErrors: string[]) {
+    super('Schedule date validation failed');
+    this.name = 'ScheduleImportValidationError';
+    this.dateErrors = dateErrors;
+  }
+}
+
 // ─── Parser ───────────────────────────────────────────────────────────────────
 
 const SUMMARY_LABELS = /^(opening|middle|closing|off\/cuti|off|cuti)$/i;
 const SKIP_HEADER    = /^(month\s*:|no|pic|name)$/i;
+const WEEKDAY_MAP: Record<string, number> = {
+  SUN: 0, SUNDAY: 0,
+  MON: 1, MONDAY: 1,
+  TUE: 2, TUES: 2, TUESDAY: 2,
+  WED: 3, WEDNESDAY: 3,
+  THU: 4, THUR: 4, THURS: 4, THURSDAY: 4,
+  FRI: 5, FRIDAY: 5,
+  SAT: 6, SATURDAY: 6,
+};
 
 function parseSections(raw: any[][], sheetName: string): ParsedScheduleFile {
   const employees: EmployeeScheduleRow[] = [];
   const sections:  string[]              = [];
   let   month: Date                      = new Date();
+  const dateErrors: string[]             = [];
 
   const sectionStarts: number[] = [];
   for (let r = 0; r < raw.length; r++) {
@@ -122,12 +141,6 @@ function parseSections(raw: any[][], sheetName: string): ParsedScheduleFile {
     if (isStoreLabel) sectionStarts.push(r);
   }
 
-  console.log(
-    '[parser] sectionStarts:',
-    sectionStarts,
-    sectionStarts.map(r => raw[r]?.[0]),
-  );
-
   for (const start of sectionStarts) {
     const sectionLabel = String(raw[start][0]).trim();
     sections.push(sectionLabel);
@@ -141,13 +154,28 @@ function parseSections(raw: any[][], sheetName: string): ParsedScheduleFile {
       }
     }
 
-    const dateRow  = raw[start + 3] ?? [];
-    const dayDates = buildDateMap(dateRow, month);
+    const weekdayRow = raw[start + 2] ?? [];
+    const dateRow    = raw[start + 3] ?? [];
+    const dayDates   = buildDateMap(dateRow, month);
 
-    console.log(
-      `[parser] section "${sectionLabel}" month=${month.toISOString().slice(0, 7)} ` +
-      `dates=${Object.keys(dayDates).length}`,
-    );
+    // ── Validate each day number against its weekday header ────────────────
+    for (const [colStr, date] of Object.entries(dayDates)) {
+      const col           = Number(colStr);
+      const headerRaw     = String(weekdayRow[col] ?? '').trim().toUpperCase();
+      if (!headerRaw) continue; // no weekday header — skip
+      // Strip trailing punctuation/non-letters (e.g. "MON.", "MON ")
+      const headerClean   = headerRaw.replace(/[^A-Z]/g, '');
+      const expectedDow   = WEEKDAY_MAP[headerClean];
+      if (expectedDow === undefined) continue; // unknown header — skip
+      const actualDow     = date.getDay();
+      if (expectedDow !== actualDow) {
+        const actualName = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][actualDow];
+        const headerName = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][expectedDow];
+        dateErrors.push(
+          `Section "${sectionLabel}": day ${date.getDate()} is marked as ${headerName} but ${month.toLocaleString('en-US',{month:'long'})} ${date.getDate()}, ${month.getFullYear()} is actually ${actualName}.`,
+        );
+      }
+    }
 
     const nextSection = sectionStarts.find(s => s > start) ?? raw.length;
 
@@ -173,11 +201,13 @@ function parseSections(raw: any[][], sheetName: string): ParsedScheduleFile {
       }
 
       employees.push({ name, pic, section: sectionLabel, days });
-      console.log(
-        `[parser]   employee "${name}" (${pic}) ` +
-        `working=${days.filter(d => d.shift !== 'off' && d.shift !== 'leave').length}`,
-      );
     }
+  }
+
+  // ── If any date/weekday mismatches found, reject the whole import ─────────
+  if (dateErrors.length > 0) {
+    // Deduplicate identical errors
+    throw new ScheduleImportValidationError([...new Set(dateErrors)]);
   }
 
   return { month, sheetName, employees, sections: [...new Set(sections)] };

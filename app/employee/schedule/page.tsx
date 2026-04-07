@@ -9,6 +9,7 @@ import {
   Shield, Calendar, Users, X, ChevronLeft, ChevronRight,
   CheckCircle2, AlertCircle, ChevronDown, ChevronUp,
   FileSpreadsheet,
+  Plus,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
@@ -48,6 +49,13 @@ interface ImportResult {
   month?:           string;
   sheet?:           string;
   sections?:        string[];
+  dateErrors?:      string[];
+}
+
+interface EmployeeOption {
+  id:           string;
+  name:         string;
+  employeeType: string | null;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -102,10 +110,11 @@ function getShiftCfg(entry: DayEntry | undefined) {
 // ─── DayDetailSheet ───────────────────────────────────────────────────────────
 // Bottom sheet showing all employees on a selected day
 
-function DayDetailSheet({ date, entries, onEdit, onClose }: {
+function DayDetailSheet({ date, entries, onEdit, onAdd, onClose }: {
   date:    Date;
   entries: DayEntry[];
   onEdit:  (e: DayEntry) => void;
+  onAdd:   () => void;
   onClose: () => void;
 }) {
   const label = date.toLocaleDateString('en-ID', { weekday: 'long', day: 'numeric', month: 'long' });
@@ -144,12 +153,28 @@ function DayDetailSheet({ date, entries, onEdit, onClose }: {
         </div>
 
         {entries.length === 0 ? (
-          <div className="flex flex-col items-center gap-3 py-10 text-center px-6">
+          <div className="flex flex-col items-center gap-3 py-8 text-center px-6">
             <Calendar className="h-8 w-8 text-slate-200" />
             <p className="text-sm text-slate-400">No employees scheduled on this day.</p>
+            <button
+              onClick={onAdd}
+              className="mt-2 flex items-center gap-1.5 rounded-xl bg-indigo-500 px-4 py-2 text-xs font-bold text-white active:scale-[0.98]"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Add employee
+            </button>
           </div>
         ) : (
           <div className="space-y-1 px-4">
+            {/* Add employee button at top */}
+            <button
+              onClick={onAdd}
+              className="mb-3 flex w-full items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-indigo-200 bg-indigo-50 py-2.5 text-xs font-bold text-indigo-600 active:scale-[0.98]"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Add another employee
+            </button>
+
             {/* Working */}
             {working.length > 0 && (
               <div className="mb-2">
@@ -242,6 +267,157 @@ function DayDetailSheet({ date, entries, onEdit, onClose }: {
           to   { transform: translateY(0);    opacity: 1; }
         }
       `}</style>
+    </div>
+  );
+}
+
+// ─── AddEntryModal ────────────────────────────────────────────────────────────
+// Used when PIC taps a day and wants to assign an employee to it.
+
+function AddEntryModal({ date, employees, existingUserIds, onSave, onClose, saving }: {
+  date:            Date;
+  employees:       EmployeeOption[];
+  existingUserIds: Set<string>;
+  onSave:          (p: { userId: string; shift: Shift | null; isOff: boolean; isLeave: boolean }) => Promise<void>;
+  onClose:         () => void;
+  saving:          boolean;
+}) {
+  const [selectedUserId, setSelectedUserId] = useState<string>('');
+  const [mode, setMode] = useState<'morning' | 'evening' | 'off' | 'leave'>('morning');
+
+  const label = date.toLocaleDateString('en-ID', { weekday: 'long', day: 'numeric', month: 'long' });
+
+  // Filter out employees already assigned to this day
+  const available = employees.filter(e => !existingUserIds.has(e.id));
+
+  function handleSubmit() {
+    if (!selectedUserId) { toast.error('Please select an employee'); return; }
+    const payload = {
+      userId:  selectedUserId,
+      shift:   (mode === 'morning' || mode === 'evening') ? mode : null,
+      isOff:   mode === 'off',
+      isLeave: mode === 'leave',
+    };
+    onSave(payload);
+  }
+
+  const options = [
+    { key: 'morning', label: 'Morning', sub: '08:00 – 17:00', icon: <Sun  className="h-5 w-5" />, accent: '#ea580c' },
+    { key: 'evening', label: 'Evening', sub: '13:00 – 22:00', icon: <Moon className="h-5 w-5" />, accent: '#7c3aed' },
+    { key: 'off',     label: 'Day Off', sub: 'No work today', icon: <X    className="h-5 w-5" />, accent: '#64748b' },
+    { key: 'leave',   label: 'Leave',   sub: 'AL / CU / Sick',icon: <Calendar className="h-5 w-5" />, accent: '#4338ca' },
+  ] as const;
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-end justify-center"
+      style={{ background: 'rgba(15,23,42,0.65)', backdropFilter: 'blur(6px)' }}
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md rounded-t-3xl bg-white px-5 pb-10 pt-4 shadow-2xl"
+        style={{ animation: 'slideUp 0.25s cubic-bezier(0.34,1.56,0.64,1)', maxHeight: '90vh', overflow: 'auto' }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-slate-200" />
+
+        <div className="mb-5 flex items-start justify-between">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Add Employee</p>
+            <p className="mt-0.5 text-lg font-bold text-slate-900">{label}</p>
+          </div>
+          <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-slate-400">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Employee picker */}
+        <div className="mb-4">
+          <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Employee</p>
+          {available.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 py-6 text-center">
+              <p className="text-xs text-slate-400">All employees already assigned to this day.</p>
+            </div>
+          ) : (
+            <div className="max-h-48 space-y-1.5 overflow-y-auto">
+              {available.map(emp => {
+                const active = selectedUserId === emp.id;
+                return (
+                  <button
+                    key={emp.id}
+                    onClick={() => setSelectedUserId(emp.id)}
+                    className="flex w-full items-center gap-3 rounded-xl border-2 px-3 py-2.5 text-left transition-all active:scale-[0.98]"
+                    style={{
+                      borderColor: active ? '#6366f1' : '#e2e8f0',
+                      background:  active ? '#eef2ff' : '#f8fafc',
+                    }}
+                  >
+                    <div
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xs font-bold"
+                      style={{ background: active ? '#6366f1' : '#e2e8f0', color: active ? 'white' : '#64748b' }}
+                    >
+                      {emp.name.slice(0, 2).toUpperCase()}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-bold text-slate-800 truncate">{emp.name}</p>
+                      <p className="text-[10px] text-slate-400">{EMP_LABEL[emp.employeeType ?? ''] ?? '—'}</p>
+                    </div>
+                    {active && <CheckCircle2 className="h-4 w-4 shrink-0 text-indigo-500" />}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Shift picker */}
+        <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Shift</p>
+        <div className="mb-6 grid grid-cols-2 gap-2.5">
+          {options.map(opt => {
+            const active = mode === opt.key;
+            return (
+              <button
+                key={opt.key}
+                onClick={() => setMode(opt.key)}
+                className="relative flex flex-col items-start gap-1.5 rounded-2xl border-2 px-4 py-3.5 text-left transition-all active:scale-[0.97]"
+                style={{
+                  borderColor: active ? opt.accent : '#e2e8f0',
+                  background:  active ? `${opt.accent}12` : '#f8fafc',
+                  boxShadow:   active ? `0 0 0 3px ${opt.accent}20` : 'none',
+                }}
+              >
+                <span style={{ color: active ? opt.accent : '#94a3b8' }}>{opt.icon}</span>
+                <div>
+                  <p className="text-sm font-bold" style={{ color: active ? opt.accent : '#334155' }}>{opt.label}</p>
+                  <p className="text-[10px] text-slate-400">{opt.sub}</p>
+                </div>
+                {active && (
+                  <span className="absolute right-2.5 top-2.5 flex h-4 w-4 items-center justify-center rounded-full" style={{ background: opt.accent }}>
+                    <CheckCircle2 className="h-3 w-3 text-white" />
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex gap-2.5">
+          <button
+            onClick={onClose}
+            className="flex h-12 flex-1 items-center justify-center rounded-2xl border border-slate-200 bg-white text-sm font-semibold text-slate-600 active:scale-[0.98]"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={saving || !selectedUserId || available.length === 0}
+            className="flex h-12 flex-[2] items-center justify-center gap-2 rounded-2xl text-sm font-bold text-white transition-all active:scale-[0.98] disabled:opacity-60"
+            style={{ background: 'linear-gradient(135deg, #4f46e5, #7c3aed)' }}
+          >
+            {saving ? <><Loader2 className="h-4 w-4 animate-spin" />Adding…</> : 'Add to Schedule'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -364,24 +540,73 @@ function ImportButton({ onImported }: { onImported: () => void }) {
     const file = e.target.files?.[0];
     if (!file) return;
     e.target.value = '';
-    setImporting(true); setResult(null);
+    setImporting(true);
+    setResult(null);
+    setShowErrors(false);
+
     try {
       const form = new FormData();
       form.append('file', file);
       const res  = await fetch('/api/pic/schedule/import', { method: 'POST', body: form });
-      const json = await res.json() as ImportResult;
-      setResult(json);
-      if (json.schedulesCreated > 0 && !json.errors.length) { toast.success(`Imported ${json.entriesCreated} entries`); onImported(); }
-      else if (json.schedulesCreated > 0) { toast.warning('Imported with warnings'); onImported(); }
-      else if (!json.success) toast.error('Import failed');
-      else toast.info('No new data imported');
+      const json = (await res.json()) as ImportResult & { error?: string };
+
+      // Normalise the response into our ImportResult shape
+      const normalised: ImportResult = {
+        success:          json.success          ?? false,
+        schedulesCreated: json.schedulesCreated ?? 0,
+        entriesCreated:   json.entriesCreated   ?? 0,
+        skipped:          json.skipped          ?? 0,
+        errors:           json.errors           ?? (json.error ? [json.error] : []),
+        notFound:         json.notFound         ?? [],
+        month:            json.month,
+        sheet:            json.sheet,
+        sections:         json.sections,
+        dateErrors:       json.dateErrors,
+      };
+
+      setResult(normalised);
+
+      // If there are date errors, auto-expand and toast loud
+      if (normalised.dateErrors && normalised.dateErrors.length > 0) {
+        setShowErrors(true);
+        toast.error('Excel has wrong dates — please fix and re-upload');
+        return;
+      }
+
+      if (normalised.schedulesCreated > 0 && normalised.errors.length === 0 && normalised.notFound.length === 0) {
+        toast.success(`Imported ${normalised.entriesCreated} entries`);
+        onImported();
+      } else if (normalised.schedulesCreated > 0) {
+        toast.warning('Imported with warnings');
+        setShowErrors(true);
+        onImported();
+      } else if (!normalised.success) {
+        toast.error(normalised.errors[0] ?? 'Import failed');
+        setShowErrors(true);
+      } else {
+        toast.info('No new data imported');
+      }
     } catch (err) {
-      setResult({ success: false, schedulesCreated: 0, entriesCreated: 0, skipped: 0, errors: [String(err)], notFound: [] });
+      setResult({
+        success: false, schedulesCreated: 0, entriesCreated: 0, skipped: 0,
+        errors: [String(err)], notFound: [],
+      });
+      setShowErrors(true);
       toast.error('Network error');
-    } finally { setImporting(false); }
+    } finally {
+      setImporting(false);
+    }
   }
 
-  const hasWarnings = (result?.errors.length ?? 0) > 0 || (result?.notFound.length ?? 0) > 0;
+  // Unified warning detection — include dateErrors now
+  const hasDateErrors = (result?.dateErrors?.length ?? 0) > 0;
+  const hasErrors     = (result?.errors.length     ?? 0) > 0;
+  const hasNotFound   = (result?.notFound.length   ?? 0) > 0;
+  const hasWarnings   = hasDateErrors || hasErrors || hasNotFound;
+
+  // Severity for panel styling
+  const isFullSuccess = result?.success && !hasWarnings;
+  const isHardFail    = result && !result.success && (hasDateErrors || (result.schedulesCreated === 0));
 
   return (
     <div className="space-y-2">
@@ -397,47 +622,104 @@ function ImportButton({ onImported }: { onImported: () => void }) {
           color:       importing ? '#94a3b8'  : '#4f46e5',
         }}
       >
-        {importing ? <><Loader2 className="h-4 w-4 animate-spin" />Importing…</> : <><Upload className="h-4 w-4" />Import Schedule (.xlsx)</>}
+        {importing
+          ? <><Loader2 className="h-4 w-4 animate-spin" />Importing…</>
+          : <><Upload className="h-4 w-4" />Import Schedule (.xlsx)</>}
       </button>
 
       {result && (
-        <div className={cn('overflow-hidden rounded-2xl border text-sm',
-          result.success && !hasWarnings ? 'border-emerald-200 bg-emerald-50'
-          : hasWarnings ? 'border-amber-200 bg-amber-50' : 'border-red-200 bg-red-50')}>
+        <div
+          className={cn(
+            'overflow-hidden rounded-2xl border text-sm',
+            isFullSuccess
+              ? 'border-emerald-200 bg-emerald-50'
+              : isHardFail
+                ? 'border-red-200 bg-red-50'
+                : 'border-amber-200 bg-amber-50',
+          )}
+        >
           <div className="flex items-center gap-3 px-4 py-3">
-            {result.success && !hasWarnings
+            {isFullSuccess
               ? <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
-              : <AlertCircle  className="h-4 w-4 shrink-0 text-amber-500" />}
+              : <AlertCircle  className={cn('h-4 w-4 shrink-0', isHardFail ? 'text-red-500' : 'text-amber-500')} />}
             <div className="flex-1 min-w-0">
-              <p className={cn('font-bold text-sm', result.success && !hasWarnings ? 'text-emerald-800' : hasWarnings ? 'text-amber-800' : 'text-red-800')}>
-                {result.success && !hasWarnings ? 'Import successful' : hasWarnings ? 'Imported with warnings' : 'Import failed'}
+              <p className={cn(
+                'font-bold text-sm',
+                isFullSuccess ? 'text-emerald-800' : isHardFail ? 'text-red-800' : 'text-amber-800',
+              )}>
+                {isFullSuccess
+                  ? 'Import successful'
+                  : hasDateErrors
+                    ? 'Wrong dates in Excel'
+                    : isHardFail
+                      ? 'Import failed'
+                      : 'Imported with warnings'}
               </p>
               <p className="text-[11px] text-slate-500 mt-0.5">
-                {result.entriesCreated} entries · {result.schedulesCreated} store(s){result.month && ` · ${formatYearMonth(result.month)}`}
+                {result.entriesCreated} entries · {result.schedulesCreated} store(s)
+                {result.month && ` · ${formatYearMonth(result.month)}`}
               </p>
             </div>
             {hasWarnings && (
-              <button onClick={() => setShowErrors(v => !v)} className="text-[11px] font-semibold text-amber-700 flex items-center gap-0.5">
+              <button
+                onClick={() => setShowErrors(v => !v)}
+                className={cn(
+                  'text-[11px] font-semibold flex items-center gap-0.5',
+                  isHardFail ? 'text-red-700' : 'text-amber-700',
+                )}
+              >
                 Details {showErrors ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
               </button>
             )}
-            <button onClick={() => setResult(null)} className="text-slate-400"><X className="h-3.5 w-3.5" /></button>
+            <button onClick={() => setResult(null)} className="text-slate-400">
+              <X className="h-3.5 w-3.5" />
+            </button>
           </div>
+
           {hasWarnings && showErrors && (
-            <div className="border-t border-amber-200 bg-white/60 px-4 py-3 space-y-2">
-              {result.notFound.length > 0 && (
+            <div className={cn(
+              'border-t bg-white/70 px-4 py-3 space-y-3',
+              isHardFail ? 'border-red-200' : 'border-amber-200',
+            )}>
+              {hasDateErrors && (
                 <div>
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-amber-700 mb-1">Not found</p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-red-700 mb-1.5">
+                    Wrong dates — please fix your Excel file
+                  </p>
+                  <ul className="max-h-40 overflow-y-auto space-y-1">
+                    {result.dateErrors!.map((e, i) => (
+                      <li key={i} className="text-[11px] leading-relaxed text-red-700">
+                        • {e}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {hasNotFound && (
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-amber-700 mb-1">
+                    Employees not found in system
+                  </p>
                   <div className="flex flex-wrap gap-1">
-                    {result.notFound.map(n => <span key={n} className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">{n}</span>)}
+                    {result.notFound.map(n => (
+                      <span key={n} className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                        {n}
+                      </span>
+                    ))}
                   </div>
                 </div>
               )}
-              {result.errors.length > 0 && (
+
+              {hasErrors && (
                 <div>
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-red-700 mb-1">Errors</p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-red-700 mb-1">
+                    Errors
+                  </p>
                   <ul className="max-h-28 overflow-y-auto space-y-0.5">
-                    {result.errors.map((e, i) => <li key={i} className="text-[11px] text-red-700 font-mono">{e}</li>)}
+                    {result.errors.map((e, i) => (
+                      <li key={i} className="text-[11px] text-red-700 font-mono break-all">{e}</li>
+                    ))}
                   </ul>
                 </div>
               )}
@@ -445,9 +727,11 @@ function ImportButton({ onImported }: { onImported: () => void }) {
           )}
         </div>
       )}
+
       {!result && !importing && (
         <p className="flex items-center gap-1.5 px-1 text-[10px] text-slate-400">
-          <FileSpreadsheet className="h-3 w-3 shrink-0" />E = Morning · L = Evening · AL/CU = Leave
+          <FileSpreadsheet className="h-3 w-3 shrink-0" />
+          E = Morning · L = Evening · AL/CU = Leave
         </p>
       )}
     </div>
@@ -512,12 +796,11 @@ function CalendarGrid({ schedule, yearMonth, onDayPress }: {
           return (
             <button
               key={ds}
-              onClick={() => entries.length > 0 && onDayPress(date, entries)}
+              onClick={() => onDayPress(date, entries)}
               className={cn(
                 'relative flex flex-col items-center py-2 transition-colors active:bg-slate-50',
                 'border-b border-slate-50',
                 !isLastInRow && 'border-r',
-                entries.length === 0 && 'cursor-default',
               )}
               style={{
                 background: isTod ? '#eef2ff' : isWkd ? '#fafafa' : 'white',
@@ -585,6 +868,12 @@ export default function SchedulePage() {
   const [loading,       setLoading]       = useState(false);
   const [deleting,      setDeleting]      = useState(false);
 
+  // Create entry state (opened from the calendar grid)
+  const [creating, setCreating] = useState(false);
+  const [employees,  setEmployees]  = useState<EmployeeOption[]>([]);
+  const [addingDate, setAddingDate] = useState<Date | null>(null);
+  const [addingEntry, setAddingEntry] = useState(false);
+  
   // Day detail sheet state
   const [detailDate,    setDetailDate]    = useState<Date | null>(null);
   const [detailEntries, setDetailEntries] = useState<DayEntry[]>([]);
@@ -600,6 +889,14 @@ export default function SchedulePage() {
     if (!session) { router.replace('/login'); return; }
     if (!isPic1)  router.replace('/employee');
   }, [authStatus, session, isPic1, router]);
+
+  useEffect(() => {
+    if (!isPic1) return;
+    fetch('/api/pic/schedule/employees')
+      .then(r => r.json())
+      .then(j => { if (j.success) setEmployees(j.employees ?? []); })
+      .catch(() => toast.error('Failed to load employees'));
+  }, [isPic1]);
 
   const loadSchedule = useCallback(async (ym: string) => {
     if (!storeId) return;
@@ -633,6 +930,31 @@ export default function SchedulePage() {
     setEditEntry(entry);
   }
 
+  function handleAddFromSheet() {
+    if (!detailDate) return;
+    setAddingDate(detailDate);
+    setDetailDate(null);  // close the detail sheet
+  }
+
+  async function handleCreate() {
+    if (schedule) { toast.error('A schedule already exists for this month'); return; }
+    if (!confirm(`Create an empty schedule for ${formatYearMonth(selectedMonth)}?`)) return;
+    setCreating(true);
+    try {
+      const res = await fetch('/api/pic/schedule/monthly', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ yearMonth: selectedMonth }),
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error);
+      toast.success('Empty schedule created — tap days to assign shifts');
+      loadSchedule(selectedMonth);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Create failed');
+    } finally { setCreating(false); }
+  }
+
   async function handleDelete() {
     if (!confirm(`Delete the ${formatYearMonth(selectedMonth)} schedule? Attended days are preserved.`)) return;
     setDeleting(true);
@@ -663,6 +985,35 @@ export default function SchedulePage() {
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Update failed');
     } finally { setSavingEntry(false); }
+  }
+
+  async function handleSaveNewEntry(payload: {
+    userId: string;
+    shift:  Shift | null;
+    isOff:  boolean;
+    isLeave:boolean;
+  }) {
+    if (!addingDate) return;
+    setAddingEntry(true);
+    try {
+      const res = await fetch('/api/pic/schedule/entry', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          ...payload,
+          date: isoDate(addingDate),
+        }),
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error);
+      toast.success('Employee added to this day');
+      setAddingDate(null);
+      loadSchedule(selectedMonth);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Add failed');
+    } finally {
+      setAddingEntry(false);
+    }
   }
 
   // ── Auth guards ────────────────────────────────────────────────────────────
@@ -713,6 +1064,16 @@ export default function SchedulePage() {
             >
               <RefreshCw className="h-4 w-4" />
             </button>
+            {!schedule && (
+              <button
+                onClick={handleCreate}
+                disabled={creating}
+                className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white/70 hover:bg-emerald-400/30 disabled:opacity-40"
+                title="Create empty schedule"
+              >
+                {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+              </button>
+            )}
             {schedule && (
               <button
                 onClick={handleDelete}
@@ -826,18 +1187,35 @@ export default function SchedulePage() {
             </div>
             <div>
               <p className="text-sm font-bold text-slate-700">No schedule for {formatYearMonth(selectedMonth)}</p>
-              <p className="mt-1 text-xs text-slate-400">Import an Excel file above to get started.</p>
+              <p className="mt-1 text-xs text-slate-400">Import an Excel file above, or tap the + button in the header to create an empty schedule.</p>
             </div>
           </div>
         )}
       </div>
+      
+      {/* Add Entry Modal */}
+      {addingDate && (
+        <AddEntryModal
+          date={addingDate}
+          employees={employees}
+          existingUserIds={new Set(
+            (schedule?.entries ?? [])
+              .filter(e => e.date.slice(0, 10) === isoDate(addingDate))
+              .map(e => e.userId),
+          )}
+          onSave={handleSaveNewEntry}
+          onClose={() => setAddingDate(null)}
+          saving={addingEntry}
+        />
+      )}
 
       {/* Day detail sheet */}
-      {detailDate && !editEntry && (
+      {detailDate && !editEntry && !addingDate && (
         <DayDetailSheet
           date={detailDate}
           entries={detailEntries}
           onEdit={handleEditFromSheet}
+          onAdd={handleAddFromSheet}
           onClose={() => setDetailDate(null)}
         />
       )}
@@ -853,4 +1231,5 @@ export default function SchedulePage() {
       )}
     </div>
   );
+  
 }

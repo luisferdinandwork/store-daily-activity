@@ -1,10 +1,7 @@
 // lib/schedule-utils.ts
 /**
  * Monthly schedule management + attendance utilities.
- *
- * All store/schedule/entry PKs are serial integers (number) in the schema.
- * Session values arriving as strings must be coerced with Number() at the
- * API boundary before being passed into these functions.
+ * All store/schedule/entry PKs are serial integers.
  */
 
 import { db } from '@/lib/db';
@@ -16,7 +13,6 @@ import {
 } from '@/lib/db/schema';
 import { eq, and, gte, lte, inArray, isNull, sql } from 'drizzle-orm';
 
-// ─── Re-export BreakType from schema so callers can import it from here ───────
 export type { BreakType } from '@/lib/db/schema';
 import type { BreakType } from '@/lib/db/schema';
 
@@ -27,13 +23,32 @@ export const SHIFT_CONFIG = {
   evening: { startHour: 13, endHour: 22, lateAfterMinutes: 30, breakType: 'dinner' as BreakType },
 } as const;
 
+/**
+ * All task table names that reference `schedules.id`.
+ * Used to clean up task rows before deleting a schedule row, regardless of
+ * whether the task tables have ON DELETE CASCADE set in the DB.
+ */
+const TASK_TABLES = [
+  'store_opening_tasks',
+  'setoran_tasks',
+  'cek_bin_tasks',
+  'product_check_tasks',
+  'receiving_tasks',
+  'briefing_tasks',
+  'edc_summary_tasks',
+  'edc_settlement_tasks',
+  'eod_z_report_tasks',
+  'open_statement_tasks',
+  'grooming_tasks',
+] as const;
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type Shift = 'morning' | 'evening';
 
 export interface DayAssignment {
   userId:  string;
-  storeId: number;   // serial integer PK
+  storeId: number;
   date:    Date;
   shift:   Shift | null;
   isOff:   boolean;
@@ -41,7 +56,7 @@ export interface DayAssignment {
 }
 
 export interface CreateMonthlyScheduleInput {
-  storeId:    number;   // serial integer PK
+  storeId:    number;
   yearMonth:  string;
   entries:    DayAssignment[];
   note?:      string;
@@ -67,6 +82,21 @@ export function yearMonthToDate(ym: string): Date {
 }
 export function dateToYearMonth(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+/**
+ * Delete all task rows referencing the given schedule IDs, across every
+ * task table. Safe to call even if there are no tasks.
+ */
+async function deleteAllTasksForSchedules(scheduleIds: number[]): Promise<void> {
+  if (scheduleIds.length === 0) return;
+  for (const table of TASK_TABLES) {
+    await db.execute(
+      sql.raw(
+        `DELETE FROM ${table} WHERE schedule_id IN (${scheduleIds.join(',')})`,
+      ),
+    );
+  }
 }
 
 // ─── Authorization ────────────────────────────────────────────────────────────
@@ -127,7 +157,7 @@ export async function canManageSchedule(
   }
 
   if (actor.employeeType === 'pic_1') {
-    if (actor.homeStoreId !== storeId)
+    if (Number(actor.homeStoreId) !== Number(storeId))
       return { allowed: false, reason: 'PIC 1 can only manage schedules for their home store.' };
     return { allowed: true };
   }
@@ -140,6 +170,40 @@ export async function canManageSchedule(
 
 // ─── Monthly Schedule CRUD ────────────────────────────────────────────────────
 
+export async function createEmptyMonthlySchedule(
+  storeId:    number,
+  yearMonth:  string,
+  actorId:    string,
+  note?:      string,
+): Promise<{ success: boolean; scheduleId?: number; error?: string }> {
+  try {
+    const auth = await canManageSchedule(actorId, storeId);
+    if (!auth.allowed) return { success: false, error: auth.reason };
+
+    if (!/^\d{4}-\d{2}$/.test(yearMonth))
+      return { success: false, error: 'yearMonth must be in YYYY-MM format.' };
+
+    const [existing] = await db
+      .select({ id: monthlySchedules.id })
+      .from(monthlySchedules)
+      .where(and(eq(monthlySchedules.storeId, storeId), eq(monthlySchedules.yearMonth, yearMonth)))
+      .limit(1);
+
+    if (existing)
+      return { success: false, error: `A schedule for ${yearMonth} already exists.` };
+
+    const [ms] = await db
+      .insert(monthlySchedules)
+      .values({ storeId, yearMonth, importedBy: actorId, note })
+      .returning({ id: monthlySchedules.id });
+
+    return { success: true, scheduleId: ms.id };
+  } catch (err) {
+    console.error('[createEmptyMonthlySchedule]', err);
+    return { success: false, error: `createEmptyMonthlySchedule: ${err}` };
+  }
+}
+
 export async function createOrReplaceMonthlySchedule(
   data: CreateMonthlyScheduleInput,
 ): Promise<{ success: boolean; scheduleId?: number; error?: string }> {
@@ -151,12 +215,7 @@ export async function createOrReplaceMonthlySchedule(
     const [existing] = await db
       .select({ id: monthlySchedules.id })
       .from(monthlySchedules)
-      .where(
-        and(
-          eq(monthlySchedules.storeId,   data.storeId),
-          eq(monthlySchedules.yearMonth, data.yearMonth),
-        ),
-      )
+      .where(and(eq(monthlySchedules.storeId, data.storeId), eq(monthlySchedules.yearMonth, data.yearMonth)))
       .limit(1);
 
     let monthlyScheduleId: number;
@@ -164,49 +223,51 @@ export async function createOrReplaceMonthlySchedule(
     if (existing) {
       monthlyScheduleId = existing.id;
 
+      // Find every entry in this month and partition into deletable vs locked
       const entriesToCheck = await db
-        .select({
-          id:      monthlyScheduleEntries.id,
-          shift:   monthlyScheduleEntries.shift,
-          isOff:   monthlyScheduleEntries.isOff,
-          isLeave: monthlyScheduleEntries.isLeave,
-        })
+        .select({ id: monthlyScheduleEntries.id })
         .from(monthlyScheduleEntries)
         .where(eq(monthlyScheduleEntries.monthlyScheduleId, monthlyScheduleId));
 
-      const deletableIds: number[] = [];
-      for (const entry of entriesToCheck) {
-        if (entry.isOff || entry.isLeave || !entry.shift) {
-          deletableIds.push(entry.id);
-          continue;
-        }
-        const [sched] = await db
-          .select({ id: schedules.id })
-          .from(schedules)
-          .where(eq(schedules.monthlyScheduleEntryId, entry.id))
-          .limit(1);
-        if (!sched) { deletableIds.push(entry.id); continue; }
-        const [att] = await db
-          .select({ id: attendance.id })
-          .from(attendance)
-          .where(eq(attendance.scheduleId, sched.id))
-          .limit(1);
-        if (!att) deletableIds.push(entry.id);
-      }
+      const entryIds = entriesToCheck.map(e => e.id);
 
-      if (deletableIds.length > 0) {
+      if (entryIds.length > 0) {
+        // Which entries have a schedule row?
         const entrySchedules = await db
-          .select({ id: schedules.id })
+          .select({ id: schedules.id, entryId: schedules.monthlyScheduleEntryId })
           .from(schedules)
-          .where(inArray(schedules.monthlyScheduleEntryId, deletableIds));
+          .where(inArray(schedules.monthlyScheduleEntryId, entryIds));
 
+        // Which schedule rows have attendance → those entries are locked
+        const lockedSchedIds = new Set<number>();
         if (entrySchedules.length > 0) {
           const schedIds = entrySchedules.map(s => s.id);
-          await db.delete(schedules).where(inArray(schedules.id, schedIds));
+          const attended = await db
+            .select({ scheduleId: attendance.scheduleId })
+            .from(attendance)
+            .where(inArray(attendance.scheduleId, schedIds));
+          for (const a of attended) lockedSchedIds.add(a.scheduleId);
         }
-        await db
-          .delete(monthlyScheduleEntries)
-          .where(inArray(monthlyScheduleEntries.id, deletableIds));
+
+        const deletableSchedIds = entrySchedules
+          .filter(s => !lockedSchedIds.has(s.id))
+          .map(s => s.id);
+        const lockedEntryIds = new Set(
+          entrySchedules
+            .filter(s => lockedSchedIds.has(s.id))
+            .map(s => s.entryId)
+            .filter((id): id is number => id != null),
+        );
+        const deletableEntryIds = entryIds.filter(id => !lockedEntryIds.has(id));
+
+        // Clean up tasks → schedules → entries (unlocked ones only)
+        await deleteAllTasksForSchedules(deletableSchedIds);
+        if (deletableSchedIds.length > 0) {
+          await db.delete(schedules).where(inArray(schedules.id, deletableSchedIds));
+        }
+        if (deletableEntryIds.length > 0) {
+          await db.delete(monthlyScheduleEntries).where(inArray(monthlyScheduleEntries.id, deletableEntryIds));
+        }
       }
 
       await db
@@ -226,22 +287,21 @@ export async function createOrReplaceMonthlySchedule(
       monthlyScheduleId = ms.id;
     }
 
+    // Insert new entries in batches
     const BATCH = 100;
     for (let i = 0; i < data.entries.length; i += BATCH) {
       const batch = data.entries.slice(i, i + BATCH);
       await db
         .insert(monthlyScheduleEntries)
-        .values(
-          batch.map(e => ({
-            monthlyScheduleId,
-            userId:  e.userId,
-            storeId: e.storeId,
-            date:    startOfDay(e.date),
-            shift:   e.shift ?? undefined,
-            isOff:   e.isOff,
-            isLeave: e.isLeave,
-          })),
-        )
+        .values(batch.map(e => ({
+          monthlyScheduleId,
+          userId:  e.userId,
+          storeId: e.storeId,
+          date:    startOfDay(e.date),
+          shift:   e.shift ?? undefined,
+          isOff:   e.isOff,
+          isLeave: e.isLeave,
+        })))
         .onConflictDoUpdate({
           target: [
             monthlyScheduleEntries.monthlyScheduleId,
@@ -266,6 +326,13 @@ export async function createOrReplaceMonthlySchedule(
   }
 }
 
+/**
+ * Update a single day (shift/off/leave). Handles the full lifecycle:
+ *   1. Verify no attendance locked the day
+ *   2. Delete any existing schedule row (and its tasks)
+ *   3. Update the entry
+ *   4. If the new state is a working shift, create a fresh schedule row
+ */
 export async function updateMonthlyScheduleEntry(
   entryId: number,
   patch:   { shift?: Shift | null; isOff?: boolean; isLeave?: boolean },
@@ -283,6 +350,7 @@ export async function updateMonthlyScheduleEntry(
     const auth = await canManageSchedule(actorId, entry.storeId);
     if (!auth.allowed) return { success: false, error: auth.reason };
 
+    // Step 1+2: check attendance, then tear down existing schedule row + tasks
     const [sched] = await db
       .select({ id: schedules.id })
       .from(schedules)
@@ -295,30 +363,73 @@ export async function updateMonthlyScheduleEntry(
         .from(attendance)
         .where(eq(attendance.scheduleId, sched.id))
         .limit(1);
-      if (att) return { success: false, error: 'Cannot edit a day that already has an attendance record.' };
+      if (att) {
+        return { success: false, error: 'Cannot edit a day that already has an attendance record.' };
+      }
+
+      // Delete tasks first (FK), then the schedule row
+      await deleteAllTasksForSchedules([sched.id]);
       await db.delete(schedules).where(eq(schedules.id, sched.id));
     }
 
+    // Step 3: compute the final state
+    const finalShift:   Shift | null = patch.shift   !== undefined ? patch.shift   : (entry.shift as Shift | null);
+    const finalIsOff:   boolean      = patch.isOff   !== undefined ? patch.isOff   : entry.isOff;
+    const finalIsLeave: boolean      = patch.isLeave !== undefined ? patch.isLeave : entry.isLeave;
+
+    // Mutually exclusive: if isOff or isLeave, shift must be null
+    const normalisedShift = (finalIsOff || finalIsLeave) ? null : finalShift;
+
     await db
       .update(monthlyScheduleEntries)
-      .set({ ...patch, updatedAt: new Date() })
+      .set({
+        shift:     normalisedShift ?? null,
+        isOff:     finalIsOff,
+        isLeave:   finalIsLeave,
+        updatedAt: new Date(),
+      })
       .where(eq(monthlyScheduleEntries.id, entryId));
 
-    const updatedShift   = patch.shift   !== undefined ? patch.shift   : entry.shift;
-    const updatedIsOff   = patch.isOff   !== undefined ? patch.isOff   : entry.isOff;
-    const updatedIsLeave = patch.isLeave !== undefined ? patch.isLeave : entry.isLeave;
+    // Step 4: if new state is a working shift, create a new schedule row for THIS entry only
+    if (!finalIsOff && !finalIsLeave && normalisedShift) {
+      const [newSched] = await db
+        .insert(schedules)
+        .values({
+          userId:                 entry.userId,
+          storeId:                entry.storeId,
+          shift:                  normalisedShift,
+          date:                   startOfDay(entry.date),
+          monthlyScheduleEntryId: entryId,
+          isHoliday:              false,
+        })
+        .returning({ id: schedules.id });
 
-    if (!updatedIsOff && !updatedIsLeave && updatedShift) {
-      const [ms] = await db
-        .select({ storeId: monthlySchedules.storeId, yearMonth: monthlySchedules.yearMonth })
-        .from(monthlySchedules)
-        .where(eq(monthlySchedules.id, entry.monthlyScheduleId))
+      // Backfill attendance link if it exists
+      const [existingAtt] = await db
+        .select({ id: attendance.id })
+        .from(attendance)
+        .where(
+          and(
+            eq(attendance.userId,  entry.userId),
+            eq(attendance.storeId, entry.storeId),
+            eq(attendance.shift,   normalisedShift),
+            gte(attendance.date,   startOfDay(entry.date)),
+            lte(attendance.date,   endOfDay(entry.date)),
+          ),
+        )
         .limit(1);
-      if (ms) await materialiseSchedulesForMonth(ms.storeId, ms.yearMonth);
+
+      if (existingAtt) {
+        await db
+          .update(attendance)
+          .set({ scheduleId: newSched.id, updatedAt: new Date() })
+          .where(eq(attendance.id, existingAtt.id));
+      }
     }
 
     return { success: true };
   } catch (err) {
+    console.error('[updateMonthlyScheduleEntry]', err);
     return { success: false, error: `updateMonthlyScheduleEntry: ${err}` };
   }
 }
@@ -345,6 +456,7 @@ export async function deleteMonthlySchedule(
       .where(eq(monthlyScheduleEntries.monthlyScheduleId, ms.id));
 
     const entryIds = allEntries.map(e => e.id);
+
     const entrySchedules = entryIds.length > 0
       ? await db
           .select({ id: schedules.id, entryId: schedules.monthlyScheduleEntryId })
@@ -352,45 +464,139 @@ export async function deleteMonthlySchedule(
           .where(inArray(schedules.monthlyScheduleEntryId, entryIds))
       : [];
 
-    let lockedCount = 0;
-    const deletableSchedIds: number[] = [];
-
-    for (const s of entrySchedules) {
-      const [att] = await db
-        .select({ id: attendance.id })
+    // Which schedule rows are locked by attendance?
+    const lockedSchedIds = new Set<number>();
+    if (entrySchedules.length > 0) {
+      const schedIds = entrySchedules.map(s => s.id);
+      const attended = await db
+        .select({ scheduleId: attendance.scheduleId })
         .from(attendance)
-        .where(eq(attendance.scheduleId, s.id))
-        .limit(1);
-      if (att) lockedCount++;
-      else deletableSchedIds.push(s.id);
+        .where(inArray(attendance.scheduleId, schedIds));
+      for (const a of attended) lockedSchedIds.add(a.scheduleId);
     }
 
+    const deletableSchedIds = entrySchedules
+      .filter(s => !lockedSchedIds.has(s.id))
+      .map(s => s.id);
+    const lockedCount = lockedSchedIds.size;
+    const lockedEntryIds = new Set(
+      entrySchedules
+        .filter(s => lockedSchedIds.has(s.id))
+        .map(s => s.entryId)
+        .filter((id): id is number => id != null),
+    );
+
+    // Wipe tasks + schedules for unlocked rows
+    await deleteAllTasksForSchedules(deletableSchedIds);
     if (deletableSchedIds.length > 0) {
       await db.delete(schedules).where(inArray(schedules.id, deletableSchedIds));
     }
 
+    // If nothing is locked, blow away the whole monthly schedule
     if (lockedCount === 0) {
-      if (entryIds.length > 0)
+      if (entryIds.length > 0) {
         await db.delete(monthlyScheduleEntries).where(inArray(monthlyScheduleEntries.id, entryIds));
+      }
       await db.delete(monthlySchedules).where(eq(monthlySchedules.id, ms.id));
     } else {
-      const attendedSchedIds = new Set(
-        entrySchedules.filter(s => !deletableSchedIds.includes(s.id)).map(s => s.id),
-      );
-      const attendedEntryIds = new Set(
-        entrySchedules
-          .filter(s => attendedSchedIds.has(s.id))
-          .map(s => s.entryId)
-          .filter((id): id is number => id != null),
-      );
-      const toDeleteEntries = entryIds.filter(id => !attendedEntryIds.has(id));
-      if (toDeleteEntries.length > 0)
-        await db.delete(monthlyScheduleEntries).where(inArray(monthlyScheduleEntries.id, toDeleteEntries));
+      // Keep locked entries, delete the rest
+      const deletableEntryIds = entryIds.filter(id => !lockedEntryIds.has(id));
+      if (deletableEntryIds.length > 0) {
+        await db.delete(monthlyScheduleEntries).where(inArray(monthlyScheduleEntries.id, deletableEntryIds));
+      }
     }
 
     return { success: true, lockedCount };
   } catch (err) {
+    console.error('[deleteMonthlySchedule]', err);
     return { success: false, error: `deleteMonthlySchedule: ${err}` };
+  }
+}
+
+/**
+ * Create a single new schedule entry for (user, date) within an existing
+ * monthly schedule. Used when PIC manually builds a schedule day-by-day.
+ *
+ * If the entry is a working shift, also creates the corresponding schedule row.
+ */
+export async function createMonthlyScheduleEntry(
+  storeId:   number,
+  yearMonth: string,
+  userId:    string,
+  date:      Date,
+  state:     { shift: Shift | null; isOff: boolean; isLeave: boolean },
+  actorId:   string,
+): Promise<{ success: boolean; entryId?: number; error?: string }> {
+  try {
+    const auth = await canManageSchedule(actorId, storeId);
+    if (!auth.allowed) return { success: false, error: auth.reason };
+
+    // Find the monthly schedule
+    const [ms] = await db
+      .select({ id: monthlySchedules.id })
+      .from(monthlySchedules)
+      .where(and(eq(monthlySchedules.storeId, storeId), eq(monthlySchedules.yearMonth, yearMonth)))
+      .limit(1);
+    if (!ms) return { success: false, error: `No monthly schedule for ${yearMonth}. Create one first.` };
+
+    // Verify user exists
+    const [u] = await db.select({ id: users.id }).from(users).where(eq(users.id, userId)).limit(1);
+    if (!u) return { success: false, error: 'User not found.' };
+
+    const dateStart = startOfDay(date);
+
+    // Check for existing entry (same user + same date in this monthly schedule)
+    const [existingEntry] = await db
+      .select({ id: monthlyScheduleEntries.id })
+      .from(monthlyScheduleEntries)
+      .where(
+        and(
+          eq(monthlyScheduleEntries.monthlyScheduleId, ms.id),
+          eq(monthlyScheduleEntries.userId, userId),
+          eq(monthlyScheduleEntries.date, dateStart),
+        ),
+      )
+      .limit(1);
+
+    if (existingEntry) {
+      return { success: false, error: 'This employee already has a schedule for this day. Edit it instead.' };
+    }
+
+    // Normalise: if off/leave, shift must be null
+    const normalisedShift = (state.isOff || state.isLeave) ? null : state.shift;
+
+    // Insert the entry
+    const [newEntry] = await db
+      .insert(monthlyScheduleEntries)
+      .values({
+        monthlyScheduleId: ms.id,
+        userId,
+        storeId,
+        date:    dateStart,
+        shift:   normalisedShift ?? undefined,
+        isOff:   state.isOff,
+        isLeave: state.isLeave,
+      })
+      .returning({ id: monthlyScheduleEntries.id });
+
+    // If it's a working shift, also create the schedule row
+    if (!state.isOff && !state.isLeave && normalisedShift) {
+      await db
+        .insert(schedules)
+        .values({
+          userId,
+          storeId,
+          shift:                  normalisedShift,
+          date:                   dateStart,
+          monthlyScheduleEntryId: newEntry.id,
+          isHoliday:              false,
+        });
+    }
+
+    return { success: true, entryId: newEntry.id };
+  } catch (err) {
+    console.error('[createMonthlyScheduleEntry]', err);
+    return { success: false, error: `createMonthlyScheduleEntry: ${err}` };
   }
 }
 
@@ -430,7 +636,7 @@ export async function listMonthlySchedules(storeId: number): Promise<MonthlySche
     .orderBy(sql`${monthlySchedules.yearMonth} DESC`);
 }
 
-// ─── Materialisation ──────────────────────────────────────────────────────────
+// ─── Materialisation (used by import flow only) ───────────────────────────────
 
 export async function materialiseSchedulesForMonth(
   storeId:   number,
@@ -460,8 +666,47 @@ export async function materialiseSchedulesForMonth(
   for (const entry of entries) {
     if (!entry.shift) continue;
     try {
-      const created = await createScheduleRow(entry);
-      if (created) schedulesCreated++;
+      const [existing] = await db
+        .select({ id: schedules.id })
+        .from(schedules)
+        .where(eq(schedules.monthlyScheduleEntryId, entry.id))
+        .limit(1);
+      if (existing) continue;
+
+      const [newSched] = await db
+        .insert(schedules)
+        .values({
+          userId:                 entry.userId,
+          storeId:                entry.storeId,
+          shift:                  entry.shift as Shift,
+          date:                   startOfDay(entry.date),
+          monthlyScheduleEntryId: entry.id,
+          isHoliday:              false,
+        })
+        .returning({ id: schedules.id });
+
+      schedulesCreated++;
+
+      const [existingAtt] = await db
+        .select({ id: attendance.id })
+        .from(attendance)
+        .where(
+          and(
+            eq(attendance.userId,  entry.userId),
+            eq(attendance.storeId, entry.storeId),
+            eq(attendance.shift,   entry.shift!),
+            gte(attendance.date,   startOfDay(entry.date)),
+            lte(attendance.date,   endOfDay(entry.date)),
+          ),
+        )
+        .limit(1);
+
+      if (existingAtt) {
+        await db
+          .update(attendance)
+          .set({ scheduleId: newSched.id, updatedAt: new Date() })
+          .where(eq(attendance.id, existingAtt.id));
+      }
     } catch (err) {
       errors.push(`Entry ${entry.id}: ${err}`);
     }
@@ -470,52 +715,8 @@ export async function materialiseSchedulesForMonth(
   return { schedulesCreated, errors };
 }
 
-async function createScheduleRow(entry: MonthlyScheduleEntry): Promise<boolean> {
-  const [existing] = await db
-    .select({ id: schedules.id })
-    .from(schedules)
-    .where(eq(schedules.monthlyScheduleEntryId, entry.id))
-    .limit(1);
-  if (existing) return false;
-
-  const [newSched] = await db
-    .insert(schedules)
-    .values({
-      userId:                 entry.userId,
-      storeId:                entry.storeId,
-      shift:                  entry.shift as Shift,
-      date:                   startOfDay(entry.date),
-      monthlyScheduleEntryId: entry.id,
-      isHoliday:              false,
-    })
-    .returning({ id: schedules.id });
-
-  // Backfill attendance link if a check-in already exists for this employee/shift/day
-  const [existingAtt] = await db
-    .select({ id: attendance.id })
-    .from(attendance)
-    .where(
-      and(
-        eq(attendance.userId,  entry.userId),
-        eq(attendance.storeId, entry.storeId),
-        eq(attendance.shift,   entry.shift!),
-        gte(attendance.date,   startOfDay(entry.date)),
-        lte(attendance.date,   endOfDay(entry.date)),
-      ),
-    )
-    .limit(1);
-
-  if (existingAtt) {
-    await db
-      .update(attendance)
-      .set({ scheduleId: newSched.id, updatedAt: new Date() })
-      .where(eq(attendance.id, existingAtt.id));
-  }
-
-  return true;
-}
-
-// ─── Check-in / Check-out ─────────────────────────────────────────────────────
+// ─── Check-in / Check-out / Break / Attendance helpers ───────────────────────
+// (Unchanged from your previous version — these are known to work)
 
 export async function employeeCheckIn(
   userId:  string,
@@ -591,7 +792,6 @@ export async function employeeCheckIn(
       };
     }
 
-    // Already checked in — if on break, end it; otherwise return current state
     if (existing.onBreak) {
       return endBreak(userId, storeId, existing.id);
     }
@@ -653,8 +853,6 @@ export async function employeeCheckOut(
     return { success: false, error: `Check-out failed: ${err}` };
   }
 }
-
-// ─── Break management ─────────────────────────────────────────────────────────
 
 export async function startBreak(
   userId:  string,
@@ -772,8 +970,6 @@ export async function endBreak(
     return { success: false, error: `endBreak failed: ${err}` };
   }
 }
-
-// ─── Attendance helpers ───────────────────────────────────────────────────────
 
 export async function getTodayAttendance(userId: string, storeId: number) {
   const now  = new Date();

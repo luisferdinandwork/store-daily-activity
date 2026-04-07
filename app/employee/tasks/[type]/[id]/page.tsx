@@ -6,6 +6,7 @@ import { useParams, useRouter }  from 'next/navigation';
 import {
   ArrowLeft, CheckCircle2, Camera, X, Loader2,
   MapPin, AlertCircle, Check, Cloud, CloudOff, Save,
+  LogIn, Navigation, NavigationOff, RefreshCw,
 } from 'lucide-react';
 import { cn }          from '@/lib/utils';
 import { toast }       from 'sonner';
@@ -21,6 +22,16 @@ type TaskType =
   | 'grooming';
 
 type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'verified' | 'rejected';
+
+/**
+ * Mirrors TaskAccessStatus from lib/db/utils/tasks.ts.
+ * Returned by GET /api/employee/tasks/access?scheduleId=…&storeId=…&lat=…&lng=…
+ */
+type AccessStatus =
+  | { status: 'ok' }
+  | { status: 'not_checked_in' }
+  | { status: 'outside_geofence'; distanceM: number; radiusM: number }
+  | { status: 'geo_unavailable' };
 
 interface TaskBase {
   id: string; scheduleId: string; userId: string; storeId: string;
@@ -66,11 +77,12 @@ const TASK_TITLES: Record<TaskType, string> = {
 // ─── Form props shared by all task forms ─────────────────────────────────────
 
 interface FormProps {
-  onSubmit:  (payload: Record<string, unknown>) => void;
+  onSubmit:   (payload: Record<string, unknown>) => void;
   submitting: boolean;
   readonly:   boolean;
-  /** Call this on every field change to trigger a debounced auto-save PATCH. */
-  autoSave:  (patch: Record<string, unknown>, opts?: { immediate?: boolean }) => void;
+  /** Disabled = task is locked (not checked in or outside geofence). */
+  locked:     boolean;
+  autoSave:   (patch: Record<string, unknown>, opts?: { immediate?: boolean }) => void;
 }
 
 // ─── Geo hook ─────────────────────────────────────────────────────────────────
@@ -79,15 +91,181 @@ function useGeo() {
   const [geo,      setGeo]      = useState<{ lat: number; lng: number } | null>(null);
   const [geoError, setGeoError] = useState<string | null>(null);
   const [geoReady, setGeoReady] = useState(false);
-  useEffect(() => {
-    if (!navigator.geolocation) { setGeoError('Geolocation tidak didukung.'); setGeoReady(true); return; }
+
+  const refresh = useCallback(() => {
+    setGeoReady(false);
+    setGeoError(null);
+    if (!navigator.geolocation) {
+      setGeoError('Geolocation tidak didukung.');
+      setGeoReady(true);
+      return;
+    }
     navigator.geolocation.getCurrentPosition(
       pos => { setGeo({ lat: pos.coords.latitude, lng: pos.coords.longitude }); setGeoReady(true); },
-      ()  => { setGeoError('Lokasi tidak dapat diperoleh. Submit tanpa verifikasi lokasi.'); setGeoReady(true); },
-      { timeout: 10_000, maximumAge: 60_000 },
+      ()  => { setGeoError('Lokasi tidak dapat diperoleh.'); setGeoReady(true); },
+      { timeout: 10_000, maximumAge: 0 },  // maximumAge 0 forces a fresh fix on refresh
     );
   }, []);
-  return { geo, geoError, geoReady };
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  return { geo, geoError, geoReady, refresh };
+}
+
+// ─── Access-status hook ───────────────────────────────────────────────────────
+
+/**
+ * Fetches task access status from the server once geo is ready.
+ * Re-fetches whenever geo changes.
+ *
+ * Returns:
+ *   accessStatus  — null while loading
+ *   refreshAccess — call after the employee checks in to re-validate
+ */
+function useAccessStatus(
+  scheduleId: string,
+  storeId:    string,
+  geo:        { lat: number; lng: number } | null,
+  geoReady:   boolean,
+  taskStatus: TaskStatus | undefined,
+) {
+  const [accessStatus,  setAccessStatus]  = useState<AccessStatus | null>(null);
+  const [accessLoading, setAccessLoading] = useState(true);
+
+  const fetch_ = useCallback(async () => {
+    // Already completed/verified/rejected — no access check needed
+    if (taskStatus && ['completed', 'verified', 'rejected'].includes(taskStatus)) {
+      setAccessStatus({ status: 'ok' });
+      setAccessLoading(false);
+      return;
+    }
+    if (!scheduleId || !storeId) return;
+
+    setAccessLoading(true);
+    try {
+      const params = new URLSearchParams({ scheduleId, storeId });
+      if (geo) { params.set('lat', String(geo.lat)); params.set('lng', String(geo.lng)); }
+      const res  = await fetch(`/api/employee/tasks/access?${params}`);
+      const data = await res.json() as AccessStatus;
+      setAccessStatus(data);
+    } catch {
+      // Network error — don't block the employee, treat as geo_unavailable
+      setAccessStatus({ status: 'geo_unavailable' });
+    } finally {
+      setAccessLoading(false);
+    }
+  }, [scheduleId, storeId, geo, taskStatus]);
+
+  useEffect(() => {
+    if (geoReady) fetch_();
+  }, [geoReady, fetch_]);
+
+  return { accessStatus, accessLoading, refreshAccess: fetch_ };
+}
+
+// ─── Access banners ───────────────────────────────────────────────────────────
+
+function AccessBanner({
+  accessStatus,
+  accessLoading,
+  geoReady,
+  geo,
+  geoError,
+  onRefreshGeo,
+  onRefreshAccess,
+}: {
+  accessStatus:    AccessStatus | null;
+  accessLoading:   boolean;
+  geoReady:        boolean;
+  geo:             { lat: number; lng: number } | null;
+  geoError:        string | null;
+  onRefreshGeo:    () => void;
+  onRefreshAccess: () => void;
+}) {
+  if (!geoReady || accessLoading) {
+    return (
+      <div className="flex items-center gap-2 rounded-xl border border-border bg-secondary px-4 py-2.5">
+        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        <p className="text-xs text-muted-foreground">{!geoReady ? 'Mendapatkan lokasi…' : 'Memeriksa akses…'}</p>
+      </div>
+    );
+  }
+
+  if (!accessStatus) return null;
+
+  if (accessStatus.status === 'not_checked_in') {
+    return (
+      <div className="flex items-start gap-3 rounded-xl border border-red-300 bg-red-50 px-4 py-3.5">
+        <LogIn className="mt-0.5 h-5 w-5 flex-shrink-0 text-red-600" />
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-bold text-red-700">Belum absen masuk</p>
+          <p className="mt-0.5 text-xs text-red-600">
+            Kamu harus melakukan absensi masuk terlebih dahulu sebelum dapat mengerjakan task.
+          </p>
+        </div>
+        <button
+          onClick={onRefreshAccess}
+          className="flex-shrink-0 flex items-center gap-1 rounded-lg bg-red-100 px-2.5 py-1.5 text-[11px] font-semibold text-red-700 hover:bg-red-200 transition-colors"
+        >
+          <RefreshCw className="h-3 w-3" />
+          Cek ulang
+        </button>
+      </div>
+    );
+  }
+
+  if (accessStatus.status === 'outside_geofence') {
+    return (
+      <div className="flex items-start gap-3 rounded-xl border border-orange-300 bg-orange-50 px-4 py-3.5">
+        <NavigationOff className="mt-0.5 h-5 w-5 flex-shrink-0 text-orange-600" />
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-bold text-orange-700">Di luar area toko</p>
+          <p className="mt-0.5 text-xs text-orange-600">
+            Kamu berada {accessStatus.distanceM}m dari toko (batas: {accessStatus.radiusM}m).
+            Pastikan kamu berada di dalam toko.
+          </p>
+        </div>
+        <button
+          onClick={() => { onRefreshGeo(); }}
+          className="flex-shrink-0 flex items-center gap-1 rounded-lg bg-orange-100 px-2.5 py-1.5 text-[11px] font-semibold text-orange-700 hover:bg-orange-200 transition-colors"
+        >
+          <RefreshCw className="h-3 w-3" />
+          Perbarui
+        </button>
+      </div>
+    );
+  }
+
+  if (accessStatus.status === 'geo_unavailable') {
+    return (
+      <div className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+        <NavigationOff className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
+        <div className="flex-1 min-w-0">
+          <p className="text-xs font-semibold text-amber-800">Lokasi tidak terdeteksi</p>
+          <p className="mt-0.5 text-xs text-amber-600">
+            {geoError ?? 'Izin lokasi belum diberikan.'} Task dapat dilanjutkan, namun lokasi tidak akan direkam.
+          </p>
+        </div>
+        <button
+          onClick={onRefreshGeo}
+          className="flex-shrink-0 flex items-center gap-1 rounded-lg bg-amber-100 px-2.5 py-1.5 text-[11px] font-semibold text-amber-700 hover:bg-amber-200 transition-colors"
+        >
+          <RefreshCw className="h-3 w-3" />
+          Coba lagi
+        </button>
+      </div>
+    );
+  }
+
+  // status === 'ok'
+  return (
+    <div className="flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-2.5">
+      <Navigation className="h-4 w-4 flex-shrink-0 text-green-600" />
+      <p className="text-xs font-medium text-green-700">
+        Lokasi terdeteksi ({geo?.lat.toFixed(5)}, {geo?.lng.toFixed(5)})
+      </p>
+    </div>
+  );
 }
 
 // ─── Save status indicator ─────────────────────────────────────────────────
@@ -157,7 +335,7 @@ function PhotoUploader({ label, photoType, photos, onChange, max = 3, disabled }
         ))}
         {!disabled && photos.length < max && (
           <button onClick={() => inputRef.current?.click()} disabled={uploading}
-            className="flex h-20 w-20 flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-border bg-secondary text-muted-foreground hover:border-primary/40 hover:text-primary">
+            className="flex h-20 w-20 flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-border bg-secondary text-muted-foreground hover:border-primary/40 hover:text-primary disabled:opacity-50">
             {uploading ? <Loader2 className="h-5 w-5 animate-spin" /> : <><Camera className="h-5 w-5" /><span className="text-[9px] font-semibold">Tambah</span></>}
           </button>
         )}
@@ -216,9 +394,33 @@ function SubmitBtn({ label, disabled, submitting, onClick }: {
   );
 }
 
+/** Overlay shown over the form when the task is locked due to access restrictions. */
+function LockedOverlay({ accessStatus }: { accessStatus: AccessStatus | null }) {
+  if (!accessStatus || accessStatus.status === 'ok' || accessStatus.status === 'geo_unavailable') return null;
+
+  const isCheckIn = accessStatus.status === 'not_checked_in';
+
+  return (
+    <div className="pointer-events-none absolute inset-0 rounded-2xl bg-background/70 backdrop-blur-[2px] flex flex-col items-center justify-center gap-2 z-10">
+      <div className={cn(
+        'flex h-12 w-12 items-center justify-center rounded-full',
+        isCheckIn ? 'bg-red-100' : 'bg-orange-100',
+      )}>
+        {isCheckIn
+          ? <LogIn       className="h-6 w-6 text-red-600"    />
+          : <NavigationOff className="h-6 w-6 text-orange-600" />}
+      </div>
+      <p className={cn('text-sm font-bold', isCheckIn ? 'text-red-700' : 'text-orange-700')}>
+        {isCheckIn ? 'Absen masuk dulu' : 'Kamu di luar area toko'}
+      </p>
+    </div>
+  );
+}
+
 // ─── Task forms ───────────────────────────────────────────────────────────────
 
-function StoreOpeningForm({ data, onSubmit, submitting, readonly, autoSave }: FormProps & { data: StoreOpeningData }) {
+function StoreOpeningForm({ data, onSubmit, submitting, readonly, locked, autoSave }: FormProps & { data: StoreOpeningData }) {
+  const dis = readonly || locked;
   const [loginPos,          setLoginPos]          = useState(data.loginPos);
   const [checkAbsenSunfish, setCheckAbsenSunfish] = useState(data.checkAbsenSunfish);
   const [tarikSohSales,     setTarikSohSales]     = useState(data.tarikSohSales);
@@ -231,72 +433,74 @@ function StoreOpeningForm({ data, onSubmit, submitting, readonly, autoSave }: Fo
 
   const chk = (field: string, setter: (v: boolean) => void, v: boolean) => { setter(v); autoSave({ [field]: v }); };
   const allChecked = loginPos && checkAbsenSunfish && tarikSohSales && fiveR && cekLamp && cekSoundSystem;
-  const canSubmit  = allChecked && storeFrontPhotos.length > 0;
+  const canSubmit  = !locked && allChecked && storeFrontPhotos.length > 0;
 
   return (
     <div className="space-y-6">
       <Section title="Checklist Pembukaan">
         <div className="space-y-2">
-          <CheckItem label="Log-in POS / Buka komputer kasir"  checked={loginPos}          onChange={v => chk('loginPos', setLoginPos, v)}                   disabled={readonly} />
-          <CheckItem label="Tarik & cek absen di Sunfish"       checked={checkAbsenSunfish} onChange={v => chk('checkAbsenSunfish', setCheckAbsenSunfish, v)} disabled={readonly} />
-          <CheckItem label="Tarik SOH & Sales"                  checked={tarikSohSales}     onChange={v => chk('tarikSohSales', setTarikSohSales, v)}         disabled={readonly} />
-          <CheckItem label="5R — Kebersihan toko"              checked={fiveR}             onChange={v => chk('fiveR', setFiveR, v)}                         disabled={readonly} />
-          <CheckItem label="Cek semua lampu menyala"            checked={cekLamp}           onChange={v => chk('cekLamp', setCekLamp, v)}                     disabled={readonly} />
-          <CheckItem label="Cek sound system"                   checked={cekSoundSystem}    onChange={v => chk('cekSoundSystem', setCekSoundSystem, v)}       disabled={readonly} />
+          <CheckItem label="Log-in POS / Buka komputer kasir"  checked={loginPos}          onChange={v => chk('loginPos', setLoginPos, v)}                   disabled={dis} />
+          <CheckItem label="Tarik & cek absen di Sunfish"       checked={checkAbsenSunfish} onChange={v => chk('checkAbsenSunfish', setCheckAbsenSunfish, v)} disabled={dis} />
+          <CheckItem label="Tarik SOH & Sales"                  checked={tarikSohSales}     onChange={v => chk('tarikSohSales', setTarikSohSales, v)}         disabled={dis} />
+          <CheckItem label="5R — Kebersihan toko"              checked={fiveR}             onChange={v => chk('fiveR', setFiveR, v)}                         disabled={dis} />
+          <CheckItem label="Cek semua lampu menyala"            checked={cekLamp}           onChange={v => chk('cekLamp', setCekLamp, v)}                     disabled={dis} />
+          <CheckItem label="Cek sound system"                   checked={cekSoundSystem}    onChange={v => chk('cekSoundSystem', setCekSoundSystem, v)}       disabled={dis} />
         </div>
       </Section>
       <Section title="Foto Tampak Depan Toko (wajib)">
         <PhotoUploader label="Store Front (max 3)" photoType="store_front" photos={storeFrontPhotos}
           onChange={urls => { setStoreFrontPhotos(urls); autoSave({ storeFrontPhotos: urls }, { immediate: true }); }}
-          max={3} disabled={readonly} />
+          max={3} disabled={dis} />
       </Section>
       <Section title="Foto Laci Kasir">
         <PhotoUploader label="Cash Drawer (max 2)" photoType="cash_drawer" photos={cashDrawerPhotos}
           onChange={urls => { setCashDrawerPhotos(urls); autoSave({ cashDrawerPhotos: urls }, { immediate: true }); }}
-          max={2} disabled={readonly} />
+          max={2} disabled={dis} />
       </Section>
-      <NotesField value={notes} onChange={v => { setNotes(v); autoSave({ notes: v }); }} disabled={readonly} />
+      <NotesField value={notes} onChange={v => { setNotes(v); autoSave({ notes: v }); }} disabled={dis} />
       {!readonly && <>
         <SubmitBtn label="Submit Store Opening" disabled={!canSubmit} submitting={submitting}
           onClick={() => onSubmit({ loginPos, checkAbsenSunfish, tarikSohSales, fiveR, cekLamp, cekSoundSystem, storeFrontPhotos, cashDrawerPhotos, notes: notes || undefined })} />
-        {!canSubmit && <p className="text-center text-[11px] text-muted-foreground">{!allChecked ? 'Lengkapi semua checklist terlebih dahulu.' : 'Upload minimal 1 foto tampak depan toko.'}</p>}
+        {!canSubmit && !locked && <p className="text-center text-[11px] text-muted-foreground">{!allChecked ? 'Lengkapi semua checklist terlebih dahulu.' : 'Upload minimal 1 foto tampak depan toko.'}</p>}
       </>}
     </div>
   );
 }
 
-function SetoranForm({ data, onSubmit, submitting, readonly, autoSave }: FormProps & { data: SetoranData }) {
+function SetoranForm({ data, onSubmit, submitting, readonly, locked, autoSave }: FormProps & { data: SetoranData }) {
+  const dis = readonly || locked;
   const [amount,      setAmount]      = useState(data.amount ?? '');
   const [linkSetoran, setLinkSetoran] = useState(data.linkSetoran ?? '');
   const [moneyPhotos, setMoneyPhotos] = useState<string[]>(data.moneyPhotos);
   const [notes,       setNotes]       = useState(data.notes ?? '');
-  const canSubmit = !!amount && !!linkSetoran && moneyPhotos.length > 0;
+  const canSubmit = !locked && !!amount && !!linkSetoran && moneyPhotos.length > 0;
 
   return (
     <div className="space-y-6">
       <Section title="Nominal Setoran (Rp)">
-        <input type="number" value={amount} disabled={readonly} placeholder="Contoh: 1500000"
+        <input type="number" value={amount} disabled={dis} placeholder="Contoh: 1500000"
           onChange={e => { setAmount(e.target.value); autoSave({ amount: e.target.value }); }}
           className="w-full rounded-xl border border-border bg-secondary px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60" />
       </Section>
       <Section title="Link / No. Referensi Transfer">
-        <input type="text" value={linkSetoran} disabled={readonly} placeholder="Paste link atau nomor referensi"
+        <input type="text" value={linkSetoran} disabled={dis} placeholder="Paste link atau nomor referensi"
           onChange={e => { setLinkSetoran(e.target.value); autoSave({ linkSetoran: e.target.value }); }}
           className="w-full rounded-xl border border-border bg-secondary px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60" />
       </Section>
       <Section title="Foto Uang (min 1, wajib)">
         <PhotoUploader label="Foto uang setoran" photoType="money" photos={moneyPhotos}
           onChange={urls => { setMoneyPhotos(urls); autoSave({ moneyPhotos: urls }, { immediate: true }); }}
-          max={3} disabled={readonly} />
+          max={3} disabled={dis} />
       </Section>
-      <NotesField value={notes} onChange={v => { setNotes(v); autoSave({ notes: v }); }} disabled={readonly} />
+      <NotesField value={notes} onChange={v => { setNotes(v); autoSave({ notes: v }); }} disabled={dis} />
       {!readonly && <SubmitBtn label="Submit Setoran" disabled={!canSubmit} submitting={submitting}
         onClick={() => onSubmit({ amount, linkSetoran, moneyPhotos, notes: notes || undefined })} />}
     </div>
   );
 }
 
-function ProductCheckForm({ data, onSubmit, submitting, readonly, autoSave }: FormProps & { data: ProductCheckData }) {
+function ProductCheckForm({ data, onSubmit, submitting, readonly, locked, autoSave }: FormProps & { data: ProductCheckData }) {
+  const dis = readonly || locked;
   const [display,    setDisplay]    = useState(data.display);
   const [price,      setPrice]      = useState(data.price);
   const [saleTag,    setSaleTag]    = useState(data.saleTag);
@@ -311,26 +515,27 @@ function ProductCheckForm({ data, onSubmit, submitting, readonly, autoSave }: Fo
     <div className="space-y-6">
       <Section title="Checklist Produk">
         <div className="space-y-2">
-          <CheckItem label="Display produk sesuai standar" checked={display}    onChange={v => chk('display',    setDisplay,    v)} disabled={readonly} />
-          <CheckItem label="Harga / price tag terpasang"   checked={price}      onChange={v => chk('price',      setPrice,      v)} disabled={readonly} />
-          <CheckItem label="Sale tag terpasang"             checked={saleTag}    onChange={v => chk('saleTag',    setSaleTag,    v)} disabled={readonly} />
-          <CheckItem label="Shoe filler terpasang"          checked={shoeFiller} onChange={v => chk('shoeFiller', setShoeFiller, v)} disabled={readonly} />
-          <CheckItem label="Label Indo tersedia"            checked={labelIndo}  onChange={v => chk('labelIndo',  setLabelIndo,  v)} disabled={readonly} />
-          <CheckItem label="Barcode dapat terbaca"          checked={barcode}    onChange={v => chk('barcode',    setBarcode,    v)} disabled={readonly} />
+          <CheckItem label="Display produk sesuai standar" checked={display}    onChange={v => chk('display',    setDisplay,    v)} disabled={dis} />
+          <CheckItem label="Harga / price tag terpasang"   checked={price}      onChange={v => chk('price',      setPrice,      v)} disabled={dis} />
+          <CheckItem label="Sale tag terpasang"             checked={saleTag}    onChange={v => chk('saleTag',    setSaleTag,    v)} disabled={dis} />
+          <CheckItem label="Shoe filler terpasang"          checked={shoeFiller} onChange={v => chk('shoeFiller', setShoeFiller, v)} disabled={dis} />
+          <CheckItem label="Label Indo tersedia"            checked={labelIndo}  onChange={v => chk('labelIndo',  setLabelIndo,  v)} disabled={dis} />
+          <CheckItem label="Barcode dapat terbaca"          checked={barcode}    onChange={v => chk('barcode',    setBarcode,    v)} disabled={dis} />
         </div>
       </Section>
-      <NotesField value={notes} onChange={v => { setNotes(v); autoSave({ notes: v }); }} disabled={readonly} />
-      {!readonly && <SubmitBtn label="Submit Product Check" disabled={!allChecked} submitting={submitting}
+      <NotesField value={notes} onChange={v => { setNotes(v); autoSave({ notes: v }); }} disabled={dis} />
+      {!readonly && <SubmitBtn label="Submit Product Check" disabled={locked || !allChecked} submitting={submitting}
         onClick={() => onSubmit({ display, price, saleTag, shoeFiller, labelIndo, barcode, notes: notes || undefined })} />}
     </div>
   );
 }
 
-function ReceivingForm({ data, onSubmit, submitting, readonly, autoSave }: FormProps & { data: ReceivingData }) {
+function ReceivingForm({ data, onSubmit, submitting, readonly, locked, autoSave }: FormProps & { data: ReceivingData }) {
+  const dis = readonly || locked;
   const [hasReceiving,    setHasReceiving]    = useState(data.hasReceiving);
   const [receivingPhotos, setReceivingPhotos] = useState<string[]>(data.receivingPhotos);
   const [notes,           setNotes]           = useState(data.notes ?? '');
-  const canSubmit = !hasReceiving || receivingPhotos.length > 0;
+  const canSubmit = !locked && (!hasReceiving || receivingPhotos.length > 0);
 
   return (
     <div className="space-y-6">
@@ -338,10 +543,10 @@ function ReceivingForm({ data, onSubmit, submitting, readonly, autoSave }: FormP
         <div className="grid grid-cols-2 gap-2">
           {([true, false] as const).map(val => (
             <button key={String(val)} type="button"
-              onClick={() => { if (!readonly) { setHasReceiving(val); autoSave({ hasReceiving: val }); } }}
+              onClick={() => { if (!dis) { setHasReceiving(val); autoSave({ hasReceiving: val }); } }}
               className={cn('rounded-2xl border-2 py-4 text-sm font-bold transition-all',
                 hasReceiving === val ? (val ? 'border-green-500 bg-green-50 text-green-700' : 'border-slate-400 bg-slate-50 text-slate-600') : 'border-border bg-card text-muted-foreground',
-                readonly && 'cursor-default opacity-60')}>
+                dis && 'cursor-default opacity-60')}>
               {val ? 'Ya, Ada' : 'Tidak Ada'}
             </button>
           ))}
@@ -351,33 +556,35 @@ function ReceivingForm({ data, onSubmit, submitting, readonly, autoSave }: FormP
         <Section title="Foto Barang Diterima (min 1)">
           <PhotoUploader label="Foto receiving" photoType="receiving" photos={receivingPhotos}
             onChange={urls => { setReceivingPhotos(urls); autoSave({ receivingPhotos: urls }, { immediate: true }); }}
-            max={5} disabled={readonly} />
+            max={5} disabled={dis} />
         </Section>
       )}
-      <NotesField value={notes} onChange={v => { setNotes(v); autoSave({ notes: v }); }} disabled={readonly} />
+      <NotesField value={notes} onChange={v => { setNotes(v); autoSave({ notes: v }); }} disabled={dis} />
       {!readonly && <SubmitBtn label="Submit Receiving" disabled={!canSubmit} submitting={submitting}
         onClick={() => onSubmit({ hasReceiving, receivingPhotos, notes: notes || undefined })} />}
     </div>
   );
 }
 
-function BriefingForm({ data, onSubmit, submitting, readonly, autoSave }: FormProps & { data: BriefingData }) {
+function BriefingForm({ data, onSubmit, submitting, readonly, locked, autoSave }: FormProps & { data: BriefingData }) {
+  const dis = readonly || locked;
   const [done,  setDone]  = useState(data.done);
   const [notes, setNotes] = useState(data.notes ?? '');
   return (
     <div className="space-y-6">
       <Section title="Status Briefing">
         <CheckItem label="Briefing shift malam telah dilakukan" checked={done}
-          onChange={v => { setDone(v); autoSave({ done: v }); }} disabled={readonly} />
+          onChange={v => { setDone(v); autoSave({ done: v }); }} disabled={dis} />
       </Section>
-      <NotesField value={notes} onChange={v => { setNotes(v); autoSave({ notes: v }); }} disabled={readonly} />
-      {!readonly && <SubmitBtn label="Submit Briefing" disabled={!done} submitting={submitting}
+      <NotesField value={notes} onChange={v => { setNotes(v); autoSave({ notes: v }); }} disabled={dis} />
+      {!readonly && <SubmitBtn label="Submit Briefing" disabled={locked || !done} submitting={submitting}
         onClick={() => onSubmit({ done, notes: notes || undefined })} />}
     </div>
   );
 }
 
-function CekBinForm({ data, onSubmit, submitting, readonly, autoSave }: FormProps & { data: CekBinData }) {
+function CekBinForm({ data, onSubmit, submitting, readonly, locked, autoSave }: FormProps & { data: CekBinData }) {
+  const dis = readonly || locked;
   const [notes, setNotes] = useState(data.notes ?? '');
   return (
     <div className="space-y-6">
@@ -385,19 +592,20 @@ function CekBinForm({ data, onSubmit, submitting, readonly, autoSave }: FormProp
         <p className="text-sm font-semibold text-amber-800">Cek Bin</p>
         <p className="mt-1 text-xs text-amber-600">Lakukan pemeriksaan bin dan konfirmasi selesai di bawah.</p>
       </div>
-      <NotesField value={notes} onChange={v => { setNotes(v); autoSave({ notes: v }); }} disabled={readonly} />
-      {!readonly && <SubmitBtn label="Selesai Cek Bin" disabled={false} submitting={submitting}
+      <NotesField value={notes} onChange={v => { setNotes(v); autoSave({ notes: v }); }} disabled={dis} />
+      {!readonly && <SubmitBtn label="Selesai Cek Bin" disabled={locked} submitting={submitting}
         onClick={() => onSubmit({ notes: notes || undefined })} />}
     </div>
   );
 }
 
 function PhotoOnlyForm({ data, photoField, photoKey, photoType, sectionTitle, submitLabel,
-  onSubmit, submitting, readonly, autoSave, max = 3 }: FormProps & {
+  onSubmit, submitting, readonly, locked, autoSave, max = 3 }: FormProps & {
   data: AnyTaskData; photoField: string; photoKey: string; photoType: string;
   sectionTitle: string; submitLabel: string; max?: number;
 }) {
-  const raw     = (data as unknown as Record<string, unknown>)[photoField];
+  const dis = readonly || locked;
+  const raw = (data as unknown as Record<string, unknown>)[photoField];
   const [photos, setPhotos] = useState<string[]>(Array.isArray(raw) ? raw as string[] : []);
   const [notes,  setNotes]  = useState((data as TaskBase).notes ?? '');
   return (
@@ -405,16 +613,17 @@ function PhotoOnlyForm({ data, photoField, photoKey, photoType, sectionTitle, su
       <Section title={sectionTitle}>
         <PhotoUploader label={`Foto (min 1, max ${max})`} photoType={photoType} photos={photos}
           onChange={urls => { setPhotos(urls); autoSave({ [photoKey]: urls }, { immediate: true }); }}
-          max={max} disabled={readonly} />
+          max={max} disabled={dis} />
       </Section>
-      <NotesField value={notes} onChange={v => { setNotes(v); autoSave({ notes: v }); }} disabled={readonly} />
-      {!readonly && <SubmitBtn label={submitLabel} disabled={photos.length === 0} submitting={submitting}
+      <NotesField value={notes} onChange={v => { setNotes(v); autoSave({ notes: v }); }} disabled={dis} />
+      {!readonly && <SubmitBtn label={submitLabel} disabled={locked || photos.length === 0} submitting={submitting}
         onClick={() => onSubmit({ photos, notes: notes || undefined })} />}
     </div>
   );
 }
 
-function GroomingForm({ data, onSubmit, submitting, readonly, autoSave }: FormProps & { data: GroomingData }) {
+function GroomingForm({ data, onSubmit, submitting, readonly, locked, autoSave }: FormProps & { data: GroomingData }) {
+  const dis = readonly || locked;
   const [uniformComplete,      setUniformComplete]      = useState<boolean>(data.uniformComplete      ?? false);
   const [hairGroomed,          setHairGroomed]          = useState<boolean>(data.hairGroomed          ?? false);
   const [nailsClean,           setNailsClean]           = useState<boolean>(data.nailsClean           ?? false);
@@ -426,35 +635,35 @@ function GroomingForm({ data, onSubmit, submitting, readonly, autoSave }: FormPr
   const chk = (field: string, setter: (v: boolean) => void, v: boolean) => { setter(v); autoSave({ [field]: v }); };
 
   const activeItems = [
-    data.uniformActive     && { key: 'uniform',      label: 'Seragam lengkap',          value: uniformComplete,      set: (v: boolean) => chk('uniformComplete',      setUniformComplete,      v) },
-    data.hairActive        && { key: 'hair',          label: 'Rambut rapi',              value: hairGroomed,          set: (v: boolean) => chk('hairGroomed',          setHairGroomed,          v) },
-    data.nailsActive       && { key: 'nails',         label: 'Kuku bersih',              value: nailsClean,           set: (v: boolean) => chk('nailsClean',           setNailsClean,           v) },
-    data.accessoriesActive && { key: 'accessories',   label: 'Aksesoris sesuai standar', value: accessoriesCompliant, set: (v: boolean) => chk('accessoriesCompliant', setAccessoriesCompliant, v) },
-    data.shoeActive        && { key: 'shoe',          label: 'Sepatu sesuai standar',    value: shoeCompliant,        set: (v: boolean) => chk('shoeCompliant',        setShoeCompliant,        v) },
+    data.uniformActive     && { key: 'uniform',    label: 'Seragam lengkap',          value: uniformComplete,      set: (v: boolean) => chk('uniformComplete',      setUniformComplete,      v) },
+    data.hairActive        && { key: 'hair',        label: 'Rambut rapi',              value: hairGroomed,          set: (v: boolean) => chk('hairGroomed',          setHairGroomed,          v) },
+    data.nailsActive       && { key: 'nails',       label: 'Kuku bersih',              value: nailsClean,           set: (v: boolean) => chk('nailsClean',           setNailsClean,           v) },
+    data.accessoriesActive && { key: 'accessories', label: 'Aksesoris sesuai standar', value: accessoriesCompliant, set: (v: boolean) => chk('accessoriesCompliant', setAccessoriesCompliant, v) },
+    data.shoeActive        && { key: 'shoe',        label: 'Sepatu sesuai standar',    value: shoeCompliant,        set: (v: boolean) => chk('shoeCompliant',        setShoeCompliant,        v) },
   ].filter(Boolean) as { key: string; label: string; value: boolean; set: (v: boolean) => void }[];
 
   const allChecked = activeItems.every(i => i.value);
-  const canSubmit  = allChecked && selfiePhotos.length > 0;
+  const canSubmit  = !locked && allChecked && selfiePhotos.length > 0;
 
   return (
     <div className="space-y-6">
       {activeItems.length > 0 && (
         <Section title="Checklist Penampilan">
           <div className="space-y-2">
-            {activeItems.map(item => <CheckItem key={item.key} label={item.label} checked={item.value} onChange={item.set} disabled={readonly} />)}
+            {activeItems.map(item => <CheckItem key={item.key} label={item.label} checked={item.value} onChange={item.set} disabled={dis} />)}
           </div>
         </Section>
       )}
       <Section title="Foto Selfie Full Body (wajib)">
         <PhotoUploader label="Selfie (min 1, max 2)" photoType="selfie" photos={selfiePhotos}
           onChange={urls => { setSelfiePhotos(urls); autoSave({ selfiePhotos: urls }, { immediate: true }); }}
-          max={2} disabled={readonly} />
+          max={2} disabled={dis} />
       </Section>
-      <NotesField value={notes} onChange={v => { setNotes(v); autoSave({ notes: v }); }} disabled={readonly} />
+      <NotesField value={notes} onChange={v => { setNotes(v); autoSave({ notes: v }); }} disabled={dis} />
       {!readonly && <>
         <SubmitBtn label="Submit Grooming" disabled={!canSubmit} submitting={submitting}
           onClick={() => onSubmit({ uniformComplete, hairGroomed, nailsClean, accessoriesCompliant, shoeCompliant, selfiePhotos, notes: notes || undefined })} />
-        {!canSubmit && <p className="text-center text-[11px] text-muted-foreground">{!allChecked ? 'Lengkapi semua checklist.' : 'Upload minimal 1 foto selfie.'}</p>}
+        {!canSubmit && !locked && <p className="text-center text-[11px] text-muted-foreground">{!allChecked ? 'Lengkapi semua checklist.' : 'Upload minimal 1 foto selfie.'}</p>}
       </>}
     </div>
   );
@@ -469,7 +678,7 @@ export default function TaskDetailPage() {
   const taskType = params.type as TaskType;
   const taskId   = params.id   as string;
 
-  const { geo, geoError, geoReady } = useGeo();
+  const { geo, geoError, geoReady, refresh: refreshGeo } = useGeo();
 
   const [taskData,    setTaskData]    = useState<AnyTaskData | null>(null);
   const [loading,     setLoading]     = useState(true);
@@ -494,19 +703,39 @@ export default function TaskDetailPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // IDs needed for auto-save baseBody — safe defaults while loading
+  // Access status check — re-evaluates when geo changes
+  const { accessStatus, accessLoading, refreshAccess } = useAccessStatus(
+    taskData?.scheduleId ?? '',
+    taskData?.storeId    ?? '',
+    geo,
+    geoReady,
+    taskData?.status,
+  );
+
   const scheduleId = taskData ? parseInt(taskData.scheduleId, 10) : 0;
   const storeId    = taskData ? parseInt(taskData.storeId,    10) : 0;
 
   const { status: saveStatus, lastSaved, error: saveError, save: autoSave } = useAutoSave({
-    url:       `/api/employee/tasks/${taskType}`,
-    baseBody:  { scheduleId, storeId },
+    url:        `/api/employee/tasks/${taskType}`,
+    baseBody:   { scheduleId, storeId },
     debounceMs: 800,
   });
 
-  const status     = taskData?.status;
-  const readonly   = status === 'completed' || status === 'verified';
-  const isRejected = status === 'rejected';
+  const taskStatus = taskData?.status;
+  const readonly   = taskStatus === 'completed' || taskStatus === 'verified';
+  const isRejected = taskStatus === 'rejected';
+
+  /**
+   * A task is "locked" when:
+   *   - the employee hasn't checked in, OR
+   *   - they are outside the geofence.
+   *
+   * geo_unavailable is NOT a lock — we degrade gracefully (skipGeo path).
+   */
+  const locked =
+    !readonly &&
+    !!accessStatus &&
+    (accessStatus.status === 'not_checked_in' || accessStatus.status === 'outside_geofence');
 
   async function handleSubmit(payload: Record<string, unknown>) {
     if (!taskData) return;
@@ -520,9 +749,15 @@ export default function TaskDetailPage() {
     setSubmitting(true);
     try {
       const res = await fetch(`/api/employee/tasks/${taskType}`, {
-        method: 'POST',
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scheduleId, storeId, geo: geo ?? null, skipGeo: geo === null, ...payload }),
+        body:    JSON.stringify({
+          scheduleId,
+          storeId,
+          geo:     geo ?? null,
+          skipGeo: geo === null,
+          ...payload,
+        }),
       });
 
       let json: Record<string, unknown> = {};
@@ -536,12 +771,13 @@ export default function TaskDetailPage() {
           if (res.status === 401) return 'Sesi habis, silakan login ulang.';
           if (res.status === 403) return 'Tidak punya akses untuk task ini.';
           if (res.status === 404) return 'Task tidak ditemukan. Coba refresh halaman.';
-          if (serverMsg?.toLowerCase().includes('meter') || serverMsg?.toLowerCase().includes('geofence'))
+          if (serverMsg?.toLowerCase().includes('absen'))
+            return serverMsg; // surface check-in message directly
+          if (serverMsg?.toLowerCase().includes('meter') || serverMsg?.toLowerCase().includes('geofence') || serverMsg?.toLowerCase().includes('area'))
             return 'Kamu terlalu jauh dari toko. Pastikan berada di dalam toko dan coba lagi.';
           return null;
         })();
         const displayMsg = hint ?? serverMsg ?? `HTTP ${res.status} ${res.statusText}`;
-        console.error('[TaskDetailPage] submit failed:', { status: res.status, json, displayMsg });
         setSubmitError(displayMsg);
         toast.error(displayMsg, { duration: 6000 });
         return;
@@ -551,7 +787,6 @@ export default function TaskDetailPage() {
       router.back();
     } catch (e) {
       const msg = e instanceof Error ? `Koneksi gagal: ${e.message}` : 'Gagal terhubung ke server.';
-      console.error('[TaskDetailPage] fetch error:', e);
       setSubmitError(msg);
       toast.error(msg, { duration: 6000 });
     } finally {
@@ -559,8 +794,15 @@ export default function TaskDetailPage() {
     }
   }
 
-  const title    = TASK_TITLES[taskType] ?? taskType;
-  const formProps: FormProps = { onSubmit: handleSubmit, submitting, readonly, autoSave };
+  // When geo refreshes, also re-check access
+  const handleRefreshGeo = useCallback(() => {
+    refreshGeo();
+    // refreshAccess will fire automatically via the useEffect in useAccessStatus
+    // once geoReady flips back to true with the new coords
+  }, [refreshGeo]);
+
+  const title     = TASK_TITLES[taskType] ?? taskType;
+  const formProps: FormProps = { onSubmit: handleSubmit, submitting, readonly, locked, autoSave };
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
@@ -581,18 +823,26 @@ export default function TaskDetailPage() {
           <SaveIndicator status={saveStatus} lastSaved={lastSaved} />
         )}
 
-        {status === 'completed' && <span className="flex items-center gap-1 rounded-full bg-green-100 px-2.5 py-1 text-[10px] font-bold text-green-700"><CheckCircle2 className="h-3 w-3" />Selesai</span>}
-        {status === 'verified'  && <span className="flex items-center gap-1 rounded-full bg-green-200 px-2.5 py-1 text-[10px] font-bold text-green-800"><CheckCircle2 className="h-3 w-3" />Terverifikasi</span>}
-        {status === 'rejected'  && <span className="flex items-center gap-1 rounded-full bg-red-100   px-2.5 py-1 text-[10px] font-bold text-red-700"><AlertCircle  className="h-3 w-3" />Ditolak</span>}
+        {taskStatus === 'completed' && <span className="flex items-center gap-1 rounded-full bg-green-100  px-2.5 py-1 text-[10px] font-bold text-green-700" ><CheckCircle2 className="h-3 w-3" />Selesai</span>}
+        {taskStatus === 'verified'  && <span className="flex items-center gap-1 rounded-full bg-green-200  px-2.5 py-1 text-[10px] font-bold text-green-800" ><CheckCircle2 className="h-3 w-3" />Terverifikasi</span>}
+        {taskStatus === 'rejected'  && <span className="flex items-center gap-1 rounded-full bg-red-100    px-2.5 py-1 text-[10px] font-bold text-red-700"  ><AlertCircle  className="h-3 w-3" />Ditolak</span>}
       </div>
 
       {/* Body */}
       <div className="flex-1 space-y-4 p-4 pb-10">
 
-        {/* Geo */}
-        {geoReady && geoError  && <div className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3"><MapPin className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" /><p className="text-xs text-amber-700">{geoError}</p></div>}
-        {geoReady && geo       && <div className="flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-2.5"><MapPin className="h-4 w-4 flex-shrink-0 text-green-600" /><p className="text-xs font-medium text-green-700">Lokasi terdeteksi ({geo.lat.toFixed(5)}, {geo.lng.toFixed(5)})</p></div>}
-        {!geoReady             && <div className="flex items-center gap-2 rounded-xl border border-border bg-secondary px-4 py-2.5"><Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /><p className="text-xs text-muted-foreground">Mendapatkan lokasi…</p></div>}
+        {/* Access / geo banners — always shown when task is not yet readonly */}
+        {!readonly && !loading && taskData && (
+          <AccessBanner
+            accessStatus={accessStatus}
+            accessLoading={accessLoading}
+            geoReady={geoReady}
+            geo={geo}
+            geoError={geoError}
+            onRefreshGeo={handleRefreshGeo}
+            onRefreshAccess={refreshAccess}
+          />
+        )}
 
         {/* Submit error */}
         {submitError && (
@@ -620,15 +870,15 @@ export default function TaskDetailPage() {
         )}
 
         {/* Verified banner */}
-        {status === 'verified' && taskData?.verifiedAt && (
+        {taskStatus === 'verified' && taskData?.verifiedAt && (
           <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3">
             <p className="text-xs font-semibold text-green-800">Task telah diverifikasi</p>
             <p className="mt-0.5 text-xs text-green-600">{new Date(taskData.verifiedAt).toLocaleString('id-ID',{day:'numeric',month:'long',year:'numeric',hour:'2-digit',minute:'2-digit'})}</p>
           </div>
         )}
 
-        {/* Collaborative hint for shared tasks */}
-        {!readonly && !loading && taskData && taskType !== 'grooming' && (
+        {/* Collaborative hint — only for non-locked shared tasks */}
+        {!readonly && !locked && !loading && taskData && taskType !== 'grooming' && (
           <div className="flex items-center gap-2 rounded-xl border border-blue-100 bg-blue-50 px-4 py-2.5">
             <Save className="h-4 w-4 flex-shrink-0 text-blue-500" />
             <p className="text-xs text-blue-700">Perubahan otomatis tersimpan. Rekan shift lain dapat melanjutkan task ini.</p>
@@ -645,19 +895,21 @@ export default function TaskDetailPage() {
             <p className="mt-1 text-xs text-muted-foreground">Task mungkin sudah tidak tersedia.</p>
           </div>
         ) : (
-          <>
+          /* Wrapper with relative positioning for the LockedOverlay */
+          <div className="relative">
+            <LockedOverlay accessStatus={accessStatus} />
             {taskType === 'store_opening'  && <StoreOpeningForm  data={taskData as StoreOpeningData}  {...formProps} />}
             {taskType === 'setoran'        && <SetoranForm        data={taskData as SetoranData}        {...formProps} />}
             {taskType === 'cek_bin'        && <CekBinForm         data={taskData as CekBinData}         {...formProps} />}
             {taskType === 'product_check'  && <ProductCheckForm   data={taskData as ProductCheckData}   {...formProps} />}
             {taskType === 'receiving'      && <ReceivingForm       data={taskData as ReceivingData}      {...formProps} />}
             {taskType === 'briefing'       && <BriefingForm        data={taskData as BriefingData}       {...formProps} />}
-            {taskType === 'edc_summary'    && <PhotoOnlyForm data={taskData} photoField="edcSummaryPhotos"    photoKey="photos" photoType="edc_summary"    sectionTitle="Foto Summary EDC"       submitLabel="Submit EDC Summary"    {...formProps} />}
+            {taskType === 'edc_summary'    && <PhotoOnlyForm data={taskData} photoField="edcSummaryPhotos"    photoKey="photos" photoType="edc_summary"    sectionTitle="Foto Summary EDC"        submitLabel="Submit EDC Summary"    {...formProps} />}
             {taskType === 'edc_settlement' && <PhotoOnlyForm data={taskData} photoField="edcSettlementPhotos" photoKey="photos" photoType="edc_settlement" sectionTitle="Foto Settlement EDC"     submitLabel="Submit EDC Settlement" {...formProps} />}
             {taskType === 'eod_z_report'   && <PhotoOnlyForm data={taskData} photoField="zReportPhotos"       photoKey="photos" photoType="z_report"       sectionTitle="Foto Z-Report"           submitLabel="Submit Z-Report"       {...formProps} />}
             {taskType === 'open_statement' && <PhotoOnlyForm data={taskData} photoField="openStatementPhotos" photoKey="photos" photoType="open_statement" sectionTitle="Foto Open Statement List" submitLabel="Submit Open Statement" {...formProps} />}
             {taskType === 'grooming'       && <GroomingForm        data={taskData as GroomingData}       {...formProps} />}
-          </>
+          </div>
         )}
       </div>
     </div>
