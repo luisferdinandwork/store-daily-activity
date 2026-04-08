@@ -1,11 +1,20 @@
 // app/api/ops/attendance/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
+import { getServerSession }          from 'next-auth';
+import { authOptions }               from '@/lib/auth';
 import { getAttendanceForDate, opsMarkAttendance } from '@/lib/schedule-utils';
-import { db } from '@/lib/db';
-import { breakSessions } from '@/lib/db/schema';
-import { eq } from 'drizzle-orm';
+import { db }                        from '@/lib/db';
+import { breakSessions, shifts }     from '@/lib/db/schema';
+import { eq }                        from 'drizzle-orm';
+
+// Cache shift id → code lookups in-process
+let shiftCodeCache: Map<number, string> | null = null;
+async function getShiftCodeMap(): Promise<Map<number, string>> {
+  if (shiftCodeCache) return shiftCodeCache;
+  const rows = await db.select({ id: shifts.id, code: shifts.code }).from(shifts);
+  shiftCodeCache = new Map(rows.map(r => [r.id, r.code]));
+  return shiftCodeCache;
+}
 
 // GET /api/ops/attendance?storeId=...&date=ISO
 export async function GET(req: NextRequest) {
@@ -15,26 +24,36 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const storeId = req.nextUrl.searchParams.get('storeId');
-    const dateStr = req.nextUrl.searchParams.get('date');
+    const storeIdRaw = req.nextUrl.searchParams.get('storeId');
+    const dateStr    = req.nextUrl.searchParams.get('date');
 
-    if (!storeId || !dateStr) {
+    if (!storeIdRaw || !dateStr) {
       return NextResponse.json(
         { success: false, error: 'storeId and date are required' },
         { status: 400 },
       );
     }
 
-    const data = await getAttendanceForDate(storeId, new Date(dateStr));
+    const storeId = Number(storeIdRaw);
+    if (isNaN(storeId)) {
+      return NextResponse.json({ success: false, error: 'invalid storeId' }, { status: 400 });
+    }
 
-    // For each row that has an attendance record, fetch its break sessions
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) {
+      return NextResponse.json({ success: false, error: 'invalid date' }, { status: 400 });
+    }
+
+    const data       = await getAttendanceForDate(storeId, date);
+    const shiftCodes = await getShiftCodeMap();
+
     const serialized = await Promise.all(
       data.map(async ({ schedule, user, attendance }) => {
         let breaks: {
-          id: string;
-          breakType: string;
+          id:           number;
+          breakType:    string;
           breakOutTime: string;
-          returnTime: string | null;
+          returnTime:   string | null;
         }[] = [];
 
         if (attendance) {
@@ -44,7 +63,7 @@ export async function GET(req: NextRequest) {
             .where(eq(breakSessions.attendanceId, attendance.id))
             .orderBy(breakSessions.breakOutTime);
 
-          breaks = rows.map((b) => ({
+          breaks = rows.map(b => ({
             id:           b.id,
             breakType:    b.breakType,
             breakOutTime: b.breakOutTime.toISOString(),
@@ -54,17 +73,20 @@ export async function GET(req: NextRequest) {
 
         return {
           schedule: {
-            id:    schedule.id,
-            shift: schedule.shift,
-            date:  schedule.date.toISOString(),
+            id:      schedule.id,
+            shiftId: schedule.shiftId,
+            shift:   shiftCodes.get(schedule.shiftId) ?? null,    // legacy field for the page
+            date:    schedule.date.toISOString(),
           },
           user: user
-            ? { id: user.id, name: user.name, employeeType: user.employeeType }
+            ? { id: user.id, name: user.name, employeeTypeId: user.employeeTypeId }
             : null,
           attendance: attendance
             ? {
                 id:           attendance.id,
                 status:       attendance.status,
+                shiftId:      attendance.shiftId,
+                shift:        shiftCodes.get(attendance.shiftId) ?? null,
                 checkInTime:  attendance.checkInTime?.toISOString()  ?? null,
                 checkOutTime: attendance.checkOutTime?.toISOString() ?? null,
                 onBreak:      attendance.onBreak,
@@ -78,12 +100,12 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ success: true, data: serialized });
   } catch (err) {
+    console.error('[GET /api/ops/attendance]', err);
     return NextResponse.json({ success: false, error: String(err) }, { status: 500 });
   }
 }
 
-// POST /api/ops/attendance
-// Body: { scheduleId, status, notes? }
+// POST /api/ops/attendance — body: { scheduleId, status, notes? }
 export async function POST(req: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
@@ -100,7 +122,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const validStatuses = ['present', 'absent', 'late', 'excused'];
+    const validStatuses = ['present', 'absent', 'late', 'excused'] as const;
     if (!validStatuses.includes(status)) {
       return NextResponse.json(
         { success: false, error: `status must be one of: ${validStatuses.join(', ')}` },
@@ -108,15 +130,21 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const schedIdNum = Number(scheduleId);
+    if (isNaN(schedIdNum)) {
+      return NextResponse.json({ success: false, error: 'invalid scheduleId' }, { status: 400 });
+    }
+
     const result = await opsMarkAttendance(
-      scheduleId,
+      schedIdNum,
       status,
-      (session.user as any).id,
+      (session.user as any).id as string,
       notes,
     );
 
     return NextResponse.json(result, { status: result.success ? 200 : 400 });
   } catch (err) {
+    console.error('[POST /api/ops/attendance]', err);
     return NextResponse.json({ success: false, error: String(err) }, { status: 500 });
   }
 }

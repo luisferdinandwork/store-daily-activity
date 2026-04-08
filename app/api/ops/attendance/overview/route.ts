@@ -1,14 +1,26 @@
 // app/api/ops/attendance/overview/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
-import { getStoresForOps } from '@/lib/schedule-utils';
-import { db } from '@/lib/db';
+import { getServerSession }          from 'next-auth';
+import { authOptions }               from '@/lib/auth';
+import { getStoresForOps }           from '@/lib/schedule-utils';
+import { db }                        from '@/lib/db';
 import { schedules, attendance, stores } from '@/lib/db/schema';
-import { eq, and, gte, lte } from 'drizzle-orm';
+import { eq, and, gte, lte, inArray } from 'drizzle-orm';
 
-function startOfDay(d: Date) { const r = new Date(d); r.setHours(0, 0, 0, 0); return r; }
+function startOfDay(d: Date) { const r = new Date(d); r.setHours(0, 0, 0, 0);     return r; }
 function endOfDay(d: Date)   { const r = new Date(d); r.setHours(23, 59, 59, 999); return r; }
+
+interface StoreSummary {
+  storeId:   number;
+  storeName: string;
+  total:     number;
+  present:   number;
+  absent:    number;
+  late:      number;
+  excused:   number;
+  onBreak:   number;
+  unset:     number;
+}
 
 // GET /api/ops/attendance/overview?date=ISO
 export async function GET(req: NextRequest) {
@@ -24,34 +36,44 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'date is required' }, { status: 400 });
     }
 
-    const date     = new Date(dateStr);
+    const date = new Date(dateStr);
+    if (isNaN(date.getTime())) {
+      return NextResponse.json({ success: false, error: 'invalid date' }, { status: 400 });
+    }
+
     const dayStart = startOfDay(date);
     const dayEnd   = endOfDay(date);
 
-    // Get all stores in this OPS user's area
+    // getStoresForOps now returns number[] (serial PKs)
     const storeIds = await getStoresForOps(userId);
     if (!storeIds.length) {
       return NextResponse.json({ success: true, data: [] });
     }
 
-    // Fetch store names
+    // Fetch store names — single query, always inArray (works for one or many)
     const storeRows = await db
       .select({ id: stores.id, name: stores.name })
       .from(stores)
-      .where(
-        storeIds.length === 1
-          ? eq(stores.id, storeIds[0])
-          : // drizzle inArray
-            (() => { const { inArray } = require('drizzle-orm'); return inArray(stores.id, storeIds); })(),
-      );
+      .where(inArray(stores.id, storeIds));
 
-    const storeMap = Object.fromEntries(storeRows.map((s) => [s.id, s.name]));
+    const storeNameById = new Map<number, string>(storeRows.map(s => [s.id, s.name]));
 
-    // For each store, aggregate attendance
-    const { inArray } = await import('drizzle-orm');
+    // Pre-seed summary so stores with zero schedules still appear
+    const summaryMap = new Map<number, StoreSummary>();
+    for (const sid of storeIds) {
+      summaryMap.set(sid, {
+        storeId:   sid,
+        storeName: storeNameById.get(sid) ?? String(sid),
+        total: 0, present: 0, absent: 0, late: 0, excused: 0, onBreak: 0, unset: 0,
+      });
+    }
 
+    // Pull every schedule for the day across all OPS stores, with optional attendance
     const scheduleRows = await db
-      .select({ schedule: schedules, attendance })
+      .select({
+        sched: schedules,
+        att:   attendance,
+      })
       .from(schedules)
       .leftJoin(attendance, eq(attendance.scheduleId, schedules.id))
       .where(
@@ -63,34 +85,25 @@ export async function GET(req: NextRequest) {
         ),
       );
 
-    // Aggregate per store
-    const summaryMap: Record<string, {
-      storeId: string; storeName: string;
-      total: number; present: number; absent: number;
-      late: number; excused: number; onBreak: number; unset: number;
-    }> = {};
-
-    for (const sid of storeIds) {
-      summaryMap[sid] = {
-        storeId: sid, storeName: storeMap[sid] ?? sid,
-        total: 0, present: 0, absent: 0, late: 0, excused: 0, onBreak: 0, unset: 0,
-      };
-    }
-
-    for (const { schedule, attendance: att } of scheduleRows) {
-      const s = summaryMap[schedule.storeId];
+    for (const { sched, att } of scheduleRows) {
+      const s = summaryMap.get(sched.storeId);
       if (!s) continue;
       s.total++;
+
       if (!att) { s.unset++; continue; }
-      if (att.status === 'present') s.present++;
-      else if (att.status === 'absent')  s.absent++;
-      else if (att.status === 'late')    s.late++;
-      else if (att.status === 'excused') s.excused++;
+
+      switch (att.status) {
+        case 'present': s.present++; break;
+        case 'absent':  s.absent++;  break;
+        case 'late':    s.late++;    break;
+        case 'excused': s.excused++; break;
+      }
       if (att.onBreak) s.onBreak++;
     }
 
-    return NextResponse.json({ success: true, data: Object.values(summaryMap) });
+    return NextResponse.json({ success: true, data: [...summaryMap.values()] });
   } catch (err) {
+    console.error('[GET /api/ops/attendance/overview]', err);
     return NextResponse.json({ success: false, error: String(err) }, { status: 500 });
   }
 }

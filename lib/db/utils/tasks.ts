@@ -31,6 +31,7 @@ import {
   type GroomingTask,
 } from '@/lib/db/schema';
 import { canManageSchedule } from '@/lib/schedule-utils';
+import { users, areas } from '@/lib/db/schema';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -162,6 +163,32 @@ export interface VerifyTaskInput {
   storeId: number;
   approve: boolean;
   notes?:  string;
+}
+
+export interface FlatTask {
+  id:          number;
+  type:        string;                    // 'store_opening' | 'setoran' | …
+  scheduleId:  number;
+  userId:      string;
+  userName:    string | null;
+  storeId:     number;
+  shift:       'morning' | 'evening' | null;
+  date:        string;                    // ISO
+  status:      string | null;
+  notes:       string | null;
+  completedAt: string | null;
+  verifiedBy:  string | null;
+  verifiedAt:  string | null;
+  extra:       Record<string, unknown>;
+}
+
+export interface StoreTaskSummary {
+  pending:    number;
+  inProgress: number;
+  completed:  number;
+  verified:   number;
+  rejected:   number;
+  total:      number;
 }
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
@@ -902,6 +929,8 @@ export async function submitOpenStatement(input: SubmitPhotoTaskInput): Promise<
   } catch (err) { return { success: false, error: `submitOpenStatement: ${err}` }; }
 }
 
+
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function submitGrooming(
@@ -1097,4 +1126,261 @@ export async function getDailyTaskSummary(storeId: number, date: Date) {
     briefing, edcSummary, edcSettlement, eodZReport, openStatement,
     grooming,
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OPS READ helpers — flat task list + area overview
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface FlatTask {
+  id:          number;
+  type:        string;
+  scheduleId:  number;
+  userId:      string;
+  userName:    string | null;
+  storeId:     number;
+  shift:       'morning' | 'evening' | null;
+  date:        string;
+  status:      string | null;
+  notes:       string | null;
+  completedAt: string | null;
+  verifiedBy:  string | null;
+  verifiedAt:  string | null;
+  extra:       Record<string, unknown>;
+}
+
+export interface StoreTaskSummary {
+  pending:    number;
+  inProgress: number;
+  completed:  number;
+  verified:   number;
+  rejected:   number;
+  total:      number;
+}
+
+function parsePhotosField(raw: unknown): string[] {
+  if (raw == null) return [];
+  if (Array.isArray(raw)) return raw as string[];
+  if (typeof raw !== 'string') return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function buildExtra(
+  row: Record<string, unknown>,
+  photoFields: string[] = [],
+): Record<string, unknown> {
+  const skip = new Set([
+    'id', 'scheduleId', 'userId', 'storeId', 'shiftId',
+    'date', 'status', 'notes', 'completedAt', 'verifiedBy', 'verifiedAt',
+    'createdAt', 'updatedAt', 'submittedLat', 'submittedLng',
+  ]);
+  const extra: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(row)) {
+    if (skip.has(k)) continue;
+    extra[k] = photoFields.includes(k) ? parsePhotosField(v) : v;
+  }
+  return extra;
+}
+
+/**
+ * Fetch ALL task rows for a store on a given day, across every task table,
+ * joined with user names and shift codes. Returns a flat array sorted by
+ * (shift, task type, user name).
+ */
+export async function getFlatTasksForStoreDate(
+  storeId: number,
+  date:    Date,
+): Promise<FlatTask[]> {
+  const dayStart = startOfDay(date);
+  const dayEnd   = endOfDay(date);
+
+  const shiftRows = await db.select({ id: shifts.id, code: shifts.code }).from(shifts);
+  const shiftCodeById = new Map<number, 'morning' | 'evening'>(
+    shiftRows.map(s => [s.id, s.code as 'morning' | 'evening']),
+  );
+
+  async function loadTable(
+    table:       any,
+    type:        string,
+    photoFields: string[],
+  ): Promise<FlatTask[]> {
+    const rows = await db
+      .select({
+        task:     table,
+        userName: users.name,
+      })
+      .from(table)
+      .leftJoin(users, eq(table.userId, users.id))
+      .where(
+        and(
+          eq(table.storeId, storeId),
+          gte(table.date, dayStart),
+          lte(table.date, dayEnd),
+        ),
+      );
+
+    return rows.map(({ task, userName }) => {
+      const t = task as any;
+      return {
+        id:          t.id,
+        type,
+        scheduleId:  t.scheduleId,
+        userId:      t.userId,
+        userName:    userName ?? null,
+        storeId:     t.storeId,
+        shift:       shiftCodeById.get(t.shiftId) ?? null,
+        date:        t.date instanceof Date ? t.date.toISOString() : String(t.date),
+        status:      t.status ?? null,
+        notes:       t.notes ?? null,
+        completedAt: t.completedAt instanceof Date ? t.completedAt.toISOString() : null,
+        verifiedBy:  t.verifiedBy ?? null,
+        verifiedAt:  t.verifiedAt instanceof Date ? t.verifiedAt.toISOString() : null,
+        extra:       buildExtra(t, photoFields),
+      };
+    });
+  }
+
+  const [
+    opening, setoran, cekBin, productCheck, receiving,
+    briefing, edcSummary, edcSettlement, eodZReport, openStatement,
+    grooming,
+  ] = await Promise.all([
+    loadTable(storeOpeningTasks,  'store_opening',  ['storeFrontPhotos', 'cashDrawerPhotos']),
+    loadTable(setoranTasks,       'setoran',        ['moneyPhotos']),
+    loadTable(cekBinTasks,        'cek_bin',        []),
+    loadTable(productCheckTasks,  'product_check',  []),
+    loadTable(receivingTasks,     'receiving',      ['receivingPhotos']),
+    loadTable(briefingTasks,      'briefing',       []),
+    loadTable(edcSummaryTasks,    'edc_summary',    ['edcSummaryPhotos']),
+    loadTable(edcSettlementTasks, 'edc_settlement', ['edcSettlementPhotos']),
+    loadTable(eodZReportTasks,    'eod_z_report',   ['zReportPhotos']),
+    loadTable(openStatementTasks, 'open_statement', ['openStatementPhotos']),
+    loadTable(groomingTasks,      'grooming',       ['selfiePhotos']),
+  ]);
+
+  const all = [
+    ...opening, ...setoran, ...cekBin, ...productCheck, ...receiving,
+    ...briefing, ...edcSummary, ...edcSettlement, ...eodZReport, ...openStatement,
+    ...grooming,
+  ];
+
+  const shiftOrder: Record<string, number> = { morning: 0, evening: 1 };
+  all.sort((a, b) => {
+    const sa = a.shift ? shiftOrder[a.shift] ?? 2 : 2;
+    const sb = b.shift ? shiftOrder[b.shift] ?? 2 : 2;
+    if (sa !== sb) return sa - sb;
+    if (a.type !== b.type) return a.type.localeCompare(b.type);
+    return (a.userName ?? '').localeCompare(b.userName ?? '');
+  });
+
+  return all;
+}
+
+export function summariseTasks(tasks: FlatTask[]): StoreTaskSummary {
+  const summary: StoreTaskSummary = {
+    pending: 0, inProgress: 0, completed: 0, verified: 0, rejected: 0, total: tasks.length,
+  };
+  for (const t of tasks) {
+    switch (t.status) {
+      case 'pending':     summary.pending++;    break;
+      case 'in_progress': summary.inProgress++; break;
+      case 'completed':   summary.completed++;  break;
+      case 'verified':    summary.verified++;   break;
+      case 'rejected':    summary.rejected++;   break;
+    }
+  }
+  return summary;
+}
+
+/**
+ * Area-wide overview for every store in the OPS user's area.
+ * Returns area info + per-store task summary for the given date.
+ */
+export async function getAreaTaskOverview(
+  opsUserId: string,
+  date:      Date,
+): Promise<{
+  area: { id: number; name: string } | null;
+  stores: Array<{
+    id:      number;
+    name:    string;
+    address: string;
+    summary: StoreTaskSummary;
+  }>;
+}> {
+  const [opsUser] = await db
+    .select({ areaId: users.areaId })
+    .from(users)
+    .where(eq(users.id, opsUserId))
+    .limit(1);
+
+  if (!opsUser?.areaId) return { area: null, stores: [] };
+
+  const [area] = await db
+    .select({ id: areas.id, name: areas.name })
+    .from(areas)
+    .where(eq(areas.id, opsUser.areaId))
+    .limit(1);
+
+  const areaStores = await db
+    .select({ id: stores.id, name: stores.name, address: stores.address })
+    .from(stores)
+    .where(eq(stores.areaId, opsUser.areaId))
+    .orderBy(stores.name);
+
+  const results = await Promise.all(
+    areaStores.map(async (s) => {
+      const daily = await getDailyTaskSummary(s.id, date);
+
+      const summary: StoreTaskSummary = {
+        pending: 0, inProgress: 0, completed: 0, verified: 0, rejected: 0, total: 0,
+      };
+      for (const perType of Object.values(daily)) {
+        summary.pending    += perType.pending;
+        summary.inProgress += perType.inProgress;
+        summary.completed  += perType.completed;
+        summary.verified   += perType.verified;
+        summary.rejected   += perType.rejected;
+      }
+      summary.total =
+        summary.pending + summary.inProgress + summary.completed +
+        summary.verified + summary.rejected;
+
+      return { ...s, summary };
+    }),
+  );
+
+  return { area: area ?? null, stores: results };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Verify dispatcher — route (type, id) to the right verify function
+// ─────────────────────────────────────────────────────────────────────────────
+
+const VERIFY_DISPATCH: Record<string, (i: VerifyTaskInput) => Promise<TaskResult<void>>> = {
+  store_opening:  verifyStoreOpening,
+  setoran:        verifySetoran,
+  cek_bin:        verifyCekBin,
+  product_check:  verifyProductCheck,
+  receiving:      verifyReceiving,
+  briefing:       verifyBriefing,
+  edc_summary:    verifyEdcSummary,
+  edc_settlement: verifyEdcSettlement,
+  eod_z_report:   verifyEodZReport,
+  open_statement: verifyOpenStatement,
+  grooming:       verifyGrooming,
+};
+
+export async function verifyTaskByType(
+  type:  string,
+  input: VerifyTaskInput,
+): Promise<TaskResult<void>> {
+  const fn = VERIFY_DISPATCH[type];
+  if (!fn) return { success: false, error: `Unknown task type: ${type}` };
+  return fn(input);
 }

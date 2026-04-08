@@ -1,17 +1,19 @@
 // app/api/ops/attendance/export/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
-import { db } from '@/lib/db';
-import { attendance, schedules, users, stores, breakSessions } from '@/lib/db/schema';
+import { getServerSession }          from 'next-auth';
+import { authOptions }               from '@/lib/auth';
+import { db }                        from '@/lib/db';
+import {
+  attendance, users, stores, breakSessions, shifts,
+} from '@/lib/db/schema';
 import { eq, and, gte, lte, inArray } from 'drizzle-orm';
-import { getStoresForOps } from '@/lib/schedule-utils';
-import * as XLSX from 'xlsx';
+import { getStoresForOps }            from '@/lib/schedule-utils';
+import * as XLSX                      from 'xlsx';
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
 
-function startOfDay(d: Date) { const r = new Date(d); r.setHours(0,0,0,0);        return r; }
-function endOfDay(d: Date)   { const r = new Date(d); r.setHours(23,59,59,999);   return r; }
+function startOfDay(d: Date) { const r = new Date(d); r.setHours(0,0,0,0);      return r; }
+function endOfDay(d: Date)   { const r = new Date(d); r.setHours(23,59,59,999); return r; }
 
 // ─── Formatting helpers ───────────────────────────────────────────────────────
 
@@ -32,21 +34,20 @@ function fmtDateLong(iso: string): string {
   });
 }
 
-function lateMinutes(checkInIso: string | null | undefined, shift: string): number {
-  if (!checkInIso) return 0;
+function lateMinutes(checkInIso: string | null | undefined, shiftCode: string | null): number {
+  if (!checkInIso || !shiftCode) return 0;
   const dt = new Date(checkInIso);
   const threshold = new Date(dt);
-  threshold.setHours(shift === 'morning' ? 8 : 13, 30, 0, 0);
+  threshold.setHours(shiftCode === 'morning' ? 8 : 13, 30, 0, 0);
   const diff = Math.floor((dt.getTime() - threshold.getTime()) / 60000);
   return diff > 0 ? diff : 0;
 }
 
-// ─── Style constants ──────────────────────────────────────────────────────────
+// ─── Style constants (unchanged) ──────────────────────────────────────────────
 
 const thin = { style: 'thin' } as const;
 const BORDER = { top: thin, bottom: thin, left: thin, right: thin };
 
-const CENTER: XLSX.ExcelDataType = 'n'; // used for type clarity below
 const centerAlign = { horizontal: 'center', vertical: 'center', wrapText: true  } as const;
 const leftAlign   = { horizontal: 'left',   vertical: 'center', wrapText: false } as const;
 
@@ -86,7 +87,6 @@ const STYLES = {
   },
 } as const;
 
-// Row fill colours per status
 const STATUS_FILL: Record<string, string> = {
   present: 'F0FDF4',
   late:    'FFFBEB',
@@ -94,7 +94,7 @@ const STATUS_FILL: Record<string, string> = {
   excused: 'EFF6FF',
 };
 
-function rowStyle(status: string | null, col: number, colLetter: string) {
+function rowStyle(status: string | null, _col: number, colLetter: string) {
   const bg = STATUS_FILL[status ?? ''] ?? 'FFFFFF';
   return {
     font:      { name: 'Arial', sz: 9 },
@@ -103,8 +103,6 @@ function rowStyle(status: string | null, col: number, colLetter: string) {
     border:    BORDER,
   };
 }
-
-// ─── Cell helper ──────────────────────────────────────────────────────────────
 
 function C(r: number, c: number) { return XLSX.utils.encode_cell({ r, c }); }
 
@@ -128,7 +126,7 @@ type ExportRow = {
   userName:     string;
   storeName:    string;
   date:         string;
-  shift:        string;
+  shift:        string | null;          // shift code string for display
   status:       string | null;
   checkInTime:  string | null;
   checkOutTime: string | null;
@@ -137,7 +135,7 @@ type ExportRow = {
   notes:        string | null;
 };
 
-// ─── Sheet 1: Full attendance log ─────────────────────────────────────────────
+// ─── Sheet 1: Full attendance log (unchanged shape) ───────────────────────────
 
 function buildLogSheet(
   ws: XLSX.WorkSheet,
@@ -153,57 +151,44 @@ function buildLogSheet(
   const { storeName, fromDate, toDate, exportedBy } = params;
 
   ws['!cols'] = [
-    { wch: 5  }, // A  No.
-    { wch: 13 }, // B  Date
-    { wch: 22 }, // C  Employee
-    { wch: 20 }, // D  Store
-    { wch: 9  }, // E  Shift
-    { wch: 11 }, // F  Status
-    { wch: 10 }, // G  Check-In
-    { wch: 10 }, // H  Check-Out
-    { wch: 11 }, // I  Break Out
-    { wch: 11 }, // J  Break Return
-    { wch: 12 }, // K  Late (min)
-    { wch: 28 }, // L  Notes
+    { wch: 5  }, { wch: 13 }, { wch: 22 }, { wch: 20 }, { wch: 9  }, { wch: 11 },
+    { wch: 10 }, { wch: 10 }, { wch: 11 }, { wch: 11 }, { wch: 12 }, { wch: 28 },
   ];
   ws['!rows'] = [];
 
-  // ── Row 0: Title ──────────────────────────────────────────────────────────
   cell(ws, C(0,0), 'ATTENDANCE REPORT', STYLES.title);
   merges.push({ s: { r:0, c:0 }, e: { r:0, c:11 } });
   ws['!rows'][0] = { hpt: 30 };
 
-  // ── Row 1: Meta ───────────────────────────────────────────────────────────
-  cell(ws, C(1,0), 'Store:',     STYLES.metaBold);
-  cell(ws, C(1,1), storeName,    STYLES.meta);
+  cell(ws, C(1,0), 'Store:',  STYLES.metaBold);
+  cell(ws, C(1,1), storeName, STYLES.meta);
   merges.push({ s: { r:1, c:1 }, e: { r:1, c:3 } });
 
-  cell(ws, C(1,4), 'Period:',    STYLES.metaBold);
+  cell(ws, C(1,4), 'Period:', STYLES.metaBold);
   cell(ws, C(1,5), `${fmtDate(fromDate + 'T00:00:00')}  –  ${fmtDate(toDate + 'T00:00:00')}`, STYLES.meta);
   merges.push({ s: { r:1, c:5 }, e: { r:1, c:7 } });
 
-  cell(ws, C(1,8),  'Exported:',  STYLES.metaBold);
-  cell(ws, C(1,9),  exportedBy,   STYLES.meta);
+  cell(ws, C(1,8), 'Exported:', STYLES.metaBold);
+  cell(ws, C(1,9), exportedBy,  STYLES.meta);
   merges.push({ s: { r:1, c:9 }, e: { r:1, c:11 } });
   ws['!rows'][1] = { hpt: 18 };
 
-  // ── Row 2: spacer ─────────────────────────────────────────────────────────
   ws['!rows'][2] = { hpt: 5 };
 
-  // ── Row 3: Column headers ─────────────────────────────────────────────────
   const HEADERS = ['No.','Date','Employee','Store','Shift','Status',
                    'Check-In','Check-Out','Break Out','Break Return','Late (min)','Notes'];
   HEADERS.forEach((h, i) => cell(ws, C(3, i), h, STYLES.tableHeader));
   ws['!rows'][3] = { hpt: 22 };
 
-  // ── Rows 4+: Data ─────────────────────────────────────────────────────────
   const COL_LETTERS = ['A','B','C','D','E','F','G','H','I','J','K','L'];
 
   rows.forEach((row, idx) => {
-    const r      = 4 + idx;
-    const status = row.status;
-    const late   = lateMinutes(row.checkInTime, row.shift);
-    const shiftL = row.shift === 'morning' ? 'Morning' : row.shift === 'evening' ? 'Evening' : row.shift;
+    const r       = 4 + idx;
+    const status  = row.status;
+    const late    = lateMinutes(row.checkInTime, row.shift);
+    const shiftL  = row.shift === 'morning' ? 'Morning'
+                  : row.shift === 'evening' ? 'Evening'
+                  : (row.shift ?? '—');
     const statusL = status ? status.charAt(0).toUpperCase() + status.slice(1) : '—';
     const noWork  = status === 'absent' || status === 'excused';
 
@@ -229,9 +214,8 @@ function buildLogSheet(
     ws['!rows']![r] = { hpt: 18 };
   });
 
-  // ── Summary footer ────────────────────────────────────────────────────────
   const sr = 4 + rows.length + 1;
-  ws['!rows']![sr - 1] = { hpt: 6 }; // spacer
+  ws['!rows']![sr - 1] = { hpt: 6 };
 
   const nPresent = rows.filter(r => r.status === 'present').length;
   const nLate    = rows.filter(r => r.status === 'late').length;
@@ -241,11 +225,11 @@ function buildLogSheet(
   cell(ws, C(sr,0), 'SUMMARY', STYLES.summaryLabel);
   merges.push({ s: { r:sr, c:0 }, e: { r:sr, c:3 } });
 
-  cell(ws, C(sr,4), `Present: ${nPresent}`,   STYLES.summaryVal);
-  cell(ws, C(sr,5), `Late: ${nLate}`,          STYLES.summaryVal);
-  cell(ws, C(sr,6), `Absent: ${nAbsent}`,      STYLES.summaryVal);
-  cell(ws, C(sr,7), `Excused: ${nExcused}`,    STYLES.summaryVal);
-  cell(ws, C(sr,8), `Total: ${rows.length}`,   STYLES.summaryVal);
+  cell(ws, C(sr,4), `Present: ${nPresent}`, STYLES.summaryVal);
+  cell(ws, C(sr,5), `Late: ${nLate}`,        STYLES.summaryVal);
+  cell(ws, C(sr,6), `Absent: ${nAbsent}`,    STYLES.summaryVal);
+  cell(ws, C(sr,7), `Excused: ${nExcused}`,  STYLES.summaryVal);
+  cell(ws, C(sr,8), `Total: ${rows.length}`, STYLES.summaryVal);
   merges.push({ s: { r:sr, c:9 }, e: { r:sr, c:11 } });
   ws['!rows']![sr] = { hpt: 22 };
 
@@ -253,7 +237,7 @@ function buildLogSheet(
   ws['!merges'] = merges;
 }
 
-// ─── Sheet 2: Per-employee pivot ──────────────────────────────────────────────
+// ─── Sheet 2: Per-employee pivot (unchanged) ──────────────────────────────────
 
 type EmpStat = {
   name: string; store: string;
@@ -264,35 +248,27 @@ function buildEmployeeSheet(ws: XLSX.WorkSheet, rows: ExportRow[]) {
   const merges: XLSX.Range[] = [];
 
   ws['!cols'] = [
-    { wch: 24 }, // A Employee
-    { wch: 20 }, // B Store
-    { wch: 11 }, // C Total
-    { wch: 10 }, // D Present
-    { wch: 10 }, // E Late
-    { wch: 10 }, // F Absent
-    { wch: 10 }, // G Excused
-    { wch: 10 }, // H Late %
+    { wch: 24 }, { wch: 20 }, { wch: 11 }, { wch: 10 },
+    { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 },
   ];
   ws['!rows'] = [];
 
-  // Title
   cell(ws, C(0,0), 'Attendance by Employee', STYLES.title);
   merges.push({ s: { r:0, c:0 }, e: { r:0, c:7 } });
   ws['!rows'][0] = { hpt: 26 };
-
   ws['!rows'][1] = { hpt: 5 };
 
-  // Headers
   const HEADERS2 = ['Employee','Store','Total Days','Present','Late','Absent','Excused','Late %'];
   HEADERS2.forEach((h, i) => cell(ws, C(2, i), h, STYLES.tableHeader));
   ws['!rows'][2] = { hpt: 22 };
 
-  // Aggregate
   const empMap = new Map<string, EmpStat>();
   for (const row of rows) {
     const key  = row.userId;
-    const prev = empMap.get(key) ?? { name: row.userName, store: row.storeName,
-                                       present: 0, late: 0, absent: 0, excused: 0 };
+    const prev = empMap.get(key) ?? {
+      name: row.userName, store: row.storeName,
+      present: 0, late: 0, absent: 0, excused: 0,
+    };
     const s = (row.status ?? 'absent') as keyof Pick<EmpStat,'present'|'late'|'absent'|'excused'>;
     if (s in prev) (prev[s] as number)++;
     empMap.set(key, prev);
@@ -301,10 +277,10 @@ function buildEmployeeSheet(ws: XLSX.WorkSheet, rows: ExportRow[]) {
   const empList = [...empMap.values()].sort((a, b) => a.name.localeCompare(b.name));
 
   empList.forEach((emp, idx) => {
-    const r     = 3 + idx;
-    const total = emp.present + emp.late + emp.absent + emp.excused;
+    const r       = 3 + idx;
+    const total   = emp.present + emp.late + emp.absent + emp.excused;
     const latePct = total > 0 ? `${Math.round((emp.late / total) * 100)}%` : '0%';
-    const alt   = idx % 2 === 0 ? 'F8FAFC' : 'FFFFFF';
+    const alt     = idx % 2 === 0 ? 'F8FAFC' : 'FFFFFF';
 
     const rowS = (isLeft: boolean) => ({
       font:      { name: 'Arial', sz: 9 },
@@ -337,7 +313,7 @@ export async function GET(request: NextRequest) {
     const fromDateParam = searchParams.get('fromDate');
     const toDateParam   = searchParams.get('toDate');
     const storeIdParam  = searchParams.get('storeId');
-    const shiftParam    = searchParams.get('shift');
+    const shiftParam    = searchParams.get('shift');     // 'morning' | 'evening'
     const statusParam   = searchParams.get('status');
 
     if (!fromDateParam || !toDateParam) {
@@ -359,52 +335,75 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Date range cannot exceed 90 days' }, { status: 400 });
     }
 
-    // ── OPS store scope ────────────────────────────────────────────────────
-    const opsStoreIds = await getStoresForOps(session.user.id);
+    // OPS area scope
+    const opsStoreIds = await getStoresForOps((session.user as any).id as string);
     if (!opsStoreIds.length) {
       return NextResponse.json({ error: 'No stores found for your area' }, { status: 403 });
     }
 
-    const storeIds = storeIdParam && opsStoreIds.includes(storeIdParam)
-      ? [storeIdParam]
-      : opsStoreIds;
+    // Optional store filter must be in the OPS area
+    let storeIds = opsStoreIds;
+    if (storeIdParam) {
+      const requested = Number(storeIdParam);
+      if (isNaN(requested)) {
+        return NextResponse.json({ error: 'Invalid storeId' }, { status: 400 });
+      }
+      if (!opsStoreIds.includes(requested)) {
+        return NextResponse.json({ error: 'Store is not in your area' }, { status: 403 });
+      }
+      storeIds = [requested];
+    }
 
-    // ── Query attendance ───────────────────────────────────────────────────
+    // Resolve shift code → shift id for the optional shift filter
+    let shiftIdFilter: number | null = null;
+    if (shiftParam) {
+      const [shiftRow] = await db
+        .select({ id: shifts.id })
+        .from(shifts)
+        .where(eq(shifts.code, shiftParam))
+        .limit(1);
+      if (!shiftRow) {
+        return NextResponse.json({ error: `Unknown shift code "${shiftParam}"` }, { status: 400 });
+      }
+      shiftIdFilter = shiftRow.id;
+    }
+
+    // ── Query attendance ────────────────────────────────────────────────────
     const conditions = [
       inArray(attendance.storeId, storeIds),
       gte(attendance.date, fromDate),
       lte(attendance.date, toDate),
     ];
-    if (shiftParam)  conditions.push(eq(attendance.shift,  shiftParam as any));
-    if (statusParam) conditions.push(eq(attendance.status, statusParam as any));
+    if (shiftIdFilter) conditions.push(eq(attendance.shiftId, shiftIdFilter));
+    if (statusParam)   conditions.push(eq(attendance.status, statusParam as any));
 
     const rows = await db
       .select({
-        att:   attendance,
-        user:  { id: users.id,  name: users.name  },
-        store: { id: stores.id, name: stores.name },
+        att:       attendance,
+        userName:  users.name,
+        userId:    users.id,
+        storeName: stores.name,
+        shiftCode: shifts.code,
       })
       .from(attendance)
       .leftJoin(users,  eq(attendance.userId,  users.id))
       .leftJoin(stores, eq(attendance.storeId, stores.id))
+      .leftJoin(shifts, eq(attendance.shiftId, shifts.id))
       .where(and(...conditions))
       .orderBy(attendance.date, users.name);
 
-    // First break session per attendance record
+    // First break per attendance
     const attIds = rows.map(r => r.att.id);
     const breaks = attIds.length
-      ? await db
-          .select()
-          .from(breakSessions)
-          .where(inArray(breakSessions.attendanceId, attIds))
+      ? await db.select().from(breakSessions).where(inArray(breakSessions.attendanceId, attIds))
       : [];
 
-    const breakByAtt = new Map<string, typeof breaks[0]>();
+    const breakByAtt = new Map<number, typeof breaks[0]>();
     for (const b of breaks) {
       if (!breakByAtt.has(b.attendanceId)) breakByAtt.set(b.attendanceId, b);
     }
 
-    // Store display name
+    // Single-store name for header
     let storeName = 'All Stores';
     if (storeIds.length === 1) {
       const [s] = await db
@@ -415,25 +414,25 @@ export async function GET(request: NextRequest) {
       if (s) storeName = s.name;
     }
 
-    // ── Build export rows ──────────────────────────────────────────────────
-    const exportRows: ExportRow[] = rows.map(({ att, user, store }) => {
+    // Build export rows
+    const exportRows: ExportRow[] = rows.map(({ att, userName, userId, storeName: sn, shiftCode }) => {
       const brk = breakByAtt.get(att.id);
       return {
         userId:       att.userId,
-        userName:     user?.name  ?? '—',
-        storeName:    store?.name ?? '—',
+        userName:     userName  ?? '—',
+        storeName:    sn        ?? '—',
         date:         att.date.toISOString(),
-        shift:        att.shift,
+        shift:        shiftCode ?? null,
         status:       att.status,
-        checkInTime:  att.checkInTime?.toISOString()   ?? null,
-        checkOutTime: att.checkOutTime?.toISOString()  ?? null,
-        breakOutTime: brk?.breakOutTime?.toISOString() ?? null,
-        returnTime:   brk?.returnTime?.toISOString()   ?? null,
+        checkInTime:  att.checkInTime?.toISOString()    ?? null,
+        checkOutTime: att.checkOutTime?.toISOString()   ?? null,
+        breakOutTime: brk?.breakOutTime?.toISOString()  ?? null,
+        returnTime:   brk?.returnTime?.toISOString()    ?? null,
         notes:        att.notes ?? null,
       };
     });
 
-    // ── Build workbook ─────────────────────────────────────────────────────
+    // Build workbook
     const wb = XLSX.utils.book_new();
 
     const ws1: XLSX.WorkSheet = {};
@@ -450,7 +449,6 @@ export async function GET(request: NextRequest) {
     XLSX.utils.book_append_sheet(wb, ws2, 'By Employee');
 
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx', cellStyles: true });
-
     const filename = `attendance_${fromDateParam}_to_${toDateParam}.xlsx`;
 
     return new NextResponse(buf, {
