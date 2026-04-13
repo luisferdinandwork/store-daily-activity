@@ -1,8 +1,8 @@
 CREATE TYPE "public"."attendance_status" AS ENUM('present', 'absent', 'late', 'excused');--> statement-breakpoint
-CREATE TYPE "public"."break_type" AS ENUM('lunch', 'dinner');--> statement-breakpoint
+CREATE TYPE "public"."break_type" AS ENUM('lunch', 'dinner', 'full_day_lunch', 'full_day_dinner');--> statement-breakpoint
 CREATE TYPE "public"."issue_status" AS ENUM('reported', 'in_review', 'resolved');--> statement-breakpoint
 CREATE TYPE "public"."report_status" AS ENUM('draft', 'submitted', 'verified', 'rejected');--> statement-breakpoint
-CREATE TYPE "public"."task_status" AS ENUM('pending', 'in_progress', 'completed', 'verified', 'rejected');--> statement-breakpoint
+CREATE TYPE "public"."task_status" AS ENUM('pending', 'in_progress', 'completed', 'discrepancy', 'verified', 'rejected');--> statement-breakpoint
 CREATE TABLE "areas" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"name" text NOT NULL,
@@ -191,7 +191,9 @@ CREATE TABLE "briefing_tasks" (
 	"store_id" integer NOT NULL,
 	"shift_id" integer NOT NULL,
 	"date" timestamp NOT NULL,
+	"parent_task_id" integer,
 	"done" boolean DEFAULT false NOT NULL,
+	"is_balanced" boolean,
 	"submitted_lat" numeric(10, 7),
 	"submitted_lng" numeric(10, 7),
 	"status" "task_status" DEFAULT 'pending' NOT NULL,
@@ -200,8 +202,7 @@ CREATE TABLE "briefing_tasks" (
 	"verified_by" text,
 	"verified_at" timestamp,
 	"created_at" timestamp DEFAULT now() NOT NULL,
-	"updated_at" timestamp DEFAULT now() NOT NULL,
-	CONSTRAINT "briefing_tasks_store_id_date_unique" UNIQUE("store_id","date")
+	"updated_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "cek_bin_tasks" (
@@ -230,7 +231,9 @@ CREATE TABLE "edc_settlement_tasks" (
 	"store_id" integer NOT NULL,
 	"shift_id" integer NOT NULL,
 	"date" timestamp NOT NULL,
+	"parent_task_id" integer,
 	"edc_settlement_photos" text,
+	"is_balanced" boolean,
 	"submitted_lat" numeric(10, 7),
 	"submitted_lng" numeric(10, 7),
 	"status" "task_status" DEFAULT 'pending' NOT NULL,
@@ -239,8 +242,7 @@ CREATE TABLE "edc_settlement_tasks" (
 	"verified_by" text,
 	"verified_at" timestamp,
 	"created_at" timestamp DEFAULT now() NOT NULL,
-	"updated_at" timestamp DEFAULT now() NOT NULL,
-	CONSTRAINT "edc_settlement_tasks_store_id_date_unique" UNIQUE("store_id","date")
+	"updated_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "edc_summary_tasks" (
@@ -250,7 +252,9 @@ CREATE TABLE "edc_summary_tasks" (
 	"store_id" integer NOT NULL,
 	"shift_id" integer NOT NULL,
 	"date" timestamp NOT NULL,
+	"parent_task_id" integer,
 	"edc_summary_photos" text,
+	"is_balanced" boolean,
 	"submitted_lat" numeric(10, 7),
 	"submitted_lng" numeric(10, 7),
 	"status" "task_status" DEFAULT 'pending' NOT NULL,
@@ -259,8 +263,7 @@ CREATE TABLE "edc_summary_tasks" (
 	"verified_by" text,
 	"verified_at" timestamp,
 	"created_at" timestamp DEFAULT now() NOT NULL,
-	"updated_at" timestamp DEFAULT now() NOT NULL,
-	CONSTRAINT "edc_summary_tasks_store_id_date_unique" UNIQUE("store_id","date")
+	"updated_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "eod_z_report_tasks" (
@@ -270,7 +273,9 @@ CREATE TABLE "eod_z_report_tasks" (
 	"store_id" integer NOT NULL,
 	"shift_id" integer NOT NULL,
 	"date" timestamp NOT NULL,
+	"parent_task_id" integer,
 	"z_report_photos" text,
+	"is_balanced" boolean,
 	"submitted_lat" numeric(10, 7),
 	"submitted_lng" numeric(10, 7),
 	"status" "task_status" DEFAULT 'pending' NOT NULL,
@@ -279,8 +284,7 @@ CREATE TABLE "eod_z_report_tasks" (
 	"verified_by" text,
 	"verified_at" timestamp,
 	"created_at" timestamp DEFAULT now() NOT NULL,
-	"updated_at" timestamp DEFAULT now() NOT NULL,
-	CONSTRAINT "eod_z_report_tasks_store_id_date_unique" UNIQUE("store_id","date")
+	"updated_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "grooming_tasks" (
@@ -320,7 +324,9 @@ CREATE TABLE "open_statement_tasks" (
 	"store_id" integer NOT NULL,
 	"shift_id" integer NOT NULL,
 	"date" timestamp NOT NULL,
+	"parent_task_id" integer,
 	"open_statement_photos" text,
+	"is_balanced" boolean,
 	"submitted_lat" numeric(10, 7),
 	"submitted_lng" numeric(10, 7),
 	"status" "task_status" DEFAULT 'pending' NOT NULL,
@@ -329,8 +335,7 @@ CREATE TABLE "open_statement_tasks" (
 	"verified_by" text,
 	"verified_at" timestamp,
 	"created_at" timestamp DEFAULT now() NOT NULL,
-	"updated_at" timestamp DEFAULT now() NOT NULL,
-	CONSTRAINT "open_statement_tasks_store_id_date_unique" UNIQUE("store_id","date")
+	"updated_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "product_check_tasks" (
@@ -412,6 +417,8 @@ CREATE TABLE "store_opening_tasks" (
 	"check_absen_sunfish" boolean DEFAULT false NOT NULL,
 	"tarik_soh_sales" boolean DEFAULT false NOT NULL,
 	"five_r" boolean DEFAULT false NOT NULL,
+	"five_r_photos" text,
+	"cek_promo" boolean DEFAULT false NOT NULL,
 	"cek_lamp" boolean DEFAULT false NOT NULL,
 	"cek_sound_system" boolean DEFAULT false NOT NULL,
 	"store_front_photos" text,

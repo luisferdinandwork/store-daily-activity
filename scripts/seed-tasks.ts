@@ -2,16 +2,18 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Seeds all task rows for every existing schedule row.
 //
-// Updated for lookup-table schema:
-//   • schedules.shift → schedules.shiftId (FK to shifts table)
-//   • users.employeeType → users.employeeTypeId (FK to employee_types)
-//   • Shift code ('morning'/'evening') is resolved via JOIN against shifts.code
+// Changes from original:
+//   • full_day shift creates BOTH morning and evening task sets
+//   • Evening tasks have no unique(storeId, date) constraint — existence check
+//     looks for any active (pending/in_progress/discrepancy) row instead
+//   • store_opening_tasks now has fiveRPhotos + cekPromo columns (no values
+//     needed for seed — they default to null/false)
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { config } from 'dotenv';
 config({ path: '.env.local' });
 
-import { db }   from '@/lib/db';
+import { db } from '@/lib/db';
 import {
   schedules, users, stores, areas, shifts,
   storeOpeningTasks, setoranTasks, cekBinTasks,
@@ -19,7 +21,7 @@ import {
   edcSummaryTasks, edcSettlementTasks, eodZReportTasks,
   openStatementTasks, groomingTasks,
 } from '@/lib/db/schema';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, inArray } from 'drizzle-orm';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -27,19 +29,8 @@ function startOfDay(d: Date): Date {
   const r = new Date(d); r.setHours(0, 0, 0, 0); return r;
 }
 
-async function exists(
-  table: typeof storeOpeningTasks,
-  scheduleId: number,
-): Promise<boolean> {
-  const [row] = await db
-    .select({ id: table.id })
-    .from(table)
-    .where(eq(table.scheduleId, scheduleId))
-    .limit(1);
-  return !!row;
-}
-
-async function sharedExists(
+/** Morning tasks use a unique(storeId, date) constraint — check by store+date. */
+async function morningSharedExists(
   table: typeof storeOpeningTasks,
   storeId: number,
   date: Date,
@@ -47,12 +38,41 @@ async function sharedExists(
   const [row] = await db
     .select({ id: table.id })
     .from(table)
-    .where(
-      and(
-        eq(table.storeId, storeId),
-        eq(table.date,    startOfDay(date)),
-      ),
-    )
+    .where(and(eq(table.storeId, storeId), eq(table.date, startOfDay(date))))
+    .limit(1);
+  return !!row;
+}
+
+/**
+ * Evening tasks have NO unique(storeId, date) constraint (discrepancy rows can
+ * span multiple days). We check for any active (non-terminal) row instead.
+ */
+async function eveningActiveExists(
+  table: typeof briefingTasks,
+  storeId: number,
+  date: Date,
+): Promise<boolean> {
+  const [row] = await db
+    .select({ id: table.id })
+    .from(table)
+    .where(and(
+      eq(table.storeId, storeId),
+      eq(table.date, startOfDay(date)),
+      inArray(table.status, ['pending', 'in_progress', 'discrepancy']),
+    ))
+    .limit(1);
+  return !!row;
+}
+
+/** Grooming is personal — one row per scheduleId. */
+async function personalExists(
+  table: typeof groomingTasks,
+  scheduleId: number,
+): Promise<boolean> {
+  const [row] = await db
+    .select({ id: table.id })
+    .from(table)
+    .where(eq(table.scheduleId, scheduleId))
     .limit(1);
   return !!row;
 }
@@ -78,8 +98,6 @@ const counts = {
 async function seedTasks() {
   console.log('🗂️   seed-tasks: all 11 task types\n');
 
-  // Load all schedule rows joined with the shift table so we can read the
-  // shift CODE ('morning'/'evening') instead of the numeric id for branching.
   const allSchedules = await db
     .select({
       sched:     schedules,
@@ -100,6 +118,17 @@ async function seedTasks() {
     process.exit(1);
   }
 
+  // Resolve morning/evening shift IDs for full_day task rows
+  const allShifts         = await db.select({ id: shifts.id, code: shifts.code }).from(shifts);
+  const shiftIdByCode     = Object.fromEntries(allShifts.map(s => [s.code, s.id])) as Record<string, number>;
+  const morningShiftId    = shiftIdByCode['morning'];
+  const eveningShiftId    = shiftIdByCode['evening'];
+
+  if (!morningShiftId || !eveningShiftId) {
+    console.error('❌  morning/evening shifts not found. Run seed-setup.ts first.');
+    process.exit(1);
+  }
+
   console.log(`   Found ${allSchedules.length} schedule row(s).\n`);
 
   let errors = 0;
@@ -109,113 +138,120 @@ async function seedTasks() {
       `${(area?.name  ?? '?').padEnd(12)} | ` +
       `${(store?.name ?? '?').padEnd(16)} | ` +
       `${(user?.name  ?? '?').padEnd(18)} | ` +
-      `${shiftCode.padEnd(7)} | ` +
+      `${shiftCode.padEnd(8)} | ` +
       `${sched.date.toISOString().slice(0, 10)}`;
 
-    // Note: tasks store shiftId (FK), not the code
-    const base = {
-      scheduleId: sched.id,
-      userId:     sched.userId,
-      storeId:    sched.storeId,
-      shiftId:    sched.shiftId,
-      date:       startOfDay(sched.date),
-      status:     'pending' as const,
+    // For full_day shifts, morning tasks use the morning shiftId and evening
+    // tasks use the evening shiftId, so the UI can group them correctly.
+    const morningBase = {
+      scheduleId: sched.id, userId: sched.userId, storeId: sched.storeId,
+      shiftId: morningShiftId, date: startOfDay(sched.date), status: 'pending' as const,
     };
+    const eveningBase = {
+      scheduleId: sched.id, userId: sched.userId, storeId: sched.storeId,
+      shiftId: eveningShiftId, date: startOfDay(sched.date), status: 'pending' as const,
+    };
+
+    const isMorning = shiftCode === 'morning'  || shiftCode === 'full_day';
+    const isEvening = shiftCode === 'evening'  || shiftCode === 'full_day';
 
     try {
       // ── MORNING TASKS ─────────────────────────────────────────────────────
-      if (shiftCode === 'morning') {
-
-        if (await sharedExists(storeOpeningTasks as any, sched.storeId, sched.date)) {
+      if (isMorning) {
+        if (await morningSharedExists(storeOpeningTasks as any, sched.storeId, sched.date)) {
           counts.storeOpening.skipped++;
         } else {
-          await db.insert(storeOpeningTasks).values(base);
+          await db.insert(storeOpeningTasks).values(morningBase);
           counts.storeOpening.created++;
           console.log(`   ✅ storeOpening  ${label}`);
         }
 
-        if (await sharedExists(setoranTasks as any, sched.storeId, sched.date)) {
+        if (await morningSharedExists(setoranTasks as any, sched.storeId, sched.date)) {
           counts.setoran.skipped++;
         } else {
-          await db.insert(setoranTasks).values(base);
+          await db.insert(setoranTasks).values(morningBase);
           counts.setoran.created++;
           console.log(`   ✅ setoran       ${label}`);
         }
 
-        if (await sharedExists(cekBinTasks as any, sched.storeId, sched.date)) {
+        if (await morningSharedExists(cekBinTasks as any, sched.storeId, sched.date)) {
           counts.cekBin.skipped++;
         } else {
-          await db.insert(cekBinTasks).values(base);
+          await db.insert(cekBinTasks).values(morningBase);
           counts.cekBin.created++;
           console.log(`   ✅ cekBin        ${label}`);
         }
 
-        if (await sharedExists(productCheckTasks as any, sched.storeId, sched.date)) {
+        if (await morningSharedExists(productCheckTasks as any, sched.storeId, sched.date)) {
           counts.productCheck.skipped++;
         } else {
-          await db.insert(productCheckTasks).values(base);
+          await db.insert(productCheckTasks).values(morningBase);
           counts.productCheck.created++;
           console.log(`   ✅ productCheck  ${label}`);
         }
 
-        if (await sharedExists(receivingTasks as any, sched.storeId, sched.date)) {
+        if (await morningSharedExists(receivingTasks as any, sched.storeId, sched.date)) {
           counts.receiving.skipped++;
         } else {
-          await db.insert(receivingTasks).values(base);
+          await db.insert(receivingTasks).values(morningBase);
           counts.receiving.created++;
           console.log(`   ✅ receiving     ${label}`);
         }
       }
 
       // ── EVENING TASKS ─────────────────────────────────────────────────────
-      if (shiftCode === 'evening') {
-
-        if (await sharedExists(briefingTasks as any, sched.storeId, sched.date)) {
+      if (isEvening) {
+        if (await eveningActiveExists(briefingTasks as any, sched.storeId, sched.date)) {
           counts.briefing.skipped++;
         } else {
-          await db.insert(briefingTasks).values(base);
+          await db.insert(briefingTasks).values(eveningBase);
           counts.briefing.created++;
           console.log(`   ✅ briefing      ${label}`);
         }
 
-        if (await sharedExists(edcSummaryTasks as any, sched.storeId, sched.date)) {
+        if (await eveningActiveExists(edcSummaryTasks as any, sched.storeId, sched.date)) {
           counts.edcSummary.skipped++;
         } else {
-          await db.insert(edcSummaryTasks).values(base);
+          await db.insert(edcSummaryTasks).values(eveningBase);
           counts.edcSummary.created++;
           console.log(`   ✅ edcSummary    ${label}`);
         }
 
-        if (await sharedExists(edcSettlementTasks as any, sched.storeId, sched.date)) {
+        if (await eveningActiveExists(edcSettlementTasks as any, sched.storeId, sched.date)) {
           counts.edcSettlement.skipped++;
         } else {
-          await db.insert(edcSettlementTasks).values(base);
+          await db.insert(edcSettlementTasks).values(eveningBase);
           counts.edcSettlement.created++;
           console.log(`   ✅ edcSettlement ${label}`);
         }
 
-        if (await sharedExists(eodZReportTasks as any, sched.storeId, sched.date)) {
+        if (await eveningActiveExists(eodZReportTasks as any, sched.storeId, sched.date)) {
           counts.eodZReport.skipped++;
         } else {
-          await db.insert(eodZReportTasks).values(base);
+          await db.insert(eodZReportTasks).values(eveningBase);
           counts.eodZReport.created++;
           console.log(`   ✅ eodZReport    ${label}`);
         }
 
-        if (await sharedExists(openStatementTasks as any, sched.storeId, sched.date)) {
+        if (await eveningActiveExists(openStatementTasks as any, sched.storeId, sched.date)) {
           counts.openStatement.skipped++;
         } else {
-          await db.insert(openStatementTasks).values(base);
+          await db.insert(openStatementTasks).values(eveningBase);
           counts.openStatement.created++;
           console.log(`   ✅ openStatement ${label}`);
         }
       }
 
-      // ── GROOMING — personal, both shifts ──────────────────────────────────
-      if (await exists(groomingTasks as any, sched.id)) {
+      // ── GROOMING — personal, all shifts ───────────────────────────────────
+      if (await personalExists(groomingTasks, sched.id)) {
         counts.grooming.skipped++;
       } else {
-        await db.insert(groomingTasks).values(base);
+        // Grooming keeps the schedule's own shiftId (morning/evening/full_day)
+        // so the employee knows which shift they're grooming for.
+        await db.insert(groomingTasks).values({
+          scheduleId: sched.id, userId: sched.userId, storeId: sched.storeId,
+          shiftId: sched.shiftId, date: startOfDay(sched.date), status: 'pending' as const,
+        });
         counts.grooming.created++;
         console.log(`   ✅ grooming      ${label}`);
       }

@@ -8,26 +8,33 @@ import {
   Sun, Moon, Upload, Loader2, Trash2, RefreshCw,
   Shield, Calendar, Users, X, ChevronLeft, ChevronRight,
   CheckCircle2, AlertCircle, ChevronDown, ChevronUp,
-  FileSpreadsheet,
-  Plus,
+  FileSpreadsheet, Plus, Clock,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Shift = 'morning' | 'evening';
+type ShiftCode = 'morning' | 'evening' | 'full_day' | string;
+
+interface ShiftOption {
+  id:        number;
+  code:      string;
+  label:     string;
+  startTime: string | null;
+  endTime:   string | null;
+}
 
 interface DayEntry {
-  id:         string;
-  userId:     string;
-  userName:   string | null;
-  userType:   string | null; // Maps to userEmployeeType from API
-  date:       string;
-  shiftId:    number | null;
-  shift:      Shift | null;  // Now reliably populated from API
-  isOff:      boolean;
-  isLeave:    boolean;
+  id:       string;
+  userId:   string;
+  userName: string | null;
+  userType: string | null;
+  date:     string;
+  shiftId:  number | null;
+  shift:    ShiftCode | null;
+  isOff:    boolean;
+  isLeave:  boolean;
 }
 
 interface MonthlySchedule {
@@ -65,29 +72,33 @@ const MONTHS      = ['January','February','March','April','May','June','July','A
 const DAYS_HEADER = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 const EMP_LABEL: Record<string, string> = { pic_1: 'PIC 1', pic_2: 'PIC 2', so: 'SO' };
 
-// Shift visual config
-const SHIFT_CFG = {
-  morning: { label: 'E', bg: '#fff7ed', border: '#fed7aa', text: '#c2410c', dot: '#fb923c' },
-  evening: { label: 'L', bg: '#f5f3ff', border: '#ddd6fe', text: '#6d28d9', dot: '#a78bfa' },
-  leave:   { label: 'AL', bg: '#eef2ff', border: '#c7d2fe', text: '#3730a3', dot: '#818cf8' },
-  off:     { label: '',   bg: 'transparent', border: 'transparent', text: '#cbd5e1', dot: '#e2e8f0' },
+// Visual palette per shift code — extended for full_day, with a fallback
+const SHIFT_PALETTE: Record<string, { label: string; bg: string; border: string; text: string; dot: string }> = {
+  morning:  { label: 'E',  bg: '#fff7ed', border: '#fed7aa', text: '#c2410c', dot: '#fb923c' },
+  evening:  { label: 'L',  bg: '#f5f3ff', border: '#ddd6fe', text: '#6d28d9', dot: '#a78bfa' },
+  full_day: { label: 'FD', bg: '#f0fdf4', border: '#bbf7d0', text: '#15803d', dot: '#4ade80' },
+  leave:    { label: 'AL', bg: '#eef2ff', border: '#c7d2fe', text: '#3730a3', dot: '#818cf8' },
+  off:      { label: '',   bg: 'transparent', border: 'transparent', text: '#cbd5e1', dot: '#e2e8f0' },
 };
+
+function shiftPalette(shift: ShiftCode | null, isOff: boolean, isLeave: boolean) {
+  if (isLeave) return SHIFT_PALETTE.leave;
+  if (isOff || !shift) return SHIFT_PALETTE.off;
+  return SHIFT_PALETTE[shift] ?? { label: shift.toUpperCase().slice(0, 2), bg: '#f1f5f9', border: '#e2e8f0', text: '#475569', dot: '#94a3b8' };
+}
+
+function formatTime(t: string | null | undefined): string {
+  if (!t) return '';
+  // DB stores 'HH:MM:SS' — trim to HH:MM
+  return t.slice(0, 5);
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/**
- * Convert any date-ish input (Date, ISO string from server, YYYY-MM-DD)
- * into a local YYYY-MM-DD string. Server timestamps come back as UTC ISO
- * (e.g. "2026-05-14T17:00:00.000Z") which represents May 15 in Jakarta —
- * we must convert to LOCAL time before extracting the date portion.
- */
 function toLocalDateKey(input: Date | string): string {
   const d = typeof input === 'string' ? new Date(input) : input;
   if (isNaN(d.getTime())) return '';
-  const y   = d.getFullYear();
-  const m   = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 function currentYearMonth() {
@@ -103,15 +114,9 @@ function formatYearMonth(ym: string | null | undefined): string {
 }
 
 function isoDate(d: Date): string {
-  // Use LOCAL date components, not UTC. toISOString() converts to UTC which
-  // shifts the day boundary in non-UTC timezones.
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-/** Build the calendar grid: 6 weeks × 7 days, padded with nulls */
 function buildCalendarGrid(yearMonth: string): (Date | null)[] {
   const [y, m] = yearMonth.split('-').map(Number);
   const first  = new Date(y, m - 1, 1);
@@ -123,27 +128,28 @@ function buildCalendarGrid(yearMonth: string): (Date | null)[] {
   return grid;
 }
 
-function getShiftCfg(entry: DayEntry | undefined) {
-  if (!entry) return null;
-  if (entry.isLeave)              return SHIFT_CFG.leave;
-  if (entry.isOff || !entry.shift) return SHIFT_CFG.off;
-  return SHIFT_CFG[entry.shift];
-}
-
 // ─── DayDetailSheet ───────────────────────────────────────────────────────────
-// Bottom sheet showing all employees on a selected day
 
-function DayDetailSheet({ date, entries, onEdit, onAdd, onClose }: {
-  date:    Date;
-  entries: DayEntry[];
-  onEdit:  (e: DayEntry) => void;
-  onAdd:   () => void;
-  onClose: () => void;
+function DayDetailSheet({ date, entries, shiftOptions, onEdit, onAdd, onClose }: {
+  date:         Date;
+  entries:      DayEntry[];
+  shiftOptions: ShiftOption[];
+  onEdit:       (e: DayEntry) => void;
+  onAdd:        () => void;
+  onClose:      () => void;
 }) {
-  const label = date.toLocaleDateString('en-ID', { weekday: 'long', day: 'numeric', month: 'long' });
+  const label   = date.toLocaleDateString('en-ID', { weekday: 'long', day: 'numeric', month: 'long' });
   const working = entries.filter(e => !e.isOff && !e.isLeave && e.shift);
   const leave   = entries.filter(e => e.isLeave);
   const off     = entries.filter(e => e.isOff && !e.isLeave);
+
+  // Build a code→label map for shift display
+  const shiftLabel: Record<string, string> = {};
+  const shiftTime:  Record<string, string> = {};
+  for (const s of shiftOptions) {
+    shiftLabel[s.code] = s.label;
+    shiftTime[s.code]  = [formatTime(s.startTime), formatTime(s.endTime)].filter(Boolean).join('–');
+  }
 
   return (
     <div
@@ -156,21 +162,16 @@ function DayDetailSheet({ date, entries, onEdit, onAdd, onClose }: {
         style={{ animation: 'slideUp 0.28s cubic-bezier(0.34,1.4,0.64,1)', maxHeight: '80vh', overflow: 'auto' }}
         onClick={e => e.stopPropagation()}
       >
-        {/* Handle */}
         <div className="flex justify-center pt-3 pb-1">
           <div className="h-1 w-10 rounded-full bg-slate-200" />
         </div>
 
-        {/* Header */}
         <div className="flex items-start justify-between px-5 pb-4 pt-2">
           <div>
             <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Schedule</p>
             <p className="mt-0.5 text-lg font-bold text-slate-900">{label}</p>
           </div>
-          <button
-            onClick={onClose}
-            className="mt-1 flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-slate-400"
-          >
+          <button onClick={onClose} className="mt-1 flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-slate-400">
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -179,56 +180,43 @@ function DayDetailSheet({ date, entries, onEdit, onAdd, onClose }: {
           <div className="flex flex-col items-center gap-3 py-8 text-center px-6">
             <Calendar className="h-8 w-8 text-slate-200" />
             <p className="text-sm text-slate-400">No employees scheduled on this day.</p>
-            <button
-              onClick={onAdd}
-              className="mt-2 flex items-center gap-1.5 rounded-xl bg-indigo-500 px-4 py-2 text-xs font-bold text-white active:scale-[0.98]"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              Add employee
+            <button onClick={onAdd} className="mt-2 flex items-center gap-1.5 rounded-xl bg-indigo-500 px-4 py-2 text-xs font-bold text-white active:scale-[0.98]">
+              <Plus className="h-3.5 w-3.5" /> Add employee
             </button>
           </div>
         ) : (
           <div className="space-y-1 px-4">
-            {/* Add employee button at top */}
             <button
               onClick={onAdd}
               className="mb-3 flex w-full items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-indigo-200 bg-indigo-50 py-2.5 text-xs font-bold text-indigo-600 active:scale-[0.98]"
             >
-              <Plus className="h-3.5 w-3.5" />
-              Add another employee
+              <Plus className="h-3.5 w-3.5" /> Add another employee
             </button>
 
-            {/* Working */}
             {working.length > 0 && (
               <div className="mb-2">
                 <p className="mb-1.5 px-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">Working</p>
                 {working.map(entry => {
-                  const cfg = getShiftCfg(entry)!;
+                  const pal = shiftPalette(entry.shift, false, false);
                   return (
                     <button
                       key={entry.id}
                       onClick={() => onEdit(entry)}
                       className="flex w-full items-center gap-3 rounded-2xl border px-4 py-3 mb-2 text-left transition-all active:scale-[0.98]"
-                      style={{ borderColor: cfg.border, background: cfg.bg }}
+                      style={{ borderColor: pal.border, background: pal.bg }}
                     >
-                      <div
-                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-xs font-extrabold"
-                        style={{ background: cfg.dot + '30', color: cfg.text }}
-                      >
-                        {cfg.label}
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-xs font-extrabold" style={{ background: pal.dot + '30', color: pal.text }}>
+                        {pal.label}
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-bold text-slate-800 truncate">{entry.userName}</p>
                         <p className="text-[11px] text-slate-400">
-                          {EMP_LABEL[entry.userType ?? ''] ?? entry.userType ?? '—'} ·{' '}
-                          {entry.shift === 'morning' ? '08:00–17:00' : '13:00–22:00'}
+                          {EMP_LABEL[entry.userType ?? ''] ?? entry.userType ?? '—'}
+                          {entry.shift && shiftTime[entry.shift] ? ` · ${shiftTime[entry.shift]}` : ''}
                         </p>
                       </div>
-                      <div
-                        className="rounded-lg px-2 py-0.5 text-[10px] font-bold"
-                        style={{ background: cfg.dot + '20', color: cfg.text }}
-                      >
-                        {entry.shift === 'morning' ? 'Morning' : 'Evening'}
+                      <div className="rounded-lg px-2 py-0.5 text-[10px] font-bold" style={{ background: pal.dot + '20', color: pal.text }}>
+                        {entry.shift ? (shiftLabel[entry.shift] ?? entry.shift) : '—'}
                       </div>
                     </button>
                   );
@@ -236,19 +224,12 @@ function DayDetailSheet({ date, entries, onEdit, onAdd, onClose }: {
               </div>
             )}
 
-            {/* Leave */}
             {leave.length > 0 && (
               <div className="mb-2">
                 <p className="mb-1.5 px-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">On Leave</p>
                 {leave.map(entry => (
-                  <button
-                    key={entry.id}
-                    onClick={() => onEdit(entry)}
-                    className="flex w-full items-center gap-3 rounded-2xl border border-indigo-100 bg-indigo-50 px-4 py-3 mb-2 text-left active:scale-[0.98]"
-                  >
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-indigo-100 text-xs font-extrabold text-indigo-600">
-                      AL
-                    </div>
+                  <button key={entry.id} onClick={() => onEdit(entry)} className="flex w-full items-center gap-3 rounded-2xl border border-indigo-100 bg-indigo-50 px-4 py-3 mb-2 text-left active:scale-[0.98]">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-indigo-100 text-xs font-extrabold text-indigo-600">AL</div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-bold text-slate-800 truncate">{entry.userName}</p>
                       <p className="text-[11px] text-slate-400">{EMP_LABEL[entry.userType ?? ''] ?? '—'}</p>
@@ -259,19 +240,12 @@ function DayDetailSheet({ date, entries, onEdit, onAdd, onClose }: {
               </div>
             )}
 
-            {/* Off */}
             {off.length > 0 && (
               <div className="mb-2">
                 <p className="mb-1.5 px-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">Day Off</p>
                 {off.map(entry => (
-                  <button
-                    key={entry.id}
-                    onClick={() => onEdit(entry)}
-                    className="flex w-full items-center gap-3 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 mb-2 text-left active:scale-[0.98]"
-                  >
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-xs font-bold text-slate-400">
-                      —
-                    </div>
+                  <button key={entry.id} onClick={() => onEdit(entry)} className="flex w-full items-center gap-3 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 mb-2 text-left active:scale-[0.98]">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-xs font-bold text-slate-400">—</div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-bold text-slate-500 truncate">{entry.userName}</p>
                       <p className="text-[11px] text-slate-400">{EMP_LABEL[entry.userType ?? ''] ?? '—'}</p>
@@ -284,52 +258,98 @@ function DayDetailSheet({ date, entries, onEdit, onAdd, onClose }: {
           </div>
         )}
       </div>
-      <style>{`
-        @keyframes slideUp {
-          from { transform: translateY(100%); opacity: 0; }
-          to   { transform: translateY(0);    opacity: 1; }
-        }
-      `}</style>
+      <style>{`@keyframes slideUp{from{transform:translateY(100%);opacity:0}to{transform:translateY(0);opacity:1}}`}</style>
+    </div>
+  );
+}
+
+// ─── ShiftPicker ──────────────────────────────────────────────────────────────
+// Reusable grid used in both Add and Edit modals.
+
+function ShiftPicker({ shiftOptions, selected, onSelect }: {
+  shiftOptions: ShiftOption[];
+  selected:     string;   // shift code | 'off' | 'leave'
+  onSelect:     (v: string) => void;
+}) {
+  // Special non-shift options always appended
+  const specials = [
+    { code: 'off',   label: 'Day Off', sub: 'No work today',   accent: '#64748b', icon: <X          className="h-5 w-5" /> },
+    { code: 'leave', label: 'Leave',   sub: 'AL / CU / Sick',  accent: '#4338ca', icon: <Calendar   className="h-5 w-5" /> },
+  ];
+
+  const allOptions = [
+    ...shiftOptions.map(s => ({
+      code:   s.code,
+      label:  s.label,
+      sub:    [formatTime(s.startTime), formatTime(s.endTime)].filter(Boolean).join(' – ') || '—',
+      accent: s.code === 'morning' ? '#ea580c' : s.code === 'evening' ? '#7c3aed' : s.code === 'full_day' ? '#15803d' : '#475569',
+      icon:   s.code === 'morning'
+        ? <Sun  className="h-5 w-5" />
+        : s.code === 'evening'
+          ? <Moon className="h-5 w-5" />
+          : s.code === 'full_day'
+            ? <Clock className="h-5 w-5" />
+            : <Calendar className="h-5 w-5" />,
+    })),
+    ...specials,
+  ];
+
+  return (
+    <div className="grid grid-cols-2 gap-2.5">
+      {allOptions.map(opt => {
+        const active = selected === opt.code;
+        return (
+          <button
+            key={opt.code}
+            onClick={() => onSelect(opt.code)}
+            className="relative flex flex-col items-start gap-1.5 rounded-2xl border-2 px-4 py-3.5 text-left transition-all active:scale-[0.97]"
+            style={{
+              borderColor: active ? opt.accent : '#e2e8f0',
+              background:  active ? `${opt.accent}12` : '#f8fafc',
+              boxShadow:   active ? `0 0 0 3px ${opt.accent}20` : 'none',
+            }}
+          >
+            <span style={{ color: active ? opt.accent : '#94a3b8' }}>{opt.icon}</span>
+            <div>
+              <p className="text-sm font-bold" style={{ color: active ? opt.accent : '#334155' }}>{opt.label}</p>
+              <p className="text-[10px] text-slate-400">{opt.sub}</p>
+            </div>
+            {active && (
+              <span className="absolute right-2.5 top-2.5 flex h-4 w-4 items-center justify-center rounded-full" style={{ background: opt.accent }}>
+                <CheckCircle2 className="h-3 w-3 text-white" />
+              </span>
+            )}
+          </button>
+        );
+      })}
     </div>
   );
 }
 
 // ─── AddEntryModal ────────────────────────────────────────────────────────────
-// Used when PIC taps a day and wants to assign an employee to it.
 
-function AddEntryModal({ date, employees, existingUserIds, onSave, onClose, saving }: {
+function AddEntryModal({ date, employees, shiftOptions, existingUserIds, onSave, onClose, saving }: {
   date:            Date;
   employees:       EmployeeOption[];
+  shiftOptions:    ShiftOption[];
   existingUserIds: Set<string>;
-  onSave:          (p: { userId: string; shift: Shift | null; isOff: boolean; isLeave: boolean }) => Promise<void>;
+  onSave:          (p: { userId: string; shift: string | null; isOff: boolean; isLeave: boolean }) => Promise<void>;
   onClose:         () => void;
   saving:          boolean;
 }) {
-  const [selectedUserId, setSelectedUserId] = useState<string>('');
-  const [mode, setMode] = useState<'morning' | 'evening' | 'off' | 'leave'>('morning');
+  const [selectedUserId, setSelectedUserId] = useState('');
+  const [mode,           setMode]           = useState('morning');
 
-  const label = date.toLocaleDateString('en-ID', { weekday: 'long', day: 'numeric', month: 'long' });
-
-  // Filter out employees already assigned to this day
+  const label     = date.toLocaleDateString('en-ID', { weekday: 'long', day: 'numeric', month: 'long' });
   const available = employees.filter(e => !existingUserIds.has(e.id));
 
   function handleSubmit() {
     if (!selectedUserId) { toast.error('Please select an employee'); return; }
-    const payload = {
-      userId:  selectedUserId,
-      shift:   (mode === 'morning' || mode === 'evening') ? mode : null,
-      isOff:   mode === 'off',
-      isLeave: mode === 'leave',
-    };
-    onSave(payload);
+    const isOff   = mode === 'off';
+    const isLeave = mode === 'leave';
+    const shift   = isOff || isLeave ? null : mode;
+    onSave({ userId: selectedUserId, shift, isOff, isLeave });
   }
-
-  const options = [
-    { key: 'morning', label: 'Morning', sub: '08:00 – 17:00', icon: <Sun  className="h-5 w-5" />, accent: '#ea580c' },
-    { key: 'evening', label: 'Evening', sub: '13:00 – 22:00', icon: <Moon className="h-5 w-5" />, accent: '#7c3aed' },
-    { key: 'off',     label: 'Day Off', sub: 'No work today', icon: <X    className="h-5 w-5" />, accent: '#64748b' },
-    { key: 'leave',   label: 'Leave',   sub: 'AL / CU / Sick',icon: <Calendar className="h-5 w-5" />, accent: '#4338ca' },
-  ] as const;
 
   return (
     <div
@@ -370,10 +390,7 @@ function AddEntryModal({ date, employees, existingUserIds, onSave, onClose, savi
                     key={emp.id}
                     onClick={() => setSelectedUserId(emp.id)}
                     className="flex w-full items-center gap-3 rounded-xl border-2 px-3 py-2.5 text-left transition-all active:scale-[0.98]"
-                    style={{
-                      borderColor: active ? '#6366f1' : '#e2e8f0',
-                      background:  active ? '#eef2ff' : '#f8fafc',
-                    }}
+                    style={{ borderColor: active ? '#6366f1' : '#e2e8f0', background: active ? '#eef2ff' : '#f8fafc' }}
                   >
                     <div
                       className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xs font-bold"
@@ -393,42 +410,17 @@ function AddEntryModal({ date, employees, existingUserIds, onSave, onClose, savi
           )}
         </div>
 
-        {/* Shift picker */}
+        {/* Shift picker — fetched from DB */}
         <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Shift</p>
-        <div className="mb-6 grid grid-cols-2 gap-2.5">
-          {options.map(opt => {
-            const active = mode === opt.key;
-            return (
-              <button
-                key={opt.key}
-                onClick={() => setMode(opt.key)}
-                className="relative flex flex-col items-start gap-1.5 rounded-2xl border-2 px-4 py-3.5 text-left transition-all active:scale-[0.97]"
-                style={{
-                  borderColor: active ? opt.accent : '#e2e8f0',
-                  background:  active ? `${opt.accent}12` : '#f8fafc',
-                  boxShadow:   active ? `0 0 0 3px ${opt.accent}20` : 'none',
-                }}
-              >
-                <span style={{ color: active ? opt.accent : '#94a3b8' }}>{opt.icon}</span>
-                <div>
-                  <p className="text-sm font-bold" style={{ color: active ? opt.accent : '#334155' }}>{opt.label}</p>
-                  <p className="text-[10px] text-slate-400">{opt.sub}</p>
-                </div>
-                {active && (
-                  <span className="absolute right-2.5 top-2.5 flex h-4 w-4 items-center justify-center rounded-full" style={{ background: opt.accent }}>
-                    <CheckCircle2 className="h-3 w-3 text-white" />
-                  </span>
-                )}
-              </button>
-            );
-          })}
+        <div className="mb-6">
+          {shiftOptions.length === 0
+            ? <div className="flex items-center justify-center py-6"><Loader2 className="h-4 w-4 animate-spin text-slate-400" /></div>
+            : <ShiftPicker shiftOptions={shiftOptions} selected={mode} onSelect={setMode} />
+          }
         </div>
 
         <div className="flex gap-2.5">
-          <button
-            onClick={onClose}
-            className="flex h-12 flex-1 items-center justify-center rounded-2xl border border-slate-200 bg-white text-sm font-semibold text-slate-600 active:scale-[0.98]"
-          >
+          <button onClick={onClose} className="flex h-12 flex-1 items-center justify-center rounded-2xl border border-slate-200 bg-white text-sm font-semibold text-slate-600 active:scale-[0.98]">
             Cancel
           </button>
           <button
@@ -441,40 +433,33 @@ function AddEntryModal({ date, employees, existingUserIds, onSave, onClose, savi
           </button>
         </div>
       </div>
+      <style>{`@keyframes slideUp{from{transform:translateY(100%);opacity:0}to{transform:translateY(0);opacity:1}}`}</style>
     </div>
   );
 }
 
 // ─── EditDayModal ─────────────────────────────────────────────────────────────
 
-function EditDayModal({ entry, onSave, onClose, saving }: {
-  entry:   DayEntry;
-  onSave:  (p: { shift: Shift | null; isOff: boolean; isLeave: boolean }) => Promise<void>;
-  onClose: () => void;
-  saving:  boolean;
+function EditDayModal({ entry, shiftOptions, onSave, onClose, saving }: {
+  entry:        DayEntry;
+  shiftOptions: ShiftOption[];
+  onSave:       (p: { shift: string | null; isOff: boolean; isLeave: boolean }) => Promise<void>;
+  onClose:      () => void;
+  saving:       boolean;
 }) {
-  const [shift,   setShift]   = useState<Shift | null>(entry.shift);
-  const [isOff,   setIsOff]   = useState(entry.isOff);
-  const [isLeave, setIsLeave] = useState(entry.isLeave);
+  // Derive the initial picker mode from the entry
+  const initialMode = entry.isLeave ? 'leave' : entry.isOff ? 'off' : (entry.shift ?? 'off');
+  const [mode, setMode] = useState(initialMode);
 
   const dateObj = new Date(entry.date);
   const label   = dateObj.toLocaleDateString('en-ID', { weekday: 'long', day: 'numeric', month: 'long' });
 
-  function pick(mode: 'morning' | 'evening' | 'off' | 'leave') {
-    if (mode === 'morning') { setShift('morning'); setIsOff(false); setIsLeave(false); }
-    if (mode === 'evening') { setShift('evening'); setIsOff(false); setIsLeave(false); }
-    if (mode === 'off')     { setShift(null); setIsOff(true);  setIsLeave(false); }
-    if (mode === 'leave')   { setShift(null); setIsOff(false); setIsLeave(true);  }
+  function handleSave() {
+    const isOff   = mode === 'off';
+    const isLeave = mode === 'leave';
+    const shift   = isOff || isLeave ? null : mode;
+    onSave({ shift, isOff, isLeave });
   }
-
-  const current = isLeave ? 'leave' : isOff ? 'off' : shift ?? 'off';
-
-  const options = [
-    { key: 'morning', label: 'Morning', sub: '08:00 – 17:00', icon: <Sun  className="h-5 w-5" />, accent: '#ea580c' },
-    { key: 'evening', label: 'Evening', sub: '13:00 – 22:00', icon: <Moon className="h-5 w-5" />, accent: '#7c3aed' },
-    { key: 'off',     label: 'Day Off',  sub: 'No work today',  icon: <X    className="h-5 w-5" />, accent: '#64748b' },
-    { key: 'leave',   label: 'Leave',    sub: 'AL / CU / Sick', icon: <Calendar className="h-5 w-5" />, accent: '#4338ca' },
-  ] as const;
 
   return (
     <div
@@ -484,7 +469,7 @@ function EditDayModal({ entry, onSave, onClose, saving }: {
     >
       <div
         className="w-full max-w-md rounded-t-3xl bg-white px-5 pb-10 pt-4 shadow-2xl"
-        style={{ animation: 'slideUp 0.25s cubic-bezier(0.34,1.56,0.64,1)' }}
+        style={{ animation: 'slideUp 0.25s cubic-bezier(0.34,1.56,0.64,1)', maxHeight: '90vh', overflow: 'auto' }}
         onClick={e => e.stopPropagation()}
       >
         <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-slate-200" />
@@ -500,44 +485,19 @@ function EditDayModal({ entry, onSave, onClose, saving }: {
           </button>
         </div>
 
-        <div className="grid grid-cols-2 gap-2.5 mb-6">
-          {options.map(opt => {
-            const active = current === opt.key;
-            return (
-              <button
-                key={opt.key}
-                onClick={() => pick(opt.key)}
-                className="relative flex flex-col items-start gap-1.5 rounded-2xl border-2 px-4 py-3.5 text-left transition-all active:scale-[0.97]"
-                style={{
-                  borderColor: active ? opt.accent : '#e2e8f0',
-                  background:  active ? `${opt.accent}12` : '#f8fafc',
-                  boxShadow:   active ? `0 0 0 3px ${opt.accent}20` : 'none',
-                }}
-              >
-                <span style={{ color: active ? opt.accent : '#94a3b8' }}>{opt.icon}</span>
-                <div>
-                  <p className="text-sm font-bold" style={{ color: active ? opt.accent : '#334155' }}>{opt.label}</p>
-                  <p className="text-[10px] text-slate-400">{opt.sub}</p>
-                </div>
-                {active && (
-                  <span className="absolute right-2.5 top-2.5 flex h-4 w-4 items-center justify-center rounded-full" style={{ background: opt.accent }}>
-                    <CheckCircle2 className="h-3 w-3 text-white" />
-                  </span>
-                )}
-              </button>
-            );
-          })}
+        <div className="mb-6">
+          {shiftOptions.length === 0
+            ? <div className="flex items-center justify-center py-6"><Loader2 className="h-4 w-4 animate-spin text-slate-400" /></div>
+            : <ShiftPicker shiftOptions={shiftOptions} selected={mode} onSelect={setMode} />
+          }
         </div>
 
         <div className="flex gap-2.5">
-          <button
-            onClick={onClose}
-            className="flex h-12 flex-1 items-center justify-center rounded-2xl border border-slate-200 bg-white text-sm font-semibold text-slate-600 active:scale-[0.98]"
-          >
+          <button onClick={onClose} className="flex h-12 flex-1 items-center justify-center rounded-2xl border border-slate-200 bg-white text-sm font-semibold text-slate-600 active:scale-[0.98]">
             Cancel
           </button>
           <button
-            onClick={() => onSave({ shift, isOff, isLeave })}
+            onClick={handleSave}
             disabled={saving}
             className="flex h-12 flex-[2] items-center justify-center gap-2 rounded-2xl text-sm font-bold text-white transition-all active:scale-[0.98] disabled:opacity-60"
             style={{ background: 'linear-gradient(135deg, #4f46e5, #7c3aed)' }}
@@ -573,7 +533,6 @@ function ImportButton({ onImported }: { onImported: () => void }) {
       const res  = await fetch('/api/pic/schedule/import', { method: 'POST', body: form });
       const json = (await res.json()) as ImportResult & { error?: string };
 
-      // Normalise the response into our ImportResult shape
       const normalised: ImportResult = {
         success:          json.success          ?? false,
         schedulesCreated: json.schedulesCreated ?? 0,
@@ -589,7 +548,6 @@ function ImportButton({ onImported }: { onImported: () => void }) {
 
       setResult(normalised);
 
-      // If there are date errors, auto-expand and toast loud
       if (normalised.dateErrors && normalised.dateErrors.length > 0) {
         setShowErrors(true);
         toast.error('Excel has wrong dates — please fix and re-upload');
@@ -610,10 +568,7 @@ function ImportButton({ onImported }: { onImported: () => void }) {
         toast.info('No new data imported');
       }
     } catch (err) {
-      setResult({
-        success: false, schedulesCreated: 0, entriesCreated: 0, skipped: 0,
-        errors: [String(err)], notFound: [],
-      });
+      setResult({ success: false, schedulesCreated: 0, entriesCreated: 0, skipped: 0, errors: [String(err)], notFound: [] });
       setShowErrors(true);
       toast.error('Network error');
     } finally {
@@ -621,13 +576,10 @@ function ImportButton({ onImported }: { onImported: () => void }) {
     }
   }
 
-  // Unified warning detection — include dateErrors now
   const hasDateErrors = (result?.dateErrors?.length ?? 0) > 0;
   const hasErrors     = (result?.errors.length     ?? 0) > 0;
   const hasNotFound   = (result?.notFound.length   ?? 0) > 0;
   const hasWarnings   = hasDateErrors || hasErrors || hasNotFound;
-
-  // Severity for panel styling
   const isFullSuccess = result?.success && !hasWarnings;
   const isHardFail    = result && !result.success && (hasDateErrors || (result.schedulesCreated === 0));
 
@@ -651,32 +603,14 @@ function ImportButton({ onImported }: { onImported: () => void }) {
       </button>
 
       {result && (
-        <div
-          className={cn(
-            'overflow-hidden rounded-2xl border text-sm',
-            isFullSuccess
-              ? 'border-emerald-200 bg-emerald-50'
-              : isHardFail
-                ? 'border-red-200 bg-red-50'
-                : 'border-amber-200 bg-amber-50',
-          )}
-        >
+        <div className={cn('overflow-hidden rounded-2xl border text-sm', isFullSuccess ? 'border-emerald-200 bg-emerald-50' : isHardFail ? 'border-red-200 bg-red-50' : 'border-amber-200 bg-amber-50')}>
           <div className="flex items-center gap-3 px-4 py-3">
             {isFullSuccess
               ? <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
               : <AlertCircle  className={cn('h-4 w-4 shrink-0', isHardFail ? 'text-red-500' : 'text-amber-500')} />}
             <div className="flex-1 min-w-0">
-              <p className={cn(
-                'font-bold text-sm',
-                isFullSuccess ? 'text-emerald-800' : isHardFail ? 'text-red-800' : 'text-amber-800',
-              )}>
-                {isFullSuccess
-                  ? 'Import successful'
-                  : hasDateErrors
-                    ? 'Wrong dates in Excel'
-                    : isHardFail
-                      ? 'Import failed'
-                      : 'Imported with warnings'}
+              <p className={cn('font-bold text-sm', isFullSuccess ? 'text-emerald-800' : isHardFail ? 'text-red-800' : 'text-amber-800')}>
+                {isFullSuccess ? 'Import successful' : hasDateErrors ? 'Wrong dates in Excel' : isHardFail ? 'Import failed' : 'Imported with warnings'}
               </p>
               <p className="text-[11px] text-slate-500 mt-0.5">
                 {result.entriesCreated} entries · {result.schedulesCreated} store(s)
@@ -684,65 +618,36 @@ function ImportButton({ onImported }: { onImported: () => void }) {
               </p>
             </div>
             {hasWarnings && (
-              <button
-                onClick={() => setShowErrors(v => !v)}
-                className={cn(
-                  'text-[11px] font-semibold flex items-center gap-0.5',
-                  isHardFail ? 'text-red-700' : 'text-amber-700',
-                )}
-              >
+              <button onClick={() => setShowErrors(v => !v)} className={cn('text-[11px] font-semibold flex items-center gap-0.5', isHardFail ? 'text-red-700' : 'text-amber-700')}>
                 Details {showErrors ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
               </button>
             )}
-            <button onClick={() => setResult(null)} className="text-slate-400">
-              <X className="h-3.5 w-3.5" />
-            </button>
+            <button onClick={() => setResult(null)} className="text-slate-400"><X className="h-3.5 w-3.5" /></button>
           </div>
 
           {hasWarnings && showErrors && (
-            <div className={cn(
-              'border-t bg-white/70 px-4 py-3 space-y-3',
-              isHardFail ? 'border-red-200' : 'border-amber-200',
-            )}>
+            <div className={cn('border-t bg-white/70 px-4 py-3 space-y-3', isHardFail ? 'border-red-200' : 'border-amber-200')}>
               {hasDateErrors && (
                 <div>
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-red-700 mb-1.5">
-                    Wrong dates — please fix your Excel file
-                  </p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-red-700 mb-1.5">Wrong dates — please fix your Excel file</p>
                   <ul className="max-h-40 overflow-y-auto space-y-1">
-                    {result.dateErrors!.map((e, i) => (
-                      <li key={i} className="text-[11px] leading-relaxed text-red-700">
-                        • {e}
-                      </li>
-                    ))}
+                    {result.dateErrors!.map((e, i) => <li key={i} className="text-[11px] leading-relaxed text-red-700">• {e}</li>)}
                   </ul>
                 </div>
               )}
-
               {hasNotFound && (
                 <div>
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-amber-700 mb-1">
-                    Employees not found in system
-                  </p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-amber-700 mb-1">Employees not found in system</p>
                   <div className="flex flex-wrap gap-1">
-                    {result.notFound.map(n => (
-                      <span key={n} className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
-                        {n}
-                      </span>
-                    ))}
+                    {result.notFound.map(n => <span key={n} className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">{n}</span>)}
                   </div>
                 </div>
               )}
-
               {hasErrors && (
                 <div>
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-red-700 mb-1">
-                    Errors
-                  </p>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-red-700 mb-1">Errors</p>
                   <ul className="max-h-28 overflow-y-auto space-y-0.5">
-                    {result.errors.map((e, i) => (
-                      <li key={i} className="text-[11px] text-red-700 font-mono break-all">{e}</li>
-                    ))}
+                    {result.errors.map((e, i) => <li key={i} className="text-[11px] text-red-700 font-mono break-all">{e}</li>)}
                   </ul>
                 </div>
               )}
@@ -754,7 +659,7 @@ function ImportButton({ onImported }: { onImported: () => void }) {
       {!result && !importing && (
         <p className="flex items-center gap-1.5 px-1 text-[10px] text-slate-400">
           <FileSpreadsheet className="h-3 w-3 shrink-0" />
-          E = Morning · L = Evening · AL/CU = Leave
+          E = Morning · L = Evening · FD = Full Day · AL/CU = Leave
         </p>
       )}
     </div>
@@ -768,27 +673,21 @@ function CalendarGrid({ schedule, yearMonth, onDayPress }: {
   yearMonth:  string;
   onDayPress: (date: Date, entries: DayEntry[]) => void;
 }) {
-  const grid = buildCalendarGrid(yearMonth);
+  const grid  = buildCalendarGrid(yearMonth);
 
-  // `today` must update across midnight, otherwise the highlight gets stuck
-  // on yesterday until the user refreshes the page.
   const [today, setToday] = useState(() => isoDate(new Date()));
   useEffect(() => {
     const tick = () => setToday(isoDate(new Date()));
-    // Compute ms until next local midnight
-    const now = new Date();
+    const now  = new Date();
     const nextMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 5);
-    const msUntilMidnight = nextMidnight.getTime() - now.getTime();
     const t = setTimeout(() => {
       tick();
-      // After the first midnight tick, re-tick every 24h
       const daily = setInterval(tick, 24 * 60 * 60 * 1000);
       return () => clearInterval(daily);
-    }, msUntilMidnight);
+    }, nextMidnight.getTime() - now.getTime());
     return () => clearTimeout(t);
   }, []);
 
-  // Build a map: dateString → entries[]
   const dayMap = new Map<string, DayEntry[]>();
   for (const entry of schedule.entries) {
     const ds = toLocalDateKey(entry.date);
@@ -799,92 +698,61 @@ function CalendarGrid({ schedule, yearMonth, onDayPress }: {
 
   return (
     <div className="rounded-2xl border border-slate-100 bg-white shadow-sm overflow-hidden">
-      {/* Day headers */}
       <div className="grid grid-cols-7 border-b border-slate-100">
         {DAYS_HEADER.map((d, i) => (
-          <div
-            key={d}
-            className="py-2 text-center text-[10px] font-bold uppercase tracking-wide"
-            style={{ color: i === 0 || i === 6 ? '#fca5a5' : '#94a3b8' }}
-          >
+          <div key={d} className="py-2 text-center text-[10px] font-bold uppercase tracking-wide" style={{ color: i === 0 || i === 6 ? '#fca5a5' : '#94a3b8' }}>
             {d}
           </div>
         ))}
       </div>
 
-      {/* Calendar cells */}
       <div className="grid grid-cols-7">
         {grid.map((date, idx) => {
-          if (!date) return (
-            <div key={`pad-${idx}`} className="aspect-square border-b border-r border-slate-50 last:border-r-0" />
-          );
+          if (!date) return <div key={`pad-${idx}`} className="aspect-square border-b border-r border-slate-50 last:border-r-0" />;
 
           const ds      = isoDate(date);
           const entries = dayMap.get(ds) ?? [];
           const dow     = date.getDay();
           const isWkd   = dow === 0 || dow === 6;
           const isTod   = ds === today;
+          const isLastInRow = (idx + 1) % 7 === 0;
 
-          // Summarise shifts for dot indicators
-          const hasMorning = entries.some(e => !e.isOff && !e.isLeave && e.shift === 'morning');
-          const hasEvening = entries.some(e => !e.isOff && !e.isLeave && e.shift === 'evening');
+          // Collect shift codes present on this day for dots
+          const shiftCodes = [...new Set(entries.filter(e => !e.isOff && !e.isLeave && e.shift).map(e => e.shift!))];
           const hasLeave   = entries.some(e => e.isLeave);
           const totalWork  = entries.filter(e => !e.isOff && !e.isLeave && e.shift).length;
 
-          // Column border — no right border on last of each row
-          const isLastInRow = (idx + 1) % 7 === 0;
+          // Dot color per shift code
+          const dotColor: Record<string, string> = {
+            morning: '#fb923c', evening: '#a78bfa', full_day: '#4ade80',
+          };
 
           return (
             <button
               key={ds}
               onClick={() => onDayPress(date, entries)}
-              className={cn(
-                'relative flex flex-col items-center py-2 transition-colors active:bg-slate-50',
-                'border-b border-slate-50',
-                !isLastInRow && 'border-r',
-              )}
-              style={{
-                background: isTod ? '#eef2ff' : isWkd ? '#fafafa' : 'white',
-              }}
+              className={cn('relative flex flex-col items-center py-2 transition-colors active:bg-slate-50', 'border-b border-slate-50', !isLastInRow && 'border-r')}
+              style={{ background: isTod ? '#eef2ff' : isWkd ? '#fafafa' : 'white' }}
             >
-              {/* Date number */}
               <span
-                className={cn(
-                  'flex h-6 w-6 items-center justify-center rounded-full text-[12px] font-bold',
-                  isTod ? 'bg-indigo-500 text-white' : '',
-                )}
-                style={{
-                  color: isTod ? undefined : isWkd ? '#fca5a5' : '#334155',
-                }}
+                className={cn('flex h-6 w-6 items-center justify-center rounded-full text-[12px] font-bold', isTod ? 'bg-indigo-500 text-white' : '')}
+                style={{ color: isTod ? undefined : isWkd ? '#fca5a5' : '#334155' }}
               >
                 {date.getDate()}
               </span>
 
-              {/* Staff count badge */}
               {totalWork > 0 && (
-                <span
-                  className="mt-0.5 rounded-full px-1.5 text-[8px] font-bold"
-                  style={{ background: '#f1f5f9', color: '#64748b' }}
-                >
+                <span className="mt-0.5 rounded-full px-1.5 text-[8px] font-bold" style={{ background: '#f1f5f9', color: '#64748b' }}>
                   {totalWork}
                 </span>
               )}
 
-              {/* Shift indicator dots */}
               <div className="mt-1 flex gap-0.5">
-                {hasMorning && (
-                  <span className="h-1.5 w-1.5 rounded-full" style={{ background: '#fb923c' }} />
-                )}
-                {hasEvening && (
-                  <span className="h-1.5 w-1.5 rounded-full" style={{ background: '#a78bfa' }} />
-                )}
-                {hasLeave && (
-                  <span className="h-1.5 w-1.5 rounded-full" style={{ background: '#818cf8' }} />
-                )}
-                {/* Empty placeholder to keep height consistent */}
-                {!hasMorning && !hasEvening && !hasLeave && (
-                  <span className="h-1.5 w-1.5 opacity-0" />
-                )}
+                {shiftCodes.map(code => (
+                  <span key={code} className="h-1.5 w-1.5 rounded-full" style={{ background: dotColor[code] ?? '#94a3b8' }} />
+                ))}
+                {hasLeave && <span className="h-1.5 w-1.5 rounded-full" style={{ background: '#818cf8' }} />}
+                {shiftCodes.length === 0 && !hasLeave && <span className="h-1.5 w-1.5 opacity-0" />}
               </div>
             </button>
           );
@@ -908,29 +776,44 @@ export default function SchedulePage() {
   const [schedule,      setSchedule]      = useState<MonthlySchedule | null>(null);
   const [loading,       setLoading]       = useState(false);
   const [deleting,      setDeleting]      = useState(false);
+  const [creating,      setCreating]      = useState(false);
 
-  // Create entry state (opened from the calendar grid)
-  const [creating, setCreating] = useState(false);
-  const [employees,  setEmployees]  = useState<EmployeeOption[]>([]);
-  const [addingDate, setAddingDate] = useState<Date | null>(null);
-  const [addingEntry, setAddingEntry] = useState(false);
-  
-  // Day detail sheet state
+  // Shifts from DB — fetched once
+  const [shiftOptions,    setShiftOptions]    = useState<ShiftOption[]>([]);
+  const [loadingShifts,   setLoadingShifts]   = useState(false);
+
+  // Employee list
+  const [employees, setEmployees] = useState<EmployeeOption[]>([]);
+
+  // Detail sheet / add / edit state
   const [detailDate,    setDetailDate]    = useState<Date | null>(null);
   const [detailEntries, setDetailEntries] = useState<DayEntry[]>([]);
-
-  // Edit modal state (opened from within the day sheet)
-  const [editEntry,   setEditEntry]   = useState<DayEntry | null>(null);
-  const [savingEntry, setSavingEntry] = useState(false);
+  const [addingDate,    setAddingDate]    = useState<Date | null>(null);
+  const [addingEntry,   setAddingEntry]   = useState(false);
+  const [editEntry,     setEditEntry]     = useState<DayEntry | null>(null);
+  const [savingEntry,   setSavingEntry]   = useState(false);
 
   const isPic1 = employeeType === 'pic_1';
 
+  // ── Auth guard ─────────────────────────────────────────────────────────────
   useEffect(() => {
     if (authStatus === 'loading') return;
     if (!session) { router.replace('/login'); return; }
     if (!isPic1)  router.replace('/employee');
   }, [authStatus, session, isPic1, router]);
 
+  // ── Fetch shifts from DB ───────────────────────────────────────────────────
+  useEffect(() => {
+    if (!isPic1) return;
+    setLoadingShifts(true);
+    fetch('/api/pic/schedule/shifts')
+      .then(r => r.json())
+      .then(j => { if (j.success) setShiftOptions(j.shifts ?? []); })
+      .catch(() => toast.error('Failed to load shift options'))
+      .finally(() => setLoadingShifts(false));
+  }, [isPic1]);
+
+  // ── Fetch employees ────────────────────────────────────────────────────────
   useEffect(() => {
     if (!isPic1) return;
     fetch('/api/pic/schedule/employees')
@@ -939,6 +822,7 @@ export default function SchedulePage() {
       .catch(() => toast.error('Failed to load employees'));
   }, [isPic1]);
 
+  // ── Load schedule ──────────────────────────────────────────────────────────
   const loadSchedule = useCallback(async (ym: string) => {
     if (!storeId) return;
     setLoading(true);
@@ -957,6 +841,8 @@ export default function SchedulePage() {
     if (isPic1) loadSchedule(selectedMonth);
   }, [isPic1, selectedMonth, loadSchedule]);
 
+  // ── Handlers ──────────────────────────────────────────────────────────────
+
   function handleMonthChange(ym: string) {
     setSelectedMonth(ym);
     setDetailDate(null);
@@ -967,14 +853,12 @@ export default function SchedulePage() {
     setDetailEntries(entries);
   }
 
-  function handleEditFromSheet(entry: DayEntry) {
-    setEditEntry(entry);
-  }
+  function handleEditFromSheet(entry: DayEntry) { setEditEntry(entry); }
 
   function handleAddFromSheet() {
     if (!detailDate) return;
     setAddingDate(detailDate);
-    setDetailDate(null);  // close the detail sheet
+    setDetailDate(null);
   }
 
   async function handleCreate() {
@@ -982,11 +866,7 @@ export default function SchedulePage() {
     if (!confirm(`Create an empty schedule for ${formatYearMonth(selectedMonth)}?`)) return;
     setCreating(true);
     try {
-      const res = await fetch('/api/pic/schedule/monthly', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ yearMonth: selectedMonth }),
-      });
+      const res  = await fetch('/api/pic/schedule/monthly', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ yearMonth: selectedMonth }) });
       const json = await res.json();
       if (!json.success) throw new Error(json.error);
       toast.success('Empty schedule created — tap days to assign shifts');
@@ -1010,13 +890,11 @@ export default function SchedulePage() {
     } finally { setDeleting(false); }
   }
 
-  async function handleSaveEntry(patch: { shift: Shift | null; isOff: boolean; isLeave: boolean }) {
+  async function handleSaveEntry(patch: { shift: string | null; isOff: boolean; isLeave: boolean }) {
     if (!editEntry) return;
     setSavingEntry(true);
     try {
-      const res  = await fetch(`/api/pic/schedule/entry/${editEntry.id}`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
-      });
+      const res  = await fetch(`/api/pic/schedule/entry/${editEntry.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) });
       const json = await res.json();
       if (!json.success) throw new Error(json.error);
       toast.success('Day updated');
@@ -1028,39 +906,22 @@ export default function SchedulePage() {
     } finally { setSavingEntry(false); }
   }
 
-  async function handleSaveNewEntry(payload: {
-    userId: string;
-    shift:  Shift | null;
-    isOff:  boolean;
-    isLeave:boolean;
-  }) {
+  async function handleSaveNewEntry(payload: { userId: string; shift: string | null; isOff: boolean; isLeave: boolean }) {
     if (!addingDate) return;
     setAddingEntry(true);
     try {
-      const res = await fetch('/api/pic/schedule/entry', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({
-          ...payload,
-          date: isoDate(addingDate),
-        }),
-      });
+      const res  = await fetch('/api/pic/schedule/entry', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, date: isoDate(addingDate) }) });
       const json = await res.json();
-      console.log('[handleSaveNewEntry] response:', res.status, json);
       if (!json.success) throw new Error(json.error || `HTTP ${res.status}`);
       toast.success('Employee added to this day');
       setAddingDate(null);
       loadSchedule(selectedMonth);
     } catch (e) {
-      console.error('[handleSaveNewEntry] error:', e);
       toast.error(e instanceof Error ? e.message : 'Add failed');
-    } finally {
-      setAddingEntry(false);
-    }
+    } finally { setAddingEntry(false); }
   }
 
-  // ── Auth guards ────────────────────────────────────────────────────────────
-
+  // ── Auth loading ───────────────────────────────────────────────────────────
   if (authStatus === 'loading' || !session) return (
     <div className="flex min-h-screen items-center justify-center bg-white">
       <Loader2 className="h-6 w-6 animate-spin text-indigo-400" />
@@ -1069,29 +930,22 @@ export default function SchedulePage() {
 
   if (!isPic1) return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-white p-8 text-center">
-      <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-red-50">
-        <Shield className="h-8 w-8 text-red-500" />
-      </div>
+      <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-red-50"><Shield className="h-8 w-8 text-red-500" /></div>
       <p className="text-base font-bold text-slate-800">Access Restricted</p>
       <p className="text-sm text-slate-500">Only PIC 1 can manage store schedules.</p>
     </div>
   );
 
-  // ── Stats ──────────────────────────────────────────────────────────────────
   const totalEmployees = schedule ? new Set(schedule.entries.map(e => e.userId)).size : 0;
   const workingDays    = schedule ? schedule.entries.filter(e => !e.isOff && !e.isLeave && e.shift).length : 0;
   const leaveDays      = schedule ? schedule.entries.filter(e => e.isLeave).length : 0;
-
-  const [y, m] = selectedMonth.split('-').map(Number);
+  const [y, m]         = selectedMonth.split('-').map(Number);
 
   return (
     <div className="flex min-h-screen flex-col bg-slate-50">
 
-      {/* ── Header ── */}
-      <div
-        className="relative overflow-hidden px-5 pb-6 pt-12"
-        style={{ background: 'linear-gradient(135deg, #4338ca 0%, #7c3aed 100%)' }}
-      >
+      {/* Header */}
+      <div className="relative overflow-hidden px-5 pb-6 pt-12" style={{ background: 'linear-gradient(135deg, #4338ca 0%, #7c3aed 100%)' }}>
         <div className="pointer-events-none absolute -right-8 -top-8 h-40 w-40 rounded-full" style={{ background: 'rgba(255,255,255,0.07)' }} />
         <div className="pointer-events-none absolute -left-4 bottom-0 h-24 w-24 rounded-full"  style={{ background: 'rgba(255,255,255,0.05)' }} />
 
@@ -1101,28 +955,16 @@ export default function SchedulePage() {
             <h1 className="mt-0.5 text-2xl font-bold text-white">Staff Schedule</h1>
           </div>
           <div className="flex gap-2 mt-1">
-            <button
-              onClick={() => loadSchedule(selectedMonth)}
-              className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white/70 hover:bg-white/20"
-            >
+            <button onClick={() => loadSchedule(selectedMonth)} className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white/70 hover:bg-white/20">
               <RefreshCw className="h-4 w-4" />
             </button>
             {!schedule && (
-              <button
-                onClick={handleCreate}
-                disabled={creating}
-                className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white/70 hover:bg-emerald-400/30 disabled:opacity-40"
-                title="Create empty schedule"
-              >
+              <button onClick={handleCreate} disabled={creating} className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white/70 hover:bg-emerald-400/30 disabled:opacity-40" title="Create empty schedule">
                 {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
               </button>
             )}
             {schedule && (
-              <button
-                onClick={handleDelete}
-                disabled={deleting}
-                className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white/70 hover:bg-red-400/30 disabled:opacity-40"
-              >
+              <button onClick={handleDelete} disabled={deleting} className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white/70 hover:bg-red-400/30 disabled:opacity-40">
                 {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
               </button>
             )}
@@ -1131,58 +973,34 @@ export default function SchedulePage() {
 
         {/* Month navigator */}
         <div className="relative mt-5 flex items-center justify-between">
-          {/* Prev month */}
-          <button
-            onClick={() => {
-              const d = new Date(y, m - 2, 1);
-              handleMonthChange(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2,'0')}`);
-            }}
-            className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white/70 hover:bg-white/20"
-          >
+          <button onClick={() => { const d = new Date(y, m - 2, 1); handleMonthChange(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2,'0')}`); }} className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white/70 hover:bg-white/20">
             <ChevronLeft className="h-5 w-5" />
           </button>
-
           <div className="text-center">
             <p className="text-xl font-bold text-white">{MONTHS[m - 1]}</p>
             <p className="text-[11px] font-medium text-indigo-300">{y}</p>
           </div>
-
-          {/* Next month */}
-          <button
-            onClick={() => {
-              const d = new Date(y, m, 1);
-              handleMonthChange(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2,'0')}`);
-            }}
-            className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white/70 hover:bg-white/20"
-          >
+          <button onClick={() => { const d = new Date(y, m, 1); handleMonthChange(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2,'0')}`); }} className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white/70 hover:bg-white/20">
             <ChevronRight className="h-5 w-5" />
           </button>
         </div>
       </div>
 
-      {/* ── Body ── */}
+      {/* Body */}
       <div className="flex-1 space-y-3 p-4 pb-24">
 
-        {/* Import */}
         <ImportButton onImported={() => loadSchedule(selectedMonth)} />
 
-        {/* Loading */}
-        {loading && (
-          <div className="flex items-center justify-center py-16">
-            <Loader2 className="h-6 w-6 animate-spin text-indigo-400" />
-          </div>
-        )}
+        {loading && <div className="flex items-center justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-indigo-400" /></div>}
 
-        {/* ── Schedule exists ── */}
         {!loading && schedule && (
           <div className="space-y-3">
-
             {/* Stats */}
             <div className="grid grid-cols-3 gap-2">
               {[
-                { label: 'Staff',        value: totalEmployees, color: '#6366f1' },
-                { label: 'Work shifts',  value: workingDays,    color: '#10b981' },
-                { label: 'Leave days',   value: leaveDays,      color: '#f59e0b' },
+                { label: 'Staff',       value: totalEmployees, color: '#6366f1' },
+                { label: 'Work shifts', value: workingDays,    color: '#10b981' },
+                { label: 'Leave days',  value: leaveDays,      color: '#f59e0b' },
               ].map(({ label, value, color }) => (
                 <div key={label} className="rounded-2xl border border-slate-100 bg-white px-3 py-3 text-center shadow-sm">
                   <p className="text-xl font-bold" style={{ color }}>{value}</p>
@@ -1191,41 +1009,33 @@ export default function SchedulePage() {
               ))}
             </div>
 
-            {/* Legend */}
-            <div className="flex items-center gap-3 px-1">
-              {[
-                { color: '#fb923c', label: 'Morning' },
-                { color: '#a78bfa', label: 'Evening' },
-                { color: '#818cf8', label: 'Leave'   },
-              ].map(({ color, label }) => (
-                <div key={label} className="flex items-center gap-1 text-[10px] text-slate-400">
-                  <span className="h-2 w-2 rounded-full" style={{ background: color }} />
-                  {label}
-                </div>
-              ))}
+            {/* Dynamic legend from DB shifts */}
+            <div className="flex items-center gap-3 px-1 flex-wrap">
+              {shiftOptions.map(s => {
+                const pal = SHIFT_PALETTE[s.code] ?? { dot: '#94a3b8' };
+                return (
+                  <div key={s.code} className="flex items-center gap-1 text-[10px] text-slate-400">
+                    <span className="h-2 w-2 rounded-full" style={{ background: pal.dot }} />
+                    {s.label}
+                  </div>
+                );
+              })}
+              <div className="flex items-center gap-1 text-[10px] text-slate-400">
+                <span className="h-2 w-2 rounded-full" style={{ background: '#818cf8' }} />
+                Leave
+              </div>
               <span className="ml-auto text-[10px] text-slate-400">Tap a day to edit</span>
             </div>
 
-            {/* Calendar */}
-            <CalendarGrid
-              schedule={schedule}
-              yearMonth={selectedMonth}
-              onDayPress={handleDayPress}
-            />
+            <CalendarGrid schedule={schedule} yearMonth={selectedMonth} onDayPress={handleDayPress} />
 
-            {schedule.note && (
-              <p className="px-1 text-[11px] italic text-slate-400">Note: "{schedule.note}"</p>
-            )}
+            {schedule.note && <p className="px-1 text-[11px] italic text-slate-400">Note: "{schedule.note}"</p>}
           </div>
         )}
 
-        {/* ── No schedule ── */}
         {!loading && !schedule && (
           <div className="flex flex-col items-center gap-4 rounded-2xl border border-dashed border-slate-200 bg-white py-16 text-center">
-            <div
-              className="flex h-16 w-16 items-center justify-center rounded-2xl"
-              style={{ background: 'linear-gradient(135deg, #eef2ff, #f5f3ff)' }}
-            >
+            <div className="flex h-16 w-16 items-center justify-center rounded-2xl" style={{ background: 'linear-gradient(135deg, #eef2ff, #f5f3ff)' }}>
               <Calendar className="h-8 w-8 text-indigo-300" />
             </div>
             <div>
@@ -1235,38 +1045,35 @@ export default function SchedulePage() {
           </div>
         )}
       </div>
-      
-      {/* Add Entry Modal */}
+
+      {/* Modals */}
       {addingDate && (
         <AddEntryModal
           date={addingDate}
           employees={employees}
-          existingUserIds={new Set(
-            (schedule?.entries ?? [])
-              .filter(e => toLocalDateKey(e.date) === isoDate(addingDate))
-              .map(e => e.userId),
-          )}
+          shiftOptions={shiftOptions}
+          existingUserIds={new Set((schedule?.entries ?? []).filter(e => toLocalDateKey(e.date) === isoDate(addingDate)).map(e => e.userId))}
           onSave={handleSaveNewEntry}
           onClose={() => setAddingDate(null)}
           saving={addingEntry}
         />
       )}
 
-      {/* Day detail sheet */}
       {detailDate && !editEntry && !addingDate && (
         <DayDetailSheet
           date={detailDate}
           entries={detailEntries}
+          shiftOptions={shiftOptions}
           onEdit={handleEditFromSheet}
           onAdd={handleAddFromSheet}
           onClose={() => setDetailDate(null)}
         />
       )}
 
-      {/* Edit modal — stacked on top of detail sheet */}
       {editEntry && (
         <EditDayModal
           entry={editEntry}
+          shiftOptions={shiftOptions}
           onSave={handleSaveEntry}
           onClose={() => setEditEntry(null)}
           saving={savingEntry}
@@ -1274,5 +1081,4 @@ export default function SchedulePage() {
       )}
     </div>
   );
-  
 }

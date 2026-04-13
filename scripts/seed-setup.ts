@@ -56,10 +56,10 @@ async function seedSetup() {
   const insertedRoles = await db
     .insert(userRoles)
     .values([
-      { code: 'employee', label: 'Employee', description: 'Store-level staff', sortOrder: 10 },
-      { code: 'ops',      label: 'Operations', description: 'Area operations manager', sortOrder: 20 },
-      { code: 'finance',  label: 'Finance',  description: 'Finance team', sortOrder: 30 },
-      { code: 'admin',    label: 'Admin',    description: 'System administrator', sortOrder: 40 },
+      { code: 'employee', label: 'Employee',   description: 'Store-level staff',          sortOrder: 10 },
+      { code: 'ops',      label: 'Operations', description: 'Area operations manager',    sortOrder: 20 },
+      { code: 'finance',  label: 'Finance',    description: 'Finance team',               sortOrder: 30 },
+      { code: 'admin',    label: 'Admin',      description: 'System administrator',       sortOrder: 40 },
     ])
     .returning();
 
@@ -75,16 +75,17 @@ async function seedSetup() {
   const insertedShifts = await db
     .insert(shifts)
     .values([
-      { code: 'morning', label: 'Morning', startTime: '07:00:00', endTime: '15:00:00', sortOrder: 10 },
-      { code: 'evening', label: 'Evening', startTime: '15:00:00', endTime: '23:00:00', sortOrder: 20 },
+      { code: 'morning',  label: 'Morning',  startTime: '07:00:00', endTime: '15:00:00', sortOrder: 10 },
+      { code: 'evening',  label: 'Evening',  startTime: '15:00:00', endTime: '23:00:00', sortOrder: 20 },
+      // full_day: employee covers both morning + evening tasks for the store that day.
+      // materialiseTasksForSchedule creates both task sets when it sees this shift code.
+      // The employee gets two breaks (full_day_lunch + full_day_dinner).
+      { code: 'full_day', label: 'Full Day', startTime: '07:00:00', endTime: '23:00:00', sortOrder: 30 },
     ])
     .returning();
 
-  // Build code → id maps for ergonomic lookup below
   const roleId    = Object.fromEntries(insertedRoles.map(r => [r.code, r.id]));
   const empTypeId = Object.fromEntries(insertedEmpTypes.map(r => [r.code, r.id]));
-  // shiftId map kept for future use:
-  // const shiftId = Object.fromEntries(insertedShifts.map(r => [r.code, r.id]));
 
   console.log(`✓   ${insertedRoles.length} roles, ${insertedEmpTypes.length} employee types, ${insertedShifts.length} shifts\n`);
 
@@ -162,10 +163,7 @@ async function seedSetup() {
 
   const insertedUsers: { id: string; name: string }[] = [];
   for (const u of userDefs) {
-    const [row] = await db
-      .insert(users)
-      .values(u)
-      .returning({ id: users.id, name: users.name });
+    const [row] = await db.insert(users).values(u).returning({ id: users.id, name: users.name });
     insertedUsers.push(row);
   }
 

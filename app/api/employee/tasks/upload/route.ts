@@ -10,32 +10,40 @@ const ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'im
 const MAX_SIZE_MB  = 10;
 
 type PhotoType =
-  | 'store_front' | 'cash_drawer' | 'selfie'
+  | 'store_front' | 'cashier_desk' | 'five_r'
+  | 'promo_storefront' | 'promo_desk'
+  | 'selfie'
   | 'money' | 'receiving'
   | 'edc_summary' | 'edc_settlement' | 'z_report' | 'open_statement';
 
 const PHOTO_FOLDER: Record<PhotoType, string> = {
-  store_front:    'store-opening/store-front',
-  cash_drawer:    'store-opening/cash-drawer',
-  money:          'setoran/money',
-  receiving:      'receiving',
-  selfie:         'grooming/selfie',
-  edc_summary:    'edc/summary',
-  edc_settlement: 'edc/settlement',
-  z_report:       'eod/z-report',
-  open_statement: 'eod/open-statement',
+  store_front:      'store-opening/store-front',
+  cashier_desk:     'store-opening/cashier-desk',
+  five_r:           'store-opening/five-r',
+  promo_storefront: 'store-opening/promo-storefront',
+  promo_desk:       'store-opening/promo-desk',
+  money:            'setoran/money',
+  receiving:        'receiving',
+  selfie:           'grooming/selfie',
+  edc_summary:      'edc/summary',
+  edc_settlement:   'edc/settlement',
+  z_report:         'eod/z-report',
+  open_statement:   'eod/open-statement',
 };
 
 const PHOTO_LIMITS: Record<PhotoType, number> = {
-  store_front:    3,
-  cash_drawer:    2,
-  money:          3,
-  receiving:      5,
-  selfie:         2,
-  edc_summary:    3,
-  edc_settlement: 3,
-  z_report:       3,
-  open_statement: 3,
+  store_front:      3,
+  cashier_desk:     2,
+  five_r:           5,
+  promo_storefront: 1,
+  promo_desk:       1,
+  money:            3,
+  receiving:        5,
+  selfie:           2,
+  edc_summary:      3,
+  edc_settlement:   3,
+  z_report:         3,
+  open_statement:   3,
 };
 
 export async function POST(request: NextRequest) {
@@ -82,8 +90,6 @@ export async function POST(request: NextRequest) {
 
     if (process.env.BLOB_READ_WRITE_TOKEN) {
       // ── Vercel Blob (production) ─────────────────────────────────────────
-      // Dynamic import avoids the bundler trying to resolve the package at
-      // build time when it may not be installed locally.
       const { put } = await import('@vercel/blob');
       const blob    = await put(storagePath, file, { access: 'public' });
       url = blob.url;

@@ -16,7 +16,7 @@
     "seed:schedules": "dotenv -e .env.local -- tsx scripts/seed-current-month.ts",
     "seed:attendance": "dotenv -e .env.local -- tsx scripts/seed-attendance.ts",
     "seed:tasks": "dotenv -e .env.local -- tsx scripts/seed-tasks.ts",
-    "seed:all": "npm run seed:setup && npm run seed:schedules && npm run seed:attendance && npm run seed:tasks"
+    "seed:all": "npm run seed:setup && npm run seed:schedules && npm run seed:tasks"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.11.1",

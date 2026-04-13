@@ -18,12 +18,30 @@
 //
 //  4. Shared vs personal tasks:
 //       - Shared   → one row per store per shift (e.g. store opening, setoran).
-//                    Unique constraint on (storeId, date, shift).
+//                    For most tasks: unique constraint on (storeId, date).
 //       - Personal → one row per employee per shift (e.g. grooming).
 //                    Unique constraint on (scheduleId).
 //
-//  5. IDs: user IDs are your custom text format; all other PKs are serial
+//  5. Discrepancy carry-forward (evening tasks + briefing):
+//       When an employee submits one of these tasks and marks it as NOT balanced /
+//       NOT correct, the status is set to 'discrepancy' instead of 'completed'.
+//       The next shift's employee then picks up the SAME task row and re-submits.
+//       Because a single row can span multiple calendar days in this flow, the
+//       per-(storeId, date) unique constraint is REMOVED from these tables — the
+//       task is instead identified by its own PK and the parentTaskId chain.
+//
+//       parentTaskId  → null for the original task; set on every carry-forward row
+//                        that was spawned because the prior row had status='discrepancy'.
+//
+//  6. IDs: user IDs are your custom text format; all other PKs are serial
 //     (auto-increment integers).
+//
+//  7. Full-day shift: a full_day shift employee handles BOTH morning and evening
+//     tasks for that store on that day. materialiseTasksForSchedule creates task
+//     rows for both sets (morning morning-shift tasks + evening evening-shift tasks)
+//     when it detects a full_day shift. The shiftId on each task row still points
+//     to the logical shift the task belongs to (morning or evening), not full_day,
+//     so the task UI can group them correctly.
 //
 // Morning shift tasks
 // ────────────────────
@@ -33,7 +51,7 @@
 //   • product_check_tasks    (shared, morning)
 //   • receiving_tasks        (shared, morning)
 //
-// Evening shift tasks
+// Evening shift tasks  [discrepancy-capable]
 // ────────────────────
 //   • briefing_tasks         (shared, evening — checked by morning-shift employee)
 //   • edc_summary_tasks      (shared, evening)
@@ -60,26 +78,6 @@ import { taskStatusEnum } from './enums';
 import { schedules, users, stores } from './core';
 import { shifts } from './lookups';
 
-// ─── Shared base columns helper ───────────────────────────────────────────────
-// Not a real table; we repeat these columns per table because Drizzle ORM
-// does not support table inheritance.  This comment documents the pattern.
-//
-// Each task has:
-//   id            serial PK
-//   scheduleId    → who triggered this row (employee+shift+date)
-//   userId        → employee responsible
-//   storeId       → which store
-//   shift         morning | evening
-//   date          midnight of the working day
-//   status        pending → in_progress → completed → verified | rejected
-//   completedAt   when employee submitted
-//   verifiedBy    ops/pic1 who approved
-//   verifiedAt
-//   submittedLat  geo at submission
-//   submittedLng
-//   notes         free-text
-//   createdAt / updatedAt
-
 // ─────────────────────────────────────────────────────────────────────────────
 // MORNING TASKS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -91,7 +89,9 @@ import { shifts } from './lookups';
  *   loginPos          → Log-in POS / open cashier computer
  *   checkAbsenSunfish → Tarik & cek absen di Sunfish (verify last-day attendance)
  *   tarikSohSales     → Tarik SOH & sales
- *   fiveR             → 5R store cleaning check
+ *   fiveR             → 5R store cleaning check  ← now also has photo evidence
+ *   fiveRPhotos       → JSON array of relative image paths for the 5R check
+ *   cekPromo          → NEW: Cek Promo (verify current promotions are displayed)
  *   cekLamp           → Check all lights on
  *   cekSoundSystem    → Check sound system
  *
@@ -106,20 +106,29 @@ export const storeOpeningTasks = pgTable('store_opening_tasks', {
   storeId:    integer('store_id').references(() => stores.id).notNull(),
   shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
   date:       timestamp('date').notNull(),
-
+ 
+  // ── Checklist ──────────────────────────────────────────────────────────────
   loginPos:          boolean('login_pos').default(false).notNull(),
   checkAbsenSunfish: boolean('check_absen_sunfish').default(false).notNull(),
   tarikSohSales:     boolean('tarik_soh_sales').default(false).notNull(),
   fiveR:             boolean('five_r').default(false).notNull(),
-  cekLamp:           boolean('cek_lamp').default(false).notNull(),
-  cekSoundSystem:    boolean('cek_sound_system').default(false).notNull(),
-
-  storeFrontPhotos: text('store_front_photos'),
-  cashDrawerPhotos: text('cash_drawer_photos'),
-
+  fiveRPhotos:       text('five_r_photos'),
+  cekPromo:          boolean('cek_promo').default(false).notNull(),
+  // ── NEW: Cek Promo photos (two buckets) ───────────────────────────────────
+  cekPromoStorefrontPhotos: text('cek_promo_storefront_photos'),
+  cekPromoDeskPhotos:       text('cek_promo_desk_photos'),
+  cekLamp:          boolean('cek_lamp').default(false).notNull(),
+  cekSoundSystem:   boolean('cek_sound_system').default(false).notNull(),
+ 
+  // ── Photos ─────────────────────────────────────────────────────────────────
+  storeFrontPhotos:  text('store_front_photos'),
+  cashDrawerPhotos:  text('cash_drawer_photos'),
+ 
+  // ── Geo ────────────────────────────────────────────────────────────────────
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
-
+ 
+  // ── Lifecycle ──────────────────────────────────────────────────────────────
   status:      taskStatusEnum('status').default('pending').notNull(),
   notes:       text('notes'),
   completedAt: timestamp('completed_at'),
@@ -135,9 +144,6 @@ export const storeOpeningTasks = pgTable('store_opening_tasks', {
 
 /**
  * Setoran Task  (morning, shared)
- *
- * The employee records the day's cash handover to the company.
- * Evidence: photo of the physical money + the transfer link.
  */
 export const setoranTasks = pgTable('setoran_tasks', {
   id:         serial('id').primaryKey(),
@@ -147,16 +153,13 @@ export const setoranTasks = pgTable('setoran_tasks', {
   shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
   date:       timestamp('date').notNull(),
 
-  // ── Data ───────────────────────────────────────────────────────────────────
-  amount:       decimal('amount', { precision: 12, scale: 2 }),  // nominal setoran
-  linkSetoran:  text('link_setoran'),                            // transfer receipt URL / ref
-  moneyPhotos:  text('money_photos'),                            // JSON: string[] of local paths
+  amount:       decimal('amount', { precision: 12, scale: 2 }),
+  linkSetoran:  text('link_setoran'),
+  moneyPhotos:  text('money_photos'),
 
-  // ── Geo ────────────────────────────────────────────────────────────────────
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
 
-  // ── Lifecycle ──────────────────────────────────────────────────────────────
   status:      taskStatusEnum('status').default('pending').notNull(),
   notes:       text('notes'),
   completedAt: timestamp('completed_at'),
@@ -171,10 +174,7 @@ export const setoranTasks = pgTable('setoran_tasks', {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Cek Bin Task  (morning, shared)
- *
- * Schema-only placeholder — business logic not implemented yet.
- * Add columns here as requirements become clear.
+ * Cek Bin Task  (morning, shared) — schema-only placeholder
  */
 export const cekBinTasks = pgTable('cek_bin_tasks', {
   id:         serial('id').primaryKey(),
@@ -184,11 +184,9 @@ export const cekBinTasks = pgTable('cek_bin_tasks', {
   shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
   date:       timestamp('date').notNull(),
 
-  // ── Geo ────────────────────────────────────────────────────────────────────
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
 
-  // ── Lifecycle ──────────────────────────────────────────────────────────────
   status:      taskStatusEnum('status').default('pending').notNull(),
   notes:       text('notes'),
   completedAt: timestamp('completed_at'),
@@ -204,9 +202,6 @@ export const cekBinTasks = pgTable('cek_bin_tasks', {
 
 /**
  * Product Check Task  (morning, shared)
- *
- * Checklist: Display / Price / Sale Tag / Shoe-filler / Label Indo / Barcode.
- * One row per store per day — any morning-shift employee can fill it in.
  */
 export const productCheckTasks = pgTable('product_check_tasks', {
   id:         serial('id').primaryKey(),
@@ -216,7 +211,6 @@ export const productCheckTasks = pgTable('product_check_tasks', {
   shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
   date:       timestamp('date').notNull(),
 
-  // ── Checklist ──────────────────────────────────────────────────────────────
   display:     boolean('display').default(false).notNull(),
   price:       boolean('price').default(false).notNull(),
   saleTag:     boolean('sale_tag').default(false).notNull(),
@@ -224,11 +218,9 @@ export const productCheckTasks = pgTable('product_check_tasks', {
   labelIndo:   boolean('label_indo').default(false).notNull(),
   barcode:     boolean('barcode').default(false).notNull(),
 
-  // ── Geo ────────────────────────────────────────────────────────────────────
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
 
-  // ── Lifecycle ──────────────────────────────────────────────────────────────
   status:      taskStatusEnum('status').default('pending').notNull(),
   notes:       text('notes'),
   completedAt: timestamp('completed_at'),
@@ -244,10 +236,6 @@ export const productCheckTasks = pgTable('product_check_tasks', {
 
 /**
  * Receiving Task  (morning, shared)
- *
- * Records whether a stock delivery arrived that day.
- * `hasReceiving` = false means the employee actively confirmed "no delivery today".
- * When true, the employee can attach photos of the received goods.
  */
 export const receivingTasks = pgTable('receiving_tasks', {
   id:         serial('id').primaryKey(),
@@ -257,15 +245,12 @@ export const receivingTasks = pgTable('receiving_tasks', {
   shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
   date:       timestamp('date').notNull(),
 
-  // ── Data ───────────────────────────────────────────────────────────────────
-  hasReceiving:   boolean('has_receiving').default(false).notNull(),
-  receivingPhotos: text('receiving_photos'),  // JSON: string[] — only when hasReceiving=true
+  hasReceiving:    boolean('has_receiving').default(false).notNull(),
+  receivingPhotos: text('receiving_photos'),
 
-  // ── Geo ────────────────────────────────────────────────────────────────────
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
 
-  // ── Lifecycle ──────────────────────────────────────────────────────────────
   status:      taskStatusEnum('status').default('pending').notNull(),
   notes:       text('notes'),
   completedAt: timestamp('completed_at'),
@@ -278,35 +263,59 @@ export const receivingTasks = pgTable('receiving_tasks', {
 }));
 
 // ─────────────────────────────────────────────────────────────────────────────
-// EVENING TASKS
+// EVENING TASKS  — discrepancy-capable
+//
+// These tasks carry a `isBalanced` boolean (did the figures balance?) and a
+// `parentTaskId` self-reference for carry-forward chains.
+//
+// Lifecycle:
+//   pending → completed (isBalanced=true)  → verified | rejected   [normal path]
+//   pending → discrepancy (isBalanced=false)
+//          → next shift picks up the SAME row, re-submits
+//          → completed (isBalanced=true)   → verified | rejected
+//          → discrepancy again             → carries forward again …
+//
+// Because a discrepancy row can span multiple calendar dates, the unique
+// constraint on (storeId, date) is intentionally absent from these tables.
+// Tasks are correlated to a day via their `date` column for display purposes,
+// but uniqueness is not enforced at the DB level — the application layer
+// manages which task is "active" for a given store/shift/date.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Briefing Task  (evening, shared)
+ * Briefing Task  (evening, shared, discrepancy-capable)
  *
  * Done by the morning-shift handover employee for the evening shift.
- * Just a single "done" checkbox — no photos required.
+ * `isBalanced` here means "briefing was acknowledged / signed off by evening crew".
  */
 export const briefingTasks = pgTable('briefing_tasks', {
   id:         serial('id').primaryKey(),
   scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
-  /**
-   * userId here is the morning-shift employee who conducted the briefing
-   * (not the evening-shift employee receiving it).
-   */
   userId:     text('user_id').references(() => users.id).notNull(),
   storeId:    integer('store_id').references(() => stores.id).notNull(),
   shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
   date:       timestamp('date').notNull(),
 
-  // ── Data ───────────────────────────────────────────────────────────────────
-  done: boolean('done').default(false).notNull(),
+  // ── Carry-forward chain ────────────────────────────────────────────────────
+  /**
+   * References the ORIGINAL task row that started this chain.
+   * Null on the first row; set on every subsequent carry-forward row.
+   * Allows querying the full history: WHERE id = X OR parentTaskId = X.
+   */
+  parentTaskId: integer('parent_task_id'), // self-ref; no FK to avoid circular dep
 
-  // ── Geo ────────────────────────────────────────────────────────────────────
+  // ── Data ───────────────────────────────────────────────────────────────────
+  done:       boolean('done').default(false).notNull(),
+  /**
+   * Was the briefing acknowledged / in order?
+   * false → status becomes 'discrepancy'; the task carries forward to next shift.
+   * null  → not yet submitted.
+   */
+  isBalanced: boolean('is_balanced'),
+
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
 
-  // ── Lifecycle ──────────────────────────────────────────────────────────────
   status:      taskStatusEnum('status').default('pending').notNull(),
   notes:       text('notes'),
   completedAt: timestamp('completed_at'),
@@ -314,15 +323,15 @@ export const briefingTasks = pgTable('briefing_tasks', {
   verifiedAt:  timestamp('verified_at'),
   createdAt:   timestamp('created_at').defaultNow().notNull(),
   updatedAt:   timestamp('updated_at').defaultNow().notNull(),
-}, (t) => ({
-  uniqStoreDate: unique().on(t.storeId, t.date),
-}));
+  // NOTE: No (storeId, date) unique constraint — see table group comment above.
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * EDC Summary Task  (evening, shared)
- * Employee photographs the EDC machine summary printout.
+ * EDC Summary Task  (evening, shared, discrepancy-capable)
+ *
+ * `isBalanced` = EDC summary total matches expected end-of-day figure.
  */
 export const edcSummaryTasks = pgTable('edc_summary_tasks', {
   id:         serial('id').primaryKey(),
@@ -332,14 +341,13 @@ export const edcSummaryTasks = pgTable('edc_summary_tasks', {
   shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
   date:       timestamp('date').notNull(),
 
-  // ── Photos ─────────────────────────────────────────────────────────────────
-  edcSummaryPhotos: text('edc_summary_photos'),  // JSON: string[]
+  parentTaskId:     integer('parent_task_id'),
+  edcSummaryPhotos: text('edc_summary_photos'),
+  isBalanced:       boolean('is_balanced'),
 
-  // ── Geo ────────────────────────────────────────────────────────────────────
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
 
-  // ── Lifecycle ──────────────────────────────────────────────────────────────
   status:      taskStatusEnum('status').default('pending').notNull(),
   notes:       text('notes'),
   completedAt: timestamp('completed_at'),
@@ -347,14 +355,14 @@ export const edcSummaryTasks = pgTable('edc_summary_tasks', {
   verifiedAt:  timestamp('verified_at'),
   createdAt:   timestamp('created_at').defaultNow().notNull(),
   updatedAt:   timestamp('updated_at').defaultNow().notNull(),
-}, (t) => ({
-  uniqStoreDate: unique().on(t.storeId, t.date),
-}));
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * EDC Settlement Task  (evening, shared)
+ * EDC Settlement Task  (evening, shared, discrepancy-capable)
+ *
+ * `isBalanced` = settlement total matches EDC summary.
  */
 export const edcSettlementTasks = pgTable('edc_settlement_tasks', {
   id:         serial('id').primaryKey(),
@@ -364,7 +372,9 @@ export const edcSettlementTasks = pgTable('edc_settlement_tasks', {
   shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
   date:       timestamp('date').notNull(),
 
-  edcSettlementPhotos: text('edc_settlement_photos'),  // JSON: string[]
+  parentTaskId:        integer('parent_task_id'),
+  edcSettlementPhotos: text('edc_settlement_photos'),
+  isBalanced:          boolean('is_balanced'),
 
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
@@ -376,14 +386,14 @@ export const edcSettlementTasks = pgTable('edc_settlement_tasks', {
   verifiedAt:  timestamp('verified_at'),
   createdAt:   timestamp('created_at').defaultNow().notNull(),
   updatedAt:   timestamp('updated_at').defaultNow().notNull(),
-}, (t) => ({
-  uniqStoreDate: unique().on(t.storeId, t.date),
-}));
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * EOD Z-Report Task  (evening, shared)
+ * EOD Z-Report Task  (evening, shared, discrepancy-capable)
+ *
+ * `isBalanced` = Z-report total matches expected sales figure.
  */
 export const eodZReportTasks = pgTable('eod_z_report_tasks', {
   id:         serial('id').primaryKey(),
@@ -393,7 +403,9 @@ export const eodZReportTasks = pgTable('eod_z_report_tasks', {
   shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
   date:       timestamp('date').notNull(),
 
-  zReportPhotos: text('z_report_photos'),  // JSON: string[]
+  parentTaskId:  integer('parent_task_id'),
+  zReportPhotos: text('z_report_photos'),
+  isBalanced:    boolean('is_balanced'),
 
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
@@ -405,14 +417,14 @@ export const eodZReportTasks = pgTable('eod_z_report_tasks', {
   verifiedAt:  timestamp('verified_at'),
   createdAt:   timestamp('created_at').defaultNow().notNull(),
   updatedAt:   timestamp('updated_at').defaultNow().notNull(),
-}, (t) => ({
-  uniqStoreDate: unique().on(t.storeId, t.date),
-}));
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Open Statement List Task  (evening, shared)
+ * Open Statement Task  (evening, shared, discrepancy-capable)
+ *
+ * `isBalanced` = open statement list matches physical count.
  */
 export const openStatementTasks = pgTable('open_statement_tasks', {
   id:         serial('id').primaryKey(),
@@ -422,7 +434,9 @@ export const openStatementTasks = pgTable('open_statement_tasks', {
   shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
   date:       timestamp('date').notNull(),
 
-  openStatementPhotos: text('open_statement_photos'),  // JSON: string[]
+  parentTaskId:        integer('parent_task_id'),
+  openStatementPhotos: text('open_statement_photos'),
+  isBalanced:          boolean('is_balanced'),
 
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
@@ -434,9 +448,7 @@ export const openStatementTasks = pgTable('open_statement_tasks', {
   verifiedAt:  timestamp('verified_at'),
   createdAt:   timestamp('created_at').defaultNow().notNull(),
   updatedAt:   timestamp('updated_at').defaultNow().notNull(),
-}, (t) => ({
-  uniqStoreDate: unique().on(t.storeId, t.date),
-}));
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BOTH SHIFTS — PERSONAL TASKS
@@ -444,51 +456,32 @@ export const openStatementTasks = pgTable('open_statement_tasks', {
 
 /**
  * Grooming Task  (both shifts, personal — one row per employee per shift)
- *
- * The OPS team defines which checklist items are active via boolean flags
- * (true = item is enabled by ops; false = item disabled/hidden for now).
- * The employee then fills in whether they comply (also boolean).
- *
- * Current checklist items (all yes/no):
- *   uniformComplete       → Uniform lengkap
- *   hairGroomed           → Rambut rapi
- *   nailsClean            → Kuku bersih
- *   accessoriesCompliant  → Aksesoris sesuai standar
- *   shoeCompliant         → Sepatu sesuai standar
- *
- * Photos:
- *   selfiePhotos          → full-body photo(s), JSON array of local paths
  */
 export const groomingTasks = pgTable('grooming_tasks', {
   id:         serial('id').primaryKey(),
-scheduleId: integer('schedule_id').references(() => schedules.id).notNull().unique(),  userId:     text('user_id').references(() => users.id).notNull(),
+  scheduleId: integer('schedule_id').references(() => schedules.id).notNull().unique(),
+  userId:     text('user_id').references(() => users.id).notNull(),
   storeId:    integer('store_id').references(() => stores.id).notNull(),
   shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
   date:       timestamp('date').notNull(),
 
-  // ── OPS-controlled activation flags ───────────────────────────────────────
-  // When false, that item is hidden from the employee's form.
   uniformActive:      boolean('uniform_active').default(true).notNull(),
   hairActive:         boolean('hair_active').default(true).notNull(),
   nailsActive:        boolean('nails_active').default(true).notNull(),
   accessoriesActive:  boolean('accessories_active').default(true).notNull(),
   shoeActive:         boolean('shoe_active').default(true).notNull(),
 
-  // ── Employee compliance answers ────────────────────────────────────────────
   uniformComplete:      boolean('uniform_complete'),
   hairGroomed:          boolean('hair_groomed'),
   nailsClean:           boolean('nails_clean'),
   accessoriesCompliant: boolean('accessories_compliant'),
   shoeCompliant:        boolean('shoe_compliant'),
 
-  // ── Photos ─────────────────────────────────────────────────────────────────
-  selfiePhotos: text('selfie_photos'),  // JSON: string[]
+  selfiePhotos: text('selfie_photos'),
 
-  // ── Geo ────────────────────────────────────────────────────────────────────
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
 
-  // ── Lifecycle ──────────────────────────────────────────────────────────────
   status:      taskStatusEnum('status').default('pending').notNull(),
   notes:       text('notes'),
   completedAt: timestamp('completed_at'),

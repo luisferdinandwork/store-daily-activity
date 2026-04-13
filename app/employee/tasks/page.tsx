@@ -149,9 +149,7 @@ export default function EmployeeTasksPage() {
   const openTask = async (item: TaskItem) => {
     const { status, id } = item.data;
 
-    // Verified tasks are read-only — still navigate so employee can see details
     if (status === 'pending') {
-      // Optimistically advance to in_progress before navigating
       setTasks(prev =>
         prev.map(t =>
           t.data.id === id
@@ -159,7 +157,6 @@ export default function EmployeeTasksPage() {
             : t,
         ),
       );
-      // Fire-and-forget — the detail page will show the updated state
       fetch('/api/employee/tasks', {
         method:  'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -167,7 +164,10 @@ export default function EmployeeTasksPage() {
       }).catch(console.error);
     }
 
-    router.push(`/employee/tasks/${item.type}/${id}`);
+    const path = item.type === 'store_opening'
+      ? `/employee/tasks/store-opening/${id}`
+      : `/employee/tasks/${item.type}/${id}`;
+    router.push(path);
   };
 
   const countFilter = (f: Filter) =>

@@ -1,5 +1,5 @@
 {
-  "id": "4f98f7c8-378e-4034-8ce6-89f0b4fc6b07",
+  "id": "711ac9b2-d543-4fec-a38d-162d7ae1b9bf",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -1561,12 +1561,24 @@
           "primaryKey": false,
           "notNull": true
         },
+        "parent_task_id": {
+          "name": "parent_task_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
         "done": {
           "name": "done",
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,
           "default": false
+        },
+        "is_balanced": {
+          "name": "is_balanced",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": false
         },
         "submitted_lat": {
           "name": "submitted_lat",
@@ -1696,16 +1708,7 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "briefing_tasks_store_id_date_unique": {
-          "name": "briefing_tasks_store_id_date_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "store_id",
-            "date"
-          ]
-        }
-      },
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -1932,9 +1935,21 @@
           "primaryKey": false,
           "notNull": true
         },
+        "parent_task_id": {
+          "name": "parent_task_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
         "edc_settlement_photos": {
           "name": "edc_settlement_photos",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "is_balanced": {
+          "name": "is_balanced",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": false
         },
@@ -2066,16 +2081,7 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "edc_settlement_tasks_store_id_date_unique": {
-          "name": "edc_settlement_tasks_store_id_date_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "store_id",
-            "date"
-          ]
-        }
-      },
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -2120,9 +2126,21 @@
           "primaryKey": false,
           "notNull": true
         },
+        "parent_task_id": {
+          "name": "parent_task_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
         "edc_summary_photos": {
           "name": "edc_summary_photos",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "is_balanced": {
+          "name": "is_balanced",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": false
         },
@@ -2254,16 +2272,7 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "edc_summary_tasks_store_id_date_unique": {
-          "name": "edc_summary_tasks_store_id_date_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "store_id",
-            "date"
-          ]
-        }
-      },
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -2308,9 +2317,21 @@
           "primaryKey": false,
           "notNull": true
         },
+        "parent_task_id": {
+          "name": "parent_task_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
         "z_report_photos": {
           "name": "z_report_photos",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "is_balanced": {
+          "name": "is_balanced",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": false
         },
@@ -2442,16 +2463,7 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "eod_z_report_tasks_store_id_date_unique": {
-          "name": "eod_z_report_tasks_store_id_date_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "store_id",
-            "date"
-          ]
-        }
-      },
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -2748,9 +2760,21 @@
           "primaryKey": false,
           "notNull": true
         },
+        "parent_task_id": {
+          "name": "parent_task_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
         "open_statement_photos": {
           "name": "open_statement_photos",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "is_balanced": {
+          "name": "is_balanced",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": false
         },
@@ -2882,16 +2906,7 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "open_statement_tasks_store_id_date_unique": {
-          "name": "open_statement_tasks_store_id_date_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "store_id",
-            "date"
-          ]
-        }
-      },
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -3583,6 +3598,19 @@
           "notNull": true,
           "default": false
         },
+        "five_r_photos": {
+          "name": "five_r_photos",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cek_promo": {
+          "name": "cek_promo",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
         "cek_lamp": {
           "name": "cek_lamp",
           "type": "boolean",
@@ -3768,7 +3796,9 @@
       "schema": "public",
       "values": [
         "lunch",
-        "dinner"
+        "dinner",
+        "full_day_lunch",
+        "full_day_dinner"
       ]
     },
     "public.issue_status": {
@@ -3797,6 +3827,7 @@
         "pending",
         "in_progress",
         "completed",
+        "discrepancy",
         "verified",
         "rejected"
       ]
