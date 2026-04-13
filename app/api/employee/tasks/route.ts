@@ -198,7 +198,9 @@ export async function GET(request: NextRequest) {
       data: {
         id: String(t.id), scheduleId: String(t.scheduleId), userId: t.userId,
         storeId: String(t.storeId), shift: 'morning' as const, date: t.date.toISOString(),
-        amount: t.amount, linkSetoran: t.linkSetoran, moneyPhotos: parsePhotos(t.moneyPhotos),
+        amount: t.amount,
+        linkSetoran: t.linkSetoran,
+        resiPhoto:   t.resiPhoto,   // ← was moneyPhotos: parsePhotos(t.moneyPhotos)
         status: t.status, notes: t.notes,
         completedAt: toIso(t.completedAt), verifiedBy: t.verifiedBy, verifiedAt: toIso(t.verifiedAt),
       },

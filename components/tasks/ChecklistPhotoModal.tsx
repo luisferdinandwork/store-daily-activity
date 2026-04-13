@@ -211,7 +211,7 @@ export default function ChecklistPhotoModal(props: ChecklistPhotoModalProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 sm:items-center"
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 sm:items-center bottom-16"
       onClick={onClose}
       role="dialog"
       aria-modal="true"

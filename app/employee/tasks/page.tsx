@@ -39,6 +39,12 @@ interface TaskBase {
   verifiedAt:  string | null;
 }
 
+export interface SetoranData extends TaskBase {
+  amount:      string | null;
+  linkSetoran: string | null;
+  resiPhoto:   string | null;   // ← was: moneyPhotos: string[]
+}
+
 export interface StoreOpeningData extends TaskBase {
   loginPos: boolean; checkAbsenSunfish: boolean; tarikSohSales: boolean;
   fiveR: boolean; cekLamp: boolean; cekSoundSystem: boolean;
@@ -112,6 +118,11 @@ const TASK_META: Record<TaskType, {
   grooming:       { title: 'Grooming Check',    description: 'Uniform check + full-body selfie.',     Icon: User,          hasPhoto: true  },
 };
 
+const CUSTOM_ROUTES: Partial<Record<TaskType, string>> = {
+  store_opening: 'store-opening',
+  setoran:       'setoran',
+};
+
 const FILTERS: { key: Filter; label: string }[] = [
   { key: 'all',         label: 'All'    },
   { key: 'pending',     label: 'Pending'},
@@ -148,7 +159,7 @@ export default function EmployeeTasksPage() {
 
   const openTask = async (item: TaskItem) => {
     const { status, id } = item.data;
-
+  
     if (status === 'pending') {
       setTasks(prev =>
         prev.map(t =>
@@ -163,11 +174,9 @@ export default function EmployeeTasksPage() {
         body:    JSON.stringify({ taskId: id, taskType: item.type, status: 'in_progress' }),
       }).catch(console.error);
     }
-
-    const path = item.type === 'store_opening'
-      ? `/employee/tasks/store-opening/${id}`
-      : `/employee/tasks/${item.type}/${id}`;
-    router.push(path);
+  
+    const slug = CUSTOM_ROUTES[item.type] ?? item.type;
+    router.push(`/employee/tasks/${slug}/${id}`);
   };
 
   const countFilter = (f: Filter) =>

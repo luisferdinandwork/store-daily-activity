@@ -13,7 +13,7 @@ type PhotoType =
   | 'store_front' | 'cashier_desk' | 'five_r'
   | 'promo_storefront' | 'promo_desk'
   | 'selfie'
-  | 'money' | 'receiving'
+  | 'resi' | 'receiving'
   | 'edc_summary' | 'edc_settlement' | 'z_report' | 'open_statement';
 
 const PHOTO_FOLDER: Record<PhotoType, string> = {
@@ -22,7 +22,7 @@ const PHOTO_FOLDER: Record<PhotoType, string> = {
   five_r:           'store-opening/five-r',
   promo_storefront: 'store-opening/promo-storefront',
   promo_desk:       'store-opening/promo-desk',
-  money:            'setoran/money',
+  resi:             'setoran/resi',
   receiving:        'receiving',
   selfie:           'grooming/selfie',
   edc_summary:      'edc/summary',
@@ -37,7 +37,7 @@ const PHOTO_LIMITS: Record<PhotoType, number> = {
   five_r:           5,
   promo_storefront: 1,
   promo_desk:       1,
-  money:            3,
+  resi:             1,
   receiving:        5,
   selfie:           2,
   edc_summary:      3,
@@ -89,12 +89,10 @@ export async function POST(request: NextRequest) {
     let url: string;
 
     if (process.env.BLOB_READ_WRITE_TOKEN) {
-      // ── Vercel Blob (production) ─────────────────────────────────────────
       const { put } = await import('@vercel/blob');
       const blob    = await put(storagePath, file, { access: 'public' });
       url = blob.url;
     } else {
-      // ── Local filesystem (development) ───────────────────────────────────
       const bytes     = await file.arrayBuffer();
       const buffer    = Buffer.from(bytes);
       const uploadDir = join(process.cwd(), 'public', 'uploads', 'tasks', folder);

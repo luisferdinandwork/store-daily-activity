@@ -152,14 +152,15 @@ export const setoranTasks = pgTable('setoran_tasks', {
   storeId:    integer('store_id').references(() => stores.id).notNull(),
   shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
   date:       timestamp('date').notNull(),
-
+ 
   amount:       decimal('amount', { precision: 12, scale: 2 }),
   linkSetoran:  text('link_setoran'),
-  moneyPhotos:  text('money_photos'),
-
+  // ── RENAMED: money_photos (JSON array) → resi_photo (single URL) ────────
+  resiPhoto:    text('resi_photo'),
+ 
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
-
+ 
   status:      taskStatusEnum('status').default('pending').notNull(),
   notes:       text('notes'),
   completedAt: timestamp('completed_at'),
