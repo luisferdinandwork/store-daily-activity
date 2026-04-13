@@ -238,20 +238,54 @@ export const productCheckTasks = pgTable('product_check_tasks', {
 /**
  * Receiving Task  (morning, shared)
  */
-export const receivingTasks = pgTable('receiving_tasks', {
+export const itemDroppingTasks = pgTable('item_dropping_tasks', {
   id:         serial('id').primaryKey(),
   scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
   userId:     text('user_id').references(() => users.id).notNull(),
   storeId:    integer('store_id').references(() => stores.id).notNull(),
   shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
   date:       timestamp('date').notNull(),
-
-  hasReceiving:    boolean('has_receiving').default(false).notNull(),
-  receivingPhotos: text('receiving_photos'),
-
+ 
+  // ── Carry-forward chain (same pattern as evening discrepancy tasks) ────────
+  /**
+   * Null on the first row. Set on every carry-forward row created because the
+   * prior day's item was still not received (status = 'discrepancy').
+   */
+  parentTaskId: integer('parent_task_id'), // self-ref; no FK to avoid circular dep
+ 
+  // ── Core data ─────────────────────────────────────────────────────────────
+  /** false = no drop today; true = item drop occurred / in-progress. */
+  hasDropping:      boolean('has_dropping').default(false).notNull(),
+ 
+  /** Timestamp when the delivery arrived at the store front. */
+  dropTime:         timestamp('drop_time'),
+ 
+  /** JSON array of photo paths taken at drop-off (evidence of arrival). */
+  droppingPhotos:   text('dropping_photos'),
+ 
+  // ── Receipt confirmation ───────────────────────────────────────────────────
+  /** true once the store has formally accepted the dropped items. */
+  isReceived:       boolean('is_received').default(false).notNull(),
+ 
+  /** Timestamp when the store employee confirmed receipt. */
+  receiveTime:      timestamp('receive_time'),
+ 
+  /** userId of the employee who performed the receive confirmation. */
+  receivedByUserId: text('received_by_user_id').references(() => users.id),
+ 
+  // ── Geo ────────────────────────────────────────────────────────────────────
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
-
+ 
+  // ── Lifecycle ──────────────────────────────────────────────────────────────
+  /**
+   * Status flow:
+   *   pending → in_progress (auto-save touched)
+   *   → completed  (hasDropping=false OR hasDropping=true AND isReceived=true)
+   *   → discrepancy (hasDropping=true AND isReceived=false at end of shift)
+   *   → [carry-forward] → new row picks it up next morning
+   *   → verified | rejected (OPS action)
+   */
   status:      taskStatusEnum('status').default('pending').notNull(),
   notes:       text('notes'),
   completedAt: timestamp('completed_at'),
@@ -259,9 +293,9 @@ export const receivingTasks = pgTable('receiving_tasks', {
   verifiedAt:  timestamp('verified_at'),
   createdAt:   timestamp('created_at').defaultNow().notNull(),
   updatedAt:   timestamp('updated_at').defaultNow().notNull(),
-}, (t) => ({
-  uniqStoreDate: unique().on(t.storeId, t.date),
-}));
+  // NOTE: No (storeId, date) unique constraint — app layer manages active row.
+});
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EVENING TASKS  — discrepancy-capable
@@ -500,7 +534,8 @@ export type SetoranTask          = typeof setoranTasks.$inferSelect;
 export type NewSetoranTask       = typeof setoranTasks.$inferInsert;
 export type CekBinTask           = typeof cekBinTasks.$inferSelect;
 export type ProductCheckTask     = typeof productCheckTasks.$inferSelect;
-export type ReceivingTask        = typeof receivingTasks.$inferSelect;
+export type ItemDroppingTask    = typeof itemDroppingTasks.$inferSelect;
+export type NewItemDroppingTask = typeof itemDroppingTasks.$inferInsert;
 export type BriefingTask         = typeof briefingTasks.$inferSelect;
 export type EdcSummaryTask       = typeof edcSummaryTasks.$inferSelect;
 export type EdcSettlementTask    = typeof edcSettlementTasks.$inferSelect;

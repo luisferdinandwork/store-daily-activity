@@ -6,9 +6,10 @@ import { db }                        from '@/lib/db';
 import {
   schedules, shifts,
   storeOpeningTasks, setoranTasks, cekBinTasks,
-  productCheckTasks, receivingTasks, briefingTasks,
+  productCheckTasks, briefingTasks,
   edcSummaryTasks, edcSettlementTasks, eodZReportTasks,
   openStatementTasks, groomingTasks,
+  itemDroppingTasks,
 } from '@/lib/db/schema';
 import { eq, and, gte, lte, desc } from 'drizzle-orm';
 
@@ -88,7 +89,7 @@ export async function GET(request: NextRequest) {
 
   // ── 2. Fetch tasks in parallel ─────────────────────────────────────────────
   const [
-    openingRows, setoranRows, cekBinRows, productCheckRows, receivingRows,
+    openingRows, setoranRows, cekBinRows, productCheckRows, itemDroppingRows,
     briefingRows, edcSummaryRows, edcSettlementRows, eodZReportRows,
     openStatementRows, groomingRows,
   ] = await Promise.all([
@@ -118,9 +119,9 @@ export async function GET(request: NextRequest) {
       : Promise.resolve([]),
 
     hasMorningTasks
-      ? db.select().from(receivingTasks)
-          .where(and(gte(receivingTasks.date, dayStart), lte(receivingTasks.date, dayEnd)))
-          .orderBy(desc(receivingTasks.date))
+      ? db.select().from(itemDroppingTasks)
+          .where(and(gte(itemDroppingTasks.date, dayStart), lte(itemDroppingTasks.date, dayEnd)))
+          .orderBy(desc(itemDroppingTasks.date))
       : Promise.resolve([]),
 
     hasEveningTasks
@@ -180,10 +181,8 @@ export async function GET(request: NextRequest) {
         tarikSohSales: t.tarikSohSales, fiveR: t.fiveR,
         fiveRPhotos: parsePhotos(t.fiveRPhotos),
         cekPromo: t.cekPromo,
-        // ── NEW ─────────────────────────────────────────────────────────────
         cekPromoStorefrontPhotos: parsePhotos(t.cekPromoStorefrontPhotos),
         cekPromoDeskPhotos:       parsePhotos(t.cekPromoDeskPhotos),
-        // ───────────────────────────────────────────────────────────────────
         cekLamp: t.cekLamp, cekSoundSystem: t.cekSoundSystem,
         storeFrontPhotos: parsePhotos(t.storeFrontPhotos),
         cashDrawerPhotos: parsePhotos(t.cashDrawerPhotos),
@@ -200,7 +199,7 @@ export async function GET(request: NextRequest) {
         storeId: String(t.storeId), shift: 'morning' as const, date: t.date.toISOString(),
         amount: t.amount,
         linkSetoran: t.linkSetoran,
-        resiPhoto:   t.resiPhoto,   // ← was moneyPhotos: parsePhotos(t.moneyPhotos)
+        resiPhoto:   t.resiPhoto,
         status: t.status, notes: t.notes,
         completedAt: toIso(t.completedAt), verifiedBy: t.verifiedBy, verifiedAt: toIso(t.verifiedAt),
       },
@@ -230,13 +229,24 @@ export async function GET(request: NextRequest) {
       },
     })),
 
-    ...receivingRows.filter(r => inStore(r.storeId)).map(t => ({
-      type: 'receiving' as const,
+    // ── Item Dropping (renamed from receiving, now discrepancy-capable) ───────
+    ...itemDroppingRows.filter(r => inStore(r.storeId)).map(t => ({
+      type: 'item_dropping' as const,
       shift: (shiftCodeMap[t.shiftId] ?? 'morning') as ShiftCode,
       data: {
         id: String(t.id), scheduleId: String(t.scheduleId), userId: t.userId,
         storeId: String(t.storeId), shift: 'morning' as const, date: t.date.toISOString(),
-        hasReceiving: t.hasReceiving, receivingPhotos: parsePhotos(t.receivingPhotos),
+        // Carry-forward chain
+        parentTaskId: t.parentTaskId,
+        // Core data
+        hasDropping:    t.hasDropping,
+        dropTime:       toIso(t.dropTime),
+        droppingPhotos: parsePhotos(t.droppingPhotos),
+        // Receipt confirmation
+        isReceived:       t.isReceived,
+        receiveTime:      toIso(t.receiveTime),
+        receivedByUserId: t.receivedByUserId,
+        // Lifecycle
         status: t.status, notes: t.notes,
         completedAt: toIso(t.completedAt), verifiedBy: t.verifiedBy, verifiedAt: toIso(t.verifiedAt),
       },
@@ -388,9 +398,9 @@ export async function PATCH(request: NextRequest) {
       getRow: async id => (await db.select({ status: productCheckTasks.status }).from(productCheckTasks).where(eq(productCheckTasks.id, id)).limit(1))[0],
       update: id => db.update(productCheckTasks).set({ status: 'in_progress', updatedAt: new Date() }).where(eq(productCheckTasks.id, id)).then(() => {}),
     },
-    receiving: {
-      getRow: async id => (await db.select({ status: receivingTasks.status }).from(receivingTasks).where(eq(receivingTasks.id, id)).limit(1))[0],
-      update: id => db.update(receivingTasks).set({ status: 'in_progress', updatedAt: new Date() }).where(eq(receivingTasks.id, id)).then(() => {}),
+    item_dropping: {
+      getRow: async id => (await db.select({ status: itemDroppingTasks.status }).from(itemDroppingTasks).where(eq(itemDroppingTasks.id, id)).limit(1))[0],
+      update: id => db.update(itemDroppingTasks).set({ status: 'in_progress', updatedAt: new Date() }).where(eq(itemDroppingTasks.id, id)).then(() => {}),
     },
     briefing: {
       getRow: async id => (await db.select({ status: briefingTasks.status }).from(briefingTasks).where(eq(briefingTasks.id, id)).limit(1))[0],

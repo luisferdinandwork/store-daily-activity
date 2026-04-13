@@ -13,7 +13,7 @@ type PhotoType =
   | 'store_front' | 'cashier_desk' | 'five_r'
   | 'promo_storefront' | 'promo_desk'
   | 'selfie'
-  | 'resi' | 'receiving'
+  | 'resi' | 'item_dropping'
   | 'edc_summary' | 'edc_settlement' | 'z_report' | 'open_statement';
 
 const PHOTO_FOLDER: Record<PhotoType, string> = {
@@ -23,7 +23,7 @@ const PHOTO_FOLDER: Record<PhotoType, string> = {
   promo_storefront: 'store-opening/promo-storefront',
   promo_desk:       'store-opening/promo-desk',
   resi:             'setoran/resi',
-  receiving:        'receiving',
+  item_dropping:    'item-dropping',
   selfie:           'grooming/selfie',
   edc_summary:      'edc/summary',
   edc_settlement:   'edc/settlement',
@@ -38,7 +38,7 @@ const PHOTO_LIMITS: Record<PhotoType, number> = {
   promo_storefront: 1,
   promo_desk:       1,
   resi:             1,
-  receiving:        5,
+  item_dropping:    5,
   selfie:           2,
   edc_summary:      3,
   edc_settlement:   3,

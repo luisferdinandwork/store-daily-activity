@@ -4,12 +4,11 @@ import { eq, and, gte, lte, inArray, sql, isNull, or } from 'drizzle-orm';
 import {
   schedules, stores, shifts, attendance,
   monthlySchedules, monthlyScheduleEntries,
-  storeOpeningTasks, setoranTasks, cekBinTasks,
-  productCheckTasks, receivingTasks, briefingTasks,
+  cekBinTasks,
+  productCheckTasks, briefingTasks,
   edcSummaryTasks, edcSettlementTasks, eodZReportTasks,
-  openStatementTasks, groomingTasks,
-  type StoreOpeningTask, type SetoranTask,
-  type ProductCheckTask, type ReceivingTask,
+  openStatementTasks, groomingTasks, itemDroppingTasks,
+  type ProductCheckTask,
   type BriefingTask, type EdcSummaryTask,
   type EdcSettlementTask, type EodZReportTask,
   type OpenStatementTask, type GroomingTask,
@@ -50,37 +49,6 @@ export type TaskAccessStatus =
 
 // ─── Submit input types ───────────────────────────────────────────────────────
 
-export interface SubmitStoreOpeningInput {
-  scheduleId:        number;
-  userId:            string;
-  storeId:           number;
-  geo:               GeoPoint;
-  loginPos:          boolean;
-  checkAbsenSunfish: boolean;
-  tarikSohSales:     boolean;
-  fiveR:             boolean;
-  fiveRPhotos?:      string[];
-  cekPromo:          boolean;
-  cekLamp:           boolean;
-  cekSoundSystem:    boolean;
-  storeFrontPhotos?: string[];
-  cashDrawerPhotos?: string[];
-  notes?:            string;
-  skipGeo?:          boolean;
-}
-
-export interface SubmitSetoranInput {
-  scheduleId:  number;
-  userId:      string;
-  storeId:     number;
-  geo:         GeoPoint;
-  amount:      string;
-  linkSetoran: string;
-  moneyPhotos: string[];
-  notes?:      string;
-  skipGeo?:    boolean;
-}
-
 export interface SubmitProductCheckInput {
   scheduleId: number;
   userId:     string;
@@ -94,17 +62,6 @@ export interface SubmitProductCheckInput {
   barcode:    boolean;
   notes?:     string;
   skipGeo?:   boolean;
-}
-
-export interface SubmitReceivingInput {
-  scheduleId:       number;
-  userId:           string;
-  storeId:          number;
-  geo:              GeoPoint;
-  hasReceiving:     boolean;
-  receivingPhotos?: string[];
-  notes?:           string;
-  skipGeo?:         boolean;
 }
 
 export interface SubmitBriefingInput {
@@ -416,21 +373,17 @@ export async function materialiseTasksForSchedule(
   // ── Morning ────────────────────────────────────────────────────────────────
   if (isMorning) {
     const base = { ...baseCommon, shiftId: morningId };
-    await insertShared('storeOpening',
-      () => db.select({ id: storeOpeningTasks.id }).from(storeOpeningTasks).where(and(eq(storeOpeningTasks.storeId, sched.storeId), eq(storeOpeningTasks.date, dayStart))).limit(1).then(r => r[0]),
-      () => db.insert(storeOpeningTasks).values(base));
-    await insertShared('setoran',
-      () => db.select({ id: setoranTasks.id }).from(setoranTasks).where(and(eq(setoranTasks.storeId, sched.storeId), eq(setoranTasks.date, dayStart))).limit(1).then(r => r[0]),
-      () => db.insert(setoranTasks).values(base));
     await insertShared('cekBin',
       () => db.select({ id: cekBinTasks.id }).from(cekBinTasks).where(and(eq(cekBinTasks.storeId, sched.storeId), eq(cekBinTasks.date, dayStart))).limit(1).then(r => r[0]),
       () => db.insert(cekBinTasks).values(base));
     await insertShared('productCheck',
       () => db.select({ id: productCheckTasks.id }).from(productCheckTasks).where(and(eq(productCheckTasks.storeId, sched.storeId), eq(productCheckTasks.date, dayStart))).limit(1).then(r => r[0]),
       () => db.insert(productCheckTasks).values(base));
-    await insertShared('receiving',
-      () => db.select({ id: receivingTasks.id }).from(receivingTasks).where(and(eq(receivingTasks.storeId, sched.storeId), eq(receivingTasks.date, dayStart))).limit(1).then(r => r[0]),
-      () => db.insert(receivingTasks).values(base));
+    
+    // Item Dropping replaces Receiving
+    await insertShared('itemDropping',
+      () => db.select({ id: itemDroppingTasks.id }).from(itemDroppingTasks).where(and(eq(itemDroppingTasks.storeId, sched.storeId), eq(itemDroppingTasks.date, dayStart), inArray(itemDroppingTasks.status, ['pending', 'in_progress', 'discrepancy']))).limit(1).then(r => r[0]),
+      () => db.insert(itemDroppingTasks).values({ ...base, hasDropping: false, isReceived: false }));
   }
 
   // ── Evening ────────────────────────────────────────────────────────────────
@@ -489,11 +442,9 @@ export async function materialiseTasksForMonth(storeId: number, yearMonth: strin
 export async function deleteTasksForSchedule(scheduleId: number): Promise<void> {
   const eveningStatuses = [...PENDING_STATUSES, 'discrepancy'] as string[];
   await Promise.all([
-    db.delete(storeOpeningTasks) .where(and(eq(storeOpeningTasks.scheduleId,  scheduleId), inArray(storeOpeningTasks.status,  PENDING_STATUSES))),
-    db.delete(setoranTasks)      .where(and(eq(setoranTasks.scheduleId,       scheduleId), inArray(setoranTasks.status,       PENDING_STATUSES))),
     db.delete(cekBinTasks)       .where(and(eq(cekBinTasks.scheduleId,        scheduleId), inArray(cekBinTasks.status,        PENDING_STATUSES))),
     db.delete(productCheckTasks) .where(and(eq(productCheckTasks.scheduleId,  scheduleId), inArray(productCheckTasks.status,  PENDING_STATUSES))),
-    db.delete(receivingTasks)    .where(and(eq(receivingTasks.scheduleId,     scheduleId), inArray(receivingTasks.status,     PENDING_STATUSES))),
+    db.delete(itemDroppingTasks) .where(and(eq(itemDroppingTasks.scheduleId,  scheduleId), inArray(itemDroppingTasks.status,  eveningStatuses as any))),
     db.delete(briefingTasks)     .where(and(eq(briefingTasks.scheduleId,      scheduleId), inArray(briefingTasks.status,      eveningStatuses as any))),
     db.delete(edcSummaryTasks)   .where(and(eq(edcSummaryTasks.scheduleId,    scheduleId), inArray(edcSummaryTasks.status,    eveningStatuses as any))),
     db.delete(edcSettlementTasks).where(and(eq(edcSettlementTasks.scheduleId, scheduleId), inArray(edcSettlementTasks.status, eveningStatuses as any))),
@@ -506,66 +457,6 @@ export async function deleteTasksForSchedule(scheduleId: number): Promise<void> 
 // ─────────────────────────────────────────────────────────────────────────────
 // SUBMIT — morning tasks
 // ─────────────────────────────────────────────────────────────────────────────
-
-export async function submitStoreOpening(input: SubmitStoreOpeningInput): Promise<TaskResult<StoreOpeningTask>> {
-  try {
-    const gateErr = await assertCanProgressTask(input.scheduleId, input.storeId, input.geo, input.skipGeo);
-    if (gateErr) return { success: false, error: gateErr };
-
-    const [existing] = await db.select().from(storeOpeningTasks)
-      .where(eq(storeOpeningTasks.scheduleId, input.scheduleId)).limit(1);
-    if (existing?.status === 'completed' || existing?.status === 'verified')
-      return { success: false, error: 'Store opening task sudah disubmit.' };
-
-    const shiftMap = await getShiftIdMap();
-    const now      = new Date();
-    const values   = {
-      scheduleId: input.scheduleId, userId: input.userId, storeId: input.storeId,
-      shiftId: shiftMap['morning'], date: startOfDay(now),
-      loginPos: input.loginPos, checkAbsenSunfish: input.checkAbsenSunfish,
-      tarikSohSales: input.tarikSohSales, fiveR: input.fiveR,
-      fiveRPhotos: jsonPhotos(input.fiveRPhotos), cekPromo: input.cekPromo,
-      cekLamp: input.cekLamp, cekSoundSystem: input.cekSoundSystem,
-      storeFrontPhotos: jsonPhotos(input.storeFrontPhotos),
-      cashDrawerPhotos: jsonPhotos(input.cashDrawerPhotos),
-      submittedLat: String(input.geo.lat), submittedLng: String(input.geo.lng),
-      notes: input.notes, status: 'completed' as const, completedAt: now, updatedAt: now,
-    };
-
-    const row = existing
-      ? (await db.update(storeOpeningTasks).set(values).where(eq(storeOpeningTasks.id, existing.id)).returning())[0]
-      : (await db.insert(storeOpeningTasks).values(values).returning())[0];
-    return { success: true, data: row };
-  } catch (err) { return { success: false, error: `submitStoreOpening: ${err}` }; }
-}
-
-export async function submitSetoran(input: SubmitSetoranInput): Promise<TaskResult<SetoranTask>> {
-  try {
-    const gateErr = await assertCanProgressTask(input.scheduleId, input.storeId, input.geo, input.skipGeo);
-    if (gateErr) return { success: false, error: gateErr };
-
-    if (!input.moneyPhotos?.length) return { success: false, error: 'Minimal 1 foto uang wajib diupload.' };
-    if (!input.linkSetoran)         return { success: false, error: 'Link setoran wajib diisi.' };
-
-    const [existing] = await db.select().from(setoranTasks).where(eq(setoranTasks.scheduleId, input.scheduleId)).limit(1);
-    if (existing?.status === 'verified') return { success: false, error: 'Setoran sudah diverifikasi.' };
-
-    const shiftMap = await getShiftIdMap();
-    const now      = new Date();
-    const values   = {
-      scheduleId: input.scheduleId, userId: input.userId, storeId: input.storeId,
-      shiftId: shiftMap['morning'], date: startOfDay(now),
-      amount: input.amount, linkSetoran: input.linkSetoran, moneyPhotos: jsonPhotos(input.moneyPhotos),
-      submittedLat: String(input.geo.lat), submittedLng: String(input.geo.lng),
-      notes: input.notes, status: 'completed' as const, completedAt: now, updatedAt: now,
-    };
-
-    const row = existing
-      ? (await db.update(setoranTasks).set(values).where(eq(setoranTasks.id, existing.id)).returning())[0]
-      : (await db.insert(setoranTasks).values(values).returning())[0];
-    return { success: true, data: row };
-  } catch (err) { return { success: false, error: `submitSetoran: ${err}` }; }
-}
 
 export async function submitProductCheck(input: SubmitProductCheckInput): Promise<TaskResult<ProductCheckTask>> {
   try {
@@ -591,34 +482,6 @@ export async function submitProductCheck(input: SubmitProductCheckInput): Promis
       : (await db.insert(productCheckTasks).values(values).returning())[0];
     return { success: true, data: row };
   } catch (err) { return { success: false, error: `submitProductCheck: ${err}` }; }
-}
-
-export async function submitReceiving(input: SubmitReceivingInput): Promise<TaskResult<ReceivingTask>> {
-  try {
-    const gateErr = await assertCanProgressTask(input.scheduleId, input.storeId, input.geo, input.skipGeo);
-    if (gateErr) return { success: false, error: gateErr };
-
-    if (input.hasReceiving && !input.receivingPhotos?.length)
-      return { success: false, error: 'Foto wajib diupload jika ada penerimaan barang.' };
-
-    const [existing] = await db.select().from(receivingTasks).where(eq(receivingTasks.scheduleId, input.scheduleId)).limit(1);
-    if (existing?.status === 'verified') return { success: false, error: 'Receiving sudah diverifikasi.' };
-
-    const shiftMap = await getShiftIdMap();
-    const now      = new Date();
-    const values   = {
-      scheduleId: input.scheduleId, userId: input.userId, storeId: input.storeId,
-      shiftId: shiftMap['morning'], date: startOfDay(now),
-      hasReceiving: input.hasReceiving, receivingPhotos: jsonPhotos(input.receivingPhotos),
-      submittedLat: String(input.geo.lat), submittedLng: String(input.geo.lng),
-      notes: input.notes, status: 'completed' as const, completedAt: now, updatedAt: now,
-    };
-
-    const row = existing
-      ? (await db.update(receivingTasks).set(values).where(eq(receivingTasks.id, existing.id)).returning())[0]
-      : (await db.insert(receivingTasks).values(values).returning())[0];
-    return { success: true, data: row };
-  } catch (err) { return { success: false, error: `submitReceiving: ${err}` }; }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -792,11 +655,8 @@ export async function submitGrooming(input: SubmitGroomingInput): Promise<TaskRe
 // VERIFY
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const verifyStoreOpening  = (i: VerifyTaskInput) => runVerify(i, id => db.select({ id: storeOpeningTasks.id,  status: storeOpeningTasks.status  }).from(storeOpeningTasks) .where(eq(storeOpeningTasks.id,  id)).limit(1).then(r => r[0]), (id, p) => db.update(storeOpeningTasks) .set(p).where(eq(storeOpeningTasks.id,  id)).then(() => {}));
-export const verifySetoran       = (i: VerifyTaskInput) => runVerify(i, id => db.select({ id: setoranTasks.id,       status: setoranTasks.status       }).from(setoranTasks)      .where(eq(setoranTasks.id,       id)).limit(1).then(r => r[0]), (id, p) => db.update(setoranTasks)      .set(p).where(eq(setoranTasks.id,       id)).then(() => {}));
 export const verifyCekBin        = (i: VerifyTaskInput) => runVerify(i, id => db.select({ id: cekBinTasks.id,        status: cekBinTasks.status        }).from(cekBinTasks)       .where(eq(cekBinTasks.id,        id)).limit(1).then(r => r[0]), (id, p) => db.update(cekBinTasks)       .set(p).where(eq(cekBinTasks.id,        id)).then(() => {}));
 export const verifyProductCheck  = (i: VerifyTaskInput) => runVerify(i, id => db.select({ id: productCheckTasks.id,  status: productCheckTasks.status  }).from(productCheckTasks) .where(eq(productCheckTasks.id,  id)).limit(1).then(r => r[0]), (id, p) => db.update(productCheckTasks) .set(p).where(eq(productCheckTasks.id,  id)).then(() => {}));
-export const verifyReceiving     = (i: VerifyTaskInput) => runVerify(i, id => db.select({ id: receivingTasks.id,     status: receivingTasks.status     }).from(receivingTasks)    .where(eq(receivingTasks.id,     id)).limit(1).then(r => r[0]), (id, p) => db.update(receivingTasks)    .set(p).where(eq(receivingTasks.id,     id)).then(() => {}));
 export const verifyBriefing      = (i: VerifyTaskInput) => runVerify(i, id => db.select({ id: briefingTasks.id,      status: briefingTasks.status      }).from(briefingTasks)     .where(eq(briefingTasks.id,      id)).limit(1).then(r => r[0]), (id, p) => db.update(briefingTasks)     .set(p).where(eq(briefingTasks.id,      id)).then(() => {}));
 export const verifyEdcSummary    = (i: VerifyTaskInput) => runVerify(i, id => db.select({ id: edcSummaryTasks.id,    status: edcSummaryTasks.status    }).from(edcSummaryTasks)   .where(eq(edcSummaryTasks.id,    id)).limit(1).then(r => r[0]), (id, p) => db.update(edcSummaryTasks)   .set(p).where(eq(edcSummaryTasks.id,    id)).then(() => {}));
 export const verifyEdcSettlement = (i: VerifyTaskInput) => runVerify(i, id => db.select({ id: edcSettlementTasks.id, status: edcSettlementTasks.status }).from(edcSettlementTasks).where(eq(edcSettlementTasks.id, id)).limit(1).then(r => r[0]), (id, p) => db.update(edcSettlementTasks).set(p).where(eq(edcSettlementTasks.id, id)).then(() => {}));
@@ -809,24 +669,21 @@ export const verifyGrooming      = (i: VerifyTaskInput) => runVerify(i, id => db
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function getTasksForSchedule(scheduleId: number) {
-  const [opening, setoran, cekBin, productCheck, receiving, briefing, edcSummary, edcSettlement, eodZReport, openStatement, grooming] = await Promise.all([
-    db.select().from(storeOpeningTasks) .where(eq(storeOpeningTasks.scheduleId,  scheduleId)).limit(1),
-    db.select().from(setoranTasks)      .where(eq(setoranTasks.scheduleId,       scheduleId)).limit(1),
-    db.select().from(cekBinTasks)       .where(eq(cekBinTasks.scheduleId,        scheduleId)).limit(1),
-    db.select().from(productCheckTasks) .where(eq(productCheckTasks.scheduleId,  scheduleId)).limit(1),
-    db.select().from(receivingTasks)    .where(eq(receivingTasks.scheduleId,     scheduleId)).limit(1),
-    db.select().from(briefingTasks)     .where(eq(briefingTasks.scheduleId,      scheduleId)).limit(1),
-    db.select().from(edcSummaryTasks)   .where(eq(edcSummaryTasks.scheduleId,    scheduleId)).limit(1),
-    db.select().from(edcSettlementTasks).where(eq(edcSettlementTasks.scheduleId, scheduleId)).limit(1),
-    db.select().from(eodZReportTasks)   .where(eq(eodZReportTasks.scheduleId,    scheduleId)).limit(1),
-    db.select().from(openStatementTasks).where(eq(openStatementTasks.scheduleId, scheduleId)).limit(1),
-    db.select().from(groomingTasks)     .where(eq(groomingTasks.scheduleId,      scheduleId as any)).limit(1),
+  const [cekBin, productCheck, itemDropping, briefing, edcSummary, edcSettlement, eodZReport, openStatement, grooming] = await Promise.all([
+    db.select().from(cekBinTasks)        .where(eq(cekBinTasks.scheduleId,        scheduleId)).limit(1),
+    db.select().from(productCheckTasks)  .where(eq(productCheckTasks.scheduleId,  scheduleId)).limit(1),
+    db.select().from(itemDroppingTasks)  .where(eq(itemDroppingTasks.scheduleId,  scheduleId)).limit(1),
+    db.select().from(briefingTasks)      .where(eq(briefingTasks.scheduleId,      scheduleId)).limit(1),
+    db.select().from(edcSummaryTasks)    .where(eq(edcSummaryTasks.scheduleId,    scheduleId)).limit(1),
+    db.select().from(edcSettlementTasks) .where(eq(edcSettlementTasks.scheduleId, scheduleId)).limit(1),
+    db.select().from(eodZReportTasks)    .where(eq(eodZReportTasks.scheduleId,    scheduleId)).limit(1),
+    db.select().from(openStatementTasks) .where(eq(openStatementTasks.scheduleId, scheduleId)).limit(1),
+    db.select().from(groomingTasks)      .where(eq(groomingTasks.scheduleId,      scheduleId as any)).limit(1),
   ]);
 
   return {
-    storeOpening: opening[0] ?? null, setoran: setoran[0] ?? null,
     cekBin: cekBin[0] ?? null, productCheck: productCheck[0] ?? null,
-    receiving: receiving[0] ?? null, briefing: briefing[0] ?? null,
+    itemDropping: itemDropping[0] ?? null, briefing: briefing[0] ?? null,
     edcSummary: edcSummary[0] ?? null, edcSettlement: edcSettlement[0] ?? null,
     eodZReport: eodZReport[0] ?? null, openStatement: openStatement[0] ?? null,
     grooming: grooming[0] ?? null,
@@ -854,12 +711,10 @@ export async function getDailyTaskSummary(storeId: number, date: Date) {
     };
   }
 
-  const [opening, setoran, cekBin, productCheck, receiving, briefing, edcSummary, edcSettlement, eodZReport, openStatement, grooming] = await Promise.all([
-    db.select({ status: storeOpeningTasks.status,  count: sql<number>`count(*)::int` }).from(storeOpeningTasks) .where(and(eq(storeOpeningTasks.storeId,  storeId), gte(storeOpeningTasks.date,  dayStart), lte(storeOpeningTasks.date,  dayEnd))).groupBy(storeOpeningTasks.status) .then(summarise),
-    db.select({ status: setoranTasks.status,       count: sql<number>`count(*)::int` }).from(setoranTasks)      .where(and(eq(setoranTasks.storeId,       storeId), gte(setoranTasks.date,       dayStart), lte(setoranTasks.date,       dayEnd))).groupBy(setoranTasks.status)      .then(summarise),
+  const [cekBin, productCheck, itemDropping, briefing, edcSummary, edcSettlement, eodZReport, openStatement, grooming] = await Promise.all([
     db.select({ status: cekBinTasks.status,        count: sql<number>`count(*)::int` }).from(cekBinTasks)       .where(and(eq(cekBinTasks.storeId,        storeId), gte(cekBinTasks.date,        dayStart), lte(cekBinTasks.date,        dayEnd))).groupBy(cekBinTasks.status)       .then(summarise),
     db.select({ status: productCheckTasks.status,  count: sql<number>`count(*)::int` }).from(productCheckTasks) .where(and(eq(productCheckTasks.storeId,  storeId), gte(productCheckTasks.date,  dayStart), lte(productCheckTasks.date,  dayEnd))).groupBy(productCheckTasks.status) .then(summarise),
-    db.select({ status: receivingTasks.status,     count: sql<number>`count(*)::int` }).from(receivingTasks)    .where(and(eq(receivingTasks.storeId,     storeId), gte(receivingTasks.date,     dayStart), lte(receivingTasks.date,     dayEnd))).groupBy(receivingTasks.status)    .then(summarise),
+    db.select({ status: itemDroppingTasks.status,  count: sql<number>`count(*)::int` }).from(itemDroppingTasks) .where(and(eq(itemDroppingTasks.storeId,  storeId), gte(itemDroppingTasks.date,  dayStart), lte(itemDroppingTasks.date,  dayEnd))).groupBy(itemDroppingTasks.status) .then(summarise),
     db.select({ status: briefingTasks.status,      count: sql<number>`count(*)::int` }).from(briefingTasks)     .where(and(eq(briefingTasks.storeId,      storeId), gte(briefingTasks.date,      dayStart), lte(briefingTasks.date,      dayEnd))).groupBy(briefingTasks.status)     .then(summarise),
     db.select({ status: edcSummaryTasks.status,    count: sql<number>`count(*)::int` }).from(edcSummaryTasks)   .where(and(eq(edcSummaryTasks.storeId,    storeId), gte(edcSummaryTasks.date,    dayStart), lte(edcSummaryTasks.date,    dayEnd))).groupBy(edcSummaryTasks.status)   .then(summarise),
     db.select({ status: edcSettlementTasks.status, count: sql<number>`count(*)::int` }).from(edcSettlementTasks).where(and(eq(edcSettlementTasks.storeId, storeId), gte(edcSettlementTasks.date, dayStart), lte(edcSettlementTasks.date, dayEnd))).groupBy(edcSettlementTasks.status).then(summarise),
@@ -868,7 +723,7 @@ export async function getDailyTaskSummary(storeId: number, date: Date) {
     db.select({ status: groomingTasks.status,      count: sql<number>`count(*)::int` }).from(groomingTasks)     .where(and(eq(groomingTasks.storeId,      storeId), gte(groomingTasks.date,      dayStart), lte(groomingTasks.date,      dayEnd))).groupBy(groomingTasks.status)     .then(summarise),
   ]);
 
-  return { storeOpening: opening, setoran, cekBin, productCheck, receiving, briefing, edcSummary, edcSettlement, eodZReport, openStatement, grooming };
+  return { cekBin, productCheck, itemDropping, briefing, edcSummary, edcSettlement, eodZReport, openStatement, grooming };
 }
 
 function parsePhotosField(raw: unknown): string[] {
@@ -920,12 +775,10 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
     });
   }
 
-  const [opening, setoran, cekBin, productCheck, receiving, briefing, edcSummary, edcSettlement, eodZReport, openStatement, grooming] = await Promise.all([
-    loadTable(storeOpeningTasks,  'store_opening',  ['storeFrontPhotos', 'cashDrawerPhotos', 'fiveRPhotos']),
-    loadTable(setoranTasks,       'setoran',        ['moneyPhotos']),
+  const [cekBin, productCheck, itemDropping, briefing, edcSummary, edcSettlement, eodZReport, openStatement, grooming] = await Promise.all([
     loadTable(cekBinTasks,        'cek_bin',        []),
     loadTable(productCheckTasks,  'product_check',  []),
-    loadTable(receivingTasks,     'receiving',      ['receivingPhotos']),
+    loadTable(itemDroppingTasks,  'item_dropping',  ['droppingPhotos']),
     loadTable(briefingTasks,      'briefing',       []),
     loadTable(edcSummaryTasks,    'edc_summary',    ['edcSummaryPhotos']),
     loadTable(edcSettlementTasks, 'edc_settlement', ['edcSettlementPhotos']),
@@ -934,7 +787,7 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
     loadTable(groomingTasks,      'grooming',       ['selfiePhotos']),
   ]);
 
-  const all = [...opening, ...setoran, ...cekBin, ...productCheck, ...receiving, ...briefing, ...edcSummary, ...edcSettlement, ...eodZReport, ...openStatement, ...grooming];
+  const all = [...cekBin, ...productCheck, ...itemDropping, ...briefing, ...edcSummary, ...edcSettlement, ...eodZReport, ...openStatement, ...grooming];
   const shiftOrder: Record<string, number> = { morning: 0, full_day: 1, evening: 2 };
   all.sort((a, b) => {
     const sa = a.shift ? shiftOrder[a.shift] ?? 3 : 3;
@@ -989,8 +842,10 @@ export async function getAreaTaskOverview(opsUserId: string, date: Date) {
 }
 
 const VERIFY_DISPATCH: Record<string, (i: VerifyTaskInput) => Promise<TaskResult<void>>> = {
-  store_opening: verifyStoreOpening, setoran: verifySetoran, cek_bin: verifyCekBin,
-  product_check: verifyProductCheck, receiving: verifyReceiving, briefing: verifyBriefing,
+  cek_bin: verifyCekBin,
+  product_check: verifyProductCheck,
+  item_dropping: async (i) => { const { verifyItemDropping } = await import('@/lib/db/utils/item-dropping'); return verifyItemDropping(i); },
+  briefing: verifyBriefing,
   edc_summary: verifyEdcSummary, edc_settlement: verifyEdcSettlement,
   eod_z_report: verifyEodZReport, open_statement: verifyOpenStatement, grooming: verifyGrooming,
 };
