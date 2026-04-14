@@ -12,8 +12,8 @@ import {
   schedules, attendance, breakSessions,
   users, stores, shifts,
   storeOpeningTasks, setoranTasks, productCheckTasks,
-  receivingTasks, briefingTasks, edcSummaryTasks,
-  edcSettlementTasks, eodZReportTasks, openStatementTasks,
+  itemDroppingTasks, briefingTasks, edcReconciliationTasks,  
+  eodZReportTasks, openStatementTasks,
   groomingTasks,
 } from '@/lib/db/schema';
 import { and, eq, gte, lte } from 'drizzle-orm';
@@ -82,11 +82,11 @@ async function seedAttendance() {
   let cntPresent = 0;
   let cntBreaks  = 0;
 
-  const taskDone: Record<string, number> = {
-    storeOpening: 0, setoran: 0, productCheck: 0, receiving: 0,
-    briefing: 0, edcSummary: 0, edcSettlement: 0, eodZReport: 0, openStatement: 0,
-    grooming: 0,
-  };
+    const taskDone: Record<string, number> = {
+      storeOpening: 0, setoran: 0, productCheck: 0, itemDropping: 0,  
+      briefing: 0, edcReconciliation: 0, eodZReport: 0, openStatement: 0, 
+      grooming: 0,
+    };
 
   for (const { sched, shiftCode } of scheduleRows) {
     // Validate shift code is one we know how to handle
@@ -242,9 +242,10 @@ async function seedAttendance() {
           setoranTasks as any,
           {
             amount,
-            linkSetoran:  `https://transfer.example.com/ref/${rand(100000, 999999)}`,
-            moneyPhotos:  JSON.stringify(['setoran/sample-money.jpg']),
-            notes:        chance(0.2) ? 'Transfer confirmed.' : null,
+            linkSetoran: `https://transfer.example.com/ref/${rand(100000, 999999)}`,
+            // CHANGED: moneyPhotos (JSON) → resiPhoto (single string)
+            resiPhoto:  'setoran/sample-resi.jpg',
+            notes:      chance(0.2) ? 'Transfer confirmed.' : null,
           },
           'setoran',
         );
@@ -266,20 +267,28 @@ async function seedAttendance() {
         );
       }
 
+      // CHANGED: receivingTasks → itemDroppingTasks with correct columns
       if (chance(0.80)) {
-        const hasReceiving = chance(0.30);
+        const hasDropping = chance(0.30);
+        const isReceived  = hasDropping ? chance(0.90) : false;
         await completeTask(
-          receivingTasks as any,
+          itemDroppingTasks as any,
           {
-            hasReceiving,
-            receivingPhotos: hasReceiving
-              ? JSON.stringify(['receiving/sample-delivery.jpg'])
+            hasDropping,
+            dropTime:    hasDropping ? new Date(checkIn.getTime() + rand(10, 60) * 60_000) : null,
+            droppingPhotos: hasDropping
+              ? JSON.stringify(['dropping/sample-delivery.jpg'])
               : null,
-            notes: hasReceiving
-              ? `Received ${rand(2, 10)} boxes from supplier.`
+            isReceived,
+            receiveTime:   isReceived ? new Date(checkIn.getTime() + rand(30, 120) * 60_000) : null,
+            receivePhotos: isReceived
+              ? JSON.stringify(['dropping/sample-receipt.jpg'])
+              : null,
+            notes: hasDropping
+              ? (isReceived ? `Received ${rand(2, 10)} boxes.` : 'Dropped off, awaiting receipt confirmation.')
               : 'No delivery today.',
           },
-          'receiving',
+          'itemDropping',
         );
       }
     }
@@ -288,30 +297,27 @@ async function seedAttendance() {
       if (chance(0.70)) {
         await completeTask(
           briefingTasks as any,
-          { done: true, notes: chance(0.2) ? 'Briefing done, team aligned.' : null },
+          {
+            done:       true,
+            isBalanced: true,  // ← ADDED: schema expects this for completed state
+            notes:      chance(0.2) ? 'Briefing done, team aligned.' : null,
+          },
           'briefing',
         );
       }
 
+      // CHANGED: Merged edcSummary + edcSettlement into edcReconciliation
+      // Schema has no photo columns — uses isBalanced + expectedFetchedAt
       if (chance(0.70)) {
         await completeTask(
-          edcSummaryTasks as any,
+          edcReconciliationTasks as any,
           {
-            edcSummaryPhotos: JSON.stringify(['edc/summary-sample.jpg']),
-            notes:            chance(0.2) ? 'No issues.' : null,
+            expectedFetchedAt: new Date(checkIn.getTime() + rand(5, 15) * 60_000),
+            expectedSnapshot:  JSON.stringify({ rows: [], generatedAt: new Date().toISOString() }),
+            isBalanced:        true,
+            notes:             chance(0.2) ? 'EDC reconciled, no discrepancies.' : null,
           },
-          'edcSummary',
-        );
-      }
-
-      if (chance(0.70)) {
-        await completeTask(
-          edcSettlementTasks as any,
-          {
-            edcSettlementPhotos: JSON.stringify(['edc/settlement-sample.jpg']),
-            notes:               chance(0.2) ? 'Settled successfully.' : null,
-          },
-          'edcSettlement',
+          'edcReconciliation',
         );
       }
 
@@ -319,6 +325,7 @@ async function seedAttendance() {
         await completeTask(
           eodZReportTasks as any,
           {
+            totalNominal:  (5_000_000 + rand(0, 20) * 100_000).toString(),
             zReportPhotos: JSON.stringify(['eod/z-report-sample.jpg']),
             notes:         chance(0.2) ? 'Z-report printed and filed.' : null,
           },
@@ -326,12 +333,18 @@ async function seedAttendance() {
         );
       }
 
+      // CHANGED: openStatementTasks has no photo column.
+      // Uses expectedAmount, actualAmount, isBalanced
       if (chance(0.70)) {
+        const expected = 10_000_000 + rand(0, 5) * 500_000;
         await completeTask(
           openStatementTasks as any,
           {
-            openStatementPhotos: JSON.stringify(['statement/open-statement-sample.jpg']),
-            notes:               chance(0.2) ? 'Statement list filed.' : null,
+            expectedAmount:    expected.toString(),
+            expectedFetchedAt: new Date(checkIn.getTime() + rand(10, 30) * 60_000),
+            actualAmount:      expected.toString(), // Balanced for seed
+            isBalanced:        true,
+            notes:             chance(0.2) ? 'Open statement matched.' : null,
           },
           'openStatement',
         );

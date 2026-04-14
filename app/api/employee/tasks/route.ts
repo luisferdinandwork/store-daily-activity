@@ -6,8 +6,8 @@ import { db }                        from '@/lib/db';
 import {
   schedules, shifts,
   storeOpeningTasks, setoranTasks, cekBinTasks,
-  productCheckTasks, briefingTasks,
-  edcSummaryTasks, edcSettlementTasks, eodZReportTasks,
+  productCheckTasks, briefingTasks, 
+  edcReconciliationTasks, eodZReportTasks,
   openStatementTasks, groomingTasks,
   itemDroppingTasks,
 } from '@/lib/db/schema';
@@ -89,10 +89,17 @@ export async function GET(request: NextRequest) {
 
   // ── 2. Fetch tasks in parallel ─────────────────────────────────────────────
   const [
-    openingRows, setoranRows, cekBinRows, productCheckRows, itemDroppingRows,
-    briefingRows, edcSummaryRows, edcSettlementRows, eodZReportRows,
-    openStatementRows, groomingRows,
-  ] = await Promise.all([
+  openingRows,
+  setoranRows,
+  cekBinRows,
+  productCheckRows,      
+  itemDroppingRows,      
+  edcReconciliationRows, 
+  briefingRows,
+  eodZReportRows,
+  openStatementRows,
+  groomingRows,
+] = await Promise.all([
 
     hasMorningTasks
       ? db.select().from(storeOpeningTasks)
@@ -112,34 +119,34 @@ export async function GET(request: NextRequest) {
           .orderBy(desc(cekBinTasks.date))
       : Promise.resolve([]),
 
+    // ← ADD: productCheckTasks query
     hasMorningTasks
       ? db.select().from(productCheckTasks)
           .where(and(gte(productCheckTasks.date, dayStart), lte(productCheckTasks.date, dayEnd)))
           .orderBy(desc(productCheckTasks.date))
       : Promise.resolve([]),
 
+    // ← ADD: itemDroppingTasks query
     hasMorningTasks
       ? db.select().from(itemDroppingTasks)
           .where(and(gte(itemDroppingTasks.date, dayStart), lte(itemDroppingTasks.date, dayEnd)))
           .orderBy(desc(itemDroppingTasks.date))
       : Promise.resolve([]),
 
+    // Evening tasks
+    hasEveningTasks
+      ? db.select().from(edcReconciliationTasks)
+          .where(and(
+            gte(edcReconciliationTasks.date, dayStart),
+            lte(edcReconciliationTasks.date, dayEnd),
+          ))
+          .orderBy(desc(edcReconciliationTasks.date))
+      : Promise.resolve([]),
+
     hasEveningTasks
       ? db.select().from(briefingTasks)
           .where(and(gte(briefingTasks.date, dayStart), lte(briefingTasks.date, dayEnd)))
           .orderBy(desc(briefingTasks.date))
-      : Promise.resolve([]),
-
-    hasEveningTasks
-      ? db.select().from(edcSummaryTasks)
-          .where(and(gte(edcSummaryTasks.date, dayStart), lte(edcSummaryTasks.date, dayEnd)))
-          .orderBy(desc(edcSummaryTasks.date))
-      : Promise.resolve([]),
-
-    hasEveningTasks
-      ? db.select().from(edcSettlementTasks)
-          .where(and(gte(edcSettlementTasks.date, dayStart), lte(edcSettlementTasks.date, dayEnd)))
-          .orderBy(desc(edcSettlementTasks.date))
       : Promise.resolve([]),
 
     hasEveningTasks
@@ -154,6 +161,7 @@ export async function GET(request: NextRequest) {
           .orderBy(desc(openStatementTasks.date))
       : Promise.resolve([]),
 
+    // Both shifts - personal
     scheduleIds.length
       ? db.select().from(groomingTasks)
           .where(and(
@@ -238,13 +246,14 @@ export async function GET(request: NextRequest) {
         storeId: String(t.storeId), shift: 'morning' as const, date: t.date.toISOString(),
         // Carry-forward chain
         parentTaskId: t.parentTaskId,
-        // Core data
-        hasDropping:    t.hasDropping,
-        dropTime:       toIso(t.dropTime),
-        droppingPhotos: parsePhotos(t.droppingPhotos),
+        // Drop-off data
+        hasDropping:      t.hasDropping,
+        dropTime:         toIso(t.dropTime),
+        droppingPhotos:   parsePhotos(t.droppingPhotos),
         // Receipt confirmation
         isReceived:       t.isReceived,
         receiveTime:      toIso(t.receiveTime),
+        receivePhotos:    parsePhotos(t.receivePhotos),
         receivedByUserId: t.receivedByUserId,
         // Lifecycle
         status: t.status, notes: t.notes,
@@ -265,40 +274,31 @@ export async function GET(request: NextRequest) {
       },
     })),
 
-    ...edcSummaryRows.filter(r => inStore(r.storeId)).map(t => ({
-      type: 'edc_summary' as const,
-      shift: (shiftCodeMap[t.shiftId] ?? 'evening') as ShiftCode,
-      data: {
-        id: String(t.id), scheduleId: String(t.scheduleId), userId: t.userId,
-        storeId: String(t.storeId), shift: 'evening' as const, date: t.date.toISOString(),
-        edcSummaryPhotos: parsePhotos(t.edcSummaryPhotos),
-        isBalanced: t.isBalanced, parentTaskId: t.parentTaskId,
-        status: t.status, notes: t.notes,
-        completedAt: toIso(t.completedAt), verifiedBy: t.verifiedBy, verifiedAt: toIso(t.verifiedAt),
-      },
-    })),
-
-    ...edcSettlementRows.filter(r => inStore(r.storeId)).map(t => ({
-      type: 'edc_settlement' as const,
-      shift: (shiftCodeMap[t.shiftId] ?? 'evening') as ShiftCode,
-      data: {
-        id: String(t.id), scheduleId: String(t.scheduleId), userId: t.userId,
-        storeId: String(t.storeId), shift: 'evening' as const, date: t.date.toISOString(),
-        edcSettlementPhotos: parsePhotos(t.edcSettlementPhotos),
-        isBalanced: t.isBalanced, parentTaskId: t.parentTaskId,
-        status: t.status, notes: t.notes,
-        completedAt: toIso(t.completedAt), verifiedBy: t.verifiedBy, verifiedAt: toIso(t.verifiedAt),
-      },
-    })),
-
     ...eodZReportRows.filter(r => inStore(r.storeId)).map(t => ({
       type: 'eod_z_report' as const,
       shift: (shiftCodeMap[t.shiftId] ?? 'evening') as ShiftCode,
       data: {
         id: String(t.id), scheduleId: String(t.scheduleId), userId: t.userId,
         storeId: String(t.storeId), shift: 'evening' as const, date: t.date.toISOString(),
+        totalNominal: t.totalNominal,
         zReportPhotos: parsePhotos(t.zReportPhotos),
-        isBalanced: t.isBalanced, parentTaskId: t.parentTaskId,
+        status: t.status, notes: t.notes,
+        completedAt: toIso(t.completedAt), verifiedBy: t.verifiedBy, verifiedAt: toIso(t.verifiedAt),
+      },
+    })),
+
+    ...edcReconciliationRows.filter(r => inStore(r.storeId)).map(t => ({
+      type: 'edc_reconciliation' as const,
+      shift: (shiftCodeMap[t.shiftId] ?? 'evening') as ShiftCode,
+      data: {
+        id: String(t.id), scheduleId: String(t.scheduleId), userId: t.userId,
+        storeId: String(t.storeId), shift: 'evening' as const, date: t.date.toISOString(),
+        parentTaskId: t.parentTaskId,
+        isBalanced:   t.isBalanced,
+        expectedFetchedAt:          toIso(t.expectedFetchedAt),
+        discrepancyStartedAt:       toIso(t.discrepancyStartedAt),
+        discrepancyResolvedAt:      toIso(t.discrepancyResolvedAt),
+        discrepancyDurationMinutes: t.discrepancyDurationMinutes,
         status: t.status, notes: t.notes,
         completedAt: toIso(t.completedAt), verifiedBy: t.verifiedBy, verifiedAt: toIso(t.verifiedAt),
       },
@@ -310,8 +310,14 @@ export async function GET(request: NextRequest) {
       data: {
         id: String(t.id), scheduleId: String(t.scheduleId), userId: t.userId,
         storeId: String(t.storeId), shift: 'evening' as const, date: t.date.toISOString(),
-        openStatementPhotos: parsePhotos(t.openStatementPhotos),
-        isBalanced: t.isBalanced, parentTaskId: t.parentTaskId,
+        parentTaskId: t.parentTaskId,
+        expectedAmount:    t.expectedAmount,
+        expectedFetchedAt: toIso(t.expectedFetchedAt),
+        actualAmount:      t.actualAmount,
+        isBalanced:        t.isBalanced,
+        discrepancyStartedAt:       toIso(t.discrepancyStartedAt),
+        discrepancyResolvedAt:      toIso(t.discrepancyResolvedAt),
+        discrepancyDurationMinutes: t.discrepancyDurationMinutes,
         status: t.status, notes: t.notes,
         completedAt: toIso(t.completedAt), verifiedBy: t.verifiedBy, verifiedAt: toIso(t.verifiedAt),
       },
@@ -406,13 +412,9 @@ export async function PATCH(request: NextRequest) {
       getRow: async id => (await db.select({ status: briefingTasks.status }).from(briefingTasks).where(eq(briefingTasks.id, id)).limit(1))[0],
       update: id => db.update(briefingTasks).set({ status: 'in_progress', updatedAt: new Date() }).where(eq(briefingTasks.id, id)).then(() => {}),
     },
-    edc_summary: {
-      getRow: async id => (await db.select({ status: edcSummaryTasks.status }).from(edcSummaryTasks).where(eq(edcSummaryTasks.id, id)).limit(1))[0],
-      update: id => db.update(edcSummaryTasks).set({ status: 'in_progress', updatedAt: new Date() }).where(eq(edcSummaryTasks.id, id)).then(() => {}),
-    },
-    edc_settlement: {
-      getRow: async id => (await db.select({ status: edcSettlementTasks.status }).from(edcSettlementTasks).where(eq(edcSettlementTasks.id, id)).limit(1))[0],
-      update: id => db.update(edcSettlementTasks).set({ status: 'in_progress', updatedAt: new Date() }).where(eq(edcSettlementTasks.id, id)).then(() => {}),
+    edc_reconciliation: {
+      getRow: async id => (await db.select({ status: edcReconciliationTasks.status }).from(edcReconciliationTasks).where(eq(edcReconciliationTasks.id, id)).limit(1))[0],
+      update: id => db.update(edcReconciliationTasks).set({ status: 'in_progress', updatedAt: new Date() }).where(eq(edcReconciliationTasks.id, id)).then(() => {}),
     },
     eod_z_report: {
       getRow: async id => (await db.select({ status: eodZReportTasks.status }).from(eodZReportTasks).where(eq(eodZReportTasks.id, id)).limit(1))[0],

@@ -1,5 +1,5 @@
 {
-  "id": "711ac9b2-d543-4fec-a38d-162d7ae1b9bf",
+  "id": "27527126-d12f-495f-b87c-409fc060c04b",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -1895,8 +1895,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.edc_settlement_tasks": {
-      "name": "edc_settlement_tasks",
+    "public.edc_reconciliation_tasks": {
+      "name": "edc_reconciliation_tasks",
       "schema": "",
       "columns": {
         "id": {
@@ -1941,8 +1941,14 @@
           "primaryKey": false,
           "notNull": false
         },
-        "edc_settlement_photos": {
-          "name": "edc_settlement_photos",
+        "expected_fetched_at": {
+          "name": "expected_fetched_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "expected_snapshot": {
+          "name": "expected_snapshot",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -1950,6 +1956,24 @@
         "is_balanced": {
           "name": "is_balanced",
           "type": "boolean",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "discrepancy_started_at": {
+          "name": "discrepancy_started_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "discrepancy_resolved_at": {
+          "name": "discrepancy_resolved_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "discrepancy_duration_minutes": {
+          "name": "discrepancy_duration_minutes",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false
         },
@@ -2014,9 +2038,9 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "edc_settlement_tasks_schedule_id_schedules_id_fk": {
-          "name": "edc_settlement_tasks_schedule_id_schedules_id_fk",
-          "tableFrom": "edc_settlement_tasks",
+        "edc_reconciliation_tasks_schedule_id_schedules_id_fk": {
+          "name": "edc_reconciliation_tasks_schedule_id_schedules_id_fk",
+          "tableFrom": "edc_reconciliation_tasks",
           "tableTo": "schedules",
           "columnsFrom": [
             "schedule_id"
@@ -2027,9 +2051,9 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "edc_settlement_tasks_user_id_users_id_fk": {
-          "name": "edc_settlement_tasks_user_id_users_id_fk",
-          "tableFrom": "edc_settlement_tasks",
+        "edc_reconciliation_tasks_user_id_users_id_fk": {
+          "name": "edc_reconciliation_tasks_user_id_users_id_fk",
+          "tableFrom": "edc_reconciliation_tasks",
           "tableTo": "users",
           "columnsFrom": [
             "user_id"
@@ -2040,9 +2064,9 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "edc_settlement_tasks_store_id_stores_id_fk": {
-          "name": "edc_settlement_tasks_store_id_stores_id_fk",
-          "tableFrom": "edc_settlement_tasks",
+        "edc_reconciliation_tasks_store_id_stores_id_fk": {
+          "name": "edc_reconciliation_tasks_store_id_stores_id_fk",
+          "tableFrom": "edc_reconciliation_tasks",
           "tableTo": "stores",
           "columnsFrom": [
             "store_id"
@@ -2053,9 +2077,9 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "edc_settlement_tasks_shift_id_shifts_id_fk": {
-          "name": "edc_settlement_tasks_shift_id_shifts_id_fk",
-          "tableFrom": "edc_settlement_tasks",
+        "edc_reconciliation_tasks_shift_id_shifts_id_fk": {
+          "name": "edc_reconciliation_tasks_shift_id_shifts_id_fk",
+          "tableFrom": "edc_reconciliation_tasks",
           "tableTo": "shifts",
           "columnsFrom": [
             "shift_id"
@@ -2066,9 +2090,9 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "edc_settlement_tasks_verified_by_users_id_fk": {
-          "name": "edc_settlement_tasks_verified_by_users_id_fk",
-          "tableFrom": "edc_settlement_tasks",
+        "edc_reconciliation_tasks_verified_by_users_id_fk": {
+          "name": "edc_reconciliation_tasks_verified_by_users_id_fk",
+          "tableFrom": "edc_reconciliation_tasks",
           "tableTo": "users",
           "columnsFrom": [
             "verified_by"
@@ -2086,8 +2110,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.edc_summary_tasks": {
-      "name": "edc_summary_tasks",
+    "public.edc_transaction_rows": {
+      "name": "edc_transaction_rows",
       "schema": "",
       "columns": {
         "id": {
@@ -2096,95 +2120,52 @@
           "primaryKey": true,
           "notNull": true
         },
-        "schedule_id": {
-          "name": "schedule_id",
+        "edc_task_id": {
+          "name": "edc_task_id",
           "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
-        "user_id": {
-          "name": "user_id",
-          "type": "text",
+        "transaction_type": {
+          "name": "transaction_type",
+          "type": "tx_type",
+          "typeSchema": "public",
           "primaryKey": false,
           "notNull": true
         },
-        "store_id": {
-          "name": "store_id",
-          "type": "integer",
+        "expected_amount": {
+          "name": "expected_amount",
+          "type": "numeric(14, 2)",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
-        "shift_id": {
-          "name": "shift_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "date": {
-          "name": "date",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "parent_task_id": {
-          "name": "parent_task_id",
+        "expected_count": {
+          "name": "expected_count",
           "type": "integer",
           "primaryKey": false,
           "notNull": false
         },
-        "edc_summary_photos": {
-          "name": "edc_summary_photos",
-          "type": "text",
+        "actual_amount": {
+          "name": "actual_amount",
+          "type": "numeric(14, 2)",
           "primaryKey": false,
           "notNull": false
         },
-        "is_balanced": {
-          "name": "is_balanced",
+        "actual_count": {
+          "name": "actual_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "matches": {
+          "name": "matches",
           "type": "boolean",
           "primaryKey": false,
           "notNull": false
         },
-        "submitted_lat": {
-          "name": "submitted_lat",
-          "type": "numeric(10, 7)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "submitted_lng": {
-          "name": "submitted_lng",
-          "type": "numeric(10, 7)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "status": {
-          "name": "status",
-          "type": "task_status",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'pending'"
-        },
         "notes": {
           "name": "notes",
           "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "completed_at": {
-          "name": "completed_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "verified_by": {
-          "name": "verified_by",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "verified_at": {
-          "name": "verified_at",
-          "type": "timestamp",
           "primaryKey": false,
           "notNull": false
         },
@@ -2205,69 +2186,17 @@
       },
       "indexes": {},
       "foreignKeys": {
-        "edc_summary_tasks_schedule_id_schedules_id_fk": {
-          "name": "edc_summary_tasks_schedule_id_schedules_id_fk",
-          "tableFrom": "edc_summary_tasks",
-          "tableTo": "schedules",
+        "edc_transaction_rows_edc_task_id_edc_reconciliation_tasks_id_fk": {
+          "name": "edc_transaction_rows_edc_task_id_edc_reconciliation_tasks_id_fk",
+          "tableFrom": "edc_transaction_rows",
+          "tableTo": "edc_reconciliation_tasks",
           "columnsFrom": [
-            "schedule_id"
+            "edc_task_id"
           ],
           "columnsTo": [
             "id"
           ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "edc_summary_tasks_user_id_users_id_fk": {
-          "name": "edc_summary_tasks_user_id_users_id_fk",
-          "tableFrom": "edc_summary_tasks",
-          "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "edc_summary_tasks_store_id_stores_id_fk": {
-          "name": "edc_summary_tasks_store_id_stores_id_fk",
-          "tableFrom": "edc_summary_tasks",
-          "tableTo": "stores",
-          "columnsFrom": [
-            "store_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "edc_summary_tasks_shift_id_shifts_id_fk": {
-          "name": "edc_summary_tasks_shift_id_shifts_id_fk",
-          "tableFrom": "edc_summary_tasks",
-          "tableTo": "shifts",
-          "columnsFrom": [
-            "shift_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "edc_summary_tasks_verified_by_users_id_fk": {
-          "name": "edc_summary_tasks_verified_by_users_id_fk",
-          "tableFrom": "edc_summary_tasks",
-          "tableTo": "users",
-          "columnsFrom": [
-            "verified_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
+          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
@@ -2317,21 +2246,15 @@
           "primaryKey": false,
           "notNull": true
         },
-        "parent_task_id": {
-          "name": "parent_task_id",
-          "type": "integer",
+        "total_nominal": {
+          "name": "total_nominal",
+          "type": "numeric(14, 2)",
           "primaryKey": false,
           "notNull": false
         },
         "z_report_photos": {
           "name": "z_report_photos",
           "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "is_balanced": {
-          "name": "is_balanced",
-          "type": "boolean",
           "primaryKey": false,
           "notNull": false
         },
@@ -2720,6 +2643,242 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.item_dropping_tasks": {
+      "name": "item_dropping_tasks",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "schedule_id": {
+          "name": "schedule_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "store_id": {
+          "name": "store_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "shift_id": {
+          "name": "shift_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "date": {
+          "name": "date",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "parent_task_id": {
+          "name": "parent_task_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "has_dropping": {
+          "name": "has_dropping",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "drop_time": {
+          "name": "drop_time",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "dropping_photos": {
+          "name": "dropping_photos",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "is_received": {
+          "name": "is_received",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "receive_time": {
+          "name": "receive_time",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "receive_photos": {
+          "name": "receive_photos",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "received_by_user_id": {
+          "name": "received_by_user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "submitted_lat": {
+          "name": "submitted_lat",
+          "type": "numeric(10, 7)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "submitted_lng": {
+          "name": "submitted_lng",
+          "type": "numeric(10, 7)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "task_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "notes": {
+          "name": "notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "verified_by": {
+          "name": "verified_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "verified_at": {
+          "name": "verified_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "item_dropping_tasks_schedule_id_schedules_id_fk": {
+          "name": "item_dropping_tasks_schedule_id_schedules_id_fk",
+          "tableFrom": "item_dropping_tasks",
+          "tableTo": "schedules",
+          "columnsFrom": [
+            "schedule_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "item_dropping_tasks_user_id_users_id_fk": {
+          "name": "item_dropping_tasks_user_id_users_id_fk",
+          "tableFrom": "item_dropping_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "item_dropping_tasks_store_id_stores_id_fk": {
+          "name": "item_dropping_tasks_store_id_stores_id_fk",
+          "tableFrom": "item_dropping_tasks",
+          "tableTo": "stores",
+          "columnsFrom": [
+            "store_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "item_dropping_tasks_shift_id_shifts_id_fk": {
+          "name": "item_dropping_tasks_shift_id_shifts_id_fk",
+          "tableFrom": "item_dropping_tasks",
+          "tableTo": "shifts",
+          "columnsFrom": [
+            "shift_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "item_dropping_tasks_received_by_user_id_users_id_fk": {
+          "name": "item_dropping_tasks_received_by_user_id_users_id_fk",
+          "tableFrom": "item_dropping_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "received_by_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "item_dropping_tasks_verified_by_users_id_fk": {
+          "name": "item_dropping_tasks_verified_by_users_id_fk",
+          "tableFrom": "item_dropping_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "verified_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.open_statement_tasks": {
       "name": "open_statement_tasks",
       "schema": "",
@@ -2766,15 +2925,45 @@
           "primaryKey": false,
           "notNull": false
         },
-        "open_statement_photos": {
-          "name": "open_statement_photos",
-          "type": "text",
+        "expected_amount": {
+          "name": "expected_amount",
+          "type": "numeric(14, 2)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "expected_fetched_at": {
+          "name": "expected_fetched_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "actual_amount": {
+          "name": "actual_amount",
+          "type": "numeric(14, 2)",
           "primaryKey": false,
           "notNull": false
         },
         "is_balanced": {
           "name": "is_balanced",
           "type": "boolean",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "discrepancy_started_at": {
+          "name": "discrepancy_started_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "discrepancy_resolved_at": {
+          "name": "discrepancy_resolved_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "discrepancy_duration_minutes": {
+          "name": "discrepancy_duration_minutes",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false
         },
@@ -3135,201 +3324,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.receiving_tasks": {
-      "name": "receiving_tasks",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "serial",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "schedule_id": {
-          "name": "schedule_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "store_id": {
-          "name": "store_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "shift_id": {
-          "name": "shift_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "date": {
-          "name": "date",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "has_receiving": {
-          "name": "has_receiving",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "receiving_photos": {
-          "name": "receiving_photos",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "submitted_lat": {
-          "name": "submitted_lat",
-          "type": "numeric(10, 7)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "submitted_lng": {
-          "name": "submitted_lng",
-          "type": "numeric(10, 7)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "status": {
-          "name": "status",
-          "type": "task_status",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'pending'"
-        },
-        "notes": {
-          "name": "notes",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "completed_at": {
-          "name": "completed_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "verified_by": {
-          "name": "verified_by",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "verified_at": {
-          "name": "verified_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "receiving_tasks_schedule_id_schedules_id_fk": {
-          "name": "receiving_tasks_schedule_id_schedules_id_fk",
-          "tableFrom": "receiving_tasks",
-          "tableTo": "schedules",
-          "columnsFrom": [
-            "schedule_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "receiving_tasks_user_id_users_id_fk": {
-          "name": "receiving_tasks_user_id_users_id_fk",
-          "tableFrom": "receiving_tasks",
-          "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "receiving_tasks_store_id_stores_id_fk": {
-          "name": "receiving_tasks_store_id_stores_id_fk",
-          "tableFrom": "receiving_tasks",
-          "tableTo": "stores",
-          "columnsFrom": [
-            "store_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "receiving_tasks_shift_id_shifts_id_fk": {
-          "name": "receiving_tasks_shift_id_shifts_id_fk",
-          "tableFrom": "receiving_tasks",
-          "tableTo": "shifts",
-          "columnsFrom": [
-            "shift_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "receiving_tasks_verified_by_users_id_fk": {
-          "name": "receiving_tasks_verified_by_users_id_fk",
-          "tableFrom": "receiving_tasks",
-          "tableTo": "users",
-          "columnsFrom": [
-            "verified_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "receiving_tasks_store_id_date_unique": {
-          "name": "receiving_tasks_store_id_date_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "store_id",
-            "date"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.setoran_tasks": {
       "name": "setoran_tasks",
       "schema": "",
@@ -3382,8 +3376,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "money_photos": {
-          "name": "money_photos",
+        "resi_photo": {
+          "name": "resi_photo",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -3611,6 +3605,18 @@
           "notNull": true,
           "default": false
         },
+        "cek_promo_storefront_photos": {
+          "name": "cek_promo_storefront_photos",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cek_promo_desk_photos": {
+          "name": "cek_promo_desk_photos",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "cek_lamp": {
           "name": "cek_lamp",
           "type": "boolean",
@@ -3830,6 +3836,17 @@
         "discrepancy",
         "verified",
         "rejected"
+      ]
+    },
+    "public.tx_type": {
+      "name": "tx_type",
+      "schema": "public",
+      "values": [
+        "credit",
+        "debit",
+        "qris",
+        "ewallet",
+        "cash"
       ]
     }
   },

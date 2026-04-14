@@ -1,9 +1,9 @@
 // app/api/employee/tasks/item-dropping/route.ts
 // ─────────────────────────────────────────────────────────────────────────────
-// Dedicated endpoint for the Item Dropping task.
 //   POST  → final submit (check-in + geofence + payload validation)
 //   PATCH → auto-save partial patch (status: pending → in_progress)
 //   PUT   → confirm receipt of a carry-forward (discrepancy) task
+//           receivePhotos required (min 1)
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -36,7 +36,7 @@ function strArr(v: unknown): string[] {
   return Array.isArray(v) ? (v as string[]) : [];
 }
 
-function toDateOrUndefined(v: unknown): Date | undefined {
+function toDate(v: unknown): Date | undefined {
   if (!v) return undefined;
   const d = new Date(v as string);
   return isNaN(d.getTime()) ? undefined : d;
@@ -67,25 +67,22 @@ export async function POST(req: NextRequest) {
   const geo              = rawGeo ?? { lat: 0, lng: 0 };
   const effectiveSkipGeo = skipGeo || rawGeo === null;
 
-  const hasDropping  = Boolean(body.hasDropping);
-  const isReceived   = Boolean(body.isReceived);
-  const parentTaskId = body.parentTaskId ? Number(body.parentTaskId) : undefined;
-
   try {
     const result = await submitItemDropping({
       scheduleId,
-      userId:           session.user.id as string,
+      userId:            session.user.id as string,
       storeId,
       geo,
-      skipGeo:          effectiveSkipGeo,
-      hasDropping,
-      dropTime:         toDateOrUndefined(body.dropTime),
-      droppingPhotos:   strArr(body.droppingPhotos),
-      isReceived,
-      receiveTime:      toDateOrUndefined(body.receiveTime),
-      receivedByUserId: typeof body.receivedByUserId === 'string' ? body.receivedByUserId : undefined,
-      notes:            typeof body.notes === 'string' ? body.notes : undefined,
-      parentTaskId,
+      skipGeo:           effectiveSkipGeo,
+      hasDropping:       Boolean(body.hasDropping),
+      dropTime:          toDate(body.dropTime),
+      droppingPhotos:    strArr(body.droppingPhotos),
+      isReceived:        Boolean(body.isReceived),
+      receiveTime:       toDate(body.receiveTime),
+      receivePhotos:     strArr(body.receivePhotos),
+      receivedByUserId:  typeof body.receivedByUserId === 'string' ? body.receivedByUserId : undefined,
+      notes:             typeof body.notes === 'string' ? body.notes : undefined,
+      parentTaskId:      body.parentTaskId ? Number(body.parentTaskId) : undefined,
     });
     return NextResponse.json(result, { status: result.success ? 200 : 400 });
   } catch (err) {
@@ -116,6 +113,7 @@ export async function PATCH(req: NextRequest) {
   if ('droppingPhotos'   in body) patch.droppingPhotos   = strArr(body.droppingPhotos);
   if ('isReceived'       in body) patch.isReceived       = Boolean(body.isReceived);
   if ('receiveTime'      in body) patch.receiveTime      = typeof body.receiveTime === 'string' ? body.receiveTime : null;
+  if ('receivePhotos'    in body) patch.receivePhotos    = strArr(body.receivePhotos);
   if ('receivedByUserId' in body) patch.receivedByUserId = typeof body.receivedByUserId === 'string' ? body.receivedByUserId : null;
   if ('notes'            in body) patch.notes            = typeof body.notes === 'string' ? body.notes : undefined;
 
@@ -128,7 +126,7 @@ export async function PATCH(req: NextRequest) {
   }
 }
 
-// ─── PUT (confirm receipt of carry-forward task) ─────────────────────────────
+// ─── PUT (confirm receipt — requires receivePhotos) ───────────────────────────
 
 export async function PUT(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -155,17 +153,20 @@ export async function PUT(req: NextRequest) {
   const geo              = rawGeo ?? { lat: 0, lng: 0 };
   const effectiveSkipGeo = skipGeo || rawGeo === null;
 
+  const receivePhotos = strArr(body.receivePhotos);
+
   try {
     const result = await confirmItemReceipt({
       taskId,
       scheduleId,
-      userId:           session.user.id as string,
+      userId:            session.user.id as string,
       storeId,
       geo,
-      skipGeo:          effectiveSkipGeo,
-      receiveTime:      toDateOrUndefined(body.receiveTime),
-      receivedByUserId: typeof body.receivedByUserId === 'string' ? body.receivedByUserId : undefined,
-      notes:            typeof body.notes === 'string' ? body.notes : undefined,
+      skipGeo:           effectiveSkipGeo,
+      receiveTime:       toDate(body.receiveTime),
+      receivePhotos,                            // validated in util (min 1)
+      receivedByUserId:  typeof body.receivedByUserId === 'string' ? body.receivedByUserId : undefined,
+      notes:             typeof body.notes === 'string' ? body.notes : undefined,
     });
     return NextResponse.json(result, { status: result.success ? 200 : 400 });
   } catch (err) {

@@ -74,7 +74,7 @@ import {
   integer,
   unique,
 } from 'drizzle-orm/pg-core';
-import { taskStatusEnum } from './enums';
+import { taskStatusEnum, txTypeEnum } from './enums';
 import { schedules, users, stores } from './core';
 import { shifts } from './lookups';
 
@@ -246,31 +246,20 @@ export const itemDroppingTasks = pgTable('item_dropping_tasks', {
   shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
   date:       timestamp('date').notNull(),
  
-  // ── Carry-forward chain (same pattern as evening discrepancy tasks) ────────
-  /**
-   * Null on the first row. Set on every carry-forward row created because the
-   * prior day's item was still not received (status = 'discrepancy').
-   */
+  // ── Carry-forward chain ────────────────────────────────────────────────────
   parentTaskId: integer('parent_task_id'), // self-ref; no FK to avoid circular dep
  
-  // ── Core data ─────────────────────────────────────────────────────────────
-  /** false = no drop today; true = item drop occurred / in-progress. */
-  hasDropping:      boolean('has_dropping').default(false).notNull(),
- 
-  /** Timestamp when the delivery arrived at the store front. */
-  dropTime:         timestamp('drop_time'),
- 
-  /** JSON array of photo paths taken at drop-off (evidence of arrival). */
-  droppingPhotos:   text('dropping_photos'),
+  // ── Drop-off data ──────────────────────────────────────────────────────────
+  hasDropping:    boolean('has_dropping').default(false).notNull(),
+  dropTime:       timestamp('drop_time'),
+  /** JSON array of photo paths taken at drop-off (evidence of arrival). Min 1. */
+  droppingPhotos: text('dropping_photos'),
  
   // ── Receipt confirmation ───────────────────────────────────────────────────
-  /** true once the store has formally accepted the dropped items. */
   isReceived:       boolean('is_received').default(false).notNull(),
- 
-  /** Timestamp when the store employee confirmed receipt. */
   receiveTime:      timestamp('receive_time'),
- 
-  /** userId of the employee who performed the receive confirmation. */
+  /** JSON array of photo paths taken at receipt (evidence of acceptance). Min 1. */
+  receivePhotos:    text('receive_photos'),
   receivedByUserId: text('received_by_user_id').references(() => users.id),
  
   // ── Geo ────────────────────────────────────────────────────────────────────
@@ -278,14 +267,6 @@ export const itemDroppingTasks = pgTable('item_dropping_tasks', {
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
  
   // ── Lifecycle ──────────────────────────────────────────────────────────────
-  /**
-   * Status flow:
-   *   pending → in_progress (auto-save touched)
-   *   → completed  (hasDropping=false OR hasDropping=true AND isReceived=true)
-   *   → discrepancy (hasDropping=true AND isReceived=false at end of shift)
-   *   → [carry-forward] → new row picks it up next morning
-   *   → verified | rejected (OPS action)
-   */
   status:      taskStatusEnum('status').default('pending').notNull(),
   notes:       text('notes'),
   completedAt: timestamp('completed_at'),
@@ -293,7 +274,6 @@ export const itemDroppingTasks = pgTable('item_dropping_tasks', {
   verifiedAt:  timestamp('verified_at'),
   createdAt:   timestamp('created_at').defaultNow().notNull(),
   updatedAt:   timestamp('updated_at').defaultNow().notNull(),
-  // NOTE: No (storeId, date) unique constraint — app layer manages active row.
 });
 
 
@@ -363,26 +343,40 @@ export const briefingTasks = pgTable('briefing_tasks', {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * EDC Summary Task  (evening, shared, discrepancy-capable)
- *
- * `isBalanced` = EDC summary total matches expected end-of-day figure.
- */
-export const edcSummaryTasks = pgTable('edc_summary_tasks', {
+export const edcReconciliationTasks = pgTable('edc_reconciliation_tasks', {
   id:         serial('id').primaryKey(),
   scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
   userId:     text('user_id').references(() => users.id).notNull(),
   storeId:    integer('store_id').references(() => stores.id).notNull(),
   shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
   date:       timestamp('date').notNull(),
-
-  parentTaskId:     integer('parent_task_id'),
-  edcSummaryPhotos: text('edc_summary_photos'),
-  isBalanced:       boolean('is_balanced'),
-
+ 
+  // ── Carry-forward chain ─────────────────────────────────────────────────
+  parentTaskId: integer('parent_task_id'),
+ 
+  // ── Expected-data snapshot ──────────────────────────────────────────────
+  /** When the dummy/system expected data was last fetched for this task. */
+  expectedFetchedAt: timestamp('expected_fetched_at'),
+  /**
+   * JSON snapshot of the expected data returned by the generator, stored so
+   * the comparison stays stable across re-opens (otherwise a second fetch
+   * could yield different random dummy data).
+   * Shape: { rows: Array<{ transactionType, expectedAmount, expectedCount }> }
+   */
+  expectedSnapshot: text('expected_snapshot'),
+ 
+  // ── Balance ─────────────────────────────────────────────────────────────
+  /** true = all actual rows match expected. null until first submit. */
+  isBalanced: boolean('is_balanced'),
+ 
+  // ── Discrepancy timing ──────────────────────────────────────────────────
+  discrepancyStartedAt:       timestamp('discrepancy_started_at'),
+  discrepancyResolvedAt:      timestamp('discrepancy_resolved_at'),
+  discrepancyDurationMinutes: integer('discrepancy_duration_minutes'),
+ 
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
-
+ 
   status:      taskStatusEnum('status').default('pending').notNull(),
   notes:       text('notes'),
   completedAt: timestamp('completed_at'),
@@ -392,35 +386,28 @@ export const edcSummaryTasks = pgTable('edc_summary_tasks', {
   updatedAt:   timestamp('updated_at').defaultNow().notNull(),
 });
 
+
 // ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * EDC Settlement Task  (evening, shared, discrepancy-capable)
- *
- * `isBalanced` = settlement total matches EDC summary.
- */
-export const edcSettlementTasks = pgTable('edc_settlement_tasks', {
+export const edcTransactionRows = pgTable('edc_transaction_rows', {
   id:         serial('id').primaryKey(),
-  scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
-  userId:     text('user_id').references(() => users.id).notNull(),
-  storeId:    integer('store_id').references(() => stores.id).notNull(),
-  shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
-  date:       timestamp('date').notNull(),
-
-  parentTaskId:        integer('parent_task_id'),
-  edcSettlementPhotos: text('edc_settlement_photos'),
-  isBalanced:          boolean('is_balanced'),
-
-  submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
-  submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
-
-  status:      taskStatusEnum('status').default('pending').notNull(),
-  notes:       text('notes'),
-  completedAt: timestamp('completed_at'),
-  verifiedBy:  text('verified_by').references(() => users.id),
-  verifiedAt:  timestamp('verified_at'),
-  createdAt:   timestamp('created_at').defaultNow().notNull(),
-  updatedAt:   timestamp('updated_at').defaultNow().notNull(),
+  edcTaskId:  integer('edc_task_id').references(() => edcReconciliationTasks.id, { onDelete: 'cascade' }).notNull(),
+ 
+  transactionType: txTypeEnum('transaction_type').notNull(),
+ 
+  /** What the system said to expect (copied from the snapshot for audit). */
+  expectedAmount: decimal('expected_amount', { precision: 14, scale: 2 }),
+  expectedCount:  integer('expected_count'),
+ 
+  /** What the employee entered from the EDC machine. */
+  actualAmount: decimal('actual_amount', { precision: 14, scale: 2 }),
+  actualCount:  integer('actual_count'),
+ 
+  /** Computed at submit: expectedAmount == actualAmount && expectedCount == actualCount. */
+  matches: boolean('matches'),
+ 
+  notes:     text('notes'),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -438,9 +425,10 @@ export const eodZReportTasks = pgTable('eod_z_report_tasks', {
   shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
   date:       timestamp('date').notNull(),
 
-  parentTaskId:  integer('parent_task_id'),
+  /** Total nominal from the printed Z-Report receipt. */
+  totalNominal:  decimal('total_nominal', { precision: 14, scale: 2 }),
+  /** JSON array of photo paths of the printed receipt. Min 1. */
   zReportPhotos: text('z_report_photos'),
-  isBalanced:    boolean('is_balanced'),
 
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
@@ -468,14 +456,29 @@ export const openStatementTasks = pgTable('open_statement_tasks', {
   storeId:    integer('store_id').references(() => stores.id).notNull(),
   shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
   date:       timestamp('date').notNull(),
-
-  parentTaskId:        integer('parent_task_id'),
-  openStatementPhotos: text('open_statement_photos'),
-  isBalanced:          boolean('is_balanced'),
-
+ 
+  // ── Carry-forward chain ─────────────────────────────────────────────────
+  parentTaskId: integer('parent_task_id'),
+ 
+  // ── Expected vs actual ──────────────────────────────────────────────────
+  /** Pulled from the dummy generator when the task is opened. */
+  expectedAmount:    decimal('expected_amount', { precision: 14, scale: 2 }),
+  expectedFetchedAt: timestamp('expected_fetched_at'),
+ 
+  /** Entered by the employee from the system's Open Statement menu. */
+  actualAmount: decimal('actual_amount', { precision: 14, scale: 2 }),
+ 
+  /** true = expected == actual. null until first submit. */
+  isBalanced: boolean('is_balanced'),
+ 
+  // ── Discrepancy timing ──────────────────────────────────────────────────
+  discrepancyStartedAt:       timestamp('discrepancy_started_at'),
+  discrepancyResolvedAt:      timestamp('discrepancy_resolved_at'),
+  discrepancyDurationMinutes: integer('discrepancy_duration_minutes'),
+ 
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
-
+ 
   status:      taskStatusEnum('status').default('pending').notNull(),
   notes:       text('notes'),
   completedAt: timestamp('completed_at'),
@@ -537,9 +540,13 @@ export type ProductCheckTask     = typeof productCheckTasks.$inferSelect;
 export type ItemDroppingTask    = typeof itemDroppingTasks.$inferSelect;
 export type NewItemDroppingTask = typeof itemDroppingTasks.$inferInsert;
 export type BriefingTask         = typeof briefingTasks.$inferSelect;
-export type EdcSummaryTask       = typeof edcSummaryTasks.$inferSelect;
-export type EdcSettlementTask    = typeof edcSettlementTasks.$inferSelect;
 export type EodZReportTask       = typeof eodZReportTasks.$inferSelect;
 export type OpenStatementTask    = typeof openStatementTasks.$inferSelect;
 export type GroomingTask         = typeof groomingTasks.$inferSelect;
 export type NewGroomingTask      = typeof groomingTasks.$inferInsert;
+export type NewEodZReportTask       = typeof eodZReportTasks.$inferInsert;
+export type EdcReconciliationTask   = typeof edcReconciliationTasks.$inferSelect;
+export type NewEdcReconciliationTask= typeof edcReconciliationTasks.$inferInsert;
+export type EdcTransactionRow       = typeof edcTransactionRows.$inferSelect;
+export type NewEdcTransactionRow    = typeof edcTransactionRows.$inferInsert;
+export type NewOpenStatementTask    = typeof openStatementTasks.$inferInsert;

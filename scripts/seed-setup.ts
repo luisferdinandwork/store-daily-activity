@@ -9,8 +9,8 @@ import {
   monthlySchedules, monthlyScheduleEntries,
   schedules, attendance, breakSessions,
   storeOpeningTasks, setoranTasks, cekBinTasks,
-  productCheckTasks, receivingTasks, briefingTasks,
-  edcSummaryTasks, edcSettlementTasks, eodZReportTasks,
+  productCheckTasks, itemDroppingTasks, briefingTasks,  
+  edcReconciliationTasks, eodZReportTasks,              
   openStatementTasks, groomingTasks,
 } from '@/lib/db/schema';
 import { hash } from 'bcryptjs';
@@ -30,10 +30,9 @@ async function seedSetup() {
   await db.delete(groomingTasks);
   await db.delete(openStatementTasks);
   await db.delete(eodZReportTasks);
-  await db.delete(edcSettlementTasks);
-  await db.delete(edcSummaryTasks);
+  await db.delete(edcReconciliationTasks);
   await db.delete(briefingTasks);
-  await db.delete(receivingTasks);
+  await db.delete(itemDroppingTasks);
   await db.delete(productCheckTasks);
   await db.delete(cekBinTasks);
   await db.delete(setoranTasks);

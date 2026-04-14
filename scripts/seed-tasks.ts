@@ -17,9 +17,10 @@ import { db } from '@/lib/db';
 import {
   schedules, users, stores, areas, shifts,
   storeOpeningTasks, setoranTasks, cekBinTasks,
-  productCheckTasks, receivingTasks, briefingTasks,
-  edcSummaryTasks, edcSettlementTasks, eodZReportTasks,
+  productCheckTasks, briefingTasks,
+  eodZReportTasks, edcReconciliationTasks,
   openStatementTasks, groomingTasks,
+  itemDroppingTasks,
 } from '@/lib/db/schema';
 import { eq, and, inArray } from 'drizzle-orm';
 
@@ -80,23 +81,22 @@ async function personalExists(
 // ─── Counters ─────────────────────────────────────────────────────────────────
 
 const counts = {
-  storeOpening:  { created: 0, skipped: 0 },
-  setoran:       { created: 0, skipped: 0 },
-  cekBin:        { created: 0, skipped: 0 },
-  productCheck:  { created: 0, skipped: 0 },
-  receiving:     { created: 0, skipped: 0 },
-  briefing:      { created: 0, skipped: 0 },
-  edcSummary:    { created: 0, skipped: 0 },
-  edcSettlement: { created: 0, skipped: 0 },
-  eodZReport:    { created: 0, skipped: 0 },
-  openStatement: { created: 0, skipped: 0 },
-  grooming:      { created: 0, skipped: 0 },
+  storeOpening:       { created: 0, skipped: 0 },
+  setoran:            { created: 0, skipped: 0 },
+  cekBin:             { created: 0, skipped: 0 },
+  productCheck:       { created: 0, skipped: 0 },
+  itemDropping:       { created: 0, skipped: 0 },   
+  briefing:           { created: 0, skipped: 0 },
+  edcReconciliation:  { created: 0, skipped: 0 },   
+  eodZReport:         { created: 0, skipped: 0 },
+  openStatement:      { created: 0, skipped: 0 },
+  grooming:           { created: 0, skipped: 0 },
 };
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function seedTasks() {
-  console.log('🗂️   seed-tasks: all 11 task types\n');
+  console.log('🗂️   seed-tasks: all 10 task types\n');
 
   const allSchedules = await db
     .select({
@@ -163,7 +163,7 @@ async function seedTasks() {
         } else {
           await db.insert(storeOpeningTasks).values(morningBase);
           counts.storeOpening.created++;
-          console.log(`   ✅ storeOpening  ${label}`);
+          console.log(`   ✅ storeOpening       ${label}`);
         }
 
         if (await morningSharedExists(setoranTasks as any, sched.storeId, sched.date)) {
@@ -171,7 +171,7 @@ async function seedTasks() {
         } else {
           await db.insert(setoranTasks).values(morningBase);
           counts.setoran.created++;
-          console.log(`   ✅ setoran       ${label}`);
+          console.log(`   ✅ setoran            ${label}`);
         }
 
         if (await morningSharedExists(cekBinTasks as any, sched.storeId, sched.date)) {
@@ -179,7 +179,7 @@ async function seedTasks() {
         } else {
           await db.insert(cekBinTasks).values(morningBase);
           counts.cekBin.created++;
-          console.log(`   ✅ cekBin        ${label}`);
+          console.log(`   ✅ cekBin             ${label}`);
         }
 
         if (await morningSharedExists(productCheckTasks as any, sched.storeId, sched.date)) {
@@ -187,15 +187,16 @@ async function seedTasks() {
         } else {
           await db.insert(productCheckTasks).values(morningBase);
           counts.productCheck.created++;
-          console.log(`   ✅ productCheck  ${label}`);
+          console.log(`   ✅ productCheck       ${label}`);
         }
 
-        if (await morningSharedExists(receivingTasks as any, sched.storeId, sched.date)) {
-          counts.receiving.skipped++;
+        
+        if (await eveningActiveExists(itemDroppingTasks as any, sched.storeId, sched.date)) {
+          counts.itemDropping.skipped++;
         } else {
-          await db.insert(receivingTasks).values(morningBase);
-          counts.receiving.created++;
-          console.log(`   ✅ receiving     ${label}`);
+          await db.insert(itemDroppingTasks).values(morningBase);
+          counts.itemDropping.created++;
+          console.log(`   ✅ itemDropping       ${label}`);
         }
       }
 
@@ -206,23 +207,16 @@ async function seedTasks() {
         } else {
           await db.insert(briefingTasks).values(eveningBase);
           counts.briefing.created++;
-          console.log(`   ✅ briefing      ${label}`);
+          console.log(`   ✅ briefing           ${label}`);
         }
 
-        if (await eveningActiveExists(edcSummaryTasks as any, sched.storeId, sched.date)) {
-          counts.edcSummary.skipped++;
+        // CHANGED: Merged edcSummaryTasks & edcSettlementTasks into edcReconciliationTasks
+        if (await eveningActiveExists(edcReconciliationTasks as any, sched.storeId, sched.date)) {
+          counts.edcReconciliation.skipped++;
         } else {
-          await db.insert(edcSummaryTasks).values(eveningBase);
-          counts.edcSummary.created++;
-          console.log(`   ✅ edcSummary    ${label}`);
-        }
-
-        if (await eveningActiveExists(edcSettlementTasks as any, sched.storeId, sched.date)) {
-          counts.edcSettlement.skipped++;
-        } else {
-          await db.insert(edcSettlementTasks).values(eveningBase);
-          counts.edcSettlement.created++;
-          console.log(`   ✅ edcSettlement ${label}`);
+          await db.insert(edcReconciliationTasks).values(eveningBase);
+          counts.edcReconciliation.created++;
+          console.log(`   ✅ edcReconciliation  ${label}`);
         }
 
         if (await eveningActiveExists(eodZReportTasks as any, sched.storeId, sched.date)) {
@@ -230,7 +224,7 @@ async function seedTasks() {
         } else {
           await db.insert(eodZReportTasks).values(eveningBase);
           counts.eodZReport.created++;
-          console.log(`   ✅ eodZReport    ${label}`);
+          console.log(`   ✅ eodZReport         ${label}`);
         }
 
         if (await eveningActiveExists(openStatementTasks as any, sched.storeId, sched.date)) {
@@ -238,7 +232,7 @@ async function seedTasks() {
         } else {
           await db.insert(openStatementTasks).values(eveningBase);
           counts.openStatement.created++;
-          console.log(`   ✅ openStatement ${label}`);
+          console.log(`   ✅ openStatement      ${label}`);
         }
       }
 

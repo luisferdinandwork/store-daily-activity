@@ -17,8 +17,8 @@ import {
   users, stores, areas, shifts, employeeTypes,
   monthlySchedules, monthlyScheduleEntries, schedules,
   storeOpeningTasks, setoranTasks, cekBinTasks,
-  productCheckTasks, receivingTasks, briefingTasks,
-  edcSummaryTasks, edcSettlementTasks, eodZReportTasks,
+  productCheckTasks, itemDroppingTasks, briefingTasks,
+  edcReconciliationTasks, eodZReportTasks,
   openStatementTasks, groomingTasks,
 } from '@/lib/db/schema';
 import { eq, and, gte, lte, inArray } from 'drizzle-orm';
@@ -127,8 +127,8 @@ async function seedCurrentMonth() {
   let totalEntries   = 0;
   let totalSchedRows = 0;
   const taskCounts: Record<string, number> = {
-    storeOpening: 0, setoran: 0, cekBin: 0, productCheck: 0, receiving: 0,
-    briefing: 0, edcSummary: 0, edcSettlement: 0, eodZReport: 0, openStatement: 0,
+    storeOpening: 0, setoran: 0, cekBin: 0, productCheck: 0, itemDropping: 0,  // ← CHANGED
+    briefing: 0, edcReconciliation: 0, eodZReport: 0, openStatement: 0,        // ← CHANGED
     grooming: 0,
   };
 
@@ -287,15 +287,21 @@ async function seedTasksForSchedule(
       if (!await morningSharedExists(setoranTasks       as any, storeId, date)) { await db.insert(setoranTasks).values(morningBase);       counts.setoran++;      }
       if (!await morningSharedExists(cekBinTasks        as any, storeId, date)) { await db.insert(cekBinTasks).values(morningBase);        counts.cekBin++;       }
       if (!await morningSharedExists(productCheckTasks  as any, storeId, date)) { await db.insert(productCheckTasks).values(morningBase);  counts.productCheck++; }
-      if (!await morningSharedExists(receivingTasks     as any, storeId, date)) { await db.insert(receivingTasks).values(morningBase);     counts.receiving++;    }
+      
+      // CHANGED: receivingTasks → itemDroppingTasks. Uses eveningActiveExists 
+      // because itemDroppingTasks is discrepancy-capable and lacks a (storeId, date) unique constraint.
+      if (!await eveningActiveExists(itemDroppingTasks as any, storeId, date)) { await db.insert(itemDroppingTasks).values(morningBase); counts.itemDropping++; }
     }
     if (isEvening) {
-      if (!await eveningActiveExists(briefingTasks      as any, storeId, date)) { await db.insert(briefingTasks).values(eveningBase);      counts.briefing++;      }
-      if (!await eveningActiveExists(edcSummaryTasks    as any, storeId, date)) { await db.insert(edcSummaryTasks).values(eveningBase);    counts.edcSummary++;    }
-      if (!await eveningActiveExists(edcSettlementTasks as any, storeId, date)) { await db.insert(edcSettlementTasks).values(eveningBase); counts.edcSettlement++; }
-      if (!await eveningActiveExists(eodZReportTasks    as any, storeId, date)) { await db.insert(eodZReportTasks).values(eveningBase);    counts.eodZReport++;    }
-      if (!await eveningActiveExists(openStatementTasks as any, storeId, date)) { await db.insert(openStatementTasks).values(eveningBase); counts.openStatement++; }
+      if (!await eveningActiveExists(briefingTasks          as any, storeId, date)) { await db.insert(briefingTasks).values(eveningBase);          counts.briefing++;          }
+      
+      // CHANGED: Merged edcSummaryTasks & edcSettlementTasks into edcReconciliationTasks
+      if (!await eveningActiveExists(edcReconciliationTasks as any, storeId, date)) { await db.insert(edcReconciliationTasks).values(eveningBase); counts.edcReconciliation++; }
+      
+      if (!await eveningActiveExists(eodZReportTasks        as any, storeId, date)) { await db.insert(eodZReportTasks).values(eveningBase);        counts.eodZReport++;        }
+      if (!await eveningActiveExists(openStatementTasks     as any, storeId, date)) { await db.insert(openStatementTasks).values(eveningBase);     counts.openStatement++;     }
     }
+    
     // Grooming: always uses the schedule's own shiftId (may be full_day)
     if (!await personalExists(groomingTasks, scheduleId)) {
       await db.insert(groomingTasks).values({ scheduleId, userId, storeId, shiftId, date, status: 'pending' as const });

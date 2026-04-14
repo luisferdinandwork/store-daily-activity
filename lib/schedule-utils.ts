@@ -11,7 +11,7 @@ import {
   userRoles, employeeTypes, shifts,
   storeOpeningTasks, setoranTasks, cekBinTasks,
   productCheckTasks, itemDroppingTasks, briefingTasks,
-  edcSummaryTasks, edcSettlementTasks, eodZReportTasks,
+  eodZReportTasks, edcReconciliationTasks,
   openStatementTasks, groomingTasks,
   type Area, type MonthlySchedule, type MonthlyScheduleEntry,
 } from '@/lib/db/schema';
@@ -114,8 +114,7 @@ async function deleteAllTasksForSchedules(scheduleIds: number[]): Promise<void> 
     db.delete(productCheckTasks) .where(inArray(productCheckTasks.scheduleId,  scheduleIds)),
     db.delete(itemDroppingTasks) .where(inArray(itemDroppingTasks.scheduleId,  scheduleIds)),
     db.delete(briefingTasks)     .where(inArray(briefingTasks.scheduleId,      scheduleIds)),
-    db.delete(edcSummaryTasks)   .where(inArray(edcSummaryTasks.scheduleId,    scheduleIds)),
-    db.delete(edcSettlementTasks).where(inArray(edcSettlementTasks.scheduleId, scheduleIds)),
+    db.delete(edcReconciliationTasks) .where(inArray(edcReconciliationTasks.scheduleId, scheduleIds)),
     db.delete(eodZReportTasks)   .where(inArray(eodZReportTasks.scheduleId,    scheduleIds)),
     db.delete(openStatementTasks).where(inArray(openStatementTasks.scheduleId, scheduleIds)),
     db.delete(groomingTasks)     .where(inArray(groomingTasks.scheduleId,      scheduleIds as any)),

@@ -1,1 +1,0 @@
-ALTER TABLE "setoran_tasks" RENAME COLUMN "money_photos" TO "resi_photo";

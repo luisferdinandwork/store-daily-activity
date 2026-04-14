@@ -10,24 +10,24 @@
 //
 // A) No dropping (hasDropping = false)
 //      Employee confirms no delivery today → status 'completed' immediately.
-//      No photos or timestamps required.
+//      No photos required.
 //
 // B) Item dropped (hasDropping = true)
 //      1. Employee records dropTime + droppingPhotos (min 1).
-//      2. Task is submitted as 'completed' only when isReceived = true AND
-//         receiveTime + receivedByUserId are set.
+//      2. When item is received: isReceived=true + receiveTime + receivePhotos
+//         (min 1). Status → 'completed'.
 //      3. If end-of-shift and isReceived is still false:
-//           • Employee submits the task as-is (partially) → status 'discrepancy'.
-//           • Next morning, the SAME row is updated via parentTaskId carry-forward
-//             (same pattern as evening discrepancy tasks).
+//           • status 'discrepancy' → carry-forward to next morning.
+//           • Next-day employee opens the SAME row and completes receipt
+//             with receiveTime + receivePhotos via confirmItemReceipt().
 //
 // Access rules:
 //   • Employee must be checked in (attendance row for this schedule).
 //   • Employee must be inside the store's geofence (unless skipGeo).
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { db }                         from '@/lib/db';
-import { eq, and, gte, lte, inArray, isNull, or } from 'drizzle-orm';
+import { db }                                              from '@/lib/db';
+import { eq, and, gte, lte, inArray, isNull, or }         from 'drizzle-orm';
 import {
   itemDroppingTasks, stores, shifts, attendance, schedules,
   type ItemDroppingTask,
@@ -46,62 +46,48 @@ export interface GeoPoint {
   lng: number;
 }
 
-// ─── Photo rules ─────────────────────────────────────────────────────────────
+// ─── Photo rules (single source of truth) ────────────────────────────────────
 
 export const ITEM_DROPPING_PHOTO_RULES = {
   dropping: { min: 1, max: 5 },
+  receive:  { min: 1, max: 5 },
 } as const;
 
-// ─── Submit input types ───────────────────────────────────────────────────────
+// ─── Input types ──────────────────────────────────────────────────────────────
 
 /**
- * Initial submission of an Item Dropping task.
+ * Initial / re-submission of an Item Dropping task.
  *
- * Scenario A (no dropping): set hasDropping=false, omit everything else.
- * Scenario B (dropping happened):
- *   - set hasDropping=true
- *   - provide dropTime + droppingPhotos (min 1)
- *   - if item already received: set isReceived=true, receiveTime, receivedByUserId
- *   - if item NOT yet received at submit time: isReceived=false →
- *       status becomes 'discrepancy' for carry-forward next morning
+ * Scenario A (no dropping): hasDropping=false — nothing else needed.
+ *
+ * Scenario B (dropping):
+ *   • Always: dropTime + droppingPhotos (min 1)
+ *   • If received same shift: isReceived=true + receiveTime + receivePhotos (min 1)
+ *   • If NOT yet received:    isReceived=false → status 'discrepancy'
  */
 export interface SubmitItemDroppingInput {
-  scheduleId:        number;
-  userId:            string;
-  storeId:           number;
-  geo:               GeoPoint;
-  skipGeo?:          boolean;
+  scheduleId:       number;
+  userId:           string;
+  storeId:          number;
+  geo:              GeoPoint;
+  skipGeo?:         boolean;
 
-  /** false = no drop today; true = item arrived at store */
-  hasDropping:       boolean;
+  hasDropping:      boolean;
+  dropTime?:        Date | string;
+  droppingPhotos?:  string[];
 
-  /** Required when hasDropping=true */
-  dropTime?:         Date | string;
-
-  /** Required when hasDropping=true (min 1 photo) */
-  droppingPhotos?:   string[];
-
-  /** true if the store employee received the items during this submission */
   isReceived?:       boolean;
-
-  /** Required when isReceived=true */
   receiveTime?:      Date | string;
-
-  /** userId of the employee receiving the item; defaults to submitting userId */
+  receivePhotos?:    string[];
   receivedByUserId?: string;
 
-  notes?:            string;
-
-  /**
-   * Set when carrying forward a discrepancy row from a prior day.
-   * The function will UPDATE that existing row rather than insert a new one.
-   */
-  parentTaskId?:     number;
+  notes?:           string;
+  parentTaskId?:    number; // set when continuing a prior-day discrepancy row
 }
 
 /**
- * Mark an already-submitted (discrepancy) item as received.
- * Used when a next-day employee confirms receipt of a prior-day drop.
+ * Confirm receipt of a prior-day carry-forward task.
+ * Requires receivePhotos (min 1).
  */
 export interface ConfirmReceiptInput {
   taskId:            number;
@@ -111,6 +97,7 @@ export interface ConfirmReceiptInput {
   geo:               GeoPoint;
   skipGeo?:          boolean;
   receiveTime?:      Date | string;
+  receivePhotos:     string[];         // min 1 — required
   receivedByUserId?: string;
   notes?:            string;
 }
@@ -121,6 +108,7 @@ export interface AutoSaveItemDroppingPatch {
   droppingPhotos?:   string[];
   isReceived?:       boolean;
   receiveTime?:      string | null;
+  receivePhotos?:    string[];
   receivedByUserId?: string | null;
   notes?:            string;
 }
@@ -215,33 +203,46 @@ async function assertCanProgressTask(
 
 // ─── Payload validation ───────────────────────────────────────────────────────
 
-function validateItemDroppingPayload(input: SubmitItemDroppingInput): string | null {
-  if (!input.hasDropping) return null; // Scenario A: nothing else to validate
+function validateSubmitPayload(input: SubmitItemDroppingInput): string | null {
+  // Scenario A — nothing more to validate
+  if (!input.hasDropping) return null;
 
-  // Scenario B: dropping happened
+  // Scenario B — drop details
   if (!input.dropTime)
     return 'Waktu dropping wajib diisi ketika ada item dropping.';
 
-  const photoCount = input.droppingPhotos?.length ?? 0;
-  if (photoCount < ITEM_DROPPING_PHOTO_RULES.dropping.min)
+  const dropCount = input.droppingPhotos?.length ?? 0;
+  if (dropCount < ITEM_DROPPING_PHOTO_RULES.dropping.min)
     return `Foto dropping wajib minimal ${ITEM_DROPPING_PHOTO_RULES.dropping.min}.`;
-  if (photoCount > ITEM_DROPPING_PHOTO_RULES.dropping.max)
+  if (dropCount > ITEM_DROPPING_PHOTO_RULES.dropping.max)
     return `Foto dropping maksimal ${ITEM_DROPPING_PHOTO_RULES.dropping.max}.`;
 
-  // If isReceived is explicitly true, receiveTime must be provided
-  if (input.isReceived && !input.receiveTime)
-    return 'Waktu penerimaan wajib diisi ketika item sudah diterima.';
+  // Receipt details — only required when isReceived=true
+  if (input.isReceived) {
+    if (!input.receiveTime)
+      return 'Waktu penerimaan wajib diisi ketika item sudah diterima.';
+
+    const rcvCount = input.receivePhotos?.length ?? 0;
+    if (rcvCount < ITEM_DROPPING_PHOTO_RULES.receive.min)
+      return `Foto penerimaan wajib minimal ${ITEM_DROPPING_PHOTO_RULES.receive.min}.`;
+    if (rcvCount > ITEM_DROPPING_PHOTO_RULES.receive.max)
+      return `Foto penerimaan maksimal ${ITEM_DROPPING_PHOTO_RULES.receive.max}.`;
+  }
 
   return null;
 }
 
-// ─── Active task query (shared helper) ───────────────────────────────────────
+function validateConfirmPayload(input: ConfirmReceiptInput): string | null {
+  const rcvCount = input.receivePhotos?.length ?? 0;
+  if (rcvCount < ITEM_DROPPING_PHOTO_RULES.receive.min)
+    return `Foto penerimaan wajib minimal ${ITEM_DROPPING_PHOTO_RULES.receive.min}.`;
+  if (rcvCount > ITEM_DROPPING_PHOTO_RULES.receive.max)
+    return `Foto penerimaan maksimal ${ITEM_DROPPING_PHOTO_RULES.receive.max}.`;
+  return null;
+}
 
-/**
- * Returns the active (pending / in_progress / discrepancy) Item Dropping task
- * for a given store and date. Also surfaces unresolved discrepancies from prior
- * days (e.g. item not received yesterday).
- */
+// ─── Active task query ────────────────────────────────────────────────────────
+
 export async function getActiveItemDroppingTask(
   storeId: number,
   date:    Date,
@@ -249,7 +250,6 @@ export async function getActiveItemDroppingTask(
   const dayStart = startOfDay(date);
   const dayEnd   = endOfDay(date);
 
-  // Check today first
   const [today] = await db
     .select()
     .from(itemDroppingTasks)
@@ -264,7 +264,7 @@ export async function getActiveItemDroppingTask(
 
   if (today) return today;
 
-  // Check for unresolved discrepancy from a prior day (root row only)
+  // Surface unresolved discrepancy from a prior day (root row only)
   const [prior] = await db
     .select()
     .from(itemDroppingTasks)
@@ -288,14 +288,14 @@ export async function submitItemDropping(
     const gateErr = await assertCanProgressTask(input.scheduleId, input.storeId, input.geo, input.skipGeo);
     if (gateErr) return { success: false, error: gateErr };
 
-    const validationErr = validateItemDroppingPayload(input);
+    const validationErr = validateSubmitPayload(input);
     if (validationErr) return { success: false, error: validationErr };
 
     const TERMINAL = ['verified', 'rejected'] as const;
     const morningShiftId = await getMorningShiftId();
     const now            = new Date();
 
-    // ── Carry-forward path (updating a discrepancy row from a prior day) ──────
+    // ── Carry-forward path ────────────────────────────────────────────────────
     if (input.parentTaskId) {
       const [existing] = await db
         .select()
@@ -308,9 +308,6 @@ export async function submitItemDropping(
       if (existing.status !== 'discrepancy')
         return { success: false, error: 'Task ini tidak dalam status discrepancy.' };
 
-      // Determine new status:
-      //   - isReceived=true  → completed
-      //   - isReceived=false → discrepancy (still waiting)
       const newStatus = (input.isReceived === true) ? 'completed' as const : 'discrepancy' as const;
 
       const row = (await db
@@ -323,6 +320,7 @@ export async function submitItemDropping(
           droppingPhotos:    jsonPhotos(input.droppingPhotos) ?? existing.droppingPhotos ?? undefined,
           isReceived:        input.isReceived ?? false,
           receiveTime:       input.receiveTime ? new Date(input.receiveTime) : null,
+          receivePhotos:     jsonPhotos(input.receivePhotos),
           receivedByUserId:  input.isReceived ? (input.receivedByUserId ?? input.userId) : null,
           submittedLat:      String(input.geo.lat),
           submittedLng:      String(input.geo.lng),
@@ -337,7 +335,7 @@ export async function submitItemDropping(
       return { success: true, data: row };
     }
 
-    // ── Fresh submit (or re-submit of own pending row) ────────────────────────
+    // ── Fresh / re-submit ─────────────────────────────────────────────────────
     const [existing] = await db
       .select()
       .from(itemDroppingTasks)
@@ -347,10 +345,6 @@ export async function submitItemDropping(
     if (existing?.status != null && (TERMINAL as readonly string[]).includes(existing.status))
       return { success: false, error: 'Task sudah selesai dan tidak bisa diubah.' };
 
-    // Compute status:
-    //   Scenario A (hasDropping=false) → always completed
-    //   Scenario B, isReceived=true    → completed
-    //   Scenario B, isReceived=false   → discrepancy (carry-forward tomorrow)
     const newStatus = !input.hasDropping
       ? 'completed' as const
       : (input.isReceived === true)
@@ -369,6 +363,7 @@ export async function submitItemDropping(
       droppingPhotos:    jsonPhotos(input.droppingPhotos),
       isReceived:        input.isReceived ?? false,
       receiveTime:       input.receiveTime ? new Date(input.receiveTime) : null,
+      receivePhotos:     jsonPhotos(input.receivePhotos),
       receivedByUserId:  input.isReceived ? (input.receivedByUserId ?? input.userId) : null,
       submittedLat:      String(input.geo.lat),
       submittedLng:      String(input.geo.lng),
@@ -389,12 +384,12 @@ export async function submitItemDropping(
   }
 }
 
-// ─── Confirm receipt (standalone action for next-day carry-forward) ───────────
+// ─── Confirm receipt ──────────────────────────────────────────────────────────
 
 /**
- * Standalone action to mark an existing discrepancy task as received.
- * Called when: the next-day employee arrives and the dropped item is finally
- * accepted by a store employee, WITHOUT needing to re-do the full form.
+ * Mark an existing discrepancy task as received.
+ * Called from the next-day carry-forward flow.
+ * receivePhotos is REQUIRED (min 1).
  */
 export async function confirmItemReceipt(
   input: ConfirmReceiptInput,
@@ -402,6 +397,9 @@ export async function confirmItemReceipt(
   try {
     const gateErr = await assertCanProgressTask(input.scheduleId, input.storeId, input.geo, input.skipGeo);
     if (gateErr) return { success: false, error: gateErr };
+
+    const validationErr = validateConfirmPayload(input);
+    if (validationErr) return { success: false, error: validationErr };
 
     const [task] = await db
       .select()
@@ -422,6 +420,7 @@ export async function confirmItemReceipt(
       .set({
         isReceived:       true,
         receiveTime:      input.receiveTime ? new Date(input.receiveTime) : now,
+        receivePhotos:    jsonPhotos(input.receivePhotos),
         receivedByUserId: input.receivedByUserId ?? input.userId,
         scheduleId:       input.scheduleId,
         notes:            input.notes,
@@ -464,6 +463,7 @@ export async function autoSaveItemDropping(
     if ('droppingPhotos'   in patch) update.droppingPhotos   = jsonPhotos(patch.droppingPhotos);
     if ('isReceived'       in patch) update.isReceived       = Boolean(patch.isReceived);
     if ('receiveTime'      in patch) update.receiveTime      = patch.receiveTime ? new Date(patch.receiveTime) : null;
+    if ('receivePhotos'    in patch) update.receivePhotos    = jsonPhotos(patch.receivePhotos);
     if ('receivedByUserId' in patch) update.receivedByUserId = patch.receivedByUserId ?? null;
     if ('notes'            in patch) update.notes            = patch.notes;
 
@@ -486,7 +486,6 @@ export async function verifyItemDropping(
   input: VerifyTaskInput,
 ): Promise<TaskResult<void>> {
   try {
-    // Import here to avoid circular dependency
     const { canManageSchedule } = await import('@/lib/schedule-utils');
     const auth = await canManageSchedule(input.actorId, input.storeId);
     if (!auth.allowed) return { success: false, error: auth.reason! };
@@ -518,13 +517,8 @@ export async function verifyItemDropping(
   }
 }
 
-// ─── Materialise helper (called by materialiseTasksForSchedule) ───────────────
+// ─── Materialise helper ───────────────────────────────────────────────────────
 
-/**
- * Creates an item_dropping_tasks row for a given schedule if one doesn't
- * already exist (or if there is no active pending/in_progress row for today).
- * Mirrors the pattern used for morning shared tasks.
- */
 export async function materialiseItemDroppingTask(
   scheduleId: number,
   userId:     string,
@@ -535,7 +529,6 @@ export async function materialiseItemDroppingTask(
   const dayStart = startOfDay(date);
   const dayEnd   = endOfDay(date);
 
-  // Check if an active row already exists for this store today
   const [active] = await db
     .select({ id: itemDroppingTasks.id })
     .from(itemDroppingTasks)
@@ -554,7 +547,7 @@ export async function materialiseItemDroppingTask(
     userId,
     storeId,
     shiftId,
-    date:        dayStart,
+    date:         dayStart,
     parentTaskId: null,
     hasDropping:  false,
     isReceived:   false,
@@ -566,11 +559,6 @@ export async function materialiseItemDroppingTask(
 
 // ─── Discrepancy chain query ──────────────────────────────────────────────────
 
-/**
- * Returns the full history of an item dropping carry-forward chain.
- * Pass the original (root) task id — returns all rows in the chain ordered
- * chronologically.
- */
 export async function getItemDroppingChain(
   originalTaskId: number,
 ): Promise<ItemDroppingTask[]> {
@@ -597,9 +585,7 @@ export async function getItemDroppingBySchedule(
   return row ?? null;
 }
 
-export async function getItemDroppingById(
-  id: number,
-): Promise<ItemDroppingTask | null> {
+export async function getItemDroppingById(id: number): Promise<ItemDroppingTask | null> {
   const [row] = await db
     .select()
     .from(itemDroppingTasks)
