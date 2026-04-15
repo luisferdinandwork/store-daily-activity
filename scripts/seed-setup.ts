@@ -108,7 +108,7 @@ async function seedSetup() {
         name: 'Store Thamrin',
         address: 'Jl. MH. Thamrin No. 1, Jakarta Pusat',
         areaId: areaJP.id,
-        latitude: '-6.1944400', longitude: '106.8229800',
+        latitude: '-6.1630687', longitude: '106.7739266',
         geofenceRadiusM: '150', pettyCashBalance: '1000000',
       },
       {

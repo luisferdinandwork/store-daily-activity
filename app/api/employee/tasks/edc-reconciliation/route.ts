@@ -13,6 +13,7 @@ import {
   submitEdcReconciliation,
   autoSaveEdcReconciliation,
   addRow, updateRow, deleteRow,
+  getEdcReconciliationById,
   type AutoSaveEdcReconciliationPatch,
 } from '@/lib/db/utils/edc-reconciliation';
 import type { TxType } from '@/lib/db/utils/dummy-evening-data';
@@ -31,6 +32,29 @@ function toGeo(geo: unknown, skipGeo: boolean): { lat: number; lng: number } | n
   const { lat, lng } = geo as Record<string, unknown>;
   if (typeof lat !== 'number' || typeof lng !== 'number') return null;
   return { lat, lng };
+}
+
+// ─── GET (load task + rows for the detail page) ──────────────────────────────
+
+export async function GET(req: NextRequest) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+
+  const { searchParams } = new URL(req.url);
+  const taskIdParam = searchParams.get('taskId');
+  const taskId = taskIdParam ? parseInt(taskIdParam, 10) : NaN;
+  if (isNaN(taskId))
+    return NextResponse.json({ success: false, error: 'taskId query param required' }, { status: 400 });
+
+  try {
+    const result = await getEdcReconciliationById(taskId);
+    if (!result)
+      return NextResponse.json({ success: false, error: 'Task not found' }, { status: 404 });
+    return NextResponse.json({ success: true, data: result });
+  } catch (err) {
+    console.error('[GET /api/employee/tasks/edc-reconciliation]', err);
+    return NextResponse.json({ success: false, error: String(err) }, { status: 500 });
+  }
 }
 
 // ─── POST (final submit) ──────────────────────────────────────────────────────
