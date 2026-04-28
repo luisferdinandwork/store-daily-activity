@@ -13,7 +13,6 @@ const MAX_SIZE_MB  = 10;
 type PhotoType =
   | 'store_front'
   | 'cashier_desk'
-  // 5R per-area types (replaces the old single 'five_r' type)
   | 'five_r_kasir'
   | 'five_r_depan'
   | 'five_r_kanan'
@@ -21,6 +20,7 @@ type PhotoType =
   | 'five_r_gudang'
   | 'grooming_selfie'
   | 'resi'
+  | 'atm_card_selfie'
   | 'item_dropping'
   | 'item_dropping_receive'
   | 'z_report';
@@ -34,6 +34,7 @@ const PHOTO_FOLDER: Record<PhotoType, string> = {
   five_r_kiri:            'store-opening/five-r/kiri',
   five_r_gudang:          'store-opening/five-r/gudang',
   resi:                   'setoran/resi',
+  atm_card_selfie:        'setoran/atm-card-selfie',
   item_dropping:          'item-dropping/drop',
   item_dropping_receive:  'item-dropping/receive',
   grooming_selfie:        'grooming/selfie',
@@ -49,6 +50,7 @@ const PHOTO_LIMITS: Record<PhotoType, number> = {
   five_r_kiri:            2,
   five_r_gudang:          2,
   resi:                   1,
+  atm_card_selfie:        1,
   item_dropping:          5,
   item_dropping_receive:  5,
   grooming_selfie:        3,

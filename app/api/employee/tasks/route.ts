@@ -265,14 +265,27 @@ export async function GET(request: NextRequest) {
       type: 'setoran' as const,
       shift: (shiftCodeMap[t.shiftId] ?? 'morning') as ShiftCode,
       data: {
-        id: String(t.id), scheduleId: String(t.scheduleId), userId: t.userId,
-        storeId: String(t.storeId), shift: 'morning' as const, date: t.date.toISOString(),
-        amount:      t.amount, linkSetoran: t.linkSetoran, resiPhoto: t.resiPhoto,
-        expectedAmount: t.expectedAmount, carriedDeficit: t.carriedDeficit,
+        id: String(t.id),
+        scheduleId: String(t.scheduleId),
+        userId: t.userId,
+        storeId: String(t.storeId),
+        shift: 'morning' as const,
+        date: t.date.toISOString(),
+
+        amount: t.amount,
+        resiPhoto: t.resiPhoto,
+        atmCardSelfiePhoto: t.atmCardSelfiePhoto,
+
+        expectedAmount: t.expectedAmount,
+        carriedDeficit: t.carriedDeficit,
         carriedDeficitFetchedAt: toIso(t.carriedDeficitFetchedAt),
         unpaidAmount: t.unpaidAmount,
-        status: t.status, notes: t.notes,
-        completedAt: toIso(t.completedAt), verifiedBy: t.verifiedBy, verifiedAt: toIso(t.verifiedAt),
+
+        status: t.status,
+        notes: t.notes,
+        completedAt: toIso(t.completedAt),
+        verifiedBy: t.verifiedBy,
+        verifiedAt: toIso(t.verifiedAt),
       },
     })),
 

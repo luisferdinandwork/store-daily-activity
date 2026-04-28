@@ -19,25 +19,24 @@ import ChecklistPhotoModal from '@/components/tasks/ChecklistPhotoModal';
 type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'verified' | 'rejected' | 'discrepancy';
 
 interface SetoranData {
-  id:              string;
-  scheduleId:      string;
-  userId:          string;
-  storeId:         string;
-  shift:           'morning' | 'evening';
-  date:            string;
-  status:          TaskStatus;
-  notes:           string | null;
-  completedAt:     string | null;
-  verifiedBy:      string | null;
-  verifiedAt:      string | null;
-  amount:          string | null;
-  linkSetoran:     string | null;
-  resiPhoto:       string | null;
-  // New running-deficit fields
-  expectedAmount:          string | null;
-  carriedDeficit:          string | null;
-  carriedDeficitFetchedAt: string | null;
-  unpaidAmount:            string | null;
+  id:                     string;
+  scheduleId:             string;
+  userId:                 string;
+  storeId:                string;
+  shift:                  'morning' | 'evening';
+  date:                   string;
+  status:                 TaskStatus;
+  notes:                  string | null;
+  completedAt:            string | null;
+  verifiedBy:             string | null;
+  verifiedAt:             string | null;
+  amount:                 string | null;
+  resiPhoto:              string | null;
+  atmCardSelfiePhoto:     string | null;
+  expectedAmount:         string | null;
+  carriedDeficit:         string | null;
+  carriedDeficitFetchedAt:string | null;
+  unpaidAmount:           string | null;
 }
 
 interface SubmitMeta {
@@ -179,34 +178,57 @@ function UnpaidResultBanner({ unpaid, nextDayCarried }: {
   );
 }
 
-function ResiPhotoTile({ photo, onClick, disabled, hasPhoto }: {
-  photo: string | null; onClick: () => void; disabled?: boolean; hasPhoto: boolean;
+function PhotoProofTile({
+  title,
+  emptyText,
+  filledText,
+  photo,
+  onClick,
+  disabled,
+  hasPhoto,
+}: {
+  title: string;
+  emptyText: string;
+  filledText: string;
+  photo: string | null;
+  onClick: () => void;
+  disabled?: boolean;
+  hasPhoto: boolean;
 }) {
   return (
-    <button type="button" onClick={() => !disabled && onClick()}
+    <button
+      type="button"
+      onClick={() => !disabled && onClick()}
       className={cn(
         'flex w-full items-center gap-3 rounded-xl border-2 px-4 py-3.5 text-left transition-all',
         hasPhoto ? 'border-primary/30 bg-primary/5' : 'border-amber-400 bg-amber-50',
         disabled && 'cursor-default opacity-60',
-      )}>
+      )}
+    >
       {hasPhoto && photo ? (
         <div className="h-14 w-14 flex-shrink-0 overflow-hidden rounded-lg border border-border bg-secondary">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={photo} alt="Foto resi" className="h-full w-full object-cover" />
+          <img src={photo} alt={title} className="h-full w-full object-cover" />
         </div>
       ) : (
         <div className="flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-lg border-2 border-dashed border-amber-400 bg-amber-100">
           <Camera className="h-5 w-5 text-amber-600" />
         </div>
       )}
+
       <div className="min-w-0 flex-1">
-        <p className={cn('text-sm font-semibold', hasPhoto ? 'text-foreground' : 'text-amber-800')}>Foto Resi</p>
+        <p className={cn('text-sm font-semibold', hasPhoto ? 'text-foreground' : 'text-amber-800')}>
+          {title}
+        </p>
         <p className={cn('mt-0.5 text-[11px]', hasPhoto ? 'text-muted-foreground' : 'text-amber-700')}>
-          {hasPhoto ? 'Ketuk untuk mengubah foto' : 'Ketuk untuk upload foto resi (wajib)'}
+          {hasPhoto ? filledText : emptyText}
         </p>
       </div>
+
       {hasPhoto && (
-        <span className="flex-shrink-0 rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-bold text-green-700">1/1</span>
+        <span className="flex-shrink-0 rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-bold text-green-700">
+          1/1
+        </span>
       )}
     </button>
   );
@@ -282,13 +304,14 @@ export default function SetoranDetailPage() {
   const [submitting,     setSubmitting]     = useState(false);
   const [submitError,    setSubmitError]    = useState<string | null>(null);
   const [submitMeta,     setSubmitMeta]     = useState<SubmitMeta | null>(null);
-  const [photoModalOpen, setPhotoModalOpen] = useState(false);
+  const [resiPhotoModalOpen, setResiPhotoModalOpen] = useState(false);
+  const [atmSelfieModalOpen, setAtmSelfieModalOpen] = useState(false);
 
   // Form state — raw digit strings
   const [expectedAmount, setExpectedAmount] = useState('0');
   const [amount,         setAmount]         = useState('0');
-  const [linkSetoran,    setLinkSetoran]    = useState('');
-  const [resiPhoto,      setResiPhoto]      = useState<string | null>(null);
+  const [resiPhoto,          setResiPhoto]          = useState<string | null>(null);
+  const [atmCardSelfiePhoto, setAtmCardSelfiePhoto] = useState<string | null>(null);
   const [notes,          setNotes]          = useState('');
 
   // ── Load task ──────────────────────────────────────────────────────────────
@@ -304,8 +327,8 @@ export default function SetoranDetailPage() {
         setTaskData(d);
         setExpectedAmount(decimalToRupiahRaw(d.expectedAmount));
         setAmount(decimalToRupiahRaw(d.amount));
-        setLinkSetoran(d.linkSetoran ?? '');
         setResiPhoto(d.resiPhoto ?? null);
+        setAtmCardSelfiePhoto(d.atmCardSelfiePhoto ?? null);
         setNotes(d.notes ?? '');
       } else {
         setTaskData(null);
@@ -361,16 +384,16 @@ export default function SetoranDetailPage() {
     expectedValid &&
     amountValid &&
     !overCap &&
-    !!linkSetoran &&
-    !!resiPhoto;
+    !!resiPhoto &&
+    !!atmCardSelfiePhoto;
 
   const submitHint = (() => {
     if (locked)          return '';
     if (!expectedValid)  return 'Setoran Actual hari ini wajib diisi.';
     if (!amountValid)    return 'Nominal setoran aktual wajib diisi.';
     if (overCap)         return `Nominal disetor melebihi total wajib ${formatRupiah(String(totalDueNum))}. Setoran lebih tidak diperbolehkan.`;
-    if (!linkSetoran)    return 'Link / nomor referensi wajib diisi.';
     if (!resiPhoto)      return 'Foto resi wajib diupload.';
+    if (!atmCardSelfiePhoto) return 'Foto selfie dengan kartu ATM wajib diupload.';
     if (isShort)         return `Masih kurang ${formatRupiah(String(unpaidLive))} — akan tercatat sebagai kekurangan hari ini dan muncul di setoran besok.`;
     return '';
   })();
@@ -384,6 +407,17 @@ export default function SetoranDetailPage() {
   function clearResiPhoto() {
     setResiPhoto(null);
     autoSave({ resiPhoto: null }, { immediate: true });
+  }
+
+  function confirmAtmCardSelfiePhoto(photos: string[]) {
+    const url = photos[0] ?? null;
+    setAtmCardSelfiePhoto(url);
+    autoSave({ atmCardSelfiePhoto: url }, { immediate: true });
+  }
+
+  function clearAtmCardSelfiePhoto() {
+    setAtmCardSelfiePhoto(null);
+    autoSave({ atmCardSelfiePhoto: null }, { immediate: true });
   }
 
   // ── Submit ─────────────────────────────────────────────────────────────────
@@ -404,10 +438,10 @@ export default function SetoranDetailPage() {
         body: JSON.stringify({
           scheduleId,
           storeId,
-          expectedAmount: String(expectedNum),
-          amount:         String(amountNum),
-          linkSetoran,
+          expectedAmount:     String(expectedNum),
+          amount:             String(amountNum),
           resiPhoto,
+          atmCardSelfiePhoto,
           notes: notes || undefined,
         }),
       });
@@ -641,25 +675,28 @@ export default function SetoranDetailPage() {
                 </p>
               </Section>
 
-              {/* ── Link / referensi ───────────────────────────────────── */}
-              <Section title="Link / No. Referensi Transfer">
-                <input
-                  type="text"
-                  value={linkSetoran}
+              {/* ── Foto resi ──────────────────────────────────────────── */}
+              <Section title="Bukti Setoran">
+                <PhotoProofTile
+                  title="Foto Resi"
+                  emptyText="Ketuk untuk upload foto resi (wajib)"
+                  filledText="Ketuk untuk mengubah foto"
+                  photo={resiPhoto}
+                  onClick={() => setResiPhotoModalOpen(true)}
                   disabled={dis}
-                  placeholder="Paste link atau nomor referensi"
-                  onChange={e => { setLinkSetoran(e.target.value); autoSave({ linkSetoran: e.target.value }); }}
-                  className="w-full rounded-xl border border-border bg-secondary px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
+                  hasPhoto={!!resiPhoto}
                 />
               </Section>
 
-              {/* ── Foto resi ──────────────────────────────────────────── */}
-              <Section title="Foto Resi">
-                <ResiPhotoTile
-                  photo={resiPhoto}
-                  onClick={() => setPhotoModalOpen(true)}
+              <Section title="Selfie dengan Kartu ATM">
+                <PhotoProofTile
+                  title="Selfie + Kartu ATM"
+                  emptyText="Ketuk untuk upload selfie dengan kartu ATM (wajib)"
+                  filledText="Ketuk untuk mengubah foto"
+                  photo={atmCardSelfiePhoto}
+                  onClick={() => setAtmSelfieModalOpen(true)}
                   disabled={dis}
-                  hasPhoto={!!resiPhoto}
+                  hasPhoto={!!atmCardSelfiePhoto}
                 />
               </Section>
 
@@ -711,8 +748,8 @@ export default function SetoranDetailPage() {
       </div>
 
       <ChecklistPhotoModal
-        open={photoModalOpen}
-        onClose={() => setPhotoModalOpen(false)}
+        open={resiPhotoModalOpen}
+        onClose={() => setResiPhotoModalOpen(false)}
         title="Foto Resi"
         description="Upload 1 foto resi setoran sebagai bukti transfer."
         photoType="resi"
@@ -721,6 +758,20 @@ export default function SetoranDetailPage() {
         initialPhotos={resiPhoto ? [resiPhoto] : []}
         onConfirm={confirmResiPhoto}
         onClear={clearResiPhoto}
+        disabled={dis}
+      />
+
+      <ChecklistPhotoModal
+        open={atmSelfieModalOpen}
+        onClose={() => setAtmSelfieModalOpen(false)}
+        title="Selfie dengan Kartu ATM"
+        description="Upload 1 foto selfie sambil memegang kartu ATM sebagai bukti tambahan."
+        photoType="atm_card_selfie"
+        min={1}
+        max={1}
+        initialPhotos={atmCardSelfiePhoto ? [atmCardSelfiePhoto] : []}
+        onConfirm={confirmAtmCardSelfiePhoto}
+        onClear={clearAtmCardSelfiePhoto}
         disabled={dis}
       />
     </div>

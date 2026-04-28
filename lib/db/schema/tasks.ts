@@ -101,8 +101,8 @@ export const setoranTasks = pgTable('setoran_tasks', {
   carriedDeficit:          decimal('carried_deficit',           { precision: 12, scale: 2 }).default('0').notNull(),
   carriedDeficitFetchedAt: timestamp('carried_deficit_fetched_at'),
   amount:                  decimal('amount',                    { precision: 12, scale: 2 }),
-  linkSetoran:             text('link_setoran'),
   resiPhoto:               text('resi_photo'),
+  atmCardSelfiePhoto:      text('atm_card_selfie_photo'),
   unpaidAmount:            decimal('unpaid_amount',             { precision: 12, scale: 2 }).default('0').notNull(),
 
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),

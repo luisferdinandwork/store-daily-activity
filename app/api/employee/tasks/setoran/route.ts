@@ -38,13 +38,13 @@ export async function POST(req: NextRequest) {
   try {
     const result = await submitSetoran({
       scheduleId,
-      userId:         session.user.id as string,
+      userId:             session.user.id as string,
       storeId,
-      expectedAmount: typeof body.expectedAmount === 'string' ? body.expectedAmount : String(body.expectedAmount ?? ''),
-      amount:         typeof body.amount         === 'string' ? body.amount         : String(body.amount         ?? ''),
-      linkSetoran:    typeof body.linkSetoran    === 'string' ? body.linkSetoran    : '',
-      resiPhoto:      typeof body.resiPhoto      === 'string' ? body.resiPhoto      : '',
-      notes:          typeof body.notes          === 'string' ? body.notes          : undefined,
+      expectedAmount:     typeof body.expectedAmount     === 'string' ? body.expectedAmount     : String(body.expectedAmount ?? ''),
+      amount:             typeof body.amount             === 'string' ? body.amount             : String(body.amount ?? ''),
+      resiPhoto:          typeof body.resiPhoto          === 'string' ? body.resiPhoto          : '',
+      atmCardSelfiePhoto: typeof body.atmCardSelfiePhoto === 'string' ? body.atmCardSelfiePhoto : '',
+      notes:              typeof body.notes              === 'string' ? body.notes              : undefined,
     });
 
     if (!result.success) {
@@ -87,12 +87,17 @@ export async function PATCH(req: NextRequest) {
 
   if ('amount'         in body) patch.amount         = typeof body.amount         === 'string' ? body.amount         : String(body.amount ?? '');
   if ('expectedAmount' in body) patch.expectedAmount = typeof body.expectedAmount === 'string' && body.expectedAmount.length > 0 ? body.expectedAmount : null;
-  if ('linkSetoran'    in body) patch.linkSetoran    = typeof body.linkSetoran    === 'string' ? body.linkSetoran    : '';
   if ('notes'          in body) patch.notes          = typeof body.notes          === 'string' ? body.notes          : undefined;
 
   if ('resiPhoto' in body) {
     patch.resiPhoto = typeof body.resiPhoto === 'string' && body.resiPhoto.length > 0
       ? body.resiPhoto
+      : null;
+  }
+
+  if ('atmCardSelfiePhoto' in body) {
+    patch.atmCardSelfiePhoto = typeof body.atmCardSelfiePhoto === 'string' && body.atmCardSelfiePhoto.length > 0
+      ? body.atmCardSelfiePhoto
       : null;
   }
 

@@ -38,18 +38,15 @@ export type TaskResult<T = void> =
   | { success: false; error: string };
 
 export interface SubmitSetoranInput {
-  scheduleId:     number;
-  userId:         string;
-  storeId:        number;
-  /** Today's base deposit target (employee-entered). */
-  expectedAmount: string;
-  /** Actual amount deposited today. */
-  amount:         string;
-  linkSetoran:    string;
-  resiPhoto:      string;
-  notes?:         string;
+  scheduleId:          number;
+  userId:              string;
+  storeId:             number;
+  expectedAmount:      string;
+  amount:              string;
+  resiPhoto:           string;
+  atmCardSelfiePhoto:  string;
+  notes?:              string;
 }
-
 // ─── Private helpers ──────────────────────────────────────────────────────────
 
 function startOfDay(d: Date): Date {
@@ -134,8 +131,8 @@ async function getPriorUnpaidForStore(
  *   • carriedDeficit = unpaidAmount from the most recent prior-day setoran row
  *     for this store (or 0 if none).
  *   • status = 'pending'
- *   • amount, expectedAmount, linkSetoran, resiPhoto = null (employee fills in)
- *
+ *   • amount, expectedAmount, resiPhoto, atmCardSelfiePhoto = null (employee fills in)
+ *  *
  * If a row already exists for this schedule it is returned as-is.
  */
 export async function getOrCreateSetoranForSchedule(
@@ -231,8 +228,8 @@ function validateSetoranPayload(input: SubmitSetoranInput): string | null {
   const amt = parseAmount(input.amount);
   if (amt <= 0) return 'Nominal setoran aktual wajib diisi.';
 
-  if (!input.linkSetoran?.trim()) return 'Link / nomor referensi setoran wajib diisi.';
-  if (!input.resiPhoto?.trim())   return 'Foto resi wajib diupload.';
+  if (!input.resiPhoto?.trim())          return 'Foto resi wajib diupload.';
+  if (!input.atmCardSelfiePhoto?.trim()) return 'Foto selfie dengan kartu ATM wajib diupload.';
   return null;
 }
 
@@ -287,19 +284,17 @@ export async function submitSetoran(
     const [updated] = await db
       .update(setoranTasks)
       .set({
-        // Overwrite scheduleId/userId with the submitter — the most recent
-        // employee who actually performed the task is the one of record.
-        scheduleId:      input.scheduleId,
-        userId:          input.userId,
-        expectedAmount:  String(expected),
-        amount:          String(amt),
-        unpaidAmount:    String(unpaid),
-        linkSetoran:     input.linkSetoran,
-        resiPhoto:       input.resiPhoto,
-        notes:           input.notes,
-        status:          'completed',
-        completedAt:     now,
-        updatedAt:       now,
+        scheduleId:         input.scheduleId,
+        userId:             input.userId,
+        expectedAmount:     String(expected),
+        amount:             String(amt),
+        unpaidAmount:       String(unpaid),
+        resiPhoto:          input.resiPhoto,
+        atmCardSelfiePhoto: input.atmCardSelfiePhoto,
+        notes:              input.notes,
+        status:             'completed',
+        completedAt:        now,
+        updatedAt:          now,
       })
       .where(eq(setoranTasks.id, existing.id))
       .returning();
@@ -313,11 +308,11 @@ export async function submitSetoran(
 // ─── Auto-save ────────────────────────────────────────────────────────────────
 
 export interface SetoranAutoSavePatch {
-  amount?:         string;
-  expectedAmount?: string | null;
-  linkSetoran?:    string;
-  resiPhoto?:      string | null;
-  notes?:          string;
+  amount?:              string;
+  expectedAmount?:      string | null;
+  resiPhoto?:           string | null;
+  atmCardSelfiePhoto?:  string | null;
+  notes?:               string;
 }
 
 export async function autoSaveSetoran(
@@ -338,11 +333,11 @@ export async function autoSaveSetoran(
     // back to in_progress so the UI knows there's unfinalised changes.
     const update: Record<string, unknown> = { updatedAt: new Date() };
 
-    if ('amount'         in patch) update.amount         = patch.amount;
-    if ('expectedAmount' in patch) update.expectedAmount = patch.expectedAmount;
-    if ('linkSetoran'    in patch) update.linkSetoran    = patch.linkSetoran;
-    if ('resiPhoto'      in patch) update.resiPhoto      = patch.resiPhoto ?? null;
-    if ('notes'          in patch) update.notes          = patch.notes;
+    if ('amount'              in patch) update.amount              = patch.amount;
+    if ('expectedAmount'      in patch) update.expectedAmount      = patch.expectedAmount;
+    if ('resiPhoto'           in patch) update.resiPhoto           = patch.resiPhoto ?? null;
+    if ('atmCardSelfiePhoto'  in patch) update.atmCardSelfiePhoto  = patch.atmCardSelfiePhoto ?? null;
+    if ('notes'               in patch) update.notes               = patch.notes;
 
     if (existing.status === 'pending') update.status = 'in_progress';
 
