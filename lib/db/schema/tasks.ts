@@ -366,17 +366,19 @@ export const groomingTasks = pgTable('grooming_tasks', {
   shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
   date:       timestamp('date').notNull(),
 
-  uniformActive:     boolean('uniform_active').default(true).notNull(),
-  hairActive:        boolean('hair_active').default(true).notNull(),
-  nailsActive:       boolean('nails_active').default(true).notNull(),
-  accessoriesActive: boolean('accessories_active').default(true).notNull(),
-  shoeActive:        boolean('shoe_active').default(true).notNull(),
+  uniformActive:   boolean('uniform_active').default(true).notNull(),
+  hairActive:      boolean('hair_active').default(true).notNull(),
+  smellActive:     boolean('smell_active').default(true).notNull(),
+  makeUpActive:    boolean('make_up_active').default(true).notNull(),
+  shoeActive:      boolean('shoe_active').default(true).notNull(),
+  nameTagActive:   boolean('name_tag_active').default(true).notNull(),
 
-  uniformComplete:      boolean('uniform_complete'),
-  hairGroomed:          boolean('hair_groomed'),
-  nailsClean:           boolean('nails_clean'),
-  accessoriesCompliant: boolean('accessories_compliant'),
-  shoeCompliant:        boolean('shoe_compliant'),
+  uniformChecked:  boolean('uniform_checked'),
+  hairChecked:     boolean('hair_checked'),
+  smellChecked:    boolean('smell_checked'),
+  makeUpChecked:   boolean('make_up_checked'),
+  shoeChecked:     boolean('shoe_checked'),
+  nameTagChecked:  boolean('name_tag_checked'),
 
   selfiePhotos: text('selfie_photos'),
 
@@ -391,6 +393,40 @@ export const groomingTasks = pgTable('grooming_tasks', {
   createdAt:   timestamp('created_at').defaultNow().notNull(),
   updatedAt:   timestamp('updated_at').defaultNow().notNull(),
 });
+
+export const marketingCheckTasks = pgTable('marketing_check_tasks', {
+  id:         serial('id').primaryKey(),
+  scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
+  userId:     text('user_id').references(() => users.id).notNull(),
+  storeId:    integer('store_id').references(() => stores.id).notNull(),
+  shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
+  date:       timestamp('date').notNull(),
+
+  // Cek promo berjalan
+  promoName:      boolean('promo_name').default(false).notNull(),
+  promoPeriod:    boolean('promo_period').default(false).notNull(),
+  promoMechanism: boolean('promo_mechanism').default(false).notNull(),
+
+  // Random checking
+  randomShoeItems:    boolean('random_shoe_items').default(false).notNull(),
+  randomNonShoeItems: boolean('random_non_shoe_items').default(false).notNull(),
+
+  // Sell tag
+  sellTag: boolean('sell_tag').default(false).notNull(),
+
+  submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
+  submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
+
+  status:      taskStatusEnum('status').default('pending').notNull(),
+  notes:       text('notes'),
+  completedAt: timestamp('completed_at'),
+  verifiedBy:  text('verified_by').references(() => users.id),
+  verifiedAt:  timestamp('verified_at'),
+  createdAt:   timestamp('created_at').defaultNow().notNull(),
+  updatedAt:   timestamp('updated_at').defaultNow().notNull(),
+}, (t) => ({
+  uniqStoreShiftDate: unique().on(t.storeId, t.shiftId, t.date),
+}));
 
 // ─── Inferred types ───────────────────────────────────────────────────────────
 
@@ -411,6 +447,8 @@ export type OpenStatementTask     = typeof openStatementTasks.$inferSelect;
 export type NewOpenStatementTask  = typeof openStatementTasks.$inferInsert;
 export type GroomingTask          = typeof groomingTasks.$inferSelect;
 export type NewGroomingTask       = typeof groomingTasks.$inferInsert;
+export type MarketingCheckTask    = typeof marketingCheckTasks.$inferSelect;
+export type NewMarketingCheckTask = typeof marketingCheckTasks.$inferInsert;
 export type EdcReconciliationTask    = typeof edcReconciliationTasks.$inferSelect;
 export type NewEdcReconciliationTask = typeof edcReconciliationTasks.$inferInsert;
 export type EdcTransactionRow        = typeof edcTransactionRows.$inferSelect;

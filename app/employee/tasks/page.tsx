@@ -18,10 +18,16 @@ import { cn } from '@/lib/utils';
 // ─── Task types ────────────────────────────────────────────────────────────────
 
 export type TaskType =
-  | 'store_opening'     | 'setoran'    | 'cek_bin'
-  | 'product_check'     | 'item_dropping'
-  | 'briefing'          | 'edc_reconciliation'
-  | 'eod_z_report'      | 'open_statement'
+  | 'store_opening'
+  | 'setoran'
+  | 'cek_bin'
+  | 'product_check'
+  | 'marketing_check'
+  | 'item_dropping'
+  | 'briefing'
+  | 'edc_reconciliation'
+  | 'eod_z_report'
+  | 'open_statement'
   | 'grooming';
 
 export type TaskStatus =
@@ -58,6 +64,16 @@ export interface SetoranData extends TaskBase {
   carriedDeficitFetchedAt: string | null;
   unpaidAmount:            string | null;
 }
+
+export interface MarketingCheckData extends TaskBase {
+  promoName: boolean;
+  promoPeriod: boolean;
+  promoMechanism: boolean;
+  randomShoeItems: boolean;
+  randomNonShoeItems: boolean;
+  sellTag: boolean;
+}
+
 export interface CekBinData       extends TaskBase {}
 export interface ProductCheckData extends TaskBase {
   display: boolean; price: boolean; saleTag: boolean;
@@ -106,16 +122,17 @@ export interface GroomingData extends TaskBase {
 }
 
 export type TaskItem =
-  | { type: 'store_opening';      shift: 'morning' | 'evening' | 'full_day'; data: StoreOpeningData       }
-  | { type: 'setoran';            shift: 'morning' | 'evening' | 'full_day'; data: SetoranData             }
-  | { type: 'cek_bin';            shift: 'morning' | 'evening' | 'full_day'; data: CekBinData              }
-  | { type: 'product_check';      shift: 'morning' | 'evening' | 'full_day'; data: ProductCheckData        }
-  | { type: 'item_dropping';      shift: 'morning' | 'evening' | 'full_day'; data: ItemDroppingData        }
-  | { type: 'briefing';           shift: 'morning' | 'evening' | 'full_day'; data: BriefingData            }
-  | { type: 'edc_reconciliation'; shift: 'morning' | 'evening' | 'full_day'; data: EdcReconciliationData   }
-  | { type: 'eod_z_report';       shift: 'morning' | 'evening' | 'full_day'; data: EodZReportData          }
-  | { type: 'open_statement';     shift: 'morning' | 'evening' | 'full_day'; data: OpenStatementData       }
-  | { type: 'grooming';           shift: 'morning' | 'evening' | 'full_day'; data: GroomingData            };
+  | { type: 'store_opening';      shift: 'morning' | 'evening' | 'full_day'; data: StoreOpeningData }
+  | { type: 'setoran';            shift: 'morning' | 'evening' | 'full_day'; data: SetoranData }
+  | { type: 'cek_bin';            shift: 'morning' | 'evening' | 'full_day'; data: CekBinData }
+  | { type: 'product_check';      shift: 'morning' | 'evening' | 'full_day'; data: ProductCheckData }
+  | { type: 'marketing_check';    shift: 'morning' | 'evening' | 'full_day'; data: MarketingCheckData }
+  | { type: 'item_dropping';      shift: 'morning' | 'evening' | 'full_day'; data: ItemDroppingData }
+  | { type: 'briefing';           shift: 'morning' | 'evening' | 'full_day'; data: BriefingData }
+  | { type: 'edc_reconciliation'; shift: 'morning' | 'evening' | 'full_day'; data: EdcReconciliationData }
+  | { type: 'eod_z_report';       shift: 'morning' | 'evening' | 'full_day'; data: EodZReportData }
+  | { type: 'open_statement';     shift: 'morning' | 'evening' | 'full_day'; data: OpenStatementData }
+  | { type: 'grooming';           shift: 'morning' | 'evening' | 'full_day'; data: GroomingData };
 
 type Filter = 'all' | 'pending' | 'in_progress' | 'completed';
 
@@ -180,6 +197,12 @@ const TASK_META: Record<TaskType, { title: string; description: string; Icon: Re
   eod_z_report:       { title: 'EOD Z-Report',       description: 'Enter Z-report total & upload receipt.', Icon: BarChart2,     hasPhoto: true  },
   open_statement:     { title: 'Open Statement',     description: 'Match actual vs expected cash amount.',  Icon: ClipboardList, hasPhoto: false },
   grooming:           { title: 'Grooming Check',     description: 'Uniform check + full-body selfie.',      Icon: User,          hasPhoto: true  },
+  marketing_check: {
+  title: 'Marketing Check',
+  description: 'Promo, random checking, dan sell tag checklist.',
+  Icon: ClipboardList,
+  hasPhoto: false,
+},
 };
 
 const TASK_ROUTES: Record<TaskType, string> = {
@@ -193,6 +216,7 @@ const TASK_ROUTES: Record<TaskType, string> = {
   eod_z_report:       'eod-z-report',
   open_statement:     'open-statement',
   grooming:           'grooming',
+  marketing_check:    'marketing-check',
 };
 
 const FILTERS: { key: Filter; label: string }[] = [

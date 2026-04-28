@@ -28,28 +28,27 @@ export interface GeoPoint {
 }
 
 export interface SubmitGroomingInput {
-  scheduleId:         number;
-  userId:             string;
-  storeId:            number;
-  geo:                GeoPoint;
-  
-  // ── Active toggles (dictate which items are required) ──────────────────────
-  uniformActive?:     boolean;
-  hairActive?:        boolean;
-  nailsActive?:       boolean;
-  accessoriesActive?: boolean;
-  shoeActive?:        boolean;
-  
-  // ── Compliance answers ─────────────────────────────────────────────────────
-  uniformComplete?:      boolean;
-  hairGroomed?:          boolean;
-  nailsClean?:           boolean;
-  accessoriesCompliant?: boolean;
-  shoeCompliant?:        boolean;
-  
-  // ── Photos ─────────────────────────────────────────────────────────────────
+  scheduleId:       number;
+  userId:           string;
+  storeId:          number;
+  geo:              GeoPoint;
+
+  uniformActive?:   boolean;
+  hairActive?:      boolean;
+  smellActive?:     boolean;
+  makeUpActive?:    boolean;
+  shoeActive?:      boolean;
+  nameTagActive?:   boolean;
+
+  uniformChecked?:  boolean;
+  hairChecked?:     boolean;
+  smellChecked?:    boolean;
+  makeUpChecked?:   boolean;
+  shoeChecked?:     boolean;
+  nameTagChecked?:  boolean;
+
   selfiePhotos?: string[];
-  
+
   notes?:   string;
   skipGeo?: boolean;
 }
@@ -130,22 +129,25 @@ async function assertCanProgressTask(
 
 function validateGroomingPayload(input: SubmitGroomingInput): string | null {
   const {
-    uniformActive, hairActive, nailsActive, accessoriesActive, shoeActive,
-    uniformComplete, hairGroomed, nailsClean, accessoriesCompliant, shoeCompliant,
+    uniformActive, hairActive, smellActive, makeUpActive, shoeActive, nameTagActive,
+    uniformChecked, hairChecked, smellChecked, makeUpChecked, shoeChecked, nameTagChecked,
     selfiePhotos,
   } = input;
 
-  if (uniformActive && !uniformComplete)      return 'Checklist "Seragam Lengkap" belum ditandai.';
-  if (hairActive && !hairGroomed)             return 'Checklist "Rambut Rapih" belum ditandai.';
-  if (nailsActive && !nailsClean)             return 'Checklist "Kuku Bersih" belum ditandai.';
-  if (accessoriesActive && !accessoriesCompliant) return 'Checklist "Aksesoris Sesuai" belum ditandai.';
-  if (shoeActive && !shoeCompliant)           return 'Checklist "Sepatu Sesuai" belum ditandai.';
+  if (uniformActive && !uniformChecked) return 'Checklist "Uniform" belum ditandai.';
+  if (hairActive && !hairChecked)       return 'Checklist "Hair" belum ditandai.';
+  if (smellActive && !smellChecked)     return 'Checklist "Smell" belum ditandai.';
+  if (makeUpActive && !makeUpChecked)   return 'Checklist "Make up" belum ditandai.';
+  if (shoeActive && !shoeChecked)       return 'Checklist "Shoes" belum ditandai.';
+  if (nameTagActive && !nameTagChecked) return 'Checklist "Name Tag" belum ditandai.';
 
   const selfieCount = selfiePhotos?.length ?? 0;
-  if (selfieCount < GROOMING_PHOTO_RULES.selfie.min)
+  if (selfieCount < GROOMING_PHOTO_RULES.selfie.min) {
     return `Foto selfie wajib minimal ${GROOMING_PHOTO_RULES.selfie.min}.`;
-  if (selfieCount > GROOMING_PHOTO_RULES.selfie.max)
+  }
+  if (selfieCount > GROOMING_PHOTO_RULES.selfie.max) {
     return `Foto selfie maksimal ${GROOMING_PHOTO_RULES.selfie.max}.`;
+  }
 
   return null;
 }
@@ -188,17 +190,19 @@ export async function submitGrooming(
       shiftId:            schedule.shiftId,
       date:               startOfDay(now),
       
-      uniformActive:      input.uniformActive ?? true,
-      hairActive:         input.hairActive ?? true,
-      nailsActive:        input.nailsActive ?? true,
-      accessoriesActive:  input.accessoriesActive ?? true,
-      shoeActive:         input.shoeActive ?? true,
-      
-      uniformComplete:      input.uniformComplete ?? false,
-      hairGroomed:          input.hairGroomed ?? false,
-      nailsClean:           input.nailsClean ?? false,
-      accessoriesCompliant: input.accessoriesCompliant ?? false,
-      shoeCompliant:        input.shoeCompliant ?? false,
+      uniformActive:    input.uniformActive ?? true,
+      hairActive:       input.hairActive ?? true,
+      smellActive:      input.smellActive ?? true,
+      makeUpActive:     input.makeUpActive ?? true,
+      shoeActive:       input.shoeActive ?? true,
+      nameTagActive:    input.nameTagActive ?? true,
+
+      uniformChecked:   input.uniformChecked ?? false,
+      hairChecked:      input.hairChecked ?? false,
+      smellChecked:     input.smellChecked ?? false,
+      makeUpChecked:    input.makeUpChecked ?? false,
+      shoeChecked:      input.shoeChecked ?? false,
+      nameTagChecked:   input.nameTagChecked ?? false,
       
       selfiePhotos: jsonPhotos(input.selfiePhotos),
       submittedLat: String(input.geo.lat),
@@ -223,18 +227,22 @@ export async function submitGrooming(
 // ─── Auto-save patch ──────────────────────────────────────────────────────────
 
 export interface GroomingAutoSavePatch {
-  uniformActive?:      boolean;
-  uniformComplete?:    boolean;
-  hairActive?:         boolean;
-  hairGroomed?:        boolean;
-  nailsActive?:        boolean;
-  nailsClean?:         boolean;
-  accessoriesActive?:  boolean;
-  accessoriesCompliant?: boolean;
-  shoeActive?:         boolean;
-  shoeCompliant?:      boolean;
-  selfiePhotos?:       string[];
-  notes?:              string;
+  uniformActive?:  boolean;
+  hairActive?:     boolean;
+  smellActive?:    boolean;
+  makeUpActive?:   boolean;
+  shoeActive?:     boolean;
+  nameTagActive?:  boolean;
+
+  uniformChecked?: boolean;
+  hairChecked?:    boolean;
+  smellChecked?:   boolean;
+  makeUpChecked?:  boolean;
+  shoeChecked?:    boolean;
+  nameTagChecked?: boolean;
+
+  selfiePhotos?: string[];
+  notes?: string;
 }
 
 export async function autoSaveGrooming(
@@ -254,17 +262,19 @@ export async function autoSaveGrooming(
 
     const update: Record<string, unknown> = { updatedAt: new Date() };
 
-    if ('uniformActive'      in patch) update.uniformActive      = Boolean(patch.uniformActive);
-    if ('hairActive'         in patch) update.hairActive         = Boolean(patch.hairActive);
-    if ('nailsActive'        in patch) update.nailsActive        = Boolean(patch.nailsActive);
-    if ('accessoriesActive'  in patch) update.accessoriesActive  = Boolean(patch.accessoriesActive);
-    if ('shoeActive'         in patch) update.shoeActive         = Boolean(patch.shoeActive);
+    if ('uniformActive' in patch) update.uniformActive = Boolean(patch.uniformActive);
+    if ('hairActive'    in patch) update.hairActive    = Boolean(patch.hairActive);
+    if ('smellActive'   in patch) update.smellActive   = Boolean(patch.smellActive);
+    if ('makeUpActive'  in patch) update.makeUpActive  = Boolean(patch.makeUpActive);
+    if ('shoeActive'    in patch) update.shoeActive    = Boolean(patch.shoeActive);
+    if ('nameTagActive' in patch) update.nameTagActive = Boolean(patch.nameTagActive);
 
-    if ('uniformComplete'      in patch) update.uniformComplete      = Boolean(patch.uniformComplete);
-    if ('hairGroomed'          in patch) update.hairGroomed          = Boolean(patch.hairGroomed);
-    if ('nailsClean'           in patch) update.nailsClean           = Boolean(patch.nailsClean);
-    if ('accessoriesCompliant' in patch) update.accessoriesCompliant = Boolean(patch.accessoriesCompliant);
-    if ('shoeCompliant'        in patch) update.shoeCompliant        = Boolean(patch.shoeCompliant);
+    if ('uniformChecked' in patch) update.uniformChecked = Boolean(patch.uniformChecked);
+    if ('hairChecked'    in patch) update.hairChecked    = Boolean(patch.hairChecked);
+    if ('smellChecked'   in patch) update.smellChecked   = Boolean(patch.smellChecked);
+    if ('makeUpChecked'  in patch) update.makeUpChecked  = Boolean(patch.makeUpChecked);
+    if ('shoeChecked'    in patch) update.shoeChecked    = Boolean(patch.shoeChecked);
+    if ('nameTagChecked' in patch) update.nameTagChecked = Boolean(patch.nameTagChecked);
 
     if ('notes'        in patch) update.notes        = patch.notes;
     if ('selfiePhotos' in patch) update.selfiePhotos = jsonPhotos(patch.selfiePhotos);

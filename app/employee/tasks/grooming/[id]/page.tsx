@@ -36,28 +36,33 @@ type AccessStatus =
   | { status: 'geo_unavailable' };
 
 interface GroomingData {
-  id:                   string;
-  scheduleId:           string;
-  userId:               string;
-  storeId:              string;
-  shift:                'morning' | 'evening' | 'full_day';
-  date:                 string;
-  status:               TaskStatus;
-  notes:                string | null;
-  completedAt:          string | null;
-  verifiedBy:           string | null;
-  verifiedAt:           string | null;
-  uniformActive:        boolean;
-  hairActive:           boolean;
-  nailsActive:          boolean;
-  accessoriesActive:    boolean;
-  shoeActive:           boolean;
-  uniformComplete:      boolean | null;
-  hairGroomed:          boolean | null;
-  nailsClean:           boolean | null;
-  accessoriesCompliant: boolean | null;
-  shoeCompliant:        boolean | null;
-  selfiePhotos:         string[];
+  id:             string;
+  scheduleId:     string;
+  userId:         string;
+  storeId:        string;
+  shift:          'morning' | 'evening' | 'full_day';
+  date:           string;
+  status:         TaskStatus;
+  notes:          string | null;
+  completedAt:    string | null;
+  verifiedBy:     string | null;
+  verifiedAt:     string | null;
+
+  uniformActive:  boolean;
+  hairActive:     boolean;
+  smellActive:    boolean;
+  makeUpActive:   boolean;
+  shoeActive:     boolean;
+  nameTagActive:  boolean;
+
+  uniformChecked: boolean | null;
+  hairChecked:    boolean | null;
+  smellChecked:   boolean | null;
+  makeUpChecked:  boolean | null;
+  shoeChecked:    boolean | null;
+  nameTagChecked: boolean | null;
+
+  selfiePhotos:   string[];
 }
 
 // ─── Photo rules (mirrors server) ─────────────────────────────────────────────
@@ -431,18 +436,19 @@ export default function GroomingDetailPage() {
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   // Form state - Active Toggles
-  const [uniformActive,     setUniformActive]     = useState(true);
-  const [hairActive,        setHairActive]        = useState(true);
-  const [nailsActive,       setNailsActive]       = useState(true);
-  const [accessoriesActive, setAccessoriesActive] = useState(true);
-  const [shoeActive,        setShoeActive]        = useState(true);
+  const [uniformActive, setUniformActive] = useState(true);
+  const [hairActive, setHairActive] = useState(true);
+  const [smellActive, setSmellActive] = useState(true);
+  const [makeUpActive, setMakeUpActive] = useState(true);
+  const [shoeActive, setShoeActive] = useState(true);
+  const [nameTagActive, setNameTagActive] = useState(true);
 
-  // Form state - Compliance Checks
-  const [uniformComplete,      setUniformComplete]      = useState(false);
-  const [hairGroomed,          setHairGroomed]          = useState(false);
-  const [nailsClean,           setNailsClean]           = useState(false);
-  const [accessoriesCompliant, setAccessoriesCompliant] = useState(false);
-  const [shoeCompliant,        setShoeCompliant]        = useState(false);
+  const [uniformChecked, setUniformChecked] = useState(false);
+  const [hairChecked, setHairChecked] = useState(false);
+  const [smellChecked, setSmellChecked] = useState(false);
+  const [makeUpChecked, setMakeUpChecked] = useState(false);
+  const [shoeChecked, setShoeChecked] = useState(false);
+  const [nameTagChecked, setNameTagChecked] = useState(false);
 
   // Form state - Photos & Notes
   const [selfiePhotos, setSelfiePhotos] = useState<string[]>([]);
@@ -461,14 +467,17 @@ export default function GroomingDetailPage() {
         setTaskData(d);
         setUniformActive(d.uniformActive);
         setHairActive(d.hairActive);
-        setNailsActive(d.nailsActive);
-        setAccessoriesActive(d.accessoriesActive);
+        setSmellActive(d.smellActive);
+        setMakeUpActive(d.makeUpActive);
         setShoeActive(d.shoeActive);
-        setUniformComplete(d.uniformComplete === true);
-        setHairGroomed(d.hairGroomed === true);
-        setNailsClean(d.nailsClean === true);
-        setAccessoriesCompliant(d.accessoriesCompliant === true);
-        setShoeCompliant(d.shoeCompliant === true);
+        setNameTagActive(d.nameTagActive);
+
+        setUniformChecked(d.uniformChecked === true);
+        setHairChecked(d.hairChecked === true);
+        setSmellChecked(d.smellChecked === true);
+        setMakeUpChecked(d.makeUpChecked === true);
+        setShoeChecked(d.shoeChecked === true);
+        setNameTagChecked(d.nameTagChecked === true);
         setSelfiePhotos(d.selfiePhotos ?? []);
         setNotes(d.notes ?? '');
       } else {
@@ -534,13 +543,20 @@ export default function GroomingDetailPage() {
   }
 
   // ── Submit gate ───────────────────────────────────────────────────────────
-  const isUniformValid = !uniformActive || uniformComplete;
-  const isHairValid    = !hairActive || hairGroomed;
-  const isNailsValid   = !nailsActive || nailsClean;
-  const isAccValid     = !accessoriesActive || accessoriesCompliant;
-  const isShoeValid    = !shoeActive || shoeCompliant;
+  const isUniformValid = !uniformActive || uniformChecked;
+  const isHairValid    = !hairActive || hairChecked;
+  const isSmellValid   = !smellActive || smellChecked;
+  const isMakeUpValid  = !makeUpActive || makeUpChecked;
+  const isShoeValid    = !shoeActive || shoeChecked;
+  const isNameTagValid = !nameTagActive || nameTagChecked;
 
-  const allChecklistValid = isUniformValid && isHairValid && isNailsValid && isAccValid && isShoeValid;
+  const allChecklistValid =
+    isUniformValid &&
+    isHairValid &&
+    isSmellValid &&
+    isMakeUpValid &&
+    isShoeValid &&
+    isNameTagValid;
   const selfieValid       = selfiePhotos.length >= PHOTO_RULES.selfie.min;
 
   const canSubmit = !locked && allChecklistValid && selfieValid;
@@ -559,10 +575,25 @@ export default function GroomingDetailPage() {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          scheduleId, storeId,
-          geo: geo ?? null, skipGeo: geo === null,
-          uniformActive, hairActive, nailsActive, accessoriesActive, shoeActive,
-          uniformComplete, hairGroomed, nailsClean, accessoriesCompliant, shoeCompliant,
+          scheduleId,
+          storeId,
+          geo: geo ?? null,
+          skipGeo: geo === null,
+
+          uniformActive,
+          hairActive,
+          smellActive,
+          makeUpActive,
+          shoeActive,
+          nameTagActive,
+
+          uniformChecked,
+          hairChecked,
+          smellChecked,
+          makeUpChecked,
+          shoeChecked,
+          nameTagChecked,
+
           selfiePhotos,
           notes: notes || undefined,
         }),
@@ -594,12 +625,13 @@ export default function GroomingDetailPage() {
   // Reason text below submit button when disabled
   const submitHint = (() => {
     if (locked) return '';
-    if (!isUniformValid) return 'Lengkapi "Seragam Lengkap" atau nonaktifkan itemnya.';
-    if (!isHairValid)    return 'Lengkapi "Rambut Rapih" atau nonaktifkan itemnya.';
-    if (!isNailsValid)   return 'Lengkapi "Kuku Bersih" atau nonaktifkan itemnya.';
-    if (!isAccValid)     return 'Lengkapi "Aksesoris Sesuai" atau nonaktifkan itemnya.';
-    if (!isShoeValid)    return 'Lengkapi "Sepatu Sesuai" atau nonaktifkan itemnya.';
-    if (!selfieValid)    return `Upload min ${PHOTO_RULES.selfie.min} foto selfie.`;
+    if (!isUniformValid) return 'Lengkapi "Uniform" atau nonaktifkan itemnya.';
+    if (!isHairValid) return 'Lengkapi "Hair" atau nonaktifkan itemnya.';
+    if (!isSmellValid) return 'Lengkapi "Smell" atau nonaktifkan itemnya.';
+    if (!isMakeUpValid) return 'Lengkapi "Make up" atau nonaktifkan itemnya.';
+    if (!isShoeValid) return 'Lengkapi "Shoes" atau nonaktifkan itemnya.';
+    if (!isNameTagValid) return 'Lengkapi "Name Tag" atau nonaktifkan itemnya.';
+    if (!selfieValid) return `Upload min ${PHOTO_RULES.selfie.min} foto selfie.`;
     return '';
   })();
 
@@ -695,47 +727,56 @@ export default function GroomingDetailPage() {
               <Section title="Penampilan Diri">
                 <div className="space-y-2">
                   <ConditionalCheckItem
-                    label="Seragam Lengkap"
+                    label="Uniform"
                     active={uniformActive}
-                    onActiveChange={handleToggleActive('uniformActive', setUniformActive, 'uniformComplete', setUniformComplete, uniformComplete)}
-                    compliant={uniformComplete}
-                    onCompliantChange={handleSetCompliance('uniformComplete', setUniformComplete)}
+                    onActiveChange={handleToggleActive('uniformActive', setUniformActive, 'uniformChecked', setUniformChecked, uniformChecked)}
+                    compliant={uniformChecked}
+                    onCompliantChange={handleSetCompliance('uniformChecked', setUniformChecked)}
                     disabled={dis}
                   />
 
                   <ConditionalCheckItem
-                    label="Rambut Rapih"
+                    label="Hair"
                     active={hairActive}
-                    onActiveChange={handleToggleActive('hairActive', setHairActive, 'hairGroomed', setHairGroomed, hairGroomed)}
-                    compliant={hairGroomed}
-                    onCompliantChange={handleSetCompliance('hairGroomed', setHairGroomed)}
+                    onActiveChange={handleToggleActive('hairActive', setHairActive, 'hairChecked', setHairChecked, hairChecked)}
+                    compliant={hairChecked}
+                    onCompliantChange={handleSetCompliance('hairChecked', setHairChecked)}
                     disabled={dis}
                   />
 
                   <ConditionalCheckItem
-                    label="Kuku Bersih"
-                    active={nailsActive}
-                    onActiveChange={handleToggleActive('nailsActive', setNailsActive, 'nailsClean', setNailsClean, nailsClean)}
-                    compliant={nailsClean}
-                    onCompliantChange={handleSetCompliance('nailsClean', setNailsClean)}
+                    label="Smell"
+                    active={smellActive}
+                    onActiveChange={handleToggleActive('smellActive', setSmellActive, 'smellChecked', setSmellChecked, smellChecked)}
+                    compliant={smellChecked}
+                    onCompliantChange={handleSetCompliance('smellChecked', setSmellChecked)}
                     disabled={dis}
                   />
 
                   <ConditionalCheckItem
-                    label="Aksesoris Sesuai"
-                    active={accessoriesActive}
-                    onActiveChange={handleToggleActive('accessoriesActive', setAccessoriesActive, 'accessoriesCompliant', setAccessoriesCompliant, accessoriesCompliant)}
-                    compliant={accessoriesCompliant}
-                    onCompliantChange={handleSetCompliance('accessoriesCompliant', setAccessoriesCompliant)}
+                    label="Make up"
+                    active={makeUpActive}
+                    onActiveChange={handleToggleActive('makeUpActive', setMakeUpActive, 'makeUpChecked', setMakeUpChecked, makeUpChecked)}
+                    compliant={makeUpChecked}
+                    onCompliantChange={handleSetCompliance('makeUpChecked', setMakeUpChecked)}
                     disabled={dis}
                   />
 
                   <ConditionalCheckItem
-                    label="Sepatu Sesuai"
+                    label="Shoes"
                     active={shoeActive}
-                    onActiveChange={handleToggleActive('shoeActive', setShoeActive, 'shoeCompliant', setShoeCompliant, shoeCompliant)}
-                    compliant={shoeCompliant}
-                    onCompliantChange={handleSetCompliance('shoeCompliant', setShoeCompliant)}
+                    onActiveChange={handleToggleActive('shoeActive', setShoeActive, 'shoeChecked', setShoeChecked, shoeChecked)}
+                    compliant={shoeChecked}
+                    onCompliantChange={handleSetCompliance('shoeChecked', setShoeChecked)}
+                    disabled={dis}
+                  />
+
+                  <ConditionalCheckItem
+                    label="Name Tag"
+                    active={nameTagActive}
+                    onActiveChange={handleToggleActive('nameTagActive', setNameTagActive, 'nameTagChecked', setNameTagChecked, nameTagChecked)}
+                    compliant={nameTagChecked}
+                    onCompliantChange={handleSetCompliance('nameTagChecked', setNameTagChecked)}
                     disabled={dis}
                   />
                 </div>

@@ -9,13 +9,15 @@ import {
   productCheckTasks, briefingTasks,
   edcReconciliationTasks, eodZReportTasks,
   openStatementTasks, groomingTasks,
-  itemDroppingTasks, itemDroppingEntries,
+  itemDroppingTasks, itemDroppingEntries, 
+  marketingCheckTasks
 } from '@/lib/db/schema';
 import { eq, and, gte, lte, desc, inArray } from 'drizzle-orm';
 import { getOrCreateSetoranForSchedule }      from '@/lib/db/utils/setoran';
 import { getOrCreateStoreOpeningForSchedule } from '@/lib/db/utils/store-opening';
 import { getOrCreateItemDroppingForSchedule } from '@/lib/db/utils/item-dropping';
 import { getOrCreateGroomingForSchedule }     from '@/lib/db/utils/grooming';
+import { getOrCreateMarketingCheckForSchedule } from '@/lib/db/utils/marketing-check';
 
 function startOfDay(d: Date): Date { const r = new Date(d); r.setHours(0,  0,  0,   0); return r; }
 function endOfDay  (d: Date): Date { const r = new Date(d); r.setHours(23, 59, 59, 999); return r; }
@@ -87,6 +89,7 @@ export async function GET(request: NextRequest) {
     setoranRows,
     cekBinRows,
     productCheckRows,
+    marketingCheckRows,
     itemDroppingRows,
     itemDroppingEntryRows,
     edcReconciliationRows,
@@ -148,6 +151,31 @@ export async function GET(request: NextRequest) {
       ? db.select().from(productCheckTasks)
           .where(and(gte(productCheckTasks.date, dayStart), lte(productCheckTasks.date, dayEnd)))
           .orderBy(desc(productCheckTasks.date))
+      : Promise.resolve([]),
+
+    (hasMorningTasks || hasEveningTasks)
+      ? (async () => {
+          const eligibleSchedules = todaySchedules.filter(s => {
+            const code = shiftCodeMap[s.shiftId];
+            return code === 'morning' || code === 'evening' || code === 'full_day';
+          });
+
+          await Promise.all(
+            eligibleSchedules.map(s =>
+              getOrCreateMarketingCheckForSchedule(s.id, userId, s.storeId, s.shiftId, targetDate),
+            ),
+          );
+
+          return db
+            .select()
+            .from(marketingCheckTasks)
+            .where(and(
+              inArray(marketingCheckTasks.storeId, storeIds),
+              gte(marketingCheckTasks.date, dayStart),
+              lte(marketingCheckTasks.date, dayEnd),
+            ))
+            .orderBy(desc(marketingCheckTasks.date));
+        })()
       : Promise.resolve([]),
 
     (async () => {
@@ -315,6 +343,36 @@ export async function GET(request: NextRequest) {
       },
     })),
 
+    // ── Marketing Check ─────────────────────────────────────────────────────
+    ...marketingCheckRows.filter(r => inStore(r.storeId)).map(t => {
+      const shift = (shiftCodeMap[t.shiftId] ?? 'morning') as ShiftCode;
+      return {
+        type: 'marketing_check' as const,
+        shift,
+        data: {
+          id: String(t.id),
+          scheduleId: String(t.scheduleId),
+          userId: t.userId,
+          storeId: String(t.storeId),
+          shift,
+          date: t.date.toISOString(),
+
+          promoName: t.promoName,
+          promoPeriod: t.promoPeriod,
+          promoMechanism: t.promoMechanism,
+          randomShoeItems: t.randomShoeItems,
+          randomNonShoeItems: t.randomNonShoeItems,
+          sellTag: t.sellTag,
+
+          status: t.status,
+          notes: t.notes,
+          completedAt: toIso(t.completedAt),
+          verifiedBy: t.verifiedBy,
+          verifiedAt: toIso(t.verifiedAt),
+        },
+      };
+    }),
+
     // ── Item Dropping ─────────────────────────────────────────────────────
     ...itemDroppingRows.filter(r => inStore(r.storeId)).map(t => {
       const shift = (shiftCodeMap[t.shiftId] ?? 'morning') as ShiftCode;
@@ -402,17 +460,36 @@ export async function GET(request: NextRequest) {
     ...groomingRows.map(t => {
       const code = (shiftCodeMap[t.shiftId] ?? 'morning') as ShiftCode;
       return {
-        type: 'grooming' as const, shift: code,
+        type: 'grooming' as const,
+        shift: code,
         data: {
-          id: String(t.id), scheduleId: String(t.scheduleId), userId: t.userId,
-          storeId: String(t.storeId), shift: code, date: t.date.toISOString(),
-          uniformActive: t.uniformActive, hairActive: t.hairActive,
-          nailsActive: t.nailsActive, accessoriesActive: t.accessoriesActive, shoeActive: t.shoeActive,
-          uniformComplete: t.uniformComplete, hairGroomed: t.hairGroomed, nailsClean: t.nailsClean,
-          accessoriesCompliant: t.accessoriesCompliant, shoeCompliant: t.shoeCompliant,
+          id: String(t.id),
+          scheduleId: String(t.scheduleId),
+          userId: t.userId,
+          storeId: String(t.storeId),
+          shift: code,
+          date: t.date.toISOString(),
+
+          uniformActive: t.uniformActive,
+          hairActive: t.hairActive,
+          smellActive: t.smellActive,
+          makeUpActive: t.makeUpActive,
+          shoeActive: t.shoeActive,
+          nameTagActive: t.nameTagActive,
+
+          uniformChecked: t.uniformChecked,
+          hairChecked: t.hairChecked,
+          smellChecked: t.smellChecked,
+          makeUpChecked: t.makeUpChecked,
+          shoeChecked: t.shoeChecked,
+          nameTagChecked: t.nameTagChecked,
+
           selfiePhotos: parsePhotos(t.selfiePhotos),
-          status: t.status, notes: t.notes,
-          completedAt: toIso(t.completedAt), verifiedBy: t.verifiedBy, verifiedAt: toIso(t.verifiedAt),
+          status: t.status,
+          notes: t.notes,
+          completedAt: toIso(t.completedAt),
+          verifiedBy: t.verifiedBy,
+          verifiedAt: toIso(t.verifiedAt),
         },
       };
     }),
@@ -474,6 +551,19 @@ export async function PATCH(request: NextRequest) {
     product_check: {
       getRow: async id => (await db.select({ status: productCheckTasks.status }).from(productCheckTasks).where(eq(productCheckTasks.id, id)).limit(1))[0],
       update: id => db.update(productCheckTasks).set({ status: 'in_progress', updatedAt: new Date() }).where(eq(productCheckTasks.id, id)).then(() => {}),
+    },
+    marketing_check: {
+      getRow: async id =>
+        (await db
+          .select({ status: marketingCheckTasks.status })
+          .from(marketingCheckTasks)
+          .where(eq(marketingCheckTasks.id, id))
+          .limit(1))[0],
+      update: id =>
+        db.update(marketingCheckTasks)
+          .set({ status: 'in_progress', updatedAt: new Date() })
+          .where(eq(marketingCheckTasks.id, id))
+          .then(() => {}),
     },
     item_dropping: {
       getRow: async id => (await db.select({ status: itemDroppingTasks.status }).from(itemDroppingTasks).where(eq(itemDroppingTasks.id, id)).limit(1))[0],

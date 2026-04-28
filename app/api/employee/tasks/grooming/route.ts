@@ -63,28 +63,27 @@ export async function POST(req: NextRequest) {
   try {
     const result = await submitGrooming({
       scheduleId,
-      userId:              session.user.id as string,
+      userId:            session.user.id as string,
       storeId,
       geo,
-      skipGeo:             effectiveSkipGeo,
-      
-      // Active toggles
-      uniformActive:       body.uniformActive !== undefined ? Boolean(body.uniformActive) : true,
-      hairActive:          body.hairActive !== undefined ? Boolean(body.hairActive) : true,
-      nailsActive:         body.nailsActive !== undefined ? Boolean(body.nailsActive) : true,
-      accessoriesActive:   body.accessoriesActive !== undefined ? Boolean(body.accessoriesActive) : true,
-      shoeActive:          body.shoeActive !== undefined ? Boolean(body.shoeActive) : true,
-      
-      // Compliance answers
-      uniformComplete:      Boolean(body.uniformComplete),
-      hairGroomed:          Boolean(body.hairGroomed),
-      nailsClean:           Boolean(body.nailsClean),
-      accessoriesCompliant: Boolean(body.accessoriesCompliant),
-      shoeCompliant:        Boolean(body.shoeCompliant),
-      
-      // Photos & Notes
-      selfiePhotos:         strArr(body.selfiePhotos),
-      notes:                typeof body.notes === 'string' ? body.notes : undefined,
+      skipGeo:           effectiveSkipGeo,
+
+      uniformActive:     body.uniformActive !== undefined ? Boolean(body.uniformActive) : true,
+      hairActive:        body.hairActive !== undefined ? Boolean(body.hairActive) : true,
+      smellActive:       body.smellActive !== undefined ? Boolean(body.smellActive) : true,
+      makeUpActive:      body.makeUpActive !== undefined ? Boolean(body.makeUpActive) : true,
+      shoeActive:        body.shoeActive !== undefined ? Boolean(body.shoeActive) : true,
+      nameTagActive:     body.nameTagActive !== undefined ? Boolean(body.nameTagActive) : true,
+
+      uniformChecked:    Boolean(body.uniformChecked),
+      hairChecked:       Boolean(body.hairChecked),
+      smellChecked:      Boolean(body.smellChecked),
+      makeUpChecked:     Boolean(body.makeUpChecked),
+      shoeChecked:       Boolean(body.shoeChecked),
+      nameTagChecked:    Boolean(body.nameTagChecked),
+
+      selfiePhotos:      strArr(body.selfiePhotos),
+      notes:             typeof body.notes === 'string' ? body.notes : undefined,
     });
     
     return NextResponse.json(result, { status: result.success ? 200 : 400 });
@@ -113,18 +112,22 @@ export async function PATCH(req: NextRequest) {
   const patch: GroomingAutoSavePatch = {};
 
   // Active toggles
-  if ('uniformActive'      in body) patch.uniformActive      = Boolean(body.uniformActive);
-  if ('hairActive'         in body) patch.hairActive         = Boolean(body.hairActive);
-  if ('nailsActive'        in body) patch.nailsActive        = Boolean(body.nailsActive);
-  if ('accessoriesActive'  in body) patch.accessoriesActive  = Boolean(body.accessoriesActive);
-  if ('shoeActive'         in body) patch.shoeActive         = Boolean(body.shoeActive);
+  if ('uniformActive' in body) patch.uniformActive = Boolean(body.uniformActive);
+  if ('hairActive'    in body) patch.hairActive    = Boolean(body.hairActive);
+  if ('smellActive'   in body) patch.smellActive   = Boolean(body.smellActive);
+  if ('makeUpActive'  in body) patch.makeUpActive  = Boolean(body.makeUpActive);
+  if ('shoeActive'    in body) patch.shoeActive    = Boolean(body.shoeActive);
+  if ('nameTagActive' in body) patch.nameTagActive = Boolean(body.nameTagActive);
 
-  // Compliance answers
-  if ('uniformComplete'      in body) patch.uniformComplete      = Boolean(body.uniformComplete);
-  if ('hairGroomed'          in body) patch.hairGroomed          = Boolean(body.hairGroomed);
-  if ('nailsClean'           in body) patch.nailsClean           = Boolean(body.nailsClean);
-  if ('accessoriesCompliant' in body) patch.accessoriesCompliant = Boolean(body.accessoriesCompliant);
-  if ('shoeCompliant'        in body) patch.shoeCompliant        = Boolean(body.shoeCompliant);
+  if ('uniformChecked' in body) patch.uniformChecked = Boolean(body.uniformChecked);
+  if ('hairChecked'    in body) patch.hairChecked    = Boolean(body.hairChecked);
+  if ('smellChecked'   in body) patch.smellChecked   = Boolean(body.smellChecked);
+  if ('makeUpChecked'  in body) patch.makeUpChecked  = Boolean(body.makeUpChecked);
+  if ('shoeChecked'    in body) patch.shoeChecked    = Boolean(body.shoeChecked);
+  if ('nameTagChecked' in body) patch.nameTagChecked = Boolean(body.nameTagChecked);
+
+  if ('selfiePhotos' in body) patch.selfiePhotos = strArr(body.selfiePhotos);
+  if ('notes'        in body) patch.notes        = typeof body.notes === 'string' ? body.notes : undefined;
 
   // Photos & Notes
   if ('selfiePhotos' in body) patch.selfiePhotos = strArr(body.selfiePhotos);
