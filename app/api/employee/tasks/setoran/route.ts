@@ -1,10 +1,4 @@
 // app/api/employee/tasks/setoran/route.ts
-// ─────────────────────────────────────────────────────────────────────────────
-// Dedicated endpoint for the Setoran task.
-//   POST  → final submit (check-in + validation — NO geofence)
-//   PATCH → auto-save partial patch
-// ─────────────────────────────────────────────────────────────────────────────
-
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession }          from 'next-auth';
 import { authOptions }               from '@/lib/auth';
@@ -13,8 +7,6 @@ import {
   autoSaveSetoran,
   type SetoranAutoSavePatch,
 } from '@/lib/db/utils/setoran';
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function toInt(val: unknown, field: string): number {
   const n = parseInt(String(val ?? ''), 10);
@@ -46,14 +38,29 @@ export async function POST(req: NextRequest) {
   try {
     const result = await submitSetoran({
       scheduleId,
-      userId:      session.user.id as string,
+      userId:         session.user.id as string,
       storeId,
-      amount:      typeof body.amount      === 'string' ? body.amount      : String(body.amount ?? ''),
-      linkSetoran: typeof body.linkSetoran === 'string' ? body.linkSetoran : '',
-      resiPhoto:   typeof body.resiPhoto   === 'string' ? body.resiPhoto   : '',
-      notes:       typeof body.notes       === 'string' ? body.notes       : undefined,
+      expectedAmount: typeof body.expectedAmount === 'string' ? body.expectedAmount : String(body.expectedAmount ?? ''),
+      amount:         typeof body.amount         === 'string' ? body.amount         : String(body.amount         ?? ''),
+      linkSetoran:    typeof body.linkSetoran    === 'string' ? body.linkSetoran    : '',
+      resiPhoto:      typeof body.resiPhoto      === 'string' ? body.resiPhoto      : '',
+      notes:          typeof body.notes          === 'string' ? body.notes          : undefined,
     });
-    return NextResponse.json(result, { status: result.success ? 200 : 400 });
+
+    if (!result.success) {
+      return NextResponse.json(result, { status: 400 });
+    }
+
+    const unpaid = Number(result.data.unpaidAmount ?? 0);
+    const meta = {
+      unpaidAmount: String(unpaid),
+      hasUnpaid:    unpaid > 0,
+      // Informational: what tomorrow's task will show as carried deficit.
+      nextDayCarriedDeficit: String(unpaid),
+    };
+
+    return NextResponse.json({ ...result, meta }, { status: 200 });
+
   } catch (err) {
     console.error('[POST /api/employee/tasks/setoran]', err);
     return NextResponse.json({ success: false, error: String(err) }, { status: 500 });
@@ -78,9 +85,10 @@ export async function PATCH(req: NextRequest) {
 
   const patch: SetoranAutoSavePatch = {};
 
-  if ('amount'      in body) patch.amount      = typeof body.amount      === 'string' ? body.amount      : String(body.amount ?? '');
-  if ('linkSetoran' in body) patch.linkSetoran = typeof body.linkSetoran === 'string' ? body.linkSetoran : '';
-  if ('notes'       in body) patch.notes       = typeof body.notes       === 'string' ? body.notes       : undefined;
+  if ('amount'         in body) patch.amount         = typeof body.amount         === 'string' ? body.amount         : String(body.amount ?? '');
+  if ('expectedAmount' in body) patch.expectedAmount = typeof body.expectedAmount === 'string' && body.expectedAmount.length > 0 ? body.expectedAmount : null;
+  if ('linkSetoran'    in body) patch.linkSetoran    = typeof body.linkSetoran    === 'string' ? body.linkSetoran    : '';
+  if ('notes'          in body) patch.notes          = typeof body.notes          === 'string' ? body.notes          : undefined;
 
   if ('resiPhoto' in body) {
     patch.resiPhoto = typeof body.resiPhoto === 'string' && body.resiPhoto.length > 0

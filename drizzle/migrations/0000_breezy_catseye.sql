@@ -37,6 +37,8 @@ CREATE TABLE "break_sessions" (
 	"break_type" "break_type" NOT NULL,
 	"break_out_time" timestamp NOT NULL,
 	"return_time" timestamp,
+	"cash_out" numeric(12, 2) NOT NULL,
+	"cash_in" numeric(12, 2),
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	"updated_at" timestamp DEFAULT now() NOT NULL
 );
@@ -314,6 +316,19 @@ CREATE TABLE "grooming_tasks" (
 	CONSTRAINT "grooming_tasks_schedule_id_unique" UNIQUE("schedule_id")
 );
 --> statement-breakpoint
+CREATE TABLE "item_dropping_entries" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"task_id" integer NOT NULL,
+	"user_id" text NOT NULL,
+	"store_id" integer NOT NULL,
+	"to_number" text NOT NULL,
+	"drop_time" timestamp NOT NULL,
+	"dropping_photos" text,
+	"notes" text,
+	"created_at" timestamp DEFAULT now() NOT NULL,
+	"updated_at" timestamp DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE "item_dropping_tasks" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"schedule_id" integer NOT NULL,
@@ -321,14 +336,7 @@ CREATE TABLE "item_dropping_tasks" (
 	"store_id" integer NOT NULL,
 	"shift_id" integer NOT NULL,
 	"date" timestamp NOT NULL,
-	"parent_task_id" integer,
 	"has_dropping" boolean DEFAULT false NOT NULL,
-	"drop_time" timestamp,
-	"dropping_photos" text,
-	"is_received" boolean DEFAULT false NOT NULL,
-	"receive_time" timestamp,
-	"receive_photos" text,
-	"received_by_user_id" text,
 	"submitted_lat" numeric(10, 7),
 	"submitted_lng" numeric(10, 7),
 	"status" "task_status" DEFAULT 'pending' NOT NULL,
@@ -398,9 +406,13 @@ CREATE TABLE "setoran_tasks" (
 	"store_id" integer NOT NULL,
 	"shift_id" integer NOT NULL,
 	"date" timestamp NOT NULL,
+	"expected_amount" numeric(12, 2),
+	"carried_deficit" numeric(12, 2) DEFAULT '0' NOT NULL,
+	"carried_deficit_fetched_at" timestamp,
 	"amount" numeric(12, 2),
 	"link_setoran" text,
 	"resi_photo" text,
+	"unpaid_amount" numeric(12, 2) DEFAULT '0' NOT NULL,
 	"submitted_lat" numeric(10, 7),
 	"submitted_lng" numeric(10, 7),
 	"status" "task_status" DEFAULT 'pending' NOT NULL,
@@ -424,10 +436,11 @@ CREATE TABLE "store_opening_tasks" (
 	"check_absen_sunfish" boolean DEFAULT false NOT NULL,
 	"tarik_soh_sales" boolean DEFAULT false NOT NULL,
 	"five_r" boolean DEFAULT false NOT NULL,
-	"five_r_photos" text,
-	"cek_promo" boolean DEFAULT false NOT NULL,
-	"cek_promo_storefront_photos" text,
-	"cek_promo_desk_photos" text,
+	"five_r_area_kasir_photos" text,
+	"five_r_area_depan_photos" text,
+	"five_r_area_kanan_photos" text,
+	"five_r_area_kiri_photos" text,
+	"five_r_area_gudang_photos" text,
 	"cek_lamp" boolean DEFAULT false NOT NULL,
 	"cek_sound_system" boolean DEFAULT false NOT NULL,
 	"store_front_photos" text,
@@ -503,11 +516,13 @@ ALTER TABLE "grooming_tasks" ADD CONSTRAINT "grooming_tasks_user_id_users_id_fk"
 ALTER TABLE "grooming_tasks" ADD CONSTRAINT "grooming_tasks_store_id_stores_id_fk" FOREIGN KEY ("store_id") REFERENCES "public"."stores"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "grooming_tasks" ADD CONSTRAINT "grooming_tasks_shift_id_shifts_id_fk" FOREIGN KEY ("shift_id") REFERENCES "public"."shifts"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "grooming_tasks" ADD CONSTRAINT "grooming_tasks_verified_by_users_id_fk" FOREIGN KEY ("verified_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "item_dropping_entries" ADD CONSTRAINT "item_dropping_entries_task_id_item_dropping_tasks_id_fk" FOREIGN KEY ("task_id") REFERENCES "public"."item_dropping_tasks"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "item_dropping_entries" ADD CONSTRAINT "item_dropping_entries_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "item_dropping_entries" ADD CONSTRAINT "item_dropping_entries_store_id_stores_id_fk" FOREIGN KEY ("store_id") REFERENCES "public"."stores"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "item_dropping_tasks" ADD CONSTRAINT "item_dropping_tasks_schedule_id_schedules_id_fk" FOREIGN KEY ("schedule_id") REFERENCES "public"."schedules"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "item_dropping_tasks" ADD CONSTRAINT "item_dropping_tasks_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "item_dropping_tasks" ADD CONSTRAINT "item_dropping_tasks_store_id_stores_id_fk" FOREIGN KEY ("store_id") REFERENCES "public"."stores"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "item_dropping_tasks" ADD CONSTRAINT "item_dropping_tasks_shift_id_shifts_id_fk" FOREIGN KEY ("shift_id") REFERENCES "public"."shifts"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "item_dropping_tasks" ADD CONSTRAINT "item_dropping_tasks_received_by_user_id_users_id_fk" FOREIGN KEY ("received_by_user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "item_dropping_tasks" ADD CONSTRAINT "item_dropping_tasks_verified_by_users_id_fk" FOREIGN KEY ("verified_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "open_statement_tasks" ADD CONSTRAINT "open_statement_tasks_schedule_id_schedules_id_fk" FOREIGN KEY ("schedule_id") REFERENCES "public"."schedules"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "open_statement_tasks" ADD CONSTRAINT "open_statement_tasks_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint

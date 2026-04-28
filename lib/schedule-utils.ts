@@ -21,26 +21,19 @@ export type { BreakType } from '@/lib/db/schema';
 import type { BreakType } from '@/lib/db/schema';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
+// NOTE: startHour, endHour, and lateAfterMinutes have been REMOVED.
+// Shift start/end times are now managed dynamically in the `shifts` lookup table.
 
 export const SHIFT_CONFIG = {
   morning: {
-    startHour:        8,
-    endHour:          17,
-    lateAfterMinutes: 30,
     breakTypes: ['lunch'] as BreakType[],
     maxBreaks:  1,
   },
   evening: {
-    startHour:        13,
-    endHour:          22,
-    lateAfterMinutes: 30,
     breakTypes: ['dinner'] as BreakType[],
     maxBreaks:  1,
   },
   full_day: {
-    startHour:        8,
-    endHour:          22,
-    lateAfterMinutes: 30,
     breakTypes: ['full_day_lunch', 'full_day_dinner'] as BreakType[],
     maxBreaks:  2,
   },
@@ -74,6 +67,12 @@ export interface MonthlyScheduleWithEntries {
     userEmployeeType: string | null;
     shiftCode:        string | null;
   })[];
+}
+
+export interface NextScheduleResult {
+  scheduleId: number;
+  userId:     string;
+  date:       Date;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -617,6 +616,17 @@ export async function employeeCheckIn(
     const shiftIdToUse = shiftMap[shift];
     if (!shiftIdToUse) return { success: false, error: `Invalid shift: ${shift}` };
 
+    // Fetch the actual start time from the DB instead of using hardcoded config
+    const [shiftData] = await db
+      .select({ startTime: shifts.startTime })
+      .from(shifts)
+      .where(eq(shifts.id, shiftIdToUse))
+      .limit(1);
+
+    if (!shiftData?.startTime) {
+      return { success: false, error: `Shift start time is not configured in the database.` };
+    }
+
     const [sched] = await db.select().from(schedules).where(and(
       eq(schedules.userId,    userId),
       eq(schedules.storeId,   storeId),
@@ -632,10 +642,11 @@ export async function employeeCheckIn(
       .where(eq(attendance.scheduleId, sched.id)).limit(1);
 
     if (!existing) {
-      const cfg           = SHIFT_CONFIG[shift];
-      const shiftStart    = new Date(now); shiftStart.setHours(cfg.startHour, 0, 0, 0);
-      const lateThreshold = new Date(shiftStart); lateThreshold.setMinutes(cfg.lateAfterMinutes);
-      const attStatus     = now > lateThreshold ? 'late' : 'present';
+      const [hours, minutes] = shiftData.startTime.split(':').map(Number);
+      const shiftStart = new Date(now);
+      shiftStart.setHours(hours, minutes, 0, 0);
+
+      const attStatus = now > shiftStart ? 'late' : 'present';
 
       const [att] = await db.insert(attendance).values({
         scheduleId: sched.id, userId, storeId, date: sched.date,
@@ -681,13 +692,24 @@ export async function employeeCheckOut(userId: string, storeId: number, shift: S
   } catch (err) { return { success: false, error: `Check-out failed: ${err}` }; }
 }
 
+/**
+ * Start a break session for the given employee.
+ *
+ * @param cashOut  Amount (in Rupiah) the employee is taking out with them.
+ *                 Required — the function returns an error if missing or invalid.
+ */
 export async function startBreak(
   userId:    string,
   storeId:   number,
   shift:     Shift,
   breakType: BreakType,
+  cashOut:   number,                 // ← required: cash taken out
 ): Promise<{ success: boolean; breakSessionId?: number; breakType?: BreakType; error?: string }> {
   try {
+    // Validate cashOut before touching the DB
+    if (cashOut == null || isNaN(cashOut) || cashOut < 0)
+      return { success: false, error: 'Cash amount taken out is required and must be a non-negative number.' };
+
     const now = new Date();
     const cfg = SHIFT_CONFIG[shift];
 
@@ -723,7 +745,14 @@ export async function startBreak(
       return { success: false, error: `Already used the "${breakType}" break for this shift.` };
 
     const [session] = await db.insert(breakSessions)
-      .values({ attendanceId: att.id, userId, storeId, breakType, breakOutTime: now })
+      .values({
+        attendanceId: att.id,
+        userId,
+        storeId,
+        breakType,
+        breakOutTime: now,
+        cashOut: cashOut.toString(),   // decimal columns expect string in Drizzle
+      })
       .returning({ id: breakSessions.id });
 
     await db.update(attendance).set({ onBreak: true, updatedAt: new Date() })
@@ -733,12 +762,27 @@ export async function startBreak(
   } catch (err) { return { success: false, error: `startBreak failed: ${err}` }; }
 }
 
+/**
+ * End an active break session for the given employee.
+ *
+ * @param cashIn  Amount (in Rupiah) the employee is bringing back.
+ *                Required — the function returns an error if missing or invalid.
+ *
+ * NOTE: endBreak is also called internally by employeeCheckIn when the employee
+ * taps "check in" while already on break. In that flow cashIn is not yet
+ * available from the user, so it defaults to 0. If you want to enforce cashIn
+ * in that path too, remove the default and update employeeCheckIn accordingly.
+ */
 export async function endBreak(
   userId:       string,
   storeId:      number,
   attendanceId: number,
+  cashIn:       number = 0,          // ← required on normal return; defaults to 0 for internal calls
 ): Promise<{ success: boolean; action?: 'returned_from_break'; attendanceId?: number; scheduleId?: number; status?: string; error?: string }> {
   try {
+    if (cashIn == null || isNaN(cashIn) || cashIn < 0)
+      return { success: false, error: 'Cash amount brought back is required and must be a non-negative number.' };
+
     const now = new Date();
 
     const [openBreak] = await db.select().from(breakSessions).where(and(
@@ -748,7 +792,8 @@ export async function endBreak(
     )).limit(1);
     if (!openBreak) return { success: false, error: 'No active break session found.' };
 
-    await db.update(breakSessions).set({ returnTime: now, updatedAt: new Date() })
+    await db.update(breakSessions)
+      .set({ returnTime: now, cashIn: cashIn.toString(), updatedAt: new Date() })
       .where(eq(breakSessions.id, openBreak.id));
 
     const [updatedAtt] = await db.update(attendance)
@@ -756,7 +801,13 @@ export async function endBreak(
       .where(eq(attendance.id, attendanceId))
       .returning({ id: attendance.id, scheduleId: attendance.scheduleId, status: attendance.status });
 
-    return { success: true, action: 'returned_from_break', attendanceId: updatedAtt.id, scheduleId: updatedAtt.scheduleId, status: updatedAtt.status };
+    return {
+      success:      true,
+      action:       'returned_from_break',
+      attendanceId: updatedAtt.id,
+      scheduleId:   updatedAtt.scheduleId,
+      status:       updatedAtt.status,
+    };
   } catch (err) { return { success: false, error: `endBreak failed: ${err}` }; }
 }
 
@@ -827,4 +878,46 @@ export async function opsMarkAttendance(
 
     return { success: true, attendanceId };
   } catch (err) { return { success: false, error: `opsMarkAttendance: ${err}` }; }
+}
+
+export async function resolveNextScheduleForStore(
+  storeId:   number,
+  afterDate: Date,
+): Promise<NextScheduleResult | null> {
+  const shiftMap = await getShiftIdMap();
+ 
+  const morningShiftId  = shiftMap['morning'];
+  const fullDayShiftId  = shiftMap['full_day'];
+ 
+  const eligibleShiftIds = [morningShiftId, fullDayShiftId].filter(Boolean);
+  if (eligibleShiftIds.length === 0) return null;
+ 
+  const dayAfter = startOfDay(new Date(afterDate));
+  dayAfter.setDate(dayAfter.getDate() + 1);
+ 
+  const [next] = await db
+    .select({
+      id:     schedules.id,
+      userId: schedules.userId,
+      date:   schedules.date,
+    })
+    .from(schedules)
+    .where(
+      and(
+        eq(schedules.storeId,   storeId),
+        eq(schedules.isHoliday, false),
+        gte(schedules.date,     dayAfter),
+        inArray(schedules.shiftId, eligibleShiftIds),
+      ),
+    )
+    .orderBy(schedules.date)
+    .limit(1);
+ 
+  if (!next) return null;
+ 
+  return {
+    scheduleId: next.id,
+    userId:     next.userId,
+    date:       next.date,
+  };
 }

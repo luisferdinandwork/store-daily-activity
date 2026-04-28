@@ -1,39 +1,15 @@
 // lib/db/utils/item-dropping.ts
-// ─────────────────────────────────────────────────────────────────────────────
-// Dedicated utilities for the Item Dropping task.
-//
-// Item Dropping is a SHARED morning task — one active row per (storeId, date).
-// Any employee scheduled on the morning/full_day shift for that store can
-// interact with the same task row (auto-save + submit).
-//
-// Two sub-scenarios:
-//
-// A) No dropping (hasDropping = false)
-//      Employee confirms no delivery today → status 'completed' immediately.
-//      No photos required.
-//
-// B) Item dropped (hasDropping = true)
-//      1. Employee records dropTime + droppingPhotos (min 1).
-//      2. When item is received: isReceived=true + receiveTime + receivePhotos
-//         (min 1). Status → 'completed'.
-//      3. If end-of-shift and isReceived is still false:
-//           • status 'discrepancy' → carry-forward to next morning.
-//           • Next-day employee opens the SAME row and completes receipt
-//             with receiveTime + receivePhotos via confirmItemReceipt().
-//
-// Access rules:
-//   • Employee must be checked in (attendance row for this schedule).
-//   • Employee must be inside the store's geofence (unless skipGeo).
-// ─────────────────────────────────────────────────────────────────────────────
-
-import { db }                                              from '@/lib/db';
-import { eq, and, gte, lte, inArray, isNull, or }         from 'drizzle-orm';
+import { db }                                    from '@/lib/db';
+import { eq, and, gte, lte, desc, lt }           from 'drizzle-orm';
 import {
-  itemDroppingTasks, stores, shifts, attendance, schedules,
+  itemDroppingTasks,
+  itemDroppingEntries,
+  stores,
+  shifts,
+  attendance,
   type ItemDroppingTask,
+  type ItemDroppingEntry,
 } from '@/lib/db/schema';
-
-// ─── Public types ─────────────────────────────────────────────────────────────
 
 export const DEFAULT_GEOFENCE_RADIUS_M = 100;
 
@@ -46,71 +22,53 @@ export interface GeoPoint {
   lng: number;
 }
 
-// ─── Photo rules (single source of truth) ────────────────────────────────────
-
 export const ITEM_DROPPING_PHOTO_RULES = {
   dropping: { min: 1, max: 5 },
-  receive:  { min: 1, max: 5 },
 } as const;
 
-// ─── Input types ──────────────────────────────────────────────────────────────
-
-/**
- * Initial / re-submission of an Item Dropping task.
- *
- * Scenario A (no dropping): hasDropping=false — nothing else needed.
- *
- * Scenario B (dropping):
- *   • Always: dropTime + droppingPhotos (min 1)
- *   • If received same shift: isReceived=true + receiveTime + receivePhotos (min 1)
- *   • If NOT yet received:    isReceived=false → status 'discrepancy'
- */
-export interface SubmitItemDroppingInput {
-  scheduleId:       number;
-  userId:           string;
-  storeId:          number;
-  geo:              GeoPoint;
-  skipGeo?:         boolean;
-
-  hasDropping:      boolean;
-  dropTime?:        Date | string;
-  droppingPhotos?:  string[];
-
-  isReceived?:       boolean;
-  receiveTime?:      Date | string;
-  receivePhotos?:    string[];
-  receivedByUserId?: string;
-
-  notes?:           string;
-  parentTaskId?:    number; // set when continuing a prior-day discrepancy row
+export interface ToEntry {
+  toNumber:       string;
+  dropTime:       Date | string;
+  droppingPhotos: string[];
+  notes?:         string;
 }
 
-/**
- * Confirm receipt of a prior-day carry-forward task.
- * Requires receivePhotos (min 1).
- */
-export interface ConfirmReceiptInput {
-  taskId:            number;
-  scheduleId:        number;
-  userId:            string;
-  storeId:           number;
-  geo:               GeoPoint;
-  skipGeo?:          boolean;
-  receiveTime?:      Date | string;
-  receivePhotos:     string[];         // min 1 — required
-  receivedByUserId?: string;
-  notes?:            string;
+export interface SubmitItemDroppingInput {
+  scheduleId:  number;
+  userId:      string;
+  storeId:     number;
+  geo:         GeoPoint;
+  skipGeo?:    boolean;
+  hasDropping: boolean;
+  entries?:    ToEntry[];
+  notes?:      string;
+}
+
+export interface AddToEntryInput {
+  taskId:         number;
+  scheduleId:     number;
+  userId:         string;
+  storeId:        number;
+  geo:            GeoPoint;
+  skipGeo?:       boolean;
+  toNumber:       string;
+  dropTime:       Date | string;
+  droppingPhotos: string[];
+  notes?:         string;
+}
+
+export interface RemoveToEntryInput {
+  entryId:    number;
+  scheduleId: number;
+  userId:     string;
+  storeId:    number;
+  geo:        GeoPoint;
+  skipGeo?:   boolean;
 }
 
 export interface AutoSaveItemDroppingPatch {
-  hasDropping?:      boolean;
-  dropTime?:         string | null;
-  droppingPhotos?:   string[];
-  isReceived?:       boolean;
-  receiveTime?:      string | null;
-  receivePhotos?:    string[];
-  receivedByUserId?: string | null;
-  notes?:            string;
+  hasDropping?: boolean;
+  notes?:       string;
 }
 
 export interface VerifyTaskInput {
@@ -121,12 +79,9 @@ export interface VerifyTaskInput {
   notes?:  string;
 }
 
-// ─── Private helpers ──────────────────────────────────────────────────────────
-
 function startOfDay(d: Date): Date {
   const r = new Date(d); r.setHours(0, 0, 0, 0); return r;
 }
-
 function endOfDay(d: Date): Date {
   const r = new Date(d); r.setHours(23, 59, 59, 999); return r;
 }
@@ -141,21 +96,19 @@ function haversineMetres(a: GeoPoint, b: GeoPoint): number {
   return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
 
-function jsonPhotos(paths: string[] | undefined): string | undefined {
-  return paths && paths.length > 0 ? JSON.stringify(paths) : undefined;
+function jsonPhotos(paths: string[] | undefined): string | null {
+  return paths && paths.length > 0 ? JSON.stringify(paths) : null;
 }
 
-let _morningShiftIdCache: number | null = null;
-async function getMorningShiftId(): Promise<number> {
-  if (_morningShiftIdCache != null) return _morningShiftIdCache;
+const _shiftIdCache: Record<string, number> = {};
+async function getShiftIdByCode(code: string): Promise<number> {
+  if (_shiftIdCache[code] != null) return _shiftIdCache[code];
   const [row] = await db.select({ id: shifts.id }).from(shifts)
-    .where(eq(shifts.code, 'morning')).limit(1);
-  if (!row) throw new Error('Morning shift not found in shifts table.');
-  _morningShiftIdCache = row.id;
+    .where(eq(shifts.code, code)).limit(1);
+  if (!row) throw new Error(`Shift not found for code: ${code}`);
+  _shiftIdCache[code] = row.id;
   return row.id;
 }
-
-// ─── Guards ───────────────────────────────────────────────────────────────────
 
 async function assertCheckedIn(scheduleId: number): Promise<string | null> {
   const [att] = await db
@@ -201,50 +154,22 @@ async function assertCanProgressTask(
   return null;
 }
 
-// ─── Payload validation ───────────────────────────────────────────────────────
-
-function validateSubmitPayload(input: SubmitItemDroppingInput): string | null {
-  // Scenario A — nothing more to validate
-  if (!input.hasDropping) return null;
-
-  // Scenario B — drop details
-  if (!input.dropTime)
-    return 'Waktu dropping wajib diisi ketika ada item dropping.';
-
-  const dropCount = input.droppingPhotos?.length ?? 0;
-  if (dropCount < ITEM_DROPPING_PHOTO_RULES.dropping.min)
-    return `Foto dropping wajib minimal ${ITEM_DROPPING_PHOTO_RULES.dropping.min}.`;
-  if (dropCount > ITEM_DROPPING_PHOTO_RULES.dropping.max)
-    return `Foto dropping maksimal ${ITEM_DROPPING_PHOTO_RULES.dropping.max}.`;
-
-  // Receipt details — only required when isReceived=true
-  if (input.isReceived) {
-    if (!input.receiveTime)
-      return 'Waktu penerimaan wajib diisi ketika item sudah diterima.';
-
-    const rcvCount = input.receivePhotos?.length ?? 0;
-    if (rcvCount < ITEM_DROPPING_PHOTO_RULES.receive.min)
-      return `Foto penerimaan wajib minimal ${ITEM_DROPPING_PHOTO_RULES.receive.min}.`;
-    if (rcvCount > ITEM_DROPPING_PHOTO_RULES.receive.max)
-      return `Foto penerimaan maksimal ${ITEM_DROPPING_PHOTO_RULES.receive.max}.`;
-  }
-
+function validateToEntry(entry: ToEntry, index: number): string | null {
+  if (!entry.toNumber?.trim())
+    return `TO #${index + 1}: Nomor TO wajib diisi.`;
+  if (!entry.dropTime)
+    return `TO #${index + 1}: Waktu dropping wajib diisi.`;
+  const photoCount = entry.droppingPhotos?.length ?? 0;
+  if (photoCount < ITEM_DROPPING_PHOTO_RULES.dropping.min)
+    return `TO #${index + 1}: Foto dropping wajib minimal ${ITEM_DROPPING_PHOTO_RULES.dropping.min}.`;
+  if (photoCount > ITEM_DROPPING_PHOTO_RULES.dropping.max)
+    return `TO #${index + 1}: Foto dropping maksimal ${ITEM_DROPPING_PHOTO_RULES.dropping.max}.`;
   return null;
 }
-
-function validateConfirmPayload(input: ConfirmReceiptInput): string | null {
-  const rcvCount = input.receivePhotos?.length ?? 0;
-  if (rcvCount < ITEM_DROPPING_PHOTO_RULES.receive.min)
-    return `Foto penerimaan wajib minimal ${ITEM_DROPPING_PHOTO_RULES.receive.min}.`;
-  if (rcvCount > ITEM_DROPPING_PHOTO_RULES.receive.max)
-    return `Foto penerimaan maksimal ${ITEM_DROPPING_PHOTO_RULES.receive.max}.`;
-  return null;
-}
-
-// ─── Active task query ────────────────────────────────────────────────────────
 
 export async function getActiveItemDroppingTask(
   storeId: number,
+  shiftId: number,
   date:    Date,
 ): Promise<ItemDroppingTask | null> {
   const dayStart = startOfDay(date);
@@ -255,31 +180,24 @@ export async function getActiveItemDroppingTask(
     .from(itemDroppingTasks)
     .where(and(
       eq(itemDroppingTasks.storeId, storeId),
+      eq(itemDroppingTasks.shiftId, shiftId), // Now filters by exact shift
       gte(itemDroppingTasks.date, dayStart),
       lte(itemDroppingTasks.date, dayEnd),
-      inArray(itemDroppingTasks.status, ['pending', 'in_progress', 'discrepancy']),
     ))
-    .orderBy(itemDroppingTasks.createdAt)
     .limit(1);
 
-  if (today) return today;
-
-  // Surface unresolved discrepancy from a prior day (root row only)
-  const [prior] = await db
-    .select()
-    .from(itemDroppingTasks)
-    .where(and(
-      eq(itemDroppingTasks.storeId, storeId),
-      eq(itemDroppingTasks.status, 'discrepancy'),
-      isNull(itemDroppingTasks.parentTaskId),
-    ))
-    .orderBy(itemDroppingTasks.createdAt)
-    .limit(1);
-
-  return prior ?? null;
+  return today ?? null;
 }
 
-// ─── Submit ───────────────────────────────────────────────────────────────────
+export async function getItemDroppingEntries(
+  taskId: number,
+): Promise<ItemDroppingEntry[]> {
+  return db
+    .select()
+    .from(itemDroppingEntries)
+    .where(eq(itemDroppingEntries.taskId, taskId))
+    .orderBy(itemDroppingEntries.dropTime);
+}
 
 export async function submitItemDropping(
   input: SubmitItemDroppingInput,
@@ -288,168 +206,182 @@ export async function submitItemDropping(
     const gateErr = await assertCanProgressTask(input.scheduleId, input.storeId, input.geo, input.skipGeo);
     if (gateErr) return { success: false, error: gateErr };
 
-    const validationErr = validateSubmitPayload(input);
-    if (validationErr) return { success: false, error: validationErr };
-
-    const TERMINAL = ['verified', 'rejected'] as const;
-    const morningShiftId = await getMorningShiftId();
-    const now            = new Date();
-
-    // ── Carry-forward path ────────────────────────────────────────────────────
-    if (input.parentTaskId) {
-      const [existing] = await db
-        .select()
-        .from(itemDroppingTasks)
-        .where(eq(itemDroppingTasks.id, input.parentTaskId))
-        .limit(1);
-
-      if (!existing)
-        return { success: false, error: 'Task carry-forward tidak ditemukan.' };
-      if (existing.status !== 'discrepancy')
-        return { success: false, error: 'Task ini tidak dalam status discrepancy.' };
-
-      const newStatus = (input.isReceived === true) ? 'completed' as const : 'discrepancy' as const;
-
-      const row = (await db
-        .update(itemDroppingTasks)
-        .set({
-          scheduleId:        input.scheduleId,
-          userId:            input.userId,
-          hasDropping:       input.hasDropping,
-          dropTime:          input.dropTime ? new Date(input.dropTime) : existing.dropTime,
-          droppingPhotos:    jsonPhotos(input.droppingPhotos) ?? existing.droppingPhotos ?? undefined,
-          isReceived:        input.isReceived ?? false,
-          receiveTime:       input.receiveTime ? new Date(input.receiveTime) : null,
-          receivePhotos:     jsonPhotos(input.receivePhotos),
-          receivedByUserId:  input.isReceived ? (input.receivedByUserId ?? input.userId) : null,
-          submittedLat:      String(input.geo.lat),
-          submittedLng:      String(input.geo.lng),
-          notes:             input.notes,
-          status:            newStatus,
-          completedAt:       newStatus === 'completed' ? now : null,
-          updatedAt:         now,
-        })
-        .where(eq(itemDroppingTasks.id, input.parentTaskId))
-        .returning())[0];
-
-      return { success: true, data: row };
+    if (input.hasDropping && input.entries) {
+      for (let i = 0; i < input.entries.length; i++) {
+        const err = validateToEntry(input.entries[i], i);
+        if (err) return { success: false, error: err };
+      }
     }
 
-    // ── Fresh / re-submit ─────────────────────────────────────────────────────
+    const TERMINAL = ['verified', 'rejected'] as const;
+    const now      = new Date();
+    const today    = startOfDay(now);
+
     const [existing] = await db
       .select()
       .from(itemDroppingTasks)
-      .where(eq(itemDroppingTasks.scheduleId, input.scheduleId))
+      .where(and(
+        eq(itemDroppingTasks.storeId, input.storeId),
+        eq(itemDroppingTasks.shiftId, input.scheduleId), // Find exact shift task
+        gte(itemDroppingTasks.date, today),
+        lte(itemDroppingTasks.date, endOfDay(now)),
+      ))
       .limit(1);
 
     if (existing?.status != null && (TERMINAL as readonly string[]).includes(existing.status))
       return { success: false, error: 'Task sudah selesai dan tidak bisa diubah.' };
 
-    const newStatus = !input.hasDropping
-      ? 'completed' as const
-      : (input.isReceived === true)
-        ? 'completed' as const
-        : 'discrepancy' as const;
+    const newStatus = 'completed' as const;
 
-    const values = {
-      scheduleId:        input.scheduleId,
-      userId:            input.userId,
-      storeId:           input.storeId,
-      shiftId:           morningShiftId,
-      date:              startOfDay(now),
-      parentTaskId:      null as number | null,
-      hasDropping:       input.hasDropping,
-      dropTime:          input.dropTime ? new Date(input.dropTime) : null,
-      droppingPhotos:    jsonPhotos(input.droppingPhotos),
-      isReceived:        input.isReceived ?? false,
-      receiveTime:       input.receiveTime ? new Date(input.receiveTime) : null,
-      receivePhotos:     jsonPhotos(input.receivePhotos),
-      receivedByUserId:  input.isReceived ? (input.receivedByUserId ?? input.userId) : null,
-      submittedLat:      String(input.geo.lat),
-      submittedLng:      String(input.geo.lng),
-      notes:             input.notes,
-      status:            newStatus,
-      completedAt:       newStatus === 'completed' ? now : null,
-      updatedAt:         now,
+    const taskValues = {
+      scheduleId:   input.scheduleId,
+      userId:       input.userId,
+      storeId:      input.storeId,
+      shiftId:      existing?.shiftId, // Use exact shift from DB
+      date:         today,
+      hasDropping:  input.hasDropping,
+      submittedLat: String(input.geo.lat),
+      submittedLng: String(input.geo.lng),
+      notes:        input.notes,
+      status:       newStatus,
+      completedAt:  now,
+      updatedAt:    now,
     };
 
-    const row = existing
-      ? (await db.update(itemDroppingTasks).set(values)
-          .where(eq(itemDroppingTasks.id, existing.id)).returning())[0]
-      : (await db.insert(itemDroppingTasks).values(values).returning())[0];
+    let task: ItemDroppingTask;
+    if (existing) {
+      task = (await db.update(itemDroppingTasks).set(taskValues)
+        .where(eq(itemDroppingTasks.id, existing.id)).returning())[0];
+    } else {
+      task = (await db.insert(itemDroppingTasks).values(taskValues).returning())[0];
+    }
 
-    return { success: true, data: row };
+    if (input.hasDropping && input.entries && input.entries.length > 0) {
+      await db.insert(itemDroppingEntries).values(
+        input.entries.map(e => ({
+          taskId:         task.id,
+          userId:         input.userId,
+          storeId:        input.storeId,
+          toNumber:       e.toNumber.trim(),
+          dropTime:       new Date(e.dropTime),
+          droppingPhotos: jsonPhotos(e.droppingPhotos),
+          notes:          e.notes,
+        }))
+      );
+    }
+
+    return { success: true, data: task };
   } catch (err) {
     return { success: false, error: `submitItemDropping: ${err}` };
   }
 }
 
-// ─── Confirm receipt ──────────────────────────────────────────────────────────
-
-/**
- * Mark an existing discrepancy task as received.
- * Called from the next-day carry-forward flow.
- * receivePhotos is REQUIRED (min 1).
- */
-export async function confirmItemReceipt(
-  input: ConfirmReceiptInput,
-): Promise<TaskResult<ItemDroppingTask>> {
+export async function addToEntry(
+  input: AddToEntryInput,
+): Promise<TaskResult<ItemDroppingEntry>> {
   try {
     const gateErr = await assertCanProgressTask(input.scheduleId, input.storeId, input.geo, input.skipGeo);
     if (gateErr) return { success: false, error: gateErr };
 
-    const validationErr = validateConfirmPayload(input);
+    const entryData: ToEntry = {
+      toNumber:       input.toNumber,
+      dropTime:       input.dropTime,
+      droppingPhotos: input.droppingPhotos,
+      notes:          input.notes,
+    };
+    const validationErr = validateToEntry(entryData, 0);
     if (validationErr) return { success: false, error: validationErr };
 
     const [task] = await db
-      .select()
+      .select({ id: itemDroppingTasks.id, status: itemDroppingTasks.status })
       .from(itemDroppingTasks)
       .where(eq(itemDroppingTasks.id, input.taskId))
       .limit(1);
 
-    if (!task)
-      return { success: false, error: 'Task tidak ditemukan.' };
-    if (task.status !== 'discrepancy')
-      return { success: false, error: 'Hanya task dengan status discrepancy yang bisa dikonfirmasi.' };
-    if (!task.hasDropping)
-      return { success: false, error: 'Task ini tidak memiliki item dropping.' };
+    if (!task) return { success: false, error: 'Task tidak ditemukan.' };
+    const TERMINAL = ['verified', 'rejected'];
+    if (TERMINAL.includes(task.status))
+      return { success: false, error: 'Task sudah selesai dan tidak bisa diubah.' };
 
-    const now = new Date();
-    const row = (await db
-      .update(itemDroppingTasks)
-      .set({
-        isReceived:       true,
-        receiveTime:      input.receiveTime ? new Date(input.receiveTime) : now,
-        receivePhotos:    jsonPhotos(input.receivePhotos),
-        receivedByUserId: input.receivedByUserId ?? input.userId,
-        scheduleId:       input.scheduleId,
-        notes:            input.notes,
-        status:           'completed' as const,
-        completedAt:      now,
-        updatedAt:        now,
-        submittedLat:     String(input.geo.lat),
-        submittedLng:     String(input.geo.lng),
-      })
-      .where(eq(itemDroppingTasks.id, input.taskId))
-      .returning())[0];
+    const [entry] = await db.insert(itemDroppingEntries).values({
+      taskId:         input.taskId,
+      userId:         input.userId,
+      storeId:        input.storeId,
+      toNumber:       input.toNumber.trim(),
+      dropTime:       new Date(input.dropTime),
+      droppingPhotos: jsonPhotos(input.droppingPhotos),
+      notes:          input.notes,
+    }).returning();
 
-    return { success: true, data: row };
+    await db.update(itemDroppingTasks).set({
+      hasDropping: true,
+      status:      'completed',
+      completedAt: new Date(),
+      updatedAt:   new Date(),
+    }).where(eq(itemDroppingTasks.id, input.taskId));
+
+    return { success: true, data: entry };
   } catch (err) {
-    return { success: false, error: `confirmItemReceipt: ${err}` };
+    return { success: false, error: `addToEntry: ${err}` };
   }
 }
 
-// ─── Auto-save ────────────────────────────────────────────────────────────────
+export async function removeToEntry(
+  input: RemoveToEntryInput,
+): Promise<TaskResult<void>> {
+  try {
+    const gateErr = await assertCanProgressTask(input.scheduleId, input.storeId, input.geo, input.skipGeo);
+    if (gateErr) return { success: false, error: gateErr };
 
-export async function autoSaveItemDropping(
-  scheduleId: number,
-  patch:      AutoSaveItemDroppingPatch,
+    const [entry] = await db
+      .select()
+      .from(itemDroppingEntries)
+      .where(eq(itemDroppingEntries.id, input.entryId))
+      .limit(1);
+
+    if (!entry) return { success: false, error: 'Entry tidak ditemukan.' };
+
+    const [task] = await db
+      .select({ id: itemDroppingTasks.id, status: itemDroppingTasks.status })
+      .from(itemDroppingTasks)
+      .where(eq(itemDroppingTasks.id, entry.taskId))
+      .limit(1);
+
+    if (!task) return { success: false, error: 'Task tidak ditemukan.' };
+    const TERMINAL = ['verified', 'rejected'];
+    if (TERMINAL.includes(task.status))
+      return { success: false, error: 'Task sudah selesai dan tidak bisa diubah.' };
+
+    await db.delete(itemDroppingEntries).where(eq(itemDroppingEntries.id, input.entryId));
+
+    const remaining = await db
+      .select({ id: itemDroppingEntries.id })
+      .from(itemDroppingEntries)
+      .where(eq(itemDroppingEntries.taskId, entry.taskId))
+      .limit(1);
+
+    if (remaining.length === 0) {
+      await db.update(itemDroppingTasks).set({
+        hasDropping: false,
+        updatedAt:   new Date(),
+      }).where(eq(itemDroppingTasks.id, entry.taskId));
+    }
+
+    return { success: true, data: undefined };
+  } catch (err) {
+    return { success: false, error: `removeToEntry: ${err}` };
+  }
+}
+
+export async function autoSaveItemDroppingById(
+  taskId: number,
+  patch:  AutoSaveItemDroppingPatch,
 ): Promise<TaskResult<{ saved: string[] }>> {
   try {
     const [existing] = await db
       .select({ id: itemDroppingTasks.id, status: itemDroppingTasks.status })
       .from(itemDroppingTasks)
-      .where(eq(itemDroppingTasks.scheduleId, scheduleId))
+      .where(eq(itemDroppingTasks.id, taskId))
       .limit(1);
 
     if (!existing) return { success: false, error: 'Item dropping task not found.' };
@@ -458,29 +390,31 @@ export async function autoSaveItemDropping(
 
     const update: Record<string, unknown> = { updatedAt: new Date() };
 
-    if ('hasDropping'      in patch) update.hasDropping      = Boolean(patch.hasDropping);
-    if ('dropTime'         in patch) update.dropTime         = patch.dropTime ? new Date(patch.dropTime) : null;
-    if ('droppingPhotos'   in patch) update.droppingPhotos   = jsonPhotos(patch.droppingPhotos);
-    if ('isReceived'       in patch) update.isReceived       = Boolean(patch.isReceived);
-    if ('receiveTime'      in patch) update.receiveTime      = patch.receiveTime ? new Date(patch.receiveTime) : null;
-    if ('receivePhotos'    in patch) update.receivePhotos    = jsonPhotos(patch.receivePhotos);
-    if ('receivedByUserId' in patch) update.receivedByUserId = patch.receivedByUserId ?? null;
-    if ('notes'            in patch) update.notes            = patch.notes;
+    if ('hasDropping' in patch) update.hasDropping = Boolean(patch.hasDropping);
+    if ('notes'       in patch) update.notes       = patch.notes;
 
     if (existing.status === 'pending') update.status = 'in_progress';
 
-    await db
-      .update(itemDroppingTasks)
-      .set(update)
-      .where(eq(itemDroppingTasks.id, existing.id));
+    await db.update(itemDroppingTasks).set(update).where(eq(itemDroppingTasks.id, existing.id));
 
     return { success: true, data: { saved: Object.keys(update).filter(k => k !== 'updatedAt') } };
   } catch (err) {
-    return { success: false, error: `autoSaveItemDropping: ${err}` };
+    return { success: false, error: `autoSaveItemDroppingById: ${err}` };
   }
 }
 
-// ─── Verify ───────────────────────────────────────────────────────────────────
+export async function autoSaveItemDropping(
+  scheduleId: number,
+  patch:      AutoSaveItemDroppingPatch,
+): Promise<TaskResult<{ saved: string[] }>> {
+  const [existing] = await db
+    .select({ id: itemDroppingTasks.id })
+    .from(itemDroppingTasks)
+    .where(eq(itemDroppingTasks.scheduleId, scheduleId))
+    .limit(1);
+  if (!existing) return { success: false, error: 'Item dropping task not found.' };
+  return autoSaveItemDroppingById(existing.id, patch);
+}
 
 export async function verifyItemDropping(
   input: VerifyTaskInput,
@@ -500,24 +434,19 @@ export async function verifyItemDropping(
     if (row.status !== 'completed')
       return { success: false, error: `Tidak bisa verifikasi task dengan status "${row.status}".` };
 
-    await db
-      .update(itemDroppingTasks)
-      .set({
-        status:     input.approve ? 'verified' : 'rejected',
-        verifiedBy: input.actorId,
-        verifiedAt: new Date(),
-        notes:      input.notes,
-        updatedAt:  new Date(),
-      })
-      .where(eq(itemDroppingTasks.id, input.taskId));
+    await db.update(itemDroppingTasks).set({
+      status:     input.approve ? 'verified' : 'rejected',
+      verifiedBy: input.actorId,
+      verifiedAt: new Date(),
+      notes:      input.notes,
+      updatedAt:  new Date(),
+    }).where(eq(itemDroppingTasks.id, input.taskId));
 
     return { success: true, data: undefined };
   } catch (err) {
     return { success: false, error: `verifyItemDropping: ${err}` };
   }
 }
-
-// ─── Materialise helper ───────────────────────────────────────────────────────
 
 export async function materialiseItemDroppingTask(
   scheduleId: number,
@@ -529,50 +458,61 @@ export async function materialiseItemDroppingTask(
   const dayStart = startOfDay(date);
   const dayEnd   = endOfDay(date);
 
-  const [active] = await db
+  const [existing] = await db
     .select({ id: itemDroppingTasks.id })
     .from(itemDroppingTasks)
     .where(and(
       eq(itemDroppingTasks.storeId, storeId),
+      eq(itemDroppingTasks.shiftId, shiftId), // Check specific shift
       gte(itemDroppingTasks.date, dayStart),
       lte(itemDroppingTasks.date, dayEnd),
-      inArray(itemDroppingTasks.status, ['pending', 'in_progress', 'discrepancy']),
     ))
     .limit(1);
 
-  if (active) return 'skipped';
+  if (existing) return 'skipped';
 
   await db.insert(itemDroppingTasks).values({
     scheduleId,
     userId,
     storeId,
     shiftId,
-    date:         dayStart,
-    parentTaskId: null,
-    hasDropping:  false,
-    isReceived:   false,
-    status:       'pending',
+    date:        dayStart,
+    hasDropping: false,
+    status:      'pending',
   });
 
   return 'created';
 }
 
-// ─── Discrepancy chain query ──────────────────────────────────────────────────
+export async function getOrCreateItemDroppingForSchedule(
+  scheduleId: number,
+  userId:     string,
+  storeId:    number,
+  shiftId:    number,
+  date:       Date,
+): Promise<ItemDroppingTask> {
+  const existing = await getActiveItemDroppingTask(storeId, shiftId, date);
+  if (existing) return existing;
 
-export async function getItemDroppingChain(
-  originalTaskId: number,
-): Promise<ItemDroppingTask[]> {
-  return db
-    .select()
-    .from(itemDroppingTasks)
-    .where(or(
-      eq(itemDroppingTasks.id, originalTaskId),
-      eq(itemDroppingTasks.parentTaskId, originalTaskId),
-    ))
-    .orderBy(itemDroppingTasks.createdAt) as Promise<ItemDroppingTask[]>;
+  const dayStart = startOfDay(date);
+
+  const [row] = await db
+    .insert(itemDroppingTasks)
+    .values({
+      scheduleId,
+      userId,
+      storeId,
+      shiftId,
+      date:        dayStart,
+      hasDropping: false,
+      status:      'pending',
+    })
+    .onConflictDoNothing()
+    .returning();
+
+  // Race condition: another request inserted first — re-fetch
+  return row ?? (await getActiveItemDroppingTask(storeId, shiftId, date))!;
 }
-
-// ─── Read helpers ─────────────────────────────────────────────────────────────
 
 export async function getItemDroppingBySchedule(
   scheduleId: number,
@@ -592,4 +532,13 @@ export async function getItemDroppingById(id: number): Promise<ItemDroppingTask 
     .where(eq(itemDroppingTasks.id, id))
     .limit(1);
   return row ?? null;
+}
+
+export async function getItemDroppingWithEntries(
+  taskId: number,
+): Promise<{ task: ItemDroppingTask; entries: ItemDroppingEntry[] } | null> {
+  const task = await getItemDroppingById(taskId);
+  if (!task) return null;
+  const entries = await getItemDroppingEntries(taskId);
+  return { task, entries };
 }

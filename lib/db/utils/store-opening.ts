@@ -1,30 +1,10 @@
 // lib/db/utils/store-opening.ts
-// ─────────────────────────────────────────────────────────────────────────────
-// Dedicated utilities for the Store Opening task.
-//
-// Store Opening is a SHARED morning task — one row per (storeId, date).
-// Any employee scheduled on the morning or full_day shift for that store can
-// continue filling out the same task row (auto-save + submit).
-//
-// Checklist → photo linkage (enforced at submit time):
-//   • loginPos        → min 1 cashier desk photo (reuses cash_drawer_photos)
-//   • fiveR           → min 3 photos (reuses five_r_photos)
-//   • cekPromo        → exactly 1 storefront promo photo + 1 desk promo photo
-//   • (always)        → min 1 store front photo
-//
-// Access rules (same as other tasks):
-//   • Employee must be checked in (attendance row for this schedule).
-//   • Employee must be inside the store's geofence (unless skipGeo).
-// ─────────────────────────────────────────────────────────────────────────────
-
 import { db } from '@/lib/db';
-import { eq } from 'drizzle-orm';
+import { eq, and, gte, lte } from 'drizzle-orm';
 import {
   storeOpeningTasks, stores, shifts, attendance,
   type StoreOpeningTask,
 } from '@/lib/db/schema';
-
-// ─── Public types ─────────────────────────────────────────────────────────────
 
 export const DEFAULT_GEOFENCE_RADIUS_M = 100;
 
@@ -37,6 +17,18 @@ export interface GeoPoint {
   lng: number;
 }
 
+// ─── 5R area keys ─────────────────────────────────────────────────────────────
+
+export const FIVE_R_AREAS = [
+  { key: 'kasir',  label: 'Area Kasir'  },
+  { key: 'depan',  label: 'Depan Toko'  },
+  { key: 'kanan',  label: 'Sisi Kanan'  },
+  { key: 'kiri',   label: 'Sisi Kiri'   },
+  { key: 'gudang', label: 'Gudang'      },
+] as const;
+
+export type FiveRAreaKey = typeof FIVE_R_AREAS[number]['key'];
+
 export interface SubmitStoreOpeningInput {
   scheduleId:        number;
   userId:            string;
@@ -46,33 +38,34 @@ export interface SubmitStoreOpeningInput {
   checkAbsenSunfish: boolean;
   tarikSohSales:     boolean;
   fiveR:             boolean;
-  fiveRPhotos?:      string[];
-  cekPromo:          boolean;
-  cekPromoStorefrontPhotos?: string[];
-  cekPromoDeskPhotos?:       string[];
+  // Per-area 5R photos — each area: min 1, max 2
+  fiveRAreaKasirPhotos?:  string[];
+  fiveRAreaDepanPhotos?:  string[];
+  fiveRAreaKananPhotos?:  string[];
+  fiveRAreaKiriPhotos?:   string[];
+  fiveRAreaGudangPhotos?: string[];
   cekLamp:           boolean;
   cekSoundSystem:    boolean;
   storeFrontPhotos?: string[];
-  /** Cashier desk photos — stored in cash_drawer_photos column (repurposed). */
   cashierDeskPhotos?: string[];
   notes?:            string;
   skipGeo?:          boolean;
 }
 
-// ─── Photo rules (single source of truth) ─────────────────────────────────────
-
 export const STORE_OPENING_PHOTO_RULES = {
-  storeFront:        { min: 1, max: 3 },
-  cashierDesk:       { min: 1, max: 2 }, // required when loginPos is checked
-  fiveR:             { min: 3, max: 5 }, // required when fiveR is checked
-  cekPromoStorefront:{ min: 1, max: 1 }, // required when cekPromo is checked
-  cekPromoDesk:      { min: 1, max: 1 }, // required when cekPromo is checked
+  storeFront:  { min: 1, max: 3 },
+  cashierDesk: { min: 1, max: 2 },
+  // Each 5R area
+  fiveRArea:   { min: 1, max: 2 },
 } as const;
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
 
 function startOfDay(d: Date): Date {
   const r = new Date(d); r.setHours(0, 0, 0, 0); return r;
+}
+function endOfDay(d: Date): Date {
+  const r = new Date(d); r.setHours(23, 59, 59, 999); return r;
 }
 
 function haversineMetres(a: GeoPoint, b: GeoPoint): number {
@@ -96,6 +89,19 @@ async function getMorningShiftId(): Promise<number> {
   if (!row) throw new Error('Morning shift not found in shifts table.');
   _morningShiftIdCache = row.id;
   return row.id;
+}
+
+async function findTodayRow(storeId: number, date: Date): Promise<StoreOpeningTask | null> {
+  const [row] = await db
+    .select()
+    .from(storeOpeningTasks)
+    .where(and(
+      eq(storeOpeningTasks.storeId, storeId),
+      gte(storeOpeningTasks.date, startOfDay(date)),
+      lte(storeOpeningTasks.date, endOfDay(date)),
+    ))
+    .limit(1);
+  return row ?? null;
 }
 
 // ─── Guards ───────────────────────────────────────────────────────────────────
@@ -144,57 +150,52 @@ async function assertCanProgressTask(
   return null;
 }
 
-// ─── Checklist + photo validation ─────────────────────────────────────────────
+// ─── Validation ───────────────────────────────────────────────────────────────
 
 function validateStoreOpeningPayload(input: SubmitStoreOpeningInput): string | null {
   const {
-    loginPos, checkAbsenSunfish, tarikSohSales, fiveR, cekPromo, cekLamp, cekSoundSystem,
-    storeFrontPhotos, cashierDeskPhotos, fiveRPhotos,
-    cekPromoStorefrontPhotos, cekPromoDeskPhotos,
+    loginPos, checkAbsenSunfish, tarikSohSales, fiveR, cekLamp, cekSoundSystem,
+    storeFrontPhotos, cashierDeskPhotos,
+    fiveRAreaKasirPhotos, fiveRAreaDepanPhotos, fiveRAreaKananPhotos,
+    fiveRAreaKiriPhotos, fiveRAreaGudangPhotos,
   } = input;
 
-  // All checklist items must be marked true
   if (!loginPos)          return 'Checklist "Log-in POS / Buka komputer kasir" belum ditandai.';
   if (!checkAbsenSunfish) return 'Checklist "Tarik & cek absen Sunfish" belum ditandai.';
   if (!tarikSohSales)     return 'Checklist "Tarik SOH & Sales" belum ditandai.';
   if (!fiveR)             return 'Checklist "5R" belum ditandai.';
-  if (!cekPromo)          return 'Checklist "Cek Promo" belum ditandai.';
   if (!cekLamp)           return 'Checklist "Cek Lampu" belum ditandai.';
   if (!cekSoundSystem)    return 'Checklist "Cek Sound System" belum ditandai.';
 
-  // Store front always required
+  // Store front photos
   const sfCount = storeFrontPhotos?.length ?? 0;
   if (sfCount < STORE_OPENING_PHOTO_RULES.storeFront.min)
     return `Foto tampak depan toko wajib minimal ${STORE_OPENING_PHOTO_RULES.storeFront.min}.`;
   if (sfCount > STORE_OPENING_PHOTO_RULES.storeFront.max)
     return `Foto tampak depan toko maksimal ${STORE_OPENING_PHOTO_RULES.storeFront.max}.`;
 
-  // Cashier desk — required because loginPos must be true
+  // Cashier desk photos (linked to loginPos)
   const cdCount = cashierDeskPhotos?.length ?? 0;
   if (cdCount < STORE_OPENING_PHOTO_RULES.cashierDesk.min)
     return `Foto meja kasir wajib minimal ${STORE_OPENING_PHOTO_RULES.cashierDesk.min} (terkait "Log-in POS").`;
   if (cdCount > STORE_OPENING_PHOTO_RULES.cashierDesk.max)
     return `Foto meja kasir maksimal ${STORE_OPENING_PHOTO_RULES.cashierDesk.max}.`;
 
-  // 5R — required because fiveR must be true
-  const frCount = fiveRPhotos?.length ?? 0;
-  if (frCount < STORE_OPENING_PHOTO_RULES.fiveR.min)
-    return `Foto 5R wajib minimal ${STORE_OPENING_PHOTO_RULES.fiveR.min} (terkait "5R Kebersihan toko").`;
-  if (frCount > STORE_OPENING_PHOTO_RULES.fiveR.max)
-    return `Foto 5R maksimal ${STORE_OPENING_PHOTO_RULES.fiveR.max}.`;
-
-  // Cek Promo — both buckets required because cekPromo must be true
-  const promoSfCount = cekPromoStorefrontPhotos?.length ?? 0;
-  if (promoSfCount < STORE_OPENING_PHOTO_RULES.cekPromoStorefront.min)
-    return `Foto promo depan toko wajib ${STORE_OPENING_PHOTO_RULES.cekPromoStorefront.min} (terkait "Cek Promo").`;
-  if (promoSfCount > STORE_OPENING_PHOTO_RULES.cekPromoStorefront.max)
-    return `Foto promo depan toko maksimal ${STORE_OPENING_PHOTO_RULES.cekPromoStorefront.max}.`;
-
-  const promoDeskCount = cekPromoDeskPhotos?.length ?? 0;
-  if (promoDeskCount < STORE_OPENING_PHOTO_RULES.cekPromoDesk.min)
-    return `Foto promo meja kasir wajib ${STORE_OPENING_PHOTO_RULES.cekPromoDesk.min} (terkait "Cek Promo").`;
-  if (promoDeskCount > STORE_OPENING_PHOTO_RULES.cekPromoDesk.max)
-    return `Foto promo meja kasir maksimal ${STORE_OPENING_PHOTO_RULES.cekPromoDesk.max}.`;
+  // 5R — one validation message per area
+  const areaPhotoMap: Record<FiveRAreaKey, string[] | undefined> = {
+    kasir:  fiveRAreaKasirPhotos,
+    depan:  fiveRAreaDepanPhotos,
+    kanan:  fiveRAreaKananPhotos,
+    kiri:   fiveRAreaKiriPhotos,
+    gudang: fiveRAreaGudangPhotos,
+  };
+  for (const { key, label } of FIVE_R_AREAS) {
+    const count = areaPhotoMap[key]?.length ?? 0;
+    if (count < STORE_OPENING_PHOTO_RULES.fiveRArea.min)
+      return `5R "${label}": wajib minimal ${STORE_OPENING_PHOTO_RULES.fiveRArea.min} foto.`;
+    if (count > STORE_OPENING_PHOTO_RULES.fiveRArea.max)
+      return `5R "${label}": maksimal ${STORE_OPENING_PHOTO_RULES.fiveRArea.max} foto.`;
+  }
 
   return null;
 }
@@ -211,17 +212,13 @@ export async function submitStoreOpening(
     const validationErr = validateStoreOpeningPayload(input);
     if (validationErr) return { success: false, error: validationErr };
 
-    const [existing] = await db
-      .select()
-      .from(storeOpeningTasks)
-      .where(eq(storeOpeningTasks.scheduleId, input.scheduleId))
-      .limit(1);
+    const now      = new Date();
+    const existing = await findTodayRow(input.storeId, now);
 
     if (existing?.status === 'completed' || existing?.status === 'verified')
       return { success: false, error: 'Store opening task sudah disubmit.' };
 
     const morningShiftId = await getMorningShiftId();
-    const now            = new Date();
 
     const values = {
       scheduleId:        input.scheduleId,
@@ -233,14 +230,15 @@ export async function submitStoreOpening(
       checkAbsenSunfish: input.checkAbsenSunfish,
       tarikSohSales:     input.tarikSohSales,
       fiveR:             input.fiveR,
-      fiveRPhotos:       jsonPhotos(input.fiveRPhotos),
-      cekPromo:          input.cekPromo,
-      cekPromoStorefrontPhotos: jsonPhotos(input.cekPromoStorefrontPhotos),
-      cekPromoDeskPhotos:       jsonPhotos(input.cekPromoDeskPhotos),
+      // 5R per-area photos
+      fiveRAreaKasirPhotos:  jsonPhotos(input.fiveRAreaKasirPhotos),
+      fiveRAreaDepanPhotos:  jsonPhotos(input.fiveRAreaDepanPhotos),
+      fiveRAreaKananPhotos:  jsonPhotos(input.fiveRAreaKananPhotos),
+      fiveRAreaKiriPhotos:   jsonPhotos(input.fiveRAreaKiriPhotos),
+      fiveRAreaGudangPhotos: jsonPhotos(input.fiveRAreaGudangPhotos),
       cekLamp:           input.cekLamp,
       cekSoundSystem:    input.cekSoundSystem,
       storeFrontPhotos:  jsonPhotos(input.storeFrontPhotos),
-      // Cashier desk photos are stored in the cash_drawer_photos column (repurposed).
       cashDrawerPhotos:  jsonPhotos(input.cashierDeskPhotos),
       submittedLat:      String(input.geo.lat),
       submittedLng:      String(input.geo.lng),
@@ -251,7 +249,8 @@ export async function submitStoreOpening(
     };
 
     const row = existing
-      ? (await db.update(storeOpeningTasks).set(values).where(eq(storeOpeningTasks.id, existing.id)).returning())[0]
+      ? (await db.update(storeOpeningTasks).set(values)
+          .where(eq(storeOpeningTasks.id, existing.id)).returning())[0]
       : (await db.insert(storeOpeningTasks).values(values).returning())[0];
 
     return { success: true, data: row };
@@ -260,35 +259,32 @@ export async function submitStoreOpening(
   }
 }
 
-// ─── Auto-save patch ──────────────────────────────────────────────────────────
+// ─── Auto-save ────────────────────────────────────────────────────────────────
 
 export interface StoreOpeningAutoSavePatch {
   loginPos?:          boolean;
   checkAbsenSunfish?: boolean;
   tarikSohSales?:     boolean;
   fiveR?:             boolean;
-  cekPromo?:          boolean;
+  // Per-area 5R photos
+  fiveRAreaKasirPhotos?:  string[];
+  fiveRAreaDepanPhotos?:  string[];
+  fiveRAreaKananPhotos?:  string[];
+  fiveRAreaKiriPhotos?:   string[];
+  fiveRAreaGudangPhotos?: string[];
   cekLamp?:           boolean;
   cekSoundSystem?:    boolean;
   storeFrontPhotos?:  string[];
   cashierDeskPhotos?: string[];
-  fiveRPhotos?:       string[];
-  cekPromoStorefrontPhotos?: string[];
-  cekPromoDeskPhotos?:       string[];
   notes?:             string;
 }
 
 export async function autoSaveStoreOpening(
-  scheduleId: number,
-  patch:      StoreOpeningAutoSavePatch,
+  storeId: number,
+  patch:   StoreOpeningAutoSavePatch,
 ): Promise<TaskResult<{ saved: string[] }>> {
   try {
-    const [existing] = await db
-      .select({ id: storeOpeningTasks.id, status: storeOpeningTasks.status })
-      .from(storeOpeningTasks)
-      .where(eq(storeOpeningTasks.scheduleId, scheduleId))
-      .limit(1);
-
+    const existing = await findTodayRow(storeId, new Date());
     if (!existing) return { success: false, error: 'Store opening task not found.' };
     if (existing.status === 'completed' || existing.status === 'verified')
       return { success: true, data: { saved: [] } };
@@ -299,23 +295,22 @@ export async function autoSaveStoreOpening(
     if ('checkAbsenSunfish' in patch) update.checkAbsenSunfish = Boolean(patch.checkAbsenSunfish);
     if ('tarikSohSales'     in patch) update.tarikSohSales     = Boolean(patch.tarikSohSales);
     if ('fiveR'             in patch) update.fiveR             = Boolean(patch.fiveR);
-    if ('cekPromo'          in patch) update.cekPromo          = Boolean(patch.cekPromo);
     if ('cekLamp'           in patch) update.cekLamp           = Boolean(patch.cekLamp);
     if ('cekSoundSystem'    in patch) update.cekSoundSystem    = Boolean(patch.cekSoundSystem);
     if ('notes'             in patch) update.notes             = patch.notes;
 
-    if ('storeFrontPhotos'         in patch) update.storeFrontPhotos         = jsonPhotos(patch.storeFrontPhotos);
-    if ('cashierDeskPhotos'        in patch) update.cashDrawerPhotos         = jsonPhotos(patch.cashierDeskPhotos);
-    if ('fiveRPhotos'              in patch) update.fiveRPhotos              = jsonPhotos(patch.fiveRPhotos);
-    if ('cekPromoStorefrontPhotos' in patch) update.cekPromoStorefrontPhotos = jsonPhotos(patch.cekPromoStorefrontPhotos);
-    if ('cekPromoDeskPhotos'       in patch) update.cekPromoDeskPhotos       = jsonPhotos(patch.cekPromoDeskPhotos);
+    // Photo columns
+    if ('storeFrontPhotos'         in patch) update.storeFrontPhotos        = jsonPhotos(patch.storeFrontPhotos);
+    if ('cashierDeskPhotos'        in patch) update.cashDrawerPhotos        = jsonPhotos(patch.cashierDeskPhotos);
+    if ('fiveRAreaKasirPhotos'     in patch) update.fiveRAreaKasirPhotos    = jsonPhotos(patch.fiveRAreaKasirPhotos);
+    if ('fiveRAreaDepanPhotos'     in patch) update.fiveRAreaDepanPhotos    = jsonPhotos(patch.fiveRAreaDepanPhotos);
+    if ('fiveRAreaKananPhotos'     in patch) update.fiveRAreaKananPhotos    = jsonPhotos(patch.fiveRAreaKananPhotos);
+    if ('fiveRAreaKiriPhotos'      in patch) update.fiveRAreaKiriPhotos     = jsonPhotos(patch.fiveRAreaKiriPhotos);
+    if ('fiveRAreaGudangPhotos'    in patch) update.fiveRAreaGudangPhotos   = jsonPhotos(patch.fiveRAreaGudangPhotos);
 
     if (existing.status === 'pending') update.status = 'in_progress';
 
-    await db
-      .update(storeOpeningTasks)
-      .set(update)
-      .where(eq(storeOpeningTasks.id, existing.id));
+    await db.update(storeOpeningTasks).set(update).where(eq(storeOpeningTasks.id, existing.id));
 
     return { success: true, data: { saved: Object.keys(update).filter(k => k !== 'updatedAt') } };
   } catch (err) {
@@ -323,7 +318,14 @@ export async function autoSaveStoreOpening(
   }
 }
 
-// ─── Read ─────────────────────────────────────────────────────────────────────
+// ─── Read helpers ─────────────────────────────────────────────────────────────
+
+export async function getStoreOpeningByStoreDate(
+  storeId: number,
+  date:    Date,
+): Promise<StoreOpeningTask | null> {
+  return findTodayRow(storeId, date);
+}
 
 export async function getStoreOpeningBySchedule(scheduleId: number): Promise<StoreOpeningTask | null> {
   const [row] = await db
@@ -332,6 +334,33 @@ export async function getStoreOpeningBySchedule(scheduleId: number): Promise<Sto
     .where(eq(storeOpeningTasks.scheduleId, scheduleId))
     .limit(1);
   return row ?? null;
+}
+
+export async function getOrCreateStoreOpeningForSchedule(
+  scheduleId: number,
+  userId:     string,
+  storeId:    number,
+  date:       Date,
+): Promise<StoreOpeningTask> {
+  const existing = await findTodayRow(storeId, date);
+  if (existing) return existing;
+
+  const morningShiftId = await getMorningShiftId();
+  const [row] = await db
+    .insert(storeOpeningTasks)
+    .values({
+      scheduleId,
+      userId,
+      storeId,
+      shiftId:   morningShiftId,
+      date:      startOfDay(date),
+      status:    'pending',
+      updatedAt: new Date(),
+    })
+    .onConflictDoNothing()
+    .returning();
+
+  return row ?? (await findTodayRow(storeId, date))!;
 }
 
 export async function getStoreOpeningById(id: number): Promise<StoreOpeningTask | null> {

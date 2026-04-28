@@ -1,22 +1,15 @@
-// app/api/employee/tasks/item-dropping/route.ts
-// ─────────────────────────────────────────────────────────────────────────────
-//   POST  → final submit (check-in + geofence + payload validation)
-//   PATCH → auto-save partial patch (status: pending → in_progress)
-//   PUT   → confirm receipt of a carry-forward (discrepancy) task
-//           receivePhotos required (min 1)
-// ─────────────────────────────────────────────────────────────────────────────
-
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession }          from 'next-auth';
 import { authOptions }               from '@/lib/auth';
 import {
   submitItemDropping,
-  autoSaveItemDropping,
-  confirmItemReceipt,
+  addToEntry,
+  removeToEntry,
+  autoSaveItemDroppingById,
   type AutoSaveItemDroppingPatch,
+  type GeoPoint,
+  type ToEntry,
 } from '@/lib/db/utils/item-dropping';
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function toInt(val: unknown, field: string): number {
   const n = parseInt(String(val ?? ''), 10);
@@ -24,101 +17,133 @@ function toInt(val: unknown, field: string): number {
   return n;
 }
 
-function toGeo(geo: unknown, skipGeo: boolean): { lat: number; lng: number } | null {
-  if (skipGeo) return null;
-  if (!geo || typeof geo !== 'object') return null;
-  const { lat, lng } = geo as Record<string, unknown>;
-  if (typeof lat !== 'number' || typeof lng !== 'number') return null;
+function readGeo(body: Record<string, unknown>): GeoPoint {
+  const lat = Number(body.lat ?? body.latitude);
+  const lng = Number(body.lng ?? body.longitude);
+  if (!isFinite(lat) || !isFinite(lng)) {
+    throw new Error('Geolokasi tidak valid. Aktifkan GPS dan coba lagi.');
+  }
   return { lat, lng };
 }
 
-function strArr(v: unknown): string[] {
-  return Array.isArray(v) ? (v as string[]) : [];
+function readStringArray(v: unknown): string[] | undefined {
+  if (Array.isArray(v)) return v.filter(x => typeof x === 'string') as string[];
+  return undefined;
 }
 
-function toDate(v: unknown): Date | undefined {
-  if (!v) return undefined;
-  const d = new Date(v as string);
-  return isNaN(d.getTime()) ? undefined : d;
+function readEntries(v: unknown): ToEntry[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  return v
+    .filter(e => e && typeof e === 'object')
+    .map((e: Record<string, unknown>) => ({
+      toNumber:       String(e.toNumber ?? ''),
+      dropTime:       String(e.dropTime ?? ''),
+      droppingPhotos: readStringArray(e.droppingPhotos) ?? [],
+      notes:          typeof e.notes === 'string' ? e.notes : undefined,
+    }));
 }
 
-// ─── POST (final submit) ──────────────────────────────────────────────────────
+// ─── POST ─────────────────────────────────────────────────────────────────────
+//
+// Two modes:
+//   • mode = 'submit'     → submit the task header (hasDropping flag + optional
+//                           full entries array for first-time batch submit)
+//   • mode = 'add_entry'  → add a single TO entry to an existing task
+//                           requires: taskId, toNumber, dropTime, droppingPhotos
+//
+// If mode is omitted, 'submit' is assumed.
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
-  if (!session?.user)
+  if (!session?.user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  }
 
   let body: Record<string, unknown>;
   try { body = await req.json(); }
   catch { return NextResponse.json({ success: false, error: 'Invalid JSON body' }, { status: 400 }); }
 
-  let scheduleId: number;
-  let storeId:    number;
-  try {
-    scheduleId = toInt(body.scheduleId, 'scheduleId');
-    storeId    = toInt(body.storeId,    'storeId');
-  } catch (e) {
-    return NextResponse.json({ success: false, error: String(e) }, { status: 400 });
-  }
-
-  const skipGeo          = body.skipGeo === true;
-  const rawGeo           = toGeo(body.geo, skipGeo);
-  const geo              = rawGeo ?? { lat: 0, lng: 0 };
-  const effectiveSkipGeo = skipGeo || rawGeo === null;
+  const mode = typeof body.mode === 'string' ? body.mode : 'submit';
 
   try {
+    const scheduleId = toInt(body.scheduleId, 'scheduleId');
+    const storeId    = toInt(body.storeId,    'storeId');
+    const geo        = readGeo(body);
+    const skipGeo    = Boolean(body.skipGeo);
+    const userId     = session.user.id as string;
+
+    // ── Add single TO entry to an existing task ─────────────────────────────
+    if (mode === 'add_entry') {
+      const taskId        = toInt(body.taskId, 'taskId');
+      const toNumber      = typeof body.toNumber === 'string' ? body.toNumber : '';
+      const dropTime      = typeof body.dropTime === 'string' ? body.dropTime : '';
+      const droppingPhotos = readStringArray(body.droppingPhotos) ?? [];
+      const notes         = typeof body.notes === 'string' ? body.notes : undefined;
+
+      const result = await addToEntry({
+        taskId,
+        scheduleId,
+        userId,
+        storeId,
+        geo,
+        skipGeo,
+        toNumber,
+        dropTime,
+        droppingPhotos,
+        notes,
+      });
+
+      return NextResponse.json(result, { status: result.success ? 200 : 400 });
+    }
+
+    // ── Submit mode ─────────────────────────────────────────────────────────
+    const hasDropping = Boolean(body.hasDropping);
+    const entries     = hasDropping ? readEntries(body.entries) : undefined;
+
     const result = await submitItemDropping({
       scheduleId,
-      userId:            session.user.id as string,
+      userId,
       storeId,
       geo,
-      skipGeo:           effectiveSkipGeo,
-      hasDropping:       Boolean(body.hasDropping),
-      dropTime:          toDate(body.dropTime),
-      droppingPhotos:    strArr(body.droppingPhotos),
-      isReceived:        Boolean(body.isReceived),
-      receiveTime:       toDate(body.receiveTime),
-      receivePhotos:     strArr(body.receivePhotos),
-      receivedByUserId:  typeof body.receivedByUserId === 'string' ? body.receivedByUserId : undefined,
-      notes:             typeof body.notes === 'string' ? body.notes : undefined,
-      parentTaskId:      body.parentTaskId ? Number(body.parentTaskId) : undefined,
+      skipGeo,
+      hasDropping,
+      entries,
+      notes: typeof body.notes === 'string' ? body.notes : undefined,
     });
+
     return NextResponse.json(result, { status: result.success ? 200 : 400 });
   } catch (err) {
     console.error('[POST /api/employee/tasks/item-dropping]', err);
-    return NextResponse.json({ success: false, error: String(err) }, { status: 500 });
+    const isGeoErr = err instanceof Error && err.message.startsWith('Geolokasi');
+    return NextResponse.json({ success: false, error: String(err) }, { status: isGeoErr ? 400 : 500 });
   }
 }
 
 // ─── PATCH (auto-save) ────────────────────────────────────────────────────────
+//
+// Keyed by taskId. Only patches the task header fields (hasDropping, notes).
+// Individual TO entries are managed via POST mode=add_entry and DELETE.
 
 export async function PATCH(req: NextRequest) {
   const session = await getServerSession(authOptions);
-  if (!session?.user)
+  if (!session?.user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  }
 
   let body: Record<string, unknown>;
   try { body = await req.json(); }
   catch { return NextResponse.json({ success: false, error: 'Invalid JSON body' }, { status: 400 }); }
 
-  let scheduleId: number;
-  try { scheduleId = toInt(body.scheduleId, 'scheduleId'); }
+  let taskId: number;
+  try { taskId = toInt(body.taskId, 'taskId'); }
   catch (e) { return NextResponse.json({ success: false, error: String(e) }, { status: 400 }); }
 
   const patch: AutoSaveItemDroppingPatch = {};
-
-  if ('hasDropping'      in body) patch.hasDropping      = Boolean(body.hasDropping);
-  if ('dropTime'         in body) patch.dropTime         = typeof body.dropTime === 'string' ? body.dropTime : null;
-  if ('droppingPhotos'   in body) patch.droppingPhotos   = strArr(body.droppingPhotos);
-  if ('isReceived'       in body) patch.isReceived       = Boolean(body.isReceived);
-  if ('receiveTime'      in body) patch.receiveTime      = typeof body.receiveTime === 'string' ? body.receiveTime : null;
-  if ('receivePhotos'    in body) patch.receivePhotos    = strArr(body.receivePhotos);
-  if ('receivedByUserId' in body) patch.receivedByUserId = typeof body.receivedByUserId === 'string' ? body.receivedByUserId : null;
-  if ('notes'            in body) patch.notes            = typeof body.notes === 'string' ? body.notes : undefined;
+  if ('hasDropping' in body) patch.hasDropping = Boolean(body.hasDropping);
+  if ('notes'       in body) patch.notes       = typeof body.notes === 'string' ? body.notes : undefined;
 
   try {
-    const result = await autoSaveItemDropping(scheduleId, patch);
+    const result = await autoSaveItemDroppingById(taskId, patch);
     return NextResponse.json(result, { status: result.success ? 200 : 400 });
   } catch (err) {
     console.error('[PATCH /api/employee/tasks/item-dropping]', err);
@@ -126,51 +151,41 @@ export async function PATCH(req: NextRequest) {
   }
 }
 
-// ─── PUT (confirm receipt — requires receivePhotos) ───────────────────────────
+// ─── DELETE (remove a single TO entry) ───────────────────────────────────────
+//
+// Body: { entryId, scheduleId, storeId, lat, lng, skipGeo? }
 
-export async function PUT(req: NextRequest) {
+export async function DELETE(req: NextRequest) {
   const session = await getServerSession(authOptions);
-  if (!session?.user)
+  if (!session?.user) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  }
 
   let body: Record<string, unknown>;
   try { body = await req.json(); }
   catch { return NextResponse.json({ success: false, error: 'Invalid JSON body' }, { status: 400 }); }
 
-  let taskId:     number;
-  let scheduleId: number;
-  let storeId:    number;
   try {
-    taskId     = toInt(body.taskId,     'taskId');
-    scheduleId = toInt(body.scheduleId, 'scheduleId');
-    storeId    = toInt(body.storeId,    'storeId');
-  } catch (e) {
-    return NextResponse.json({ success: false, error: String(e) }, { status: 400 });
-  }
+    const entryId    = toInt(body.entryId,    'entryId');
+    const scheduleId = toInt(body.scheduleId, 'scheduleId');
+    const storeId    = toInt(body.storeId,    'storeId');
+    const geo        = readGeo(body);
+    const skipGeo    = Boolean(body.skipGeo);
+    const userId     = session.user.id as string;
 
-  const skipGeo          = body.skipGeo === true;
-  const rawGeo           = toGeo(body.geo, skipGeo);
-  const geo              = rawGeo ?? { lat: 0, lng: 0 };
-  const effectiveSkipGeo = skipGeo || rawGeo === null;
-
-  const receivePhotos = strArr(body.receivePhotos);
-
-  try {
-    const result = await confirmItemReceipt({
-      taskId,
+    const result = await removeToEntry({
+      entryId,
       scheduleId,
-      userId:            session.user.id as string,
+      userId,
       storeId,
       geo,
-      skipGeo:           effectiveSkipGeo,
-      receiveTime:       toDate(body.receiveTime),
-      receivePhotos,                            // validated in util (min 1)
-      receivedByUserId:  typeof body.receivedByUserId === 'string' ? body.receivedByUserId : undefined,
-      notes:             typeof body.notes === 'string' ? body.notes : undefined,
+      skipGeo,
     });
+
     return NextResponse.json(result, { status: result.success ? 200 : 400 });
   } catch (err) {
-    console.error('[PUT /api/employee/tasks/item-dropping]', err);
-    return NextResponse.json({ success: false, error: String(err) }, { status: 500 });
+    console.error('[DELETE /api/employee/tasks/item-dropping]', err);
+    const isGeoErr = err instanceof Error && err.message.startsWith('Geolokasi');
+    return NextResponse.json({ success: false, error: String(err) }, { status: isGeoErr ? 400 : 500 });
   }
 }

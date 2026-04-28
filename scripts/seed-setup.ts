@@ -67,7 +67,7 @@ async function seedSetup() {
     .values([
       { code: 'pic_1', label: 'PIC 1', description: 'Person in charge — primary',   sortOrder: 10 },
       { code: 'pic_2', label: 'PIC 2', description: 'Person in charge — secondary', sortOrder: 20 },
-      { code: 'so',    label: 'SO',    description: 'Store officer',                sortOrder: 30 },
+      { code: 'sa',    label: 'SA',    description: 'Sales Associate',                sortOrder: 30 },
     ])
     .returning();
 
@@ -115,14 +115,14 @@ async function seedSetup() {
         name: 'Store Gambir',
         address: 'Jl. Gambir No. 10, Jakarta Pusat',
         areaId: areaJP.id,
-        latitude: '-6.1770000', longitude: '106.8221000',
+        latitude: '-6.1630687', longitude: '106.7739266',
         geofenceRadiusM: '150', pettyCashBalance: '1200000',
       },
       {
         name: 'Store Sudirman',
         address: 'Jl. Jend. Sudirman No. 52, Jakarta Selatan',
         areaId: areaJS.id,
-        latitude: '-6.2088000', longitude: '106.8177000',
+        latitude: '-6.1630687', longitude: '106.7739266',
         geofenceRadiusM: '150', pettyCashBalance: '1500000',
       },
     ])
@@ -147,17 +147,17 @@ async function seedSetup() {
     // Store Thamrin
     { id: empId(), name: 'Budi Santoso',   email: 'budi@store.com',  password: pwd, roleId: roleId.employee, employeeTypeId: empTypeId.pic_1, homeStoreId: store1.id, areaId: null },
     { id: empId(), name: 'Ahmad Rahman',   email: 'ahmad@store.com', password: pwd, roleId: roleId.employee, employeeTypeId: empTypeId.pic_2, homeStoreId: store1.id, areaId: null },
-    { id: empId(), name: 'Siti Nurhaliza', email: 'siti@store.com',  password: pwd, roleId: roleId.employee, employeeTypeId: empTypeId.so,    homeStoreId: store1.id, areaId: null },
-    { id: empId(), name: 'Dewi Lestari',   email: 'dewi@store.com',  password: pwd, roleId: roleId.employee, employeeTypeId: empTypeId.so,    homeStoreId: store1.id, areaId: null },
+    { id: empId(), name: 'Siti Nurhaliza', email: 'siti@store.com',  password: pwd, roleId: roleId.employee, employeeTypeId: empTypeId.sa,    homeStoreId: store1.id, areaId: null },
+    { id: empId(), name: 'Dewi Lestari',   email: 'dewi@store.com',  password: pwd, roleId: roleId.employee, employeeTypeId: empTypeId.sa,    homeStoreId: store1.id, areaId: null },
 
     // Store Gambir
     { id: empId(), name: 'Eko Prasetyo', email: 'eko@store.com',  password: pwd, roleId: roleId.employee, employeeTypeId: empTypeId.pic_1, homeStoreId: store2.id, areaId: null },
-    { id: empId(), name: 'Rina Wijaya',  email: 'rina@store.com', password: pwd, roleId: roleId.employee, employeeTypeId: empTypeId.so,    homeStoreId: store2.id, areaId: null },
+    { id: empId(), name: 'Rina Wijaya',  email: 'rina@store.com', password: pwd, roleId: roleId.employee, employeeTypeId: empTypeId.sa,    homeStoreId: store2.id, areaId: null },
 
     // Store Sudirman
     { id: empId(), name: 'Farhan Hidayat', email: 'farhan@store.com', password: pwd, roleId: roleId.employee, employeeTypeId: empTypeId.pic_1, homeStoreId: store3.id, areaId: null },
     { id: empId(), name: 'Lina Permata',   email: 'lina@store.com',   password: pwd, roleId: roleId.employee, employeeTypeId: empTypeId.pic_2, homeStoreId: store3.id, areaId: null },
-    { id: empId(), name: 'Hendra Kusuma',  email: 'hendra@store.com', password: pwd, roleId: roleId.employee, employeeTypeId: empTypeId.so,    homeStoreId: store3.id, areaId: null },
+    { id: empId(), name: 'Hendra Kusuma',  email: 'hendra@store.com', password: pwd, roleId: roleId.employee, employeeTypeId: empTypeId.sa,    homeStoreId: store3.id, areaId: null },
   ];
 
   const insertedUsers: { id: string; name: string }[] = [];

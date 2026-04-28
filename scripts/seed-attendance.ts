@@ -11,8 +11,8 @@ import { db }   from '@/lib/db';
 import {
   schedules, attendance, breakSessions,
   users, stores, shifts,
-  storeOpeningTasks, setoranTasks, productCheckTasks,
-  itemDroppingTasks, briefingTasks, edcReconciliationTasks,  
+  storeOpeningTasks, setoranTasks, cekBinTasks,
+  productCheckTasks, itemDroppingTasks, briefingTasks, edcReconciliationTasks,  
   eodZReportTasks, openStatementTasks,
   groomingTasks,
 } from '@/lib/db/schema';
@@ -83,7 +83,7 @@ async function seedAttendance() {
   let cntBreaks  = 0;
 
     const taskDone: Record<string, number> = {
-      storeOpening: 0, setoran: 0, productCheck: 0, itemDropping: 0,  
+      storeOpening: 0, setoran: 0, cekBin: 0, productCheck: 0, itemDropping: 0,  // <-- ADD cekBin: 0
       briefing: 0, edcReconciliation: 0, eodZReport: 0, openStatement: 0, 
       grooming: 0,
     };
@@ -289,6 +289,18 @@ async function seedAttendance() {
               : 'No delivery today.',
           },
           'itemDropping',
+        );
+      }
+
+      if (chance(0.90)) {
+        await completeTask(
+          cekBinTasks as any,
+          {
+            isClean:   true,
+            hasLiner:  chance(0.95),
+            notes:     chance(0.1) ? 'Bins checked and clean.' : null,
+          },
+          'cekBin',
         );
       }
     }

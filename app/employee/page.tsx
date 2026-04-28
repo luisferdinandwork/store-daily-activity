@@ -18,8 +18,11 @@ import {
   Clock,
   XCircle,
   AlertCircle,
+  Zap,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 interface Stats {
   pending: number;
@@ -28,12 +31,20 @@ interface Stats {
   total: number;
 }
 
-interface AttRecord {
-  status: 'present' | 'late' | 'absent' | 'excused';
-  shift: 'morning' | 'evening';
-  checkInTime: string | null;
-  checkOutTime: string | null;
+// Matches the exact shape of the GET /api/employee/attendance payload
+interface AttSlot {
+  schedule: {
+    shift: 'morning' | 'evening' | 'full_day';
+  };
+  attendance: {
+    status: 'present' | 'late' | 'absent' | 'excused';
+    checkInTime: string | null;
+    checkOutTime: string | null;
+    onBreak: boolean;
+  } | null;
 }
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function greeting() {
   const h = new Date().getHours();
@@ -52,6 +63,8 @@ function fmtTime(iso: string | null) {
   if (!iso) return null;
   return new Date(iso).toLocaleTimeString('en-ID', { hour: '2-digit', minute: '2-digit' });
 }
+
+// ─── UI Components ────────────────────────────────────────────────────────────
 
 function RingProgress({ pct }: { pct: number }) {
   const r    = 44;
@@ -78,41 +91,59 @@ const ATT_CFG = {
   excused: { Icon: AlertCircle,  label: 'Excused',  textClass: 'text-white/60',  bg: 'bg-white/10' },
 };
 
+// ─── Main Page ────────────────────────────────────────────────────────────────
+
 export default function EmployeeDashboard() {
-  const { data: session } = useSession();
+  const { data: session, status: sessionStatus } = useSession();
   const [stats,    setStats]    = useState<Stats>({ pending: 0, inProgress: 0, completed: 0, total: 0 });
-  const [attRec,   setAttRec]   = useState<AttRecord | null>(null);
+  const [attSlots, setAttSlots] = useState<AttSlot[]>([]);
   const [loading,  setLoading]  = useState(true);
 
-  const user    = session?.user as any;
-  const storeId = user?.homeStoreId ?? '';
-  const employeeType = user?.employeeType as string | null;
+  const user = session?.user as any;
 
   useEffect(() => {
-    if (!storeId) return;
+    // Wait for session to be fully loaded before fetching data
+    if (sessionStatus === 'loading') return;
+    if (sessionStatus === 'unauthenticated') {
+      setLoading(false);
+      return;
+    }
 
     Promise.all([
-      fetch(`/api/employee/tasks?storeId=${storeId}`).then((r) => r.json()),
+      // FIX 1: Removed ?storeId=... (API uses session.user.id automatically)
+      fetch('/api/employee/tasks').then((r) => r.json()),
       fetch('/api/employee/attendance').then((r) => r.json()),
     ])
       .then(([taskData, attData]) => {
-        const tasks: any[] = taskData.assignedTasks ?? [];
+        // FIX 2: Updated task mapping to match GET /api/employee/tasks payload
+        const tasks: any[] = taskData.tasks ?? [];
         setStats({
-          pending:    tasks.filter((t) => t.employeeTask.status === 'pending').length,
-          inProgress: tasks.filter((t) => t.employeeTask.status === 'in_progress').length,
-          completed:  tasks.filter((t) => t.employeeTask.status === 'completed').length,
+          pending:    tasks.filter((t) => t.data.status === 'pending').length,
+          inProgress: tasks.filter((t) => t.data.status === 'in_progress' || t.data.status === 'discrepancy').length,
+          completed:  tasks.filter((t) => t.data.status === 'completed' || t.data.status === 'verified').length,
           total:      tasks.length,
         });
-        if (attData.data) setAttRec(attData.data);
+
+        // FIX 3: Updated attendance mapping to match GET /api/employee/attendance payload
+        if (attData.success && Array.isArray(attData.shifts)) {
+          setAttSlots(attData.shifts);
+        }
       })
       .catch(console.error)
       .finally(() => setLoading(false));
-  }, [storeId]);
+  }, [sessionStatus]);
 
-  const pct        = stats.total > 0 ? Math.round((stats.completed / stats.total) * 100) : 0;
-  const firstName  = user?.name?.split(' ')[0] ?? 'there';
-  const isEvening  = user?.shift === 'evening';
-  const attCfg     = attRec ? ATT_CFG[attRec.status] : null;
+  // Derive UI states from the new array format
+  const primaryShift = attSlots[0]?.schedule.shift ?? 'morning';
+  const primaryAtt   = attSlots[0]?.attendance ?? null;
+  const isOnBreak    = primaryAtt?.onBreak ?? false;
+  
+  const attCfg = primaryAtt 
+    ? ATT_CFG[primaryAtt.status] 
+    : null;
+
+  const pct       = stats.total > 0 ? Math.round((stats.completed / stats.total) * 100) : 0;
+  const firstName = user?.name?.split(' ')[0] ?? 'there';
 
   return (
     <div className="flex flex-col">
@@ -133,21 +164,29 @@ export default function EmployeeDashboard() {
           {/* Shift + attendance status row */}
           <div className="mt-4 flex flex-wrap gap-2">
             <div className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-xs font-medium text-primary-foreground/80">
-              {isEvening ? <Moon className="h-3 w-3" /> : <Sun className="h-3 w-3" />}
-              {isEvening ? 'Evening shift' : 'Morning shift'}
+              {primaryShift === 'morning' && <Sun className="h-3 w-3" />}
+              {primaryShift === 'evening' && <Moon className="h-3 w-3" />}
+              {primaryShift === 'full_day' && <Zap className="h-3 w-3" />}
+              {primaryShift === 'morning' && 'Morning shift'}
+              {primaryShift === 'evening' && 'Evening shift'}
+              {primaryShift === 'full_day' && 'Full Day shift'}
             </div>
-            {attRec && attCfg ? (
+            
+            {primaryAtt && attCfg ? (
               <div className={cn(
                 'inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium',
-                attCfg.bg, attCfg.textClass,
+                isOnBreak ? 'bg-amber-500/20 text-amber-200' : attCfg.bg, attCfg.textClass,
               )}>
-                <attCfg.Icon className="h-3 w-3" />
-                {attCfg.label}
-                {attRec.checkInTime && (
-                  <span className="opacity-70">· In {fmtTime(attRec.checkInTime)}</span>
+                {isOnBreak 
+                  ? <Clock className="h-3 w-3" />
+                  : <attCfg.Icon className="h-3 w-3" />
+                }
+                {isOnBreak ? 'On Break' : attCfg.label}
+                {primaryAtt.checkInTime && !isOnBreak && (
+                  <span className="opacity-70">· In {fmtTime(primaryAtt.checkInTime)}</span>
                 )}
               </div>
-            ) : !loading ? (
+            ) : !loading && attSlots.length > 0 ? (
               <div className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-xs font-medium text-primary-foreground/60">
                 <LogIn className="h-3 w-3" />
                 Not checked in
@@ -158,7 +197,7 @@ export default function EmployeeDashboard() {
 
         {/* Ring progress */}
         <div className="relative mt-5 flex items-center gap-5">
-          <div className="relative flex-shrink-0">
+          <div className="relative shrink-0">
             <RingProgress pct={loading ? 0 : pct} />
             <div className="absolute inset-0 flex flex-col items-center justify-center">
               <span className="text-xl font-bold text-primary-foreground">
@@ -207,7 +246,7 @@ export default function EmployeeDashboard() {
           <Link href="/employee/tasks">
             <Card className="border-border shadow-sm transition-all active:scale-[0.98]">
               <CardContent className="flex items-center gap-3 p-4">
-                <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-primary/10">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10">
                   <CheckSquare className="h-5 w-5 text-primary" />
                 </div>
                 <div className="min-w-0 flex-1">
@@ -218,7 +257,7 @@ export default function EmployeeDashboard() {
                       : `${stats.pending} pending · ${stats.inProgress} in progress`}
                   </p>
                 </div>
-                <ChevronRight className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
               </CardContent>
             </Card>
           </Link>
@@ -227,27 +266,31 @@ export default function EmployeeDashboard() {
             <Card className="border-border shadow-sm transition-all active:scale-[0.98]">
               <CardContent className="flex items-center gap-3 p-4">
                 <div className={cn(
-                  'flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl',
-                  attRec ? 'bg-green-100' : 'bg-amber-50',
+                  'flex h-10 w-10 shrink-0 items-center justify-center rounded-xl',
+                  primaryAtt && !isOnBreak ? 'bg-green-100' : 'bg-amber-50',
                 )}>
-                  <CalendarDays className={cn('h-5 w-5', attRec ? 'text-green-600' : 'text-amber-600')} />
+                  <CalendarDays className={cn('h-5 w-5', primaryAtt && !isOnBreak ? 'text-green-600' : 'text-amber-600')} />
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-semibold text-foreground">Attendance</p>
                   <p className="mt-0.5 text-xs text-muted-foreground">
                     {loading
                       ? 'Loading…'
-                      : attRec
-                      ? `${attCfg?.label} · ${attRec.checkOutTime ? 'Shift complete' : 'Check-out when done'}`
-                      : 'Tap to check in for your shift'}
+                      : isOnBreak
+                        ? 'Currently on break'
+                        : primaryAtt
+                          ? `${attCfg?.label} · ${primaryAtt.checkOutTime ? 'Shift complete' : 'Check-out when done'}`
+                          : attSlots.length > 0
+                            ? 'Tap to check in for your shift'
+                            : 'No shift scheduled today'}
                   </p>
                 </div>
-                {!attRec && !loading && (
-                  <Badge className="flex-shrink-0 bg-amber-100 text-amber-700 hover:bg-amber-100 text-[10px]">
+                {!primaryAtt && !loading && attSlots.length > 0 && (
+                  <Badge className="shrink-0 bg-amber-100 text-amber-700 hover:bg-amber-100 text-[10px]">
                     Action needed
                   </Badge>
                 )}
-                <ChevronRight className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
               </CardContent>
             </Card>
           </Link>
@@ -255,7 +298,7 @@ export default function EmployeeDashboard() {
           <Link href="/employee/profile">
             <Card className="border-border shadow-sm transition-all active:scale-[0.98]">
               <CardContent className="flex items-center gap-3 p-4">
-                <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-secondary">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-secondary">
                   <UserCircle className="h-5 w-5 text-muted-foreground" />
                 </div>
                 <div className="min-w-0 flex-1">
@@ -264,7 +307,7 @@ export default function EmployeeDashboard() {
                     View schedule &amp; account info
                   </p>
                 </div>
-                <ChevronRight className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
               </CardContent>
             </Card>
           </Link>

@@ -6,14 +6,16 @@ import { db }                        from '@/lib/db';
 import {
   schedules, shifts,
   storeOpeningTasks, setoranTasks, cekBinTasks,
-  productCheckTasks, briefingTasks, 
+  productCheckTasks, briefingTasks,
   edcReconciliationTasks, eodZReportTasks,
   openStatementTasks, groomingTasks,
-  itemDroppingTasks,
+  itemDroppingTasks, itemDroppingEntries,
 } from '@/lib/db/schema';
-import { eq, and, gte, lte, desc } from 'drizzle-orm';
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+import { eq, and, gte, lte, desc, inArray } from 'drizzle-orm';
+import { getOrCreateSetoranForSchedule }      from '@/lib/db/utils/setoran';
+import { getOrCreateStoreOpeningForSchedule } from '@/lib/db/utils/store-opening';
+import { getOrCreateItemDroppingForSchedule } from '@/lib/db/utils/item-dropping';
+import { getOrCreateGroomingForSchedule }     from '@/lib/db/utils/grooming';
 
 function startOfDay(d: Date): Date { const r = new Date(d); r.setHours(0,  0,  0,   0); return r; }
 function endOfDay  (d: Date): Date { const r = new Date(d); r.setHours(23, 59, 59, 999); return r; }
@@ -27,7 +29,6 @@ function toIso(d: Date | null | undefined): string | null {
   return d ? d.toISOString() : null;
 }
 
-// Valid shift codes — full_day means employee covers both task sets
 type ShiftCode = 'morning' | 'evening' | 'full_day';
 
 let _shiftCodeCache: Record<number, string> | null = null;
@@ -37,8 +38,6 @@ async function getShiftCodeMap(): Promise<Record<number, string>> {
   _shiftCodeCache = Object.fromEntries(rows.map(r => [r.id, r.code]));
   return _shiftCodeCache!;
 }
-
-// ─── GET ──────────────────────────────────────────────────────────────────────
 
 export async function GET(request: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -54,7 +53,6 @@ export async function GET(request: NextRequest) {
   const dayStart   = startOfDay(targetDate);
   const dayEnd     = endOfDay(targetDate);
 
-  // ── 1. Find the employee's schedule(s) for today ───────────────────────────
   const todaySchedules = await db
     .select({ id: schedules.id, shiftId: schedules.shiftId, storeId: schedules.storeId })
     .from(schedules)
@@ -74,43 +72,70 @@ export async function GET(request: NextRequest) {
   const scheduleIds = todaySchedules.map(s => s.id);
   const storeIds    = [...new Set(todaySchedules.map(s => s.storeId))];
 
-  // Collect all unique shift codes for this employee today
   const shiftCodesRaw = [...new Set(todaySchedules.map(s => shiftCodeMap[s.shiftId] ?? ''))]
     .filter(Boolean) as ShiftCode[];
 
-  // full_day means employee handles both morning AND evening tasks
   const hasMorningTasks = shiftCodesRaw.some(c => c === 'morning'  || c === 'full_day');
   const hasEveningTasks = shiftCodesRaw.some(c => c === 'evening'  || c === 'full_day');
 
-  // Primary shift shown in the UI header
   const primaryShift: ShiftCode | null = shiftCodesRaw[0] ?? null;
 
   const inStore = (storeId: number) => storeIds.includes(storeId);
 
-  // ── 2. Fetch tasks in parallel ─────────────────────────────────────────────
   const [
-  openingRows,
-  setoranRows,
-  cekBinRows,
-  productCheckRows,      
-  itemDroppingRows,      
-  edcReconciliationRows, 
-  briefingRows,
-  eodZReportRows,
-  openStatementRows,
-  groomingRows,
-] = await Promise.all([
+    openingRows,
+    setoranRows,
+    cekBinRows,
+    productCheckRows,
+    itemDroppingRows,
+    itemDroppingEntryRows,
+    edcReconciliationRows,
+    briefingRows,
+    eodZReportRows,
+    openStatementRows,
+    groomingRows,
+  ] = await Promise.all([
 
     hasMorningTasks
-      ? db.select().from(storeOpeningTasks)
-          .where(and(gte(storeOpeningTasks.date, dayStart), lte(storeOpeningTasks.date, dayEnd)))
-          .orderBy(desc(storeOpeningTasks.date))
+      ? (async () => {
+          const morningSchedules = todaySchedules.filter(s => {
+            const code = shiftCodeMap[s.shiftId];
+            return code === 'morning' || code === 'full_day';
+          });
+          await Promise.all(
+            morningSchedules.map(s =>
+              getOrCreateStoreOpeningForSchedule(s.id, userId, s.storeId, targetDate),
+            ),
+          );
+          return db
+            .select()
+            .from(storeOpeningTasks)
+            .where(and(
+              inArray(storeOpeningTasks.storeId, storeIds),
+              gte(storeOpeningTasks.date, dayStart),
+              lte(storeOpeningTasks.date, dayEnd),
+            ))
+            .orderBy(desc(storeOpeningTasks.date));
+        })()
       : Promise.resolve([]),
 
     hasMorningTasks
-      ? db.select().from(setoranTasks)
-          .where(and(gte(setoranTasks.date, dayStart), lte(setoranTasks.date, dayEnd)))
-          .orderBy(desc(setoranTasks.date))
+      ? (async () => {
+          const morningSchedules = todaySchedules.filter(s => {
+            const code = shiftCodeMap[s.shiftId];
+            return code === 'morning' || code === 'full_day';
+          });
+          await Promise.all(morningSchedules.map(s => getOrCreateSetoranForSchedule(s.id)));
+          return db
+            .select()
+            .from(setoranTasks)
+            .where(and(
+              inArray(setoranTasks.storeId, storeIds),
+              gte(setoranTasks.date, dayStart),
+              lte(setoranTasks.date, dayEnd),
+            ))
+            .orderBy(desc(setoranTasks.date));
+        })()
       : Promise.resolve([]),
 
     hasMorningTasks
@@ -119,21 +144,46 @@ export async function GET(request: NextRequest) {
           .orderBy(desc(cekBinTasks.date))
       : Promise.resolve([]),
 
-    // ← ADD: productCheckTasks query
     hasMorningTasks
       ? db.select().from(productCheckTasks)
           .where(and(gte(productCheckTasks.date, dayStart), lte(productCheckTasks.date, dayEnd)))
           .orderBy(desc(productCheckTasks.date))
       : Promise.resolve([]),
 
-    // ← ADD: itemDroppingTasks query
-    hasMorningTasks
-      ? db.select().from(itemDroppingTasks)
-          .where(and(gte(itemDroppingTasks.date, dayStart), lte(itemDroppingTasks.date, dayEnd)))
-          .orderBy(desc(itemDroppingTasks.date))
-      : Promise.resolve([]),
+    (async () => {
+      await Promise.all(
+        todaySchedules.map(s =>
+          getOrCreateItemDroppingForSchedule(s.id, userId, s.storeId, s.shiftId, targetDate),
+        ),
+      );
+      return db
+        .select()
+        .from(itemDroppingTasks)
+        .where(and(
+          inArray(itemDroppingTasks.storeId, storeIds),
+          gte(itemDroppingTasks.date, dayStart),
+          lte(itemDroppingTasks.date, dayEnd),
+        ))
+        .orderBy(desc(itemDroppingTasks.date));
+    })(),
 
-    // Evening tasks
+    (async () => {
+      const taskIds = await db
+        .select({ id: itemDroppingTasks.id })
+        .from(itemDroppingTasks)
+        .where(and(
+          inArray(itemDroppingTasks.storeId, storeIds),
+          gte(itemDroppingTasks.date, dayStart),
+          lte(itemDroppingTasks.date, dayEnd),
+        ));
+      if (!taskIds.length) return [];
+      return db
+        .select()
+        .from(itemDroppingEntries)
+        .where(inArray(itemDroppingEntries.taskId, taskIds.map(r => r.id)))
+        .orderBy(itemDroppingEntries.dropTime);
+    })(),
+
     hasEveningTasks
       ? db.select().from(edcReconciliationTasks)
           .where(and(
@@ -161,25 +211,34 @@ export async function GET(request: NextRequest) {
           .orderBy(desc(openStatementTasks.date))
       : Promise.resolve([]),
 
-    // Both shifts - personal
-    scheduleIds.length
-      ? db.select().from(groomingTasks)
-          .where(and(
-            gte(groomingTasks.date, dayStart),
-            lte(groomingTasks.date, dayEnd),
-            eq(groomingTasks.userId, userId),
-          ))
-          .orderBy(desc(groomingTasks.date))
-      : Promise.resolve([]),
+    (async () => {
+      await Promise.all(
+        todaySchedules.map(s =>
+          getOrCreateGroomingForSchedule(s.id, userId, s.storeId, s.shiftId, targetDate),
+        ),
+      );
+      return db
+        .select()
+        .from(groomingTasks)
+        .where(and(
+          gte(groomingTasks.date, dayStart),
+          lte(groomingTasks.date, dayEnd),
+          eq(groomingTasks.userId, userId),
+        ))
+        .orderBy(desc(groomingTasks.date));
+    })(),
   ]);
 
-  // ── 3. Shape into typed task items ────────────────────────────────────────
-  // Task rows store the logical shift shiftId (morning or evening) on them,
-  // even for full_day employees. We resolve that back to a display shift code.
+  const entriesByTaskId = new Map<number, typeof itemDroppingEntryRows>();
+  for (const entry of itemDroppingEntryRows) {
+    const bucket = entriesByTaskId.get(entry.taskId) ?? [];
+    bucket.push(entry);
+    entriesByTaskId.set(entry.taskId, bucket);
+  }
 
   const tasks = [
-    // ── Morning tasks ─────────────────────────────────────────────────────────
-     ...openingRows.filter(r => inStore(r.storeId)).map(t => ({
+    // ── Store Opening ──────────────────────────────────────────────────────
+    ...openingRows.filter(r => inStore(r.storeId)).map(t => ({
       type:  'store_opening' as const,
       shift: (shiftCodeMap[t.shiftId] ?? 'morning') as ShiftCode,
       data: {
@@ -187,10 +246,12 @@ export async function GET(request: NextRequest) {
         storeId: String(t.storeId), shift: 'morning' as const, date: t.date.toISOString(),
         loginPos: t.loginPos, checkAbsenSunfish: t.checkAbsenSunfish,
         tarikSohSales: t.tarikSohSales, fiveR: t.fiveR,
-        fiveRPhotos: parsePhotos(t.fiveRPhotos),
-        cekPromo: t.cekPromo,
-        cekPromoStorefrontPhotos: parsePhotos(t.cekPromoStorefrontPhotos),
-        cekPromoDeskPhotos:       parsePhotos(t.cekPromoDeskPhotos),
+        // Per-area 5R photos
+        fiveRAreaKasirPhotos:  parsePhotos(t.fiveRAreaKasirPhotos),
+        fiveRAreaDepanPhotos:  parsePhotos(t.fiveRAreaDepanPhotos),
+        fiveRAreaKananPhotos:  parsePhotos(t.fiveRAreaKananPhotos),
+        fiveRAreaKiriPhotos:   parsePhotos(t.fiveRAreaKiriPhotos),
+        fiveRAreaGudangPhotos: parsePhotos(t.fiveRAreaGudangPhotos),
         cekLamp: t.cekLamp, cekSoundSystem: t.cekSoundSystem,
         storeFrontPhotos: parsePhotos(t.storeFrontPhotos),
         cashDrawerPhotos: parsePhotos(t.cashDrawerPhotos),
@@ -199,20 +260,23 @@ export async function GET(request: NextRequest) {
       },
     })),
 
+    // ── Setoran ───────────────────────────────────────────────────────────
     ...setoranRows.filter(r => inStore(r.storeId)).map(t => ({
       type: 'setoran' as const,
       shift: (shiftCodeMap[t.shiftId] ?? 'morning') as ShiftCode,
       data: {
         id: String(t.id), scheduleId: String(t.scheduleId), userId: t.userId,
         storeId: String(t.storeId), shift: 'morning' as const, date: t.date.toISOString(),
-        amount: t.amount,
-        linkSetoran: t.linkSetoran,
-        resiPhoto:   t.resiPhoto,
+        amount:      t.amount, linkSetoran: t.linkSetoran, resiPhoto: t.resiPhoto,
+        expectedAmount: t.expectedAmount, carriedDeficit: t.carriedDeficit,
+        carriedDeficitFetchedAt: toIso(t.carriedDeficitFetchedAt),
+        unpaidAmount: t.unpaidAmount,
         status: t.status, notes: t.notes,
         completedAt: toIso(t.completedAt), verifiedBy: t.verifiedBy, verifiedAt: toIso(t.verifiedAt),
       },
     })),
 
+    // ── Cek Bin ───────────────────────────────────────────────────────────
     ...cekBinRows.filter(r => inStore(r.storeId)).map(t => ({
       type: 'cek_bin' as const,
       shift: (shiftCodeMap[t.shiftId] ?? 'morning') as ShiftCode,
@@ -224,6 +288,7 @@ export async function GET(request: NextRequest) {
       },
     })),
 
+    // ── Product Check ─────────────────────────────────────────────────────
     ...productCheckRows.filter(r => inStore(r.storeId)).map(t => ({
       type: 'product_check' as const,
       shift: (shiftCodeMap[t.shiftId] ?? 'morning') as ShiftCode,
@@ -237,31 +302,29 @@ export async function GET(request: NextRequest) {
       },
     })),
 
-    // ── Item Dropping (renamed from receiving, now discrepancy-capable) ───────
-    ...itemDroppingRows.filter(r => inStore(r.storeId)).map(t => ({
-      type: 'item_dropping' as const,
-      shift: (shiftCodeMap[t.shiftId] ?? 'morning') as ShiftCode,
-      data: {
-        id: String(t.id), scheduleId: String(t.scheduleId), userId: t.userId,
-        storeId: String(t.storeId), shift: 'morning' as const, date: t.date.toISOString(),
-        // Carry-forward chain
-        parentTaskId: t.parentTaskId,
-        // Drop-off data
-        hasDropping:      t.hasDropping,
-        dropTime:         toIso(t.dropTime),
-        droppingPhotos:   parsePhotos(t.droppingPhotos),
-        // Receipt confirmation
-        isReceived:       t.isReceived,
-        receiveTime:      toIso(t.receiveTime),
-        receivePhotos:    parsePhotos(t.receivePhotos),
-        receivedByUserId: t.receivedByUserId,
-        // Lifecycle
-        status: t.status, notes: t.notes,
-        completedAt: toIso(t.completedAt), verifiedBy: t.verifiedBy, verifiedAt: toIso(t.verifiedAt),
-      },
-    })),
+    // ── Item Dropping ─────────────────────────────────────────────────────
+    ...itemDroppingRows.filter(r => inStore(r.storeId)).map(t => {
+      const shift = (shiftCodeMap[t.shiftId] ?? 'morning') as ShiftCode;
+      const entries = (entriesByTaskId.get(t.id) ?? []).map(e => ({
+        id: String(e.id), taskId: String(e.taskId), userId: e.userId,
+        storeId: String(e.storeId), toNumber: e.toNumber,
+        dropTime: toIso(e.dropTime),
+        droppingPhotos: parsePhotos(e.droppingPhotos),
+        notes: e.notes, createdAt: toIso(e.createdAt),
+      }));
+      return {
+        type: 'item_dropping' as const, shift,
+        data: {
+          id: String(t.id), scheduleId: String(t.scheduleId), userId: t.userId,
+          storeId: String(t.storeId), shift, date: t.date.toISOString(),
+          hasDropping: t.hasDropping, entries,
+          status: t.status, notes: t.notes,
+          completedAt: toIso(t.completedAt), verifiedBy: t.verifiedBy, verifiedAt: toIso(t.verifiedAt),
+        },
+      };
+    }),
 
-    // ── Evening tasks ─────────────────────────────────────────────────────────
+    // ── Briefing ──────────────────────────────────────────────────────────
     ...briefingRows.filter(r => inStore(r.storeId)).map(t => ({
       type: 'briefing' as const,
       shift: (shiftCodeMap[t.shiftId] ?? 'evening') as ShiftCode,
@@ -274,28 +337,28 @@ export async function GET(request: NextRequest) {
       },
     })),
 
+    // ── EOD Z-Report ──────────────────────────────────────────────────────
     ...eodZReportRows.filter(r => inStore(r.storeId)).map(t => ({
       type: 'eod_z_report' as const,
       shift: (shiftCodeMap[t.shiftId] ?? 'evening') as ShiftCode,
       data: {
         id: String(t.id), scheduleId: String(t.scheduleId), userId: t.userId,
         storeId: String(t.storeId), shift: 'evening' as const, date: t.date.toISOString(),
-        totalNominal: t.totalNominal,
-        zReportPhotos: parsePhotos(t.zReportPhotos),
+        totalNominal: t.totalNominal, zReportPhotos: parsePhotos(t.zReportPhotos),
         status: t.status, notes: t.notes,
         completedAt: toIso(t.completedAt), verifiedBy: t.verifiedBy, verifiedAt: toIso(t.verifiedAt),
       },
     })),
 
+    // ── EDC Reconciliation ────────────────────────────────────────────────
     ...edcReconciliationRows.filter(r => inStore(r.storeId)).map(t => ({
       type: 'edc_reconciliation' as const,
       shift: (shiftCodeMap[t.shiftId] ?? 'evening') as ShiftCode,
       data: {
         id: String(t.id), scheduleId: String(t.scheduleId), userId: t.userId,
         storeId: String(t.storeId), shift: 'evening' as const, date: t.date.toISOString(),
-        parentTaskId: t.parentTaskId,
-        isBalanced:   t.isBalanced,
-        expectedFetchedAt:          toIso(t.expectedFetchedAt),
+        parentTaskId: t.parentTaskId, isBalanced: t.isBalanced,
+        expectedFetchedAt: toIso(t.expectedFetchedAt),
         discrepancyStartedAt:       toIso(t.discrepancyStartedAt),
         discrepancyResolvedAt:      toIso(t.discrepancyResolvedAt),
         discrepancyDurationMinutes: t.discrepancyDurationMinutes,
@@ -304,17 +367,16 @@ export async function GET(request: NextRequest) {
       },
     })),
 
+    // ── Open Statement ────────────────────────────────────────────────────
     ...openStatementRows.filter(r => inStore(r.storeId)).map(t => ({
       type: 'open_statement' as const,
       shift: (shiftCodeMap[t.shiftId] ?? 'evening') as ShiftCode,
       data: {
         id: String(t.id), scheduleId: String(t.scheduleId), userId: t.userId,
         storeId: String(t.storeId), shift: 'evening' as const, date: t.date.toISOString(),
-        parentTaskId: t.parentTaskId,
-        expectedAmount:    t.expectedAmount,
-        expectedFetchedAt: toIso(t.expectedFetchedAt),
-        actualAmount:      t.actualAmount,
-        isBalanced:        t.isBalanced,
+        parentTaskId: t.parentTaskId, expectedAmount: t.expectedAmount,
+        expectedFetchedAt: toIso(t.expectedFetchedAt), actualAmount: t.actualAmount,
+        isBalanced: t.isBalanced,
         discrepancyStartedAt:       toIso(t.discrepancyStartedAt),
         discrepancyResolvedAt:      toIso(t.discrepancyResolvedAt),
         discrepancyDurationMinutes: t.discrepancyDurationMinutes,
@@ -323,19 +385,17 @@ export async function GET(request: NextRequest) {
       },
     })),
 
-    // ── Personal — both shifts ─────────────────────────────────────────────
+    // ── Grooming ──────────────────────────────────────────────────────────
     ...groomingRows.map(t => {
       const code = (shiftCodeMap[t.shiftId] ?? 'morning') as ShiftCode;
       return {
-        type:  'grooming' as const,
-        shift: code,
+        type: 'grooming' as const, shift: code,
         data: {
           id: String(t.id), scheduleId: String(t.scheduleId), userId: t.userId,
           storeId: String(t.storeId), shift: code, date: t.date.toISOString(),
           uniformActive: t.uniformActive, hairActive: t.hairActive,
-          nailsActive: t.nailsActive, accessoriesActive: t.accessoriesActive,
-          shoeActive: t.shoeActive, uniformComplete: t.uniformComplete,
-          hairGroomed: t.hairGroomed, nailsClean: t.nailsClean,
+          nailsActive: t.nailsActive, accessoriesActive: t.accessoriesActive, shoeActive: t.shoeActive,
+          uniformComplete: t.uniformComplete, hairGroomed: t.hairGroomed, nailsClean: t.nailsClean,
           accessoriesCompliant: t.accessoriesCompliant, shoeCompliant: t.shoeCompliant,
           selfiePhotos: parsePhotos(t.selfiePhotos),
           status: t.status, notes: t.notes,
@@ -346,7 +406,7 @@ export async function GET(request: NextRequest) {
   ];
 
   const STATUS_ORDER: Record<string, number> = {
-    pending: 0, in_progress: 1, completed: 2, verified: 3, rejected: 4,
+    pending: 0, in_progress: 1, discrepancy: 2, completed: 3, verified: 4, rejected: 5,
   };
   const SHIFT_ORDER: Record<string, number> = { morning: 0, full_day: 1, evening: 2 };
 
@@ -358,8 +418,6 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({ success: true, tasks, shift: primaryShift, scheduleIds });
 }
-
-// ─── PATCH — advance task to in_progress ──────────────────────────────────────
 
 export async function PATCH(request: NextRequest) {
   const session = await getServerSession(authOptions);

@@ -1,3 +1,4 @@
+// app/employee/tasks/page.tsx
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
@@ -32,7 +33,7 @@ interface TaskBase {
   scheduleId:  string;
   userId:      string;
   storeId:     string;
-  shift:       'morning' | 'evening';
+  shift:       'morning' | 'evening' | 'full_day';
   date:        string;
   status:      TaskStatus;
   notes:       string | null;
@@ -43,12 +44,19 @@ interface TaskBase {
 
 export interface StoreOpeningData extends TaskBase {
   loginPos: boolean; checkAbsenSunfish: boolean; tarikSohSales: boolean;
-  fiveR: boolean; cekLamp: boolean; cekSoundSystem: boolean;
+  fiveR: boolean; cekBanner: boolean; cekLamp: boolean; cekSoundSystem: boolean;
   storeFrontPhotos: string[]; cashDrawerPhotos: string[];
-  cekPromoStorefrontPhotos: string[]; cekPromoDeskPhotos: string[];
+  fiveRPhotos: string[];
+  cekBannerStorefrontPhotos: string[]; cekBannerDeskPhotos: string[];
 }
 export interface SetoranData extends TaskBase {
-  amount: string | null; linkSetoran: string | null; resiPhoto: string | null;
+  amount:      string | null;
+  linkSetoran: string | null;
+  resiPhoto:   string | null;
+  expectedAmount:          string | null;
+  carriedDeficit:          string | null;
+  carriedDeficitFetchedAt: string | null;
+  unpaidAmount:            string | null;
 }
 export interface CekBinData       extends TaskBase {}
 export interface ProductCheckData extends TaskBase {
@@ -56,14 +64,12 @@ export interface ProductCheckData extends TaskBase {
   shoeFiller: boolean; labelIndo: boolean; barcode: boolean;
 }
 export interface ItemDroppingData extends TaskBase {
-  parentTaskId:     number | null;
   hasDropping:      boolean;
-  dropTime:         string | null;
-  droppingPhotos:   string[];
-  isReceived:       boolean;
-  receiveTime:      string | null;
-  receivePhotos:    string[];           // ← added
-  receivedByUserId: string | null;
+  entries:          Array<{
+    id: string; taskId: string; userId: string; storeId: string;
+    toNumber: string; dropTime: string | null; droppingPhotos: string[];
+    notes: string | null; createdAt: string | null;
+  }>;
 }
 export interface BriefingData extends TaskBase {
   done: boolean; isBalanced: boolean | null; parentTaskId: number | null;
@@ -100,26 +106,67 @@ export interface GroomingData extends TaskBase {
 }
 
 export type TaskItem =
-  | { type: 'store_opening';      shift: 'morning';             data: StoreOpeningData       }
-  | { type: 'setoran';            shift: 'morning';             data: SetoranData             }
-  | { type: 'cek_bin';            shift: 'morning';             data: CekBinData              }
-  | { type: 'product_check';      shift: 'morning';             data: ProductCheckData        }
-  | { type: 'item_dropping';      shift: 'morning';             data: ItemDroppingData        }
-  | { type: 'briefing';           shift: 'evening';             data: BriefingData            }
-  | { type: 'edc_reconciliation'; shift: 'evening';             data: EdcReconciliationData   }
-  | { type: 'eod_z_report';       shift: 'evening';             data: EodZReportData          }
-  | { type: 'open_statement';     shift: 'evening';             data: OpenStatementData       }
-  | { type: 'grooming';           shift: 'morning' | 'evening'; data: GroomingData            };
+  | { type: 'store_opening';      shift: 'morning' | 'evening' | 'full_day'; data: StoreOpeningData       }
+  | { type: 'setoran';            shift: 'morning' | 'evening' | 'full_day'; data: SetoranData             }
+  | { type: 'cek_bin';            shift: 'morning' | 'evening' | 'full_day'; data: CekBinData              }
+  | { type: 'product_check';      shift: 'morning' | 'evening' | 'full_day'; data: ProductCheckData        }
+  | { type: 'item_dropping';      shift: 'morning' | 'evening' | 'full_day'; data: ItemDroppingData        }
+  | { type: 'briefing';           shift: 'morning' | 'evening' | 'full_day'; data: BriefingData            }
+  | { type: 'edc_reconciliation'; shift: 'morning' | 'evening' | 'full_day'; data: EdcReconciliationData   }
+  | { type: 'eod_z_report';       shift: 'morning' | 'evening' | 'full_day'; data: EodZReportData          }
+  | { type: 'open_statement';     shift: 'morning' | 'evening' | 'full_day'; data: OpenStatementData       }
+  | { type: 'grooming';           shift: 'morning' | 'evening' | 'full_day'; data: GroomingData            };
 
 type Filter = 'all' | 'pending' | 'in_progress' | 'completed';
 
-const STATUS_CFG: Record<TaskStatus, { Icon: React.ElementType; label: string; cls: string }> = {
-  pending:     { Icon: Circle,        label: 'Pending',        cls: 'bg-amber-50   text-amber-600  hover:bg-amber-50'   },
-  in_progress: { Icon: Clock,         label: 'In Progress',    cls: 'bg-primary/10 text-primary    hover:bg-primary/10' },
-  completed:   { Icon: CheckCircle2,  label: 'Done',           cls: 'bg-green-50   text-green-700  hover:bg-green-50'   },
-  discrepancy: { Icon: AlertTriangle, label: 'Discrepancy',    cls: 'bg-amber-100  text-amber-700  hover:bg-amber-100'  },
-  verified:    { Icon: CheckCircle2,  label: 'Verified',       cls: 'bg-green-100  text-green-800  hover:bg-green-100'  },
-  rejected:    { Icon: XCircle,       label: 'Rejected',       cls: 'bg-red-50     text-red-600    hover:bg-red-50'     },
+// Status config: each status gets a dedicated accent color that runs the full
+// height of the card as a left border. Badge colors match.
+const STATUS_CFG: Record<TaskStatus, {
+  Icon: React.ElementType;
+  label: string;
+  badgeCls: string;
+  accentCls: string;  // full-height left bar
+}> = {
+  discrepancy: {
+    Icon: AlertTriangle, label: 'Discrepancy',
+    badgeCls: 'bg-amber-100 text-amber-700 hover:bg-amber-100',
+    accentCls: 'bg-amber-400',
+  },
+  in_progress: {
+    Icon: Clock, label: 'Active',
+    badgeCls: 'bg-primary/10 text-primary hover:bg-primary/10',
+    accentCls: 'bg-primary',
+  },
+  pending: {
+    Icon: Circle, label: 'Pending',
+    badgeCls: 'bg-amber-50 text-amber-600 hover:bg-amber-50',
+    accentCls: 'bg-amber-200',
+  },
+  completed: {
+    Icon: CheckCircle2, label: 'Done',
+    badgeCls: 'bg-green-50 text-green-700 hover:bg-green-50',
+    accentCls: 'bg-green-500',
+  },
+  verified: {
+    Icon: CheckCircle2, label: 'Verified',
+    badgeCls: 'bg-green-100 text-green-800 hover:bg-green-100',
+    accentCls: 'bg-green-600',
+  },
+  rejected: {
+    Icon: XCircle, label: 'Rejected',
+    badgeCls: 'bg-red-50 text-red-600 hover:bg-red-50',
+    accentCls: 'bg-red-500',
+  },
+};
+
+// Urgency sort order — discrepancy first, terminal states last.
+const STATUS_PRIORITY: Record<TaskStatus, number> = {
+  discrepancy: 0,
+  in_progress: 1,
+  pending:     2,
+  rejected:    3,
+  completed:   4,
+  verified:    5,
 };
 
 const TASK_META: Record<TaskType, { title: string; description: string; Icon: React.ElementType; hasPhoto: boolean }> = {
@@ -155,12 +202,14 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: 'completed',   label: 'Done'    },
 ];
 
+// ─── Page ─────────────────────────────────────────────────────────────────────
+
 export default function EmployeeTasksPage() {
   const { status: sessionStatus } = useSession();
   const router = useRouter();
 
   const [tasks,   setTasks]   = useState<TaskItem[]>([]);
-  const [shift,   setShift]   = useState<'morning' | 'evening' | null>(null);
+  const [shift,   setShift]   = useState<'morning' | 'evening' | 'full_day' | null>(null);
   const [loading, setLoading] = useState(true);
   const [filter,  setFilter]  = useState<Filter>('all');
 
@@ -168,7 +217,7 @@ export default function EmployeeTasksPage() {
     setLoading(true);
     try {
       const res  = await fetch('/api/employee/tasks');
-      const data = await res.json() as { tasks: TaskItem[]; shift: 'morning' | 'evening' | null };
+      const data = await res.json() as { tasks: TaskItem[]; shift: 'morning' | 'evening' | 'full_day' | null };
       setTasks(data.tasks ?? []);
       setShift(data.shift ?? null);
     } catch (e) {
@@ -203,26 +252,33 @@ export default function EmployeeTasksPage() {
     router.push(`/employee/tasks/${TASK_ROUTES[item.type]}/${id}`);
   }, [router]);
 
-  // discrepancy counts under 'in_progress' tab so carry-forward tasks aren't missed
   const countFilter = (f: Filter) => {
     if (f === 'all')         return tasks.length;
     if (f === 'in_progress') return tasks.filter(t => t.data.status === 'in_progress' || t.data.status === 'discrepancy').length;
     return tasks.filter(t => t.data.status === f).length;
   };
 
-  const filtered = tasks.filter(t => {
-    if (filter === 'all')         return true;
-    if (filter === 'in_progress') return t.data.status === 'in_progress' || t.data.status === 'discrepancy';
-    return t.data.status === filter;
-  });
+  // Filter + sort by urgency (discrepancy → in_progress → pending → rejected → completed → verified)
+  const filtered = tasks
+    .filter(t => {
+      if (filter === 'all')         return true;
+      if (filter === 'in_progress') return t.data.status === 'in_progress' || t.data.status === 'discrepancy';
+      return t.data.status === filter;
+    })
+    .sort((a, b) => {
+      const pa = STATUS_PRIORITY[a.data.status] ?? 9;
+      const pb = STATUS_PRIORITY[b.data.status] ?? 9;
+      return pa - pb;
+    });
 
-  const morningTasks = filtered.filter(t => t.shift === 'morning');
-  const eveningTasks = filtered.filter(t => t.shift === 'evening');
+  const morningTasks = filtered.filter(t => t.shift === 'morning' || t.shift === 'full_day');
+  const eveningTasks = filtered.filter(t => t.shift === 'evening' || t.shift === 'full_day');
   const notScheduled = !loading && tasks.length === 0;
 
   return (
     <div className="flex flex-col min-h-screen bg-background">
 
+      {/* ── Header ────────────────────────────────────────────────────────── */}
       <div className="relative overflow-hidden bg-primary px-6 pb-6 pt-12">
         <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-white/5" />
         <div className="relative">
@@ -233,22 +289,29 @@ export default function EmployeeTasksPage() {
           </p>
           {shift && (
             <div className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1">
-              {shift === 'morning' ? <Sun className="h-3.5 w-3.5 text-yellow-300" /> : <Moon className="h-3.5 w-3.5 text-blue-300" />}
+              {shift === 'morning'
+                ? <Sun className="h-3.5 w-3.5 text-yellow-300" />
+                : shift === 'evening'
+                  ? <Moon className="h-3.5 w-3.5 text-blue-300" />
+                  : <Sun className="h-3.5 w-3.5 text-orange-300" />}
               <span className="text-xs font-semibold capitalize text-primary-foreground">
-                {shift === 'morning' ? 'Morning Shift' : 'Evening Shift'}
+                {shift === 'morning' ? 'Morning Shift' : shift === 'evening' ? 'Evening Shift' : 'Full Day Shift'}
               </span>
             </div>
           )}
         </div>
       </div>
 
+      {/* ── Filter bar ───────────────────────────────────────────────────── */}
       <div className="sticky top-0 z-10 border-b border-border bg-card px-4 py-2.5">
         <div className="flex gap-1.5 overflow-x-auto pb-0.5 scrollbar-none">
           {FILTERS.map(({ key, label }) => (
             <button key={key} onClick={() => setFilter(key)}
               className={cn(
                 'flex flex-shrink-0 items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-semibold uppercase tracking-wide transition-all',
-                filter === key ? 'bg-primary text-primary-foreground shadow-sm' : 'bg-secondary text-muted-foreground hover:bg-border',
+                filter === key
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'bg-secondary text-muted-foreground hover:bg-border',
               )}>
               {label}
               <span className={cn(
@@ -262,10 +325,11 @@ export default function EmployeeTasksPage() {
         </div>
       </div>
 
+      {/* ── Task sections ────────────────────────────────────────────────── */}
       <div className="flex-1 p-4 space-y-6">
         {loading ? (
           <div className="space-y-2.5">
-            {Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-20 animate-pulse rounded-xl bg-secondary" />)}
+            {Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-24 animate-pulse rounded-xl bg-secondary" />)}
           </div>
         ) : notScheduled ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">
@@ -283,10 +347,11 @@ export default function EmployeeTasksPage() {
           <>
             {morningTasks.length > 0 && (
               <section>
-                <div className="mb-2 flex items-center gap-2">
+                <div className="mb-2.5 flex items-center gap-2">
                   <Sun className="h-4 w-4 text-amber-500" />
                   <h2 className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Morning Shift</h2>
                   <div className="h-px flex-1 bg-border" />
+                  <span className="text-[10px] font-semibold text-muted-foreground">{morningTasks.length}</span>
                 </div>
                 <div className="space-y-2.5">
                   {morningTasks.map(item => <TaskCard key={`${item.type}-${item.data.id}`} item={item} onOpen={openTask} />)}
@@ -295,10 +360,11 @@ export default function EmployeeTasksPage() {
             )}
             {eveningTasks.length > 0 && (
               <section>
-                <div className="mb-2 flex items-center gap-2">
+                <div className="mb-2.5 flex items-center gap-2">
                   <Moon className="h-4 w-4 text-blue-500" />
                   <h2 className="text-xs font-bold uppercase tracking-widest text-muted-foreground">Evening Shift</h2>
                   <div className="h-px flex-1 bg-border" />
+                  <span className="text-[10px] font-semibold text-muted-foreground">{eveningTasks.length}</span>
                 </div>
                 <div className="space-y-2.5">
                   {eveningTasks.map(item => <TaskCard key={`${item.type}-${item.data.id}`} item={item} onOpen={openTask} />)}
@@ -324,83 +390,152 @@ function TaskCard({ item, onOpen }: { item: TaskItem; onOpen: (item: TaskItem) =
   const isRejected    = status === 'rejected';
   const isDiscrepancy = status === 'discrepancy';
 
+  // ── Contextual descriptor overrides ────────────────────────────────────────
   const showCarryForward =
     isDiscrepancy && (
-      // item_dropping: only when hasDropping=true (actual delivery pending receipt)
-      (item.type === 'item_dropping' && (item.data as ItemDroppingData).hasDropping) ||
-      // edc_reconciliation: always show carry-forward when discrepancy
-      item.type === 'edc_reconciliation' ||
-      // open_statement: always show carry-forward when discrepancy
+      item.type === 'item_dropping'       ||
+      item.type === 'edc_reconciliation'  ||
       item.type === 'open_statement'
     );
 
   const carryForwardDescription: Partial<Record<TaskType, string>> = {
-    item_dropping:      'Item belum diterima dari hari sebelumnya — tap untuk konfirmasi & upload foto.',
-    edc_reconciliation: 'Rekonsiliasi EDC belum selesai dari shift sebelumnya — tap untuk lanjutkan.',
+    edc_reconciliation: 'Rekonsiliasi EDC belum selesai — tap untuk lanjutkan.',
     open_statement:     'Selisih open statement belum terselesaikan — tap untuk lanjutkan.',
   };
+
+  const itemDroppingLabel = (() => {
+    if (item.type !== 'item_dropping' || !isDiscrepancy) return null;
+    const d = item.data as ItemDroppingData;
+    const firstEntry = d.entries?.[0];
+    if (!d.hasDropping || !firstEntry?.dropTime) return 'Item belum diterima — tap untuk konfirmasi.';
+
+    const diffMin = Math.max(0, Math.floor((Date.now() - new Date(firstEntry.dropTime).getTime()) / 60_000));
+    const hours   = Math.floor(diffMin / 60);
+    const minutes = diffMin % 60;
+
+    const elapsed =
+      hours >= 24 ? `${Math.floor(hours / 24)}h ${hours % 24}j lalu` :
+      hours >  0  ? `${hours}j ${minutes}m lalu` :
+                    `${minutes}m lalu`;
+
+    return `Belum diterima · Drop ${elapsed}`;
+  })();
+
+  const setoranDeficitLabel = (() => {
+    if (item.type !== 'setoran') return null;
+    const d = item.data as SetoranData;
+
+    if ((d.status === 'completed' || d.status === 'verified') && d.unpaidAmount) {
+      const unpaid = Number(d.unpaidAmount);
+      if (unpaid > 0) return `Masih kurang: Rp ${unpaid.toLocaleString('id-ID')} — muncul di setoran besok`;
+    }
+    if ((d.status === 'pending' || d.status === 'in_progress') && d.carriedDeficit) {
+      const carried = Number(d.carriedDeficit);
+      if (carried > 0) return `Kurang dari kemarin: Rp ${carried.toLocaleString('id-ID')}`;
+    }
+    return null;
+  })();
+
+  const hasSetoranDeficit = item.type === 'setoran' && !!setoranDeficitLabel;
+  const needsAttention    = isDiscrepancy || hasSetoranDeficit || isRejected;
+
+  const description =
+    itemDroppingLabel
+      ? itemDroppingLabel
+      : setoranDeficitLabel
+        ? setoranDeficitLabel
+        : showCarryForward
+          ? (carryForwardDescription[item.type] ?? meta.description)
+          : meta.description;
 
   return (
     <Card
       className={cn(
-        'overflow-hidden border-border shadow-sm transition-all cursor-pointer active:scale-[0.99]',
-        isTerminal    && 'opacity-75',
-        isRejected    && 'border-red-200',
-        isDiscrepancy && 'border-amber-300',
+        'relative overflow-hidden border-border shadow-sm transition-all cursor-pointer active:scale-[0.99]',
+        isTerminal       && 'opacity-75',
+        isRejected       && 'border-red-200',
+        isDiscrepancy    && 'border-amber-300',
+        hasSetoranDeficit && !isDiscrepancy && 'border-amber-300',
       )}
       onClick={() => onOpen(item)}
     >
-      {status === 'in_progress'  && <div className="h-0.5 w-full animate-pulse bg-primary" />}
-      {status === 'completed'    && <div className="h-0.5 w-full bg-green-500" />}
-      {status === 'verified'     && <div className="h-0.5 w-full bg-green-600" />}
-      {status === 'rejected'     && <div className="h-0.5 w-full bg-red-500" />}
-      {status === 'discrepancy'  && <div className="h-0.5 w-full animate-pulse bg-amber-400" />}
+      {/* Full-height status accent bar (replaces the old 0.5 top stripe) */}
+      <div className={cn(
+        'absolute left-0 top-0 bottom-0 w-1',
+        cfg.accentCls,
+        status === 'in_progress' && 'animate-pulse',
+        isDiscrepancy            && 'animate-pulse',
+      )} />
 
-      <CardContent className="p-4">
+      <CardContent className="py-3.5 pl-4 pr-3">
         <div className="flex items-start gap-3">
+          {/* Task icon */}
           <div className={cn(
-            'mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl',
-            isDiscrepancy ? 'bg-amber-100' : 'bg-secondary',
+            'mt-0.5 flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl',
+            needsAttention ? 'bg-amber-100' : 'bg-secondary',
           )}>
-            <TaskIcon className={cn('h-4 w-4', isDiscrepancy ? 'text-amber-700' : 'text-foreground')} strokeWidth={2} />
+            <TaskIcon
+              className={cn('h-[18px] w-[18px]', needsAttention ? 'text-amber-700' : 'text-foreground')}
+              strokeWidth={2}
+            />
           </div>
 
+          {/* Main content */}
           <div className="min-w-0 flex-1">
+            {/* Title row */}
             <div className="flex items-start justify-between gap-2">
-              <p className="text-sm font-semibold leading-tight text-foreground">{meta.title}</p>
+              <p className="text-[13px] font-semibold leading-tight text-foreground">
+                {meta.title}
+              </p>
               {isTerminal && item.data.completedAt ? (
                 <span className="flex-shrink-0 text-[10px] font-medium text-green-600">
                   ✓ {new Date(item.data.completedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
                 </span>
               ) : (
-                <ChevronRight className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+                <ChevronRight className="mt-0.5 h-4 w-4 flex-shrink-0 text-muted-foreground" />
               )}
             </div>
 
-            <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">
-              {showCarryForward
-                ? (carryForwardDescription[item.type] ?? meta.description)
-                : meta.description}
+            {/* Description */}
+            <p className={cn(
+              'mt-1 line-clamp-2 text-[11.5px] leading-snug',
+              needsAttention ? 'text-amber-700 font-medium' : 'text-muted-foreground',
+            )}>
+              {description}
             </p>
 
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              <Badge className={cn('h-4 gap-1 px-1.5 text-[10px] font-semibold', cfg.cls)}>
-                <StatusIcon className="h-2.5 w-2.5" />{cfg.label}
+            {/* Badges */}
+            <div className="mt-2 flex flex-wrap items-center gap-1">
+              <Badge className={cn('h-[18px] gap-1 px-1.5 text-[10px] font-semibold', cfg.badgeCls)}>
+                <StatusIcon className="h-2.5 w-2.5" />
+                {cfg.label}
               </Badge>
-              {meta.hasPhoto && (
-                <Badge variant="outline" className="h-4 gap-1 px-1.5 text-[10px]">
-                  <Camera className="h-2.5 w-2.5" />Photo
+
+              {item.type === 'grooming' ? (
+                <Badge variant="outline" className="h-[18px] px-1.5 text-[10px] text-violet-600 border-violet-200">
+                  Personal
+                </Badge>
+              ) : (
+                <Badge variant="outline" className="h-[18px] px-1.5 text-[10px]">
+                  Shared
                 </Badge>
               )}
-              <Badge variant="secondary" className="h-4 px-1.5 text-[10px] capitalize">{item.shift}</Badge>
-              {item.type === 'grooming' ? (
-                <Badge variant="outline" className="h-4 px-1.5 text-[10px] text-violet-600 border-violet-200">Personal</Badge>
-              ) : (
-                <Badge variant="outline" className="h-4 px-1.5 text-[10px]">Shared</Badge>
+
+              {meta.hasPhoto && (
+                <Badge variant="outline" className="h-[18px] gap-1 px-1.5 text-[10px]">
+                  <Camera className="h-2.5 w-2.5" />
+                </Badge>
               )}
+
               {showCarryForward && (
-                <Badge className="h-4 gap-1 px-1.5 text-[10px] font-semibold bg-amber-500 text-white hover:bg-amber-500">
+                <Badge className="h-[18px] gap-1 px-1.5 text-[10px] font-semibold bg-amber-500 text-white hover:bg-amber-500">
                   <AlertTriangle className="h-2.5 w-2.5" />Carry-forward
+                </Badge>
+              )}
+
+              {hasSetoranDeficit && !isDiscrepancy && (
+                <Badge className="h-[18px] gap-1 px-1.5 text-[10px] font-semibold bg-amber-500 text-white hover:bg-amber-500">
+                  <AlertTriangle className="h-2.5 w-2.5" />Kekurangan
                 </Badge>
               )}
             </div>

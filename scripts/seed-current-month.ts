@@ -36,7 +36,7 @@ const YEAR_MONTH = `${YEAR}-${String(MONTH + 1).padStart(2, '0')}`;
 const PATTERNS: Record<string, string[]> = {
   pic_1:   ['OFF', 'E',   'E',   'E',   'E',   'E',   'OFF'],
   pic_2:   ['OFF', 'E',   'L',   'E',   'L',   'E',   'L'  ],
-  so:      ['OFF', 'OFF', 'L',   'L',   'L',   'L',   'L'  ],
+  sa:      ['OFF', 'OFF', 'L',   'L',   'L',   'L',   'L'  ],
   default: ['OFF', 'OFF', 'OFF', 'OFF', 'OFF', 'OFF', 'OFF'],
 };
 

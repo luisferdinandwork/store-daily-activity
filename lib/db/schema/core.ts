@@ -129,6 +129,12 @@ export const breakSessions = pgTable('break_sessions', {
   breakType:    breakTypeEnum('break_type').notNull(),
   breakOutTime: timestamp('break_out_time').notNull(),
   returnTime:   timestamp('return_time'),
+  // ─── Cash tracking ───────────────────────────────────────────────────────
+  // cashOut: amount the employee takes with them when leaving for break (required)
+  // cashIn:  amount the employee brings back when returning from break (required on return)
+  cashOut:      decimal('cash_out', { precision: 12, scale: 2 }).notNull(),
+  cashIn:       decimal('cash_in',  { precision: 12, scale: 2 }),
+  // ─────────────────────────────────────────────────────────────────────────
   createdAt:    timestamp('created_at').defaultNow().notNull(),
   updatedAt:    timestamp('updated_at').defaultNow().notNull(),
 });

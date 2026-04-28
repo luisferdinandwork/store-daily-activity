@@ -1,9 +1,4 @@
 // app/api/employee/tasks/store-opening/route.ts
-// ─────────────────────────────────────────────────────────────────────────────
-// Dedicated endpoint for the Store Opening task.
-//   POST  → final submit (runs check-in + geofence + checklist/photo validation)
-//   PATCH → auto-save partial patch (status: pending → in_progress)
-// ─────────────────────────────────────────────────────────────────────────────
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession }          from 'next-auth';
@@ -63,23 +58,25 @@ export async function POST(req: NextRequest) {
   try {
     const result = await submitStoreOpening({
       scheduleId,
-      userId:                   session.user.id as string,
+      userId:            session.user.id as string,
       storeId,
       geo,
-      skipGeo:                  effectiveSkipGeo,
-      loginPos:                 Boolean(body.loginPos),
-      checkAbsenSunfish:        Boolean(body.checkAbsenSunfish),
-      tarikSohSales:            Boolean(body.tarikSohSales),
-      fiveR:                    Boolean(body.fiveR),
-      fiveRPhotos:              strArr(body.fiveRPhotos),
-      cekPromo:                 Boolean(body.cekPromo),
-      cekPromoStorefrontPhotos: strArr(body.cekPromoStorefrontPhotos),
-      cekPromoDeskPhotos:       strArr(body.cekPromoDeskPhotos),
-      cekLamp:                  Boolean(body.cekLamp),
-      cekSoundSystem:           Boolean(body.cekSoundSystem),
-      storeFrontPhotos:         strArr(body.storeFrontPhotos),
-      cashierDeskPhotos:        strArr(body.cashierDeskPhotos),
-      notes:                    typeof body.notes === 'string' ? body.notes : undefined,
+      skipGeo:           effectiveSkipGeo,
+      loginPos:          Boolean(body.loginPos),
+      checkAbsenSunfish: Boolean(body.checkAbsenSunfish),
+      tarikSohSales:     Boolean(body.tarikSohSales),
+      fiveR:             Boolean(body.fiveR),
+      // Per-area 5R photos
+      fiveRAreaKasirPhotos:  strArr(body.fiveRAreaKasirPhotos),
+      fiveRAreaDepanPhotos:  strArr(body.fiveRAreaDepanPhotos),
+      fiveRAreaKananPhotos:  strArr(body.fiveRAreaKananPhotos),
+      fiveRAreaKiriPhotos:   strArr(body.fiveRAreaKiriPhotos),
+      fiveRAreaGudangPhotos: strArr(body.fiveRAreaGudangPhotos),
+      cekLamp:           Boolean(body.cekLamp),
+      cekSoundSystem:    Boolean(body.cekSoundSystem),
+      storeFrontPhotos:  strArr(body.storeFrontPhotos),
+      cashierDeskPhotos: strArr(body.cashierDeskPhotos),
+      notes:             typeof body.notes === 'string' ? body.notes : undefined,
     });
     return NextResponse.json(result, { status: result.success ? 200 : 400 });
   } catch (err) {
@@ -100,8 +97,8 @@ export async function PATCH(req: NextRequest) {
   try { body = await req.json(); }
   catch { return NextResponse.json({ success: false, error: 'Invalid JSON body' }, { status: 400 }); }
 
-  let scheduleId: number;
-  try { scheduleId = toInt(body.scheduleId, 'scheduleId'); }
+  let storeId: number;
+  try { storeId = toInt(body.storeId, 'storeId'); }
   catch (e) { return NextResponse.json({ success: false, error: String(e) }, { status: 400 }); }
 
   const patch: StoreOpeningAutoSavePatch = {};
@@ -110,19 +107,20 @@ export async function PATCH(req: NextRequest) {
   if ('checkAbsenSunfish' in body) patch.checkAbsenSunfish = Boolean(body.checkAbsenSunfish);
   if ('tarikSohSales'     in body) patch.tarikSohSales     = Boolean(body.tarikSohSales);
   if ('fiveR'             in body) patch.fiveR             = Boolean(body.fiveR);
-  if ('cekPromo'          in body) patch.cekPromo          = Boolean(body.cekPromo);
   if ('cekLamp'           in body) patch.cekLamp           = Boolean(body.cekLamp);
   if ('cekSoundSystem'    in body) patch.cekSoundSystem    = Boolean(body.cekSoundSystem);
   if ('notes'             in body) patch.notes             = typeof body.notes === 'string' ? body.notes : undefined;
 
-  if ('storeFrontPhotos'         in body) patch.storeFrontPhotos         = strArr(body.storeFrontPhotos);
-  if ('cashierDeskPhotos'        in body) patch.cashierDeskPhotos        = strArr(body.cashierDeskPhotos);
-  if ('fiveRPhotos'              in body) patch.fiveRPhotos              = strArr(body.fiveRPhotos);
-  if ('cekPromoStorefrontPhotos' in body) patch.cekPromoStorefrontPhotos = strArr(body.cekPromoStorefrontPhotos);
-  if ('cekPromoDeskPhotos'       in body) patch.cekPromoDeskPhotos       = strArr(body.cekPromoDeskPhotos);
+  if ('storeFrontPhotos'        in body) patch.storeFrontPhotos        = strArr(body.storeFrontPhotos);
+  if ('cashierDeskPhotos'       in body) patch.cashierDeskPhotos       = strArr(body.cashierDeskPhotos);
+  if ('fiveRAreaKasirPhotos'    in body) patch.fiveRAreaKasirPhotos    = strArr(body.fiveRAreaKasirPhotos);
+  if ('fiveRAreaDepanPhotos'    in body) patch.fiveRAreaDepanPhotos    = strArr(body.fiveRAreaDepanPhotos);
+  if ('fiveRAreaKananPhotos'    in body) patch.fiveRAreaKananPhotos    = strArr(body.fiveRAreaKananPhotos);
+  if ('fiveRAreaKiriPhotos'     in body) patch.fiveRAreaKiriPhotos     = strArr(body.fiveRAreaKiriPhotos);
+  if ('fiveRAreaGudangPhotos'   in body) patch.fiveRAreaGudangPhotos   = strArr(body.fiveRAreaGudangPhotos);
 
   try {
-    const result = await autoSaveStoreOpening(scheduleId, patch);
+    const result = await autoSaveStoreOpening(storeId, patch);
     return NextResponse.json(result, { status: result.success ? 200 : 400 });
   } catch (err) {
     console.error('[PATCH /api/employee/tasks/store-opening]', err);

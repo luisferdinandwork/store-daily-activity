@@ -1,16 +1,4 @@
 // app/api/employee/tasks/upload/route.ts
-// ─────────────────────────────────────────────────────────────────────────────
-// Changes vs your current upload route:
-//   • REMOVE 'edc_summary' and 'edc_settlement' photo types
-//     (EDC Reconciliation has no photos anymore)
-//   • KEEP 'z_report' (EOD Z-Report still has receipt photos)
-//   • KEEP 'open_statement' (unused by the new Open Statement task, but
-//     removing it would break anything that still references it — leave it
-//     until you're sure nothing else uses it)
-//
-// Below is the full updated file with the cleanups applied. `open_statement`
-// is kept commented-in for now; delete the line if you want it gone.
-// ─────────────────────────────────────────────────────────────────────────────
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
@@ -23,36 +11,47 @@ const ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'im
 const MAX_SIZE_MB  = 10;
 
 type PhotoType =
-  | 'store_front' | 'cashier_desk' | 'five_r'
-  | 'promo_storefront' | 'promo_desk'
-  | 'selfie'
+  | 'store_front'
+  | 'cashier_desk'
+  // 5R per-area types (replaces the old single 'five_r' type)
+  | 'five_r_kasir'
+  | 'five_r_depan'
+  | 'five_r_kanan'
+  | 'five_r_kiri'
+  | 'five_r_gudang'
+  | 'grooming_selfie'
   | 'resi'
-  | 'item_dropping' | 'item_dropping_receive'
-  | 'z_report';  // EDC photos removed — reconciliation is data-only now
+  | 'item_dropping'
+  | 'item_dropping_receive'
+  | 'z_report';
 
 const PHOTO_FOLDER: Record<PhotoType, string> = {
   store_front:            'store-opening/store-front',
   cashier_desk:           'store-opening/cashier-desk',
-  five_r:                 'store-opening/five-r',
-  promo_storefront:       'store-opening/promo-storefront',
-  promo_desk:             'store-opening/promo-desk',
+  five_r_kasir:           'store-opening/five-r/kasir',
+  five_r_depan:           'store-opening/five-r/depan',
+  five_r_kanan:           'store-opening/five-r/kanan',
+  five_r_kiri:            'store-opening/five-r/kiri',
+  five_r_gudang:          'store-opening/five-r/gudang',
   resi:                   'setoran/resi',
   item_dropping:          'item-dropping/drop',
   item_dropping_receive:  'item-dropping/receive',
-  selfie:                 'grooming/selfie',
+  grooming_selfie:        'grooming/selfie',
   z_report:               'eod/z-report',
 };
 
 const PHOTO_LIMITS: Record<PhotoType, number> = {
   store_front:            3,
   cashier_desk:           2,
-  five_r:                 5,
-  promo_storefront:       1,
-  promo_desk:             1,
+  five_r_kasir:           2,
+  five_r_depan:           2,
+  five_r_kanan:           2,
+  five_r_kiri:            2,
+  five_r_gudang:          2,
   resi:                   1,
   item_dropping:          5,
   item_dropping_receive:  5,
-  selfie:                 2,
+  grooming_selfie:        3,
   z_report:               3,
 };
 

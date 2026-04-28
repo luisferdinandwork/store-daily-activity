@@ -1,14 +1,5 @@
 'use client';
 // app/employee/tasks/store-opening/[id]/page.tsx
-// ─────────────────────────────────────────────────────────────────────────────
-// Dedicated detail page for the Store Opening task.
-//
-// Checklist ↔ photo coupling:
-//   • loginPos  → opens modal for min 1 cashier desk photo
-//   • fiveR     → opens modal for min 3 photos
-//   • cekPromo  → opens MULTI-bucket modal for 1 storefront + 1 desk promo
-//   • storeFront→ inline PhotoUploader section below the checklist (min 1)
-// ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
@@ -48,25 +39,42 @@ interface StoreOpeningData {
   checkAbsenSunfish: boolean;
   tarikSohSales:     boolean;
   fiveR:             boolean;
-  cekPromo:          boolean;
+  // Per-area 5R photos
+  fiveRAreaKasirPhotos:  string[];
+  fiveRAreaDepanPhotos:  string[];
+  fiveRAreaKananPhotos:  string[];
+  fiveRAreaKiriPhotos:   string[];
+  fiveRAreaGudangPhotos: string[];
   cekLamp:           boolean;
   cekSoundSystem:    boolean;
   storeFrontPhotos:  string[];
-  /** Cashier desk photos live in the cash_drawer_photos column (repurposed). */
   cashDrawerPhotos:  string[];
-  fiveRPhotos:       string[];
-  cekPromoStorefrontPhotos: string[];
-  cekPromoDeskPhotos:       string[];
 }
 
-// ─── Photo rules (mirrors server) ─────────────────────────────────────────────
+// ─── 5R area config ───────────────────────────────────────────────────────────
+
+const FIVE_R_AREAS = [
+  { key: 'kasir',  label: 'Area Kasir',  photoType: 'five_r_kasir'  },
+  { key: 'depan',  label: 'Depan Toko',  photoType: 'five_r_depan'  },
+  { key: 'kanan',  label: 'Sisi Kanan',  photoType: 'five_r_kanan'  },
+  { key: 'kiri',   label: 'Sisi Kiri',   photoType: 'five_r_kiri'   },
+  { key: 'gudang', label: 'Gudang',      photoType: 'five_r_gudang' },
+] as const;
+
+type FiveRAreaKey = typeof FIVE_R_AREAS[number]['key'];
+
+type FiveRPhotos = Record<FiveRAreaKey, string[]>;
+
+const EMPTY_FIVE_R: FiveRPhotos = {
+  kasir: [], depan: [], kanan: [], kiri: [], gudang: [],
+};
+
+// ─── Photo rules ──────────────────────────────────────────────────────────────
 
 const PHOTO_RULES = {
-  storeFront:         { min: 1, max: 3 },
-  cashierDesk:        { min: 1, max: 2 },
-  fiveR:              { min: 3, max: 5 },
-  cekPromoStorefront: { min: 1, max: 1 },
-  cekPromoDesk:       { min: 1, max: 1 },
+  storeFront:  { min: 1, max: 3 },
+  cashierDesk: { min: 1, max: 2 },
+  fiveRArea:   { min: 1, max: 2 },   // per area
 } as const;
 
 // ─── Geo hook ─────────────────────────────────────────────────────────────────
@@ -164,7 +172,7 @@ function AccessBanner({
         <LogIn className="mt-0.5 h-5 w-5 flex-shrink-0 text-red-600" />
         <div className="flex-1 min-w-0">
           <p className="text-sm font-bold text-red-700">Belum absen masuk</p>
-          <p className="mt-0.5 text-xs text-red-600">Kamu harus melakukan absensi masuk terlebih dahulu sebelum dapat mengerjakan task.</p>
+          <p className="mt-0.5 text-xs text-red-600">Kamu harus melakukan absensi masuk terlebih dahulu.</p>
         </div>
         <button onClick={onRefreshAccess} className="flex-shrink-0 flex items-center gap-1 rounded-lg bg-red-100 px-2.5 py-1.5 text-[11px] font-semibold text-red-700 hover:bg-red-200 transition-colors">
           <RefreshCw className="h-3 w-3" />Cek ulang
@@ -179,7 +187,7 @@ function AccessBanner({
         <div className="flex-1 min-w-0">
           <p className="text-sm font-bold text-orange-700">Di luar area toko</p>
           <p className="mt-0.5 text-xs text-orange-600">
-            Kamu berada {accessStatus.distanceM}m dari toko (batas: {accessStatus.radiusM}m). Pastikan kamu berada di dalam toko.
+            Kamu berada {accessStatus.distanceM}m dari toko (batas: {accessStatus.radiusM}m).
           </p>
         </div>
         <button onClick={onRefreshGeo} className="flex-shrink-0 flex items-center gap-1 rounded-lg bg-orange-100 px-2.5 py-1.5 text-[11px] font-semibold text-orange-700 hover:bg-orange-200 transition-colors">
@@ -195,7 +203,7 @@ function AccessBanner({
         <div className="flex-1 min-w-0">
           <p className="text-xs font-semibold text-amber-800">Lokasi tidak terdeteksi</p>
           <p className="mt-0.5 text-xs text-amber-600">
-            {geoError ?? 'Izin lokasi belum diberikan.'} Task dapat dilanjutkan, namun lokasi tidak akan direkam.
+            {geoError ?? 'Izin lokasi belum diberikan.'} Task dapat dilanjutkan tanpa rekaman lokasi.
           </p>
         </div>
         <button onClick={onRefreshGeo} className="flex-shrink-0 flex items-center gap-1 rounded-lg bg-amber-100 px-2.5 py-1.5 text-[11px] font-semibold text-amber-700 hover:bg-amber-200 transition-colors">
@@ -234,7 +242,7 @@ function SaveIndicator({ status, lastSaved }: {
   );
 }
 
-// ─── Inline PhotoUploader (for Store Front — no checklist) ───────────────────
+// ─── Inline PhotoUploader ─────────────────────────────────────────────────────
 
 function PhotoUploader({
   label, photoType, photos, onChange, min, max, disabled, hint,
@@ -296,7 +304,6 @@ function PhotoUploader({
               <button
                 onClick={() => onChange(photos.filter((_, j) => j !== i))}
                 className="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-white"
-                aria-label={`Hapus foto ${i + 1}`}
               >
                 <X className="h-3 w-3" />
               </button>
@@ -331,7 +338,88 @@ function PhotoUploader({
   );
 }
 
-// ─── Simple (non-photo) checklist item ───────────────────────────────────────
+// ─── 5R Multi-area uploader ───────────────────────────────────────────────────
+
+function FiveRUploader({
+  photos,
+  onChange,
+  disabled,
+}: {
+  photos:   FiveRPhotos;
+  onChange: (key: FiveRAreaKey, urls: string[]) => void;
+  disabled?: boolean;
+}) {
+  const allSatisfied = FIVE_R_AREAS.every(a => (photos[a.key]?.length ?? 0) >= PHOTO_RULES.fiveRArea.min);
+  const totalUploaded = FIVE_R_AREAS.reduce((sum, a) => sum + (photos[a.key]?.length ?? 0), 0);
+  const totalRequired = FIVE_R_AREAS.length * PHOTO_RULES.fiveRArea.min;
+
+  return (
+    <div className="space-y-4">
+      {/* Progress summary */}
+      <div className={cn(
+        'flex items-center justify-between rounded-xl border px-3.5 py-2.5',
+        allSatisfied ? 'border-green-200 bg-green-50' : 'border-amber-200 bg-amber-50',
+      )}>
+        <p className={cn('text-xs font-semibold', allSatisfied ? 'text-green-700' : 'text-amber-700')}>
+          {allSatisfied ? 'Semua area terfoto ✓' : `${totalUploaded} dari ${totalRequired} foto wajib`}
+        </p>
+        <span className={cn(
+          'rounded-full px-2 py-0.5 text-[10px] font-bold',
+          allSatisfied ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700',
+        )}>
+          {totalUploaded}/{FIVE_R_AREAS.length * PHOTO_RULES.fiveRArea.max} foto
+        </span>
+      </div>
+
+      {/* One uploader per area */}
+      {FIVE_R_AREAS.map(area => {
+        const areaPhotos  = photos[area.key] ?? [];
+        const satisfied   = areaPhotos.length >= PHOTO_RULES.fiveRArea.min;
+        return (
+          <div key={area.key} className={cn(
+            'rounded-xl border-2 p-3.5 space-y-2.5 transition-colors',
+            satisfied ? 'border-green-200 bg-green-50/40' : 'border-border bg-card',
+          )}>
+            <div className="flex items-center gap-2">
+              <div className={cn(
+                'flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border-2 transition-colors',
+                satisfied ? 'border-green-500 bg-green-500' : 'border-border',
+              )}>
+                {satisfied && <Check className="h-3 w-3 text-white" strokeWidth={3} />}
+              </div>
+              <p className={cn('text-sm font-semibold', satisfied ? 'text-green-800' : 'text-foreground')}>
+                {area.label}
+              </p>
+              <span className={cn(
+                'ml-auto flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold',
+                areaPhotos.length === 0
+                  ? 'bg-secondary text-muted-foreground'
+                  : satisfied
+                    ? 'bg-green-100 text-green-700'
+                    : 'bg-amber-100 text-amber-700',
+              )}>
+                <Camera className="h-2.5 w-2.5" />
+                {areaPhotos.length}/{PHOTO_RULES.fiveRArea.max}
+              </span>
+            </div>
+
+            <PhotoUploader
+              label=""
+              photoType={area.photoType}
+              photos={areaPhotos}
+              min={PHOTO_RULES.fiveRArea.min}
+              max={PHOTO_RULES.fiveRArea.max}
+              disabled={disabled}
+              onChange={urls => onChange(area.key, urls)}
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Simple checklist item ────────────────────────────────────────────────────
 
 function SimpleCheckItem({
   label, checked, onChange, disabled,
@@ -358,7 +446,7 @@ function SimpleCheckItem({
   );
 }
 
-// ─── Photo-linked checklist item (opens modal on tap) ────────────────────────
+// ─── Photo-linked checklist item ──────────────────────────────────────────────
 
 function PhotoCheckItem({
   label, description, checked, photoCount, requiredCount, onClick, disabled,
@@ -366,9 +454,7 @@ function PhotoCheckItem({
   label:         string;
   description:   string;
   checked:       boolean;
-  /** Total photos already attached across all required buckets for this item. */
   photoCount:    number;
-  /** Minimum total photos needed across all buckets to satisfy this item. */
   requiredCount: number;
   onClick:       () => void;
   disabled?:     boolean;
@@ -389,7 +475,6 @@ function PhotoCheckItem({
       )}>
         {checked && !needsMore && <Check className="h-3 w-3 text-primary-foreground" strokeWidth={3} />}
       </div>
-
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
           <span className={cn('text-sm font-medium', checked && !needsMore ? 'text-foreground' : 'text-muted-foreground')}>
@@ -441,10 +526,6 @@ function LockedOverlay({ accessStatus }: { accessStatus: AccessStatus | null }) 
   );
 }
 
-// ─── Modal identity ──────────────────────────────────────────────────────────
-
-type PhotoModalKey = 'loginPos' | 'fiveR' | 'cekPromo';
-
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function StoreOpeningDetailPage() {
@@ -459,22 +540,20 @@ export default function StoreOpeningDetailPage() {
   const [submitting,  setSubmitting]  = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  // Active modal (null = closed)
-  const [activeModal, setActiveModal] = useState<PhotoModalKey | null>(null);
+  // Active modal — only loginPos remains (fiveR no longer uses a modal)
+  const [loginPosModalOpen, setLoginPosModalOpen] = useState(false);
+  const [fiveRModalOpen, setFiveRModalOpen] = useState(false);
 
   // Form state
   const [loginPos,          setLoginPos]          = useState(false);
   const [checkAbsenSunfish, setCheckAbsenSunfish] = useState(false);
   const [tarikSohSales,     setTarikSohSales]     = useState(false);
   const [fiveR,             setFiveR]             = useState(false);
-  const [cekPromo,          setCekPromo]          = useState(false);
+  const [fiveRPhotos,       setFiveRPhotos]       = useState<FiveRPhotos>(EMPTY_FIVE_R);
   const [cekLamp,           setCekLamp]           = useState(false);
   const [cekSoundSystem,    setCekSoundSystem]    = useState(false);
   const [storeFrontPhotos,  setStoreFrontPhotos]  = useState<string[]>([]);
   const [cashierDeskPhotos, setCashierDeskPhotos] = useState<string[]>([]);
-  const [fiveRPhotos,       setFiveRPhotos]       = useState<string[]>([]);
-  const [promoStorefrontPhotos, setPromoStorefrontPhotos] = useState<string[]>([]);
-  const [promoDeskPhotos,       setPromoDeskPhotos]       = useState<string[]>([]);
   const [notes,             setNotes]             = useState('');
 
   // Load initial task state
@@ -492,14 +571,17 @@ export default function StoreOpeningDetailPage() {
         setCheckAbsenSunfish(d.checkAbsenSunfish);
         setTarikSohSales(d.tarikSohSales);
         setFiveR(d.fiveR);
-        setCekPromo(d.cekPromo);
+        setFiveRPhotos({
+          kasir:  d.fiveRAreaKasirPhotos  ?? [],
+          depan:  d.fiveRAreaDepanPhotos  ?? [],
+          kanan:  d.fiveRAreaKananPhotos  ?? [],
+          kiri:   d.fiveRAreaKiriPhotos   ?? [],
+          gudang: d.fiveRAreaGudangPhotos ?? [],
+        });
         setCekLamp(d.cekLamp);
         setCekSoundSystem(d.cekSoundSystem);
         setStoreFrontPhotos(d.storeFrontPhotos ?? []);
         setCashierDeskPhotos(d.cashDrawerPhotos ?? []);
-        setFiveRPhotos(d.fiveRPhotos ?? []);
-        setPromoStorefrontPhotos(d.cekPromoStorefrontPhotos ?? []);
-        setPromoDeskPhotos(d.cekPromoDeskPhotos ?? []);
         setNotes(d.notes ?? '');
       } else {
         setTaskData(null);
@@ -527,7 +609,7 @@ export default function StoreOpeningDetailPage() {
 
   const { status: saveStatus, lastSaved, error: saveError, save: autoSave } = useAutoSave({
     url:        '/api/employee/tasks/store-opening',
-    baseBody:   { scheduleId },
+    baseBody:   { scheduleId, storeId },
     debounceMs: 800,
   });
 
@@ -545,7 +627,63 @@ export default function StoreOpeningDetailPage() {
     setter(v); autoSave({ [field]: v });
   };
 
-  // ── Modal confirm/clear handlers ──────────────────────────────────────────
+  // ── 5R area photo handler ─────────────────────────────────────────────────
+  function confirmFiveR(results: Record<string, string[]>) {
+    const next: FiveRPhotos = {
+      kasir: results.kasir ?? [],
+      depan: results.depan ?? [],
+      kanan: results.kanan ?? [],
+      kiri: results.kiri ?? [],
+      gudang: results.gudang ?? [],
+    };
+
+    setFiveRPhotos(next);
+
+    const allDone = FIVE_R_AREAS.every(
+      a => (next[a.key]?.length ?? 0) >= PHOTO_RULES.fiveRArea.min,
+    );
+
+    setFiveR(allDone);
+
+    autoSave(
+      {
+        fiveRAreaKasirPhotos: next.kasir,
+        fiveRAreaDepanPhotos: next.depan,
+        fiveRAreaKananPhotos: next.kanan,
+        fiveRAreaKiriPhotos: next.kiri,
+        fiveRAreaGudangPhotos: next.gudang,
+        fiveR: allDone,
+      },
+      { immediate: true }
+    );
+  }
+
+  function clearFiveR() {
+    const empty = {
+      kasir: [],
+      depan: [],
+      kanan: [],
+      kiri: [],
+      gudang: [],
+    };
+
+    setFiveRPhotos(empty);
+    setFiveR(false);
+
+    autoSave(
+      {
+        fiveRAreaKasirPhotos: [],
+        fiveRAreaDepanPhotos: [],
+        fiveRAreaKananPhotos: [],
+        fiveRAreaKiriPhotos: [],
+        fiveRAreaGudangPhotos: [],
+        fiveR: false,
+      },
+      { immediate: true }
+    );
+  }
+
+  // ── Login POS modal ────────────────────────────────────────────────────────
   function confirmLoginPos(photos: string[]) {
     setCashierDeskPhotos(photos);
     setLoginPos(true);
@@ -557,54 +695,18 @@ export default function StoreOpeningDetailPage() {
     autoSave({ cashierDeskPhotos: [], loginPos: false }, { immediate: true });
   }
 
-  function confirmFiveR(photos: string[]) {
-    setFiveRPhotos(photos);
-    setFiveR(true);
-    autoSave({ fiveRPhotos: photos, fiveR: true }, { immediate: true });
-  }
-  function clearFiveR() {
-    setFiveRPhotos([]);
-    setFiveR(false);
-    autoSave({ fiveRPhotos: [], fiveR: false }, { immediate: true });
-  }
-
-  function confirmCekPromo(results: Record<string, string[]>) {
-    const sf   = results.storefront ?? [];
-    const desk = results.desk       ?? [];
-    setPromoStorefrontPhotos(sf);
-    setPromoDeskPhotos(desk);
-    setCekPromo(true);
-    autoSave({
-      cekPromoStorefrontPhotos: sf,
-      cekPromoDeskPhotos:       desk,
-      cekPromo:                 true,
-    }, { immediate: true });
-  }
-  function clearCekPromo() {
-    setPromoStorefrontPhotos([]);
-    setPromoDeskPhotos([]);
-    setCekPromo(false);
-    autoSave({
-      cekPromoStorefrontPhotos: [],
-      cekPromoDeskPhotos:       [],
-      cekPromo:                 false,
-    }, { immediate: true });
-  }
-
   // ── Submit gate ───────────────────────────────────────────────────────────
-  const cashierDeskSatisfied = cashierDeskPhotos.length    >= PHOTO_RULES.cashierDesk.min;
-  const storeFrontSatisfied  = storeFrontPhotos.length     >= PHOTO_RULES.storeFront.min;
-  const fiveRSatisfied       = fiveRPhotos.length          >= PHOTO_RULES.fiveR.min;
-  const promoSfSatisfied     = promoStorefrontPhotos.length >= PHOTO_RULES.cekPromoStorefront.min;
-  const promoDeskSatisfied   = promoDeskPhotos.length      >= PHOTO_RULES.cekPromoDesk.min;
-  const cekPromoSatisfied    = promoSfSatisfied && promoDeskSatisfied;
+  const cashierDeskSatisfied = cashierDeskPhotos.length >= PHOTO_RULES.cashierDesk.min;
+  const storeFrontSatisfied  = storeFrontPhotos.length  >= PHOTO_RULES.storeFront.min;
+  const fiveRAllAreasSatisfied = FIVE_R_AREAS.every(
+    a => (fiveRPhotos[a.key]?.length ?? 0) >= PHOTO_RULES.fiveRArea.min,
+  );
 
   const allSimpleChecked =
     checkAbsenSunfish && tarikSohSales && cekLamp && cekSoundSystem;
   const allLinkedChecked =
     loginPos && cashierDeskSatisfied &&
-    fiveR    && fiveRSatisfied &&
-    cekPromo && cekPromoSatisfied;
+    fiveR    && fiveRAllAreasSatisfied;
 
   const canSubmit = !locked && allSimpleChecked && allLinkedChecked && storeFrontSatisfied;
 
@@ -625,10 +727,12 @@ export default function StoreOpeningDetailPage() {
           scheduleId, storeId,
           geo: geo ?? null, skipGeo: geo === null,
           loginPos, checkAbsenSunfish, tarikSohSales,
-          fiveR, fiveRPhotos,
-          cekPromo,
-          cekPromoStorefrontPhotos: promoStorefrontPhotos,
-          cekPromoDeskPhotos:       promoDeskPhotos,
+          fiveR,
+          fiveRAreaKasirPhotos:  fiveRPhotos.kasir,
+          fiveRAreaDepanPhotos:  fiveRPhotos.depan,
+          fiveRAreaKananPhotos:  fiveRPhotos.kanan,
+          fiveRAreaKiriPhotos:   fiveRPhotos.kiri,
+          fiveRAreaGudangPhotos: fiveRPhotos.gudang,
           cekLamp, cekSoundSystem,
           storeFrontPhotos, cashierDeskPhotos,
           notes: notes || undefined,
@@ -658,14 +762,18 @@ export default function StoreOpeningDetailPage() {
     }
   }
 
-  // Reason text below submit button when disabled
+  // Hint below disabled submit button
   const submitHint = (() => {
     if (locked) return '';
-    if (!loginPos || !cashierDeskSatisfied) return `Lengkapi "Log-in POS" — upload min ${PHOTO_RULES.cashierDesk.min} foto meja kasir.`;
-    if (!fiveR || !fiveRSatisfied)           return `Lengkapi "5R" — upload min ${PHOTO_RULES.fiveR.min} foto.`;
-    if (!cekPromo || !cekPromoSatisfied)     return `Lengkapi "Cek Promo" — upload 1 foto promo depan toko + 1 foto promo meja kasir.`;
-    if (!allSimpleChecked)                   return 'Lengkapi semua checklist lain.';
-    if (!storeFrontSatisfied)                return `Upload min ${PHOTO_RULES.storeFront.min} foto tampak depan toko.`;
+    if (!loginPos || !cashierDeskSatisfied)
+      return `Lengkapi "Log-in POS" — upload min ${PHOTO_RULES.cashierDesk.min} foto meja kasir.`;
+    if (!fiveRAllAreasSatisfied) {
+      const missing = FIVE_R_AREAS.find(a => (fiveRPhotos[a.key]?.length ?? 0) < PHOTO_RULES.fiveRArea.min);
+      return missing ? `5R: upload min 1 foto untuk area "${missing.label}".` : '';
+    }
+    if (!allSimpleChecked) return 'Lengkapi semua checklist lain.';
+    if (!storeFrontSatisfied)
+      return `Upload min ${PHOTO_RULES.storeFront.min} foto tampak depan toko.`;
     return '';
   })();
 
@@ -680,7 +788,11 @@ export default function StoreOpeningDetailPage() {
         </button>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-bold text-foreground">Store Opening</p>
-          {taskData && <p className="text-[10px] capitalize text-muted-foreground">{taskData.shift} shift · {taskData.status.replace('_', ' ')}</p>}
+          {taskData && (
+            <p className="text-[10px] capitalize text-muted-foreground">
+              {taskData.shift} shift · {taskData.status.replace('_', ' ')}
+            </p>
+          )}
         </div>
 
         {!readonly && !loading && taskData && (
@@ -741,7 +853,9 @@ export default function StoreOpeningDetailPage() {
         {taskStatus === 'verified' && taskData?.verifiedAt && (
           <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3">
             <p className="text-xs font-semibold text-green-800">Task telah diverifikasi</p>
-            <p className="mt-0.5 text-xs text-green-600">{new Date(taskData.verifiedAt).toLocaleString('id-ID',{day:'numeric',month:'long',year:'numeric',hour:'2-digit',minute:'2-digit'})}</p>
+            <p className="mt-0.5 text-xs text-green-600">
+              {new Date(taskData.verifiedAt).toLocaleString('id-ID',{day:'numeric',month:'long',year:'numeric',hour:'2-digit',minute:'2-digit'})}
+            </p>
           </div>
         )}
 
@@ -758,15 +872,34 @@ export default function StoreOpeningDetailPage() {
           <div className="flex flex-col items-center py-20 text-center">
             <AlertCircle className="mb-3 h-8 w-8 text-muted-foreground/40" />
             <p className="text-sm font-semibold">Task tidak ditemukan</p>
-            <p className="mt-1 text-xs text-muted-foreground">Task mungkin sudah tidak tersedia.</p>
           </div>
         ) : (
           <div className="relative">
             <LockedOverlay accessStatus={accessStatus} />
 
             <div className="space-y-6">
+
+              {/* ── Store Front photos ────────────────────────────────────── */}
+              <Section title="Foto Tampak Depan Toko">
+                <PhotoUploader
+                  label="Store Front"
+                  photoType="store_front"
+                  photos={storeFrontPhotos}
+                  min={PHOTO_RULES.storeFront.min}
+                  max={PHOTO_RULES.storeFront.max}
+                  disabled={dis}
+                  hint="Foto tampak depan toko dengan 2 karyawan dari luar (toko belum dibuka)."
+                  onChange={urls => {
+                    setStoreFrontPhotos(urls);
+                    autoSave({ storeFrontPhotos: urls }, { immediate: true });
+                  }}
+                />
+              </Section>
+
+              {/* ── Checklist ─────────────────────────────────────────────── */}
               <Section title="Checklist Pembukaan">
                 <div className="space-y-2">
+
                   {/* Log-in POS — opens modal for cashier desk photos */}
                   <PhotoCheckItem
                     label="Log-in POS / Buka Komputer Kasir"
@@ -774,7 +907,7 @@ export default function StoreOpeningDetailPage() {
                     checked={loginPos}
                     photoCount={cashierDeskPhotos.length}
                     requiredCount={PHOTO_RULES.cashierDesk.min}
-                    onClick={() => setActiveModal('loginPos')}
+                    onClick={() => setLoginPosModalOpen(true)}
                     disabled={dis}
                   />
 
@@ -791,25 +924,13 @@ export default function StoreOpeningDetailPage() {
                     disabled={dis}
                   />
 
-                  {/* 5R — opens modal for 5R photos */}
                   <PhotoCheckItem
                     label="5R — Kebersihan Toko"
-                    description="Ketuk untuk upload foto 5R."
+                    description="Ketuk untuk upload foto 5 area toko."
                     checked={fiveR}
-                    photoCount={fiveRPhotos.length}
-                    requiredCount={PHOTO_RULES.fiveR.min}
-                    onClick={() => setActiveModal('fiveR')}
-                    disabled={dis}
-                  />
-
-                  {/* Cek Promo — opens multi-bucket modal */}
-                  <PhotoCheckItem
-                    label="Cek Promo"
-                    description="Ketuk untuk upload foto promo depan toko & meja kasir."
-                    checked={cekPromo}
-                    photoCount={promoStorefrontPhotos.length + promoDeskPhotos.length}
-                    requiredCount={PHOTO_RULES.cekPromoStorefront.min + PHOTO_RULES.cekPromoDesk.min}
-                    onClick={() => setActiveModal('cekPromo')}
+                    photoCount={FIVE_R_AREAS.reduce((sum, a) => sum + (fiveRPhotos[a.key]?.length ?? 0), 0)}
+                    requiredCount={FIVE_R_AREAS.length * PHOTO_RULES.fiveRArea.min}
+                    onClick={() => setFiveRModalOpen(true)}
                     disabled={dis}
                   />
 
@@ -828,23 +949,7 @@ export default function StoreOpeningDetailPage() {
                 </div>
               </Section>
 
-              {/* Store Front — inline uploader (not a checklist item) */}
-              <Section title="Foto Tampak Depan Toko">
-                <PhotoUploader
-                  label="Store Front"
-                  photoType="store_front"
-                  photos={storeFrontPhotos}
-                  min={PHOTO_RULES.storeFront.min}
-                  max={PHOTO_RULES.storeFront.max}
-                  disabled={dis}
-                  hint="Foto tampak depan toko dari luar (toko sudah dibuka)."
-                  onChange={urls => {
-                    setStoreFrontPhotos(urls);
-                    autoSave({ storeFrontPhotos: urls }, { immediate: true });
-                  }}
-                />
-              </Section>
-
+              {/* ── Notes ─────────────────────────────────────────────────── */}
               <Section title="Catatan (opsional)">
                 <textarea
                   value={notes}
@@ -879,12 +984,10 @@ export default function StoreOpeningDetailPage() {
         )}
       </div>
 
-      {/* ── Photo modals ─────────────────────────────────────────────────── */}
-
-      {/* Log-in POS — single bucket */}
+      {/* ── Login POS modal ───────────────────────────────────────────────── */}
       <ChecklistPhotoModal
-        open={activeModal === 'loginPos'}
-        onClose={() => setActiveModal(null)}
+        open={loginPosModalOpen}
+        onClose={() => setLoginPosModalOpen(false)}
         title="Log-in POS / Buka Komputer Kasir"
         description="Foto meja kasir sebagai bukti POS sudah aktif dan siap."
         photoType="cashier_desk"
@@ -896,51 +999,60 @@ export default function StoreOpeningDetailPage() {
         disabled={dis}
       />
 
-      {/* 5R — single bucket */}
+      {/* ── 5R modal ───────────────────────────────────────────────── */}
       <ChecklistPhotoModal
-        open={activeModal === 'fiveR'}
-        onClose={() => setActiveModal(null)}
+        open={fiveRModalOpen}
+        onClose={() => setFiveRModalOpen(false)}
         title="5R — Kebersihan Toko"
-        description="Foto area berbeda sebagai bukti 5R (ringkas, rapi, resik, rawat, rajin)."
-        photoType="five_r"
-        min={PHOTO_RULES.fiveR.min}
-        max={PHOTO_RULES.fiveR.max}
-        initialPhotos={fiveRPhotos}
-        onConfirm={confirmFiveR}
-        onClear={clearFiveR}
-        disabled={dis}
-      />
-
-      {/* Cek Promo — MULTI bucket (storefront promo + desk promo) */}
-      <ChecklistPhotoModal
-        open={activeModal === 'cekPromo'}
-        onClose={() => setActiveModal(null)}
-        title="Cek Promo"
-        description="Upload 1 foto promo di depan toko dan 1 foto promo di meja kasir."
+        description="Upload minimal 1 foto untuk setiap area toko."
         buckets={[
           {
-            key:           'storefront',
-            label:         'Promo di Depan Toko',
-            hint:          'Foto materi promo yang terpasang di area depan toko.',
-            photoType:     'promo_storefront',
-            min:           PHOTO_RULES.cekPromoStorefront.min,
-            max:           PHOTO_RULES.cekPromoStorefront.max,
-            initialPhotos: promoStorefrontPhotos,
+            key: 'kasir',
+            label: 'Area Kasir',
+            photoType: 'five_r_kasir',
+            min: PHOTO_RULES.fiveRArea.min,
+            max: PHOTO_RULES.fiveRArea.max,
+            initialPhotos: fiveRPhotos.kasir,
           },
           {
-            key:           'desk',
-            label:         'Promo di Meja Kasir',
-            hint:          'Foto materi promo yang terpasang di meja kasir.',
-            photoType:     'promo_desk',
-            min:           PHOTO_RULES.cekPromoDesk.min,
-            max:           PHOTO_RULES.cekPromoDesk.max,
-            initialPhotos: promoDeskPhotos,
+            key: 'depan',
+            label: 'Depan Toko',
+            photoType: 'five_r_depan',
+            min: PHOTO_RULES.fiveRArea.min,
+            max: PHOTO_RULES.fiveRArea.max,
+            initialPhotos: fiveRPhotos.depan,
+          },
+          {
+            key: 'kanan',
+            label: 'Sisi Kanan',
+            photoType: 'five_r_kanan',
+            min: PHOTO_RULES.fiveRArea.min,
+            max: PHOTO_RULES.fiveRArea.max,
+            initialPhotos: fiveRPhotos.kanan,
+          },
+          {
+            key: 'kiri',
+            label: 'Sisi Kiri',
+            photoType: 'five_r_kiri',
+            min: PHOTO_RULES.fiveRArea.min,
+            max: PHOTO_RULES.fiveRArea.max,
+            initialPhotos: fiveRPhotos.kiri,
+          },
+          {
+            key: 'gudang',
+            label: 'Gudang',
+            photoType: 'five_r_gudang',
+            min: PHOTO_RULES.fiveRArea.min,
+            max: PHOTO_RULES.fiveRArea.max,
+            initialPhotos: fiveRPhotos.gudang,
           },
         ]}
-        onConfirmMulti={confirmCekPromo}
-        onClearMulti={clearCekPromo}
+        onConfirmMulti={confirmFiveR}
+        onClearMulti={clearFiveR}
         disabled={dis}
       />
     </div>
+
+    
   );
 }

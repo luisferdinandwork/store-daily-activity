@@ -1,5 +1,5 @@
 {
-  "id": "27527126-d12f-495f-b87c-409fc060c04b",
+  "id": "b844faae-98b2-4e77-9ddf-f73749b71510",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -263,6 +263,18 @@
         "return_time": {
           "name": "return_time",
           "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cash_out": {
+          "name": "cash_out",
+          "type": "numeric(12, 2)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cash_in": {
+          "name": "cash_in",
+          "type": "numeric(12, 2)",
           "primaryKey": false,
           "notNull": false
         },
@@ -2643,6 +2655,121 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.item_dropping_entries": {
+      "name": "item_dropping_entries",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "task_id": {
+          "name": "task_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "store_id": {
+          "name": "store_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "to_number": {
+          "name": "to_number",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "drop_time": {
+          "name": "drop_time",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "dropping_photos": {
+          "name": "dropping_photos",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "notes": {
+          "name": "notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "item_dropping_entries_task_id_item_dropping_tasks_id_fk": {
+          "name": "item_dropping_entries_task_id_item_dropping_tasks_id_fk",
+          "tableFrom": "item_dropping_entries",
+          "tableTo": "item_dropping_tasks",
+          "columnsFrom": [
+            "task_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "item_dropping_entries_user_id_users_id_fk": {
+          "name": "item_dropping_entries_user_id_users_id_fk",
+          "tableFrom": "item_dropping_entries",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "item_dropping_entries_store_id_stores_id_fk": {
+          "name": "item_dropping_entries_store_id_stores_id_fk",
+          "tableFrom": "item_dropping_entries",
+          "tableTo": "stores",
+          "columnsFrom": [
+            "store_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.item_dropping_tasks": {
       "name": "item_dropping_tasks",
       "schema": "",
@@ -2683,55 +2810,12 @@
           "primaryKey": false,
           "notNull": true
         },
-        "parent_task_id": {
-          "name": "parent_task_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
         "has_dropping": {
           "name": "has_dropping",
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,
           "default": false
-        },
-        "drop_time": {
-          "name": "drop_time",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "dropping_photos": {
-          "name": "dropping_photos",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "is_received": {
-          "name": "is_received",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "receive_time": {
-          "name": "receive_time",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "receive_photos": {
-          "name": "receive_photos",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "received_by_user_id": {
-          "name": "received_by_user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         },
         "submitted_lat": {
           "name": "submitted_lat",
@@ -2839,19 +2923,6 @@
           "tableTo": "shifts",
           "columnsFrom": [
             "shift_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "item_dropping_tasks_received_by_user_id_users_id_fk": {
-          "name": "item_dropping_tasks_received_by_user_id_users_id_fk",
-          "tableFrom": "item_dropping_tasks",
-          "tableTo": "users",
-          "columnsFrom": [
-            "received_by_user_id"
           ],
           "columnsTo": [
             "id"
@@ -3364,6 +3435,25 @@
           "primaryKey": false,
           "notNull": true
         },
+        "expected_amount": {
+          "name": "expected_amount",
+          "type": "numeric(12, 2)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "carried_deficit": {
+          "name": "carried_deficit",
+          "type": "numeric(12, 2)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
+        },
+        "carried_deficit_fetched_at": {
+          "name": "carried_deficit_fetched_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
         "amount": {
           "name": "amount",
           "type": "numeric(12, 2)",
@@ -3381,6 +3471,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "unpaid_amount": {
+          "name": "unpaid_amount",
+          "type": "numeric(12, 2)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
         },
         "submitted_lat": {
           "name": "submitted_lat",
@@ -3592,27 +3689,32 @@
           "notNull": true,
           "default": false
         },
-        "five_r_photos": {
-          "name": "five_r_photos",
+        "five_r_area_kasir_photos": {
+          "name": "five_r_area_kasir_photos",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "cek_promo": {
-          "name": "cek_promo",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "cek_promo_storefront_photos": {
-          "name": "cek_promo_storefront_photos",
+        "five_r_area_depan_photos": {
+          "name": "five_r_area_depan_photos",
           "type": "text",
           "primaryKey": false,
           "notNull": false
         },
-        "cek_promo_desk_photos": {
-          "name": "cek_promo_desk_photos",
+        "five_r_area_kanan_photos": {
+          "name": "five_r_area_kanan_photos",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "five_r_area_kiri_photos": {
+          "name": "five_r_area_kiri_photos",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "five_r_area_gudang_photos": {
+          "name": "five_r_area_gudang_photos",
           "type": "text",
           "primaryKey": false,
           "notNull": false
