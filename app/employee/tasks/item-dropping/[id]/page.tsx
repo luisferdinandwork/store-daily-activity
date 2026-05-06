@@ -33,6 +33,7 @@ interface ToEntry {
   userId:         string;
   storeId:        string;
   toNumber:       string;
+  quantity:       number;           // ← ADD
   dropTime:       string | null;
   droppingPhotos: string[];
   notes:          string | null;
@@ -59,6 +60,7 @@ interface DraftEntry {
   localId:        string;
   toNumber:       string;
   description:    string | null;
+  quantity:       number;           // ← ADD
   dropTime:       string;
   droppingPhotos: string[];
   notes:          string;
@@ -71,6 +73,7 @@ function makeDraft(to: AvailableTo): DraftEntry {
     localId:        crypto.randomUUID(),
     toNumber:       to.toNumber,
     description:    to.description,
+    quantity:       to.quantity ?? 0,   // ← ADD (pre-fill from API)
     dropTime:       '',
     droppingPhotos: [],
     notes:          '',
@@ -473,6 +476,13 @@ function ToSelector({
 
 // ─── Draft Entry Card ─────────────────────────────────────────────────────────
 
+// REPLACEMENT for the DraftEntryCard component in:
+// app/employee/tasks/item-dropping/[id]/page.tsx
+//
+// Fix: the outer expand/collapse row was a <button>, which contained the
+// "Batal" <button> — invalid HTML (button inside button).
+// Changed the outer element to a <div role="button"> with keyboard support.
+
 function DraftEntryCard({
   entry, index, onChange, onDeselect, disabled,
 }: {
@@ -483,15 +493,21 @@ function DraftEntryCard({
   onDeselect: () => void;
 }) {
   const [expanded, setExpanded] = useState(true);
-  const valid = entry.dropTime.length > 0 && entry.droppingPhotos.length >= PHOTO_RULES.dropping.min;
+  const valid = entry.quantity > 0 && entry.dropTime.length > 0 && entry.droppingPhotos.length >= PHOTO_RULES.dropping.min;
 
   return (
     <div className={cn(
       'rounded-2xl border-2 transition-colors',
       valid ? 'border-amber-300 bg-amber-50/40' : 'border-amber-200 bg-amber-50/20',
     )}>
-      <button type="button" onClick={() => setExpanded(v => !v)}
-        className="flex w-full items-center gap-3 px-4 py-3.5 text-left">
+      {/* ── Header row: div instead of button to avoid nested-button error ── */}
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => setExpanded(v => !v)}
+        onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && setExpanded(v => !v)}
+        className="flex w-full cursor-pointer items-center gap-3 px-4 py-3.5 text-left select-none"
+      >
         <div className={cn(
           'flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full',
           valid ? 'bg-amber-500' : 'bg-amber-200',
@@ -500,37 +516,66 @@ function DraftEntryCard({
             ? <Check className="h-3.5 w-3.5 text-white" strokeWidth={3} />
             : <span className="text-[10px] font-bold text-amber-700">{index + 1}</span>}
         </div>
+
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-bold text-amber-800 font-mono truncate">{entry.toNumber}</p>
+          <p className="truncate font-mono text-sm font-bold text-amber-800">{entry.toNumber}</p>
           {entry.description && (
-            <p className="text-[10px] text-amber-700 truncate">{entry.description}</p>
+            <p className="truncate text-[10px] text-amber-700">{entry.description}</p>
           )}
         </div>
+
+        {/* "Batal" is a real <button> — safe here because the parent is a <div> */}
         {!disabled && (
-          <button type="button"
+          <button
+            type="button"
             onClick={e => { e.stopPropagation(); onDeselect(); }}
-            className="flex-shrink-0 flex items-center gap-1 rounded-lg bg-red-100 px-2.5 py-1.5 text-[11px] font-semibold text-red-700 hover:bg-red-200 transition-colors mr-1">
+            className="mr-1 flex flex-shrink-0 items-center gap-1 rounded-lg bg-red-100 px-2.5 py-1.5 text-[11px] font-semibold text-red-700 hover:bg-red-200 transition-colors"
+          >
             <X className="h-3 w-3" />Batal
           </button>
         )}
+
         {expanded
           ? <ChevronUp   className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
           : <ChevronDown className="h-4 w-4 flex-shrink-0 text-muted-foreground" />}
-      </button>
+      </div>
 
+      {/* ── Expanded body ─────────────────────────────────────────────────── */}
       {expanded && (
         <div className="space-y-4 border-t border-amber-200 px-4 pb-4 pt-4">
+
+          {/* Quantity */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-foreground">Jumlah Barang</label>
+            <p className="text-[10px] text-muted-foreground">Jumlah item yang diterima untuk TO ini.</p>
+            <input
+              type="number"
+              min="0"
+              value={entry.quantity === 0 ? '' : entry.quantity}
+              disabled={disabled}
+              onChange={e => onChange({ quantity: Math.max(0, Math.floor(Number(e.target.value || 0))) })}
+              placeholder="0"
+              className="w-full rounded-xl border border-border bg-secondary px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
+            />
+          </div>
+
+          {/* Drop time */}
           <div className="space-y-1.5">
             <label className="text-xs font-semibold text-foreground">Waktu Dropping</label>
             <p className="text-[10px] text-muted-foreground">Waktu saat barang tiba di toko.</p>
             <div className="relative">
               <Clock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <input type="datetime-local" value={entry.dropTime} disabled={disabled}
+              <input
+                type="datetime-local"
+                value={entry.dropTime}
+                disabled={disabled}
                 onChange={e => onChange({ dropTime: e.target.value })}
-                className="w-full rounded-xl border border-border bg-secondary py-3 pl-9 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60" />
+                className="w-full rounded-xl border border-border bg-secondary py-3 pl-9 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
+              />
             </div>
           </div>
 
+          {/* Photos */}
           <PhotoUploader
             label="Foto Dropping"
             photoType="item_dropping"
@@ -538,23 +583,27 @@ function DraftEntryCard({
             min={PHOTO_RULES.dropping.min}
             max={PHOTO_RULES.dropping.max}
             disabled={disabled}
-            hint="Foto barang yang tiba sebagai bukti. Minimal 1 foto."
+            hint="Foto tanda tangan kurir dengan barang (wajib)"
             onChange={urls => onChange({ droppingPhotos: urls })}
           />
 
+          {/* Notes */}
           <div className="space-y-1.5">
             <label className="text-xs font-semibold text-foreground">Catatan (opsional)</label>
-            <textarea value={entry.notes} disabled={disabled} rows={2}
+            <textarea
+              value={entry.notes}
+              disabled={disabled}
+              rows={2}
               onChange={e => onChange({ notes: e.target.value })}
               placeholder="Catatan untuk TO ini…"
-              className="w-full resize-none rounded-xl border border-border bg-secondary px-4 py-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60" />
+              className="w-full resize-none rounded-xl border border-border bg-secondary px-4 py-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
+            />
           </div>
         </div>
       )}
     </div>
   );
 }
-
 // ─── Saved Entry Card ─────────────────────────────────────────────────────────
 
 function SavedEntryCard({ entry, index }: { entry: ToEntry; index: number }) {
@@ -744,7 +793,11 @@ export default function ItemDroppingDetailPage() {
   // ── Validation ─────────────────────────────────────────────────────────────
 
   function isDraftValid(d: DraftEntry) {
-    return d.dropTime.length > 0 && d.droppingPhotos.length >= PHOTO_RULES.dropping.min;
+    return (
+      d.quantity > 0 &&
+      d.dropTime.length > 0 &&
+      d.droppingPhotos.length >= PHOTO_RULES.dropping.min
+    );
   }
 
   const canSubmitNoDrop   = hasDropping === false;
@@ -758,6 +811,7 @@ export default function ItemDroppingDetailPage() {
     const invalid = drafts.findIndex(d => !isDraftValid(d));
     if (invalid >= 0) {
       const d = drafts[invalid];
+      if (d.quantity <= 0)               return `${d.toNumber}: Isi jumlah barang.`;
       if (!d.dropTime)                   return `${d.toNumber}: Isi waktu dropping.`;
       if (d.droppingPhotos.length === 0) return `${d.toNumber}: Upload minimal 1 foto.`;
     }
@@ -774,6 +828,7 @@ export default function ItemDroppingDetailPage() {
       const entries = hasDropping
         ? drafts.map(d => ({
             toNumber:       d.toNumber,
+            quantity:       d.quantity,            // ← ADD
             dropTime:       new Date(d.dropTime).toISOString(),
             droppingPhotos: d.droppingPhotos,
             notes:          d.notes || undefined,

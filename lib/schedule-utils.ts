@@ -9,8 +9,8 @@ import {
   monthlySchedules, monthlyScheduleEntries,
   schedules, attendance, breakSessions,
   userRoles, employeeTypes, shifts,
-  storeOpeningTasks, setoranTasks, cekBinTasks,
-  productCheckTasks, itemDroppingTasks, briefingTasks,
+  storeOpeningTasks, storeFrontTasks, setoranTasks, cekBinTasks,
+  vmChecklistTasks, marketingCheckTasks, itemDroppingTasks, briefingTasks,
   eodZReportTasks, edcReconciliationTasks,
   openStatementTasks, groomingTasks,
   type Area, type MonthlySchedule, type MonthlyScheduleEntry,
@@ -108,9 +108,11 @@ async function deleteAllTasksForSchedules(scheduleIds: number[]): Promise<void> 
   if (scheduleIds.length === 0) return;
   await Promise.all([
     db.delete(storeOpeningTasks) .where(inArray(storeOpeningTasks.scheduleId,  scheduleIds)),
+    db.delete(storeFrontTasks)  .where(inArray(storeFrontTasks.scheduleId,    scheduleIds)),
     db.delete(setoranTasks)      .where(inArray(setoranTasks.scheduleId,       scheduleIds)),
     db.delete(cekBinTasks)       .where(inArray(cekBinTasks.scheduleId,        scheduleIds)),
-    db.delete(productCheckTasks) .where(inArray(productCheckTasks.scheduleId,  scheduleIds)),
+    db.delete(vmChecklistTasks)  .where(inArray(vmChecklistTasks.scheduleId,   scheduleIds)),
+    db.delete(marketingCheckTasks).where(inArray(marketingCheckTasks.scheduleId, scheduleIds)),
     db.delete(itemDroppingTasks) .where(inArray(itemDroppingTasks.scheduleId,  scheduleIds)),
     db.delete(briefingTasks)     .where(inArray(briefingTasks.scheduleId,      scheduleIds)),
     db.delete(edcReconciliationTasks) .where(inArray(edcReconciliationTasks.scheduleId, scheduleIds)),

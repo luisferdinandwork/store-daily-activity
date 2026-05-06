@@ -16,8 +16,8 @@ import { db } from '@/lib/db';
 import {
   users, stores, areas, shifts, employeeTypes,
   monthlySchedules, monthlyScheduleEntries, schedules,
-  storeOpeningTasks, setoranTasks, cekBinTasks,
-  productCheckTasks, itemDroppingTasks, briefingTasks,
+  storeOpeningTasks, storeFrontTasks, setoranTasks, cekBinTasks,
+  vmChecklistTasks, marketingCheckTasks, itemDroppingTasks, briefingTasks,
   edcReconciliationTasks, eodZReportTasks,
   openStatementTasks, groomingTasks,
 } from '@/lib/db/schema';
@@ -127,8 +127,8 @@ async function seedCurrentMonth() {
   let totalEntries   = 0;
   let totalSchedRows = 0;
   const taskCounts: Record<string, number> = {
-    storeOpening: 0, setoran: 0, cekBin: 0, productCheck: 0, itemDropping: 0,  // ← CHANGED
-    briefing: 0, edcReconciliation: 0, eodZReport: 0, openStatement: 0,        // ← CHANGED
+    storeOpening: 0, storeFront: 0, setoran: 0, cekBin: 0, vmChecklist: 0, marketingCheck: 0, itemDropping: 0,
+    briefing: 0, edcReconciliation: 0, eodZReport: 0, openStatement: 0,
     grooming: 0,
   };
 
@@ -284,9 +284,11 @@ async function seedTasksForSchedule(
   try {
     if (isMorning) {
       if (!await morningSharedExists(storeOpeningTasks  as any, storeId, date)) { await db.insert(storeOpeningTasks).values(morningBase);  counts.storeOpening++; }
+      if (!await morningSharedExists(storeFrontTasks    as any, storeId, date)) { await db.insert(storeFrontTasks).values(morningBase);    counts.storeFront++;   }
       if (!await morningSharedExists(setoranTasks       as any, storeId, date)) { await db.insert(setoranTasks).values(morningBase);       counts.setoran++;      }
       if (!await morningSharedExists(cekBinTasks        as any, storeId, date)) { await db.insert(cekBinTasks).values(morningBase);        counts.cekBin++;       }
-      if (!await morningSharedExists(productCheckTasks  as any, storeId, date)) { await db.insert(productCheckTasks).values(morningBase);  counts.productCheck++; }
+      if (!await morningSharedExists(vmChecklistTasks   as any, storeId, date)) { await db.insert(vmChecklistTasks).values(morningBase);   counts.vmChecklist++;  }
+      if (!await morningSharedExists(marketingCheckTasks as any, storeId, date)) { await db.insert(marketingCheckTasks).values(morningBase); counts.marketingCheck++; }
       
       // CHANGED: receivingTasks → itemDroppingTasks. Uses eveningActiveExists 
       // because itemDroppingTasks is discrepancy-capable and lacks a (storeId, date) unique constraint.

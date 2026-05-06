@@ -46,14 +46,12 @@ export interface SubmitStoreOpeningInput {
   fiveRAreaGudangPhotos?: string[];
   cekLamp:           boolean;
   cekSoundSystem:    boolean;
-  storeFrontPhotos?: string[];
   cashierDeskPhotos?: string[];
   notes?:            string;
   skipGeo?:          boolean;
 }
 
 export const STORE_OPENING_PHOTO_RULES = {
-  storeFront:  { min: 1, max: 3 },
   cashierDesk: { min: 1, max: 2 },
   // Each 5R area
   fiveRArea:   { min: 1, max: 2 },
@@ -155,7 +153,7 @@ async function assertCanProgressTask(
 function validateStoreOpeningPayload(input: SubmitStoreOpeningInput): string | null {
   const {
     loginPos, checkAbsenSunfish, tarikSohSales, fiveR, cekLamp, cekSoundSystem,
-    storeFrontPhotos, cashierDeskPhotos,
+    cashierDeskPhotos,
     fiveRAreaKasirPhotos, fiveRAreaDepanPhotos, fiveRAreaKananPhotos,
     fiveRAreaKiriPhotos, fiveRAreaGudangPhotos,
   } = input;
@@ -166,13 +164,6 @@ function validateStoreOpeningPayload(input: SubmitStoreOpeningInput): string | n
   if (!fiveR)             return 'Checklist "5R" belum ditandai.';
   if (!cekLamp)           return 'Checklist "Cek Lampu" belum ditandai.';
   if (!cekSoundSystem)    return 'Checklist "Cek Sound System" belum ditandai.';
-
-  // Store front photos
-  const sfCount = storeFrontPhotos?.length ?? 0;
-  if (sfCount < STORE_OPENING_PHOTO_RULES.storeFront.min)
-    return `Foto tampak depan toko wajib minimal ${STORE_OPENING_PHOTO_RULES.storeFront.min}.`;
-  if (sfCount > STORE_OPENING_PHOTO_RULES.storeFront.max)
-    return `Foto tampak depan toko maksimal ${STORE_OPENING_PHOTO_RULES.storeFront.max}.`;
 
   // Cashier desk photos (linked to loginPos)
   const cdCount = cashierDeskPhotos?.length ?? 0;
@@ -238,7 +229,6 @@ export async function submitStoreOpening(
       fiveRAreaGudangPhotos: jsonPhotos(input.fiveRAreaGudangPhotos),
       cekLamp:           input.cekLamp,
       cekSoundSystem:    input.cekSoundSystem,
-      storeFrontPhotos:  jsonPhotos(input.storeFrontPhotos),
       cashDrawerPhotos:  jsonPhotos(input.cashierDeskPhotos),
       submittedLat:      String(input.geo.lat),
       submittedLng:      String(input.geo.lng),
@@ -274,7 +264,6 @@ export interface StoreOpeningAutoSavePatch {
   fiveRAreaGudangPhotos?: string[];
   cekLamp?:           boolean;
   cekSoundSystem?:    boolean;
-  storeFrontPhotos?:  string[];
   cashierDeskPhotos?: string[];
   notes?:             string;
 }
@@ -300,7 +289,6 @@ export async function autoSaveStoreOpening(
     if ('notes'             in patch) update.notes             = patch.notes;
 
     // Photo columns
-    if ('storeFrontPhotos'         in patch) update.storeFrontPhotos        = jsonPhotos(patch.storeFrontPhotos);
     if ('cashierDeskPhotos'        in patch) update.cashDrawerPhotos        = jsonPhotos(patch.cashierDeskPhotos);
     if ('fiveRAreaKasirPhotos'     in patch) update.fiveRAreaKasirPhotos    = jsonPhotos(patch.fiveRAreaKasirPhotos);
     if ('fiveRAreaDepanPhotos'     in patch) update.fiveRAreaDepanPhotos    = jsonPhotos(patch.fiveRAreaDepanPhotos);

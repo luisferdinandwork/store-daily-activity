@@ -16,8 +16,9 @@ config({ path: '.env.local' });
 import { db } from '@/lib/db';
 import {
   schedules, users, stores, areas, shifts,
-  storeOpeningTasks, setoranTasks, cekBinTasks,
-  productCheckTasks, briefingTasks,
+  storeOpeningTasks, storeFrontTasks, setoranTasks, cekBinTasks,
+  storeBins,
+  vmChecklistTasks, marketingCheckTasks, briefingTasks,
   eodZReportTasks, edcReconciliationTasks,
   openStatementTasks, groomingTasks,
   itemDroppingTasks,
@@ -84,7 +85,9 @@ const counts = {
   storeOpening:       { created: 0, skipped: 0 },
   setoran:            { created: 0, skipped: 0 },
   cekBin:             { created: 0, skipped: 0 },
-  productCheck:       { created: 0, skipped: 0 },
+  storeFront:         { created: 0, skipped: 0 },
+  vmChecklist:        { created: 0, skipped: 0 },
+  marketingCheck:     { created: 0, skipped: 0 },
   itemDropping:       { created: 0, skipped: 0 },   
   briefing:           { created: 0, skipped: 0 },
   edcReconciliation:  { created: 0, skipped: 0 },   
@@ -166,6 +169,14 @@ async function seedTasks() {
           console.log(`   ✅ storeOpening       ${label}`);
         }
 
+        if (await morningSharedExists(storeFrontTasks as any, sched.storeId, sched.date)) {
+          counts.storeFront.skipped++;
+        } else {
+          await db.insert(storeFrontTasks).values(morningBase);
+          counts.storeFront.created++;
+          console.log(`   ✅ storeFront         ${label}`);
+        }
+
         if (await morningSharedExists(setoranTasks as any, sched.storeId, sched.date)) {
           counts.setoran.skipped++;
         } else {
@@ -177,17 +188,38 @@ async function seedTasks() {
         if (await morningSharedExists(cekBinTasks as any, sched.storeId, sched.date)) {
           counts.cekBin.skipped++;
         } else {
-          await db.insert(cekBinTasks).values(morningBase);
+          const activeBins = await db
+            .select({ id: storeBins.id })
+            .from(storeBins)
+            .where(and(eq(storeBins.storeId, sched.storeId), eq(storeBins.isActive, true)));
+
+          const totalStoreBins = activeBins.length;
+          const minimumBinsToCheck = totalStoreBins > 0 ? Math.ceil(totalStoreBins * 0.3) : 0;
+
+          await db.insert(cekBinTasks).values({
+            ...morningBase,
+            totalStoreBins,
+            minimumBinsToCheck,
+            checkedBinsCount: 0,
+          });
           counts.cekBin.created++;
           console.log(`   ✅ cekBin             ${label}`);
         }
 
-        if (await morningSharedExists(productCheckTasks as any, sched.storeId, sched.date)) {
-          counts.productCheck.skipped++;
+        if (await morningSharedExists(vmChecklistTasks as any, sched.storeId, sched.date)) {
+          counts.vmChecklist.skipped++;
         } else {
-          await db.insert(productCheckTasks).values(morningBase);
-          counts.productCheck.created++;
-          console.log(`   ✅ productCheck       ${label}`);
+          await db.insert(vmChecklistTasks).values(morningBase);
+          counts.vmChecklist.created++;
+          console.log(`   ✅ vmChecklist        ${label}`);
+        }
+
+        if (await morningSharedExists(marketingCheckTasks as any, sched.storeId, sched.date)) {
+          counts.marketingCheck.skipped++;
+        } else {
+          await db.insert(marketingCheckTasks).values(morningBase);
+          counts.marketingCheck.created++;
+          console.log(`   ✅ marketingCheck     ${label}`);
         }
 
         

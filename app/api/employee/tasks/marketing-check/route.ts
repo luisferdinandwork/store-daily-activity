@@ -1,114 +1,113 @@
 // app/api/employee/tasks/marketing-check/route.ts
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
+import { auth } from '@/lib/auth';
 import {
   submitMarketingCheck,
   autoSaveMarketingCheck,
-  type MarketingCheckAutoSavePatch,
 } from '@/lib/db/utils/marketing-check';
 
-function toInt(val: unknown, field: string): number {
-  const n = parseInt(String(val ?? ''), 10);
-  if (isNaN(n)) throw new Error(`${field} must be a valid integer, got: ${JSON.stringify(val)}`);
-  return n;
-}
-
-function toGeo(geo: unknown, skipGeo: boolean): { lat: number; lng: number } | null {
-  if (skipGeo) return null;
-  if (!geo || typeof geo !== 'object') return null;
-  const { lat, lng } = geo as Record<string, unknown>;
-  if (typeof lat !== 'number' || typeof lng !== 'number') return null;
-  return { lat, lng };
+function toBool(v: unknown): boolean {
+  return v === true;
 }
 
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-  }
-
-  let body: Record<string, unknown>;
   try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ success: false, error: 'Invalid JSON body' }, { status: 400 });
-  }
+    const session = await auth();
 
-  let scheduleId: number;
-  let storeId: number;
+    if (!session?.user?.id) {
+      return NextResponse.json(
+        { success: false, error: 'Unauthorized' },
+        { status: 401 },
+      );
+    }
 
-  try {
-    scheduleId = toInt(body.scheduleId, 'scheduleId');
-    storeId = toInt(body.storeId, 'storeId');
-  } catch (e) {
-    return NextResponse.json({ success: false, error: String(e) }, { status: 400 });
-  }
+    const body = await req.json();
 
-  const skipGeo = body.skipGeo === true;
-  const rawGeo = toGeo(body.geo, skipGeo);
+    const scheduleId = Number(body.scheduleId);
+    const storeId = Number(body.storeId);
 
-  try {
+    if (!Number.isFinite(scheduleId) || !Number.isFinite(storeId)) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid scheduleId or storeId.' },
+        { status: 400 },
+      );
+    }
+
     const result = await submitMarketingCheck({
       scheduleId,
-      userId: session.user.id as string,
+      userId: session.user.id,
       storeId,
-      geo: rawGeo,
-      skipGeo,
+      geo: body.geo ?? null,
+      skipGeo: Boolean(body.skipGeo),
 
-      promoName: Boolean(body.promoName),
-      promoPeriod: Boolean(body.promoPeriod),
-      promoMechanism: Boolean(body.promoMechanism),
-      randomShoeItems: Boolean(body.randomShoeItems),
-      randomNonShoeItems: Boolean(body.randomNonShoeItems),
-      sellTag: Boolean(body.sellTag),
+      promoName: toBool(body.promoName),
+      promoPeriod: toBool(body.promoPeriod),
+      promoMechanism: toBool(body.promoMechanism),
+      randomShoeItems: toBool(body.randomShoeItems),
+      randomNonShoeItems: toBool(body.randomNonShoeItems),
+      sellTag: toBool(body.sellTag),
 
       notes: typeof body.notes === 'string' ? body.notes : undefined,
     });
 
-    return NextResponse.json(result, { status: result.success ? 200 : 400 });
+    if (!result.success) {
+      return NextResponse.json(result, { status: 400 });
+    }
+
+    return NextResponse.json(result);
   } catch (err) {
     console.error('[POST /api/employee/tasks/marketing-check]', err);
-    return NextResponse.json({ success: false, error: String(err) }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: 'Failed to submit Marketing Check.' },
+      { status: 500 },
+    );
   }
 }
 
 export async function PATCH(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-  }
-
-  let body: Record<string, unknown>;
   try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ success: false, error: 'Invalid JSON body' }, { status: 400 });
-  }
+    const session = await auth();
 
-  let scheduleId: number;
-  try {
-    scheduleId = toInt(body.scheduleId, 'scheduleId');
-  } catch (e) {
-    return NextResponse.json({ success: false, error: String(e) }, { status: 400 });
-  }
+    if (!session?.user?.id) {
+      return NextResponse.json(
+        { success: false, error: 'Unauthorized' },
+        { status: 401 },
+      );
+    }
 
-  const patch: MarketingCheckAutoSavePatch = {};
+    const body = await req.json();
+    const scheduleId = Number(body.scheduleId);
 
-  if ('promoName' in body) patch.promoName = Boolean(body.promoName);
-  if ('promoPeriod' in body) patch.promoPeriod = Boolean(body.promoPeriod);
-  if ('promoMechanism' in body) patch.promoMechanism = Boolean(body.promoMechanism);
-  if ('randomShoeItems' in body) patch.randomShoeItems = Boolean(body.randomShoeItems);
-  if ('randomNonShoeItems' in body) patch.randomNonShoeItems = Boolean(body.randomNonShoeItems);
-  if ('sellTag' in body) patch.sellTag = Boolean(body.sellTag);
-  if ('notes' in body) patch.notes = typeof body.notes === 'string' ? body.notes : undefined;
+    if (!Number.isFinite(scheduleId)) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid scheduleId.' },
+        { status: 400 },
+      );
+    }
 
-  try {
+    const patch = {
+      promoName: typeof body.promoName === 'boolean' ? body.promoName : undefined,
+      promoPeriod: typeof body.promoPeriod === 'boolean' ? body.promoPeriod : undefined,
+      promoMechanism: typeof body.promoMechanism === 'boolean' ? body.promoMechanism : undefined,
+      randomShoeItems: typeof body.randomShoeItems === 'boolean' ? body.randomShoeItems : undefined,
+      randomNonShoeItems: typeof body.randomNonShoeItems === 'boolean' ? body.randomNonShoeItems : undefined,
+      sellTag: typeof body.sellTag === 'boolean' ? body.sellTag : undefined,
+      notes: typeof body.notes === 'string' ? body.notes : undefined,
+    };
+
     const result = await autoSaveMarketingCheck(scheduleId, patch);
-    return NextResponse.json(result, { status: result.success ? 200 : 400 });
+
+    if (!result.success) {
+      return NextResponse.json(result, { status: 400 });
+    }
+
+    return NextResponse.json(result);
   } catch (err) {
     console.error('[PATCH /api/employee/tasks/marketing-check]', err);
-    return NextResponse.json({ success: false, error: String(err) }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: 'Failed to autosave Marketing Check.' },
+      { status: 500 },
+    );
   }
 }

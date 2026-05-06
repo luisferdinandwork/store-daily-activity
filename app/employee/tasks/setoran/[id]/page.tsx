@@ -167,11 +167,7 @@ function UnpaidResultBanner({ unpaid, nextDayCarried }: {
       <div className="min-w-0 flex-1">
         <p className="text-sm font-bold text-orange-800">Setoran tersimpan — masih ada kekurangan</p>
         <p className="mt-0.5 text-xs text-orange-700">
-          Sisa belum disetor: <span className="font-bold">{formatRupiah(unpaid)}</span>
-        </p>
-        <p className="mt-1.5 text-[11px] text-orange-700">
-          Jumlah ini akan muncul sebagai kekurangan hari sebelumnya di setoran besok
-          (Rp {Number(nextDayCarried).toLocaleString('id-ID')}).
+          Sisa belum disetor: <span className="font-bold">Rp {Number(nextDayCarried).toLocaleString('id-ID')}</span>
         </p>
       </div>
     </div>
@@ -361,7 +357,7 @@ export default function SetoranDetailPage() {
 
   // ── Derived state ──────────────────────────────────────────────────────────
   const taskStatus = taskData?.status;
-  const readonly   = taskStatus === 'verified';
+  const readonly = taskStatus === 'completed' || taskStatus === 'verified';
   const isRejected = taskStatus === 'rejected';
   const locked     = !readonly && checkInStatus === 'not_checked_in';
   const dis        = readonly || locked;
@@ -489,7 +485,7 @@ export default function SetoranDetailPage() {
           <ArrowLeft className="h-4 w-4" />
         </button>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-bold text-foreground">Setoran</p>
+          <p className="truncate text-sm font-bold text-foreground">Setoran Penjualan</p>
           {taskData && (
             <p className="text-[10px] capitalize text-muted-foreground">
               {taskData.shift} shift · {taskData.status.replace('_', ' ')}

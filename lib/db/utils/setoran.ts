@@ -262,8 +262,9 @@ export async function submitSetoran(
     if (!ensured.success) return ensured;
     const existing = ensured.data;
 
-    if (existing.status === 'verified')
-      return { success: false, error: 'Setoran sudah diverifikasi.' };
+    if (existing.status === 'completed' || existing.status === 'verified') {
+      return { success: false, error: 'Setoran hari ini sudah disubmit dan tidak bisa diubah lagi.' };
+    }
 
     // ── Balance math ───────────────────────────────────────────────────────
     const expected = parseAmount(input.expectedAmount);
@@ -325,12 +326,10 @@ export async function autoSaveSetoran(
     if (!ensured.success) return { success: false, error: ensured.error };
     const existing = ensured.data;
 
-    if (existing.status === 'verified')
+    if (existing.status === 'completed' || existing.status === 'verified') {
       return { success: true, data: { saved: [] } };
+    }
 
-    // If the task is already completed, still allow edits to fields because
-    // the new model treats every submit as idempotent — but flip the status
-    // back to in_progress so the UI knows there's unfinalised changes.
     const update: Record<string, unknown> = { updatedAt: new Date() };
 
     if ('amount'              in patch) update.amount              = patch.amount;

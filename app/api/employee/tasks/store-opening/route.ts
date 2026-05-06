@@ -74,7 +74,6 @@ export async function POST(req: NextRequest) {
       fiveRAreaGudangPhotos: strArr(body.fiveRAreaGudangPhotos),
       cekLamp:           Boolean(body.cekLamp),
       cekSoundSystem:    Boolean(body.cekSoundSystem),
-      storeFrontPhotos:  strArr(body.storeFrontPhotos),
       cashierDeskPhotos: strArr(body.cashierDeskPhotos),
       notes:             typeof body.notes === 'string' ? body.notes : undefined,
     });
@@ -111,7 +110,6 @@ export async function PATCH(req: NextRequest) {
   if ('cekSoundSystem'    in body) patch.cekSoundSystem    = Boolean(body.cekSoundSystem);
   if ('notes'             in body) patch.notes             = typeof body.notes === 'string' ? body.notes : undefined;
 
-  if ('storeFrontPhotos'        in body) patch.storeFrontPhotos        = strArr(body.storeFrontPhotos);
   if ('cashierDeskPhotos'       in body) patch.cashierDeskPhotos       = strArr(body.cashierDeskPhotos);
   if ('fiveRAreaKasirPhotos'    in body) patch.fiveRAreaKasirPhotos    = strArr(body.fiveRAreaKasirPhotos);
   if ('fiveRAreaDepanPhotos'    in body) patch.fiveRAreaDepanPhotos    = strArr(body.fiveRAreaDepanPhotos);

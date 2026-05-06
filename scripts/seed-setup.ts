@@ -8,10 +8,10 @@ import {
   areas, stores, users,
   monthlySchedules, monthlyScheduleEntries,
   schedules, attendance, breakSessions,
-  storeOpeningTasks, setoranTasks, cekBinTasks,
-  productCheckTasks, itemDroppingTasks, briefingTasks,  
-  edcReconciliationTasks, eodZReportTasks,              
-  openStatementTasks, groomingTasks,
+  storeOpeningTasks, storeFrontTasks, setoranTasks, cekBinTasks,
+  vmChecklistTasks, marketingCheckTasks, itemDroppingTasks, briefingTasks,
+  edcReconciliationTasks, eodZReportTasks,
+  openStatementTasks, groomingTasks, storeBins, cekBinTaskBins,
 } from '@/lib/db/schema';
 import { hash } from 'bcryptjs';
 
@@ -33,8 +33,11 @@ async function seedSetup() {
   await db.delete(edcReconciliationTasks);
   await db.delete(briefingTasks);
   await db.delete(itemDroppingTasks);
-  await db.delete(productCheckTasks);
+  await db.delete(marketingCheckTasks);
+  await db.delete(vmChecklistTasks);
+  await db.delete(cekBinTaskBins);
   await db.delete(cekBinTasks);
+  await db.delete(storeFrontTasks);
   await db.delete(setoranTasks);
   await db.delete(storeOpeningTasks);
   await db.delete(attendance);
@@ -42,6 +45,7 @@ async function seedSetup() {
   await db.delete(monthlyScheduleEntries);
   await db.delete(monthlySchedules);
   await db.delete(users);
+  await db.delete(storeBins);
   await db.delete(stores);
   await db.delete(areas);
   await db.delete(shifts);
@@ -128,6 +132,28 @@ async function seedSetup() {
     ])
     .returning();
   console.log(`✓   3 stores  (ids: ${store1.id}, ${store2.id}, ${store3.id})\n`);
+  console.log('🗃️   Creating store bins…');
+  const binRows = [store1, store2, store3].flatMap((store) =>
+    Array.from({ length: 12 }, (_, i) => {
+      const n = i + 1;
+      const qtyBc = 20 + ((n * 3) % 25);
+      const qtyTidakSesuaiBin = n % 5 === 0 ? 1 : 0;
+      const qtySesuaiBin = Math.max(qtyBc - qtyTidakSesuaiBin, 0);
+
+      return {
+        storeId: store.id,
+        bin: `BIN-${String(n).padStart(2, '0')}`,
+        qtyBc,
+        qtySesuaiBin,
+        qtyTidakSesuaiBin,
+        nama: `Bin ${n}`,
+        isActive: true,
+      };
+    }),
+  );
+  await db.insert(storeBins).values(binRows);
+  console.log(`✓   ${binRows.length} store bins\n`);
+
 
   // ── 4. USERS ──────────────────────────────────────────────────────────────
   console.log('👥  Creating users…');

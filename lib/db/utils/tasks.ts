@@ -4,17 +4,26 @@ import { eq, and, gte, lte, inArray, sql, isNull, or } from 'drizzle-orm';
 import {
   schedules, stores, shifts, attendance,
   monthlySchedules, monthlyScheduleEntries,
-  cekBinTasks, productCheckTasks, briefingTasks,
+  storeFrontTasks,
+  cekBinTasks,
+  storeBins,
+  cekBinTaskBins,
+  vmChecklistTasks,
+  marketingCheckTasks,
+  briefingTasks,
   edcReconciliationTasks,
   eodZReportTasks,
   openStatementTasks,
   groomingTasks, itemDroppingTasks,
-  type ProductCheckTask,
+  type StoreFrontTask,
+  type CekBinTask,
+  type VmChecklistTask,
   type BriefingTask,
   type GroomingTask,
 } from '@/lib/db/schema';
 import { canManageSchedule } from '@/lib/schedule-utils';
 import { users, areas }      from '@/lib/db/schema';
+import { getOrCreateMarketingCheckForSchedule } from '@/lib/db/utils/marketing-check';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -48,19 +57,83 @@ export type TaskAccessStatus =
 
 // ─── Submit input types ───────────────────────────────────────────────────────
 
-export interface SubmitProductCheckInput {
+export interface SubmitStoreFrontInput {
   scheduleId: number;
   userId:     string;
   storeId:    number;
   geo:        GeoPoint;
-  display:    boolean;
-  price:      boolean;
-  saleTag:    boolean;
-  shoeFiller: boolean;
-  labelIndo:  boolean;
-  barcode:    boolean;
-  notes?:     string;
-  skipGeo?:   boolean;
+
+  storefrontPhotos:       string[];
+  rollingDoorClosedPhoto: string;
+
+  notes?:   string;
+  skipGeo?: boolean;
+}
+
+export interface SubmitVmChecklistInput {
+  scheduleId: number;
+  userId:     string;
+  storeId:    number;
+  geo:        GeoPoint;
+
+  shoeLaceShoeFillerPriceTagHangtagLabelK3L: boolean;
+  lastPairAndPigskinHangtag: boolean;
+  popPromoUpdate: boolean;
+  displayTableWallShelvingShowcaseHangbarStackingPedestal: boolean;
+  floorDisplayCleanliness: boolean;
+  vmToolsStorage: boolean;
+
+  notes?:   string;
+  skipGeo?: boolean;
+}
+
+export interface CekBinSelectedBinInput {
+  binId: number;
+  qtyBc: number;
+  qtySesuaiBin: number;
+  qtyTidakSesuaiBin: number;
+  notes?: string;
+}
+
+export interface SubmitCekBinInput {
+  scheduleId: number;
+  userId:     string;
+  storeId:    number;
+  shiftId?:   number;
+  geo:        GeoPoint;
+
+  selectedBins: CekBinSelectedBinInput[];
+
+  notes?:   string;
+  skipGeo?: boolean;
+}
+
+export interface AutoSaveCekBinInput {
+  selectedBins?: CekBinSelectedBinInput[];
+  notes?: string;
+}
+
+export interface CekBinWithBins extends CekBinTask {
+  availableBins: Array<{
+    id: number;
+    storeId: number;
+    bin: string;
+    qtyBc: number;
+    qtySesuaiBin: number;
+    qtyTidakSesuaiBin: number;
+    nama: string;
+  }>;
+  checkedBins: Array<{
+    id: number;
+    taskId: number;
+    binId: number;
+    bin: string;
+    qtyBc: number;
+    qtySesuaiBin: number;
+    qtyTidakSesuaiBin: number;
+    nama: string;
+    notes: string | null;
+  }>;
 }
 
 export interface SubmitBriefingInput {
@@ -235,6 +308,140 @@ function jsonPhotos(paths: string[] | undefined): string | undefined {
   return paths && paths.length > 0 ? JSON.stringify(paths) : undefined;
 }
 
+function parseJsonPhotos(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw.filter((v): v is string => typeof v === 'string');
+  if (typeof raw !== 'string' || raw.length === 0) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function toNonNegativeInt(value: unknown, field: string): number {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 0) {
+    throw new Error(`${field} harus berupa angka bulat 0 atau lebih.`);
+  }
+  return n;
+}
+
+function minimumBinsToCheck(totalActiveBins: number): number {
+  if (totalActiveBins <= 0) return 0;
+  return Math.ceil(totalActiveBins * 0.3);
+}
+
+async function getActiveStoreBins(storeId: number) {
+  return db
+    .select({
+      id: storeBins.id,
+      storeId: storeBins.storeId,
+      bin: storeBins.bin,
+      qtyBc: storeBins.qtyBc,
+      qtySesuaiBin: storeBins.qtySesuaiBin,
+      qtyTidakSesuaiBin: storeBins.qtyTidakSesuaiBin,
+      nama: storeBins.nama,
+    })
+    .from(storeBins)
+    .where(and(eq(storeBins.storeId, storeId), eq(storeBins.isActive, true)))
+    .orderBy(storeBins.bin);
+}
+
+async function findCekBinByStoreDate(storeId: number, date: Date): Promise<CekBinTask | null> {
+  const [row] = await db
+    .select()
+    .from(cekBinTasks)
+    .where(and(
+      eq(cekBinTasks.storeId, storeId),
+      gte(cekBinTasks.date, startOfDay(date)),
+      lte(cekBinTasks.date, endOfDay(date)),
+    ))
+    .limit(1);
+
+  return row ?? null;
+}
+
+async function getCheckedBins(taskId: number) {
+  return db
+    .select({
+      id: cekBinTaskBins.id,
+      taskId: cekBinTaskBins.taskId,
+      binId: cekBinTaskBins.binId,
+      bin: cekBinTaskBins.bin,
+      qtyBc: cekBinTaskBins.qtyBc,
+      qtySesuaiBin: cekBinTaskBins.qtySesuaiBin,
+      qtyTidakSesuaiBin: cekBinTaskBins.qtyTidakSesuaiBin,
+      nama: cekBinTaskBins.nama,
+      notes: cekBinTaskBins.notes,
+    })
+    .from(cekBinTaskBins)
+    .where(eq(cekBinTaskBins.taskId, taskId))
+    .orderBy(cekBinTaskBins.bin);
+}
+
+function validateSelectedBins(
+  selectedBins: CekBinSelectedBinInput[],
+  activeBins: Awaited<ReturnType<typeof getActiveStoreBins>>,
+): string | null {
+  const activeById = new Map(activeBins.map((b) => [b.id, b]));
+  const seen = new Set<number>();
+
+  for (const item of selectedBins) {
+    if (!Number.isInteger(item.binId)) return 'Ada BIN yang tidak valid.';
+    if (!activeById.has(item.binId)) return `BIN ID ${item.binId} tidak ditemukan di store ini atau sudah tidak aktif.`;
+    if (seen.has(item.binId)) return `BIN ID ${item.binId} dipilih lebih dari satu kali.`;
+    seen.add(item.binId);
+
+    try {
+      toNonNegativeInt(item.qtyBc, 'QTY BC');
+      toNonNegativeInt(item.qtySesuaiBin, 'QTY SESUAI BIN');
+      toNonNegativeInt(item.qtyTidakSesuaiBin, 'QTY TIDAK SESUAI BIN');
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  const min = minimumBinsToCheck(activeBins.length);
+  if (activeBins.length > 0 && selectedBins.length < min) {
+    return `Minimal cek ${min} BIN, yaitu 30% dari total ${activeBins.length} BIN aktif di store.`;
+  }
+
+  return null;
+}
+
+async function replaceCheckedBins(
+  taskId: number,
+  selectedBins: CekBinSelectedBinInput[],
+  storeId: number,
+): Promise<void> {
+  const activeBins = await getActiveStoreBins(storeId);
+  const activeById = new Map(activeBins.map((b) => [b.id, b]));
+
+  await db.delete(cekBinTaskBins).where(eq(cekBinTaskBins.taskId, taskId));
+
+  if (!selectedBins.length) return;
+
+  await db.insert(cekBinTaskBins).values(
+    selectedBins.map((item) => {
+      const master = activeById.get(item.binId);
+      if (!master) throw new Error(`BIN ID ${item.binId} tidak valid.`);
+
+      return {
+        taskId,
+        binId: item.binId,
+        bin: master.bin,
+        nama: master.nama,
+        qtyBc: toNonNegativeInt(item.qtyBc, 'QTY BC'),
+        qtySesuaiBin: toNonNegativeInt(item.qtySesuaiBin, 'QTY SESUAI BIN'),
+        qtyTidakSesuaiBin: toNonNegativeInt(item.qtyTidakSesuaiBin, 'QTY TIDAK SESUAI BIN'),
+        notes: item.notes,
+        updatedAt: new Date(),
+      };
+    }),
+  );
+}
+
 type VerifyPatch = {
   status:     'verified' | 'rejected';
   verifiedBy: string;
@@ -352,17 +559,41 @@ export async function materialiseTasksForSchedule(
   if (isMorning) {
     const base = { ...baseCommon, shiftId: morningId };
 
+    await insertShared('storeFront',
+      () => db.select({ id: storeFrontTasks.id }).from(storeFrontTasks)
+        .where(and(eq(storeFrontTasks.storeId, sched.storeId), eq(storeFrontTasks.date, dayStart)))
+        .limit(1).then(r => r[0]),
+      () => db.insert(storeFrontTasks).values(base));
+
     await insertShared('cekBin',
       () => db.select({ id: cekBinTasks.id }).from(cekBinTasks)
         .where(and(eq(cekBinTasks.storeId, sched.storeId), eq(cekBinTasks.date, dayStart)))
         .limit(1).then(r => r[0]),
       () => db.insert(cekBinTasks).values(base));
 
-    await insertShared('productCheck',
-      () => db.select({ id: productCheckTasks.id }).from(productCheckTasks)
-        .where(and(eq(productCheckTasks.storeId, sched.storeId), eq(productCheckTasks.date, dayStart)))
+    await insertShared('vmChecklist',
+      () => db.select({ id: vmChecklistTasks.id }).from(vmChecklistTasks)
+        .where(and(eq(vmChecklistTasks.storeId, sched.storeId), eq(vmChecklistTasks.date, dayStart)))
         .limit(1).then(r => r[0]),
-      () => db.insert(productCheckTasks).values(base));
+      () => db.insert(vmChecklistTasks).values(base));
+
+    try {
+      const r = await getOrCreateMarketingCheckForSchedule(
+        scheduleId,
+        sched.userId,
+        sched.storeId,
+        morningId,
+        dayStart,
+      );
+
+      if (r.success) {
+        created.push('marketingCheck');
+      } else {
+        errors.push(`marketingCheck: ${r.error}`);
+      }
+    } catch (err) {
+      errors.push(`marketingCheck: ${err}`);
+    }
 
     // Item Dropping — no unique(storeId, date) constraint, check active row
     await insertShared('itemDropping',
@@ -373,7 +604,7 @@ export async function materialiseTasksForSchedule(
           inArray(itemDroppingTasks.status, ['pending', 'in_progress', 'discrepancy']),
         ))
         .limit(1).then(r => r[0]),
-      () => db.insert(itemDroppingTasks).values({ ...base, hasDropping: false, isReceived: false }));
+      () => db.insert(itemDroppingTasks).values({ ...base, hasDropping: false }));
   }
 
   // ── Evening ────────────────────────────────────────────────────────────────
@@ -468,8 +699,15 @@ export async function deleteTasksForSchedule(scheduleId: number): Promise<void> 
     // Morning tasks
     db.delete(cekBinTasks)
       .where(and(eq(cekBinTasks.scheduleId, scheduleId), inArray(cekBinTasks.status, PENDING_STATUSES))),
-    db.delete(productCheckTasks)
-      .where(and(eq(productCheckTasks.scheduleId, scheduleId), inArray(productCheckTasks.status, PENDING_STATUSES))),
+    db.delete(storeFrontTasks)
+      .where(and(eq(storeFrontTasks.scheduleId, scheduleId), inArray(storeFrontTasks.status, PENDING_STATUSES))),
+    db.delete(vmChecklistTasks)
+      .where(and(eq(vmChecklistTasks.scheduleId, scheduleId), inArray(vmChecklistTasks.status, PENDING_STATUSES))),
+    db.delete(marketingCheckTasks)
+      .where(and(
+        eq(marketingCheckTasks.scheduleId, scheduleId),
+        inArray(marketingCheckTasks.status, PENDING_STATUSES),
+      )),
     db.delete(itemDroppingTasks)
       .where(and(eq(itemDroppingTasks.scheduleId, scheduleId), inArray(itemDroppingTasks.status, eveningStatuses as any))),
     // Evening tasks
@@ -490,46 +728,293 @@ export async function deleteTasksForSchedule(scheduleId: number): Promise<void> 
 
 // ─── Submit — morning tasks ───────────────────────────────────────────────────
 
-export async function submitProductCheck(
-  input: SubmitProductCheckInput,
-): Promise<TaskResult<ProductCheckTask>> {
+export async function submitStoreFront(
+  input: SubmitStoreFrontInput,
+): Promise<TaskResult<StoreFrontTask>> {
   try {
     const gateErr = await assertCanProgressTask(input.scheduleId, input.storeId, input.geo, input.skipGeo);
     if (gateErr) return { success: false, error: gateErr };
 
-    const [existing] = await db.select().from(productCheckTasks)
-      .where(eq(productCheckTasks.scheduleId, input.scheduleId)).limit(1);
-    if (existing?.status === 'verified')
-      return { success: false, error: 'Product check sudah diverifikasi.' };
+    const storefrontPhotos = [...new Set((input.storefrontPhotos ?? []).filter(Boolean))];
+
+    if (storefrontPhotos.length < 2) {
+      return { success: false, error: 'Minimal upload 2 foto orang di storefront.' };
+    }
+
+    if (storefrontPhotos.length > 3) {
+      return { success: false, error: 'Maksimal upload 3 foto orang di storefront.' };
+    }
+
+    if (!input.rollingDoorClosedPhoto) {
+      return { success: false, error: 'Foto rolling door tertutup wajib diupload.' };
+    }
+
+    const [existing] = await db.select().from(storeFrontTasks)
+      .where(eq(storeFrontTasks.scheduleId, input.scheduleId))
+      .limit(1);
+
+    if (existing?.status === 'verified') {
+      return { success: false, error: 'Store Front task sudah diverifikasi.' };
+    }
 
     const shiftMap = await getShiftIdMap();
-    const now      = new Date();
-    const values   = {
-      scheduleId:   input.scheduleId,
-      userId:       input.userId,
-      storeId:      input.storeId,
-      shiftId:      shiftMap['morning'],
-      date:         startOfDay(now),
-      display:      input.display,
-      price:        input.price,
-      saleTag:      input.saleTag,
-      shoeFiller:   input.shoeFiller,
-      labelIndo:    input.labelIndo,
-      barcode:      input.barcode,
+    const now = new Date();
+
+    const values = {
+      scheduleId: input.scheduleId,
+      userId: input.userId,
+      storeId: input.storeId,
+      shiftId: shiftMap['morning'],
+      date: startOfDay(now),
+
+      storefrontPhotos: jsonPhotos(storefrontPhotos),
+      rollingDoorClosedPhoto: input.rollingDoorClosedPhoto,
+
       submittedLat: String(input.geo.lat),
       submittedLng: String(input.geo.lng),
-      notes:        input.notes,
-      status:       'completed' as const,
-      completedAt:  now,
-      updatedAt:    now,
+      notes: input.notes,
+      status: 'completed' as const,
+      completedAt: now,
+      updatedAt: now,
     };
 
     const row = existing
-      ? (await db.update(productCheckTasks).set(values).where(eq(productCheckTasks.id, existing.id)).returning())[0]
-      : (await db.insert(productCheckTasks).values(values).returning())[0];
+      ? (await db.update(storeFrontTasks).set(values).where(eq(storeFrontTasks.id, existing.id)).returning())[0]
+      : (await db.insert(storeFrontTasks).values(values).returning())[0];
+
     return { success: true, data: row };
   } catch (err) {
-    return { success: false, error: `submitProductCheck: ${err}` };
+    return { success: false, error: `submitStoreFront: ${err}` };
+  }
+}
+
+export async function submitVmChecklist(
+  input: SubmitVmChecklistInput,
+): Promise<TaskResult<VmChecklistTask>> {
+  try {
+    const gateErr = await assertCanProgressTask(input.scheduleId, input.storeId, input.geo, input.skipGeo);
+    if (gateErr) return { success: false, error: gateErr };
+
+    const [existing] = await db.select().from(vmChecklistTasks)
+      .where(eq(vmChecklistTasks.scheduleId, input.scheduleId))
+      .limit(1);
+
+    if (existing?.status === 'verified') {
+      return { success: false, error: 'VM checklist sudah diverifikasi.' };
+    }
+
+    const shiftMap = await getShiftIdMap();
+    const now = new Date();
+
+    const values = {
+      scheduleId: input.scheduleId,
+      userId: input.userId,
+      storeId: input.storeId,
+      shiftId: shiftMap['morning'],
+      date: startOfDay(now),
+
+      shoeLaceShoeFillerPriceTagHangtagLabelK3L:
+        input.shoeLaceShoeFillerPriceTagHangtagLabelK3L,
+      lastPairAndPigskinHangtag:
+        input.lastPairAndPigskinHangtag,
+      popPromoUpdate:
+        input.popPromoUpdate,
+      displayTableWallShelvingShowcaseHangbarStackingPedestal:
+        input.displayTableWallShelvingShowcaseHangbarStackingPedestal,
+      floorDisplayCleanliness:
+        input.floorDisplayCleanliness,
+      vmToolsStorage:
+        input.vmToolsStorage,
+
+      submittedLat: String(input.geo.lat),
+      submittedLng: String(input.geo.lng),
+      notes: input.notes,
+      status: 'completed' as const,
+      completedAt: now,
+      updatedAt: now,
+    };
+
+    const row = existing
+      ? (await db.update(vmChecklistTasks).set(values).where(eq(vmChecklistTasks.id, existing.id)).returning())[0]
+      : (await db.insert(vmChecklistTasks).values(values).returning())[0];
+
+    return { success: true, data: row };
+  } catch (err) {
+    return { success: false, error: `submitVmChecklist: ${err}` };
+  }
+}
+
+export async function submitCekBin(
+  input: SubmitCekBinInput,
+): Promise<TaskResult<CekBinWithBins>> {
+  try {
+    const gateErr = await assertCanProgressTask(input.scheduleId, input.storeId, input.geo, input.skipGeo);
+    if (gateErr) return { success: false, error: gateErr };
+
+    const activeBins = await getActiveStoreBins(input.storeId);
+    const validationErr = validateSelectedBins(input.selectedBins, activeBins);
+    if (validationErr) return { success: false, error: validationErr };
+
+    const now = new Date();
+    const min = minimumBinsToCheck(activeBins.length);
+
+    let task = await findCekBinByStoreDate(input.storeId, now);
+
+    if (task?.status === 'verified') {
+      return { success: false, error: 'Cek BIN sudah diverifikasi.' };
+    }
+
+    const shiftMap = await getShiftIdMap();
+    const shiftId = input.shiftId ?? task?.shiftId ?? shiftMap['morning'];
+
+    const values = {
+      scheduleId: input.scheduleId,
+      userId: input.userId,
+      storeId: input.storeId,
+      shiftId,
+      date: startOfDay(now),
+      totalStoreBins: activeBins.length,
+      minimumBinsToCheck: min,
+      checkedBinsCount: input.selectedBins.length,
+      submittedLat: String(input.geo.lat),
+      submittedLng: String(input.geo.lng),
+      notes: input.notes,
+      status: 'completed' as const,
+      completedAt: now,
+      updatedAt: now,
+    };
+
+    if (task) {
+      const [updated] = await db
+        .update(cekBinTasks)
+        .set(values)
+        .where(eq(cekBinTasks.id, task.id))
+        .returning();
+      task = updated;
+    } else {
+      const [created] = await db.insert(cekBinTasks).values(values).returning();
+      task = created;
+    }
+
+    await replaceCheckedBins(task.id, input.selectedBins, input.storeId);
+
+    return getCekBinById(task.id);
+  } catch (err) {
+    return { success: false, error: `submitCekBin: ${err}` };
+  }
+}
+
+export async function autoSaveCekBin(
+  taskId: number,
+  patch: AutoSaveCekBinInput,
+): Promise<TaskResult<{ saved: string[] }>> {
+  try {
+    const [task] = await db.select().from(cekBinTasks).where(eq(cekBinTasks.id, taskId)).limit(1);
+    if (!task) return { success: false, error: 'Task Cek BIN tidak ditemukan.' };
+    if (task.status === 'completed' || task.status === 'verified') return { success: true, data: { saved: [] } };
+
+    const saved: string[] = [];
+    const update: Partial<typeof cekBinTasks.$inferInsert> = { updatedAt: new Date() };
+
+    if ('notes' in patch) {
+      update.notes = patch.notes;
+      saved.push('notes');
+    }
+
+    if (patch.selectedBins) {
+      const activeBins = await getActiveStoreBins(task.storeId);
+      const activeById = new Map(activeBins.map((b) => [b.id, b]));
+      const uniqueIds = [...new Set(patch.selectedBins.map((b) => b.binId))];
+
+      for (const binId of uniqueIds) {
+        if (!activeById.has(binId)) {
+          return { success: false, error: `BIN ID ${binId} tidak ditemukan di store ini atau sudah tidak aktif.` };
+        }
+      }
+
+      await replaceCheckedBins(task.id, patch.selectedBins, task.storeId);
+      update.checkedBinsCount = uniqueIds.length;
+      update.totalStoreBins = activeBins.length;
+      update.minimumBinsToCheck = minimumBinsToCheck(activeBins.length);
+      saved.push('selectedBins');
+    }
+
+    if (task.status === 'pending') update.status = 'in_progress';
+
+    await db.update(cekBinTasks).set(update).where(eq(cekBinTasks.id, task.id));
+
+    return { success: true, data: { saved } };
+  } catch (err) {
+    return { success: false, error: `autoSaveCekBin: ${err}` };
+  }
+}
+
+export async function getCekBinById(id: number): Promise<TaskResult<CekBinWithBins>> {
+  try {
+    const [task] = await db.select().from(cekBinTasks).where(eq(cekBinTasks.id, id)).limit(1);
+    if (!task) return { success: false, error: 'Task Cek BIN tidak ditemukan.' };
+
+    const [availableBins, checkedBins] = await Promise.all([
+      getActiveStoreBins(task.storeId),
+      getCheckedBins(task.id),
+    ]);
+
+    return {
+      success: true,
+      data: {
+        ...task,
+        availableBins,
+        checkedBins,
+      },
+    };
+  } catch (err) {
+    return { success: false, error: `getCekBinById: ${err}` };
+  }
+}
+
+export async function listStoreBins(storeId: number) {
+  return getActiveStoreBins(storeId);
+}
+
+export async function upsertStoreBins(
+  storeId: number,
+  bins: Array<{
+    bin: string;
+    qtyBc: number;
+    qtySesuaiBin: number;
+    qtyTidakSesuaiBin: number;
+    nama: string;
+  }>,
+): Promise<TaskResult<{ count: number }>> {
+  try {
+    if (!bins.length) return { success: true, data: { count: 0 } };
+
+    await db.insert(storeBins).values(
+      bins.map((b) => ({
+        storeId,
+        bin: b.bin.trim(),
+        qtyBc: toNonNegativeInt(b.qtyBc, 'QTY BC'),
+        qtySesuaiBin: toNonNegativeInt(b.qtySesuaiBin, 'QTY SESUAI BIN'),
+        qtyTidakSesuaiBin: toNonNegativeInt(b.qtyTidakSesuaiBin, 'QTY TIDAK SESUAI BIN'),
+        nama: b.nama.trim(),
+        isActive: true,
+        updatedAt: new Date(),
+      })),
+    ).onConflictDoUpdate({
+      target: [storeBins.storeId, storeBins.bin],
+      set: {
+        qtyBc: sql`excluded.qty_bc`,
+        qtySesuaiBin: sql`excluded.qty_sesuai_bin`,
+        qtyTidakSesuaiBin: sql`excluded.qty_tidak_sesuai_bin`,
+        nama: sql`excluded.nama`,
+        isActive: true,
+        updatedAt: new Date(),
+      },
+    });
+
+    return { success: true, data: { count: bins.length } };
+  } catch (err) {
+    return { success: false, error: `upsertStoreBins: ${err}` };
   }
 }
 
@@ -658,10 +1143,32 @@ export const verifyCekBin = (i: VerifyTaskInput) =>
     (id, p) => db.update(cekBinTasks).set(p).where(eq(cekBinTasks.id, id)).then(() => {}),
   );
 
-export const verifyProductCheck = (i: VerifyTaskInput) =>
+export const verifyStoreFront = (i: VerifyTaskInput) =>
   runVerify(i,
-    id => db.select({ id: productCheckTasks.id, status: productCheckTasks.status }).from(productCheckTasks).where(eq(productCheckTasks.id, id)).limit(1).then(r => r[0]),
-    (id, p) => db.update(productCheckTasks).set(p).where(eq(productCheckTasks.id, id)).then(() => {}),
+    id => db.select({ id: storeFrontTasks.id, status: storeFrontTasks.status }).from(storeFrontTasks).where(eq(storeFrontTasks.id, id)).limit(1).then(r => r[0]),
+    (id, p) => db.update(storeFrontTasks).set(p).where(eq(storeFrontTasks.id, id)).then(() => {}),
+  );
+
+export const verifyVmChecklist = (i: VerifyTaskInput) =>
+  runVerify(i,
+    id => db.select({ id: vmChecklistTasks.id, status: vmChecklistTasks.status }).from(vmChecklistTasks).where(eq(vmChecklistTasks.id, id)).limit(1).then(r => r[0]),
+    (id, p) => db.update(vmChecklistTasks).set(p).where(eq(vmChecklistTasks.id, id)).then(() => {}),
+  );
+
+export const verifyMarketingCheck = (i: VerifyTaskInput) =>
+  runVerify(i,
+    id => db
+      .select({ id: marketingCheckTasks.id, status: marketingCheckTasks.status })
+      .from(marketingCheckTasks)
+      .where(eq(marketingCheckTasks.id, id))
+      .limit(1)
+      .then(r => r[0]),
+
+    (id, p) => db
+      .update(marketingCheckTasks)
+      .set(p)
+      .where(eq(marketingCheckTasks.id, id))
+      .then(() => {}),
   );
 
 export const verifyBriefing = (i: VerifyTaskInput) =>
@@ -680,11 +1187,13 @@ export const verifyGrooming = (i: VerifyTaskInput) =>
 
 export async function getTasksForSchedule(scheduleId: number) {
   const [
-    cekBin, productCheck, itemDropping, briefing,
+    storeFront, cekBin, vmChecklist, marketingCheck, itemDropping, briefing,
     edcReconciliation, eodZReport, openStatement, grooming,
   ] = await Promise.all([
+    db.select().from(storeFrontTasks)        .where(eq(storeFrontTasks.scheduleId,        scheduleId)).limit(1),
     db.select().from(cekBinTasks)            .where(eq(cekBinTasks.scheduleId,            scheduleId)).limit(1),
-    db.select().from(productCheckTasks)      .where(eq(productCheckTasks.scheduleId,      scheduleId)).limit(1),
+    db.select().from(vmChecklistTasks)       .where(eq(vmChecklistTasks.scheduleId,       scheduleId)).limit(1),
+    db.select().from(marketingCheckTasks)    .where(eq(marketingCheckTasks.scheduleId,    scheduleId)).limit(1),
     db.select().from(itemDroppingTasks)      .where(eq(itemDroppingTasks.scheduleId,      scheduleId)).limit(1),
     db.select().from(briefingTasks)          .where(eq(briefingTasks.scheduleId,          scheduleId)).limit(1),
     db.select().from(edcReconciliationTasks) .where(eq(edcReconciliationTasks.scheduleId, scheduleId)).limit(1),
@@ -694,8 +1203,10 @@ export async function getTasksForSchedule(scheduleId: number) {
   ]);
 
   return {
+    storeFront:        storeFront[0]        ?? null,
     cekBin:            cekBin[0]            ?? null,
-    productCheck:      productCheck[0]      ?? null,
+    vmChecklist:       vmChecklist[0]       ?? null,
+    marketingCheck:    marketingCheck[0]    ?? null,
     itemDropping:      itemDropping[0]      ?? null,
     briefing:          briefing[0]          ?? null,
     edcReconciliation: edcReconciliation[0] ?? null,
@@ -727,13 +1238,17 @@ export async function getDailyTaskSummary(storeId: number, date: Date) {
   }
 
   const [
-    cekBin, productCheck, itemDropping, briefing,
+    storeFront, cekBin, vmChecklist, marketingCheck, itemDropping, briefing,
     edcReconciliation, eodZReport, openStatement, grooming,
   ] = await Promise.all([
+    db.select({ status: storeFrontTasks.status,        count: sql<number>`count(*)::int` }).from(storeFrontTasks)
+      .where(and(eq(storeFrontTasks.storeId, storeId),        gte(storeFrontTasks.date, dayStart),        lte(storeFrontTasks.date, dayEnd))).groupBy(storeFrontTasks.status).then(summarise),
     db.select({ status: cekBinTasks.status,            count: sql<number>`count(*)::int` }).from(cekBinTasks)
       .where(and(eq(cekBinTasks.storeId, storeId),            gte(cekBinTasks.date, dayStart),            lte(cekBinTasks.date, dayEnd))).groupBy(cekBinTasks.status).then(summarise),
-    db.select({ status: productCheckTasks.status,      count: sql<number>`count(*)::int` }).from(productCheckTasks)
-      .where(and(eq(productCheckTasks.storeId, storeId),      gte(productCheckTasks.date, dayStart),      lte(productCheckTasks.date, dayEnd))).groupBy(productCheckTasks.status).then(summarise),
+    db.select({ status: vmChecklistTasks.status,       count: sql<number>`count(*)::int` }).from(vmChecklistTasks)
+      .where(and(eq(vmChecklistTasks.storeId, storeId),       gte(vmChecklistTasks.date, dayStart),       lte(vmChecklistTasks.date, dayEnd))).groupBy(vmChecklistTasks.status).then(summarise),
+    db.select({ status: marketingCheckTasks.status,    count: sql<number>`count(*)::int` }).from(marketingCheckTasks)
+      .where(and(eq(marketingCheckTasks.storeId, storeId),    gte(marketingCheckTasks.date, dayStart),    lte(marketingCheckTasks.date, dayEnd))).groupBy(marketingCheckTasks.status).then(summarise),
     db.select({ status: itemDroppingTasks.status,      count: sql<number>`count(*)::int` }).from(itemDroppingTasks)
       .where(and(eq(itemDroppingTasks.storeId, storeId),      gte(itemDroppingTasks.date, dayStart),      lte(itemDroppingTasks.date, dayEnd))).groupBy(itemDroppingTasks.status).then(summarise),
     db.select({ status: briefingTasks.status,          count: sql<number>`count(*)::int` }).from(briefingTasks)
@@ -748,7 +1263,7 @@ export async function getDailyTaskSummary(storeId: number, date: Date) {
       .where(and(eq(groomingTasks.storeId, storeId),          gte(groomingTasks.date, dayStart),          lte(groomingTasks.date, dayEnd))).groupBy(groomingTasks.status).then(summarise),
   ]);
 
-  return { cekBin, productCheck, itemDropping, briefing, edcReconciliation, eodZReport, openStatement, grooming };
+  return { storeFront, cekBin, vmChecklist, marketingCheck, itemDropping, briefing, edcReconciliation, eodZReport, openStatement, grooming };
 }
 
 function parsePhotosField(raw: unknown): string[] {
@@ -816,11 +1331,13 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
   }
 
   const [
-    cekBin, productCheck, itemDropping, briefing,
+    storeFront, cekBin, vmChecklist, marketingCheck, itemDropping, briefing,
     edcReconciliation, eodZReport, openStatement, grooming,
   ] = await Promise.all([
+    loadTable(storeFrontTasks,        'store_front',        ['storefrontPhotos', 'rollingDoorClosedPhoto']),
     loadTable(cekBinTasks,            'cek_bin',            []),
-    loadTable(productCheckTasks,      'product_check',      []),
+    loadTable(vmChecklistTasks,       'vm_checklist',       []),
+    loadTable(marketingCheckTasks,    'marketing_check',    []),
     loadTable(itemDroppingTasks,      'item_dropping',      ['droppingPhotos', 'receivePhotos']),
     loadTable(briefingTasks,          'briefing',           []),
     loadTable(edcReconciliationTasks, 'edc_reconciliation', []),
@@ -830,7 +1347,7 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
   ]);
 
   const all = [
-    ...cekBin, ...productCheck, ...itemDropping, ...briefing,
+    ...storeFront, ...cekBin, ...vmChecklist, ...marketingCheck, ...itemDropping, ...briefing,
     ...edcReconciliation, ...eodZReport, ...openStatement, ...grooming,
   ];
 
@@ -901,7 +1418,8 @@ export async function getAreaTaskOverview(opsUserId: string, date: Date) {
 
 const VERIFY_DISPATCH: Record<string, (i: VerifyTaskInput) => Promise<TaskResult<void>>> = {
   cek_bin:       verifyCekBin,
-  product_check: verifyProductCheck,
+  store_front:   verifyStoreFront,
+  vm_checklist:  verifyVmChecklist,
   briefing:      verifyBriefing,
   grooming:      verifyGrooming,
 

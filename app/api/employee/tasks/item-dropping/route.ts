@@ -1,3 +1,4 @@
+// app/api/employee/tasks/item-dropping/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession }          from 'next-auth';
 import { authOptions }               from '@/lib/auth';
@@ -31,12 +32,17 @@ function readStringArray(v: unknown): string[] | undefined {
   return undefined;
 }
 
+/**
+ * Parse the entries array from the request body.
+ * Each entry now includes `quantity` (required by the updated schema).
+ */
 function readEntries(v: unknown): ToEntry[] | undefined {
   if (!Array.isArray(v)) return undefined;
   return v
     .filter(e => e && typeof e === 'object')
     .map((e: Record<string, unknown>) => ({
       toNumber:       String(e.toNumber ?? ''),
+      quantity:       Math.max(0, Math.floor(Number(e.quantity ?? 0))), // ← quantity added
       dropTime:       String(e.dropTime ?? ''),
       droppingPhotos: readStringArray(e.droppingPhotos) ?? [],
       notes:          typeof e.notes === 'string' ? e.notes : undefined,
@@ -49,7 +55,7 @@ function readEntries(v: unknown): ToEntry[] | undefined {
 //   • mode = 'submit'     → submit the task header (hasDropping flag + optional
 //                           full entries array for first-time batch submit)
 //   • mode = 'add_entry'  → add a single TO entry to an existing task
-//                           requires: taskId, toNumber, dropTime, droppingPhotos
+//                           requires: taskId, toNumber, quantity, dropTime, droppingPhotos
 //
 // If mode is omitted, 'submit' is assumed.
 
@@ -74,11 +80,12 @@ export async function POST(req: NextRequest) {
 
     // ── Add single TO entry to an existing task ─────────────────────────────
     if (mode === 'add_entry') {
-      const taskId        = toInt(body.taskId, 'taskId');
-      const toNumber      = typeof body.toNumber === 'string' ? body.toNumber : '';
-      const dropTime      = typeof body.dropTime === 'string' ? body.dropTime : '';
+      const taskId         = toInt(body.taskId, 'taskId');
+      const toNumber       = typeof body.toNumber === 'string' ? body.toNumber : '';
+      const quantity       = Math.max(0, Math.floor(Number(body.quantity ?? 0))); // ← quantity
+      const dropTime       = typeof body.dropTime === 'string' ? body.dropTime : '';
       const droppingPhotos = readStringArray(body.droppingPhotos) ?? [];
-      const notes         = typeof body.notes === 'string' ? body.notes : undefined;
+      const notes          = typeof body.notes === 'string' ? body.notes : undefined;
 
       const result = await addToEntry({
         taskId,
@@ -88,6 +95,7 @@ export async function POST(req: NextRequest) {
         geo,
         skipGeo,
         toNumber,
+        quantity,       // ← passed through
         dropTime,
         droppingPhotos,
         notes,
@@ -120,9 +128,6 @@ export async function POST(req: NextRequest) {
 }
 
 // ─── PATCH (auto-save) ────────────────────────────────────────────────────────
-//
-// Keyed by taskId. Only patches the task header fields (hasDropping, notes).
-// Individual TO entries are managed via POST mode=add_entry and DELETE.
 
 export async function PATCH(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -152,8 +157,6 @@ export async function PATCH(req: NextRequest) {
 }
 
 // ─── DELETE (remove a single TO entry) ───────────────────────────────────────
-//
-// Body: { entryId, scheduleId, storeId, lat, lng, skipGeo? }
 
 export async function DELETE(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -173,15 +176,7 @@ export async function DELETE(req: NextRequest) {
     const skipGeo    = Boolean(body.skipGeo);
     const userId     = session.user.id as string;
 
-    const result = await removeToEntry({
-      entryId,
-      scheduleId,
-      userId,
-      storeId,
-      geo,
-      skipGeo,
-    });
-
+    const result = await removeToEntry({ entryId, scheduleId, userId, storeId, geo, skipGeo });
     return NextResponse.json(result, { status: result.success ? 200 : 400 });
   } catch (err) {
     console.error('[DELETE /api/employee/tasks/item-dropping]', err);
