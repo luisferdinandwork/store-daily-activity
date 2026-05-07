@@ -58,13 +58,24 @@ export interface StoreOpeningData extends TaskBase {
   fiveRAreaGudangPhotos: string[];
 }
 export interface SetoranData extends TaskBase {
-  amount: string | null; resiPhoto: string | null; atmCardSelfiePhoto: string | null;
-  expectedAmount: string | null; carriedDeficit: string | null;
-  carriedDeficitFetchedAt: string | null; unpaidAmount: string | null;
+  // Old names kept by /api/employee/tasks for compatibility.
+  amount: string | null;
+  expectedAmount: string | null;
+  carriedDeficit: string | null;
+  carriedDeficitFetchedAt: string | null;
+  unpaidAmount: string | null;
+
+  // New clearer money-storage names.
+  actualReceivedAmount?: string | null;
+  previousUnpaidAmount?: string | null;
+  requiredStoreAmount?: string | null;
+  storedAmount?: string | null;
+
+  resiPhoto: string | null;
+  atmCardSelfiePhoto: string | null;
 }
 export interface StoreFrontData extends TaskBase {
-  storefrontStaffOnePhoto: string | null;
-  storefrontStaffTwoPhoto: string | null;
+  storefrontPhotos: string[];
   rollingDoorClosedPhoto: string | null;
 }
 export interface MarketingCheckData extends TaskBase {
@@ -72,12 +83,18 @@ export interface MarketingCheckData extends TaskBase {
   randomShoeItems: boolean; randomNonShoeItems: boolean; sellTag: boolean;
 }
 export interface CekBinData extends TaskBase {
-  totalBinSystem: number | null;
-  totalBinLocation: number | null;
-  minimumBinsToCheck?: number;
-  selectedBinIds?: number[];
-  selectedBins?: Array<{ id: string; binId: string; code: string; name: string | null; notes: string | null }>;
-  availableBins?: Array<{ id: string; code: string; name: string | null; isActive: boolean }>;
+  totalStoreBins: number;
+  minimumBinsToCheck: number;
+  checkedBinsCount: number;
+  selectedBinIds: string[];
+  availableBins: Array<{
+    id: string; storeId: string; bin: string; nama: string | null;
+    qtyBc: number | null; qtySesuaiBin: number | null; qtyTidakSesuaiBin: number | null;
+  }>;
+  checkedBins: Array<{
+    id: string; taskId: string; binId: string; bin: string; nama: string | null;
+    qtyBc: number | null; qtySesuaiBin: number | null; qtyTidakSesuaiBin: number | null; notes: string | null;
+  }>;
 }
 export interface VmChecklistData extends TaskBase {
   shoeLaceShoeFillerPriceTagHangtagLabelK3L: boolean;
@@ -157,7 +174,7 @@ const STATUS_PRIORITY: Record<TaskStatus, number> = {
 const TASK_META: Record<TaskType, { title: string; description: string; Icon: ElementType; hasPhoto: boolean }> = {
   store_opening:      { title: 'Store Opening',      description: 'Opening checklist, 5R, lampu, sound, dan cash drawer.', Icon: Store,         hasPhoto: true  },
   store_front:        { title: 'Store Front',        description: 'Foto dua orang di storefront dan rolling door tertutup.', Icon: Camera,        hasPhoto: true  },
-  setoran:            { title: 'Setoran Penjualan',            description: 'Record cash handover & upload proof.',   Icon: Wallet,        hasPhoto: true  },
+  setoran:            { title: 'Setoran Penjualan',            description: 'Uang diterima, uang disetor, dan sisa unpaid.', Icon: Wallet,        hasPhoto: true  },
   cek_bin:            { title: 'Cek Bin',            description: 'Input total bin dan pilih minimal 30% bin untuk dicek.', Icon: Box,           hasPhoto: false },
   vm_checklist:       { title: 'VM Checklist',       description: 'Checklist harian Visual Merchandising.', Icon: ClipboardList, hasPhoto: false },
   item_dropping:      { title: 'Item Dropping',      description: 'Log delivery arrival & receipt.',        Icon: Truck,         hasPhoto: true  },
@@ -451,15 +468,19 @@ function TaskCard({ item, onOpen }: { item: TaskItem; onOpen: (item: TaskItem) =
 
   const setoranDeficitLabel = (() => {
     if (item.type !== 'setoran') return null;
+
     const d = item.data as SetoranData;
-    if ((d.status === 'completed' || d.status === 'verified') && d.unpaidAmount) {
-      const unpaid = Number(d.unpaidAmount);
-      if (unpaid > 0) return `Masih kurang: Rp ${unpaid.toLocaleString('id-ID')} — muncul di setoran besok`;
+    const unpaid = Number(d.unpaidAmount ?? 0);
+    const previousUnpaid = Number(d.previousUnpaidAmount ?? d.carriedDeficit ?? 0);
+
+    if ((d.status === 'completed' || d.status === 'verified') && unpaid > 0) {
+      return `Masih kurang: Rp ${unpaid.toLocaleString('id-ID')} — jadi kebutuhan setoran besok`;
     }
-    if ((d.status === 'pending' || d.status === 'in_progress') && d.carriedDeficit) {
-      const carried = Number(d.carriedDeficit);
-      if (carried > 0) return `Kurang dari kemarin: Rp ${carried.toLocaleString('id-ID')}`;
+
+    if ((d.status === 'pending' || d.status === 'in_progress') && previousUnpaid > 0) {
+      return `Wajib bayar sisa kemarin: Rp ${previousUnpaid.toLocaleString('id-ID')}`;
     }
+
     return null;
   })();
 

@@ -1,129 +1,77 @@
 'use client';
 // app/employee/tasks/setoran/[id]/page.tsx
 
-import { useEffect, useState, useCallback } from 'react';
-import { useParams, useRouter }             from 'next/navigation';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useParams, useRouter } from 'next/navigation';
 import {
-  ArrowLeft, CheckCircle2, Camera, X, Loader2,
-  AlertCircle, Cloud, CloudOff, Save,
-  LogIn, RefreshCw, Receipt, AlertTriangle,
-  TrendingDown, Wallet,
+  ArrowLeft, AlertTriangle, Camera, CheckCircle2, Loader2,
+  Receipt, Wallet, CreditCard, X, Cloud, CloudOff,
+  AlertCircle, Check,
 } from 'lucide-react';
 import { cn }    from '@/lib/utils';
 import { toast } from 'sonner';
-import { useAutoSave } from '@/lib/hooks/useAutoSave';
-import ChecklistPhotoModal from '@/components/tasks/ChecklistPhotoModal';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'verified' | 'rejected' | 'discrepancy';
+type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'discrepancy' | 'verified' | 'rejected';
 
-interface SetoranData {
-  id:                     string;
-  scheduleId:             string;
-  userId:                 string;
-  storeId:                string;
-  shift:                  'morning' | 'evening';
-  date:                   string;
-  status:                 TaskStatus;
-  notes:                  string | null;
-  completedAt:            string | null;
-  verifiedBy:             string | null;
-  verifiedAt:             string | null;
-  amount:                 string | null;
-  resiPhoto:              string | null;
-  atmCardSelfiePhoto:     string | null;
-  expectedAmount:         string | null;
-  carriedDeficit:         string | null;
-  carriedDeficitFetchedAt:string | null;
-  unpaidAmount:           string | null;
+type SetoranTaskData = {
+  id:          string;
+  scheduleId:  string;
+  userId:      string;
+  storeId:     string;
+  shift:       'morning' | 'evening' | 'full_day';
+  date:        string;
+  status:      TaskStatus;
+  notes:       string | null;
+  completedAt: string | null;
+  verifiedBy:  string | null;
+  verifiedAt:  string | null;
+
+  // API field names
+  amount:                  string | null;
+  expectedAmount:          string | null;
+  carriedDeficit:          string | null;
+  carriedDeficitFetchedAt: string | null;
+  unpaidAmount:            string | null;
+
+  // Cleaner aliases (may also be present)
+  actualReceivedAmount?: string | null;
+  previousUnpaidAmount?: string | null;
+  requiredStoreAmount?:  string | null;
+  storedAmount?:         string | null;
+
+  resiPhoto:          string | null;
+  atmCardSelfiePhoto: string | null;
+};
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function rupiah(value: string | number | null | undefined): string {
+  const n = Number(value ?? 0);
+  if (!Number.isFinite(n)) return 'Rp 0';
+  return `Rp ${n.toLocaleString('id-ID')}`;
 }
 
-interface SubmitMeta {
-  unpaidAmount:           string;
-  hasUnpaid:              boolean;
-  nextDayCarriedDeficit:  string;
+function onlyDigits(raw: string): string { return raw.replace(/[^0-9]/g, ''); }
+
+function toNumber(raw: string | null | undefined): number {
+  const n = Number(raw ?? 0);
+  return Number.isFinite(n) ? n : 0;
 }
 
-// ─── Rupiah helpers ───────────────────────────────────────────────────────────
-
-function formatRupiah(raw: string): string {
-  const digits = raw.replace(/\D/g, '');
-  if (!digits) return 'Rp 0';
-  return 'Rp ' + parseInt(digits, 10).toLocaleString('id-ID');
+function fmtLong(iso: string | null) {
+  if (!iso) return '–';
+  return new Date(iso).toLocaleString('id-ID', {
+    day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit',
+  });
 }
 
-// For stripping formatting from user-typed input (no decimals expected).
-function parseRupiah(formatted: string): string {
-  return formatted.replace(/\D/g, '') || '0';
-}
+// ─── Save indicator ───────────────────────────────────────────────────────────
 
-// For loading a decimal string returned from the DB (e.g. "100000.00").
-// Drops the fractional part BEFORE stripping non-digits, so "100000.00"
-// becomes "100000" rather than "10000000".
-function decimalToRupiahRaw(v: string | null | undefined): string {
-  if (!v) return '0';
-  const intPart = String(v).split('.')[0];
-  return intPart.replace(/\D/g, '') || '0';
-}
+type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
-// ─── Check-in hook ────────────────────────────────────────────────────────────
-
-type CheckInStatus = 'unknown' | 'checked_in' | 'not_checked_in';
-
-function useCheckInStatus(scheduleId: string, storeId: string, taskStatus: TaskStatus | undefined) {
-  const [status,  setStatus]  = useState<CheckInStatus>('unknown');
-  const [loading, setLoading] = useState(true);
-
-  const refresh = useCallback(async () => {
-    if (taskStatus && ['completed', 'verified', 'rejected'].includes(taskStatus)) {
-      setStatus('checked_in'); setLoading(false); return;
-    }
-    if (!scheduleId || !storeId) return;
-    setLoading(true);
-    try {
-      const params = new URLSearchParams({ scheduleId, storeId });
-      const res    = await fetch(`/api/employee/tasks/access?${params}`);
-      const data   = await res.json() as { status: string };
-      setStatus(data.status === 'not_checked_in' ? 'not_checked_in' : 'checked_in');
-    } catch { setStatus('checked_in'); }
-    finally  { setLoading(false); }
-  }, [scheduleId, storeId, taskStatus]);
-
-  useEffect(() => { refresh(); }, [refresh]);
-  return { status, loading, refresh };
-}
-
-// ─── Sub-components ───────────────────────────────────────────────────────────
-
-function CheckInBanner({ status, loading, onRefresh }: {
-  status: CheckInStatus; loading: boolean; onRefresh: () => void;
-}) {
-  if (loading) return (
-    <div className="flex items-center gap-2 rounded-xl border border-border bg-secondary px-4 py-2.5">
-      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-      <p className="text-xs text-muted-foreground">Memeriksa absensi…</p>
-    </div>
-  );
-  if (status !== 'not_checked_in') return null;
-  return (
-    <div className="flex items-start gap-3 rounded-xl border border-red-300 bg-red-50 px-4 py-3.5">
-      <LogIn className="mt-0.5 h-5 w-5 flex-shrink-0 text-red-600" />
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-bold text-red-700">Belum absen masuk</p>
-        <p className="mt-0.5 text-xs text-red-600">Lakukan absensi masuk terlebih dahulu.</p>
-      </div>
-      <button onClick={onRefresh}
-        className="flex-shrink-0 flex items-center gap-1 rounded-lg bg-red-100 px-2.5 py-1.5 text-[11px] font-semibold text-red-700 hover:bg-red-200 transition-colors">
-        <RefreshCw className="h-3 w-3" />Cek ulang
-      </button>
-    </div>
-  );
-}
-
-function SaveIndicator({ status, lastSaved }: {
-  status: 'idle' | 'saving' | 'saved' | 'error'; lastSaved: Date | null;
-}) {
+function SaveIndicator({ status }: { status: SaveStatus }) {
   if (status === 'idle') return null;
   return (
     <div className={cn(
@@ -133,139 +81,13 @@ function SaveIndicator({ status, lastSaved }: {
       status === 'error'  && 'bg-red-50   text-red-600',
     )}>
       {status === 'saving' && <><Loader2 className="h-3 w-3 animate-spin" />Menyimpan…</>}
-      {status === 'saved'  && <><Cloud    className="h-3 w-3" />Tersimpan{lastSaved ? ` ${new Date(lastSaved).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'})}` : ''}</>}
+      {status === 'saved'  && <><Cloud   className="h-3 w-3" />Tersimpan</>}
       {status === 'error'  && <><CloudOff className="h-3 w-3" />Simpan gagal</>}
     </div>
   );
 }
 
-function CarriedDeficitBanner({ carriedDeficit }: { carriedDeficit: string }) {
-  const amt = Number(carriedDeficit);
-  if (!isFinite(amt) || amt <= 0) return null;
-  return (
-    <div className="flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3.5">
-      <Wallet className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600" />
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-bold text-amber-800">Ada kekurangan setoran kemarin</p>
-        <p className="mt-0.5 text-xs text-amber-700">
-          Kekurangan dari hari sebelumnya: <span className="font-bold">{formatRupiah(carriedDeficit)}</span>
-        </p>
-        <p className="mt-1 text-[11px] text-amber-700">
-          Jumlah ini ditambahkan ke total yang wajib disetor hari ini.
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function UnpaidResultBanner({ unpaid, nextDayCarried }: {
-  unpaid: string; nextDayCarried: string;
-}) {
-  return (
-    <div className="flex items-start gap-3 rounded-xl border border-orange-300 bg-orange-50 px-4 py-3.5">
-      <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-orange-600" />
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-bold text-orange-800">Setoran tersimpan — masih ada kekurangan</p>
-        <p className="mt-0.5 text-xs text-orange-700">
-          Sisa belum disetor: <span className="font-bold">Rp {Number(nextDayCarried).toLocaleString('id-ID')}</span>
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function PhotoProofTile({
-  title,
-  emptyText,
-  filledText,
-  photo,
-  onClick,
-  disabled,
-  hasPhoto,
-}: {
-  title: string;
-  emptyText: string;
-  filledText: string;
-  photo: string | null;
-  onClick: () => void;
-  disabled?: boolean;
-  hasPhoto: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={() => !disabled && onClick()}
-      className={cn(
-        'flex w-full items-center gap-3 rounded-xl border-2 px-4 py-3.5 text-left transition-all',
-        hasPhoto ? 'border-primary/30 bg-primary/5' : 'border-amber-400 bg-amber-50',
-        disabled && 'cursor-default opacity-60',
-      )}
-    >
-      {hasPhoto && photo ? (
-        <div className="h-14 w-14 flex-shrink-0 overflow-hidden rounded-lg border border-border bg-secondary">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={photo} alt={title} className="h-full w-full object-cover" />
-        </div>
-      ) : (
-        <div className="flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-lg border-2 border-dashed border-amber-400 bg-amber-100">
-          <Camera className="h-5 w-5 text-amber-600" />
-        </div>
-      )}
-
-      <div className="min-w-0 flex-1">
-        <p className={cn('text-sm font-semibold', hasPhoto ? 'text-foreground' : 'text-amber-800')}>
-          {title}
-        </p>
-        <p className={cn('mt-0.5 text-[11px]', hasPhoto ? 'text-muted-foreground' : 'text-amber-700')}>
-          {hasPhoto ? filledText : emptyText}
-        </p>
-      </div>
-
-      {hasPhoto && (
-        <span className="flex-shrink-0 rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-bold text-green-700">
-          1/1
-        </span>
-      )}
-    </button>
-  );
-}
-
-function RupiahInput({ value, onChange, disabled, placeholder, highlight }: {
-  value: string; onChange: (raw: string) => void;
-  disabled?: boolean; placeholder?: string;
-  highlight?: 'error' | 'warning' | 'success' | null;
-}) {
-  return (
-    <input
-      type="text"
-      inputMode="numeric"
-      value={formatRupiah(value)}
-      disabled={disabled}
-      placeholder={placeholder ?? 'Rp 0'}
-      onChange={e => onChange(parseRupiah(e.target.value))}
-      onFocus={e => {
-        const el = e.target, len = el.value.length;
-        requestAnimationFrame(() => el.setSelectionRange(len, len));
-      }}
-      className={cn(
-        'w-full rounded-xl border bg-secondary px-4 py-3 text-sm font-semibold tabular-nums focus:outline-none focus:ring-2 disabled:opacity-60',
-        highlight === 'error'   && 'border-red-400    focus:ring-red-400/30',
-        highlight === 'warning' && 'border-orange-400 focus:ring-orange-400/30',
-        highlight === 'success' && 'border-green-400  focus:ring-green-400/30',
-        !highlight              && 'border-border      focus:ring-primary/30',
-      )}
-    />
-  );
-}
-
-function ReadOnlyAmount({ value, label }: { value: string; label: string }) {
-  return (
-    <div className="rounded-xl border border-border bg-muted/40 px-4 py-3">
-      <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">{label}</p>
-      <p className="mt-1 text-sm font-bold tabular-nums text-foreground">{formatRupiah(value)}</p>
-    </div>
-  );
-}
+// ─── Section header ───────────────────────────────────────────────────────────
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -276,209 +98,342 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function LockedOverlay({ show }: { show: boolean }) {
-  if (!show) return null;
+// ─── Money row (read-only summary) ────────────────────────────────────────────
+
+function MoneyRow({ label, value, bold, highlight }: {
+  label: string; value: string; bold?: boolean; highlight?: 'amber' | 'green' | 'red';
+}) {
   return (
-    <div className="pointer-events-none absolute inset-0 rounded-2xl bg-background/70 backdrop-blur-[2px] flex flex-col items-center justify-center gap-2 z-10">
-      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-red-100">
-        <LogIn className="h-6 w-6 text-red-600" />
-      </div>
-      <p className="text-sm font-bold text-red-700">Absen masuk dulu</p>
+    <div className={cn(
+      'flex items-center justify-between rounded-xl px-4 py-3',
+      highlight === 'amber' && 'border border-amber-200 bg-amber-50',
+      highlight === 'green' && 'border border-green-200 bg-green-50',
+      highlight === 'red'   && 'border border-red-200   bg-red-50',
+      !highlight            && 'border border-border bg-secondary',
+    )}>
+      <span className={cn('text-xs', highlight ? 'font-medium' : 'text-muted-foreground')}>
+        {label}
+      </span>
+      <span className={cn(
+        bold ? 'text-base font-bold' : 'text-sm font-semibold',
+        highlight === 'amber' && 'text-amber-900',
+        highlight === 'green' && 'text-green-800',
+        highlight === 'red'   && 'text-red-700',
+        !highlight            && 'text-foreground',
+      )}>
+        {value}
+      </span>
     </div>
+  );
+}
+
+// ─── Rupiah input ─────────────────────────────────────────────────────────────
+
+function RupiahInput({
+  label, hint, value, onChange, onBlur, disabled, error,
+}: {
+  label: string; hint?: string; value: string;
+  onChange: (raw: string) => void; onBlur?: () => void;
+  disabled?: boolean; error?: string;
+}) {
+  const [focused, setFocused] = useState(false);
+  const n = Number(value || '0');
+  const displayVal = focused ? value : (value ? n.toLocaleString('id-ID') : '');
+
+  return (
+    <div className="space-y-1.5">
+      <label className="text-xs font-semibold text-foreground">{label}</label>
+      {hint && <p className="text-[10px] text-muted-foreground">{hint}</p>}
+      <div className={cn(
+        'flex items-center rounded-xl border-2 bg-secondary px-4 py-3 gap-2 transition-colors',
+        focused && !error && 'border-primary/40 bg-background',
+        error   && 'border-red-400 bg-red-50',
+        !focused && !error && 'border-border',
+        disabled && 'opacity-60',
+      )}>
+        <span className="text-sm font-semibold text-muted-foreground flex-shrink-0">Rp</span>
+        <input
+          inputMode="numeric"
+          disabled={disabled}
+          value={displayVal}
+          onChange={e => onChange(onlyDigits(e.target.value))}
+          onFocus={() => setFocused(true)}
+          onBlur={() => { setFocused(false); onBlur?.(); }}
+          placeholder="0"
+          className="flex-1 bg-transparent text-sm font-semibold text-foreground outline-none placeholder:text-muted-foreground"
+        />
+      </div>
+      {error && <p className="text-[10px] font-semibold text-red-600">{error}</p>}
+    </div>
+  );
+}
+
+// ─── Photo slot (single required) ────────────────────────────────────────────
+
+function PhotoSlot({
+  label, description, photoType, photo, onUpload, onClear, disabled, loading, icon,
+}: {
+  label:       string;
+  description: string;
+  photoType:   string;
+  photo:       string | null;
+  onUpload:    (file: File) => void;
+  onClear:     () => void;
+  disabled?:   boolean;
+  loading?:    boolean;
+  icon?:       'camera' | 'card';
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const Icon = icon === 'card' ? CreditCard : Camera;
+  const hasPhoto = Boolean(photo);
+
+  return (
+    <button
+      type="button"
+      onClick={() => !disabled && !loading && inputRef.current?.click()}
+      className={cn(
+        'flex w-full items-start gap-3 rounded-xl border-2 px-4 py-3.5 text-left transition-all',
+        hasPhoto  ? 'border-primary/30 bg-primary/5' : 'border-border bg-card hover:border-primary/20',
+        disabled  && 'cursor-default opacity-60',
+      )}
+    >
+      {/* Circle indicator */}
+      <div className={cn(
+        'mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border-2 transition-colors',
+        hasPhoto ? 'border-primary bg-primary' : 'border-border',
+      )}>
+        {hasPhoto && <Check className="h-3 w-3 text-primary-foreground" strokeWidth={3} />}
+      </div>
+
+      <div className="min-w-0 flex-1">
+        {/* Label + badge */}
+        <div className="flex items-center justify-between gap-2">
+          <span className={cn('text-sm font-medium', hasPhoto ? 'text-foreground' : 'text-muted-foreground')}>
+            {label}
+          </span>
+          <span className={cn(
+            'flex-shrink-0 flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold',
+            hasPhoto ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700',
+          )}>
+            <Icon className="h-2.5 w-2.5" />
+            {hasPhoto ? '1/1' : '0/1'}
+          </span>
+        </div>
+
+        <p className="mt-0.5 text-[10px] text-muted-foreground">
+          {hasPhoto ? 'Ketuk untuk mengganti foto.' : description}
+        </p>
+
+        {/* Preview or placeholder */}
+        {hasPhoto ? (
+          <div
+            className="relative mt-3 h-32 w-full overflow-hidden rounded-xl border border-border"
+            onClick={e => e.stopPropagation()}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={photo!} alt={label} className="h-full w-full object-cover" />
+            {!disabled && (
+              <button
+                onClick={e => { e.stopPropagation(); onClear(); }}
+                className="absolute right-1.5 top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-black/60 text-white"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+        ) : (
+          !disabled && (
+            <div className="mt-3 flex h-20 w-full items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-border bg-secondary text-muted-foreground">
+              {loading
+                ? <Loader2 className="h-4 w-4 animate-spin" />
+                : <><Icon className="h-4 w-4" /><span className="text-[11px] font-medium">Ambil foto</span></>}
+            </div>
+          )
+        )}
+      </div>
+
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+        onChange={e => { const f = e.target.files?.[0]; if (f) onUpload(f); e.target.value = ''; }}
+      />
+    </button>
   );
 }
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
-export default function SetoranDetailPage() {
-  const params = useParams();
+export default function SetoranTaskPage() {
   const router = useRouter();
-  const taskId = params.id as string;
+  const params = useParams<{ id: string }>();
+  const taskId = String(params?.id ?? '');
 
-  const [taskData,       setTaskData]       = useState<SetoranData | null>(null);
-  const [loading,        setLoading]        = useState(true);
-  const [submitting,     setSubmitting]     = useState(false);
-  const [submitError,    setSubmitError]    = useState<string | null>(null);
-  const [submitMeta,     setSubmitMeta]     = useState<SubmitMeta | null>(null);
-  const [resiPhotoModalOpen, setResiPhotoModalOpen] = useState(false);
-  const [atmSelfieModalOpen, setAtmSelfieModalOpen] = useState(false);
+  const [task,     setTask]     = useState<SetoranTaskData | null>(null);
+  const [loading,  setLoading]  = useState(true);
+  const [saving,   setSaving]   = useState(false);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
+  const [uploading, setUploading]  = useState<'resi' | 'atm' | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
-  // Form state — raw digit strings
-  const [expectedAmount, setExpectedAmount] = useState('0');
-  const [amount,         setAmount]         = useState('0');
-  const [resiPhoto,          setResiPhoto]          = useState<string | null>(null);
-  const [atmCardSelfiePhoto, setAtmCardSelfiePhoto] = useState<string | null>(null);
-  const [notes,          setNotes]          = useState('');
+  const [actualReceivedAmount, setActualReceivedAmount] = useState('');
+  const [storedAmount,         setStoredAmount]         = useState('');
+  const [resiPhoto,            setResiPhoto]            = useState<string | null>(null);
+  const [atmCardSelfiePhoto,   setAtmCardSelfiePhoto]   = useState<string | null>(null);
+  const [notes,                setNotes]                = useState('');
 
-  // ── Load task ──────────────────────────────────────────────────────────────
+  // ── Load ──────────────────────────────────────────────────────────────────
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res  = await fetch('/api/employee/tasks');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json() as { tasks: { type: string; data: SetoranData }[] };
-      const found = data.tasks?.find(t => t.type === 'setoran' && t.data.id === taskId);
-      if (found) {
-        const d = found.data;
-        setTaskData(d);
-        setExpectedAmount(decimalToRupiahRaw(d.expectedAmount));
-        setAmount(decimalToRupiahRaw(d.amount));
-        setResiPhoto(d.resiPhoto ?? null);
-        setAtmCardSelfiePhoto(d.atmCardSelfiePhoto ?? null);
-        setNotes(d.notes ?? '');
-      } else {
-        setTaskData(null);
-      }
+      const res  = await fetch('/api/employee/tasks', { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? 'Gagal memuat task.');
+
+      const found = (data.tasks ?? []).find(
+        (item: { type: string; data: SetoranTaskData }) =>
+          item.type === 'setoran' && String(item.data.id) === taskId,
+      );
+      if (!found) throw new Error('Setoran task tidak ditemukan.');
+
+      const d: SetoranTaskData = found.data;
+      setTask(d);
+      setActualReceivedAmount(String(d.actualReceivedAmount ?? d.expectedAmount ?? ''));
+      setStoredAmount(String(d.storedAmount ?? d.amount ?? ''));
+      setResiPhoto(d.resiPhoto ?? null);
+      setAtmCardSelfiePhoto(d.atmCardSelfiePhoto ?? null);
+      setNotes(d.notes ?? '');
     } catch (e) {
-      console.error('[SetoranDetailPage] load error:', e);
-      toast.error('Gagal memuat data task.');
+      toast.error(e instanceof Error ? e.message : 'Gagal memuat task.');
     } finally {
       setLoading(false);
     }
   }, [taskId]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { void load(); }, [load]);
 
-  // ── Check-in / auto-save ───────────────────────────────────────────────────
-  const { status: checkInStatus, loading: checkInLoading, refresh: refreshCheckIn } = useCheckInStatus(
-    taskData?.scheduleId ?? '',
-    taskData?.storeId    ?? '',
-    taskData?.status,
+  // ── Derived money values ──────────────────────────────────────────────────
+
+  const previousUnpaid = useMemo(
+    () => toNumber(task?.previousUnpaidAmount ?? task?.carriedDeficit),
+    [task],
   );
+  const actualNum      = useMemo(() => toNumber(actualReceivedAmount), [actualReceivedAmount]);
+  const requiredTotal  = useMemo(() => actualNum + previousUnpaid, [actualNum, previousUnpaid]);
+  const storedNum      = useMemo(() => toNumber(storedAmount), [storedAmount]);
+  const unpaidRemain   = useMemo(() => Math.max(0, requiredTotal - storedNum), [requiredTotal, storedNum]);
+  const isOverStored   = storedNum > requiredTotal && requiredTotal > 0;
 
-  const scheduleId = taskData ? parseInt(taskData.scheduleId, 10) : 0;
-  const storeId    = taskData ? parseInt(taskData.storeId,    10) : 0;
+  const readonly = task?.status === 'completed' || task?.status === 'verified';
+  const isRejected = task?.status === 'rejected';
 
-  const { status: saveStatus, lastSaved, error: saveError, save: autoSave } = useAutoSave({
-    url:        '/api/employee/tasks/setoran',
-    baseBody:   { scheduleId },
-    debounceMs: 800,
-  });
+  // ── Auto-save ─────────────────────────────────────────────────────────────
 
-  // ── Derived state ──────────────────────────────────────────────────────────
-  const taskStatus = taskData?.status;
-  const readonly = taskStatus === 'completed' || taskStatus === 'verified';
-  const isRejected = taskStatus === 'rejected';
-  const locked     = !readonly && checkInStatus === 'not_checked_in';
-  const dis        = readonly || locked;
-
-  const expectedNum = isFinite(Number(expectedAmount)) ? Number(expectedAmount) : 0;
-  const amountNum   = isFinite(Number(amount))         ? Number(amount)         : 0;
-  const carriedNum  = taskData?.carriedDeficit ? Number(taskData.carriedDeficit) : 0;
-  const totalDueNum = expectedNum + carriedNum;
-
-  // Cap preview for amount input
-  const overCap   = amountNum > totalDueNum && totalDueNum > 0;
-  const isShort   = totalDueNum > 0 && amountNum > 0 && amountNum < totalDueNum;
-  const isExact   = totalDueNum > 0 && amountNum > 0 && amountNum === totalDueNum;
-  const unpaidLive = Math.max(0, totalDueNum - amountNum);
-
-  const expectedValid = expectedNum > 0;
-  const amountValid   = amountNum > 0;
-  const canSubmit =
-    !locked &&
-    expectedValid &&
-    amountValid &&
-    !overCap &&
-    !!resiPhoto &&
-    !!atmCardSelfiePhoto;
-
-  const submitHint = (() => {
-    if (locked)          return '';
-    if (!expectedValid)  return 'Setoran Actual hari ini wajib diisi.';
-    if (!amountValid)    return 'Nominal setoran aktual wajib diisi.';
-    if (overCap)         return `Nominal disetor melebihi total wajib ${formatRupiah(String(totalDueNum))}. Setoran lebih tidak diperbolehkan.`;
-    if (!resiPhoto)      return 'Foto resi wajib diupload.';
-    if (!atmCardSelfiePhoto) return 'Foto selfie dengan kartu ATM wajib diupload.';
-    if (isShort)         return `Masih kurang ${formatRupiah(String(unpaidLive))} — akan tercatat sebagai kekurangan hari ini dan muncul di setoran besok.`;
-    return '';
-  })();
-
-  // ── Photo handlers ─────────────────────────────────────────────────────────
-  function confirmResiPhoto(photos: string[]) {
-    const url = photos[0] ?? null;
-    setResiPhoto(url);
-    autoSave({ resiPhoto: url }, { immediate: true });
-  }
-  function clearResiPhoto() {
-    setResiPhoto(null);
-    autoSave({ resiPhoto: null }, { immediate: true });
-  }
-
-  function confirmAtmCardSelfiePhoto(photos: string[]) {
-    const url = photos[0] ?? null;
-    setAtmCardSelfiePhoto(url);
-    autoSave({ atmCardSelfiePhoto: url }, { immediate: true });
-  }
-
-  function clearAtmCardSelfiePhoto() {
-    setAtmCardSelfiePhoto(null);
-    autoSave({ atmCardSelfiePhoto: null }, { immediate: true });
-  }
-
-  // ── Submit ─────────────────────────────────────────────────────────────────
-  async function handleSubmit() {
-    if (!taskData) return;
-    setSubmitError(null);
-    setSubmitMeta(null);
-    if (!storeId || !scheduleId) {
-      const msg = 'Data task tidak valid. Muat ulang halaman.';
-      setSubmitError(msg); toast.error(msg); return;
-    }
-
-    setSubmitting(true);
+  const autoSave = useCallback(async (patch?: Record<string, unknown>) => {
+    if (!task || readonly) return;
+    setSaveStatus('saving');
     try {
-      const res = await fetch('/api/employee/tasks/setoran', {
+      // Build base body — omit null photo fields so we don't accidentally
+      // overwrite a previously saved photo with null on every keystroke.
+      const base: Record<string, unknown> = {
+        scheduleId:          Number(task.scheduleId),
+        actualReceivedAmount,
+        storedAmount,
+        notes,
+      };
+      if (resiPhoto          !== null) base.resiPhoto          = resiPhoto;
+      if (atmCardSelfiePhoto !== null) base.atmCardSelfiePhoto = atmCardSelfiePhoto;
+
+      await fetch('/api/employee/tasks/setoran', {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...base, ...(patch ?? {}) }),
+      });
+      setSaveStatus('saved');
+    } catch {
+      setSaveStatus('error');
+    }
+  }, [actualReceivedAmount, atmCardSelfiePhoto, notes, readonly, resiPhoto, storedAmount, task]);
+
+  // ── Photo upload ──────────────────────────────────────────────────────────
+
+  async function uploadPhoto(file: File, type: 'resi' | 'atm') {
+    if (!task || readonly) return;
+    setUploading(type);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('photoType', type === 'resi' ? 'resi' : 'atm_card_selfie');
+      const res  = await fetch('/api/employee/tasks/upload', { method: 'POST', body: form });
+      const data = await res.json();
+      if (!res.ok || !data.url) throw new Error(data?.error ?? 'Upload gagal.');
+      if (type === 'resi') {
+        setResiPhoto(data.url);
+        await autoSave({ resiPhoto: data.url });
+      } else {
+        setAtmCardSelfiePhoto(data.url);
+        await autoSave({ atmCardSelfiePhoto: data.url });
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Upload gagal.');
+    } finally {
+      setUploading(null);
+    }
+  }
+
+  // ── Submit ────────────────────────────────────────────────────────────────
+
+  async function handleSubmit() {
+    if (!task || readonly) return;
+    setSubmitError(null);
+    setSaving(true);
+    try {
+      if (actualNum <= 0)          throw new Error('Nominal uang aktual diterima wajib diisi.');
+      if (storedNum <= 0)          throw new Error('Nominal uang disetor wajib diisi.');
+      if (isOverStored)            throw new Error('Uang disetor tidak boleh lebih besar dari total wajib disetor.');
+      if (!resiPhoto)              throw new Error('Foto resi wajib diupload.');
+      if (!atmCardSelfiePhoto)     throw new Error('Foto selfie dengan kartu ATM wajib diupload.');
+
+      const res  = await fetch('/api/employee/tasks/setoran', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          scheduleId,
-          storeId,
-          expectedAmount:     String(expectedNum),
-          amount:             String(amountNum),
-          resiPhoto,
-          atmCardSelfiePhoto,
-          notes: notes || undefined,
+          scheduleId:          Number(task.scheduleId),
+          storeId:             Number(task.storeId),
+          actualReceivedAmount, storedAmount, resiPhoto, atmCardSelfiePhoto, notes,
         }),
       });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data?.error ?? 'Gagal submit Setoran.');
 
-      let json: Record<string, unknown> = {};
-      if (res.headers.get('content-type')?.includes('application/json')) json = await res.json();
-
-      if (!res.ok || json.success === false) {
-        const serverMsg =
-          (typeof json.error   === 'string' && json.error)   ||
-          (typeof json.message === 'string' && json.message) || `HTTP ${res.status}`;
-        setSubmitError(serverMsg);
-        toast.error(serverMsg, { duration: 6000 });
-        return;
-      }
-
-      const meta = json.meta as SubmitMeta | undefined;
-
-      if (meta?.hasUnpaid) {
-        setSubmitMeta(meta);
-        toast.warning('Setoran tersimpan — masih ada kekurangan yang akan dibawa ke besok.', { duration: 6000 });
-        await load();
-      } else {
-        toast.success('Setoran lunas & tersimpan ✓', { duration: 4000 });
-        router.back();
-      }
+      toast.success('Setoran Penjualan berhasil disubmit! ✓', { duration: 4000 });
+      router.back();
     } catch (e) {
-      const msg = e instanceof Error ? `Koneksi gagal: ${e.message}` : 'Gagal terhubung ke server.';
+      const msg = e instanceof Error ? e.message : 'Terjadi kesalahan.';
       setSubmitError(msg);
       toast.error(msg, { duration: 6000 });
     } finally {
-      setSubmitting(false);
+      setSaving(false);
     }
   }
 
-  // ─── Render ───────────────────────────────────────────────────────────────
+  // ── Render ────────────────────────────────────────────────────────────────
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
 
-      {/* Header */}
+      {/* ── Header ──────────────────────────────────────────────────────────── */}
       <div className="sticky top-0 z-20 flex items-center gap-2 border-b border-border bg-card px-4 py-3">
         <button onClick={() => router.back()}
           className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-secondary text-foreground">
@@ -486,45 +441,23 @@ export default function SetoranDetailPage() {
         </button>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-bold text-foreground">Setoran Penjualan</p>
-          {taskData && (
+          {task && (
             <p className="text-[10px] capitalize text-muted-foreground">
-              {taskData.shift} shift · {taskData.status.replace('_', ' ')}
+              {task.shift} shift · {task.status.replace('_', ' ')}
             </p>
           )}
         </div>
-
-        {!readonly && !loading && taskData && <SaveIndicator status={saveStatus} lastSaved={lastSaved} />}
-
-        {taskStatus === 'completed' && <span className="flex items-center gap-1 rounded-full bg-green-100 px-2.5 py-1 text-[10px] font-bold text-green-700"><CheckCircle2 className="h-3 w-3" />Tersimpan</span>}
-        {taskStatus === 'verified'  && <span className="flex items-center gap-1 rounded-full bg-green-200 px-2.5 py-1 text-[10px] font-bold text-green-800"><CheckCircle2 className="h-3 w-3" />Terverifikasi</span>}
-        {taskStatus === 'rejected'  && <span className="flex items-center gap-1 rounded-full bg-red-100   px-2.5 py-1 text-[10px] font-bold text-red-700"><AlertCircle  className="h-3 w-3" />Ditolak</span>}
+        {!readonly && task && <SaveIndicator status={saveStatus} />}
+        {task?.status === 'completed'  && <span className="flex items-center gap-1 rounded-full bg-green-100  px-2.5 py-1 text-[10px] font-bold text-green-700"><CheckCircle2 className="h-3 w-3" />Selesai</span>}
+        {task?.status === 'verified'   && <span className="flex items-center gap-1 rounded-full bg-green-200  px-2.5 py-1 text-[10px] font-bold text-green-800"><CheckCircle2 className="h-3 w-3" />Terverifikasi</span>}
+        {task?.status === 'rejected'   && <span className="flex items-center gap-1 rounded-full bg-red-100    px-2.5 py-1 text-[10px] font-bold text-red-700"><AlertCircle   className="h-3 w-3" />Ditolak</span>}
+        {task?.status === 'discrepancy'&& <span className="flex items-center gap-1 rounded-full bg-amber-100  px-2.5 py-1 text-[10px] font-bold text-amber-700"><AlertTriangle  className="h-3 w-3" />Diskrepansi</span>}
       </div>
 
-      {/* Body */}
-      <div className="flex-1 space-y-4 p-4 pb-10">
+      {/* ── Body ────────────────────────────────────────────────────────────── */}
+      <div className="flex-1 space-y-6 p-4 pb-28">
 
-        {!readonly && !loading && taskData && (
-          <CheckInBanner status={checkInStatus} loading={checkInLoading} onRefresh={refreshCheckIn} />
-        )}
-
-        {!loading && taskData?.carriedDeficit && (
-          <CarriedDeficitBanner carriedDeficit={taskData.carriedDeficit} />
-        )}
-
-        {submitMeta?.hasUnpaid && (
-          <UnpaidResultBanner
-            unpaid={submitMeta.unpaidAmount}
-            nextDayCarried={submitMeta.nextDayCarriedDeficit}
-          />
-        )}
-
-        {!loading && !submitMeta && taskData?.unpaidAmount && Number(taskData.unpaidAmount) > 0 && taskStatus === 'completed' && (
-          <UnpaidResultBanner
-            unpaid={taskData.unpaidAmount}
-            nextDayCarried={taskData.unpaidAmount}
-          />
-        )}
-
+        {/* Submit error */}
         {submitError && (
           <div className="flex items-start gap-2.5 rounded-xl border border-red-300 bg-red-50 px-4 py-3">
             <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-600" />
@@ -538,238 +471,164 @@ export default function SetoranDetailPage() {
           </div>
         )}
 
-        {saveError && !readonly && (
-          <div className="flex items-center gap-2 rounded-xl border border-orange-200 bg-orange-50 px-4 py-2.5">
-            <CloudOff className="h-4 w-4 flex-shrink-0 text-orange-600" />
-            <p className="text-xs text-orange-700">Auto-save gagal: {saveError}</p>
-          </div>
-        )}
-
-        {isRejected && taskData?.notes && (
+        {/* Rejected notice */}
+        {isRejected && task?.notes && (
           <div className="flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
             <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-600" />
             <div>
               <p className="text-xs font-bold text-red-700">Ditolak oleh OPS</p>
-              <p className="mt-0.5 text-xs text-red-600">{taskData.notes}</p>
+              <p className="mt-0.5 text-xs text-red-600">{task.notes}</p>
               <p className="mt-1.5 text-xs font-medium text-red-700">Silakan perbaiki dan submit ulang.</p>
             </div>
           </div>
         )}
 
-        {taskStatus === 'verified' && taskData?.verifiedAt && (
+        {/* Verified notice */}
+        {task?.status === 'verified' && task.verifiedAt && (
           <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3">
             <p className="text-xs font-semibold text-green-800">Task telah diverifikasi</p>
-            <p className="mt-0.5 text-xs text-green-600">
-              {new Date(taskData.verifiedAt).toLocaleString('id-ID',{day:'numeric',month:'long',year:'numeric',hour:'2-digit',minute:'2-digit'})}
-            </p>
+            <p className="mt-0.5 text-xs text-green-600">{fmtLong(task.verifiedAt)}</p>
           </div>
         )}
 
-        {!readonly && !locked && !loading && taskData && (
-          <div className="flex items-center gap-2 rounded-xl border border-blue-100 bg-blue-50 px-4 py-2.5">
-            <Save className="h-4 w-4 flex-shrink-0 text-blue-500" />
-            <p className="text-xs text-blue-700">Perubahan otomatis tersimpan. Rekan shift lain dapat melanjutkan.</p>
-          </div>
-        )}
-
-        {/* ── Form ────────────────────────────────────────────────────────── */}
-        {loading ? (
-          <div className="space-y-3">{[1,2,3,4,5].map(i => <div key={i} className="h-14 animate-pulse rounded-xl bg-secondary" />)}</div>
-        ) : !taskData ? (
-          <div className="flex flex-col items-center py-20 text-center">
-            <AlertCircle className="mb-3 h-8 w-8 text-muted-foreground/40" />
-            <p className="text-sm font-semibold">Task tidak ditemukan</p>
-            <p className="mt-1 text-xs text-muted-foreground">Task mungkin sudah tidak tersedia.</p>
-          </div>
-        ) : (
-          <div className="relative">
-            <LockedOverlay show={locked} />
-            <div className="space-y-6">
-
-              {/* ── Carried deficit (read-only) ────────────────────────── */}
-              {carriedNum > 0 && (
-                <ReadOnlyAmount
-                  label="Kekurangan Hari Sebelumnya"
-                  value={taskData.carriedDeficit ?? '0'}
-                />
-              )}
-
-              {/* ── Setoran Actual hari ini ─────────────────────────────── */}
-              <Section title="Setoran Actual Hari Ini">
-                <RupiahInput
-                  value={expectedAmount}
-                  onChange={v => { setExpectedAmount(v); autoSave({ expectedAmount: v }); }}
-                  disabled={dis}
-                  placeholder="Rp 0"
-                />
-                <p className="text-[10px] text-muted-foreground">
-                  Isi nominal yang seharusnya disetor hari ini (di luar kekurangan sebelumnya).
-                </p>
-              </Section>
-
-              {/* ── Total due (computed) ────────────────────────────────── */}
-              {(expectedNum > 0 || carriedNum > 0) && (
-                <div className="rounded-xl border-2 border-primary/20 bg-primary/5 px-4 py-3">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-[10px] font-bold uppercase tracking-widest text-primary/80">Total Wajib Disetor</p>
-                      <p className="mt-0.5 text-[10px] text-muted-foreground">
-                        Target hari ini + kekurangan kemarin
-                      </p>
-                    </div>
-                    <p className="text-base font-extrabold tabular-nums text-primary">
-                      {formatRupiah(String(totalDueNum))}
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              {/* ── Nominal aktual ──────────────────────────────────────── */}
-              <Section title="Nominal Disetorkan">
-                <RupiahInput
-                  value={amount}
-                  onChange={v => { setAmount(v); autoSave({ amount: v }); }}
-                  disabled={dis}
-                  placeholder="Rp 0"
-                  highlight={
-                    !dis && amountNum > 0 && totalDueNum > 0
-                      ? overCap ? 'error'
-                        : isExact  ? 'success'
-                        : isShort  ? 'warning'
-                        : null
-                      : null
-                  }
-                />
-
-                {!dis && overCap && (
-                  <div className="flex items-center gap-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">
-                    <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
-                    <span>Melebihi total wajib {formatRupiah(String(totalDueNum))}. Nominal akan di-reject.</span>
-                  </div>
-                )}
-
-                {!dis && !overCap && amountNum > 0 && totalDueNum > 0 && (
-                  <div className={cn(
-                    'flex items-center justify-between rounded-lg px-3 py-2 text-xs',
-                    isShort ? 'bg-orange-50' : 'bg-green-50',
-                  )}>
-                    <span className={cn('flex items-center gap-1.5', isShort ? 'text-orange-700' : 'text-green-700')}>
-                      {isShort
-                        ? <TrendingDown className="h-3.5 w-3.5" />
-                        : <CheckCircle2 className="h-3.5 w-3.5" />
-                      }
-                      {isShort ? 'Sisa kekurangan' : 'Lunas'}
-                    </span>
-                    <span className={cn('font-bold tabular-nums', isShort ? 'text-orange-700' : 'text-green-700')}>
-                      {isShort ? formatRupiah(String(unpaidLive)) : '✓'}
-                    </span>
-                  </div>
-                )}
-
-                <p className="text-[10px] text-muted-foreground">
-                  Nominal yang benar-benar sudah disetor hari ini. Tidak boleh melebihi total wajib.
-                </p>
-              </Section>
-
-              {/* ── Foto resi ──────────────────────────────────────────── */}
-              <Section title="Bukti Setoran">
-                <PhotoProofTile
-                  title="Foto Resi"
-                  emptyText="Ketuk untuk upload foto resi (wajib)"
-                  filledText="Ketuk untuk mengubah foto"
-                  photo={resiPhoto}
-                  onClick={() => setResiPhotoModalOpen(true)}
-                  disabled={dis}
-                  hasPhoto={!!resiPhoto}
-                />
-              </Section>
-
-              <Section title="Selfie dengan Kartu ATM">
-                <PhotoProofTile
-                  title="Selfie + Kartu ATM"
-                  emptyText="Ketuk untuk upload selfie dengan kartu ATM (wajib)"
-                  filledText="Ketuk untuk mengubah foto"
-                  photo={atmCardSelfiePhoto}
-                  onClick={() => setAtmSelfieModalOpen(true)}
-                  disabled={dis}
-                  hasPhoto={!!atmCardSelfiePhoto}
-                />
-              </Section>
-
-              {/* ── Catatan ────────────────────────────────────────────── */}
-              <Section title="Catatan (opsional)">
-                <textarea
-                  value={notes}
-                  onChange={e => { setNotes(e.target.value); autoSave({ notes: e.target.value }); }}
-                  disabled={dis}
-                  rows={3}
-                  placeholder="Tambahkan catatan jika ada…"
-                  className="w-full resize-none rounded-xl border border-border bg-secondary px-4 py-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
-                />
-              </Section>
-
-              {/* ── Submit button ───────────────────────────────────────── */}
-              {!readonly && (
-                <>
-                  <button
-                    type="button"
-                    onClick={handleSubmit}
-                    disabled={!canSubmit || submitting}
-                    className={cn(
-                      'flex h-12 w-full items-center justify-center gap-2 rounded-2xl text-sm font-bold transition-all active:scale-[0.98] disabled:opacity-40',
-                      isShort && !overCap ? 'bg-orange-500 text-white' : 'bg-primary text-primary-foreground',
-                    )}>
-                    {submitting
-                      ? <><Loader2 className="h-4 w-4 animate-spin" />Menyimpan…</>
-                      : isShort && !overCap
-                        ? <><AlertTriangle className="h-4 w-4" />Submit (masih kurang)</>
-                        : <><Receipt       className="h-4 w-4" />Submit Setoran</>
-                    }
-                  </button>
-
-                  {submitHint && (
-                    <p className={cn('text-center text-[11px]',
-                      overCap                ? 'text-red-600' :
-                      isShort && !overCap    ? 'text-orange-600' :
-                                               'text-muted-foreground',
-                    )}>
-                      {submitHint}
-                    </p>
-                  )}
-                </>
-              )}
+        {/* Previous unpaid warning */}
+        {previousUnpaid > 0 && (
+          <div className="flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3.5">
+            <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-700" />
+            <div>
+              <p className="text-sm font-bold text-amber-900">Ada kekurangan dari setoran sebelumnya</p>
+              <p className="mt-0.5 text-xs text-amber-800 leading-relaxed">
+                Sisa unpaid <span className="font-bold">{rupiah(previousUnpaid)}</span> otomatis ditambahkan ke total wajib disetor hari ini.
+              </p>
             </div>
           </div>
         )}
+
+        {!task ? (
+          <div className="flex flex-col items-center py-20 text-center">
+            <AlertCircle className="mb-3 h-8 w-8 text-muted-foreground/40" />
+            <p className="text-sm font-semibold">Task tidak ditemukan</p>
+          </div>
+        ) : (
+          <>
+            {/* ── Nominal Setoran ──────────────────────────────────────────── */}
+            <Section title="Nominal Setoran">
+              <div className="space-y-3">
+                <RupiahInput
+                  label="Uang aktual diterima hari ini"
+                  hint="Total kas yang diterima toko hari ini."
+                  value={actualReceivedAmount}
+                  onChange={setActualReceivedAmount}
+                  onBlur={() => autoSave({ actualReceivedAmount })}
+                  disabled={readonly}
+                />
+
+                {previousUnpaid > 0 && (
+                  <MoneyRow label="Sisa unpaid sebelumnya" value={rupiah(previousUnpaid)} highlight="amber" />
+                )}
+
+                <MoneyRow
+                  label="Total wajib disetor"
+                  value={rupiah(requiredTotal)}
+                  bold
+                  highlight={requiredTotal > 0 ? undefined : undefined}
+                />
+
+                <RupiahInput
+                  label="Uang yang disetor / disimpan"
+                  hint="Nominal yang benar-benar disetorkan ke rekening atau disimpan."
+                  value={storedAmount}
+                  onChange={setStoredAmount}
+                  onBlur={() => autoSave({ storedAmount })}
+                  disabled={readonly}
+                  error={isOverStored ? 'Tidak boleh lebih besar dari total wajib disetor.' : undefined}
+                />
+
+                <MoneyRow
+                  label={unpaidRemain > 0 ? 'Sisa belum disetor (carry forward)' : 'Setoran cukup ✓'}
+                  value={rupiah(unpaidRemain)}
+                  bold
+                  highlight={unpaidRemain > 0 ? 'amber' : 'green'}
+                />
+
+                {unpaidRemain > 0 && (
+                  <p className="text-[10px] text-muted-foreground px-1">
+                    Nominal ini akan menjadi beban setoran morning shift berikutnya.
+                  </p>
+                )}
+              </div>
+            </Section>
+
+            {/* ── Bukti Foto ───────────────────────────────────────────────── */}
+            <Section title="Bukti Foto">
+              <div className="space-y-2">
+                <PhotoSlot
+                  label="Foto Resi"
+                  description="Upload foto resi bukti setoran."
+                  photoType="resi"
+                  photo={resiPhoto}
+                  loading={uploading === 'resi'}
+                  disabled={readonly || uploading !== null}
+                  onUpload={f => uploadPhoto(f, 'resi')}
+                  onClear={() => { setResiPhoto(null); autoSave({ resiPhoto: null }); }}
+                  icon="camera"
+                />
+
+                <PhotoSlot
+                  label="Selfie dengan Kartu ATM"
+                  description="Upload selfie kamu sambil memegang kartu ATM."
+                  photoType="atm_card_selfie"
+                  photo={atmCardSelfiePhoto}
+                  loading={uploading === 'atm'}
+                  disabled={readonly || uploading !== null}
+                  onUpload={f => uploadPhoto(f, 'atm')}
+                  onClear={() => { setAtmCardSelfiePhoto(null); autoSave({ atmCardSelfiePhoto: null }); }}
+                  icon="card"
+                />
+              </div>
+            </Section>
+
+            {/* ── Catatan ──────────────────────────────────────────────────── */}
+            <Section title="Catatan (opsional)">
+              <textarea
+                value={notes}
+                disabled={readonly}
+                rows={3}
+                onChange={e => setNotes(e.target.value)}
+                onBlur={() => autoSave({ notes })}
+                placeholder="Tambahkan catatan jika ada…"
+                className="w-full resize-none rounded-xl border border-border bg-secondary px-4 py-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
+              />
+            </Section>
+          </>
+        )}
       </div>
 
-      <ChecklistPhotoModal
-        open={resiPhotoModalOpen}
-        onClose={() => setResiPhotoModalOpen(false)}
-        title="Foto Resi"
-        description="Upload 1 foto resi setoran sebagai bukti transfer."
-        photoType="resi"
-        min={1}
-        max={1}
-        initialPhotos={resiPhoto ? [resiPhoto] : []}
-        onConfirm={confirmResiPhoto}
-        onClear={clearResiPhoto}
-        disabled={dis}
-      />
+      {/* ── Sticky submit ────────────────────────────────────────────────────── */}
+      {task && !readonly && (
+        <div className="fixed inset-x-0 bottom-14 z-30 border-t border-border bg-background/95 px-4 py-4 backdrop-blur-sm">
+          <button
+            type="button"
+            disabled={saving || uploading !== null || isOverStored}
+            onClick={handleSubmit}
+            className="flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-primary text-sm font-bold text-primary-foreground transition-all active:scale-[0.98] disabled:opacity-40"
+          >
+            {saving
+              ? <><Loader2 className="h-4 w-4 animate-spin" />Menyimpan…</>
+              : <><CheckCircle2 className="h-4 w-4" />Submit Setoran Penjualan</>}
+          </button>
 
-      <ChecklistPhotoModal
-        open={atmSelfieModalOpen}
-        onClose={() => setAtmSelfieModalOpen(false)}
-        title="Selfie dengan Kartu ATM"
-        description="Upload 1 foto selfie sambil memegang kartu ATM sebagai bukti tambahan."
-        photoType="atm_card_selfie"
-        min={1}
-        max={1}
-        initialPhotos={atmCardSelfiePhoto ? [atmCardSelfiePhoto] : []}
-        onConfirm={confirmAtmCardSelfiePhoto}
-        onClear={clearAtmCardSelfiePhoto}
-        disabled={dis}
-      />
+          {/* Inline hint */}
+          {!saving && (() => {
+            if (actualNum <= 0)       return <p className="mt-2 text-center text-[11px] text-muted-foreground">Isi nominal uang aktual diterima.</p>;
+            if (isOverStored)         return <p className="mt-2 text-center text-[11px] text-red-600">Uang disetor melebihi total wajib disetor.</p>;
+            if (storedNum <= 0)       return <p className="mt-2 text-center text-[11px] text-muted-foreground">Isi nominal uang yang disetor.</p>;
+            if (!resiPhoto)           return <p className="mt-2 text-center text-[11px] text-muted-foreground">Upload foto resi terlebih dahulu.</p>;
+            if (!atmCardSelfiePhoto)  return <p className="mt-2 text-center text-[11px] text-muted-foreground">Upload selfie dengan kartu ATM.</p>;
+            return null;
+          })()}
+        </div>
+      )}
     </div>
   );
 }

@@ -565,32 +565,49 @@ export async function GET(request: NextRequest) {
         },
       })),
 
-      ...setoranRows.filter((r) => inStore(r.storeId)).map((t) => ({
-        type: 'setoran' as const,
-        shift: (shiftCodeMap[t.shiftId] ?? 'morning') as ShiftCode,
-        data: {
-          id: String(t.id),
-          scheduleId: String(t.scheduleId),
-          userId: t.userId,
-          storeId: String(t.storeId),
+      ...setoranRows.filter((r) => inStore(r.storeId)).map((t) => {
+        const actualReceivedAmount = t.expectedAmount;
+        const storedAmount = t.amount;
+        const previousUnpaidAmount = t.carriedDeficit;
+        const requiredStoreAmount = (
+          Number(actualReceivedAmount ?? 0) + Number(previousUnpaidAmount ?? 0)
+        ).toFixed(2);
+
+        return {
+          type: 'setoran' as const,
           shift: (shiftCodeMap[t.shiftId] ?? 'morning') as ShiftCode,
-          date: t.date.toISOString(),
+          data: {
+            id: String(t.id),
+            scheduleId: String(t.scheduleId),
+            userId: t.userId,
+            storeId: String(t.storeId),
+            shift: (shiftCodeMap[t.shiftId] ?? 'morning') as ShiftCode,
+            date: t.date.toISOString(),
 
-          amount: t.amount,
-          resiPhoto: t.resiPhoto,
-          atmCardSelfiePhoto: t.atmCardSelfiePhoto,
-          expectedAmount: t.expectedAmount,
-          carriedDeficit: t.carriedDeficit,
-          carriedDeficitFetchedAt: toIso(t.carriedDeficitFetchedAt),
-          unpaidAmount: t.unpaidAmount,
+            // Existing names kept for compatibility.
+            amount: t.amount,
+            expectedAmount: t.expectedAmount,
+            carriedDeficit: t.carriedDeficit,
+            carriedDeficitFetchedAt: toIso(t.carriedDeficitFetchedAt),
+            unpaidAmount: t.unpaidAmount,
 
-          status: t.status,
-          notes: t.notes,
-          completedAt: toIso(t.completedAt),
-          verifiedBy: t.verifiedBy,
-          verifiedAt: toIso(t.verifiedAt),
-        },
-      })),
+            // New clearer money-storage names.
+            actualReceivedAmount,
+            previousUnpaidAmount,
+            requiredStoreAmount,
+            storedAmount,
+
+            resiPhoto: t.resiPhoto,
+            atmCardSelfiePhoto: t.atmCardSelfiePhoto,
+
+            status: t.status,
+            notes: t.notes,
+            completedAt: toIso(t.completedAt),
+            verifiedBy: t.verifiedBy,
+            verifiedAt: toIso(t.verifiedAt),
+          },
+        };
+      }),
 
       ...cekBinRows.filter((r) => inStore(r.storeId)).map((t) => {
         const availableBins = (availableBinsByStoreId.get(t.storeId) ?? []).map((bin) => ({

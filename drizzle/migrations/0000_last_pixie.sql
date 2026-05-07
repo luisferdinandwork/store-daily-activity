@@ -421,6 +421,28 @@ CREATE TABLE "open_statement_tasks" (
 	"updated_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "setoran_money_storage" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"task_id" integer NOT NULL,
+	"schedule_id" integer NOT NULL,
+	"user_id" text NOT NULL,
+	"store_id" integer NOT NULL,
+	"shift_id" integer NOT NULL,
+	"date" timestamp NOT NULL,
+	"actual_received_amount" numeric(12, 2) NOT NULL,
+	"previous_unpaid_amount" numeric(12, 2) DEFAULT '0' NOT NULL,
+	"required_store_amount" numeric(12, 2) NOT NULL,
+	"stored_amount" numeric(12, 2) NOT NULL,
+	"unpaid_amount" numeric(12, 2) DEFAULT '0' NOT NULL,
+	"resi_photo" text,
+	"atm_card_selfie_photo" text,
+	"notes" text,
+	"created_at" timestamp DEFAULT now() NOT NULL,
+	"updated_at" timestamp DEFAULT now() NOT NULL,
+	CONSTRAINT "setoran_money_storage_task_id_unique" UNIQUE("task_id"),
+	CONSTRAINT "setoran_money_storage_store_date_unique" UNIQUE("store_id","date")
+);
+--> statement-breakpoint
 CREATE TABLE "setoran_tasks" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"schedule_id" integer NOT NULL,
@@ -444,7 +466,7 @@ CREATE TABLE "setoran_tasks" (
 	"verified_at" timestamp,
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	"updated_at" timestamp DEFAULT now() NOT NULL,
-	CONSTRAINT "setoran_tasks_store_id_date_unique" UNIQUE("store_id","date")
+	CONSTRAINT "setoran_tasks_store_date_unique" UNIQUE("store_id","date")
 );
 --> statement-breakpoint
 CREATE TABLE "store_bins" (
@@ -617,6 +639,11 @@ ALTER TABLE "open_statement_tasks" ADD CONSTRAINT "open_statement_tasks_user_id_
 ALTER TABLE "open_statement_tasks" ADD CONSTRAINT "open_statement_tasks_store_id_stores_id_fk" FOREIGN KEY ("store_id") REFERENCES "public"."stores"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "open_statement_tasks" ADD CONSTRAINT "open_statement_tasks_shift_id_shifts_id_fk" FOREIGN KEY ("shift_id") REFERENCES "public"."shifts"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "open_statement_tasks" ADD CONSTRAINT "open_statement_tasks_verified_by_users_id_fk" FOREIGN KEY ("verified_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "setoran_money_storage" ADD CONSTRAINT "setoran_money_storage_task_id_setoran_tasks_id_fk" FOREIGN KEY ("task_id") REFERENCES "public"."setoran_tasks"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "setoran_money_storage" ADD CONSTRAINT "setoran_money_storage_schedule_id_schedules_id_fk" FOREIGN KEY ("schedule_id") REFERENCES "public"."schedules"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "setoran_money_storage" ADD CONSTRAINT "setoran_money_storage_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "setoran_money_storage" ADD CONSTRAINT "setoran_money_storage_store_id_stores_id_fk" FOREIGN KEY ("store_id") REFERENCES "public"."stores"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "setoran_money_storage" ADD CONSTRAINT "setoran_money_storage_shift_id_shifts_id_fk" FOREIGN KEY ("shift_id") REFERENCES "public"."shifts"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "setoran_tasks" ADD CONSTRAINT "setoran_tasks_schedule_id_schedules_id_fk" FOREIGN KEY ("schedule_id") REFERENCES "public"."schedules"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "setoran_tasks" ADD CONSTRAINT "setoran_tasks_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "setoran_tasks" ADD CONSTRAINT "setoran_tasks_store_id_stores_id_fk" FOREIGN KEY ("store_id") REFERENCES "public"."stores"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -640,4 +667,5 @@ ALTER TABLE "vm_checklist_tasks" ADD CONSTRAINT "vm_checklist_tasks_shift_id_shi
 ALTER TABLE "vm_checklist_tasks" ADD CONSTRAINT "vm_checklist_tasks_verified_by_users_id_fk" FOREIGN KEY ("verified_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "cek_bin_task_bins_task_idx" ON "cek_bin_task_bins" USING btree ("task_id");--> statement-breakpoint
 CREATE INDEX "cek_bin_tasks_store_date_idx" ON "cek_bin_tasks" USING btree ("store_id","date");--> statement-breakpoint
+CREATE INDEX "setoran_money_storage_store_date_idx" ON "setoran_money_storage" USING btree ("store_id","date");--> statement-breakpoint
 CREATE INDEX "store_bins_store_idx" ON "store_bins" USING btree ("store_id");

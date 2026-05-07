@@ -36,7 +36,6 @@ import { shifts } from './lookups';
  *   cekSoundSystem    → Check sound system
  *
  * Photos (non-checklist):
- *   storeFrontPhotos  → JSON array, min 1 max 3
  *   cashDrawerPhotos  → JSON array, min 1 max 2  (repurposed for cashier desk)
  *
  * NOTE: cekBanner and all banner photo columns have been removed.
@@ -143,9 +142,50 @@ export const setoranTasks = pgTable('setoran_tasks', {
   createdAt:   timestamp('created_at').defaultNow().notNull(),
   updatedAt:   timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
-  uniqStoreDate: unique().on(t.storeId, t.date),
+  uniqStoreDate: unique('setoran_tasks_store_date_unique').on(t.storeId, t.date),
 }));
 
+export const setoranMoneyStorage = pgTable('setoran_money_storage', {
+  id: serial('id').primaryKey(),
+
+  taskId: integer('task_id')
+    .references(() => setoranTasks.id, { onDelete: 'cascade' })
+    .notNull()
+    .unique(),
+
+  scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
+  userId: text('user_id').references(() => users.id).notNull(),
+  storeId: integer('store_id').references(() => stores.id).notNull(),
+  shiftId: integer('shift_id').references(() => shifts.id).notNull(),
+  date: timestamp('date').notNull(),
+
+  // Uang aktual yang diterima store hari itu.
+  // Backward compatible with old setoranTasks.expectedAmount.
+  actualReceivedAmount: decimal('actual_received_amount', { precision: 12, scale: 2 }).notNull(),
+
+  // Unpaid dari setoran sebelumnya.
+  previousUnpaidAmount: decimal('previous_unpaid_amount', { precision: 12, scale: 2 }).default('0').notNull(),
+
+  // actualReceivedAmount + previousUnpaidAmount.
+  requiredStoreAmount: decimal('required_store_amount', { precision: 12, scale: 2 }).notNull(),
+
+  // Uang aktual yang disetor/disimpan hari itu.
+  // Backward compatible with old setoranTasks.amount.
+  storedAmount: decimal('stored_amount', { precision: 12, scale: 2 }).notNull(),
+
+  // requiredStoreAmount - storedAmount. This becomes the next morning carry-forward.
+  unpaidAmount: decimal('unpaid_amount', { precision: 12, scale: 2 }).default('0').notNull(),
+
+  resiPhoto: text('resi_photo'),
+  atmCardSelfiePhoto: text('atm_card_selfie_photo'),
+  notes: text('notes'),
+
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => ({
+  uniqStoreDate: unique('setoran_money_storage_store_date_unique').on(t.storeId, t.date),
+  storeDateIdx: index('setoran_money_storage_store_date_idx').on(t.storeId, t.date),
+}));
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -542,20 +582,30 @@ export const groomingTasks = pgTable('grooming_tasks', {
 
 export type StoreOpeningTask      = typeof storeOpeningTasks.$inferSelect;
 export type NewStoreOpeningTask   = typeof storeOpeningTasks.$inferInsert;
+
 export type SetoranTask           = typeof setoranTasks.$inferSelect;
 export type NewSetoranTask        = typeof setoranTasks.$inferInsert;
+export type SetoranMoneyStorage = typeof setoranMoneyStorage.$inferSelect;
+export type NewSetoranMoneyStorage = typeof setoranMoneyStorage.$inferInsert;
+
 export type CekBinTask            = typeof cekBinTasks.$inferSelect;
 export type NewCekBinTask         = typeof cekBinTasks.$inferInsert;
 export type StoreBin              = typeof storeBins.$inferSelect;
 export type NewStoreBin           = typeof storeBins.$inferInsert;
 export type CekBinTaskBin         = typeof cekBinTaskBins.$inferSelect;
 export type NewCekBinTaskBin      = typeof cekBinTaskBins.$inferInsert;
-export type VMChecklistTask       = typeof vmChecklistTasks.$inferSelect;
-export type NewVMChecklistTask    = typeof vmChecklistTasks.$inferInsert;
+
+// VM types
+export type VmChecklistTask       = typeof vmChecklistTasks.$inferSelect;
+export type NewVmChecklistTask    = typeof vmChecklistTasks.$inferInsert;
+export type VMChecklistTask       = VmChecklistTask;
+export type NewVMChecklistTask    = NewVmChecklistTask;
+
 export type ItemDroppingTask      = typeof itemDroppingTasks.$inferSelect;
 export type NewItemDroppingTask   = typeof itemDroppingTasks.$inferInsert;
 export type ItemDroppingEntry     = typeof itemDroppingEntries.$inferSelect;
 export type NewItemDroppingEntry  = typeof itemDroppingEntries.$inferInsert;
+
 export type BriefingTask          = typeof briefingTasks.$inferSelect;
 export type EodZReportTask        = typeof eodZReportTasks.$inferSelect;
 export type NewEodZReportTask     = typeof eodZReportTasks.$inferInsert;
@@ -571,5 +621,3 @@ export type MarketingCheckTask    = typeof marketingCheckTasks.$inferSelect;
 export type NewMarketingCheckTask = typeof marketingCheckTasks.$inferInsert;
 export type StoreFrontTask        = typeof storeFrontTasks.$inferSelect;
 export type NewStoreFrontTask     = typeof storeFrontTasks.$inferInsert;
-export type VmChecklistTask       = typeof vmChecklistTasks.$inferSelect;
-export type NewVmChecklistTask    = typeof vmChecklistTasks.$inferInsert;
