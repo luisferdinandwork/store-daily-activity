@@ -64,6 +64,45 @@ export const storeOpeningTasks = pgTable('store_opening_tasks', {
 
   cashDrawerPhotos: text('cash_drawer_photos'),
 
+  loginPosBy: text('login_pos_by').references(() => users.id),
+  loginPosAt: timestamp('login_pos_at'),
+
+  checkAbsenSunfishBy: text('check_absen_sunfish_by').references(() => users.id),
+  checkAbsenSunfishAt: timestamp('check_absen_sunfish_at'),
+
+  tarikSohSalesBy: text('tarik_soh_sales_by').references(() => users.id),
+  tarikSohSalesAt: timestamp('tarik_soh_sales_at'),
+
+  fiveRBy: text('five_r_by').references(() => users.id),
+  fiveRAt: timestamp('five_r_at'),
+
+  fiveRAreaKasirBy: text('five_r_kasir_by').references(() => users.id),
+  fiveRAreaKasirAt: timestamp('five_r_kasir_at'),
+
+  fiveRAreaDepanBy: text('five_r_depan_by').references(() => users.id),
+  fiveRAreaDepanAt: timestamp('five_r_depan_at'),
+
+  fiveRAreaKananBy: text('five_r_kanan_by').references(() => users.id),
+  fiveRAreaKananAt: timestamp('five_r_kanan_at'),
+
+  fiveRAreaKiriBy: text('five_r_kiri_by').references(() => users.id),
+  fiveRAreaKiriAt: timestamp('five_r_kiri_at'),
+
+  fiveRAreaGudangBy: text('five_r_gudang_by').references(() => users.id),
+  fiveRAreaGudangAt: timestamp('five_r_gudang_at'),
+
+  cekLampBy: text('cek_lamp_by').references(() => users.id),
+  cekLampAt: timestamp('cek_lamp_at'),
+
+  cekSoundSystemBy: text('cek_sound_system_by').references(() => users.id),
+  cekSoundSystemAt: timestamp('cek_sound_system_at'),
+
+  cashDrawerBy: text('cash_drawer_by').references(() => users.id),
+  cashDrawerAt: timestamp('cash_drawer_at'),
+
+  completedBy: text('completed_by').references(() => users.id),
+  completedByScheduleId: integer('completed_by_schedule_id').references(() => schedules.id),
+
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
 
@@ -95,6 +134,11 @@ export const storeFrontTasks = pgTable('store_front_tasks', {
   // Both staff should appear in at least one photo together in front of the store
   storefrontPhotos:       text('storefront_photos'),
   rollingDoorClosedPhoto: text('rolling_door_closed_photo'),
+
+  claimedBy: text('claimed_by').references(() => users.id),
+  claimedAt: timestamp('claimed_at', { mode: 'date' }),
+  completedBy: text('completed_by').references(() => users.id),
+  completedByScheduleId: integer('completed_by_schedule_id').references(() => schedules.id),
  
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
@@ -130,6 +174,19 @@ export const setoranTasks = pgTable('setoran_tasks', {
   resiPhoto:               text('resi_photo'),
   atmCardSelfiePhoto:      text('atm_card_selfie_photo'),
   unpaidAmount:            decimal('unpaid_amount',             { precision: 12, scale: 2 }).default('0').notNull(),
+
+  actualReceivedAmountBy: text('actual_received_amount_by').references(() => users.id),
+  actualReceivedAmountAt: timestamp('actual_received_amount_at', { mode: 'date' }),
+  storedAmountBy: text('stored_amount_by').references(() => users.id),
+  storedAmountAt: timestamp('stored_amount_at', { mode: 'date' }),
+  resiPhotoBy: text('resi_photo_by').references(() => users.id),
+  resiPhotoAt: timestamp('resi_photo_at', { mode: 'date' }),
+  atmCardSelfiePhotoBy: text('atm_card_selfie_photo_by').references(() => users.id),
+  atmCardSelfiePhotoAt: timestamp('atm_card_selfie_photo_at', { mode: 'date' }),
+  notesBy: text('notes_by').references(() => users.id),
+  notesAt: timestamp('notes_at', { mode: 'date' }),
+  completedBy: text('completed_by').references(() => users.id),
+  completedByScheduleId: integer('completed_by_schedule_id').references(() => schedules.id),
 
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
@@ -179,6 +236,19 @@ export const setoranMoneyStorage = pgTable('setoran_money_storage', {
   resiPhoto: text('resi_photo'),
   atmCardSelfiePhoto: text('atm_card_selfie_photo'),
   notes: text('notes'),
+  
+  actualReceivedAmountBy: text('actual_received_amount_by').references(() => users.id),
+  actualReceivedAmountAt: timestamp('actual_received_amount_at', { mode: 'date' }),
+  storedAmountBy: text('stored_amount_by').references(() => users.id),
+  storedAmountAt: timestamp('stored_amount_at', { mode: 'date' }),
+  resiPhotoBy: text('resi_photo_by').references(() => users.id),
+  resiPhotoAt: timestamp('resi_photo_at', { mode: 'date' }),
+  atmCardSelfiePhotoBy: text('atm_card_selfie_photo_by').references(() => users.id),
+  atmCardSelfiePhotoAt: timestamp('atm_card_selfie_photo_at', { mode: 'date' }),
+  notesBy: text('notes_by').references(() => users.id),
+  notesAt: timestamp('notes_at', { mode: 'date' }),
+  completedBy: text('completed_by').references(() => users.id),
+  completedByScheduleId: integer('completed_by_schedule_id').references(() => schedules.id),
 
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -354,6 +424,9 @@ export const itemDroppingEntries = pgTable('item_dropping_entries', {
   updatedAt:      timestamp('updated_at').defaultNow().notNull(),
 });
 
+/**
+ * Marketing Check Task  (morning)
+ */
 export const marketingCheckTasks = pgTable('marketing_check_tasks', {
   id: serial('id').primaryKey(),
 
@@ -381,6 +454,30 @@ export const marketingCheckTasks = pgTable('marketing_check_tasks', {
   randomShoeItems: boolean('random_shoe_items').default(false).notNull(),
   randomNonShoeItems: boolean('random_non_shoe_items').default(false).notNull(),
   sellTag: boolean('sell_tag').default(false).notNull(),
+
+  promoNameBy: text('promo_name_by').references(() => users.id),
+  promoNameAt: timestamp('promo_name_at'),
+
+  promoPeriodBy: text('promo_period_by').references(() => users.id),
+  promoPeriodAt: timestamp('promo_period_at'),
+
+  promoMechanismBy: text('promo_mechanism_by').references(() => users.id),
+  promoMechanismAt: timestamp('promo_mechanism_at'),
+
+  randomShoeItemsBy: text('random_shoe_items_by').references(() => users.id),
+  randomShoeItemsAt: timestamp('random_shoe_items_at'),
+
+  randomNonShoeItemsBy: text('random_non_shoe_items_by').references(() => users.id),
+  randomNonShoeItemsAt: timestamp('random_non_shoe_items_at'),
+
+  sellTagBy: text('sell_tag_by').references(() => users.id),
+  sellTagAt: timestamp('sell_tag_at'),
+
+  notesBy: text('notes_by').references(() => users.id),
+  notesAt: timestamp('notes_at'),
+
+  completedBy: text('completed_by').references(() => users.id),
+  completedByScheduleId: integer('completed_by_schedule_id').references(() => schedules.id),
 
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),

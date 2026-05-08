@@ -3,45 +3,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Reusable modal for capturing photos linked to a checklist item.
 //
-// Supports TWO modes:
+// Photos are persisted IMMEDIATELY on upload/remove via `onChange` /
+// `onChangeMulti`. The parent autosaves them; the modal's "Konfirmasi" button
+// only marks the linked checkbox as done once all `min` thresholds are met.
 //
-// 1) SINGLE-BUCKET (backward compatible):
-//    <ChecklistPhotoModal
-//      open={...} onClose={...}
-//      title="5R — Kebersihan Toko"
-//      description="Foto area berbeda sebagai bukti 5R."
-//      photoType="five_r"
-//      min={3}
-//      max={5}
-//      initialPhotos={fiveRPhotos}
-//      onConfirm={(photos) => { setFiveRPhotos(photos); setFiveR(true); }}
-//      onClear={() => setFiveR(false)}
-//    />
-//
-// 2) MULTI-BUCKET (for items that need multiple distinct photo sets):
-//    <ChecklistPhotoModal
-//      open={...} onClose={...}
-//      title="Cek Promo"
-//      description="Upload foto promo di dua lokasi."
-//      buckets={[
-//        { key: 'storefront', label: 'Promo di Depan Toko',
-//          photoType: 'promo_storefront', min: 1, max: 1, initialPhotos: [...] },
-//        { key: 'desk',       label: 'Promo di Meja Kasir',
-//          photoType: 'promo_desk',       min: 1, max: 1, initialPhotos: [...] },
-//      ]}
-//      onConfirmMulti={(results) => {
-//        setStorefrontPromo(results.storefront);
-//        setDeskPromo(results.desk);
-//        setCekPromo(true);
-//      }}
-//      onClearMulti={() => setCekPromo(false)}
-//    />
-//
-// Contract:
-//   - `onConfirm`/`onConfirmMulti` fires when user taps Konfirmasi AND every
-//     bucket meets its `min`. Parent persists photos + sets the linked checkbox.
-//   - `onClear`/`onClearMulti` fires when user taps "Hapus Semua".
-//   - The modal holds its own local drafts per bucket so users can back out.
+// IMPORTANT: emitChange runs in a useEffect that watches `drafts`, NOT inside
+// the setState updater. Calling parent setState from within a child setState
+// updater triggers React's "Cannot update a component while rendering" warning.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useRef, useState } from 'react';
@@ -52,13 +20,9 @@ import { toast } from 'sonner';
 // ─── Bucket type (multi-mode) ────────────────────────────────────────────────
 
 export interface PhotoBucket {
-  /** Stable identifier — used as map key in onConfirmMulti results. */
   key:           string;
-  /** Short label shown above this bucket's photo grid. */
   label:         string;
-  /** Optional hint text under the label. */
   hint?:         string;
-  /** Upload endpoint photoType discriminator for this bucket. */
   photoType:     string;
   min:           number;
   max:           number;
@@ -82,23 +46,27 @@ type SingleProps = CommonProps & {
   initialPhotos: string[];
   onConfirm:     (photos: string[]) => void;
   onClear?:      () => void;
+  onChange?:     (photos: string[]) => void;
 
-  buckets?:       never;
-  onConfirmMulti?: never;
-  onClearMulti?:   never;
+  buckets?:        undefined;
+  onConfirmMulti?: undefined;
+  onClearMulti?:   undefined;
+  onChangeMulti?:  undefined;
 };
 
 type MultiProps = CommonProps & {
   buckets:        PhotoBucket[];
   onConfirmMulti: (results: Record<string, string[]>) => void;
   onClearMulti?:  () => void;
+  onChangeMulti?: (results: Record<string, string[]>) => void;
 
-  photoType?:     never;
-  min?:           never;
-  max?:           never;
-  initialPhotos?: never;
-  onConfirm?:     never;
-  onClear?:       never;
+  photoType?:     undefined;
+  min?:           undefined;
+  max?:           undefined;
+  initialPhotos?: undefined;
+  onConfirm?:     undefined;
+  onClear?:       undefined;
+  onChange?:      undefined;
 };
 
 export type ChecklistPhotoModalProps = SingleProps | MultiProps;
@@ -108,14 +76,13 @@ export type ChecklistPhotoModalProps = SingleProps | MultiProps;
 export default function ChecklistPhotoModal(props: ChecklistPhotoModalProps) {
   const { open, onClose, title, description, disabled } = props;
 
-  // Normalize to a bucket array internally — single mode becomes a 1-bucket array.
   const normalizedBuckets: PhotoBucket[] = props.buckets ?? [{
     key:           '__single__',
     label:         '',
-    photoType:     props.photoType,
-    min:           props.min,
-    max:           props.max,
-    initialPhotos: props.initialPhotos,
+    photoType:     props.photoType!,
+    min:           props.min!,
+    max:           props.max!,
+    initialPhotos: props.initialPhotos ?? [],
   }];
 
   const [drafts, setDrafts] = useState<Record<string, string[]>>(() =>
@@ -123,9 +90,14 @@ export default function ChecklistPhotoModal(props: ChecklistPhotoModalProps) {
   );
   const [uploadingKey, setUploadingKey] = useState<string | null>(null);
 
-  // Reset whenever the modal (re)opens
+  // Track whether drafts changed because of user action (vs. an open/reset).
+  // Only user-driven changes should be emitted to the parent.
+  const userMutatedRef = useRef(false);
+
+  // Reset on open. Mark as non-user mutation so we don't re-emit initial state.
   useEffect(() => {
     if (open) {
+      userMutatedRef.current = false;
       setDrafts(Object.fromEntries(normalizedBuckets.map(b => [b.key, b.initialPhotos])));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -139,9 +111,26 @@ export default function ChecklistPhotoModal(props: ChecklistPhotoModalProps) {
     return () => { document.body.style.overflow = prev; };
   }, [open]);
 
-  if (!open) return null;
-
   const isSingle = !props.buckets;
+
+  // Emit drafts to parent in an effect — NEVER inside a setState updater.
+  // This is the fix for the "Cannot update a component while rendering"
+  // warning that React throws when a child triggers parent state during render.
+  useEffect(() => {
+    if (!open) return;
+    if (!userMutatedRef.current) return;
+    if (isSingle) {
+      (props as SingleProps).onChange?.(drafts['__single__'] ?? []);
+    } else {
+      (props as MultiProps).onChangeMulti?.(drafts);
+    }
+    // We intentionally only depend on `drafts`. The handlers are stable enough
+    // for our purposes (parent supplies them via useCallback or normal closures);
+    // we don't want to re-emit when only the parent reference changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drafts, open]);
+
+  if (!open) return null;
 
   async function handleFiles(bucket: PhotoBucket, files: FileList | null) {
     if (!files?.length || disabled) return;
@@ -163,6 +152,7 @@ export default function ChecklistPhotoModal(props: ChecklistPhotoModalProps) {
         if (!res.ok || !data.url) throw new Error(data.error ?? 'Upload gagal');
         urls.push(data.url);
       }
+      userMutatedRef.current = true;
       setDrafts(d => ({ ...d, [bucket.key]: [...(d[bucket.key] ?? []), ...urls] }));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Upload gagal');
@@ -172,6 +162,7 @@ export default function ChecklistPhotoModal(props: ChecklistPhotoModalProps) {
   }
 
   function removeAt(bucketKey: string, idx: number) {
+    userMutatedRef.current = true;
     setDrafts(d => ({
       ...d,
       [bucketKey]: (d[bucketKey] ?? []).filter((_, i) => i !== idx),
@@ -200,7 +191,9 @@ export default function ChecklistPhotoModal(props: ChecklistPhotoModalProps) {
   }
 
   function handleClearAll() {
-    setDrafts(Object.fromEntries(normalizedBuckets.map(b => [b.key, [] as string[]])));
+    userMutatedRef.current = true;
+    const cleared = Object.fromEntries(normalizedBuckets.map(b => [b.key, [] as string[]]));
+    setDrafts(cleared);
     if (isSingle) {
       (props as SingleProps).onClear?.();
     } else {
@@ -221,7 +214,6 @@ export default function ChecklistPhotoModal(props: ChecklistPhotoModalProps) {
         className="relative w-full max-w-md rounded-t-3xl bg-background shadow-xl sm:rounded-3xl max-h-[92vh] flex flex-col"
         onClick={e => e.stopPropagation()}
       >
-        {/* Header */}
         <div className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
           <div className="min-w-0 flex-1">
             <h3 id="checklist-photo-modal-title" className="text-base font-bold text-foreground">{title}</h3>
@@ -239,7 +231,6 @@ export default function ChecklistPhotoModal(props: ChecklistPhotoModalProps) {
           </button>
         </div>
 
-        {/* Body — one section per bucket */}
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
           {normalizedBuckets.map(bucket => {
             const current   = drafts[bucket.key] ?? [];
@@ -263,7 +254,6 @@ export default function ChecklistPhotoModal(props: ChecklistPhotoModalProps) {
             );
           })}
 
-          {/* Clear all */}
           {!disabled && hasAnyPhotos && ((isSingle && (props as SingleProps).onClear) || (!isSingle && (props as MultiProps).onClearMulti)) && (
             <button
               type="button"
@@ -276,7 +266,6 @@ export default function ChecklistPhotoModal(props: ChecklistPhotoModalProps) {
           )}
         </div>
 
-        {/* Footer */}
         {!disabled && (
           <div className="flex gap-2 border-t border-border px-5 py-4">
             <button
@@ -284,7 +273,7 @@ export default function ChecklistPhotoModal(props: ChecklistPhotoModalProps) {
               onClick={onClose}
               className="flex-1 rounded-xl border border-border bg-card px-4 py-3 text-sm font-semibold text-foreground hover:bg-secondary"
             >
-              Batal
+              Tutup
             </button>
             <button
               type="button"
@@ -338,7 +327,6 @@ function BucketSection({
 
   return (
     <div className="space-y-2.5">
-      {/* Bucket header */}
       {showLabel ? (
         <div className="flex items-center justify-between">
           <div className="min-w-0 flex-1">
@@ -357,10 +345,9 @@ function BucketSection({
         </div>
       )}
 
-      {/* Photo grid */}
       <div className="grid grid-cols-3 gap-2.5">
         {current.map((url, i) => (
-          <div key={i} className="relative aspect-square overflow-hidden rounded-xl border border-border bg-secondary">
+          <div key={`${url}-${i}`} className="relative aspect-square overflow-hidden rounded-xl border border-border bg-secondary">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={url} alt="" className="h-full w-full object-cover" />
             {!disabled && (

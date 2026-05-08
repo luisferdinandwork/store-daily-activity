@@ -2,14 +2,17 @@
 import { db } from '@/lib/db';
 import { eq, and, gte, lte } from 'drizzle-orm';
 import {
-  storeOpeningTasks, stores, shifts, attendance,
+  storeOpeningTasks,
+  stores,
+  shifts,
+  attendance,
   type StoreOpeningTask,
 } from '@/lib/db/schema';
 
 export const DEFAULT_GEOFENCE_RADIUS_M = 100;
 
 export type TaskResult<T = void> =
-  | { success: true;  data: T }
+  | { success: true; data: T }
   | { success: false; error: string };
 
 export interface GeoPoint {
@@ -17,62 +20,86 @@ export interface GeoPoint {
   lng: number;
 }
 
-// ─── 5R area keys ─────────────────────────────────────────────────────────────
-
 export const FIVE_R_AREAS = [
-  { key: 'kasir',  label: 'Area Kasir'  },
-  { key: 'depan',  label: 'Depan Toko'  },
-  { key: 'kanan',  label: 'Sisi Kanan'  },
-  { key: 'kiri',   label: 'Sisi Kiri'   },
-  { key: 'gudang', label: 'Gudang'      },
+  { key: 'kasir', label: 'Area Kasir' },
+  { key: 'depan', label: 'Depan Toko' },
+  { key: 'kanan', label: 'Sisi Kanan' },
+  { key: 'kiri', label: 'Sisi Kiri' },
+  { key: 'gudang', label: 'Gudang' },
 ] as const;
 
-export type FiveRAreaKey = typeof FIVE_R_AREAS[number]['key'];
+export type FiveRAreaKey = (typeof FIVE_R_AREAS)[number]['key'];
 
 export interface SubmitStoreOpeningInput {
-  scheduleId:        number;
-  userId:            string;
-  storeId:           number;
-  geo:               GeoPoint;
-  loginPos:          boolean;
+  taskId?: number;
+  scheduleId: number;
+  userId: string;
+  storeId: number;
+  geo: GeoPoint;
+
+  loginPos: boolean;
   checkAbsenSunfish: boolean;
-  tarikSohSales:     boolean;
-  fiveR:             boolean;
-  // Per-area 5R photos — each area: min 1, max 2
-  fiveRAreaKasirPhotos?:  string[];
-  fiveRAreaDepanPhotos?:  string[];
-  fiveRAreaKananPhotos?:  string[];
-  fiveRAreaKiriPhotos?:   string[];
+  tarikSohSales: boolean;
+  fiveR: boolean;
+
+  fiveRAreaKasirPhotos?: string[];
+  fiveRAreaDepanPhotos?: string[];
+  fiveRAreaKananPhotos?: string[];
+  fiveRAreaKiriPhotos?: string[];
   fiveRAreaGudangPhotos?: string[];
-  cekLamp:           boolean;
-  cekSoundSystem:    boolean;
+
+  cekLamp: boolean;
+  cekSoundSystem: boolean;
   cashierDeskPhotos?: string[];
-  notes?:            string;
-  skipGeo?:          boolean;
+
+  notes?: string;
+  skipGeo?: boolean;
 }
+
+export interface StoreOpeningAutoSavePatch {
+  loginPos?: boolean;
+  checkAbsenSunfish?: boolean;
+  tarikSohSales?: boolean;
+  fiveR?: boolean;
+
+  fiveRAreaKasirPhotos?: string[];
+  fiveRAreaDepanPhotos?: string[];
+  fiveRAreaKananPhotos?: string[];
+  fiveRAreaKiriPhotos?: string[];
+  fiveRAreaGudangPhotos?: string[];
+
+  cekLamp?: boolean;
+  cekSoundSystem?: boolean;
+  cashierDeskPhotos?: string[];
+  notes?: string;
+}
+
+export interface AutoSaveStoreOpeningInput extends StoreOpeningAutoSavePatch {}
 
 export const STORE_OPENING_PHOTO_RULES = {
   cashierDesk: { min: 1, max: 2 },
-  // Each 5R area
-  fiveRArea:   { min: 1, max: 2 },
+  fiveRArea: { min: 1, max: 2 },
 } as const;
 
-// ─── Private helpers ──────────────────────────────────────────────────────────
-
 function startOfDay(d: Date): Date {
-  const r = new Date(d); r.setHours(0, 0, 0, 0); return r;
+  const r = new Date(d);
+  r.setHours(0, 0, 0, 0);
+  return r;
 }
+
 function endOfDay(d: Date): Date {
-  const r = new Date(d); r.setHours(23, 59, 59, 999); return r;
+  const r = new Date(d);
+  r.setHours(23, 59, 59, 999);
+  return r;
 }
 
 function haversineMetres(a: GeoPoint, b: GeoPoint): number {
-  const R  = 6_371_000;
-  const φ1 = (a.lat * Math.PI) / 180;
-  const φ2 = (b.lat * Math.PI) / 180;
-  const Δφ = ((b.lat - a.lat) * Math.PI) / 180;
-  const Δλ = ((b.lng - a.lng) * Math.PI) / 180;
-  const h  = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+  const R = 6_371_000;
+  const p1 = (a.lat * Math.PI) / 180;
+  const p2 = (b.lat * Math.PI) / 180;
+  const dp = ((b.lat - a.lat) * Math.PI) / 180;
+  const dl = ((b.lng - a.lng) * Math.PI) / 180;
+  const h = Math.sin(dp / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
 
@@ -80,12 +107,18 @@ function jsonPhotos(paths: string[] | undefined): string | undefined {
   return paths && paths.length > 0 ? JSON.stringify(paths) : undefined;
 }
 
-let _morningShiftIdCache: number | null = null;
+let morningShiftIdCache: number | null = null;
 async function getMorningShiftId(): Promise<number> {
-  if (_morningShiftIdCache != null) return _morningShiftIdCache;
-  const [row] = await db.select({ id: shifts.id }).from(shifts).where(eq(shifts.code, 'morning')).limit(1);
+  if (morningShiftIdCache != null) return morningShiftIdCache;
+
+  const [row] = await db
+    .select({ id: shifts.id })
+    .from(shifts)
+    .where(eq(shifts.code, 'morning'))
+    .limit(1);
+
   if (!row) throw new Error('Morning shift not found in shifts table.');
-  _morningShiftIdCache = row.id;
+  morningShiftIdCache = row.id;
   return row.id;
 }
 
@@ -93,16 +126,32 @@ async function findTodayRow(storeId: number, date: Date): Promise<StoreOpeningTa
   const [row] = await db
     .select()
     .from(storeOpeningTasks)
-    .where(and(
-      eq(storeOpeningTasks.storeId, storeId),
-      gte(storeOpeningTasks.date, startOfDay(date)),
-      lte(storeOpeningTasks.date, endOfDay(date)),
-    ))
+    .where(
+      and(
+        eq(storeOpeningTasks.storeId, storeId),
+        gte(storeOpeningTasks.date, startOfDay(date)),
+        lte(storeOpeningTasks.date, endOfDay(date)),
+      ),
+    )
     .limit(1);
+
   return row ?? null;
 }
 
-// ─── Guards ───────────────────────────────────────────────────────────────────
+async function findRowByTaskId(taskId: number): Promise<StoreOpeningTask | null> {
+  const [row] = await db
+    .select()
+    .from(storeOpeningTasks)
+    .where(eq(storeOpeningTasks.id, taskId))
+    .limit(1);
+
+  return row ?? null;
+}
+
+async function findRow(taskId: number | undefined, storeId: number, date = new Date()): Promise<StoreOpeningTask | null> {
+  if (taskId) return findRowByTaskId(taskId);
+  return findTodayRow(storeId, date);
+}
 
 async function assertCheckedIn(scheduleId: number): Promise<string | null> {
   const [att] = await db
@@ -110,8 +159,11 @@ async function assertCheckedIn(scheduleId: number): Promise<string | null> {
     .from(attendance)
     .where(eq(attendance.scheduleId, scheduleId))
     .limit(1);
-  if (!att?.checkInTime)
+
+  if (!att?.checkInTime) {
     return 'Kamu belum absen masuk. Lakukan absensi masuk terlebih dahulu sebelum mengerjakan task.';
+  }
+
   return null;
 }
 
@@ -122,10 +174,13 @@ async function assertInGeofence(storeId: number, geo: GeoPoint): Promise<string 
     .where(eq(stores.id, storeId))
     .limit(1);
 
-  if (!store)                   return 'Toko tidak ditemukan.';
+  if (!store) return 'Toko tidak ditemukan.';
   if (!store.lat || !store.lng) return null;
 
-  const dist   = haversineMetres(geo, { lat: parseFloat(store.lat), lng: parseFloat(store.lng) });
+  const dist = haversineMetres(geo, {
+    lat: parseFloat(store.lat),
+    lng: parseFloat(store.lng),
+  });
   const radius = store.radius ? parseFloat(store.radius) : DEFAULT_GEOFENCE_RADIUS_M;
 
   return dist > radius
@@ -135,67 +190,146 @@ async function assertInGeofence(storeId: number, geo: GeoPoint): Promise<string 
 
 async function assertCanProgressTask(
   scheduleId: number,
-  storeId:    number,
-  geo:        GeoPoint,
-  skipGeo?:   boolean,
+  storeId: number,
+  geo: GeoPoint,
+  skipGeo?: boolean,
 ): Promise<string | null> {
   const checkInErr = await assertCheckedIn(scheduleId);
   if (checkInErr) return checkInErr;
+
   if (!skipGeo) {
     const geoErr = await assertInGeofence(storeId, geo);
     if (geoErr) return geoErr;
   }
+
   return null;
 }
 
-// ─── Validation ───────────────────────────────────────────────────────────────
+function photoCount(paths?: string[]): number {
+  return Array.isArray(paths) ? paths.length : 0;
+}
 
 function validateStoreOpeningPayload(input: SubmitStoreOpeningInput): string | null {
-  const {
-    loginPos, checkAbsenSunfish, tarikSohSales, fiveR, cekLamp, cekSoundSystem,
-    cashierDeskPhotos,
-    fiveRAreaKasirPhotos, fiveRAreaDepanPhotos, fiveRAreaKananPhotos,
-    fiveRAreaKiriPhotos, fiveRAreaGudangPhotos,
-  } = input;
+  if (!input.loginPos) return 'Checklist "Log-in POS / Buka komputer kasir" belum ditandai.';
+  if (!input.checkAbsenSunfish) return 'Checklist "Tarik & cek absen Sunfish" belum ditandai.';
+  if (!input.tarikSohSales) return 'Checklist "Tarik SOH & Sales" belum ditandai.';
+  if (!input.fiveR) return 'Checklist "5R" belum ditandai.';
+  if (!input.cekLamp) return 'Checklist "Cek Lampu" belum ditandai.';
+  if (!input.cekSoundSystem) return 'Checklist "Cek Sound System" belum ditandai.';
 
-  if (!loginPos)          return 'Checklist "Log-in POS / Buka komputer kasir" belum ditandai.';
-  if (!checkAbsenSunfish) return 'Checklist "Tarik & cek absen Sunfish" belum ditandai.';
-  if (!tarikSohSales)     return 'Checklist "Tarik SOH & Sales" belum ditandai.';
-  if (!fiveR)             return 'Checklist "5R" belum ditandai.';
-  if (!cekLamp)           return 'Checklist "Cek Lampu" belum ditandai.';
-  if (!cekSoundSystem)    return 'Checklist "Cek Sound System" belum ditandai.';
-
-  // Cashier desk photos (linked to loginPos)
-  const cdCount = cashierDeskPhotos?.length ?? 0;
-  if (cdCount < STORE_OPENING_PHOTO_RULES.cashierDesk.min)
-    return `Foto meja kasir wajib minimal ${STORE_OPENING_PHOTO_RULES.cashierDesk.min} (terkait "Log-in POS").`;
-  if (cdCount > STORE_OPENING_PHOTO_RULES.cashierDesk.max)
+  const cashierCount = photoCount(input.cashierDeskPhotos);
+  if (cashierCount < STORE_OPENING_PHOTO_RULES.cashierDesk.min) {
+    return `Foto meja kasir wajib minimal ${STORE_OPENING_PHOTO_RULES.cashierDesk.min}.`;
+  }
+  if (cashierCount > STORE_OPENING_PHOTO_RULES.cashierDesk.max) {
     return `Foto meja kasir maksimal ${STORE_OPENING_PHOTO_RULES.cashierDesk.max}.`;
+  }
 
-  // 5R — one validation message per area
   const areaPhotoMap: Record<FiveRAreaKey, string[] | undefined> = {
-    kasir:  fiveRAreaKasirPhotos,
-    depan:  fiveRAreaDepanPhotos,
-    kanan:  fiveRAreaKananPhotos,
-    kiri:   fiveRAreaKiriPhotos,
-    gudang: fiveRAreaGudangPhotos,
+    kasir: input.fiveRAreaKasirPhotos,
+    depan: input.fiveRAreaDepanPhotos,
+    kanan: input.fiveRAreaKananPhotos,
+    kiri: input.fiveRAreaKiriPhotos,
+    gudang: input.fiveRAreaGudangPhotos,
   };
+
   for (const { key, label } of FIVE_R_AREAS) {
-    const count = areaPhotoMap[key]?.length ?? 0;
-    if (count < STORE_OPENING_PHOTO_RULES.fiveRArea.min)
+    const count = photoCount(areaPhotoMap[key]);
+    if (count < STORE_OPENING_PHOTO_RULES.fiveRArea.min) {
       return `5R "${label}": wajib minimal ${STORE_OPENING_PHOTO_RULES.fiveRArea.min} foto.`;
-    if (count > STORE_OPENING_PHOTO_RULES.fiveRArea.max)
+    }
+    if (count > STORE_OPENING_PHOTO_RULES.fiveRArea.max) {
       return `5R "${label}": maksimal ${STORE_OPENING_PHOTO_RULES.fiveRArea.max} foto.`;
+    }
   }
 
   return null;
 }
 
-// ─── Submit ───────────────────────────────────────────────────────────────────
+function applyActorForPatch(update: Record<string, unknown>, patch: StoreOpeningAutoSavePatch, userId: string, now: Date) {
+  if ('loginPos' in patch && patch.loginPos === true) {
+    update.loginPosBy = userId;
+    update.loginPosAt = now;
+  }
+  if ('checkAbsenSunfish' in patch && patch.checkAbsenSunfish === true) {
+    update.checkAbsenSunfishBy = userId;
+    update.checkAbsenSunfishAt = now;
+  }
+  if ('tarikSohSales' in patch && patch.tarikSohSales === true) {
+    update.tarikSohSalesBy = userId;
+    update.tarikSohSalesAt = now;
+  }
+  if ('fiveR' in patch && patch.fiveR === true) {
+    update.fiveRBy = userId;
+    update.fiveRAt = now;
+  }
+  if ('fiveRAreaKasirPhotos' in patch && photoCount(patch.fiveRAreaKasirPhotos) > 0) {
+    update.fiveRAreaKasirBy = userId;
+    update.fiveRAreaKasirAt = now;
+  }
+  if ('fiveRAreaDepanPhotos' in patch && photoCount(patch.fiveRAreaDepanPhotos) > 0) {
+    update.fiveRAreaDepanBy = userId;
+    update.fiveRAreaDepanAt = now;
+  }
+  if ('fiveRAreaKananPhotos' in patch && photoCount(patch.fiveRAreaKananPhotos) > 0) {
+    update.fiveRAreaKananBy = userId;
+    update.fiveRAreaKananAt = now;
+  }
+  if ('fiveRAreaKiriPhotos' in patch && photoCount(patch.fiveRAreaKiriPhotos) > 0) {
+    update.fiveRAreaKiriBy = userId;
+    update.fiveRAreaKiriAt = now;
+  }
+  if ('fiveRAreaGudangPhotos' in patch && photoCount(patch.fiveRAreaGudangPhotos) > 0) {
+    update.fiveRAreaGudangBy = userId;
+    update.fiveRAreaGudangAt = now;
+  }
+  if ('cekLamp' in patch && patch.cekLamp === true) {
+    update.cekLampBy = userId;
+    update.cekLampAt = now;
+  }
+  if ('cekSoundSystem' in patch && patch.cekSoundSystem === true) {
+    update.cekSoundSystemBy = userId;
+    update.cekSoundSystemAt = now;
+  }
+  if ('cashierDeskPhotos' in patch && photoCount(patch.cashierDeskPhotos) > 0) {
+    update.cashDrawerBy = userId;
+    update.cashDrawerAt = now;
+  }
+}
 
-export async function submitStoreOpening(
+function makeSubmitActorUpdate(
   input: SubmitStoreOpeningInput,
-): Promise<TaskResult<StoreOpeningTask>> {
+  existing: StoreOpeningTask | null,
+  now: Date,
+): Record<string, unknown> {
+  const actor: Record<string, unknown> = {};
+
+  const setIfMissing = (condition: boolean, byKey: string, atKey: string) => {
+    if (condition && !(existing?.[byKey as keyof StoreOpeningTask])) {
+      actor[byKey] = input.userId;
+      actor[atKey] = now;
+    }
+  };
+
+  setIfMissing(input.loginPos, 'loginPosBy', 'loginPosAt');
+  setIfMissing(input.checkAbsenSunfish, 'checkAbsenSunfishBy', 'checkAbsenSunfishAt');
+  setIfMissing(input.tarikSohSales, 'tarikSohSalesBy', 'tarikSohSalesAt');
+  setIfMissing(input.fiveR, 'fiveRBy', 'fiveRAt');
+  setIfMissing(photoCount(input.fiveRAreaKasirPhotos) > 0, 'fiveRAreaKasirBy', 'fiveRAreaKasirAt');
+  setIfMissing(photoCount(input.fiveRAreaDepanPhotos) > 0, 'fiveRAreaDepanBy', 'fiveRAreaDepanAt');
+  setIfMissing(photoCount(input.fiveRAreaKananPhotos) > 0, 'fiveRAreaKananBy', 'fiveRAreaKananAt');
+  setIfMissing(photoCount(input.fiveRAreaKiriPhotos) > 0, 'fiveRAreaKiriBy', 'fiveRAreaKiriAt');
+  setIfMissing(photoCount(input.fiveRAreaGudangPhotos) > 0, 'fiveRAreaGudangBy', 'fiveRAreaGudangAt');
+  setIfMissing(input.cekLamp, 'cekLampBy', 'cekLampAt');
+  setIfMissing(input.cekSoundSystem, 'cekSoundSystemBy', 'cekSoundSystemAt');
+  setIfMissing(photoCount(input.cashierDeskPhotos) > 0, 'cashDrawerBy', 'cashDrawerAt');
+
+  actor.completedBy = input.userId;
+  actor.completedByScheduleId = input.scheduleId;
+  return actor;
+}
+
+export async function submitStoreOpening(input: SubmitStoreOpeningInput): Promise<TaskResult<StoreOpeningTask>> {
   try {
     const gateErr = await assertCanProgressTask(input.scheduleId, input.storeId, input.geo, input.skipGeo);
     if (gateErr) return { success: false, error: gateErr };
@@ -203,45 +337,49 @@ export async function submitStoreOpening(
     const validationErr = validateStoreOpeningPayload(input);
     if (validationErr) return { success: false, error: validationErr };
 
-    const now      = new Date();
-    const existing = await findTodayRow(input.storeId, now);
+    const now = new Date();
+    const existing = await findRow(input.taskId, input.storeId, now);
 
-    if (existing?.status === 'completed' || existing?.status === 'verified')
+    if (existing?.status === 'completed' || existing?.status === 'verified') {
       return { success: false, error: 'Store opening task sudah disubmit.' };
+    }
 
     const morningShiftId = await getMorningShiftId();
 
     const values = {
-      scheduleId:        input.scheduleId,
-      userId:            input.userId,
-      storeId:           input.storeId,
-      shiftId:           morningShiftId,
-      date:              startOfDay(now),
-      loginPos:          input.loginPos,
+      scheduleId: input.scheduleId,
+      userId: input.userId,
+      storeId: input.storeId,
+      shiftId: existing?.shiftId ?? morningShiftId,
+      date: existing?.date ?? startOfDay(now),
+
+      loginPos: input.loginPos,
       checkAbsenSunfish: input.checkAbsenSunfish,
-      tarikSohSales:     input.tarikSohSales,
-      fiveR:             input.fiveR,
-      // 5R per-area photos
-      fiveRAreaKasirPhotos:  jsonPhotos(input.fiveRAreaKasirPhotos),
-      fiveRAreaDepanPhotos:  jsonPhotos(input.fiveRAreaDepanPhotos),
-      fiveRAreaKananPhotos:  jsonPhotos(input.fiveRAreaKananPhotos),
-      fiveRAreaKiriPhotos:   jsonPhotos(input.fiveRAreaKiriPhotos),
+      tarikSohSales: input.tarikSohSales,
+      fiveR: input.fiveR,
+
+      fiveRAreaKasirPhotos: jsonPhotos(input.fiveRAreaKasirPhotos),
+      fiveRAreaDepanPhotos: jsonPhotos(input.fiveRAreaDepanPhotos),
+      fiveRAreaKananPhotos: jsonPhotos(input.fiveRAreaKananPhotos),
+      fiveRAreaKiriPhotos: jsonPhotos(input.fiveRAreaKiriPhotos),
       fiveRAreaGudangPhotos: jsonPhotos(input.fiveRAreaGudangPhotos),
-      cekLamp:           input.cekLamp,
-      cekSoundSystem:    input.cekSoundSystem,
-      cashDrawerPhotos:  jsonPhotos(input.cashierDeskPhotos),
-      submittedLat:      String(input.geo.lat),
-      submittedLng:      String(input.geo.lng),
-      notes:             input.notes,
-      status:            'completed' as const,
-      completedAt:       now,
-      updatedAt:         now,
+
+      cekLamp: input.cekLamp,
+      cekSoundSystem: input.cekSoundSystem,
+      cashDrawerPhotos: jsonPhotos(input.cashierDeskPhotos),
+
+      submittedLat: String(input.geo.lat),
+      submittedLng: String(input.geo.lng),
+      notes: input.notes,
+      status: 'completed' as const,
+      completedAt: now,
+      updatedAt: now,
+      ...makeSubmitActorUpdate(input, existing ?? null, now),
     };
 
-    const row = existing
-      ? (await db.update(storeOpeningTasks).set(values)
-          .where(eq(storeOpeningTasks.id, existing.id)).returning())[0]
-      : (await db.insert(storeOpeningTasks).values(values).returning())[0];
+    const [row] = existing
+      ? await db.update(storeOpeningTasks).set(values).where(eq(storeOpeningTasks.id, existing.id)).returning()
+      : await db.insert(storeOpeningTasks).values(values).returning();
 
     return { success: true, data: row };
   } catch (err) {
@@ -249,69 +387,54 @@ export async function submitStoreOpening(
   }
 }
 
-// ─── Auto-save ────────────────────────────────────────────────────────────────
-
-export interface StoreOpeningAutoSavePatch {
-  loginPos?:          boolean;
-  checkAbsenSunfish?: boolean;
-  tarikSohSales?:     boolean;
-  fiveR?:             boolean;
-  // Per-area 5R photos
-  fiveRAreaKasirPhotos?:  string[];
-  fiveRAreaDepanPhotos?:  string[];
-  fiveRAreaKananPhotos?:  string[];
-  fiveRAreaKiriPhotos?:   string[];
-  fiveRAreaGudangPhotos?: string[];
-  cekLamp?:           boolean;
-  cekSoundSystem?:    boolean;
-  cashierDeskPhotos?: string[];
-  notes?:             string;
-}
-
 export async function autoSaveStoreOpening(
-  storeId: number,
-  patch:   StoreOpeningAutoSavePatch,
+  taskIdOrStoreId: number,
+  patch: StoreOpeningAutoSavePatch,
+  userId?: string,
+  scheduleId?: number,
 ): Promise<TaskResult<{ saved: string[] }>> {
   try {
-    const existing = await findTodayRow(storeId, new Date());
+    const existing = scheduleId
+      ? await findRowByTaskId(taskIdOrStoreId)
+      : await findTodayRow(taskIdOrStoreId, new Date());
+
     if (!existing) return { success: false, error: 'Store opening task not found.' };
-    if (existing.status === 'completed' || existing.status === 'verified')
+    if (existing.status === 'completed' || existing.status === 'verified') {
       return { success: true, data: { saved: [] } };
+    }
 
-    const update: Record<string, unknown> = { updatedAt: new Date() };
+    const now = new Date();
+    const update: Record<string, unknown> = { updatedAt: now };
 
-    if ('loginPos'          in patch) update.loginPos          = Boolean(patch.loginPos);
+    if ('loginPos' in patch) update.loginPos = Boolean(patch.loginPos);
     if ('checkAbsenSunfish' in patch) update.checkAbsenSunfish = Boolean(patch.checkAbsenSunfish);
-    if ('tarikSohSales'     in patch) update.tarikSohSales     = Boolean(patch.tarikSohSales);
-    if ('fiveR'             in patch) update.fiveR             = Boolean(patch.fiveR);
-    if ('cekLamp'           in patch) update.cekLamp           = Boolean(patch.cekLamp);
-    if ('cekSoundSystem'    in patch) update.cekSoundSystem    = Boolean(patch.cekSoundSystem);
-    if ('notes'             in patch) update.notes             = patch.notes;
+    if ('tarikSohSales' in patch) update.tarikSohSales = Boolean(patch.tarikSohSales);
+    if ('fiveR' in patch) update.fiveR = Boolean(patch.fiveR);
+    if ('cekLamp' in patch) update.cekLamp = Boolean(patch.cekLamp);
+    if ('cekSoundSystem' in patch) update.cekSoundSystem = Boolean(patch.cekSoundSystem);
+    if ('notes' in patch) update.notes = patch.notes;
 
-    // Photo columns
-    if ('cashierDeskPhotos'        in patch) update.cashDrawerPhotos        = jsonPhotos(patch.cashierDeskPhotos);
-    if ('fiveRAreaKasirPhotos'     in patch) update.fiveRAreaKasirPhotos    = jsonPhotos(patch.fiveRAreaKasirPhotos);
-    if ('fiveRAreaDepanPhotos'     in patch) update.fiveRAreaDepanPhotos    = jsonPhotos(patch.fiveRAreaDepanPhotos);
-    if ('fiveRAreaKananPhotos'     in patch) update.fiveRAreaKananPhotos    = jsonPhotos(patch.fiveRAreaKananPhotos);
-    if ('fiveRAreaKiriPhotos'      in patch) update.fiveRAreaKiriPhotos     = jsonPhotos(patch.fiveRAreaKiriPhotos);
-    if ('fiveRAreaGudangPhotos'    in patch) update.fiveRAreaGudangPhotos   = jsonPhotos(patch.fiveRAreaGudangPhotos);
+    if ('cashierDeskPhotos' in patch) update.cashDrawerPhotos = jsonPhotos(patch.cashierDeskPhotos);
+    if ('fiveRAreaKasirPhotos' in patch) update.fiveRAreaKasirPhotos = jsonPhotos(patch.fiveRAreaKasirPhotos);
+    if ('fiveRAreaDepanPhotos' in patch) update.fiveRAreaDepanPhotos = jsonPhotos(patch.fiveRAreaDepanPhotos);
+    if ('fiveRAreaKananPhotos' in patch) update.fiveRAreaKananPhotos = jsonPhotos(patch.fiveRAreaKananPhotos);
+    if ('fiveRAreaKiriPhotos' in patch) update.fiveRAreaKiriPhotos = jsonPhotos(patch.fiveRAreaKiriPhotos);
+    if ('fiveRAreaGudangPhotos' in patch) update.fiveRAreaGudangPhotos = jsonPhotos(patch.fiveRAreaGudangPhotos);
 
+    if (userId) applyActorForPatch(update, patch, userId, now);
+    if (userId) update.userId = userId;
+    if (scheduleId) update.scheduleId = scheduleId;
     if (existing.status === 'pending') update.status = 'in_progress';
 
     await db.update(storeOpeningTasks).set(update).where(eq(storeOpeningTasks.id, existing.id));
 
-    return { success: true, data: { saved: Object.keys(update).filter(k => k !== 'updatedAt') } };
+    return { success: true, data: { saved: Object.keys(update).filter((k) => k !== 'updatedAt') } };
   } catch (err) {
     return { success: false, error: `autoSaveStoreOpening: ${err}` };
   }
 }
 
-// ─── Read helpers ─────────────────────────────────────────────────────────────
-
-export async function getStoreOpeningByStoreDate(
-  storeId: number,
-  date:    Date,
-): Promise<StoreOpeningTask | null> {
+export async function getStoreOpeningByStoreDate(storeId: number, date: Date): Promise<StoreOpeningTask | null> {
   return findTodayRow(storeId, date);
 }
 
@@ -321,14 +444,19 @@ export async function getStoreOpeningBySchedule(scheduleId: number): Promise<Sto
     .from(storeOpeningTasks)
     .where(eq(storeOpeningTasks.scheduleId, scheduleId))
     .limit(1);
+
   return row ?? null;
+}
+
+export async function getStoreOpeningById(id: number): Promise<StoreOpeningTask | null> {
+  return findRowByTaskId(id);
 }
 
 export async function getOrCreateStoreOpeningForSchedule(
   scheduleId: number,
-  userId:     string,
-  storeId:    number,
-  date:       Date,
+  userId: string,
+  storeId: number,
+  date: Date,
 ): Promise<StoreOpeningTask> {
   const existing = await findTodayRow(storeId, date);
   if (existing) return existing;
@@ -340,22 +468,13 @@ export async function getOrCreateStoreOpeningForSchedule(
       scheduleId,
       userId,
       storeId,
-      shiftId:   morningShiftId,
-      date:      startOfDay(date),
-      status:    'pending',
+      shiftId: morningShiftId,
+      date: startOfDay(date),
+      status: 'pending',
       updatedAt: new Date(),
     })
     .onConflictDoNothing()
     .returning();
 
   return row ?? (await findTodayRow(storeId, date))!;
-}
-
-export async function getStoreOpeningById(id: number): Promise<StoreOpeningTask | null> {
-  const [row] = await db
-    .select()
-    .from(storeOpeningTasks)
-    .where(eq(storeOpeningTasks.id, id))
-    .limit(1);
-  return row ?? null;
 }

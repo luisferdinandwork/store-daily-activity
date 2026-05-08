@@ -1,8 +1,8 @@
 // app/api/employee/tasks/route.ts
-import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
-import { db } from '@/lib/db';
+import { NextRequest, NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
+import { db } from "@/lib/db";
 import {
   schedules,
   shifts,
@@ -21,16 +21,19 @@ import {
   groomingTasks,
   itemDroppingTasks,
   itemDroppingEntries,
-} from '@/lib/db/schema';
-import { eq, and, gte, lte, desc, inArray, asc } from 'drizzle-orm';
-import { getOrCreateSetoranForSchedule } from '@/lib/db/utils/setoran';
-import { getOrCreateStoreOpeningForSchedule } from '@/lib/db/utils/store-opening';
-import { getOrCreateStoreFrontForSchedule } from '@/lib/db/utils/store-front';
-import { getOrCreateCekBinForSchedule } from '@/lib/db/utils/cek-bin';
-import { getOrCreateVmChecklistForSchedule } from '@/lib/db/utils/vm-checklist';
-import { getOrCreateMarketingCheckForSchedule } from '@/lib/db/utils/marketing-check';
-import { getOrCreateItemDroppingForSchedule } from '@/lib/db/utils/item-dropping';
-import { getOrCreateGroomingForSchedule } from '@/lib/db/utils/grooming';
+} from "@/lib/db/schema";
+import { eq, and, gte, lte, desc, inArray, asc } from "drizzle-orm";
+import { getOrCreateSetoranForSchedule } from "@/lib/db/utils/setoran";
+import { getOrCreateStoreOpeningForSchedule } from "@/lib/db/utils/store-opening";
+import {
+  getOrCreateStoreFrontForSchedule,
+  claimStoreFrontTask,
+} from "@/lib/db/utils/store-front";
+import { getOrCreateCekBinForSchedule } from "@/lib/db/utils/cek-bin";
+import { getOrCreateVmChecklistForSchedule } from "@/lib/db/utils/vm-checklist";
+import { getOrCreateMarketingCheckForSchedule } from "@/lib/db/utils/marketing-check";
+import { getOrCreateItemDroppingForSchedule } from "@/lib/db/utils/item-dropping";
+import { getOrCreateGroomingForSchedule } from "@/lib/db/utils/grooming";
 
 function startOfDay(d: Date): Date {
   const r = new Date(d);
@@ -49,7 +52,9 @@ function parsePhotos(raw: string | null | undefined): string[] {
 
   try {
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter((v) => typeof v === 'string') : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((v) => typeof v === "string")
+      : [];
   } catch {
     return [];
   }
@@ -59,7 +64,7 @@ function toIso(d: Date | null | undefined): string | null {
   return d ? d.toISOString() : null;
 }
 
-type ShiftCode = 'morning' | 'evening' | 'full_day';
+type ShiftCode = "morning" | "evening" | "full_day";
 
 let _shiftCodeCache: Record<number, string> | null = null;
 
@@ -79,14 +84,16 @@ export async function GET(request: NextRequest) {
     const session = await getServerSession(authOptions);
 
     if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const userId = session.user.id;
     const { searchParams } = new URL(request.url);
-    const dateParam = searchParams.get('date');
+    const dateParam = searchParams.get("date");
 
-    const targetDate = dateParam ? new Date(`${dateParam}T00:00:00`) : new Date();
+    const targetDate = dateParam
+      ? new Date(`${dateParam}T00:00:00`)
+      : new Date();
     const dayStart = startOfDay(targetDate);
     const dayEnd = endOfDay(targetDate);
 
@@ -120,23 +127,39 @@ export async function GET(request: NextRequest) {
     const storeIds = [...new Set(todaySchedules.map((s) => s.storeId))];
 
     const shiftCodesRaw = [
-      ...new Set(todaySchedules.map((s) => shiftCodeMap[s.shiftId] ?? '')),
+      ...new Set(todaySchedules.map((s) => shiftCodeMap[s.shiftId] ?? "")),
     ].filter(Boolean) as ShiftCode[];
 
     const hasMorningTasks = shiftCodesRaw.some(
-      (c) => c === 'morning' || c === 'full_day',
+      (c) => c === "morning" || c === "full_day",
     );
 
     const hasEveningTasks = shiftCodesRaw.some(
-      (c) => c === 'evening' || c === 'full_day',
+      (c) => c === "evening" || c === "full_day",
     );
 
     const primaryShift: ShiftCode | null = shiftCodesRaw[0] ?? null;
     const inStore = (storeId: number) => storeIds.includes(storeId);
 
+    // Store-level shared tasks must use the current employee's schedule when submitting,
+    // even if the shared task row was originally seeded/created by another employee.
+    const scheduleByStoreId = new Map<
+      number,
+      (typeof todaySchedules)[number]
+    >();
+    for (const schedule of todaySchedules) {
+      const current = scheduleByStoreId.get(schedule.storeId);
+      const currentCode = current ? shiftCodeMap[current.shiftId] : null;
+      const nextCode = shiftCodeMap[schedule.shiftId];
+
+      if (!current || (currentCode !== "morning" && nextCode === "morning")) {
+        scheduleByStoreId.set(schedule.storeId, schedule);
+      }
+    }
+
     const morningSchedules = todaySchedules.filter((s) => {
       const code = shiftCodeMap[s.shiftId];
-      return code === 'morning' || code === 'full_day';
+      return code === "morning" || code === "full_day";
     });
 
     const [
@@ -356,7 +379,12 @@ export async function GET(request: NextRequest) {
         return db
           .select()
           .from(itemDroppingEntries)
-          .where(inArray(itemDroppingEntries.taskId, taskIds.map((r) => r.id)))
+          .where(
+            inArray(
+              itemDroppingEntries.taskId,
+              taskIds.map((r) => r.id),
+            ),
+          )
           .orderBy(itemDroppingEntries.dropTime);
       })(),
 
@@ -509,96 +537,33 @@ export async function GET(request: NextRequest) {
     }
 
     const tasks = [
-      ...openingRows.filter((r) => inStore(r.storeId)).map((t) => ({
-        type: 'store_opening' as const,
-        shift: (shiftCodeMap[t.shiftId] ?? 'morning') as ShiftCode,
-        data: {
-          id: String(t.id),
-          scheduleId: String(t.scheduleId),
-          userId: t.userId,
-          storeId: String(t.storeId),
-          shift: (shiftCodeMap[t.shiftId] ?? 'morning') as ShiftCode,
-          date: t.date.toISOString(),
-
-          loginPos: t.loginPos,
-          checkAbsenSunfish: t.checkAbsenSunfish,
-          tarikSohSales: t.tarikSohSales,
-          fiveR: t.fiveR,
-
-          fiveRAreaKasirPhotos: parsePhotos(t.fiveRAreaKasirPhotos),
-          fiveRAreaDepanPhotos: parsePhotos(t.fiveRAreaDepanPhotos),
-          fiveRAreaKananPhotos: parsePhotos(t.fiveRAreaKananPhotos),
-          fiveRAreaKiriPhotos: parsePhotos(t.fiveRAreaKiriPhotos),
-          fiveRAreaGudangPhotos: parsePhotos(t.fiveRAreaGudangPhotos),
-
-          cekLamp: t.cekLamp,
-          cekSoundSystem: t.cekSoundSystem,
-          cashDrawerPhotos: parsePhotos(t.cashDrawerPhotos),
-
-          status: t.status,
-          notes: t.notes,
-          completedAt: toIso(t.completedAt),
-          verifiedBy: t.verifiedBy,
-          verifiedAt: toIso(t.verifiedAt),
-        },
-      })),
-
-      ...storeFrontRows.filter((r) => inStore(r.storeId)).map((t) => ({
-        type: 'store_front' as const,
-        shift: (shiftCodeMap[t.shiftId] ?? 'morning') as ShiftCode,
-        data: {
-          id: String(t.id),
-          scheduleId: String(t.scheduleId),
-          userId: t.userId,
-          storeId: String(t.storeId),
-          shift: (shiftCodeMap[t.shiftId] ?? 'morning') as ShiftCode,
-          date: t.date.toISOString(),
-
-          storefrontPhotos: parsePhotos(t.storefrontPhotos),
-          rollingDoorClosedPhoto: t.rollingDoorClosedPhoto,
-
-          status: t.status,
-          notes: t.notes,
-          completedAt: toIso(t.completedAt),
-          verifiedBy: t.verifiedBy,
-          verifiedAt: toIso(t.verifiedAt),
-        },
-      })),
-
-      ...setoranRows.filter((r) => inStore(r.storeId)).map((t) => {
-        const actualReceivedAmount = t.expectedAmount;
-        const storedAmount = t.amount;
-        const previousUnpaidAmount = t.carriedDeficit;
-        const requiredStoreAmount = (
-          Number(actualReceivedAmount ?? 0) + Number(previousUnpaidAmount ?? 0)
-        ).toFixed(2);
-
-        return {
-          type: 'setoran' as const,
-          shift: (shiftCodeMap[t.shiftId] ?? 'morning') as ShiftCode,
+      ...openingRows
+        .filter((r) => inStore(r.storeId))
+        .map((t) => ({
+          type: "store_opening" as const,
+          shift: (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode,
           data: {
             id: String(t.id),
             scheduleId: String(t.scheduleId),
             userId: t.userId,
             storeId: String(t.storeId),
-            shift: (shiftCodeMap[t.shiftId] ?? 'morning') as ShiftCode,
+            shift: (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode,
             date: t.date.toISOString(),
 
-            // Existing names kept for compatibility.
-            amount: t.amount,
-            expectedAmount: t.expectedAmount,
-            carriedDeficit: t.carriedDeficit,
-            carriedDeficitFetchedAt: toIso(t.carriedDeficitFetchedAt),
-            unpaidAmount: t.unpaidAmount,
+            loginPos: t.loginPos,
+            checkAbsenSunfish: t.checkAbsenSunfish,
+            tarikSohSales: t.tarikSohSales,
+            fiveR: t.fiveR,
 
-            // New clearer money-storage names.
-            actualReceivedAmount,
-            previousUnpaidAmount,
-            requiredStoreAmount,
-            storedAmount,
+            fiveRAreaKasirPhotos: parsePhotos(t.fiveRAreaKasirPhotos),
+            fiveRAreaDepanPhotos: parsePhotos(t.fiveRAreaDepanPhotos),
+            fiveRAreaKananPhotos: parsePhotos(t.fiveRAreaKananPhotos),
+            fiveRAreaKiriPhotos: parsePhotos(t.fiveRAreaKiriPhotos),
+            fiveRAreaGudangPhotos: parsePhotos(t.fiveRAreaGudangPhotos),
 
-            resiPhoto: t.resiPhoto,
-            atmCardSelfiePhoto: t.atmCardSelfiePhoto,
+            cekLamp: t.cekLamp,
+            cekSoundSystem: t.cekSoundSystem,
+            cashDrawerPhotos: parsePhotos(t.cashDrawerPhotos),
 
             status: t.status,
             notes: t.notes,
@@ -606,146 +571,193 @@ export async function GET(request: NextRequest) {
             verifiedBy: t.verifiedBy,
             verifiedAt: toIso(t.verifiedAt),
           },
-        };
-      }),
+        })),
 
-      ...cekBinRows.filter((r) => inStore(r.storeId)).map((t) => {
-        const availableBins = (availableBinsByStoreId.get(t.storeId) ?? []).map((bin) => ({
-          id: String(bin.id),
-          storeId: String(bin.storeId),
-          bin: bin.bin,
-          qtyBc: bin.qtyBc,
-          qtySesuaiBin: bin.qtySesuaiBin,
-          qtyTidakSesuaiBin: bin.qtyTidakSesuaiBin,
-          nama: bin.nama,
-        }));
+      ...storeFrontRows
+        .filter((r) => inStore(r.storeId))
+        .map((t) => {
+          const actorSchedule = scheduleByStoreId.get(t.storeId);
+          const actorScheduleId = actorSchedule?.id ?? t.scheduleId;
+          const actorShiftId = actorSchedule?.shiftId ?? t.shiftId;
+          const shift = (shiftCodeMap[actorShiftId] ?? "morning") as ShiftCode;
 
-        const checkedBins = (checkedBinsByTaskId.get(t.id) ?? []).map((bin) => ({
-          id: String(bin.id),
-          taskId: String(bin.taskId),
-          binId: String(bin.binId),
-          bin: bin.bin,
-          qtyBc: bin.qtyBc,
-          qtySesuaiBin: bin.qtySesuaiBin,
-          qtyTidakSesuaiBin: bin.qtyTidakSesuaiBin,
-          nama: bin.nama,
-          notes: bin.notes,
-        }));
-
-        const totalStoreBins = t.totalStoreBins || availableBins.length;
-        const minimumBinsToCheck = t.minimumBinsToCheck || Math.ceil(totalStoreBins * 0.3);
-        const checkedBinsCount = t.checkedBinsCount || checkedBins.length;
-
-        return {
-          type: 'cek_bin' as const,
-          shift: (shiftCodeMap[t.shiftId] ?? 'morning') as ShiftCode,
-          data: {
-            id: String(t.id),
-            scheduleId: String(t.scheduleId),
-            userId: t.userId,
-            storeId: String(t.storeId),
-            shift: (shiftCodeMap[t.shiftId] ?? 'morning') as ShiftCode,
-            date: t.date.toISOString(),
-
-            totalStoreBins,
-            minimumBinsToCheck,
-            checkedBinsCount,
-            availableBins,
-            checkedBins,
-            selectedBinIds: checkedBins.map((bin) => bin.binId),
-
-            status: t.status,
-            notes: t.notes,
-            completedAt: toIso(t.completedAt),
-            verifiedBy: t.verifiedBy,
-            verifiedAt: toIso(t.verifiedAt),
-          },
-        };
-      }),
-
-      ...vmChecklistRows.filter((r) => inStore(r.storeId)).map((t) => ({
-        type: 'vm_checklist' as const,
-        shift: (shiftCodeMap[t.shiftId] ?? 'morning') as ShiftCode,
-        data: {
-          id: String(t.id),
-          scheduleId: String(t.scheduleId),
-          userId: t.userId,
-          storeId: String(t.storeId),
-          shift: (shiftCodeMap[t.shiftId] ?? 'morning') as ShiftCode,
-          date: t.date.toISOString(),
-
-          shoeLaceShoeFillerPriceTagHangtagLabelK3L:
-            t.shoeLaceShoeFillerPriceTagHangtagLabelK3L,
-          lastPairAndPigskinHangtag: t.lastPairAndPigskinHangtag,
-          popPromoUpdate: t.popPromoUpdate,
-          displayTableWallShelvingShowcaseHangbarStackingPedestal:
-            t.displayTableWallShelvingShowcaseHangbarStackingPedestal,
-          floorDisplayCleanliness: t.floorDisplayCleanliness,
-          vmToolsStorage: t.vmToolsStorage,
-
-          status: t.status,
-          notes: t.notes,
-          completedAt: toIso(t.completedAt),
-          verifiedBy: t.verifiedBy,
-          verifiedAt: toIso(t.verifiedAt),
-        },
-      })),
-
-      ...marketingCheckRows.filter((r) => inStore(r.storeId)).map((t) => ({
-        type: 'marketing_check' as const,
-        shift: (shiftCodeMap[t.shiftId] ?? 'morning') as ShiftCode,
-        data: {
-          id: String(t.id),
-          scheduleId: String(t.scheduleId),
-          userId: t.userId,
-          storeId: String(t.storeId),
-          shift: (shiftCodeMap[t.shiftId] ?? 'morning') as ShiftCode,
-          date: t.date.toISOString(),
-
-          promoName: t.promoName,
-          promoPeriod: t.promoPeriod,
-          promoMechanism: t.promoMechanism,
-          randomShoeItems: t.randomShoeItems,
-          randomNonShoeItems: t.randomNonShoeItems,
-          sellTag: t.sellTag,
-
-          status: t.status,
-          notes: t.notes,
-          completedAt: toIso(t.completedAt),
-          verifiedBy: t.verifiedBy,
-          verifiedAt: toIso(t.verifiedAt),
-        },
-      })),
-
-      ...itemDroppingRows.filter((r) => inStore(r.storeId)).map((t) => {
-        const shift = (shiftCodeMap[t.shiftId] ?? 'morning') as ShiftCode;
-
-        const entries = (entriesByTaskId.get(t.id) ?? []).map((e) => ({
-          id: String(e.id),
-          taskId: String(e.taskId),
-          userId: e.userId,
-          storeId: String(e.storeId),
-          toNumber: e.toNumber,
-          quantity: e.quantity ?? 0,
-          dropTime: toIso(e.dropTime),
-          droppingPhotos: parsePhotos(e.droppingPhotos),
-          notes: e.notes,
-          createdAt: toIso(e.createdAt),
-        }));
-
-        return {
-          type: 'item_dropping' as const,
-          shift,
-          data: {
-            id: String(t.id),
-            scheduleId: String(t.scheduleId),
-            userId: t.userId,
-            storeId: String(t.storeId),
+          return {
+            type: "store_front" as const,
             shift,
+            data: {
+              id: String(t.id),
+              // For shared store/day tasks, scheduleId must belong to the logged-in employee.
+              // The original shared row schedule is kept as originalScheduleId for auditing.
+              scheduleId: String(actorScheduleId),
+              originalScheduleId: String(t.scheduleId),
+              userId,
+              assignedUserId: t.userId,
+              storeId: String(t.storeId),
+              shift,
+              date: t.date.toISOString(),
+
+              storefrontPhotos: parsePhotos(t.storefrontPhotos),
+              rollingDoorClosedPhoto: t.rollingDoorClosedPhoto,
+              claimedBy: t.claimedBy,
+              claimedAt: toIso(t.claimedAt),
+              completedBy: t.completedBy,
+              completedByScheduleId: t.completedByScheduleId
+                ? String(t.completedByScheduleId)
+                : null,
+
+              status: t.status,
+              notes: t.notes,
+              completedAt: toIso(t.completedAt),
+              verifiedBy: t.verifiedBy,
+              verifiedAt: toIso(t.verifiedAt),
+            },
+          };
+        }),
+
+      ...setoranRows
+        .filter((r) => inStore(r.storeId))
+        .map((t) => {
+          const actualReceivedAmount = t.expectedAmount;
+          const storedAmount = t.amount;
+          const previousUnpaidAmount = t.carriedDeficit;
+          const requiredStoreAmount = (
+            Number(actualReceivedAmount ?? 0) +
+            Number(previousUnpaidAmount ?? 0)
+          ).toFixed(2);
+
+          return {
+            type: "setoran" as const,
+            shift: (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode,
+            data: {
+              id: String(t.id),
+              scheduleId: String(t.scheduleId),
+              userId: t.userId,
+              storeId: String(t.storeId),
+              shift: (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode,
+              date: t.date.toISOString(),
+
+              // Existing names kept for compatibility.
+              amount: t.amount,
+              expectedAmount: t.expectedAmount,
+              carriedDeficit: t.carriedDeficit,
+              carriedDeficitFetchedAt: toIso(t.carriedDeficitFetchedAt),
+              unpaidAmount: t.unpaidAmount,
+
+              // New clearer money-storage names.
+              actualReceivedAmount,
+              previousUnpaidAmount,
+              requiredStoreAmount,
+              storedAmount,
+
+              resiPhoto: t.resiPhoto,
+              atmCardSelfiePhoto: t.atmCardSelfiePhoto,
+
+              actualReceivedAmountBy: (t as any).actualReceivedAmountBy ?? null,
+              actualReceivedAmountAt: toIso((t as any).actualReceivedAmountAt),
+              storedAmountBy: (t as any).storedAmountBy ?? null,
+              storedAmountAt: toIso((t as any).storedAmountAt),
+              resiPhotoBy: (t as any).resiPhotoBy ?? null,
+              resiPhotoAt: toIso((t as any).resiPhotoAt),
+              atmCardSelfiePhotoBy: (t as any).atmCardSelfiePhotoBy ?? null,
+              atmCardSelfiePhotoAt: toIso((t as any).atmCardSelfiePhotoAt),
+              notesBy: (t as any).notesBy ?? null,
+              notesAt: toIso((t as any).notesAt),
+              completedBy: (t as any).completedBy ?? null,
+              completedByScheduleId: (t as any).completedByScheduleId
+                ? String((t as any).completedByScheduleId)
+                : null,
+
+              status: t.status,
+              notes: t.notes,
+              completedAt: toIso(t.completedAt),
+              verifiedBy: t.verifiedBy,
+              verifiedAt: toIso(t.verifiedAt),
+            },
+          };
+        }),
+
+      ...cekBinRows
+        .filter((r) => inStore(r.storeId))
+        .map((t) => {
+          const availableBins = (
+            availableBinsByStoreId.get(t.storeId) ?? []
+          ).map((bin) => ({
+            id: String(bin.id),
+            storeId: String(bin.storeId),
+            bin: bin.bin,
+            qtyBc: bin.qtyBc,
+            qtySesuaiBin: bin.qtySesuaiBin,
+            qtyTidakSesuaiBin: bin.qtyTidakSesuaiBin,
+            nama: bin.nama,
+          }));
+
+          const checkedBins = (checkedBinsByTaskId.get(t.id) ?? []).map(
+            (bin) => ({
+              id: String(bin.id),
+              taskId: String(bin.taskId),
+              binId: String(bin.binId),
+              bin: bin.bin,
+              qtyBc: bin.qtyBc,
+              qtySesuaiBin: bin.qtySesuaiBin,
+              qtyTidakSesuaiBin: bin.qtyTidakSesuaiBin,
+              nama: bin.nama,
+              notes: bin.notes,
+            }),
+          );
+
+          const totalStoreBins = t.totalStoreBins || availableBins.length;
+          const minimumBinsToCheck =
+            t.minimumBinsToCheck || Math.ceil(totalStoreBins * 0.3);
+          const checkedBinsCount = t.checkedBinsCount || checkedBins.length;
+
+          return {
+            type: "cek_bin" as const,
+            shift: (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode,
+            data: {
+              id: String(t.id),
+              scheduleId: String(t.scheduleId),
+              userId: t.userId,
+              storeId: String(t.storeId),
+              shift: (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode,
+              date: t.date.toISOString(),
+
+              totalStoreBins,
+              minimumBinsToCheck,
+              checkedBinsCount,
+              availableBins,
+              checkedBins,
+              selectedBinIds: checkedBins.map((bin) => bin.binId),
+
+              status: t.status,
+              notes: t.notes,
+              completedAt: toIso(t.completedAt),
+              verifiedBy: t.verifiedBy,
+              verifiedAt: toIso(t.verifiedAt),
+            },
+          };
+        }),
+
+      ...vmChecklistRows
+        .filter((r) => inStore(r.storeId))
+        .map((t) => ({
+          type: "vm_checklist" as const,
+          shift: (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode,
+          data: {
+            id: String(t.id),
+            scheduleId: String(t.scheduleId),
+            userId: t.userId,
+            storeId: String(t.storeId),
+            shift: (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode,
             date: t.date.toISOString(),
 
-            hasDropping: t.hasDropping,
-            entries,
+            shoeLaceShoeFillerPriceTagHangtagLabelK3L:
+              t.shoeLaceShoeFillerPriceTagHangtagLabelK3L,
+            lastPairAndPigskinHangtag: t.lastPairAndPigskinHangtag,
+            popPromoUpdate: t.popPromoUpdate,
+            displayTableWallShelvingShowcaseHangbarStackingPedestal:
+              t.displayTableWallShelvingShowcaseHangbarStackingPedestal,
+            floorDisplayCleanliness: t.floorDisplayCleanliness,
+            vmToolsStorage: t.vmToolsStorage,
 
             status: t.status,
             notes: t.notes,
@@ -753,113 +765,206 @@ export async function GET(request: NextRequest) {
             verifiedBy: t.verifiedBy,
             verifiedAt: toIso(t.verifiedAt),
           },
-        };
-      }),
+        })),
 
-      ...briefingRows.filter((r) => inStore(r.storeId)).map((t) => ({
-        type: 'briefing' as const,
-        shift: (shiftCodeMap[t.shiftId] ?? 'evening') as ShiftCode,
-        data: {
-          id: String(t.id),
-          scheduleId: String(t.scheduleId),
-          userId: t.userId,
-          storeId: String(t.storeId),
-          shift: (shiftCodeMap[t.shiftId] ?? 'evening') as ShiftCode,
-          date: t.date.toISOString(),
+      ...marketingCheckRows
+        .filter((r) => inStore(r.storeId))
+        .map((t) => ({
+          type: "marketing_check" as const,
+          shift: (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode,
+          data: {
+            id: String(t.id),
+            scheduleId: String(t.scheduleId),
+            userId: t.userId,
+            storeId: String(t.storeId),
+            shift: (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode,
+            date: t.date.toISOString(),
 
-          done: t.done,
-          isBalanced: t.isBalanced,
-          parentTaskId: t.parentTaskId,
+            promoName: t.promoName,
+            promoPeriod: t.promoPeriod,
+            promoMechanism: t.promoMechanism,
+            randomShoeItems: t.randomShoeItems,
+            randomNonShoeItems: t.randomNonShoeItems,
+            sellTag: t.sellTag,
 
-          status: t.status,
-          notes: t.notes,
-          completedAt: toIso(t.completedAt),
-          verifiedBy: t.verifiedBy,
-          verifiedAt: toIso(t.verifiedAt),
-        },
-      })),
+            promoNameBy: t.promoNameBy,
+            promoNameAt: toIso(t.promoNameAt),
+            promoPeriodBy: t.promoPeriodBy,
+            promoPeriodAt: toIso(t.promoPeriodAt),
+            promoMechanismBy: t.promoMechanismBy,
+            promoMechanismAt: toIso(t.promoMechanismAt),
+            randomShoeItemsBy: t.randomShoeItemsBy,
+            randomShoeItemsAt: toIso(t.randomShoeItemsAt),
+            randomNonShoeItemsBy: t.randomNonShoeItemsBy,
+            randomNonShoeItemsAt: toIso(t.randomNonShoeItemsAt),
+            sellTagBy: t.sellTagBy,
+            sellTagAt: toIso(t.sellTagAt),
+            notesBy: t.notesBy,
+            notesAt: toIso(t.notesAt),
+            completedBy: t.completedBy,
+            completedByScheduleId: t.completedByScheduleId ? String(t.completedByScheduleId) : null,
 
-      ...eodZReportRows.filter((r) => inStore(r.storeId)).map((t) => ({
-        type: 'eod_z_report' as const,
-        shift: (shiftCodeMap[t.shiftId] ?? 'evening') as ShiftCode,
-        data: {
-          id: String(t.id),
-          scheduleId: String(t.scheduleId),
-          userId: t.userId,
-          storeId: String(t.storeId),
-          shift: (shiftCodeMap[t.shiftId] ?? 'evening') as ShiftCode,
-          date: t.date.toISOString(),
+            status: t.status,
+            notes: t.notes,
+            completedAt: toIso(t.completedAt),
+            verifiedBy: t.verifiedBy,
+            verifiedAt: toIso(t.verifiedAt),
+          },
+        })),
 
-          totalNominal: t.totalNominal,
-          zReportPhotos: parsePhotos(t.zReportPhotos),
+      ...itemDroppingRows
+        .filter((r) => inStore(r.storeId))
+        .map((t) => {
+          const shift = (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode;
 
-          status: t.status,
-          notes: t.notes,
-          completedAt: toIso(t.completedAt),
-          verifiedBy: t.verifiedBy,
-          verifiedAt: toIso(t.verifiedAt),
-        },
-      })),
+          const entries = (entriesByTaskId.get(t.id) ?? []).map((e) => ({
+            id: String(e.id),
+            taskId: String(e.taskId),
+            userId: e.userId,
+            storeId: String(e.storeId),
+            toNumber: e.toNumber,
+            quantity: e.quantity ?? 0,
+            dropTime: toIso(e.dropTime),
+            droppingPhotos: parsePhotos(e.droppingPhotos),
+            notes: e.notes,
+            createdAt: toIso(e.createdAt),
+          }));
 
-      ...edcReconciliationRows.filter((r) => inStore(r.storeId)).map((t) => ({
-        type: 'edc_reconciliation' as const,
-        shift: (shiftCodeMap[t.shiftId] ?? 'evening') as ShiftCode,
-        data: {
-          id: String(t.id),
-          scheduleId: String(t.scheduleId),
-          userId: t.userId,
-          storeId: String(t.storeId),
-          shift: (shiftCodeMap[t.shiftId] ?? 'evening') as ShiftCode,
-          date: t.date.toISOString(),
+          return {
+            type: "item_dropping" as const,
+            shift,
+            data: {
+              id: String(t.id),
+              scheduleId: String(t.scheduleId),
+              userId: t.userId,
+              storeId: String(t.storeId),
+              shift,
+              date: t.date.toISOString(),
 
-          parentTaskId: t.parentTaskId,
-          isBalanced: t.isBalanced,
-          expectedFetchedAt: toIso(t.expectedFetchedAt),
-          discrepancyStartedAt: toIso(t.discrepancyStartedAt),
-          discrepancyResolvedAt: toIso(t.discrepancyResolvedAt),
-          discrepancyDurationMinutes: t.discrepancyDurationMinutes,
+              hasDropping: t.hasDropping,
+              entries,
 
-          status: t.status,
-          notes: t.notes,
-          completedAt: toIso(t.completedAt),
-          verifiedBy: t.verifiedBy,
-          verifiedAt: toIso(t.verifiedAt),
-        },
-      })),
+              status: t.status,
+              notes: t.notes,
+              completedAt: toIso(t.completedAt),
+              verifiedBy: t.verifiedBy,
+              verifiedAt: toIso(t.verifiedAt),
+            },
+          };
+        }),
 
-      ...openStatementRows.filter((r) => inStore(r.storeId)).map((t) => ({
-        type: 'open_statement' as const,
-        shift: (shiftCodeMap[t.shiftId] ?? 'evening') as ShiftCode,
-        data: {
-          id: String(t.id),
-          scheduleId: String(t.scheduleId),
-          userId: t.userId,
-          storeId: String(t.storeId),
-          shift: (shiftCodeMap[t.shiftId] ?? 'evening') as ShiftCode,
-          date: t.date.toISOString(),
+      ...briefingRows
+        .filter((r) => inStore(r.storeId))
+        .map((t) => ({
+          type: "briefing" as const,
+          shift: (shiftCodeMap[t.shiftId] ?? "evening") as ShiftCode,
+          data: {
+            id: String(t.id),
+            scheduleId: String(t.scheduleId),
+            userId: t.userId,
+            storeId: String(t.storeId),
+            shift: (shiftCodeMap[t.shiftId] ?? "evening") as ShiftCode,
+            date: t.date.toISOString(),
 
-          parentTaskId: t.parentTaskId,
-          expectedAmount: t.expectedAmount,
-          expectedFetchedAt: toIso(t.expectedFetchedAt),
-          actualAmount: t.actualAmount,
-          isBalanced: t.isBalanced,
-          discrepancyStartedAt: toIso(t.discrepancyStartedAt),
-          discrepancyResolvedAt: toIso(t.discrepancyResolvedAt),
-          discrepancyDurationMinutes: t.discrepancyDurationMinutes,
+            done: t.done,
+            isBalanced: t.isBalanced,
+            parentTaskId: t.parentTaskId,
 
-          status: t.status,
-          notes: t.notes,
-          completedAt: toIso(t.completedAt),
-          verifiedBy: t.verifiedBy,
-          verifiedAt: toIso(t.verifiedAt),
-        },
-      })),
+            status: t.status,
+            notes: t.notes,
+            completedAt: toIso(t.completedAt),
+            verifiedBy: t.verifiedBy,
+            verifiedAt: toIso(t.verifiedAt),
+          },
+        })),
+
+      ...eodZReportRows
+        .filter((r) => inStore(r.storeId))
+        .map((t) => ({
+          type: "eod_z_report" as const,
+          shift: (shiftCodeMap[t.shiftId] ?? "evening") as ShiftCode,
+          data: {
+            id: String(t.id),
+            scheduleId: String(t.scheduleId),
+            userId: t.userId,
+            storeId: String(t.storeId),
+            shift: (shiftCodeMap[t.shiftId] ?? "evening") as ShiftCode,
+            date: t.date.toISOString(),
+
+            totalNominal: t.totalNominal,
+            zReportPhotos: parsePhotos(t.zReportPhotos),
+
+            status: t.status,
+            notes: t.notes,
+            completedAt: toIso(t.completedAt),
+            verifiedBy: t.verifiedBy,
+            verifiedAt: toIso(t.verifiedAt),
+          },
+        })),
+
+      ...edcReconciliationRows
+        .filter((r) => inStore(r.storeId))
+        .map((t) => ({
+          type: "edc_reconciliation" as const,
+          shift: (shiftCodeMap[t.shiftId] ?? "evening") as ShiftCode,
+          data: {
+            id: String(t.id),
+            scheduleId: String(t.scheduleId),
+            userId: t.userId,
+            storeId: String(t.storeId),
+            shift: (shiftCodeMap[t.shiftId] ?? "evening") as ShiftCode,
+            date: t.date.toISOString(),
+
+            parentTaskId: t.parentTaskId,
+            isBalanced: t.isBalanced,
+            expectedFetchedAt: toIso(t.expectedFetchedAt),
+            discrepancyStartedAt: toIso(t.discrepancyStartedAt),
+            discrepancyResolvedAt: toIso(t.discrepancyResolvedAt),
+            discrepancyDurationMinutes: t.discrepancyDurationMinutes,
+
+            status: t.status,
+            notes: t.notes,
+            completedAt: toIso(t.completedAt),
+            verifiedBy: t.verifiedBy,
+            verifiedAt: toIso(t.verifiedAt),
+          },
+        })),
+
+      ...openStatementRows
+        .filter((r) => inStore(r.storeId))
+        .map((t) => ({
+          type: "open_statement" as const,
+          shift: (shiftCodeMap[t.shiftId] ?? "evening") as ShiftCode,
+          data: {
+            id: String(t.id),
+            scheduleId: String(t.scheduleId),
+            userId: t.userId,
+            storeId: String(t.storeId),
+            shift: (shiftCodeMap[t.shiftId] ?? "evening") as ShiftCode,
+            date: t.date.toISOString(),
+
+            parentTaskId: t.parentTaskId,
+            expectedAmount: t.expectedAmount,
+            expectedFetchedAt: toIso(t.expectedFetchedAt),
+            actualAmount: t.actualAmount,
+            isBalanced: t.isBalanced,
+            discrepancyStartedAt: toIso(t.discrepancyStartedAt),
+            discrepancyResolvedAt: toIso(t.discrepancyResolvedAt),
+            discrepancyDurationMinutes: t.discrepancyDurationMinutes,
+
+            status: t.status,
+            notes: t.notes,
+            completedAt: toIso(t.completedAt),
+            verifiedBy: t.verifiedBy,
+            verifiedAt: toIso(t.verifiedAt),
+          },
+        })),
 
       ...groomingRows.map((t) => {
-        const code = (shiftCodeMap[t.shiftId] ?? 'morning') as ShiftCode;
+        const code = (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode;
 
         return {
-          type: 'grooming' as const,
+          type: "grooming" as const,
           shift: code,
           data: {
             id: String(t.id),
@@ -926,9 +1031,9 @@ export async function GET(request: NextRequest) {
       scheduleIds,
     });
   } catch (error) {
-    console.error('[GET /api/employee/tasks]', error);
+    console.error("[GET /api/employee/tasks]", error);
     return NextResponse.json(
-      { success: false, error: 'Failed to load employee tasks.' },
+      { success: false, error: "Failed to load employee tasks." },
       { status: 500 },
     );
   }
@@ -939,7 +1044,7 @@ export async function PATCH(request: NextRequest) {
     const session = await getServerSession(authOptions);
 
     if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const userId = session.user.id;
@@ -950,9 +1055,9 @@ export async function PATCH(request: NextRequest) {
       status: string;
     };
 
-    if (!taskId || !taskType || status !== 'in_progress') {
+    if (!taskId || !taskType || status !== "in_progress") {
       return NextResponse.json(
-        { error: 'taskId, taskType, and status=in_progress are required' },
+        { error: "taskId, taskType, and status=in_progress are required" },
         { status: 400 },
       );
     }
@@ -961,7 +1066,7 @@ export async function PATCH(request: NextRequest) {
 
     if (Number.isNaN(id)) {
       return NextResponse.json(
-        { error: 'taskId must be a number' },
+        { error: "taskId must be a number" },
         { status: 400 },
       );
     }
@@ -986,26 +1091,8 @@ export async function PATCH(request: NextRequest) {
         update: (id) =>
           db
             .update(storeOpeningTasks)
-            .set({ status: 'in_progress', updatedAt: new Date() })
+            .set({ status: "in_progress", updatedAt: new Date() })
             .where(eq(storeOpeningTasks.id, id))
-            .then(() => {}),
-      },
-
-      store_front: {
-        getRow: async (id) =>
-          (
-            await db
-              .select({ status: storeFrontTasks.status })
-              .from(storeFrontTasks)
-              .where(eq(storeFrontTasks.id, id))
-              .limit(1)
-            )[0],
-
-        update: (id) =>
-          db
-            .update(storeFrontTasks)
-            .set({ status: 'in_progress', updatedAt: new Date() })
-            .where(eq(storeFrontTasks.id, id))
             .then(() => {}),
       },
 
@@ -1022,7 +1109,7 @@ export async function PATCH(request: NextRequest) {
         update: (id) =>
           db
             .update(setoranTasks)
-            .set({ status: 'in_progress', updatedAt: new Date() })
+            .set({ status: "in_progress", updatedAt: new Date() })
             .where(eq(setoranTasks.id, id))
             .then(() => {}),
       },
@@ -1040,7 +1127,7 @@ export async function PATCH(request: NextRequest) {
         update: (id) =>
           db
             .update(cekBinTasks)
-            .set({ status: 'in_progress', updatedAt: new Date() })
+            .set({ status: "in_progress", updatedAt: new Date() })
             .where(eq(cekBinTasks.id, id))
             .then(() => {}),
       },
@@ -1058,7 +1145,7 @@ export async function PATCH(request: NextRequest) {
         update: (id) =>
           db
             .update(vmChecklistTasks)
-            .set({ status: 'in_progress', updatedAt: new Date() })
+            .set({ status: "in_progress", updatedAt: new Date() })
             .where(eq(vmChecklistTasks.id, id))
             .then(() => {}),
       },
@@ -1076,7 +1163,7 @@ export async function PATCH(request: NextRequest) {
         update: (id) =>
           db
             .update(marketingCheckTasks)
-            .set({ status: 'in_progress', updatedAt: new Date() })
+            .set({ status: "in_progress", updatedAt: new Date() })
             .where(eq(marketingCheckTasks.id, id))
             .then(() => {}),
       },
@@ -1094,7 +1181,7 @@ export async function PATCH(request: NextRequest) {
         update: (id) =>
           db
             .update(itemDroppingTasks)
-            .set({ status: 'in_progress', updatedAt: new Date() })
+            .set({ status: "in_progress", updatedAt: new Date() })
             .where(eq(itemDroppingTasks.id, id))
             .then(() => {}),
       },
@@ -1112,7 +1199,7 @@ export async function PATCH(request: NextRequest) {
         update: (id) =>
           db
             .update(briefingTasks)
-            .set({ status: 'in_progress', updatedAt: new Date() })
+            .set({ status: "in_progress", updatedAt: new Date() })
             .where(eq(briefingTasks.id, id))
             .then(() => {}),
       },
@@ -1130,7 +1217,7 @@ export async function PATCH(request: NextRequest) {
         update: (id) =>
           db
             .update(edcReconciliationTasks)
-            .set({ status: 'in_progress', updatedAt: new Date() })
+            .set({ status: "in_progress", updatedAt: new Date() })
             .where(eq(edcReconciliationTasks.id, id))
             .then(() => {}),
       },
@@ -1148,7 +1235,7 @@ export async function PATCH(request: NextRequest) {
         update: (id) =>
           db
             .update(eodZReportTasks)
-            .set({ status: 'in_progress', updatedAt: new Date() })
+            .set({ status: "in_progress", updatedAt: new Date() })
             .where(eq(eodZReportTasks.id, id))
             .then(() => {}),
       },
@@ -1166,13 +1253,67 @@ export async function PATCH(request: NextRequest) {
         update: (id) =>
           db
             .update(openStatementTasks)
-            .set({ status: 'in_progress', updatedAt: new Date() })
+            .set({ status: "in_progress", updatedAt: new Date() })
             .where(eq(openStatementTasks.id, id))
             .then(() => {}),
       },
     };
 
-    if (taskType === 'grooming') {
+    if (taskType === "store_front") {
+      const [task] = await db
+        .select({
+          id: storeFrontTasks.id,
+          storeId: storeFrontTasks.storeId,
+          date: storeFrontTasks.date,
+          status: storeFrontTasks.status,
+        })
+        .from(storeFrontTasks)
+        .where(eq(storeFrontTasks.id, id))
+        .limit(1);
+
+      if (!task) {
+        return NextResponse.json({ error: "Task not found" }, { status: 404 });
+      }
+
+      if (task.status !== "pending" && task.status !== "in_progress") {
+        return NextResponse.json({ success: true });
+      }
+
+      const [ownSchedule] = await db
+        .select({ id: schedules.id })
+        .from(schedules)
+        .where(
+          and(
+            eq(schedules.userId, userId),
+            eq(schedules.storeId, task.storeId),
+            eq(schedules.isHoliday, false),
+            gte(schedules.date, startOfDay(task.date)),
+            lte(schedules.date, endOfDay(task.date)),
+          ),
+        )
+        .limit(1);
+
+      if (!ownSchedule) {
+        return NextResponse.json(
+          { error: "No matching schedule for this employee." },
+          { status: 403 },
+        );
+      }
+
+      const claimed = await claimStoreFrontTask({
+        taskId: id,
+        userId,
+        scheduleId: ownSchedule.id,
+      });
+
+      if (!claimed.success) {
+        return NextResponse.json({ error: claimed.error }, { status: 400 });
+      }
+
+      return NextResponse.json({ success: true });
+    }
+
+    if (taskType === "grooming") {
       const [row] = await db
         .select({ userId: groomingTasks.userId, status: groomingTasks.status })
         .from(groomingTasks)
@@ -1180,20 +1321,20 @@ export async function PATCH(request: NextRequest) {
         .limit(1);
 
       if (!row) {
-        return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+        return NextResponse.json({ error: "Task not found" }, { status: 404 });
       }
 
       if (row.userId !== userId) {
-        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
       }
 
-      if (row.status !== 'pending') {
+      if (row.status !== "pending") {
         return NextResponse.json({ success: true });
       }
 
       await db
         .update(groomingTasks)
-        .set({ status: 'in_progress', updatedAt: new Date() })
+        .set({ status: "in_progress", updatedAt: new Date() })
         .where(eq(groomingTasks.id, id));
 
       return NextResponse.json({ success: true });
@@ -1211,10 +1352,10 @@ export async function PATCH(request: NextRequest) {
     const row = await handler.getRow(id);
 
     if (!row) {
-      return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+      return NextResponse.json({ error: "Task not found" }, { status: 404 });
     }
 
-    if (row.status !== 'pending') {
+    if (row.status !== "pending") {
       return NextResponse.json({ success: true });
     }
 
@@ -1222,9 +1363,9 @@ export async function PATCH(request: NextRequest) {
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error('[PATCH /api/employee/tasks]', error);
+    console.error("[PATCH /api/employee/tasks]", error);
     return NextResponse.json(
-      { success: false, error: 'Failed to update employee task.' },
+      { success: false, error: "Failed to update employee task." },
       { status: 500 },
     );
   }

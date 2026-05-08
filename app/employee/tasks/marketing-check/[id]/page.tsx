@@ -39,6 +39,23 @@ interface MarketingCheckData {
   randomShoeItems: boolean;
   randomNonShoeItems: boolean;
   sellTag: boolean;
+
+  promoNameBy?: string | null;
+  promoNameAt?: string | null;
+  promoPeriodBy?: string | null;
+  promoPeriodAt?: string | null;
+  promoMechanismBy?: string | null;
+  promoMechanismAt?: string | null;
+  randomShoeItemsBy?: string | null;
+  randomShoeItemsAt?: string | null;
+  randomNonShoeItemsBy?: string | null;
+  randomNonShoeItemsAt?: string | null;
+  sellTagBy?: string | null;
+  sellTagAt?: string | null;
+  notesBy?: string | null;
+  notesAt?: string | null;
+  completedBy?: string | null;
+  completedByScheduleId?: string | null;
 }
 
 function useGeo() {
@@ -355,9 +372,18 @@ export default function MarketingCheckDetailPage() {
 
   const { status: saveStatus, lastSaved, error: saveError, save: autoSave } = useAutoSave({
     url: '/api/employee/tasks/marketing-check',
-    baseBody: { scheduleId },
+    baseBody: {},
     debounceMs: 800,
   });
+
+  const makeAutoSaveBody = useCallback((patch: Record<string, unknown>) => ({
+    taskId: taskData ? Number(taskData.id) : undefined,
+    scheduleId: taskData ? Number(taskData.scheduleId) : undefined,
+    storeId: taskData ? Number(taskData.storeId) : undefined,
+    geo: geo ?? null,
+    skipGeo: geo === null,
+    ...patch,
+  }), [taskData, geo]);
 
   const taskStatus = taskData?.status;
   const readonly = taskStatus === 'completed' || taskStatus === 'verified';
@@ -370,7 +396,7 @@ export default function MarketingCheckDetailPage() {
 
   const setChk = (field: string, setter: (v: boolean) => void) => (v: boolean) => {
     setter(v);
-    autoSave({ [field]: v });
+    autoSave(makeAutoSaveBody({ [field]: v }));
   };
 
   const allChecked =
@@ -412,6 +438,7 @@ export default function MarketingCheckDetailPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          taskId: Number(taskData.id),
           scheduleId,
           storeId,
           geo: geo ?? null,
@@ -586,7 +613,7 @@ export default function MarketingCheckDetailPage() {
                   value={notes}
                   onChange={(e) => {
                     setNotes(e.target.value);
-                    autoSave({ notes: e.target.value });
+                    autoSave(makeAutoSaveBody({ notes: e.target.value }));
                   }}
                   disabled={dis}
                   rows={3}

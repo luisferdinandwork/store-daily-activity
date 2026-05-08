@@ -28,7 +28,7 @@ interface StoreOpeningData {
   scheduleId:        string;
   userId:            string;
   storeId:           string;
-  shift:             'morning' | 'evening';
+  shift:             'morning' | 'evening' | 'full_day';
   date:              string;
   status:            TaskStatus;
   notes:             string | null;
@@ -48,6 +48,35 @@ interface StoreOpeningData {
   cekLamp:           boolean;
   cekSoundSystem:    boolean;
   cashDrawerPhotos:  string[];
+
+  // Backend field-level actor tracking. These are intentionally optional here
+  // because the employee page does not need to render them; OPS monitor uses them.
+  loginPosBy?: string | null;
+  loginPosAt?: string | null;
+  checkAbsenSunfishBy?: string | null;
+  checkAbsenSunfishAt?: string | null;
+  tarikSohSalesBy?: string | null;
+  tarikSohSalesAt?: string | null;
+  fiveRBy?: string | null;
+  fiveRAt?: string | null;
+  fiveRAreaKasirBy?: string | null;
+  fiveRAreaKasirAt?: string | null;
+  fiveRAreaDepanBy?: string | null;
+  fiveRAreaDepanAt?: string | null;
+  fiveRAreaKananBy?: string | null;
+  fiveRAreaKananAt?: string | null;
+  fiveRAreaKiriBy?: string | null;
+  fiveRAreaKiriAt?: string | null;
+  fiveRAreaGudangBy?: string | null;
+  fiveRAreaGudangAt?: string | null;
+  cekLampBy?: string | null;
+  cekLampAt?: string | null;
+  cekSoundSystemBy?: string | null;
+  cekSoundSystemAt?: string | null;
+  cashDrawerBy?: string | null;
+  cashDrawerAt?: string | null;
+  completedBy?: string | null;
+  completedByScheduleId?: string | null;
 }
 
 // ─── 5R area config ───────────────────────────────────────────────────────────
@@ -201,7 +230,7 @@ function AccessBanner({
         <div className="flex-1 min-w-0">
           <p className="text-xs font-semibold text-amber-800">Lokasi tidak terdeteksi</p>
           <p className="mt-0.5 text-xs text-amber-600">
-            {geoError ?? 'Izin lokasi belum diberikan.'} Task dapat dilanjutkan tanpa rekaman lokasi.
+            {geoError ?? 'Izin lokasi belum diberikan.'} Lokasi wajib aktif untuk mengerjakan Store Opening.
           </p>
         </div>
         <button onClick={onRefreshGeo} className="flex-shrink-0 flex items-center gap-1 rounded-lg bg-amber-100 px-2.5 py-1.5 text-[11px] font-semibold text-amber-700 hover:bg-amber-200 transition-colors">
@@ -331,17 +360,18 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 function LockedOverlay({ accessStatus }: { accessStatus: AccessStatus | null }) {
-  if (!accessStatus || accessStatus.status === 'ok' || accessStatus.status === 'geo_unavailable') return null;
+  if (!accessStatus || accessStatus.status === 'ok') return null;
   const isCheckIn = accessStatus.status === 'not_checked_in';
+  const isGeoUnavailable = accessStatus.status === 'geo_unavailable';
   return (
     <div className="pointer-events-none absolute inset-0 rounded-2xl bg-background/70 backdrop-blur-[2px] flex flex-col items-center justify-center gap-2 z-10">
-      <div className={cn('flex h-12 w-12 items-center justify-center rounded-full', isCheckIn ? 'bg-red-100' : 'bg-orange-100')}>
+      <div className={cn('flex h-12 w-12 items-center justify-center rounded-full', isCheckIn ? 'bg-red-100' : isGeoUnavailable ? 'bg-amber-100' : 'bg-orange-100')}>
         {isCheckIn
           ? <LogIn className="h-6 w-6 text-red-600" />
-          : <NavigationOff className="h-6 w-6 text-orange-600" />}
+          : <NavigationOff className={cn('h-6 w-6', isGeoUnavailable ? 'text-amber-600' : 'text-orange-600')} />}
       </div>
-      <p className={cn('text-sm font-bold', isCheckIn ? 'text-red-700' : 'text-orange-700')}>
-        {isCheckIn ? 'Absen masuk dulu' : 'Kamu di luar area toko'}
+      <p className={cn('text-sm font-bold', isCheckIn ? 'text-red-700' : isGeoUnavailable ? 'text-amber-700' : 'text-orange-700')}>
+        {isCheckIn ? 'Absen masuk dulu' : isGeoUnavailable ? 'Lokasi wajib aktif' : 'Kamu di luar area toko'}
       </p>
     </div>
   );
@@ -426,19 +456,48 @@ export default function StoreOpeningDetailPage() {
   const scheduleId = taskData ? parseInt(taskData.scheduleId, 10) : 0;
   const storeId    = taskData ? parseInt(taskData.storeId,    10) : 0;
 
-  const { status: saveStatus, lastSaved, error: saveError, save: autoSave } = useAutoSave({
+  const { status: saveStatus, lastSaved, error: saveError, save: rawAutoSave } = useAutoSave({
     url:        '/api/employee/tasks/store-opening',
-    baseBody:   { scheduleId, storeId },
+    // Keep scheduleId/storeId for compatibility and include taskId so the
+    // backend can update the exact shared store-opening row and record
+    // field-level actor metadata correctly.
+    baseBody:   { taskId: taskData ? Number(taskData.id) : 0, scheduleId, storeId },
     debounceMs: 800,
   });
+
+  const autoSave = useCallback((patch: Record<string, unknown>, options?: { immediate?: boolean }) => {
+    if (!taskData || !scheduleId || !storeId) {
+      toast.error('Data task belum siap. Coba ulangi setelah halaman selesai dimuat.');
+      return;
+    }
+
+    if (!geo) {
+      toast.error('Lokasi wajib aktif sebelum menyimpan Store Opening.');
+      return;
+    }
+
+    // Always include the latest ids in the PATCH body. This avoids stale baseBody
+    // from useAutoSave when the first render had taskId: 0.
+    rawAutoSave({
+      taskId: Number(taskData.id),
+      scheduleId,
+      storeId,
+      ...patch,
+      geo,
+      skipGeo: false,
+    }, options);
+  }, [geo, rawAutoSave, scheduleId, storeId, taskData]);
 
   const taskStatus = taskData?.status;
   const readonly   = taskStatus === 'completed' || taskStatus === 'verified';
   const isRejected = taskStatus === 'rejected';
+  const locationBlocked = !geoReady || !geo || accessStatus?.status === 'geo_unavailable';
   const locked =
     !readonly &&
-    !!accessStatus &&
-    (accessStatus.status === 'not_checked_in' || accessStatus.status === 'outside_geofence');
+    (accessLoading ||
+      locationBlocked ||
+      accessStatus?.status === 'not_checked_in' ||
+      accessStatus?.status === 'outside_geofence');
   const dis = readonly || locked;
 
   // Simple checklist setter + auto-save
@@ -503,13 +562,17 @@ export default function StoreOpeningDetailPage() {
     loginPos && cashierDeskSatisfied &&
     fiveR    && fiveRAllAreasSatisfied;
 
-  const canSubmit = !locked && allSimpleChecked && allLinkedChecked;
+  const canSubmit = !locked && !!geo && accessStatus?.status === 'ok' && allSimpleChecked && allLinkedChecked;
 
   async function handleSubmit() {
     if (!taskData) return;
     setSubmitError(null);
     if (!storeId || !scheduleId) {
       const msg = 'Data task tidak valid. Muat ulang halaman.';
+      setSubmitError(msg); toast.error(msg); return;
+    }
+    if (!geo) {
+      const msg = 'Lokasi wajib aktif untuk submit Store Opening.';
       setSubmitError(msg); toast.error(msg); return;
     }
 
@@ -519,8 +582,9 @@ export default function StoreOpeningDetailPage() {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          taskId: Number(taskData.id),
           scheduleId, storeId,
-          geo: geo ?? null, skipGeo: geo === null,
+          geo, skipGeo: false,
           loginPos, checkAbsenSunfish, tarikSohSales,
           fiveR,
           fiveRAreaKasirPhotos:  fiveRPhotos.kasir,

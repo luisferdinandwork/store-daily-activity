@@ -43,6 +43,11 @@ export interface SubmitSetoranInput {
   notes?: string;
 }
 
+export interface SetoranActorContext {
+  userId: string;
+  scheduleId: number;
+}
+
 export interface SetoranAutoSavePatch {
   actualReceivedAmount?: string | null;
   expectedAmount?: string | null;
@@ -267,6 +272,77 @@ export async function getSetoranForStoreDate(
   return row ? await refreshPendingCarryForward(row) : null;
 }
 
+
+function actorFieldsForPatch(
+  patch: SetoranAutoSavePatch,
+  actor: SetoranActorContext,
+  now: Date,
+): Record<string, unknown> {
+  const update: Record<string, unknown> = {};
+
+  if ('actualReceivedAmount' in patch || 'expectedAmount' in patch) {
+    update.actualReceivedAmountBy = actor.userId;
+    update.actualReceivedAmountAt = now;
+  }
+
+  if ('storedAmount' in patch || 'amount' in patch) {
+    update.storedAmountBy = actor.userId;
+    update.storedAmountAt = now;
+  }
+
+  if ('resiPhoto' in patch) {
+    update.resiPhotoBy = actor.userId;
+    update.resiPhotoAt = now;
+  }
+
+  if ('atmCardSelfiePhoto' in patch) {
+    update.atmCardSelfiePhotoBy = actor.userId;
+    update.atmCardSelfiePhotoAt = now;
+  }
+
+  if ('notes' in patch) {
+    update.notesBy = actor.userId;
+    update.notesAt = now;
+  }
+
+  return update;
+}
+
+function preserveSetoranFieldActors(
+  existing: SetoranTask,
+  input: SubmitSetoranInput,
+  now: Date,
+): Record<string, unknown> {
+  const values: Record<string, unknown> = {};
+
+  if (!existing.actualReceivedAmountBy) {
+    values.actualReceivedAmountBy = input.userId;
+    values.actualReceivedAmountAt = now;
+  }
+
+  if (!existing.storedAmountBy) {
+    values.storedAmountBy = input.userId;
+    values.storedAmountAt = now;
+  }
+
+  if (!existing.resiPhotoBy) {
+    values.resiPhotoBy = input.userId;
+    values.resiPhotoAt = now;
+  }
+
+  if (!existing.atmCardSelfiePhotoBy) {
+    values.atmCardSelfiePhotoBy = input.userId;
+    values.atmCardSelfiePhotoAt = now;
+  }
+
+  if (input.notes !== undefined && !existing.notesBy) {
+    values.notesBy = input.userId;
+    values.notesAt = now;
+  }
+
+  return values;
+}
+
 function validateSetoranPayload(input: SubmitSetoranInput): string | null {
   const actualReceived = parseAmount(input.actualReceivedAmount ?? input.expectedAmount);
   if (actualReceived <= 0) return 'Nominal uang aktual diterima hari ini wajib diisi.';
@@ -330,6 +406,9 @@ export async function submitSetoran(
         resiPhoto: input.resiPhoto,
         atmCardSelfiePhoto: input.atmCardSelfiePhoto,
         notes: input.notes,
+        ...preserveSetoranFieldActors(existing, input, now),
+        completedBy: input.userId,
+        completedByScheduleId: input.scheduleId,
         status: 'completed',
         completedAt: now,
         updatedAt: now,
@@ -354,6 +433,18 @@ export async function submitSetoran(
         resiPhoto: input.resiPhoto,
         atmCardSelfiePhoto: input.atmCardSelfiePhoto,
         notes: input.notes,
+        actualReceivedAmountBy: updated.actualReceivedAmountBy,
+        actualReceivedAmountAt: updated.actualReceivedAmountAt,
+        storedAmountBy: updated.storedAmountBy,
+        storedAmountAt: updated.storedAmountAt,
+        resiPhotoBy: updated.resiPhotoBy,
+        resiPhotoAt: updated.resiPhotoAt,
+        atmCardSelfiePhotoBy: updated.atmCardSelfiePhotoBy,
+        atmCardSelfiePhotoAt: updated.atmCardSelfiePhotoAt,
+        notesBy: updated.notesBy,
+        notesAt: updated.notesAt,
+        completedBy: input.userId,
+        completedByScheduleId: input.scheduleId,
         createdAt: now,
         updatedAt: now,
       })
@@ -373,6 +464,18 @@ export async function submitSetoran(
           resiPhoto: input.resiPhoto,
           atmCardSelfiePhoto: input.atmCardSelfiePhoto,
           notes: input.notes,
+          actualReceivedAmountBy: updated.actualReceivedAmountBy,
+          actualReceivedAmountAt: updated.actualReceivedAmountAt,
+          storedAmountBy: updated.storedAmountBy,
+          storedAmountAt: updated.storedAmountAt,
+          resiPhotoBy: updated.resiPhotoBy,
+          resiPhotoAt: updated.resiPhotoAt,
+          atmCardSelfiePhotoBy: updated.atmCardSelfiePhotoBy,
+          atmCardSelfiePhotoAt: updated.atmCardSelfiePhotoAt,
+          notesBy: updated.notesBy,
+          notesAt: updated.notesAt,
+          completedBy: input.userId,
+          completedByScheduleId: input.scheduleId,
           updatedAt: now,
         },
       });
@@ -386,6 +489,7 @@ export async function submitSetoran(
 export async function autoSaveSetoran(
   scheduleId: number,
   patch: SetoranAutoSavePatch,
+  actor?: SetoranActorContext,
 ): Promise<TaskResult<{ saved: string[] }>> {
   try {
     const shiftErr = await assertMorningSchedule(scheduleId);
@@ -400,7 +504,12 @@ export async function autoSaveSetoran(
       return { success: true, data: { saved: [] } };
     }
 
-    const update: Record<string, unknown> = { updatedAt: new Date() };
+    const now = new Date();
+    const update: Record<string, unknown> = { updatedAt: now };
+
+    if (actor) {
+      Object.assign(update, actorFieldsForPatch(patch, actor, now));
+    }
 
     if ('actualReceivedAmount' in patch) update.expectedAmount = patch.actualReceivedAmount;
     if ('expectedAmount' in patch) update.expectedAmount = patch.expectedAmount;
