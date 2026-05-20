@@ -78,18 +78,23 @@ export const storeOpeningTasks = pgTable('store_opening_tasks', {
 
   fiveRAreaKasirBy: text('five_r_kasir_by').references(() => users.id),
   fiveRAreaKasirAt: timestamp('five_r_kasir_at'),
+  fiveRAreaKasirPhotoActors: text('five_r_area_kasir_photo_actors'),
 
   fiveRAreaDepanBy: text('five_r_depan_by').references(() => users.id),
   fiveRAreaDepanAt: timestamp('five_r_depan_at'),
+  fiveRAreaDepanPhotoActors: text('five_r_area_depan_photo_actors'),
 
   fiveRAreaKananBy: text('five_r_kanan_by').references(() => users.id),
   fiveRAreaKananAt: timestamp('five_r_kanan_at'),
+  fiveRAreaKananPhotoActors: text('five_r_area_kanan_photo_actors'),
 
   fiveRAreaKiriBy: text('five_r_kiri_by').references(() => users.id),
   fiveRAreaKiriAt: timestamp('five_r_kiri_at'),
+  fiveRAreaKiriPhotoActors: text('five_r_area_kiri_photo_actors'),
 
   fiveRAreaGudangBy: text('five_r_gudang_by').references(() => users.id),
   fiveRAreaGudangAt: timestamp('five_r_gudang_at'),
+  fiveRAreaGudangPhotoActors: text('five_r_area_gudang_photo_actors'),
 
   cekLampBy: text('cek_lamp_by').references(() => users.id),
   cekLampAt: timestamp('cek_lamp_at'),
@@ -102,6 +107,7 @@ export const storeOpeningTasks = pgTable('store_opening_tasks', {
 
   completedBy: text('completed_by').references(() => users.id),
   completedByScheduleId: integer('completed_by_schedule_id').references(() => schedules.id),
+
 
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),

@@ -47,6 +47,16 @@ function endOfDay(d: Date): Date {
   return r;
 }
 
+function parseJsonArray<T = unknown>(raw: string | null | undefined): T[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? (parsed as T[]) : [];
+  } catch {
+    return [];
+  }
+}
+
 function parsePhotos(raw: string | null | undefined): string[] {
   if (!raw) return [];
 
@@ -564,6 +574,38 @@ export async function GET(request: NextRequest) {
             cekLamp: t.cekLamp,
             cekSoundSystem: t.cekSoundSystem,
             cashDrawerPhotos: parsePhotos(t.cashDrawerPhotos),
+
+            loginPosBy: t.loginPosBy,
+            loginPosAt: toIso(t.loginPosAt),
+            checkAbsenSunfishBy: t.checkAbsenSunfishBy,
+            checkAbsenSunfishAt: toIso(t.checkAbsenSunfishAt),
+            tarikSohSalesBy: t.tarikSohSalesBy,
+            tarikSohSalesAt: toIso(t.tarikSohSalesAt),
+            fiveRBy: t.fiveRBy,
+            fiveRAt: toIso(t.fiveRAt),
+            fiveRAreaKasirBy: t.fiveRAreaKasirBy,
+            fiveRAreaKasirAt: toIso(t.fiveRAreaKasirAt),
+            fiveRAreaKasirPhotoActors: parseJsonArray(t.fiveRAreaKasirPhotoActors),
+            fiveRAreaDepanBy: t.fiveRAreaDepanBy,
+            fiveRAreaDepanAt: toIso(t.fiveRAreaDepanAt),
+            fiveRAreaDepanPhotoActors: parseJsonArray(t.fiveRAreaDepanPhotoActors),
+            fiveRAreaKananBy: t.fiveRAreaKananBy,
+            fiveRAreaKananAt: toIso(t.fiveRAreaKananAt),
+            fiveRAreaKananPhotoActors: parseJsonArray(t.fiveRAreaKananPhotoActors),
+            fiveRAreaKiriBy: t.fiveRAreaKiriBy,
+            fiveRAreaKiriAt: toIso(t.fiveRAreaKiriAt),
+            fiveRAreaKiriPhotoActors: parseJsonArray(t.fiveRAreaKiriPhotoActors),
+            fiveRAreaGudangBy: t.fiveRAreaGudangBy,
+            fiveRAreaGudangAt: toIso(t.fiveRAreaGudangAt),
+            fiveRAreaGudangPhotoActors: parseJsonArray(t.fiveRAreaGudangPhotoActors),
+            cekLampBy: t.cekLampBy,
+            cekLampAt: toIso(t.cekLampAt),
+            cekSoundSystemBy: t.cekSoundSystemBy,
+            cekSoundSystemAt: toIso(t.cekSoundSystemAt),
+            cashDrawerBy: t.cashDrawerBy,
+            cashDrawerAt: toIso(t.cashDrawerAt),
+            completedBy: t.completedBy,
+            completedByScheduleId: t.completedByScheduleId ? String(t.completedByScheduleId) : null,
 
             status: t.status,
             notes: t.notes,

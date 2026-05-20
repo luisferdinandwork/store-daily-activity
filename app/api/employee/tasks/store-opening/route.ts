@@ -167,8 +167,11 @@ export async function PATCH(req: NextRequest) {
   if ('notes' in body) patch.notes = toOptionalString(body.notes);
 
   const result = await autoSaveStoreOpening(
-    storeId!,
+    taskId ?? storeId!,
     patch,
+    session.user.id,
+    scheduleId,
+    geo,
   );
 
   if (!result.success) {

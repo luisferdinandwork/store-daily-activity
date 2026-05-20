@@ -1,5 +1,5 @@
 {
-  "id": "4a50eb39-eea6-41c3-bb43-79207acbb43b",
+  "id": "8c069129-1ea2-44f2-9748-5e4a7f096ebc",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -3231,6 +3231,102 @@
           "notNull": true,
           "default": false
         },
+        "promo_name_by": {
+          "name": "promo_name_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "promo_name_at": {
+          "name": "promo_name_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "promo_period_by": {
+          "name": "promo_period_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "promo_period_at": {
+          "name": "promo_period_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "promo_mechanism_by": {
+          "name": "promo_mechanism_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "promo_mechanism_at": {
+          "name": "promo_mechanism_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "random_shoe_items_by": {
+          "name": "random_shoe_items_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "random_shoe_items_at": {
+          "name": "random_shoe_items_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "random_non_shoe_items_by": {
+          "name": "random_non_shoe_items_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "random_non_shoe_items_at": {
+          "name": "random_non_shoe_items_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sell_tag_by": {
+          "name": "sell_tag_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sell_tag_at": {
+          "name": "sell_tag_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "notes_by": {
+          "name": "notes_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "notes_at": {
+          "name": "notes_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_by": {
+          "name": "completed_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_by_schedule_id": {
+          "name": "completed_by_schedule_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
         "submitted_lat": {
           "name": "submitted_lat",
           "type": "numeric(10, 7)",
@@ -3337,6 +3433,123 @@
           "tableTo": "shifts",
           "columnsFrom": [
             "shift_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "marketing_check_tasks_promo_name_by_users_id_fk": {
+          "name": "marketing_check_tasks_promo_name_by_users_id_fk",
+          "tableFrom": "marketing_check_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "promo_name_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "marketing_check_tasks_promo_period_by_users_id_fk": {
+          "name": "marketing_check_tasks_promo_period_by_users_id_fk",
+          "tableFrom": "marketing_check_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "promo_period_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "marketing_check_tasks_promo_mechanism_by_users_id_fk": {
+          "name": "marketing_check_tasks_promo_mechanism_by_users_id_fk",
+          "tableFrom": "marketing_check_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "promo_mechanism_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "marketing_check_tasks_random_shoe_items_by_users_id_fk": {
+          "name": "marketing_check_tasks_random_shoe_items_by_users_id_fk",
+          "tableFrom": "marketing_check_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "random_shoe_items_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "marketing_check_tasks_random_non_shoe_items_by_users_id_fk": {
+          "name": "marketing_check_tasks_random_non_shoe_items_by_users_id_fk",
+          "tableFrom": "marketing_check_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "random_non_shoe_items_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "marketing_check_tasks_sell_tag_by_users_id_fk": {
+          "name": "marketing_check_tasks_sell_tag_by_users_id_fk",
+          "tableFrom": "marketing_check_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "sell_tag_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "marketing_check_tasks_notes_by_users_id_fk": {
+          "name": "marketing_check_tasks_notes_by_users_id_fk",
+          "tableFrom": "marketing_check_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "notes_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "marketing_check_tasks_completed_by_users_id_fk": {
+          "name": "marketing_check_tasks_completed_by_users_id_fk",
+          "tableFrom": "marketing_check_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "completed_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "marketing_check_tasks_completed_by_schedule_id_schedules_id_fk": {
+          "name": "marketing_check_tasks_completed_by_schedule_id_schedules_id_fk",
+          "tableFrom": "marketing_check_tasks",
+          "tableTo": "schedules",
+          "columnsFrom": [
+            "completed_by_schedule_id"
           ],
           "columnsTo": [
             "id"
@@ -3698,6 +3911,78 @@
           "primaryKey": false,
           "notNull": false
         },
+        "actual_received_amount_by": {
+          "name": "actual_received_amount_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "actual_received_amount_at": {
+          "name": "actual_received_amount_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "stored_amount_by": {
+          "name": "stored_amount_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "stored_amount_at": {
+          "name": "stored_amount_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "resi_photo_by": {
+          "name": "resi_photo_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "resi_photo_at": {
+          "name": "resi_photo_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "atm_card_selfie_photo_by": {
+          "name": "atm_card_selfie_photo_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "atm_card_selfie_photo_at": {
+          "name": "atm_card_selfie_photo_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "notes_by": {
+          "name": "notes_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "notes_at": {
+          "name": "notes_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_by": {
+          "name": "completed_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_by_schedule_id": {
+          "name": "completed_by_schedule_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
@@ -3795,6 +4080,97 @@
           "tableTo": "shifts",
           "columnsFrom": [
             "shift_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "setoran_money_storage_actual_received_amount_by_users_id_fk": {
+          "name": "setoran_money_storage_actual_received_amount_by_users_id_fk",
+          "tableFrom": "setoran_money_storage",
+          "tableTo": "users",
+          "columnsFrom": [
+            "actual_received_amount_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "setoran_money_storage_stored_amount_by_users_id_fk": {
+          "name": "setoran_money_storage_stored_amount_by_users_id_fk",
+          "tableFrom": "setoran_money_storage",
+          "tableTo": "users",
+          "columnsFrom": [
+            "stored_amount_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "setoran_money_storage_resi_photo_by_users_id_fk": {
+          "name": "setoran_money_storage_resi_photo_by_users_id_fk",
+          "tableFrom": "setoran_money_storage",
+          "tableTo": "users",
+          "columnsFrom": [
+            "resi_photo_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "setoran_money_storage_atm_card_selfie_photo_by_users_id_fk": {
+          "name": "setoran_money_storage_atm_card_selfie_photo_by_users_id_fk",
+          "tableFrom": "setoran_money_storage",
+          "tableTo": "users",
+          "columnsFrom": [
+            "atm_card_selfie_photo_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "setoran_money_storage_notes_by_users_id_fk": {
+          "name": "setoran_money_storage_notes_by_users_id_fk",
+          "tableFrom": "setoran_money_storage",
+          "tableTo": "users",
+          "columnsFrom": [
+            "notes_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "setoran_money_storage_completed_by_users_id_fk": {
+          "name": "setoran_money_storage_completed_by_users_id_fk",
+          "tableFrom": "setoran_money_storage",
+          "tableTo": "users",
+          "columnsFrom": [
+            "completed_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "setoran_money_storage_completed_by_schedule_id_schedules_id_fk": {
+          "name": "setoran_money_storage_completed_by_schedule_id_schedules_id_fk",
+          "tableFrom": "setoran_money_storage",
+          "tableTo": "schedules",
+          "columnsFrom": [
+            "completed_by_schedule_id"
           ],
           "columnsTo": [
             "id"
@@ -3909,6 +4285,78 @@
           "notNull": true,
           "default": "'0'"
         },
+        "actual_received_amount_by": {
+          "name": "actual_received_amount_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "actual_received_amount_at": {
+          "name": "actual_received_amount_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "stored_amount_by": {
+          "name": "stored_amount_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "stored_amount_at": {
+          "name": "stored_amount_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "resi_photo_by": {
+          "name": "resi_photo_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "resi_photo_at": {
+          "name": "resi_photo_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "atm_card_selfie_photo_by": {
+          "name": "atm_card_selfie_photo_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "atm_card_selfie_photo_at": {
+          "name": "atm_card_selfie_photo_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "notes_by": {
+          "name": "notes_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "notes_at": {
+          "name": "notes_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_by": {
+          "name": "completed_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_by_schedule_id": {
+          "name": "completed_by_schedule_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
         "submitted_lat": {
           "name": "submitted_lat",
           "type": "numeric(10, 7)",
@@ -4015,6 +4463,97 @@
           "tableTo": "shifts",
           "columnsFrom": [
             "shift_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "setoran_tasks_actual_received_amount_by_users_id_fk": {
+          "name": "setoran_tasks_actual_received_amount_by_users_id_fk",
+          "tableFrom": "setoran_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "actual_received_amount_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "setoran_tasks_stored_amount_by_users_id_fk": {
+          "name": "setoran_tasks_stored_amount_by_users_id_fk",
+          "tableFrom": "setoran_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "stored_amount_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "setoran_tasks_resi_photo_by_users_id_fk": {
+          "name": "setoran_tasks_resi_photo_by_users_id_fk",
+          "tableFrom": "setoran_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "resi_photo_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "setoran_tasks_atm_card_selfie_photo_by_users_id_fk": {
+          "name": "setoran_tasks_atm_card_selfie_photo_by_users_id_fk",
+          "tableFrom": "setoran_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "atm_card_selfie_photo_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "setoran_tasks_notes_by_users_id_fk": {
+          "name": "setoran_tasks_notes_by_users_id_fk",
+          "tableFrom": "setoran_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "notes_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "setoran_tasks_completed_by_users_id_fk": {
+          "name": "setoran_tasks_completed_by_users_id_fk",
+          "tableFrom": "setoran_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "completed_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "setoran_tasks_completed_by_schedule_id_schedules_id_fk": {
+          "name": "setoran_tasks_completed_by_schedule_id_schedules_id_fk",
+          "tableFrom": "setoran_tasks",
+          "tableTo": "schedules",
+          "columnsFrom": [
+            "completed_by_schedule_id"
           ],
           "columnsTo": [
             "id"
@@ -4221,6 +4760,30 @@
           "primaryKey": false,
           "notNull": false
         },
+        "claimed_by": {
+          "name": "claimed_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "claimed_at": {
+          "name": "claimed_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_by": {
+          "name": "completed_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_by_schedule_id": {
+          "name": "completed_by_schedule_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
         "submitted_lat": {
           "name": "submitted_lat",
           "type": "numeric(10, 7)",
@@ -4327,6 +4890,45 @@
           "tableTo": "shifts",
           "columnsFrom": [
             "shift_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "store_front_tasks_claimed_by_users_id_fk": {
+          "name": "store_front_tasks_claimed_by_users_id_fk",
+          "tableFrom": "store_front_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "claimed_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "store_front_tasks_completed_by_users_id_fk": {
+          "name": "store_front_tasks_completed_by_users_id_fk",
+          "tableFrom": "store_front_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "completed_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "store_front_tasks_completed_by_schedule_id_schedules_id_fk": {
+          "name": "store_front_tasks_completed_by_schedule_id_schedules_id_fk",
+          "tableFrom": "store_front_tasks",
+          "tableTo": "schedules",
+          "columnsFrom": [
+            "completed_by_schedule_id"
           ],
           "columnsTo": [
             "id"
@@ -4481,6 +5083,162 @@
           "primaryKey": false,
           "notNull": false
         },
+        "login_pos_by": {
+          "name": "login_pos_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "login_pos_at": {
+          "name": "login_pos_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "check_absen_sunfish_by": {
+          "name": "check_absen_sunfish_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "check_absen_sunfish_at": {
+          "name": "check_absen_sunfish_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tarik_soh_sales_by": {
+          "name": "tarik_soh_sales_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "tarik_soh_sales_at": {
+          "name": "tarik_soh_sales_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "five_r_by": {
+          "name": "five_r_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "five_r_at": {
+          "name": "five_r_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "five_r_kasir_by": {
+          "name": "five_r_kasir_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "five_r_kasir_at": {
+          "name": "five_r_kasir_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "five_r_depan_by": {
+          "name": "five_r_depan_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "five_r_depan_at": {
+          "name": "five_r_depan_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "five_r_kanan_by": {
+          "name": "five_r_kanan_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "five_r_kanan_at": {
+          "name": "five_r_kanan_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "five_r_kiri_by": {
+          "name": "five_r_kiri_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "five_r_kiri_at": {
+          "name": "five_r_kiri_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "five_r_gudang_by": {
+          "name": "five_r_gudang_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "five_r_gudang_at": {
+          "name": "five_r_gudang_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cek_lamp_by": {
+          "name": "cek_lamp_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cek_lamp_at": {
+          "name": "cek_lamp_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cek_sound_system_by": {
+          "name": "cek_sound_system_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cek_sound_system_at": {
+          "name": "cek_sound_system_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cash_drawer_by": {
+          "name": "cash_drawer_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cash_drawer_at": {
+          "name": "cash_drawer_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_by": {
+          "name": "completed_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_by_schedule_id": {
+          "name": "completed_by_schedule_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
         "submitted_lat": {
           "name": "submitted_lat",
           "type": "numeric(10, 7)",
@@ -4587,6 +5345,188 @@
           "tableTo": "shifts",
           "columnsFrom": [
             "shift_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "store_opening_tasks_login_pos_by_users_id_fk": {
+          "name": "store_opening_tasks_login_pos_by_users_id_fk",
+          "tableFrom": "store_opening_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "login_pos_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "store_opening_tasks_check_absen_sunfish_by_users_id_fk": {
+          "name": "store_opening_tasks_check_absen_sunfish_by_users_id_fk",
+          "tableFrom": "store_opening_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "check_absen_sunfish_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "store_opening_tasks_tarik_soh_sales_by_users_id_fk": {
+          "name": "store_opening_tasks_tarik_soh_sales_by_users_id_fk",
+          "tableFrom": "store_opening_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "tarik_soh_sales_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "store_opening_tasks_five_r_by_users_id_fk": {
+          "name": "store_opening_tasks_five_r_by_users_id_fk",
+          "tableFrom": "store_opening_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "five_r_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "store_opening_tasks_five_r_kasir_by_users_id_fk": {
+          "name": "store_opening_tasks_five_r_kasir_by_users_id_fk",
+          "tableFrom": "store_opening_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "five_r_kasir_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "store_opening_tasks_five_r_depan_by_users_id_fk": {
+          "name": "store_opening_tasks_five_r_depan_by_users_id_fk",
+          "tableFrom": "store_opening_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "five_r_depan_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "store_opening_tasks_five_r_kanan_by_users_id_fk": {
+          "name": "store_opening_tasks_five_r_kanan_by_users_id_fk",
+          "tableFrom": "store_opening_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "five_r_kanan_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "store_opening_tasks_five_r_kiri_by_users_id_fk": {
+          "name": "store_opening_tasks_five_r_kiri_by_users_id_fk",
+          "tableFrom": "store_opening_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "five_r_kiri_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "store_opening_tasks_five_r_gudang_by_users_id_fk": {
+          "name": "store_opening_tasks_five_r_gudang_by_users_id_fk",
+          "tableFrom": "store_opening_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "five_r_gudang_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "store_opening_tasks_cek_lamp_by_users_id_fk": {
+          "name": "store_opening_tasks_cek_lamp_by_users_id_fk",
+          "tableFrom": "store_opening_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "cek_lamp_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "store_opening_tasks_cek_sound_system_by_users_id_fk": {
+          "name": "store_opening_tasks_cek_sound_system_by_users_id_fk",
+          "tableFrom": "store_opening_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "cek_sound_system_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "store_opening_tasks_cash_drawer_by_users_id_fk": {
+          "name": "store_opening_tasks_cash_drawer_by_users_id_fk",
+          "tableFrom": "store_opening_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "cash_drawer_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "store_opening_tasks_completed_by_users_id_fk": {
+          "name": "store_opening_tasks_completed_by_users_id_fk",
+          "tableFrom": "store_opening_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "completed_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "store_opening_tasks_completed_by_schedule_id_schedules_id_fk": {
+          "name": "store_opening_tasks_completed_by_schedule_id_schedules_id_fk",
+          "tableFrom": "store_opening_tasks",
+          "tableTo": "schedules",
+          "columnsFrom": [
+            "completed_by_schedule_id"
           ],
           "columnsTo": [
             "id"

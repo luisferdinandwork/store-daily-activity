@@ -382,6 +382,22 @@ CREATE TABLE "marketing_check_tasks" (
 	"random_shoe_items" boolean DEFAULT false NOT NULL,
 	"random_non_shoe_items" boolean DEFAULT false NOT NULL,
 	"sell_tag" boolean DEFAULT false NOT NULL,
+	"promo_name_by" text,
+	"promo_name_at" timestamp,
+	"promo_period_by" text,
+	"promo_period_at" timestamp,
+	"promo_mechanism_by" text,
+	"promo_mechanism_at" timestamp,
+	"random_shoe_items_by" text,
+	"random_shoe_items_at" timestamp,
+	"random_non_shoe_items_by" text,
+	"random_non_shoe_items_at" timestamp,
+	"sell_tag_by" text,
+	"sell_tag_at" timestamp,
+	"notes_by" text,
+	"notes_at" timestamp,
+	"completed_by" text,
+	"completed_by_schedule_id" integer,
 	"submitted_lat" numeric(10, 7),
 	"submitted_lng" numeric(10, 7),
 	"status" "task_status" DEFAULT 'pending' NOT NULL,
@@ -437,6 +453,18 @@ CREATE TABLE "setoran_money_storage" (
 	"resi_photo" text,
 	"atm_card_selfie_photo" text,
 	"notes" text,
+	"actual_received_amount_by" text,
+	"actual_received_amount_at" timestamp,
+	"stored_amount_by" text,
+	"stored_amount_at" timestamp,
+	"resi_photo_by" text,
+	"resi_photo_at" timestamp,
+	"atm_card_selfie_photo_by" text,
+	"atm_card_selfie_photo_at" timestamp,
+	"notes_by" text,
+	"notes_at" timestamp,
+	"completed_by" text,
+	"completed_by_schedule_id" integer,
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	"updated_at" timestamp DEFAULT now() NOT NULL,
 	CONSTRAINT "setoran_money_storage_task_id_unique" UNIQUE("task_id"),
@@ -457,6 +485,18 @@ CREATE TABLE "setoran_tasks" (
 	"resi_photo" text,
 	"atm_card_selfie_photo" text,
 	"unpaid_amount" numeric(12, 2) DEFAULT '0' NOT NULL,
+	"actual_received_amount_by" text,
+	"actual_received_amount_at" timestamp,
+	"stored_amount_by" text,
+	"stored_amount_at" timestamp,
+	"resi_photo_by" text,
+	"resi_photo_at" timestamp,
+	"atm_card_selfie_photo_by" text,
+	"atm_card_selfie_photo_at" timestamp,
+	"notes_by" text,
+	"notes_at" timestamp,
+	"completed_by" text,
+	"completed_by_schedule_id" integer,
 	"submitted_lat" numeric(10, 7),
 	"submitted_lng" numeric(10, 7),
 	"status" "task_status" DEFAULT 'pending' NOT NULL,
@@ -492,6 +532,10 @@ CREATE TABLE "store_front_tasks" (
 	"date" timestamp NOT NULL,
 	"storefront_photos" text,
 	"rolling_door_closed_photo" text,
+	"claimed_by" text,
+	"claimed_at" timestamp,
+	"completed_by" text,
+	"completed_by_schedule_id" integer,
 	"submitted_lat" numeric(10, 7),
 	"submitted_lng" numeric(10, 7),
 	"status" "task_status" DEFAULT 'pending' NOT NULL,
@@ -523,6 +567,32 @@ CREATE TABLE "store_opening_tasks" (
 	"cek_lamp" boolean DEFAULT false NOT NULL,
 	"cek_sound_system" boolean DEFAULT false NOT NULL,
 	"cash_drawer_photos" text,
+	"login_pos_by" text,
+	"login_pos_at" timestamp,
+	"check_absen_sunfish_by" text,
+	"check_absen_sunfish_at" timestamp,
+	"tarik_soh_sales_by" text,
+	"tarik_soh_sales_at" timestamp,
+	"five_r_by" text,
+	"five_r_at" timestamp,
+	"five_r_kasir_by" text,
+	"five_r_kasir_at" timestamp,
+	"five_r_depan_by" text,
+	"five_r_depan_at" timestamp,
+	"five_r_kanan_by" text,
+	"five_r_kanan_at" timestamp,
+	"five_r_kiri_by" text,
+	"five_r_kiri_at" timestamp,
+	"five_r_gudang_by" text,
+	"five_r_gudang_at" timestamp,
+	"cek_lamp_by" text,
+	"cek_lamp_at" timestamp,
+	"cek_sound_system_by" text,
+	"cek_sound_system_at" timestamp,
+	"cash_drawer_by" text,
+	"cash_drawer_at" timestamp,
+	"completed_by" text,
+	"completed_by_schedule_id" integer,
 	"submitted_lat" numeric(10, 7),
 	"submitted_lng" numeric(10, 7),
 	"status" "task_status" DEFAULT 'pending' NOT NULL,
@@ -633,6 +703,15 @@ ALTER TABLE "marketing_check_tasks" ADD CONSTRAINT "marketing_check_tasks_schedu
 ALTER TABLE "marketing_check_tasks" ADD CONSTRAINT "marketing_check_tasks_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "marketing_check_tasks" ADD CONSTRAINT "marketing_check_tasks_store_id_stores_id_fk" FOREIGN KEY ("store_id") REFERENCES "public"."stores"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "marketing_check_tasks" ADD CONSTRAINT "marketing_check_tasks_shift_id_shifts_id_fk" FOREIGN KEY ("shift_id") REFERENCES "public"."shifts"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "marketing_check_tasks" ADD CONSTRAINT "marketing_check_tasks_promo_name_by_users_id_fk" FOREIGN KEY ("promo_name_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "marketing_check_tasks" ADD CONSTRAINT "marketing_check_tasks_promo_period_by_users_id_fk" FOREIGN KEY ("promo_period_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "marketing_check_tasks" ADD CONSTRAINT "marketing_check_tasks_promo_mechanism_by_users_id_fk" FOREIGN KEY ("promo_mechanism_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "marketing_check_tasks" ADD CONSTRAINT "marketing_check_tasks_random_shoe_items_by_users_id_fk" FOREIGN KEY ("random_shoe_items_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "marketing_check_tasks" ADD CONSTRAINT "marketing_check_tasks_random_non_shoe_items_by_users_id_fk" FOREIGN KEY ("random_non_shoe_items_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "marketing_check_tasks" ADD CONSTRAINT "marketing_check_tasks_sell_tag_by_users_id_fk" FOREIGN KEY ("sell_tag_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "marketing_check_tasks" ADD CONSTRAINT "marketing_check_tasks_notes_by_users_id_fk" FOREIGN KEY ("notes_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "marketing_check_tasks" ADD CONSTRAINT "marketing_check_tasks_completed_by_users_id_fk" FOREIGN KEY ("completed_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "marketing_check_tasks" ADD CONSTRAINT "marketing_check_tasks_completed_by_schedule_id_schedules_id_fk" FOREIGN KEY ("completed_by_schedule_id") REFERENCES "public"."schedules"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "marketing_check_tasks" ADD CONSTRAINT "marketing_check_tasks_verified_by_users_id_fk" FOREIGN KEY ("verified_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "open_statement_tasks" ADD CONSTRAINT "open_statement_tasks_schedule_id_schedules_id_fk" FOREIGN KEY ("schedule_id") REFERENCES "public"."schedules"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "open_statement_tasks" ADD CONSTRAINT "open_statement_tasks_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -644,21 +723,52 @@ ALTER TABLE "setoran_money_storage" ADD CONSTRAINT "setoran_money_storage_schedu
 ALTER TABLE "setoran_money_storage" ADD CONSTRAINT "setoran_money_storage_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "setoran_money_storage" ADD CONSTRAINT "setoran_money_storage_store_id_stores_id_fk" FOREIGN KEY ("store_id") REFERENCES "public"."stores"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "setoran_money_storage" ADD CONSTRAINT "setoran_money_storage_shift_id_shifts_id_fk" FOREIGN KEY ("shift_id") REFERENCES "public"."shifts"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "setoran_money_storage" ADD CONSTRAINT "setoran_money_storage_actual_received_amount_by_users_id_fk" FOREIGN KEY ("actual_received_amount_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "setoran_money_storage" ADD CONSTRAINT "setoran_money_storage_stored_amount_by_users_id_fk" FOREIGN KEY ("stored_amount_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "setoran_money_storage" ADD CONSTRAINT "setoran_money_storage_resi_photo_by_users_id_fk" FOREIGN KEY ("resi_photo_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "setoran_money_storage" ADD CONSTRAINT "setoran_money_storage_atm_card_selfie_photo_by_users_id_fk" FOREIGN KEY ("atm_card_selfie_photo_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "setoran_money_storage" ADD CONSTRAINT "setoran_money_storage_notes_by_users_id_fk" FOREIGN KEY ("notes_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "setoran_money_storage" ADD CONSTRAINT "setoran_money_storage_completed_by_users_id_fk" FOREIGN KEY ("completed_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "setoran_money_storage" ADD CONSTRAINT "setoran_money_storage_completed_by_schedule_id_schedules_id_fk" FOREIGN KEY ("completed_by_schedule_id") REFERENCES "public"."schedules"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "setoran_tasks" ADD CONSTRAINT "setoran_tasks_schedule_id_schedules_id_fk" FOREIGN KEY ("schedule_id") REFERENCES "public"."schedules"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "setoran_tasks" ADD CONSTRAINT "setoran_tasks_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "setoran_tasks" ADD CONSTRAINT "setoran_tasks_store_id_stores_id_fk" FOREIGN KEY ("store_id") REFERENCES "public"."stores"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "setoran_tasks" ADD CONSTRAINT "setoran_tasks_shift_id_shifts_id_fk" FOREIGN KEY ("shift_id") REFERENCES "public"."shifts"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "setoran_tasks" ADD CONSTRAINT "setoran_tasks_actual_received_amount_by_users_id_fk" FOREIGN KEY ("actual_received_amount_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "setoran_tasks" ADD CONSTRAINT "setoran_tasks_stored_amount_by_users_id_fk" FOREIGN KEY ("stored_amount_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "setoran_tasks" ADD CONSTRAINT "setoran_tasks_resi_photo_by_users_id_fk" FOREIGN KEY ("resi_photo_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "setoran_tasks" ADD CONSTRAINT "setoran_tasks_atm_card_selfie_photo_by_users_id_fk" FOREIGN KEY ("atm_card_selfie_photo_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "setoran_tasks" ADD CONSTRAINT "setoran_tasks_notes_by_users_id_fk" FOREIGN KEY ("notes_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "setoran_tasks" ADD CONSTRAINT "setoran_tasks_completed_by_users_id_fk" FOREIGN KEY ("completed_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "setoran_tasks" ADD CONSTRAINT "setoran_tasks_completed_by_schedule_id_schedules_id_fk" FOREIGN KEY ("completed_by_schedule_id") REFERENCES "public"."schedules"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "setoran_tasks" ADD CONSTRAINT "setoran_tasks_verified_by_users_id_fk" FOREIGN KEY ("verified_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "store_bins" ADD CONSTRAINT "store_bins_store_id_stores_id_fk" FOREIGN KEY ("store_id") REFERENCES "public"."stores"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "store_front_tasks" ADD CONSTRAINT "store_front_tasks_schedule_id_schedules_id_fk" FOREIGN KEY ("schedule_id") REFERENCES "public"."schedules"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "store_front_tasks" ADD CONSTRAINT "store_front_tasks_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "store_front_tasks" ADD CONSTRAINT "store_front_tasks_store_id_stores_id_fk" FOREIGN KEY ("store_id") REFERENCES "public"."stores"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "store_front_tasks" ADD CONSTRAINT "store_front_tasks_shift_id_shifts_id_fk" FOREIGN KEY ("shift_id") REFERENCES "public"."shifts"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "store_front_tasks" ADD CONSTRAINT "store_front_tasks_claimed_by_users_id_fk" FOREIGN KEY ("claimed_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "store_front_tasks" ADD CONSTRAINT "store_front_tasks_completed_by_users_id_fk" FOREIGN KEY ("completed_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "store_front_tasks" ADD CONSTRAINT "store_front_tasks_completed_by_schedule_id_schedules_id_fk" FOREIGN KEY ("completed_by_schedule_id") REFERENCES "public"."schedules"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "store_front_tasks" ADD CONSTRAINT "store_front_tasks_verified_by_users_id_fk" FOREIGN KEY ("verified_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "store_opening_tasks" ADD CONSTRAINT "store_opening_tasks_schedule_id_schedules_id_fk" FOREIGN KEY ("schedule_id") REFERENCES "public"."schedules"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "store_opening_tasks" ADD CONSTRAINT "store_opening_tasks_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "store_opening_tasks" ADD CONSTRAINT "store_opening_tasks_store_id_stores_id_fk" FOREIGN KEY ("store_id") REFERENCES "public"."stores"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "store_opening_tasks" ADD CONSTRAINT "store_opening_tasks_shift_id_shifts_id_fk" FOREIGN KEY ("shift_id") REFERENCES "public"."shifts"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "store_opening_tasks" ADD CONSTRAINT "store_opening_tasks_login_pos_by_users_id_fk" FOREIGN KEY ("login_pos_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "store_opening_tasks" ADD CONSTRAINT "store_opening_tasks_check_absen_sunfish_by_users_id_fk" FOREIGN KEY ("check_absen_sunfish_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "store_opening_tasks" ADD CONSTRAINT "store_opening_tasks_tarik_soh_sales_by_users_id_fk" FOREIGN KEY ("tarik_soh_sales_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "store_opening_tasks" ADD CONSTRAINT "store_opening_tasks_five_r_by_users_id_fk" FOREIGN KEY ("five_r_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "store_opening_tasks" ADD CONSTRAINT "store_opening_tasks_five_r_kasir_by_users_id_fk" FOREIGN KEY ("five_r_kasir_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "store_opening_tasks" ADD CONSTRAINT "store_opening_tasks_five_r_depan_by_users_id_fk" FOREIGN KEY ("five_r_depan_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "store_opening_tasks" ADD CONSTRAINT "store_opening_tasks_five_r_kanan_by_users_id_fk" FOREIGN KEY ("five_r_kanan_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "store_opening_tasks" ADD CONSTRAINT "store_opening_tasks_five_r_kiri_by_users_id_fk" FOREIGN KEY ("five_r_kiri_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "store_opening_tasks" ADD CONSTRAINT "store_opening_tasks_five_r_gudang_by_users_id_fk" FOREIGN KEY ("five_r_gudang_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "store_opening_tasks" ADD CONSTRAINT "store_opening_tasks_cek_lamp_by_users_id_fk" FOREIGN KEY ("cek_lamp_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "store_opening_tasks" ADD CONSTRAINT "store_opening_tasks_cek_sound_system_by_users_id_fk" FOREIGN KEY ("cek_sound_system_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "store_opening_tasks" ADD CONSTRAINT "store_opening_tasks_cash_drawer_by_users_id_fk" FOREIGN KEY ("cash_drawer_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "store_opening_tasks" ADD CONSTRAINT "store_opening_tasks_completed_by_users_id_fk" FOREIGN KEY ("completed_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "store_opening_tasks" ADD CONSTRAINT "store_opening_tasks_completed_by_schedule_id_schedules_id_fk" FOREIGN KEY ("completed_by_schedule_id") REFERENCES "public"."schedules"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "store_opening_tasks" ADD CONSTRAINT "store_opening_tasks_verified_by_users_id_fk" FOREIGN KEY ("verified_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "vm_checklist_tasks" ADD CONSTRAINT "vm_checklist_tasks_schedule_id_schedules_id_fk" FOREIGN KEY ("schedule_id") REFERENCES "public"."schedules"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "vm_checklist_tasks" ADD CONSTRAINT "vm_checklist_tasks_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint

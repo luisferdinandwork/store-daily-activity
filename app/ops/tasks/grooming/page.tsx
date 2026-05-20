@@ -6,22 +6,18 @@ import {
   AlertCircle,
   CalendarDays,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
-  Clock3,
   Loader2,
+  MapPin,
   RefreshCw,
   Search,
   Sparkles,
   Store,
-  UserCheck,
-  Users,
-  XCircle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 type Period = 'daily' | 'weekly' | 'monthly';
 type Status = 'pending' | 'in_progress' | 'completed' | 'verified' | 'rejected' | 'discrepancy';
@@ -102,9 +98,28 @@ interface GroomingMonitorResponse {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+// ─── Shared design tokens ─────────────────────────────────────────────────────
+
+// Single source of truth for progress → color mapping used across all OPS pages
+export function progressColor(pct: number): string {
+  if (pct >= 80) return '#4f46e5'; // indigo-600
+  if (pct >= 40) return '#f59e0b'; // amber-500
+  return '#6366f1';                 // indigo-400 (soft indigo for low, not alarming)
+}
+
+export function progressTextClass(pct: number): string {
+  if (pct >= 80) return 'text-indigo-600';
+  if (pct >= 40) return 'text-amber-600';
+  return 'text-indigo-400';
+}
+
+export function progressBarClass(pct: number): string {
+  if (pct >= 80) return 'bg-indigo-600';
+  if (pct >= 40) return 'bg-amber-500';
+  return 'bg-indigo-300';
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function todayKey(): string {
   const d = new Date();
@@ -112,31 +127,13 @@ function todayKey(): string {
 }
 
 function formatDate(value: string | null): string {
-  if (!value) return '-';
-  return new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(`${value}T00:00:00`));
+  if (!value) return '—';
+  return new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: 'short' }).format(new Date(`${value}T00:00:00`));
 }
 
 function formatDateTime(value: string | null): string {
-  if (!value) return '-';
+  if (!value) return '—';
   return new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(value));
-}
-
-function statusLabel(status: Status): string {
-  return { pending: 'Pending', in_progress: 'In Progress', completed: 'Completed', verified: 'Verified', rejected: 'Rejected', discrepancy: 'Discrepancy' }[status] ?? status;
-}
-
-function statusIcon(status: Status) {
-  if (status === 'completed' || status === 'verified') return <CheckCircle2 className="h-3.5 w-3.5" />;
-  if (status === 'rejected' || status === 'discrepancy') return <XCircle className="h-3.5 w-3.5" />;
-  if (status === 'in_progress') return <Clock3 className="h-3.5 w-3.5" />;
-  return <AlertCircle className="h-3.5 w-3.5" />;
-}
-
-function statusStyle(status: Status): string {
-  if (status === 'completed' || status === 'verified') return 'bg-emerald-50 text-emerald-700 border-emerald-200';
-  if (status === 'rejected' || status === 'discrepancy') return 'bg-rose-50 text-rose-700 border-rose-200';
-  if (status === 'in_progress') return 'bg-indigo-50 text-indigo-700 border-indigo-200';
-  return 'bg-amber-50 text-amber-700 border-amber-200';
 }
 
 function healthOf(store: GroomingStoreRow): HealthFilter {
@@ -147,109 +144,86 @@ function healthOf(store: GroomingStoreRow): HealthFilter {
   return 'done';
 }
 
-// ---------------------------------------------------------------------------
-// Page
-// ---------------------------------------------------------------------------
+// ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function OpsGroomingPage() {
-  const [period, setPeriod] = useState<Period>('daily');
-  const [date, setDate] = useState(todayKey());
-  const [storeId, setStoreId] = useState('all');
-  const [search, setSearch] = useState('');
-  const [data, setData] = useState<GroomingMonitorResponse['data'] | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const [health, setHealth] = useState<HealthFilter>('all');
-  const [sort, setSort] = useState<SortKey>('most_pending');
+  const [period, setPeriod]             = useState<Period>('daily');
+  const [date, setDate]                 = useState(todayKey());
+  const [storeId, setStoreId]           = useState('all');
+  const [search, setSearch]             = useState('');
+  const [data, setData]                 = useState<GroomingMonitorResponse['data'] | null>(null);
+  const [loading, setLoading]           = useState(true);
+  const [error, setError]               = useState<string | null>(null);
+  const [health, setHealth]             = useState<HealthFilter>('all');
+  const [sort, setSort]                 = useState<SortKey>('most_pending');
   const [activeStoreId, setActiveStoreId] = useState<number | null>(null);
 
-  // ---- Data fetching ----
-
   async function load() {
-    setLoading(true);
-    setError(null);
+    setLoading(true); setError(null);
     try {
       const params = new URLSearchParams({ period, date, storeId });
-      const res = await fetch(`/api/ops/tasks/grooming?${params.toString()}`, { cache: 'no-store' });
+      const res  = await fetch(`/api/ops/tasks/grooming?${params}`, { cache: 'no-store' });
       const json = await res.json() as GroomingMonitorResponse;
-      if (!res.ok || !json.success || !json.data) throw new Error(json.error || 'Failed to load Grooming monitor.');
+      if (!res.ok || !json.success || !json.data) throw new Error(json.error || 'Failed to load.');
       setData(json.data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load Grooming monitor.');
+      setError(err instanceof Error ? err.message : 'Failed to load.');
       setData(null);
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   }
 
   useEffect(() => { void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [period, date, storeId]);
 
-  // ---- Derived state ----
-
-  const storeOptions = useMemo(() => (data?.availableStores ?? []).map((s) => ({ id: s.id, name: s.name })), [data?.availableStores]);
+  const storeOptions = useMemo(() => (data?.availableStores ?? []).map(s => ({ id: s.id, name: s.name })), [data?.availableStores]);
 
   const visibleStores = useMemo(() => {
     const q = search.trim().toLowerCase();
     let list = data?.stores ?? [];
-
     if (q) {
-      list = list
-        .map((s) => ({
-          ...s,
-          tasks: s.tasks.filter((t) => {
-            const vals = [s.name, t.employee.name, t.employee.email, t.employee.employeeType?.label, t.shift?.label, t.notes].join(' ').toLowerCase();
-            return vals.includes(q);
-          }),
-        }))
-        .filter((s) => s.tasks.length > 0 || s.name.toLowerCase().includes(q));
+      list = list.map(s => ({
+        ...s,
+        tasks: s.tasks.filter(t => [s.name, t.employee.name, t.employee.email, t.employee.employeeType?.label, t.shift?.label, t.notes].join(' ').toLowerCase().includes(q)),
+      })).filter(s => s.tasks.length > 0 || s.name.toLowerCase().includes(q));
     }
-
-    if (health !== 'all') {
-      list = list.filter((s) => healthOf(s) === health);
-    }
-
+    if (health !== 'all') list = list.filter(s => healthOf(s) === health);
     return [...list].sort((a, b) => {
       switch (sort) {
-        case 'name': return a.name.localeCompare(b.name);
-        case 'progress_low': return a.summary.averageProgress - b.summary.averageProgress;
+        case 'name':          return a.name.localeCompare(b.name);
+        case 'progress_low':  return a.summary.averageProgress - b.summary.averageProgress;
         case 'progress_high': return b.summary.averageProgress - a.summary.averageProgress;
         case 'most_pending': {
           const pa = a.summary.pendingTasks + a.summary.inProgressTasks + a.summary.rejectedTasks;
           const pb = b.summary.pendingTasks + b.summary.inProgressTasks + b.summary.rejectedTasks;
-          if (pb !== pa) return pb - pa;
-          return a.name.localeCompare(b.name);
+          return pb !== pa ? pb - pa : a.name.localeCompare(b.name);
         }
       }
     });
   }, [data?.stores, search, health, sort]);
 
   useEffect(() => {
-    if (visibleStores.length === 0) { setActiveStoreId(null); return; }
-    if (!visibleStores.some((s) => s.id === activeStoreId)) setActiveStoreId(visibleStores[0].id);
+    if (!visibleStores.length) { setActiveStoreId(null); return; }
+    if (!visibleStores.some(s => s.id === activeStoreId)) setActiveStoreId(visibleStores[0].id);
   }, [visibleStores, activeStoreId]);
 
-  const activeStore = visibleStores.find((s) => s.id === activeStoreId) ?? null;
-  const summary = data?.summary;
+  const activeStore = visibleStores.find(s => s.id === activeStoreId) ?? null;
+  const summary     = data?.summary;
 
   const healthCounts = useMemo(() => {
     const c = { all: 0, done: 0, pending: 0, issues: 0 };
-    for (const s of data?.stores ?? []) { c.all += 1; c[healthOf(s)] += 1; }
+    for (const s of data?.stores ?? []) { c.all++; c[healthOf(s)]++; }
     return c;
   }, [data?.stores]);
 
-  // ---- Render ----
-
   return (
     <main className="min-h-screen bg-slate-50">
-      {/* Sticky header */}
+      {/* ── Header ── */}
       <div className="sticky top-0 z-20 border-b border-slate-200 bg-white/90 backdrop-blur">
         <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-500">Ops · Task Monitor</p>
-              <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Grooming Monitor</h1>
-              <p className="mt-1 text-sm text-slate-500">Monitor grooming per employee. Each scheduled employee has their own task and progress.</p>
+              <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Grooming</h1>
+              <p className="mt-1 text-sm text-slate-500">Per-employee personal task. Tap a store to see who's still pending.</p>
             </div>
             <button type="button" onClick={() => void load()} disabled={loading} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-60">
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Refresh
@@ -259,78 +233,75 @@ export default function OpsGroomingPage() {
       </div>
 
       <div className="mx-auto max-w-7xl space-y-5 px-4 py-5 sm:px-6 lg:px-8">
-        {/* Toolbar */}
-        <div className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm md:grid-cols-[260px_180px_220px_1fr]">
-          <div className="flex rounded-xl bg-slate-100 p-1">
-            {(['daily', 'weekly', 'monthly'] as Period[]).map((p) => (
-              <button key={p} type="button" onClick={() => setPeriod(p)} className={cn('flex-1 rounded-lg px-3 py-2 text-xs font-bold capitalize transition', period === p ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700')}>{p}</button>
-            ))}
-          </div>
-          <label className="relative block">
-            <CalendarDays className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <input value={date} onChange={(e) => setDate(e.target.value)} type="date" className="h-10 w-full rounded-xl border border-slate-200 bg-white pl-9 pr-3 text-sm font-semibold text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100" />
-          </label>
-          <select value={storeId} onChange={(e) => setStoreId(e.target.value)} className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100">
-            <option value="all">All stores</option>
-            {storeOptions.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-          <label className="relative block">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Cari toko, employee, role, atau shift…" className="h-10 w-full rounded-xl border border-slate-200 bg-white pl-9 pr-3 text-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100" />
-          </label>
-        </div>
+        {/* ── Toolbar ── */}
+        <Toolbar period={period} date={date} storeId={storeId} search={search} storeOptions={storeOptions}
+          onPeriod={setPeriod} onDate={setDate} onStore={setStoreId} onSearch={setSearch} />
 
-        {error && <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm font-medium text-rose-700">{error}</div>}
+        {error && <ErrorBanner message={error} />}
 
-        {/* Summary tiles */}
-        {summary && data && (
-          <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-            <SummaryTile label="Avg Progress" value={`${summary.averageProgress}%`} helper={data.range.start && data.range.end ? `${data.range.start} – ${data.range.end}` : 'Selected range'} accent="#4f46e5" emphasis />
-            <SummaryTile label="Stores" value={summary.totalStores} helper="Active stores" accent="#6366f1" />
-            <SummaryTile label="Employees" value={summary.totalEmployees} helper="Scheduled staff" accent="#0ea5e9" />
-            <SummaryTile label="Tasks" value={summary.totalTasks} helper={`${summary.completedTasks} completed`} accent="#10b981" />
-            <SummaryTile label="Verified" value={summary.verifiedTasks} helper="Approved tasks" accent="#f59e0b" />
+        {/* ── Summary ── */}
+        {summary && (
+          <section className="grid gap-3 sm:grid-cols-3">
+            <SummaryTile label="Avg Progress" value={`${summary.averageProgress}%`} helper={`${summary.totalStores} stores · ${summary.totalEmployees} employees`} emphasis />
+            <SummaryTile label="Selesai" value={summary.completedTasks + summary.verifiedTasks} helper={`dari ${summary.totalTasks} task`} accent="#4f46e5" />
+            <SummaryTile label="Perlu Tindakan" value={summary.pendingTasks + summary.inProgressTasks + summary.rejectedTasks} helper={summary.rejectedTasks > 0 ? `${summary.rejectedTasks} ditolak` : 'Pending + in-progress'} accent="#f59e0b" warning />
           </section>
         )}
 
-        {/* Health filter + Sort */}
-        <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <HealthChip label="All" count={healthCounts.all} active={health === 'all'} onClick={() => setHealth('all')} />
-            <HealthChip label="Done" count={healthCounts.done} active={health === 'done'} onClick={() => setHealth('done')} color="emerald" />
-            <HealthChip label="Pending" count={healthCounts.pending} active={health === 'pending'} onClick={() => setHealth('pending')} color="amber" />
-            <HealthChip label="Issues" count={healthCounts.issues} active={health === 'issues'} onClick={() => setHealth('issues')} color="rose" />
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Sort</span>
-            <select value={sort} onChange={(e) => setSort(e.target.value as SortKey)} className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100">
-              <option value="most_pending">Most pending first</option>
-              <option value="progress_low">Lowest progress</option>
-              <option value="progress_high">Highest progress</option>
-              <option value="name">Name (A→Z)</option>
-            </select>
-          </div>
-        </div>
+        {/* ── Filter bar ── */}
+        <FilterBar
+          healthCounts={healthCounts} health={health} onHealth={setHealth}
+          sortOptions={[
+            { value: 'most_pending', label: 'Most pending first' },
+            { value: 'progress_low', label: 'Lowest progress' },
+            { value: 'progress_high', label: 'Highest progress' },
+            { value: 'name', label: 'Name (A→Z)' },
+          ]}
+          sort={sort} onSort={v => setSort(v as SortKey)}
+        />
 
-        {loading && (
-          <div className="grid gap-3 lg:grid-cols-[360px_1fr]">
-            <div className="space-y-2">{Array.from({ length: 8 }).map((_, i) => <div key={i} className="h-16 animate-pulse rounded-2xl bg-slate-100" />)}</div>
-            <div className="h-[360px] animate-pulse rounded-2xl bg-slate-100" />
-          </div>
-        )}
+        {loading && <LoadingSkeleton />}
 
         {!loading && !error && visibleStores.length === 0 && (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-10 text-center">
-            <Sparkles className="mx-auto h-10 w-10 text-slate-300" />
-            <h2 className="mt-3 text-base font-bold text-slate-900">No grooming tasks found</h2>
-            <p className="mt-1 text-sm text-slate-500">Try a different date, period, filter, or search keyword.</p>
-          </div>
+          <EmptyState icon={<Sparkles className="mx-auto h-10 w-10 text-slate-300" />}
+            title="No grooming tasks found"
+            body="Try a different date, period, filter, or search keyword." />
         )}
 
         {!loading && visibleStores.length > 0 && (
           <div className="grid gap-4 lg:grid-cols-[380px_1fr]">
-            <StoreList stores={visibleStores} activeId={activeStoreId} onSelect={setActiveStoreId} />
-            {activeStore ? <StoreDetail store={activeStore} /> : <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-10 text-center text-sm text-slate-500">Select a store to see its tasks.</div>}
+            {/* Store list */}
+            <StoreList stores={visibleStores} activeId={activeStoreId} onSelect={(id) => setActiveStoreId(id as number)}
+              renderRow={(store, active) => {
+                const rate    = store.summary.averageProgress;
+                const pending = store.summary.pendingTasks + store.summary.inProgressTasks;
+                const rejected = store.summary.rejectedTasks;
+                return (
+                  <>
+                    <StoreIcon active={active} />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className={cn('truncate text-sm font-bold', active ? 'text-indigo-900' : 'text-slate-900')}>{store.name}</p>
+                        <span className={cn('shrink-0 text-xs font-bold tabular-nums', progressTextClass(rate))}>{rate}%</span>
+                      </div>
+                      <ProgressBar pct={rate} className="mt-1.5" />
+                      <p className="mt-1.5 text-[11px] font-semibold text-slate-500">
+                        {store.summary.totalEmployees} karyawan
+                        {pending  > 0 && <span className="text-amber-600"> · {pending} pending</span>}
+                        {rejected > 0 && <span className="text-indigo-500"> · {rejected} ditolak</span>}
+                      </p>
+                    </div>
+                  </>
+                );
+              }}
+            />
+
+            {/* Detail panel */}
+            {activeStore ? (
+              <GroomingDetail store={activeStore} />
+            ) : (
+              <EmptyDetail />
+            )}
           </div>
         )}
       </div>
@@ -338,74 +309,272 @@ export default function OpsGroomingPage() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Subcomponents
-// ---------------------------------------------------------------------------
+// ─── Grooming-specific detail ─────────────────────────────────────────────────
 
-function SummaryTile({ label, value, helper, accent, emphasis, warning }: { label: string; value: string | number; helper: string; accent: string; emphasis?: boolean; warning?: boolean }) {
-  if (emphasis) {
-    return (
-      <div className="rounded-2xl border border-slate-900 bg-slate-950 p-4 text-white shadow-sm">
-        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-300">{label}</p>
-        <p className="mt-2 text-2xl font-black">{value}</p>
-        <p className="mt-1 text-[11px] text-slate-300">{helper}</p>
+function GroomingDetail({ store }: { store: GroomingStoreRow }) {
+  const rate    = store.summary.averageProgress;
+  const done    = store.summary.completedTasks + store.summary.verifiedTasks;
+  const pending = store.summary.pendingTasks + store.summary.inProgressTasks;
+
+  return (
+    <article className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <DetailHeader
+        name={store.name}
+        address={store.address}
+        ring={<ProgressRing pct={rate} size={64} stroke={6} />}
+        meta={
+          <p className="mt-1.5 text-xs font-semibold text-slate-600">
+            <span className="text-indigo-600">{done} selesai</span>
+            <span className="text-slate-300"> · </span>
+            <span className={pending > 0 ? 'text-amber-600' : 'text-slate-400'}>{pending} pending</span>
+            {store.summary.rejectedTasks > 0 && (
+              <><span className="text-slate-300"> · </span><span className="text-indigo-500">{store.summary.rejectedTasks} ditolak</span></>
+            )}
+            <span className="text-slate-400"> dari {store.summary.totalEmployees}</span>
+          </p>
+        }
+      />
+      <div className="divide-y divide-slate-100">
+        {store.tasks.length === 0
+          ? <div className="p-8 text-center text-sm text-slate-500">Tidak ada task grooming dalam rentang ini.</div>
+          : store.tasks.map(task => <EmployeeRow key={`${task.scheduleId}-${task.id ?? 'no-id'}`} task={task} />)
+        }
       </div>
-    );
-  }
+    </article>
+  );
+}
+
+function EmployeeRow({ task }: { task: GroomingTaskRecord }) {
+  const [expanded, setExpanded] = useState(false);
+  const activeFields = task.fields.filter(f => f.active);
+  const missing      = activeFields.filter(f => !f.done);
+  const isDone       = task.progress >= 100;
+  const initials     = task.employee.name.split(' ').slice(0, 2).map(p => p[0]).join('').toUpperCase();
+
+  return (
+    <div>
+      <button type="button" onClick={() => setExpanded(v => !v)}
+        className="flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-slate-50 sm:px-5">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-indigo-50 text-xs font-bold text-indigo-700">
+          {initials || '?'}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+            <p className="truncate text-sm font-bold text-slate-900">{task.employee.name}</p>
+            <p className="truncate text-[11px] text-slate-500">
+              {task.employee.employeeType?.label ?? 'Employee'}
+              {task.shift?.label && <> · {task.shift.label}</>}
+              <> · {formatDate(task.date)}</>
+            </p>
+          </div>
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+            {isDone ? (
+              <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-bold text-indigo-700">
+                <CheckCircle2 className="h-3 w-3" />Semua selesai
+              </span>
+            ) : missing.length === 0 ? (
+              <span className="text-[10px] font-semibold text-slate-400">Tidak ada item aktif</span>
+            ) : (
+              <>
+                {missing.slice(0, 3).map(f => (
+                  <span key={f.key} className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-700">
+                    <AlertCircle className="h-3 w-3" />{f.label}
+                  </span>
+                ))}
+                {missing.length > 3 && <span className="text-[10px] font-semibold text-slate-500">+{missing.length - 3} lagi</span>}
+              </>
+            )}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <div className="text-right">
+            <p className={cn('text-sm font-black tabular-nums', progressTextClass(task.progress))}>{task.progress}%</p>
+            <p className="text-[10px] font-semibold text-slate-400">{task.completedFields}/{task.totalFields}</p>
+          </div>
+          <ChevronDown className={cn('h-4 w-4 text-slate-400 transition-transform', expanded && 'rotate-180')} />
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="border-t border-slate-100 bg-slate-50/60 px-4 py-4 sm:px-5">
+          <div className="grid gap-x-4 gap-y-1.5 sm:grid-cols-2">
+            {task.fields.map(field => (
+              <div key={field.key} className={cn(
+                'flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-xs',
+                !field.active && 'text-slate-400',
+                field.active && field.done && 'text-indigo-700',
+                field.active && !field.done && 'text-amber-700',
+              )}>
+                <span className="font-semibold">{field.label}</span>
+                {!field.active ? <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">N/A</span>
+                  : field.done ? <CheckCircle2 className="h-4 w-4 text-indigo-500" />
+                  : <AlertCircle className="h-4 w-4 text-amber-500" />}
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-500">
+            {task.selfiePhotoCount > 0 && <span>{task.selfiePhotoCount} foto selfie</span>}
+            {task.completedAt && <span>Selesai {formatDateTime(task.completedAt)}</span>}
+            {task.verifiedAt && <span className="text-indigo-600">Diverifikasi {formatDateTime(task.verifiedAt)}</span>}
+          </div>
+          {task.notes && (
+            <div className="mt-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+              <span className="font-bold text-slate-800">Catatan:</span> {task.notes}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Shared OPS UI building blocks ────────────────────────────────────────────
+// These are extracted so Store Opening and Setoran pages can import the same
+// primitives and stay visually identical.
+
+export function Toolbar({ period, date, storeId, search, storeOptions, onPeriod, onDate, onStore, onSearch }: {
+  period: string; date: string; storeId: string; search: string;
+  storeOptions: { id: number | string; name: string }[];
+  onPeriod: (p: Period) => void; onDate: (d: string) => void;
+  onStore: (s: string) => void; onSearch: (s: string) => void;
+}) {
+  return (
+    <div className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm md:grid-cols-[260px_180px_220px_1fr]">
+      <div className="flex rounded-xl bg-slate-100 p-1">
+        {(['daily', 'weekly', 'monthly'] as Period[]).map(p => (
+          <button key={p} type="button" onClick={() => onPeriod(p)}
+            className={cn('flex-1 rounded-lg px-3 py-2 text-xs font-bold capitalize transition',
+              period === p ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700')}>
+            {p}
+          </button>
+        ))}
+      </div>
+      <label className="relative block">
+        <CalendarDays className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+        <input value={date} onChange={e => onDate(e.target.value)} type="date"
+          className="h-10 w-full rounded-xl border border-slate-200 bg-white pl-9 pr-3 text-sm font-semibold text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100" />
+      </label>
+      <select value={storeId} onChange={e => onStore(e.target.value)}
+        className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100">
+        <option value="all">Semua toko</option>
+        {storeOptions.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+      </select>
+      <label className="relative block">
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+        <input value={search} onChange={e => onSearch(e.target.value)} placeholder="Cari toko atau karyawan…"
+          className="h-10 w-full rounded-xl border border-slate-200 bg-white pl-9 pr-3 text-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100" />
+      </label>
+    </div>
+  );
+}
+
+export function ErrorBanner({ message }: { message: string }) {
+  return <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-4 text-sm font-medium text-indigo-700">{message}</div>;
+}
+
+export function SummaryTile({ label, value, helper, accent, emphasis, warning }: {
+  label: string; value: string | number; helper: string; accent?: string; emphasis?: boolean; warning?: boolean;
+}) {
+  if (emphasis) return (
+    <div className="rounded-2xl border border-indigo-900 bg-indigo-950 p-4 text-white shadow-sm">
+      <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-300">{label}</p>
+      <p className="mt-2 text-3xl font-black">{value}</p>
+      <p className="mt-1 text-[11px] text-indigo-200">{helper}</p>
+    </div>
+  );
   return (
     <div className={cn('rounded-2xl border bg-white p-4 shadow-sm', warning ? 'border-amber-200 bg-amber-50' : 'border-slate-200')}>
       <div className="flex items-start justify-between">
         <p className={cn('text-[10px] font-bold uppercase tracking-widest', warning ? 'text-amber-700' : 'text-slate-400')}>{label}</p>
-        <span className="h-2 w-2 rounded-full" style={{ background: accent }} />
+        {accent && <span className="h-2 w-2 rounded-full" style={{ background: accent }} />}
       </div>
-      <p className={cn('mt-2 text-2xl font-black', warning ? 'text-amber-900' : 'text-slate-900')}>{value}</p>
+      <p className={cn('mt-2 text-3xl font-black', warning ? 'text-amber-900' : 'text-slate-900')}>{value}</p>
       <p className={cn('mt-1 text-[11px]', warning ? 'text-amber-700' : 'text-slate-500')}>{helper}</p>
     </div>
   );
 }
 
-function HealthChip({ label, count, active, onClick, color = 'indigo' }: { label: string; count: number; active: boolean; onClick: () => void; color?: 'indigo' | 'emerald' | 'amber' | 'rose' }) {
-  const palette: Record<'indigo' | 'emerald' | 'amber' | 'rose', { active: string; idle: string }> = {
-    indigo: { active: 'bg-indigo-600 text-white border-indigo-600', idle: 'bg-white text-slate-600 border-slate-200 hover:border-indigo-200' },
-    emerald: { active: 'bg-emerald-500 text-white border-emerald-500', idle: 'bg-white text-slate-600 border-slate-200 hover:border-emerald-200' },
-    amber: { active: 'bg-amber-500 text-white border-amber-500', idle: 'bg-white text-slate-600 border-slate-200 hover:border-amber-200' },
-    rose: { active: 'bg-rose-500 text-white border-rose-500', idle: 'bg-white text-slate-600 border-slate-200 hover:border-rose-200' },
+export function FilterBar({ healthCounts, health, onHealth, sortOptions, sort, onSort }: {
+  healthCounts: Record<HealthFilter, number>;
+  health: HealthFilter; onHealth: (h: HealthFilter) => void;
+  sortOptions: { value: string; label: string }[];
+  sort: string; onSort: (s: string) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <HealthChip label="Semua" count={healthCounts.all}     active={health === 'all'}     onClick={() => onHealth('all')} />
+        <HealthChip label="Selesai" count={healthCounts.done}  active={health === 'done'}    onClick={() => onHealth('done')}    color="indigo" />
+        <HealthChip label="Pending" count={healthCounts.pending} active={health === 'pending'} onClick={() => onHealth('pending')} color="amber" />
+        <HealthChip label="Masalah" count={healthCounts.issues} active={health === 'issues'}  onClick={() => onHealth('issues')}  color="indigo-soft" />
+      </div>
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Urutkan</span>
+        <select value={sort} onChange={e => onSort(e.target.value)}
+          className="h-9 rounded-xl border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100">
+          {sortOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+      </div>
+    </div>
+  );
+}
+
+export function HealthChip({ label, count, active, onClick, color = 'indigo' }: {
+  label: string; count: number; active: boolean; onClick: () => void;
+  color?: 'indigo' | 'amber' | 'indigo-soft';
+}) {
+  const palette = {
+    indigo:      { active: 'bg-indigo-600 text-white border-indigo-600',   idle: 'bg-white text-slate-600 border-slate-200 hover:border-indigo-200' },
+    amber:       { active: 'bg-amber-500 text-white border-amber-500',      idle: 'bg-white text-slate-600 border-slate-200 hover:border-amber-200' },
+    'indigo-soft': { active: 'bg-indigo-400 text-white border-indigo-400', idle: 'bg-white text-slate-600 border-slate-200 hover:border-indigo-100' },
   };
   const { active: activeCls, idle } = palette[color];
   return (
-    <button type="button" onClick={onClick} className={cn('inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-bold transition', active ? activeCls : idle)}>
+    <button type="button" onClick={onClick}
+      className={cn('inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-bold transition', active ? activeCls : idle)}>
       {label}
       <span className={cn('rounded-full px-1.5 text-[10px] font-bold', active ? 'bg-white/20' : 'bg-slate-100 text-slate-600')}>{count}</span>
     </button>
   );
 }
 
-function StoreList({ stores, activeId, onSelect }: { stores: GroomingStoreRow[]; activeId: number | null; onSelect: (id: number) => void }) {
+export function StoreIcon({ active }: { active: boolean }) {
+  return (
+    <div className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-xl', active ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500')}>
+      <Store className="h-4 w-4" />
+    </div>
+  );
+}
+
+export function ProgressBar({ pct, className }: { pct: number; className?: string }) {
+  return (
+    <div className={cn('h-1.5 overflow-hidden rounded-full bg-slate-100', className)}>
+      <div className={cn('h-full rounded-full transition-all', progressBarClass(pct))} style={{ width: `${pct}%` }} />
+    </div>
+  );
+}
+
+export function StoreList<T extends { id: number | string; name: string }>({
+  stores, activeId, onSelect, renderRow,
+}: {
+  stores: T[];
+  activeId: number | string | null;
+  onSelect: (id: number | string) => void;
+  renderRow: (store: T, active: boolean) => React.ReactNode;
+}) {
   return (
     <aside className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-100 px-4 py-2.5 text-[10px] font-bold uppercase tracking-widest text-slate-400">
-        {stores.length} store{stores.length !== 1 ? 's' : ''}
+        {stores.length} toko
       </div>
       <div className="max-h-[640px] divide-y divide-slate-100 overflow-y-auto">
-        {stores.map((store) => {
+        {stores.map(store => {
           const active = store.id === activeId;
-          const rate = store.summary.averageProgress;
-          const left = Math.max(0, store.summary.totalEmployees - store.summary.completedTasks);
           return (
-            <button key={store.id} type="button" onClick={() => onSelect(store.id)} className={cn('flex w-full items-start gap-3 px-4 py-3 text-left transition', active ? 'bg-indigo-50' : 'hover:bg-slate-50')}>
-              <div className={cn('mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl', active ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500')}><Store className="h-4 w-4" /></div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-start justify-between gap-2">
-                  <p className={cn('truncate text-sm font-bold', active ? 'text-indigo-900' : 'text-slate-900')}>{store.name}</p>
-                  <span className={cn('shrink-0 text-xs font-bold tabular-nums', rate >= 80 ? 'text-emerald-600' : rate >= 40 ? 'text-amber-600' : 'text-rose-600')}>{rate}%</span>
-                </div>
-                <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-indigo-500 transition-all" style={{ width: `${rate}%` }} /></div>
-                <div className="mt-1.5 flex items-center gap-2 text-[10px] font-semibold text-slate-500">
-                  <span>{store.summary.totalEmployees} employees</span>
-                  {left > 0 && <span className="text-amber-600">· {left} pending</span>}
-                </div>
-              </div>
-              <ChevronRight className={cn('mt-2 h-4 w-4 shrink-0', active ? 'text-indigo-500' : 'text-slate-300')} />
+            <button key={store.id} type="button" onClick={() => onSelect(store.id)}
+              className={cn('flex w-full items-center gap-3 px-4 py-3 text-left transition', active ? 'bg-indigo-50' : 'hover:bg-slate-50')}>
+              {renderRow(store, active)}
+              <ChevronRight className={cn('h-4 w-4 shrink-0', active ? 'text-indigo-500' : 'text-slate-300')} />
             </button>
           );
         })}
@@ -414,113 +583,68 @@ function StoreList({ stores, activeId, onSelect }: { stores: GroomingStoreRow[];
   );
 }
 
-function StoreDetail({ store }: { store: GroomingStoreRow }) {
-  const rate = store.summary.averageProgress;
-  const pending = store.summary.pendingTasks + store.summary.inProgressTasks;
-  const rejected = store.summary.rejectedTasks;
-
+export function DetailHeader({ name, address, ring, meta }: {
+  name: string; address?: string | null;
+  ring?: React.ReactNode; meta?: React.ReactNode;
+}) {
   return (
-    <article className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="border-b border-slate-100 p-4 sm:p-5">
-        <div className="flex items-start gap-3">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600"><Store className="h-5 w-5" /></div>
-          <div className="min-w-0 flex-1">
-            <h2 className="truncate text-lg font-bold text-slate-900">{store.name}</h2>
-            {store.address && <p className="mt-0.5 flex items-start gap-1.5 text-xs text-slate-500"><MapPin className="mt-0.5 h-3 w-3 shrink-0" /><span className="line-clamp-2">{store.address}</span></p>}
-          </div>
-          <div className="hidden text-right sm:block">
-            <p className="text-2xl font-black text-slate-900 tabular-nums">{rate}%</p>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Avg Progress</p>
-          </div>
-        </div>
-
-        <div className="mt-4 grid grid-cols-4 gap-2">
-          <Metric label="Done" value={store.summary.completedTasks + store.summary.verifiedTasks} accent="#10b981" />
-          <Metric label="Pending" value={pending} accent="#f59e0b" />
-          <Metric label="Rejected" value={rejected} accent="#ef4444" />
-          <Metric label="Total" value={store.summary.totalEmployees} accent="#6366f1" />
-        </div>
-        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-indigo-500 transition-all" style={{ width: `${rate}%` }} /></div>
-      </div>
-
-      <div className="divide-y divide-slate-100">
-        {store.tasks.length === 0 ? (
-          <div className="p-8 text-center text-sm text-slate-500">No grooming tasks in this range.</div>
-        ) : (
-          store.tasks.map((task) => <GroomingTaskCard key={`${task.scheduleId}-${task.id}`} task={task} />)
+    <div className="flex items-center gap-4 border-b border-slate-100 p-4 sm:p-5">
+      {ring}
+      <div className="min-w-0 flex-1">
+        <h2 className="truncate text-lg font-bold text-slate-900">{name}</h2>
+        {address && (
+          <p className="mt-0.5 flex items-start gap-1.5 text-xs text-slate-500">
+            <MapPin className="mt-0.5 h-3 w-3 shrink-0" />
+            <span className="line-clamp-1">{address}</span>
+          </p>
         )}
+        {meta}
       </div>
-    </article>
-  );
-}
-
-// Mock MapPin used above if not imported
-function MapPin({ className }: { className?: string }) {
-  return <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>;
-}
-
-function Metric({ label, value, accent }: { label: string; value: number | string; accent: string }) {
-  return (
-    <div className="rounded-xl bg-slate-50 px-3 py-2.5">
-      <div className="flex items-center justify-between">
-        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{label}</p>
-        <span className="h-1.5 w-1.5 rounded-full" style={{ background: accent }} />
-      </div>
-      <p className="mt-1 text-lg font-black tabular-nums" style={{ color: accent }}>{value}</p>
     </div>
   );
 }
 
-function GroomingTaskCard({ task }: { task: GroomingTaskRecord }) {
+export function LoadingSkeleton() {
   return (
-    <div className="p-4 sm:p-5">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-sm font-bold text-slate-900">{task.employee.name}</h3>
-            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-bold text-slate-600">{task.employee.employeeType?.label ?? 'Employee'}</span>
-            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-bold text-slate-600">{task.shift?.label ?? task.shift?.code ?? 'Shift'}</span>
-            <span className={cn('inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-bold', statusStyle(task.status))}>
-              {statusIcon(task.status)} {statusLabel(task.status)}
-            </span>
-          </div>
+    <div className="grid gap-3 lg:grid-cols-[360px_1fr]">
+      <div className="space-y-2">{Array.from({ length: 8 }).map((_, i) => <div key={i} className="h-16 animate-pulse rounded-2xl bg-slate-100" />)}</div>
+      <div className="h-[360px] animate-pulse rounded-2xl bg-slate-100" />
+    </div>
+  );
+}
 
-          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500">
-            <span className="inline-flex items-center gap-1"><CalendarDays className="h-3.5 w-3.5" />{formatDate(task.date)}</span>
-            <span className="inline-flex items-center gap-1"><UserCheck className="h-3.5 w-3.5" />{task.selfiePhotoCount} selfie photos</span>
-            <span>Completed: {formatDateTime(task.completedAt)}</span>
-          </div>
+export function EmptyState({ icon, title, body }: { icon?: React.ReactNode; title: string; body: string }) {
+  return (
+    <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-10 text-center">
+      {icon}
+      <h2 className="mt-3 text-base font-bold text-slate-900">{title}</h2>
+      <p className="mt-1 text-sm text-slate-500">{body}</p>
+    </div>
+  );
+}
 
-          <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-4">
-            {task.fields.map((field) => (
-              <div key={field.key} className={cn('flex items-center gap-2 rounded-xl border px-3 py-2.5 text-xs', !field.active ? 'border-slate-200 bg-slate-50 text-slate-400' : field.done ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-white text-slate-600')}>
-                <div className={cn('flex h-5 w-5 shrink-0 items-center justify-center rounded-full', !field.active ? 'bg-slate-200 text-slate-500' : field.done ? 'bg-emerald-500 text-white' : 'bg-slate-200 text-slate-500')}>
-                  {field.done ? <CheckCircle2 className="h-3.5 w-3.5" /> : <Clock3 className="h-3.5 w-3.5" />}
-                </div>
-                <span className="font-medium">{field.label}</span>
-              </div>
-            ))}
-          </div>
+export function EmptyDetail() {
+  return (
+    <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
+      Pilih toko untuk melihat detail task.
+    </div>
+  );
+}
 
-          {task.notes && (
-            <div className="mt-4 rounded-xl bg-slate-50 px-3 py-2.5 text-xs text-slate-600">
-              <span className="font-bold text-slate-800">Notes:</span> {task.notes}
-            </div>
-          )}
-        </div>
-
-        <div className="w-full rounded-2xl border border-slate-200 bg-slate-50 p-4 lg:w-48">
-          <div className="mb-2 flex items-center justify-between text-sm">
-            <span className="font-medium text-slate-500">Progress</span>
-            <span className="text-lg font-black text-slate-900 tabular-nums">{task.progress}%</span>
-          </div>
-          <div className="h-2 overflow-hidden rounded-full bg-slate-200">
-            <div className={cn('h-full rounded-full transition-all', task.progress >= 100 ? 'bg-emerald-500' : task.progress >= 60 ? 'bg-amber-500' : 'bg-red-500')} style={{ width: `${Math.max(0, Math.min(task.progress, 100))}%` }} />
-          </div>
-          <p className="mt-2 text-[11px] text-slate-500">
-            {task.completedFields}/{task.totalFields} items done
-          </p>
-        </div>
+export function ProgressRing({ pct, size = 56, stroke = 5 }: { pct: number; size?: number; stroke?: number }) {
+  const r    = (size - stroke) / 2;
+  const c    = 2 * Math.PI * r;
+  const dash = (Math.min(100, Math.max(0, pct)) / 100) * c;
+  const color = progressColor(pct);
+  return (
+    <div className="relative shrink-0" style={{ width: size, height: size }}>
+      <svg width={size} height={size} className="-rotate-90">
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#e2e8f0" strokeWidth={stroke} />
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={stroke}
+          strokeDasharray={`${dash} ${c}`} strokeLinecap="round" className="transition-all duration-300" />
+      </svg>
+      <div className="absolute inset-0 flex items-center justify-center">
+        <span className="text-sm font-black tabular-nums" style={{ color }}>{pct}%</span>
       </div>
     </div>
   );
