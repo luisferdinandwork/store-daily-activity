@@ -8,6 +8,7 @@ import {
   integer,
   unique,
   serial,
+  index,
 } from 'drizzle-orm/pg-core';
 import {
   attendanceStatusEnum,
@@ -40,24 +41,93 @@ export const stores = pgTable('stores', {
 });
 
 // ─── User ─────────────────────────────────────────────────────────────────────
+//
+// Login identity is now NIK, not email.
+//
+// Important:
+// - users.id remains the internal generated app ID.
+// - users.nik is the unique office/employee identity.
+// - All FK references still point to users.id, so historical task,
+//   schedule, attendance, report, and verification records stay stable.
+// - NIK can be used later for sync to office API / sales API.
 
 export const users = pgTable('users', {
-  id:             text('id').primaryKey(),       // custom format e.g. "EMP-001"
-  name:           text('name').notNull(),
-  email:          text('email').notNull().unique(),
-  password:       text('password').notNull(),
+  id: text('id')
+    .primaryKey()
+    .$defaultFn(() => crypto.randomUUID()),
+
+  nik: text('nik').notNull().unique(),
+
+  name:     text('name').notNull(),
+  password: text('password').notNull(),
+
   /**
-   * roleId / employeeTypeId are FKs into the lookup tables in lookups.ts.
-   * Use `restrict` semantics: a role/type cannot be deleted while users still
-   * reference it. Admins should soft-disable via isActive instead.
+   * roleId / employeeTypeId are FKs into lookup tables in lookups.ts.
+   * Admins should soft-disable roles/types via isActive instead of deleting.
    */
   roleId:         integer('role_id').references(() => userRoles.id).notNull(),
   employeeTypeId: integer('employee_type_id').references(() => employeeTypes.id),
-  homeStoreId:    integer('home_store_id').references(() => stores.id),
-  areaId:         integer('area_id').references(() => areas.id),
-  createdAt:      timestamp('created_at').defaultNow().notNull(),
-  updatedAt:      timestamp('updated_at').defaultNow().notNull(),
-});
+
+  /**
+   * Current/default assignment.
+   * This is safe to update when a user moves store.
+   * Old schedule/task rows keep their own storeId snapshots.
+   */
+  homeStoreId: integer('home_store_id').references(() => stores.id),
+  areaId:      integer('area_id').references(() => areas.id),
+
+  isActive: boolean('is_active').default(true).notNull(),
+
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => ({
+  nikIdx: index('users_nik_idx').on(t.nik),
+  homeStoreIdx: index('users_home_store_idx').on(t.homeStoreId),
+  areaIdx: index('users_area_idx').on(t.areaId),
+}));
+
+// ─── User Store / Role Assignment History ─────────────────────────────────────
+//
+// This table keeps movement history when an employee moves from one store
+// to another or changes role/type.
+// The current user table keeps the latest active assignment,
+// while this table preserves the timeline.
+
+export const userStoreAssignments = pgTable('user_store_assignments', {
+  id: serial('id').primaryKey(),
+
+  userId: text('user_id')
+    .references(() => users.id, { onDelete: 'cascade' })
+    .notNull(),
+
+  storeId: integer('store_id')
+    .references(() => stores.id)
+    .notNull(),
+
+  areaId: integer('area_id')
+    .references(() => areas.id),
+
+  roleId: integer('role_id')
+    .references(() => userRoles.id)
+    .notNull(),
+
+  employeeTypeId: integer('employee_type_id')
+    .references(() => employeeTypes.id),
+
+  effectiveFrom: timestamp('effective_from').defaultNow().notNull(),
+  effectiveTo: timestamp('effective_to'),
+
+  isActive: boolean('is_active').default(true).notNull(),
+
+  assignedBy: text('assigned_by').references(() => users.id),
+  notes: text('notes'),
+
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => ({
+  userActiveIdx: index('user_store_assignments_user_active_idx').on(t.userId, t.isActive),
+  storeActiveIdx: index('user_store_assignments_store_active_idx').on(t.storeId, t.isActive),
+}));
 
 // ─── Monthly Schedule ─────────────────────────────────────────────────────────
 
@@ -129,14 +199,12 @@ export const breakSessions = pgTable('break_sessions', {
   breakType:    breakTypeEnum('break_type').notNull(),
   breakOutTime: timestamp('break_out_time').notNull(),
   returnTime:   timestamp('return_time'),
-  // ─── Cash tracking ───────────────────────────────────────────────────────
-  // cashOut: amount the employee takes with them when leaving for break (required)
-  // cashIn:  amount the employee brings back when returning from break (required on return)
-  cashOut:      decimal('cash_out', { precision: 12, scale: 2 }).notNull(),
-  cashIn:       decimal('cash_in',  { precision: 12, scale: 2 }),
-  // ─────────────────────────────────────────────────────────────────────────
-  createdAt:    timestamp('created_at').defaultNow().notNull(),
-  updatedAt:    timestamp('updated_at').defaultNow().notNull(),
+
+  cashOut: decimal('cash_out', { precision: 12, scale: 2 }).notNull(),
+  cashIn:  decimal('cash_in',  { precision: 12, scale: 2 }),
+
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
 });
 
 // ─── Petty Cash & Reports ─────────────────────────────────────────────────────
@@ -189,6 +257,8 @@ export type Area                    = typeof areas.$inferSelect;
 export type Store                   = typeof stores.$inferSelect;
 export type User                    = typeof users.$inferSelect;
 export type NewUser                 = typeof users.$inferInsert;
+export type UserStoreAssignment     = typeof userStoreAssignments.$inferSelect;
+export type NewUserStoreAssignment  = typeof userStoreAssignments.$inferInsert;
 export type MonthlySchedule         = typeof monthlySchedules.$inferSelect;
 export type NewMonthlySchedule      = typeof monthlySchedules.$inferInsert;
 export type MonthlyScheduleEntry    = typeof monthlyScheduleEntries.$inferSelect;

@@ -170,7 +170,7 @@ export async function submitGrooming(
       .where(eq(groomingTasks.scheduleId, input.scheduleId))
       .limit(1);
 
-    if (existing?.status === 'completed' || existing?.status === 'verified')
+    if (existing?.status === 'completed')
       return { success: false, error: 'Task grooming sudah disubmit.' };
 
     const [schedule] = await db
@@ -257,7 +257,7 @@ export async function autoSaveGrooming(
       .limit(1);
 
     if (!existing) return { success: false, error: 'Grooming task not found.' };
-    if (existing.status === 'completed' || existing.status === 'verified')
+    if (existing.status === 'completed')
       return { success: true, data: { saved: [] } };
 
     const update: Record<string, unknown> = { updatedAt: new Date() };

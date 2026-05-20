@@ -322,7 +322,7 @@ export async function autoSaveMarketingCheck(
       (input.storeId ? await findByStoreDate(input.storeId, new Date()) : null);
 
     if (!existing) return { success: false, error: 'Marketing Check task tidak ditemukan.' };
-    if (existing.status === 'completed' || existing.status === 'verified') {
+    if (existing.status === 'completed') {
       return { success: true, data: { saved: [], task: existing } };
     }
 
@@ -396,7 +396,7 @@ export async function submitMarketingCheck(
       (await findByStoreDate(input.storeId, new Date()));
 
     if (!existing) return { success: false, error: 'Marketing Check task tidak ditemukan.' };
-    if (existing.status === 'verified') return { success: false, error: 'Marketing Check sudah diverifikasi.' };
+    if (existing?.status === 'completed') return { success: false, error: 'Marketing Check sudah selesai.' };
 
     const now = new Date();
     const update = {

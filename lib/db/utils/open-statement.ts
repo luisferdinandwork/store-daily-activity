@@ -209,7 +209,7 @@ export async function submitOpenStatement(
       .where(eq(openStatementTasks.scheduleId, input.scheduleId))
       .limit(1);
     if (!task) return { success: false, error: 'Task tidak ditemukan.' };
-    if (['completed', 'verified', 'rejected'].includes(task.status ?? ''))
+    if (['completed'].includes(task.status ?? ''))
       return { success: false, error: 'Task sudah final.' };
     if (task.expectedAmount == null)
       return { success: false, error: 'Expected data belum di-fetch. Buka task ulang untuk fetch.' };
@@ -275,7 +275,7 @@ export async function autoSaveOpenStatement(
       .where(eq(openStatementTasks.scheduleId, scheduleId))
       .limit(1);
     if (!existing) return { success: false, error: 'Task not found.' };
-    if (['completed', 'verified', 'rejected'].includes(existing.status ?? ''))
+    if (['completed'].includes(existing.status ?? ''))
       return { success: true, data: { saved: [] } };
 
     const update: Record<string, unknown> = { updatedAt: new Date() };
@@ -345,40 +345,4 @@ export async function materialiseOpenStatementTask(
   });
 
   return 'created';
-}
-
-// ─── Verify ───────────────────────────────────────────────────────────────────
-
-export async function verifyOpenStatement(input: {
-  taskId: number; actorId: string; storeId: number; approve: boolean; notes?: string;
-}): Promise<TaskResult<void>> {
-  try {
-    const { canManageSchedule } = await import('@/lib/schedule-utils');
-    const auth = await canManageSchedule(input.actorId, input.storeId);
-    if (!auth.allowed) return { success: false, error: auth.reason! };
-
-    const [row] = await db
-      .select({ id: openStatementTasks.id, status: openStatementTasks.status })
-      .from(openStatementTasks)
-      .where(eq(openStatementTasks.id, input.taskId))
-      .limit(1);
-    if (!row) return { success: false, error: 'Task tidak ditemukan.' };
-    if (row.status !== 'completed')
-      return { success: false, error: `Tidak bisa verifikasi task dengan status "${row.status}".` };
-
-    await db
-      .update(openStatementTasks)
-      .set({
-        status:     input.approve ? 'verified' : 'rejected',
-        verifiedBy: input.actorId,
-        verifiedAt: new Date(),
-        notes:      input.notes,
-        updatedAt:  new Date(),
-      })
-      .where(eq(openStatementTasks.id, input.taskId));
-
-    return { success: true, data: undefined };
-  } catch (err) {
-    return { success: false, error: `verifyOpenStatement: ${err}` };
-  }
 }

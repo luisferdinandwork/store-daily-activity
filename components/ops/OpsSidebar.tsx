@@ -1,5 +1,9 @@
 'use client';
 // components/ops/OpsSidebar.tsx
+//
+// Main change:
+// - Added /ops/users to People section.
+// - Footer now displays NIK instead of email.
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
@@ -31,7 +35,6 @@ import {
 
 import { cn } from '@/lib/utils';
 
-// Task Progress is its own item, separate from the collapsible task list
 const TASK_PROGRESS_ITEM = {
   href: '/ops/tasks/progress',
   label: 'Task Progress',
@@ -39,7 +42,6 @@ const TASK_PROGRESS_ITEM = {
   key: 'progress',
 };
 
-// The collapsible task type items (does NOT include Task Progress)
 const TASK_ITEMS = [
   { href: '/ops/tasks/store-front',        label: 'Store Front',        icon: Store,         key: 'store-front' },
   { href: '/ops/tasks/store-opening',      label: 'Store Opening',      icon: DoorClosed,    key: 'store-opening' },
@@ -66,6 +68,7 @@ const NAV = [
   {
     section: 'People',
     items: [
+      { href: '/ops/users',      label: 'Users',      icon: UsersRound },
       { href: '/ops/schedules',  label: 'Schedules',  icon: Calendar },
       { href: '/ops/attendance', label: 'Attendance', icon: UserCheck },
     ],
@@ -87,7 +90,6 @@ export default function OpsSidebar({ storeName = 'Store Manager' }: Props) {
   const pathname = usePathname();
   const { data: session } = useSession();
 
-  // The monitor dropdown starts open when on any task sub-page (but NOT progress)
   const isOnTaskPage = pathname.startsWith('/ops/tasks') && pathname !== TASK_PROGRESS_ITEM.href;
   const [tasksOpen, setTasksOpen] = useState(isOnTaskPage);
   const [pendingCounts, setPendingCounts] = useState<Record<string, number>>({});
@@ -111,6 +113,7 @@ export default function OpsSidebar({ storeName = 'Store Manager' }: Props) {
         const res = await fetch(`/api/ops/tasks/pending-counts?date=${todayKey}`, {
           cache: 'no-store',
         });
+
         if (res.ok) {
           const data = await res.json();
           setPendingCounts(data.counts || {});
@@ -122,12 +125,12 @@ export default function OpsSidebar({ storeName = 'Store Manager' }: Props) {
 
     fetchCounts();
     intervalId = setInterval(fetchCounts, 5 * 60 * 1000);
+
     return () => clearInterval(intervalId);
   }, []);
 
   return (
     <aside className="flex h-screen w-64 flex-col border-r border-border bg-card">
-      {/* Brand */}
       <div className="border-b border-border px-5 py-4">
         <div className="flex items-center gap-2">
           <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary">
@@ -141,7 +144,6 @@ export default function OpsSidebar({ storeName = 'Store Manager' }: Props) {
       </div>
 
       <nav className="flex-1 overflow-y-auto px-3 py-4">
-        {/* Overview section */}
         <div className="mb-5">
           <p className="mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
             Overview
@@ -170,13 +172,11 @@ export default function OpsSidebar({ storeName = 'Store Manager' }: Props) {
           </ul>
         </div>
 
-        {/* ── Tasks group ── */}
         <div className="mb-5">
           <p className="mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
             Tasks
           </p>
 
-          {/* 1. Task Progress — standalone link, NOT inside the dropdown */}
           <div className="mb-1">
             <Link
               href={TASK_PROGRESS_ITEM.href}
@@ -189,16 +189,12 @@ export default function OpsSidebar({ storeName = 'Store Manager' }: Props) {
             >
               <TASK_PROGRESS_ITEM.icon className="h-4 w-4 flex-shrink-0" />
               <span className="flex-1">{TASK_PROGRESS_ITEM.label}</span>
-              {isActive(TASK_PROGRESS_ITEM.href)
-                ? <ChevronRight className="h-3 w-3 opacity-60" />
-                : null}
+              {isActive(TASK_PROGRESS_ITEM.href) ? <ChevronRight className="h-3 w-3 opacity-60" /> : null}
             </Link>
           </div>
 
-          {/* Subtle divider */}
-          <div className="my-1.5 mx-2.5 border-t border-border/50" />
+          <div className="mx-2.5 my-1.5 border-t border-border/50" />
 
-          {/* 2. Task Monitor collapsible — all the individual task types */}
           <button
             type="button"
             onClick={() => setTasksOpen((v) => !v)}
@@ -213,9 +209,7 @@ export default function OpsSidebar({ storeName = 'Store Manager' }: Props) {
             <span className="min-w-0 flex-1 truncate">
               {taskSectionActive ? activeTaskLabel : 'Task Monitor'}
             </span>
-            <ChevronDown
-              className={cn('h-3.5 w-3.5 transition-transform', tasksOpen && 'rotate-180')}
-            />
+            <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', tasksOpen && 'rotate-180')} />
           </button>
 
           {tasksOpen && (
@@ -223,6 +217,7 @@ export default function OpsSidebar({ storeName = 'Store Manager' }: Props) {
               {TASK_ITEMS.map(({ href, label, icon: Icon, key }) => {
                 const active = isActive(href);
                 const count = pendingCounts[key] || 0;
+
                 return (
                   <li key={href}>
                     <Link
@@ -255,7 +250,6 @@ export default function OpsSidebar({ storeName = 'Store Manager' }: Props) {
           )}
         </div>
 
-        {/* People + Operations */}
         {NAV.slice(1).map(({ section, items }) => (
           <div key={section} className="mb-5">
             <p className="mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
@@ -264,6 +258,7 @@ export default function OpsSidebar({ storeName = 'Store Manager' }: Props) {
             <ul className="space-y-0.5">
               {items.map(({ href, label, icon: Icon, exact }) => {
                 const active = isActive(href, exact);
+
                 return (
                   <li key={href}>
                     <Link
@@ -287,7 +282,6 @@ export default function OpsSidebar({ storeName = 'Store Manager' }: Props) {
         ))}
       </nav>
 
-      {/* User footer */}
       <div className="border-t border-border px-3 py-3">
         <div className="flex items-center gap-2.5 rounded-md px-2.5 py-2">
           <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-secondary text-xs font-semibold text-secondary-foreground">
@@ -298,7 +292,7 @@ export default function OpsSidebar({ storeName = 'Store Manager' }: Props) {
               {session?.user?.name ?? 'OPS Manager'}
             </p>
             <p className="truncate text-[10px] text-muted-foreground">
-              {session?.user?.email ?? 'ops@store.com'}
+              {session?.user?.nik ? `NIK ${session.user.nik}` : 'OPS user'}
             </p>
           </div>
           <button

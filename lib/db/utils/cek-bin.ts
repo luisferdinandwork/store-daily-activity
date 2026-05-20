@@ -342,8 +342,8 @@ export async function submitCekBin(input: SubmitCekBinInput): Promise<TaskResult
 
     let task = await findCekBinByStoreDate(input.storeId, now);
 
-    if (task?.status === 'verified') {
-      return { success: false, error: 'Cek BIN sudah diverifikasi.' };
+    if (task?.status === 'completed') {
+      return { success: false, error: 'Cek BIN sudah selesai.' };
     }
 
     const values = {
@@ -393,7 +393,7 @@ export async function autoSaveCekBin(
   try {
     const [task] = await db.select().from(cekBinTasks).where(eq(cekBinTasks.id, taskId)).limit(1);
     if (!task) return { success: false, error: 'Task Cek BIN tidak ditemukan.' };
-    if (task.status === 'completed' || task.status === 'verified') return { success: true, data: { saved: [] } };
+    if (task.status === 'completed') return { success: true, data: { saved: [] } };
 
     const saved: string[] = [];
     const update: Partial<typeof cekBinTasks.$inferInsert> = { updatedAt: new Date() };

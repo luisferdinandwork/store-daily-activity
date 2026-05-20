@@ -374,7 +374,7 @@ export async function submitSetoran(
 
     const existing = ensured.data;
 
-    if (existing.status === 'completed' || existing.status === 'verified') {
+    if (existing.status === 'completed') {
       return { success: false, error: 'Setoran hari ini sudah disubmit dan tidak bisa diubah lagi.' };
     }
 
@@ -500,7 +500,7 @@ export async function autoSaveSetoran(
 
     const existing = ensured.data;
 
-    if (existing.status === 'completed' || existing.status === 'verified') {
+    if (existing.status === 'completed') {
       return { success: true, data: { saved: [] } };
     }
 

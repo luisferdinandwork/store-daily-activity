@@ -1,5 +1,5 @@
 {
-  "id": "8c069129-1ea2-44f2-9748-5e4a7f096ebc",
+  "id": "19426e86-ac2c-48e4-a8c1-490a06f11f41",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -1166,6 +1166,223 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.user_store_assignments": {
+      "name": "user_store_assignments",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "store_id": {
+          "name": "store_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "area_id": {
+          "name": "area_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "role_id": {
+          "name": "role_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "employee_type_id": {
+          "name": "employee_type_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "effective_from": {
+          "name": "effective_from",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "effective_to": {
+          "name": "effective_to",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "is_active": {
+          "name": "is_active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "assigned_by": {
+          "name": "assigned_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "notes": {
+          "name": "notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "user_store_assignments_user_active_idx": {
+          "name": "user_store_assignments_user_active_idx",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "is_active",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "user_store_assignments_store_active_idx": {
+          "name": "user_store_assignments_store_active_idx",
+          "columns": [
+            {
+              "expression": "store_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "is_active",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "user_store_assignments_user_id_users_id_fk": {
+          "name": "user_store_assignments_user_id_users_id_fk",
+          "tableFrom": "user_store_assignments",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "user_store_assignments_store_id_stores_id_fk": {
+          "name": "user_store_assignments_store_id_stores_id_fk",
+          "tableFrom": "user_store_assignments",
+          "tableTo": "stores",
+          "columnsFrom": [
+            "store_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "user_store_assignments_area_id_areas_id_fk": {
+          "name": "user_store_assignments_area_id_areas_id_fk",
+          "tableFrom": "user_store_assignments",
+          "tableTo": "areas",
+          "columnsFrom": [
+            "area_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "user_store_assignments_role_id_user_roles_id_fk": {
+          "name": "user_store_assignments_role_id_user_roles_id_fk",
+          "tableFrom": "user_store_assignments",
+          "tableTo": "user_roles",
+          "columnsFrom": [
+            "role_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "user_store_assignments_employee_type_id_employee_types_id_fk": {
+          "name": "user_store_assignments_employee_type_id_employee_types_id_fk",
+          "tableFrom": "user_store_assignments",
+          "tableTo": "employee_types",
+          "columnsFrom": [
+            "employee_type_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "user_store_assignments_assigned_by_users_id_fk": {
+          "name": "user_store_assignments_assigned_by_users_id_fk",
+          "tableFrom": "user_store_assignments",
+          "tableTo": "users",
+          "columnsFrom": [
+            "assigned_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.users": {
       "name": "users",
       "schema": "",
@@ -1176,14 +1393,14 @@
           "primaryKey": true,
           "notNull": true
         },
-        "name": {
-          "name": "name",
+        "nik": {
+          "name": "nik",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "email": {
-          "name": "email",
+        "name": {
+          "name": "name",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -1218,6 +1435,13 @@
           "primaryKey": false,
           "notNull": false
         },
+        "is_active": {
+          "name": "is_active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
@@ -1233,7 +1457,53 @@
           "default": "now()"
         }
       },
-      "indexes": {},
+      "indexes": {
+        "users_nik_idx": {
+          "name": "users_nik_idx",
+          "columns": [
+            {
+              "expression": "nik",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "users_home_store_idx": {
+          "name": "users_home_store_idx",
+          "columns": [
+            {
+              "expression": "home_store_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "users_area_idx": {
+          "name": "users_area_idx",
+          "columns": [
+            {
+              "expression": "area_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {
         "users_role_id_user_roles_id_fk": {
           "name": "users_role_id_user_roles_id_fk",
@@ -1290,11 +1560,11 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
-        "users_email_unique": {
-          "name": "users_email_unique",
+        "users_nik_unique": {
+          "name": "users_nik_unique",
           "nullsNotDistinct": false,
           "columns": [
-            "email"
+            "nik"
           ]
         }
       },
@@ -5143,6 +5413,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "five_r_area_kasir_photo_actors": {
+          "name": "five_r_area_kasir_photo_actors",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "five_r_depan_by": {
           "name": "five_r_depan_by",
           "type": "text",
@@ -5152,6 +5428,12 @@
         "five_r_depan_at": {
           "name": "five_r_depan_at",
           "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "five_r_area_depan_photo_actors": {
+          "name": "five_r_area_depan_photo_actors",
+          "type": "text",
           "primaryKey": false,
           "notNull": false
         },
@@ -5167,6 +5449,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "five_r_area_kanan_photo_actors": {
+          "name": "five_r_area_kanan_photo_actors",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "five_r_kiri_by": {
           "name": "five_r_kiri_by",
           "type": "text",
@@ -5179,6 +5467,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "five_r_area_kiri_photo_actors": {
+          "name": "five_r_area_kiri_photo_actors",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "five_r_gudang_by": {
           "name": "five_r_gudang_by",
           "type": "text",
@@ -5188,6 +5482,12 @@
         "five_r_gudang_at": {
           "name": "five_r_gudang_at",
           "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "five_r_area_gudang_photo_actors": {
+          "name": "five_r_area_gudang_photo_actors",
+          "type": "text",
           "primaryKey": false,
           "notNull": false
         },
@@ -5823,9 +6123,7 @@
       "schema": "public",
       "values": [
         "draft",
-        "submitted",
-        "verified",
-        "rejected"
+        "submitted"
       ]
     },
     "public.task_status": {
@@ -5835,9 +6133,7 @@
         "pending",
         "in_progress",
         "completed",
-        "discrepancy",
-        "verified",
-        "rejected"
+        "discrepancy"
       ]
     },
     "public.tx_type": {

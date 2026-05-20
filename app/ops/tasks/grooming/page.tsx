@@ -1,5 +1,5 @@
-'use client';
 // app/ops/tasks/grooming/page.tsx
+'use client';
 
 import { useEffect, useMemo, useState } from 'react';
 import {
@@ -20,7 +20,7 @@ import { cn } from '@/lib/utils';
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type Period = 'daily' | 'weekly' | 'monthly';
-type Status = 'pending' | 'in_progress' | 'completed' | 'verified' | 'rejected' | 'discrepancy';
+type Status = 'pending' | 'in_progress' | 'completed' | 'discrepancy';
 type HealthFilter = 'all' | 'done' | 'pending' | 'issues';
 type SortKey = 'name' | 'progress_low' | 'progress_high' | 'most_pending';
 
@@ -51,8 +51,8 @@ interface GroomingTaskRecord {
   selfiePhotoCount: number;
   notes: string | null;
   completedAt: string | null;
-  verifiedBy: string | null;
-  verifiedAt: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
 }
 
 interface GroomingStoreRow {
@@ -64,10 +64,9 @@ interface GroomingStoreRow {
     totalEmployees: number;
     totalTasks: number;
     completedTasks: number;
-    verifiedTasks: number;
     pendingTasks: number;
     inProgressTasks: number;
-    rejectedTasks: number;
+    discrepancyTasks: number;
     completionRate: number;
     averageProgress: number;
     statusCount: Record<string, number>;
@@ -87,10 +86,9 @@ interface GroomingMonitorResponse {
       totalEmployees: number;
       totalTasks: number;
       completedTasks: number;
-      verifiedTasks: number;
       pendingTasks: number;
       inProgressTasks: number;
-      rejectedTasks: number;
+      discrepancyTasks: number;
       completionRate: number;
       averageProgress: number;
     };
@@ -100,11 +98,10 @@ interface GroomingMonitorResponse {
 
 // ─── Shared design tokens ─────────────────────────────────────────────────────
 
-// Single source of truth for progress → color mapping used across all OPS pages
 export function progressColor(pct: number): string {
-  if (pct >= 80) return '#4f46e5'; // indigo-600
-  if (pct >= 40) return '#f59e0b'; // amber-500
-  return '#6366f1';                 // indigo-400 (soft indigo for low, not alarming)
+  if (pct >= 80) return '#4f46e5';
+  if (pct >= 40) return '#f59e0b';
+  return '#6366f1';
 }
 
 export function progressTextClass(pct: number): string {
@@ -139,7 +136,7 @@ function formatDateTime(value: string | null): string {
 function healthOf(store: GroomingStoreRow): HealthFilter {
   const s = store.summary;
   if (s.totalTasks === 0) return 'pending';
-  if (s.rejectedTasks > 0) return 'issues';
+  if (s.discrepancyTasks > 0) return 'issues';
   if (s.pendingTasks + s.inProgressTasks > 0) return 'pending';
   return 'done';
 }
@@ -192,8 +189,8 @@ export default function OpsGroomingPage() {
         case 'progress_low':  return a.summary.averageProgress - b.summary.averageProgress;
         case 'progress_high': return b.summary.averageProgress - a.summary.averageProgress;
         case 'most_pending': {
-          const pa = a.summary.pendingTasks + a.summary.inProgressTasks + a.summary.rejectedTasks;
-          const pb = b.summary.pendingTasks + b.summary.inProgressTasks + b.summary.rejectedTasks;
+          const pa = a.summary.pendingTasks + a.summary.inProgressTasks + a.summary.discrepancyTasks;
+          const pb = b.summary.pendingTasks + b.summary.inProgressTasks + b.summary.discrepancyTasks;
           return pb !== pa ? pb - pa : a.name.localeCompare(b.name);
         }
       }
@@ -243,8 +240,8 @@ export default function OpsGroomingPage() {
         {summary && (
           <section className="grid gap-3 sm:grid-cols-3">
             <SummaryTile label="Avg Progress" value={`${summary.averageProgress}%`} helper={`${summary.totalStores} stores · ${summary.totalEmployees} employees`} emphasis />
-            <SummaryTile label="Selesai" value={summary.completedTasks + summary.verifiedTasks} helper={`dari ${summary.totalTasks} task`} accent="#4f46e5" />
-            <SummaryTile label="Perlu Tindakan" value={summary.pendingTasks + summary.inProgressTasks + summary.rejectedTasks} helper={summary.rejectedTasks > 0 ? `${summary.rejectedTasks} ditolak` : 'Pending + in-progress'} accent="#f59e0b" warning />
+            <SummaryTile label="Selesai" value={summary.completedTasks} helper={`dari ${summary.totalTasks} task`} accent="#4f46e5" />
+            <SummaryTile label="Perlu Tindakan" value={summary.pendingTasks + summary.inProgressTasks + summary.discrepancyTasks} helper={summary.discrepancyTasks > 0 ? `${summary.discrepancyTasks} discrepancy` : 'Pending + in-progress'} accent="#f59e0b" warning />
           </section>
         )}
 
@@ -275,7 +272,7 @@ export default function OpsGroomingPage() {
               renderRow={(store, active) => {
                 const rate    = store.summary.averageProgress;
                 const pending = store.summary.pendingTasks + store.summary.inProgressTasks;
-                const rejected = store.summary.rejectedTasks;
+                const discrepancy = store.summary.discrepancyTasks;
                 return (
                   <>
                     <StoreIcon active={active} />
@@ -287,8 +284,8 @@ export default function OpsGroomingPage() {
                       <ProgressBar pct={rate} className="mt-1.5" />
                       <p className="mt-1.5 text-[11px] font-semibold text-slate-500">
                         {store.summary.totalEmployees} karyawan
-                        {pending  > 0 && <span className="text-amber-600"> · {pending} pending</span>}
-                        {rejected > 0 && <span className="text-indigo-500"> · {rejected} ditolak</span>}
+                        {pending > 0 && <span className="text-amber-600"> · {pending} pending</span>}
+                        {discrepancy > 0 && <span className="text-indigo-500"> · {discrepancy} discrepancy</span>}
                       </p>
                     </div>
                   </>
@@ -313,7 +310,7 @@ export default function OpsGroomingPage() {
 
 function GroomingDetail({ store }: { store: GroomingStoreRow }) {
   const rate    = store.summary.averageProgress;
-  const done    = store.summary.completedTasks + store.summary.verifiedTasks;
+  const done    = store.summary.completedTasks;
   const pending = store.summary.pendingTasks + store.summary.inProgressTasks;
 
   return (
@@ -327,8 +324,8 @@ function GroomingDetail({ store }: { store: GroomingStoreRow }) {
             <span className="text-indigo-600">{done} selesai</span>
             <span className="text-slate-300"> · </span>
             <span className={pending > 0 ? 'text-amber-600' : 'text-slate-400'}>{pending} pending</span>
-            {store.summary.rejectedTasks > 0 && (
-              <><span className="text-slate-300"> · </span><span className="text-indigo-500">{store.summary.rejectedTasks} ditolak</span></>
+            {store.summary.discrepancyTasks > 0 && (
+              <><span className="text-slate-300"> · </span><span className="text-indigo-500">{store.summary.discrepancyTasks} discrepancy</span></>
             )}
             <span className="text-slate-400"> dari {store.summary.totalEmployees}</span>
           </p>
@@ -415,7 +412,6 @@ function EmployeeRow({ task }: { task: GroomingTaskRecord }) {
           <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-500">
             {task.selfiePhotoCount > 0 && <span>{task.selfiePhotoCount} foto selfie</span>}
             {task.completedAt && <span>Selesai {formatDateTime(task.completedAt)}</span>}
-            {task.verifiedAt && <span className="text-indigo-600">Diverifikasi {formatDateTime(task.verifiedAt)}</span>}
           </div>
           {task.notes && (
             <div className="mt-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
@@ -429,8 +425,6 @@ function EmployeeRow({ task }: { task: GroomingTaskRecord }) {
 }
 
 // ─── Shared OPS UI building blocks ────────────────────────────────────────────
-// These are extracted so Store Opening and Setoran pages can import the same
-// primitives and stay visually identical.
 
 export function Toolbar({ period, date, storeId, search, storeOptions, onPeriod, onDate, onStore, onSearch }: {
   period: string; date: string; storeId: string; search: string;

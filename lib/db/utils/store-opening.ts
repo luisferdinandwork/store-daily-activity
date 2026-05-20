@@ -623,7 +623,7 @@ export async function submitStoreOpening(
     const now = new Date();
     const existing = await findRow(input.taskId, input.storeId, now);
 
-    if (existing?.status === "completed" || existing?.status === "verified") {
+    if (existing?.status === "completed") {
       return { success: false, error: "Store opening task sudah disubmit." };
     }
 
@@ -688,7 +688,7 @@ export async function autoSaveStoreOpening(
 
     if (!existing)
       return { success: false, error: "Store opening task not found." };
-    if (existing.status === "completed" || existing.status === "verified") {
+    if (existing.status === "completed") {
       return { success: true, data: { saved: [] } };
     }
 

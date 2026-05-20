@@ -256,8 +256,8 @@ export async function submitVmChecklist(
       .where(eq(vmChecklistTasks.scheduleId, input.scheduleId))
       .limit(1);
 
-    if (existing?.status === 'verified') {
-      return { success: false, error: 'VM Checklist task sudah diverifikasi.' };
+    if (existing?.status === 'completed') {
+      return { success: false, error: 'VM Checklist task sudah selesai.' };
     }
 
     const now = new Date();

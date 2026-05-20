@@ -10,10 +10,8 @@ import {
   Loader2,
   RefreshCw,
   Search,
-  ShieldCheck,
   Store,
   UserCheck,
-  XCircle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -25,10 +23,10 @@ import { cn } from '@/lib/utils';
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type Period = 'daily' | 'weekly' | 'monthly';
-type Status = 'pending' | 'in_progress' | 'completed' | 'verified' | 'rejected' | 'discrepancy';
+type Status = 'pending' | 'in_progress' | 'completed' | 'discrepancy';
 type HealthFilter = 'all' | 'done' | 'pending' | 'issues';
 type SortKey = 'name' | 'completion_low' | 'completion_high' | 'most_pending';
-type Actor = { id: string; name: string | null; email: string | null } | null;
+type Actor = { id: string; name: string | null; nik: string | null } | null;
 
 type FieldRow = {
   label: string;
@@ -45,8 +43,6 @@ type StoreGroup = {
     pending: number;
     inProgress: number;
     completed: number;
-    verified: number;
-    rejected: number;
     discrepancy: number;
     completionRate: number;
     completedFields: number;
@@ -118,14 +114,14 @@ function todayInput() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
-function actorName(actor: Actor) { return actor?.name || actor?.email || actor?.id || '—'; }
+function actorName(actor: Actor) { return actor?.name || actor?.nik || actor?.id || '—'; }
 function formatTime(v: string | null) { if (!v) return '—'; return new Date(v).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'}); }
 function formatDate(v: string | null) { if (!v) return '—'; return new Date(v).toLocaleDateString('id-ID',{day:'2-digit',month:'short',year:'numeric'}); }
 
 function healthOf(g: StoreGroup): HealthFilter {
   const s = g.summary;
   if (s.total === 0) return 'pending';
-  if (s.rejected > 0 || s.discrepancy > 0) return 'issues';
+  if (s.discrepancy > 0) return 'issues';
   if (s.completionRate < 100) return 'pending';
   return 'done';
 }
@@ -135,17 +131,13 @@ function statusStyle(status: Status): string {
     pending:     'bg-amber-50 text-amber-700 border-amber-200',
     in_progress: 'bg-indigo-50 text-indigo-700 border-indigo-200',
     completed:   'bg-indigo-50 text-indigo-700 border-indigo-200',
-    verified:    'bg-indigo-100 text-indigo-800 border-indigo-300',
-    rejected:    'bg-indigo-50 text-indigo-600 border-indigo-200',
     discrepancy: 'bg-amber-50 text-amber-800 border-amber-300',
   } as Record<Status, string>)[status] ?? 'bg-amber-50 text-amber-700 border-amber-200';
 }
 
 function statusIcon(status: Status) {
-  if (status === 'verified')    return <ShieldCheck className="h-3.5 w-3.5" />;
   if (status === 'completed')   return <CheckCircle2 className="h-3.5 w-3.5" />;
   if (status === 'in_progress') return <Clock3 className="h-3.5 w-3.5" />;
-  if (status === 'rejected')    return <XCircle className="h-3.5 w-3.5" />;
   if (status === 'discrepancy') return <AlertCircle className="h-3.5 w-3.5" />;
   return <Clock3 className="h-3.5 w-3.5" />;
 }
@@ -204,8 +196,8 @@ export default function OpsStoreOpeningMonitorPage() {
         case 'completion_low':  return a.summary.completionRate - b.summary.completionRate;
         case 'completion_high': return b.summary.completionRate - a.summary.completionRate;
         case 'most_pending': {
-          const sa = a.summary.totalFields - a.summary.completedFields + a.summary.rejected + a.summary.discrepancy;
-          const sb = b.summary.totalFields - b.summary.completedFields + b.summary.rejected + b.summary.discrepancy;
+          const sa = a.summary.totalFields - a.summary.completedFields + a.summary.discrepancy;
+          const sb = b.summary.totalFields - b.summary.completedFields + b.summary.discrepancy;
           return sb !== sa ? sb - sa : a.store.name.localeCompare(b.store.name);
         }
       }
@@ -324,7 +316,7 @@ export default function OpsStoreOpeningMonitorPage() {
                   const active = group.store.id === activeStoreId;
                   const rate   = group.summary.completionRate;
                   const left   = Math.max(0, group.summary.totalFields - group.summary.completedFields);
-                  const hasIssue = group.summary.rejected > 0 || group.summary.discrepancy > 0;
+                  const hasIssue = group.summary.discrepancy > 0;
                   return (
                     <button key={group.store.id} type="button" onClick={() => setActiveStoreId(group.store.id)}
                       className={cn('flex w-full items-center gap-3 px-4 py-3 text-left transition',
@@ -388,9 +380,9 @@ function StoreOpeningDetail({ group }: { group: StoreGroup }) {
               <span className="text-indigo-600">{group.summary.completedFields} field selesai</span>
               <span className="text-slate-300"> · </span>
               <span className="text-slate-500">{group.summary.totalFields} total</span>
-              {(group.summary.rejected + group.summary.discrepancy) > 0 && (
+              {(group.summary.discrepancy) > 0 && (
                 <><span className="text-slate-300"> · </span>
-                <span className="text-indigo-400">{group.summary.rejected + group.summary.discrepancy} masalah</span></>
+                <span className="text-indigo-400">{group.summary.discrepancy} masalah</span></>
               )}
             </p>
           </div>

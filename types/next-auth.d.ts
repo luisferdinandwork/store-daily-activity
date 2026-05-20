@@ -5,9 +5,10 @@ import { JWT as DefaultJWT } from 'next-auth/jwt';
 declare module 'next-auth' {
   interface User extends DefaultUser {
     id:                string;
-    role:              string;          // role code, e.g. 'ops' — DB-driven now
+    nik:               string;
+    role:              string;
     roleLabel:         string;
-    employeeType:      string | null;   // e.g. 'pic_1' or null
+    employeeType:      string | null;
     employeeTypeLabel: string | null;
     homeStoreId:       number | null;
     areaId:            number | null;
@@ -16,6 +17,7 @@ declare module 'next-auth' {
   interface Session {
     user: {
       id:                string;
+      nik:               string;
       role:              string;
       roleLabel:         string;
       employeeType:      string | null;
@@ -29,6 +31,7 @@ declare module 'next-auth' {
 declare module 'next-auth/jwt' {
   interface JWT extends DefaultJWT {
     id:                string;
+    nik:               string;
     role:              string;
     roleLabel:         string;
     employeeType:      string | null;

@@ -12,12 +12,10 @@ import {
   userRoles,
 } from '@/lib/db/schema';
 
-// ─── Date helpers ───────────────────────────────────────────────────────────
-
 type Period = 'daily' | 'weekly' | 'monthly';
-type Status = 'pending' | 'in_progress' | 'completed' | 'verified' | 'rejected' | 'discrepancy';
+type Status = 'pending' | 'in_progress' | 'completed' | 'discrepancy';
 
-type Actor = { id: string; name: string | null; email: string | null } | null;
+type Actor = { id: string; name: string | null; nik: string | null } | null;
 
 type FieldKey =
   | 'loginPos'
@@ -48,7 +46,7 @@ function endOfDay(d: Date): Date {
 function startOfWeek(d: Date): Date {
   const r = startOfDay(d);
   const day = r.getDay();
-  const diff = day === 0 ? -6 : 1 - day; // Monday start
+  const diff = day === 0 ? -6 : 1 - day;
   r.setDate(r.getDate() + diff);
   return r;
 }
@@ -69,10 +67,7 @@ function getRange(period: Period, dateInput: string | null) {
     return { start, end };
   }
 
-  if (period === 'weekly') {
-    return { start: startOfWeek(base), end: endOfWeek(base) };
-  }
-
+  if (period === 'weekly') return { start: startOfWeek(base), end: endOfWeek(base) };
   return { start: startOfDay(base), end: endOfDay(base) };
 }
 
@@ -95,11 +90,9 @@ function toIso(d: Date | null | undefined): string | null {
 }
 
 function taskStatusFromProgress(rawStatus: Status, done: number, total: number): Status {
-  if (rawStatus === 'verified' || rawStatus === 'completed' || rawStatus === 'rejected' || rawStatus === 'discrepancy') {
-    return rawStatus;
-  }
-
+  if (rawStatus === 'completed' || rawStatus === 'discrepancy') return rawStatus;
   if (done > 0 && done < total) return 'in_progress';
+  if (done >= total && total > 0) return 'completed';
   return rawStatus;
 }
 
@@ -124,8 +117,6 @@ function buildSummary() {
     pending: 0,
     inProgress: 0,
     completed: 0,
-    verified: 0,
-    rejected: 0,
     discrepancy: 0,
     completionRate: 0,
     completedFields: 0,
@@ -138,8 +129,6 @@ function countStatus(summary: ReturnType<typeof buildSummary>, status: Status) {
   if (status === 'pending') summary.pending += 1;
   else if (status === 'in_progress') summary.inProgress += 1;
   else if (status === 'completed') summary.completed += 1;
-  else if (status === 'verified') summary.verified += 1;
-  else if (status === 'rejected') summary.rejected += 1;
   else if (status === 'discrepancy') summary.discrepancy += 1;
 }
 
@@ -148,7 +137,7 @@ async function getCurrentOpsUser(userId: string) {
     .select({
       id: users.id,
       name: users.name,
-      email: users.email,
+      nik: users.nik,
       areaId: users.areaId,
       roleCode: userRoles.code,
     })
@@ -165,7 +154,7 @@ async function getActorMap(userIds: string[]) {
   if (!unique.length) return new Map<string, NonNullable<Actor>>();
 
   const rows = await db
-    .select({ id: users.id, name: users.name, email: users.email })
+    .select({ id: users.id, name: users.name, nik: users.nik })
     .from(users)
     .where(inArray(users.id, unique));
 
@@ -174,10 +163,8 @@ async function getActorMap(userIds: string[]) {
 
 function actorFrom(map: Map<string, NonNullable<Actor>>, id: string | null | undefined): Actor {
   if (!id) return null;
-  return map.get(id) ?? { id, name: null, email: null };
+  return map.get(id) ?? { id, name: null, nik: null };
 }
-
-// ─── API ────────────────────────────────────────────────────────────────────
 
 export async function GET(req: NextRequest) {
   try {
@@ -187,9 +174,7 @@ export async function GET(req: NextRequest) {
     }
 
     const currentUser = await getCurrentOpsUser(session.user.id);
-    if (!currentUser) {
-      return NextResponse.json({ success: false, error: 'User not found.' }, { status: 404 });
-    }
+    if (!currentUser) return NextResponse.json({ success: false, error: 'User not found.' }, { status: 404 });
 
     const isAdmin = currentUser.roleCode === 'admin';
     const isOps = currentUser.roleCode === 'ops';
@@ -212,21 +197,28 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Invalid storeId.' }, { status: 400 });
     }
 
+    const { start, end } = getRange(period, date);
+
     if (isOps && !currentUser.areaId) {
+      const emptySummary = {
+        totalStores: 0,
+        totalTasks: 0,
+        completedTasks: 0,
+        pendingTasks: 0,
+        inProgressTasks: 0,
+        discrepancyTasks: 0,
+        completedFields: 0,
+        totalFields: 0,
+        completionRate: 0,
+      };
+
       return NextResponse.json({
         success: true,
-        range: { start: isoDate(getRange(period, date).start), end: isoDate(getRange(period, date).end) },
+        range: { start: isoDate(start), end: isoDate(end) },
         stores: [],
-        data: {
-          period,
-          range: { start: isoDate(getRange(period, date).start), end: isoDate(getRange(period, date).end) },
-          summary: { totalStores: 0, totalTasks: 0, completionRate: 0 },
-          stores: [],
-        },
+        data: { period, range: { start: isoDate(start), end: isoDate(end) }, summary: emptySummary, stores: [] },
       });
     }
-
-    const { start, end } = getRange(period, date);
 
     const storeConditions = [];
     if (isOps) storeConditions.push(eq(stores.areaId, currentUser.areaId!));
@@ -257,15 +249,14 @@ export async function GET(req: NextRequest) {
         totalStores: 0,
         totalTasks: 0,
         completedTasks: 0,
-        verifiedTasks: 0,
         pendingTasks: 0,
         inProgressTasks: 0,
-        rejectedTasks: 0,
         discrepancyTasks: 0,
         completedFields: 0,
         totalFields: 0,
         completionRate: 0,
       };
+
       return NextResponse.json({
         success: true,
         range: { start: isoDate(start), end: isoDate(end) },
@@ -320,84 +311,18 @@ export async function GET(req: NextRequest) {
         };
 
         const fields: Record<FieldKey, { label: string; done: boolean; actor: Actor; at: string | null; photoCount?: number }> = {
-          loginPos: {
-            label: FIELD_LABELS.loginPos,
-            done: Boolean(t.loginPos),
-            actor: actorFrom(actorMap, t.loginPosBy),
-            at: toIso(t.loginPosAt),
-          },
-          checkAbsenSunfish: {
-            label: FIELD_LABELS.checkAbsenSunfish,
-            done: Boolean(t.checkAbsenSunfish),
-            actor: actorFrom(actorMap, t.checkAbsenSunfishBy),
-            at: toIso(t.checkAbsenSunfishAt),
-          },
-          tarikSohSales: {
-            label: FIELD_LABELS.tarikSohSales,
-            done: Boolean(t.tarikSohSales),
-            actor: actorFrom(actorMap, t.tarikSohSalesBy),
-            at: toIso(t.tarikSohSalesAt),
-          },
-          fiveR: {
-            label: FIELD_LABELS.fiveR,
-            done: Boolean(t.fiveR),
-            actor: actorFrom(actorMap, t.fiveRBy),
-            at: toIso(t.fiveRAt),
-          },
-          fiveRAreaKasir: {
-            label: FIELD_LABELS.fiveRAreaKasir,
-            done: photos.fiveRAreaKasir.length > 0,
-            actor: actorFrom(actorMap, t.fiveRAreaKasirBy),
-            at: toIso(t.fiveRAreaKasirAt),
-            photoCount: photos.fiveRAreaKasir.length,
-          },
-          fiveRAreaDepan: {
-            label: FIELD_LABELS.fiveRAreaDepan,
-            done: photos.fiveRAreaDepan.length > 0,
-            actor: actorFrom(actorMap, t.fiveRAreaDepanBy),
-            at: toIso(t.fiveRAreaDepanAt),
-            photoCount: photos.fiveRAreaDepan.length,
-          },
-          fiveRAreaKanan: {
-            label: FIELD_LABELS.fiveRAreaKanan,
-            done: photos.fiveRAreaKanan.length > 0,
-            actor: actorFrom(actorMap, t.fiveRAreaKananBy),
-            at: toIso(t.fiveRAreaKananAt),
-            photoCount: photos.fiveRAreaKanan.length,
-          },
-          fiveRAreaKiri: {
-            label: FIELD_LABELS.fiveRAreaKiri,
-            done: photos.fiveRAreaKiri.length > 0,
-            actor: actorFrom(actorMap, t.fiveRAreaKiriBy),
-            at: toIso(t.fiveRAreaKiriAt),
-            photoCount: photos.fiveRAreaKiri.length,
-          },
-          fiveRAreaGudang: {
-            label: FIELD_LABELS.fiveRAreaGudang,
-            done: photos.fiveRAreaGudang.length > 0,
-            actor: actorFrom(actorMap, t.fiveRAreaGudangBy),
-            at: toIso(t.fiveRAreaGudangAt),
-            photoCount: photos.fiveRAreaGudang.length,
-          },
-          cekLamp: {
-            label: FIELD_LABELS.cekLamp,
-            done: Boolean(t.cekLamp),
-            actor: actorFrom(actorMap, t.cekLampBy),
-            at: toIso(t.cekLampAt),
-          },
-          cekSoundSystem: {
-            label: FIELD_LABELS.cekSoundSystem,
-            done: Boolean(t.cekSoundSystem),
-            actor: actorFrom(actorMap, t.cekSoundSystemBy),
-            at: toIso(t.cekSoundSystemAt),
-          },
-          cashDrawer: {
-            label: FIELD_LABELS.cashDrawer,
-            done: photos.cashDrawer.length > 0,
-            actor: actorFrom(actorMap, t.cashDrawerBy),
-            at: toIso(t.cashDrawerAt),
-            photoCount: photos.cashDrawer.length,
-          },
+          loginPos: { label: FIELD_LABELS.loginPos, done: Boolean(t.loginPos), actor: actorFrom(actorMap, t.loginPosBy), at: toIso(t.loginPosAt) },
+          checkAbsenSunfish: { label: FIELD_LABELS.checkAbsenSunfish, done: Boolean(t.checkAbsenSunfish), actor: actorFrom(actorMap, t.checkAbsenSunfishBy), at: toIso(t.checkAbsenSunfishAt) },
+          tarikSohSales: { label: FIELD_LABELS.tarikSohSales, done: Boolean(t.tarikSohSales), actor: actorFrom(actorMap, t.tarikSohSalesBy), at: toIso(t.tarikSohSalesAt) },
+          fiveR: { label: FIELD_LABELS.fiveR, done: Boolean(t.fiveR), actor: actorFrom(actorMap, t.fiveRBy), at: toIso(t.fiveRAt) },
+          fiveRAreaKasir: { label: FIELD_LABELS.fiveRAreaKasir, done: photos.fiveRAreaKasir.length > 0, actor: actorFrom(actorMap, t.fiveRAreaKasirBy), at: toIso(t.fiveRAreaKasirAt), photoCount: photos.fiveRAreaKasir.length },
+          fiveRAreaDepan: { label: FIELD_LABELS.fiveRAreaDepan, done: photos.fiveRAreaDepan.length > 0, actor: actorFrom(actorMap, t.fiveRAreaDepanBy), at: toIso(t.fiveRAreaDepanAt), photoCount: photos.fiveRAreaDepan.length },
+          fiveRAreaKanan: { label: FIELD_LABELS.fiveRAreaKanan, done: photos.fiveRAreaKanan.length > 0, actor: actorFrom(actorMap, t.fiveRAreaKananBy), at: toIso(t.fiveRAreaKananAt), photoCount: photos.fiveRAreaKanan.length },
+          fiveRAreaKiri: { label: FIELD_LABELS.fiveRAreaKiri, done: photos.fiveRAreaKiri.length > 0, actor: actorFrom(actorMap, t.fiveRAreaKiriBy), at: toIso(t.fiveRAreaKiriAt), photoCount: photos.fiveRAreaKiri.length },
+          fiveRAreaGudang: { label: FIELD_LABELS.fiveRAreaGudang, done: photos.fiveRAreaGudang.length > 0, actor: actorFrom(actorMap, t.fiveRAreaGudangBy), at: toIso(t.fiveRAreaGudangAt), photoCount: photos.fiveRAreaGudang.length },
+          cekLamp: { label: FIELD_LABELS.cekLamp, done: Boolean(t.cekLamp), actor: actorFrom(actorMap, t.cekLampBy), at: toIso(t.cekLampAt) },
+          cekSoundSystem: { label: FIELD_LABELS.cekSoundSystem, done: Boolean(t.cekSoundSystem), actor: actorFrom(actorMap, t.cekSoundSystemBy), at: toIso(t.cekSoundSystemAt) },
+          cashDrawer: { label: FIELD_LABELS.cashDrawer, done: photos.cashDrawer.length > 0, actor: actorFrom(actorMap, t.cashDrawerBy), at: toIso(t.cashDrawerAt), photoCount: photos.cashDrawer.length },
         };
 
         const fieldList = Object.values(fields);
@@ -457,10 +382,8 @@ export async function GET(req: NextRequest) {
         acc.totalStores += 1;
         acc.totalTasks += group.summary.total;
         acc.completedTasks += group.summary.completed;
-        acc.verifiedTasks += group.summary.verified;
         acc.pendingTasks += group.summary.pending;
         acc.inProgressTasks += group.summary.inProgress;
-        acc.rejectedTasks += group.summary.rejected;
         acc.discrepancyTasks += group.summary.discrepancy;
         acc.completedFields += group.summary.completedFields;
         acc.totalFields += group.summary.totalFields;
@@ -470,10 +393,8 @@ export async function GET(req: NextRequest) {
         totalStores: 0,
         totalTasks: 0,
         completedTasks: 0,
-        verifiedTasks: 0,
         pendingTasks: 0,
         inProgressTasks: 0,
-        rejectedTasks: 0,
         discrepancyTasks: 0,
         completedFields: 0,
         totalFields: 0,
@@ -485,23 +406,21 @@ export async function GET(req: NextRequest) {
       ? Math.round((globalSummary.completedFields / globalSummary.totalFields) * 100)
       : 0;
 
-    const range = { start: isoDate(start), end: isoDate(end) };
-
     return NextResponse.json({
       success: true,
-      range,
+      range: { start: isoDate(start), end: isoDate(end) },
       stores: groups,
       data: {
         period,
-        range,
+        range: { start: isoDate(start), end: isoDate(end) },
         summary: globalSummary,
         stores: groups,
       },
     });
-  } catch (err) {
-    console.error('[GET /api/ops/tasks/store-opening]', err);
+  } catch (error) {
+    console.error('GET /api/ops/tasks/store-opening failed:', error);
     return NextResponse.json(
-      { success: false, error: err instanceof Error ? err.message : 'Failed to load Store Opening monitor.' },
+      { success: false, error: 'Failed to load store opening tasks.' },
       { status: 500 },
     );
   }

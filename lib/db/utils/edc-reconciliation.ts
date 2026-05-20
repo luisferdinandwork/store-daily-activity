@@ -241,7 +241,7 @@ export async function addRow(input: AddRowInput): Promise<TaskResult<EdcTransact
       .where(eq(edcReconciliationTasks.id, input.taskId))
       .limit(1);
     if (!task) return { success: false, error: 'Task tidak ditemukan.' };
-    if (['completed', 'verified', 'rejected'].includes(task.status ?? ''))
+    if (['completed'].includes(task.status ?? ''))
       return { success: false, error: 'Task sudah final, tidak bisa menambah row.' };
 
     // Pull expected from the snapshot for this transaction type (best-effort)
@@ -292,7 +292,7 @@ export async function updateRow(input: UpdateRowInput): Promise<TaskResult<EdcTr
       .where(eq(edcReconciliationTasks.id, existing.edcTaskId))
       .limit(1);
     if (!task) return { success: false, error: 'Parent task tidak ditemukan.' };
-    if (['completed', 'verified', 'rejected'].includes(task.status ?? ''))
+    if (['completed'].includes(task.status ?? ''))
       return { success: false, error: 'Task sudah final, tidak bisa mengubah row.' };
 
     const patch: Record<string, unknown> = { updatedAt: new Date() };
@@ -334,7 +334,7 @@ export async function deleteRow(rowId: number): Promise<TaskResult<void>> {
       .from(edcReconciliationTasks)
       .where(eq(edcReconciliationTasks.id, existing.edcTaskId))
       .limit(1);
-    if (['completed', 'verified', 'rejected'].includes(task?.status ?? ''))
+    if (['completed'].includes(task?.status ?? ''))
       return { success: false, error: 'Task sudah final, tidak bisa menghapus row.' };
 
     await db.delete(edcTransactionRows).where(eq(edcTransactionRows.id, rowId));
@@ -369,7 +369,7 @@ export async function submitEdcReconciliation(
       .where(eq(edcReconciliationTasks.scheduleId, input.scheduleId))
       .limit(1);
     if (!task) return { success: false, error: 'Task tidak ditemukan untuk schedule ini.' };
-    if (['completed', 'verified', 'rejected'].includes(task.status ?? ''))
+    if (['completed'].includes(task.status ?? ''))
       return { success: false, error: 'Task sudah final.' };
 
     const snapshot = parseExpectedSnapshot(task.expectedSnapshot);
@@ -473,7 +473,7 @@ export async function autoSaveEdcReconciliation(
       .where(eq(edcReconciliationTasks.scheduleId, scheduleId))
       .limit(1);
     if (!existing) return { success: false, error: 'Task not found.' };
-    if (['completed', 'verified', 'rejected'].includes(existing.status ?? ''))
+    if (['completed'].includes(existing.status ?? ''))
       return { success: true, data: { saved: [] } };
 
     const update: Record<string, unknown> = { updatedAt: new Date() };
@@ -552,40 +552,4 @@ export async function materialiseEdcReconciliationTask(
   });
 
   return 'created';
-}
-
-// ─── Verify ───────────────────────────────────────────────────────────────────
-
-export async function verifyEdcReconciliation(input: {
-  taskId: number; actorId: string; storeId: number; approve: boolean; notes?: string;
-}): Promise<TaskResult<void>> {
-  try {
-    const { canManageSchedule } = await import('@/lib/schedule-utils');
-    const auth = await canManageSchedule(input.actorId, input.storeId);
-    if (!auth.allowed) return { success: false, error: auth.reason! };
-
-    const [row] = await db
-      .select({ id: edcReconciliationTasks.id, status: edcReconciliationTasks.status })
-      .from(edcReconciliationTasks)
-      .where(eq(edcReconciliationTasks.id, input.taskId))
-      .limit(1);
-    if (!row) return { success: false, error: 'Task tidak ditemukan.' };
-    if (row.status !== 'completed')
-      return { success: false, error: `Tidak bisa verifikasi task dengan status "${row.status}".` };
-
-    await db
-      .update(edcReconciliationTasks)
-      .set({
-        status:     input.approve ? 'verified' : 'rejected',
-        verifiedBy: input.actorId,
-        verifiedAt: new Date(),
-        notes:      input.notes,
-        updatedAt:  new Date(),
-      })
-      .where(eq(edcReconciliationTasks.id, input.taskId));
-
-    return { success: true, data: undefined };
-  } catch (err) {
-    return { success: false, error: `verifyEdcReconciliation: ${err}` };
-  }
 }

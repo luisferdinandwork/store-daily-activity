@@ -28,13 +28,9 @@ function serializeTask(task: Awaited<ReturnType<typeof getFlatTasksForStoreDate>
   };
 }
 
-function completionRate(summary: {
-  total: number;
-  completed: number;
-  verified: number;
-}) {
+function completionRate(summary: { total: number; completed: number }) {
   if (summary.total <= 0) return 0;
-  return Math.round(((summary.completed + summary.verified) / summary.total) * 100);
+  return Math.round((summary.completed / summary.total) * 100);
 }
 
 function makeEmptyAggregate() {
@@ -43,8 +39,6 @@ function makeEmptyAggregate() {
     inProgress: 0,
     completed: 0,
     discrepancy: 0,
-    verified: 0,
-    rejected: 0,
     total: 0,
   };
 }
@@ -54,14 +48,14 @@ function makeEmptyAggregate() {
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
 
-  if (!session?.user) {
+  if (!session?.user?.id) {
     return NextResponse.json(
       { success: false, error: 'Unauthorized' },
       { status: 401 },
     );
   }
 
-  const actor = await getOpsActor((session.user as any).id);
+  const actor = await getOpsActor(session.user.id);
 
   if (!actor) {
     return NextResponse.json(
@@ -85,7 +79,6 @@ export async function GET(req: NextRequest) {
 
   const rawStoreId = req.nextUrl.searchParams.get('storeId');
 
-  // Detail mode: one store opened from the page.
   if (rawStoreId) {
     const storeParsed = parseStoreId(rawStoreId);
 
@@ -142,9 +135,7 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  // Overview mode: all stores in OPS actor area.
   const overview = await getAreaTaskOverview(actor.id, dateParsed.date);
-
   const aggregate = makeEmptyAggregate();
 
   for (const store of overview.stores) {
@@ -152,8 +143,6 @@ export async function GET(req: NextRequest) {
     aggregate.inProgress += store.summary.inProgress;
     aggregate.completed += store.summary.completed;
     aggregate.discrepancy += store.summary.discrepancy;
-    aggregate.verified += store.summary.verified;
-    aggregate.rejected += store.summary.rejected;
     aggregate.total += store.summary.total;
   }
 

@@ -214,7 +214,7 @@ export async function claimStoreFrontTask(input: {
       .limit(1);
 
     if (!existing) return { success: false, error: 'Store Front task tidak ditemukan.' };
-    if (existing.status === 'completed' || existing.status === 'verified') {
+    if (existing.status === 'completed') {
       return { success: true, data: existing };
     }
 
@@ -315,8 +315,8 @@ export async function submitStoreFront(input: SubmitStoreFrontInput): Promise<Ta
       ? await getStoreFrontById(input.taskId)
       : await findStoreFrontForStoreDate(input.storeId, now);
 
-    if (existing?.status === 'verified') {
-      return { success: false, error: 'Store Front task sudah diverifikasi.' };
+    if (existing?.status === 'completed') {
+      return { success: false, error: 'Store Front task sudah selesai.' };
     }
 
     const values: Partial<typeof storeFrontTasks.$inferInsert> = {

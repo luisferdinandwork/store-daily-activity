@@ -12,7 +12,7 @@ type Period = 'daily' | 'weekly' | 'monthly';
 type UserInfo = {
   id: string;
   name: string | null;
-  email: string | null;
+  nik: string | null;
 } | null;
 
 type ChecklistKey =
@@ -96,14 +96,14 @@ function toIso(value: Date | null | undefined): string | null {
 }
 
 function isCompletedStatus(status: string): boolean {
-  return status === 'completed' || status === 'verified';
+  return status === 'completed';
 }
 
-function toUser(user: { id: string; name: string | null; email: string | null } | undefined | null): UserInfo {
-  return user ? { id: user.id, name: user.name, email: user.email } : null;
+function toUser(user: { id: string; name: string | null; nik: string | null } | undefined | null): UserInfo {
+  return user ? { id: user.id, name: user.name, nik: user.nik } : null;
 }
 
-function calculateProgress(task: Record<string, unknown>, userById: Map<string, { id: string; name: string | null; email: string | null }>) {
+function calculateProgress(task: Record<string, unknown>, userById: Map<string, { id: string; name: string | null; nik: string | null }>) {
   const checklist = CHECKLIST_FIELDS.map((field) => {
     const actorId = typeof task[field.actorKey] === 'string' ? task[field.actorKey] as string : null;
     const actedAt = task[field.timeKey] instanceof Date ? task[field.timeKey] as Date : null;
@@ -173,7 +173,8 @@ function collectUserIds(tasks: Array<Record<string, unknown>>, rows: Array<{ ass
   }
 
   for (const task of tasks) {
-    const directKeys = ['verifiedBy', 'completedBy', 'notesBy'];
+    const directKeys = ['completedBy', 'notesBy'];
+
     for (const key of directKeys) {
       const value = task[key];
       if (typeof value === 'string') ids.add(value);
@@ -189,165 +190,169 @@ function collectUserIds(tasks: Array<Record<string, unknown>>, rows: Array<{ ass
 }
 
 export async function GET(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.id) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-  }
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
 
-  const currentUser = await getCurrentUser(session.user.id);
-  const roleCode = currentUser?.roleCode ?? (session.user as any)?.role;
+    const currentUser = await getCurrentUser(session.user.id);
+    const roleCode = currentUser?.roleCode ?? session.user.role;
 
-  if (roleCode !== 'admin' && roleCode !== 'ops') {
-    return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
-  }
+    if (roleCode !== 'admin' && roleCode !== 'ops') {
+      return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
+    }
 
-  const { searchParams } = new URL(req.url);
-  const period = parsePeriod(searchParams.get('period'));
-  const date = parseDate(searchParams.get('date'));
-  const selectedStoreId = parseStoreId(searchParams.get('storeId'));
-  const { start, end } = getRange(period, date);
+    const { searchParams } = new URL(req.url);
+    const period = parsePeriod(searchParams.get('period'));
+    const date = parseDate(searchParams.get('date'));
+    const selectedStoreId = parseStoreId(searchParams.get('storeId'));
+    const { start, end } = getRange(period, date);
 
-  const availableStores = await getAllowedStores(roleCode, currentUser?.areaId ?? null);
-  const allowedStoreIds = availableStores.map((store) => Number(store.id));
+    const availableStores = await getAllowedStores(roleCode, currentUser?.areaId ?? null);
+    const allowedStoreIds = availableStores.map((store) => Number(store.id));
 
-  if (roleCode === 'ops' && allowedStoreIds.length === 0) {
+    if (roleCode === 'ops' && allowedStoreIds.length === 0) {
+      return NextResponse.json({
+        success: true,
+        period,
+        date: date.toISOString().slice(0, 10),
+        selectedStoreId: selectedStoreId ? String(selectedStoreId) : 'all',
+        availableStores,
+        summary: { stores: 0, totalTasks: 0, completedTasks: 0, averageProgress: 0 },
+        stores: [],
+      });
+    }
+
+    if (selectedStoreId && roleCode === 'ops' && !allowedStoreIds.includes(selectedStoreId)) {
+      return NextResponse.json(
+        { success: false, error: 'Forbidden: this store is outside your OPS area.' },
+        { status: 403 },
+      );
+    }
+
+    const filters = [
+      gte(marketingCheckTasks.date, start),
+      lte(marketingCheckTasks.date, end),
+    ];
+
+    if (selectedStoreId) {
+      filters.push(eq(marketingCheckTasks.storeId, selectedStoreId));
+    } else if (roleCode === 'ops') {
+      filters.push(inArray(marketingCheckTasks.storeId, allowedStoreIds));
+    }
+
+    const rows = await db
+      .select({
+        task: marketingCheckTasks,
+        storeId: stores.id,
+        storeName: stores.name,
+        storeAreaId: stores.areaId,
+        assignedUserId: users.id,
+        assignedUserName: users.name,
+        assignedUserNik: users.nik,
+      })
+      .from(marketingCheckTasks)
+      .innerJoin(stores, eq(marketingCheckTasks.storeId, stores.id))
+      .leftJoin(users, eq(marketingCheckTasks.userId, users.id))
+      .where(and(...filters))
+      .orderBy(stores.name, desc(marketingCheckTasks.date));
+
+    const rawTasks = rows.map((row) => row.task as unknown as Record<string, unknown>);
+    const userIds = collectUserIds(rawTasks, rows);
+
+    const actorRows = userIds.length
+      ? await db
+          .select({ id: users.id, name: users.name, nik: users.nik })
+          .from(users)
+          .where(inArray(users.id, userIds))
+      : [];
+
+    const userById = new Map(actorRows.map((user) => [user.id, user]));
+    const storeMap = new Map<number, any>();
+
+    for (const row of rows) {
+      const task = row.task as any;
+      const progress = calculateProgress(task, userById);
+      const completedBy = task.completedBy ? toUser(userById.get(task.completedBy)) : null;
+      const assignedUser = row.assignedUserId
+        ? { id: row.assignedUserId, name: row.assignedUserName, nik: row.assignedUserNik }
+        : null;
+
+      const activeEmployee = completedBy
+        ?? progress.checklist.find((item) => item.checkedBy)?.checkedBy
+        ?? assignedUser;
+
+      const monitorTask = {
+        id: String(task.id),
+        scheduleId: String(task.scheduleId),
+        date: toIso(task.date),
+        status: task.status,
+        notes: task.notes,
+        completedAt: toIso(task.completedAt),
+        progress: progress.progress,
+        completedFields: progress.completedFields,
+        totalFields: progress.totalFields,
+        checklist: progress.checklist,
+        assignedUser,
+        employee: activeEmployee,
+        completedBy,
+        notesBy: task.notesBy ? toUser(userById.get(task.notesBy)) : null,
+        notesAt: toIso(task.notesAt),
+      };
+
+      const storeGroup = storeMap.get(row.storeId) ?? {
+        storeId: String(row.storeId),
+        storeName: row.storeName,
+        areaId: row.storeAreaId ?? null,
+        total: 0,
+        completed: 0,
+        averageProgress: 0,
+        tasks: [],
+      };
+
+      storeGroup.total += 1;
+      if (isCompletedStatus(task.status)) storeGroup.completed += 1;
+      storeGroup.tasks.push(monitorTask);
+
+      storeMap.set(row.storeId, storeGroup);
+    }
+
+    const storeGroups = [...storeMap.values()].map((store) => {
+      const totalProgress = store.tasks.reduce((sum: number, task: { progress: number }) => sum + task.progress, 0);
+      return {
+        ...store,
+        averageProgress: store.tasks.length ? Math.round(totalProgress / store.tasks.length) : 0,
+      };
+    });
+
+    const totalTasks = storeGroups.reduce((sum, store) => sum + store.total, 0);
+    const totalProgress = storeGroups.reduce(
+      (sum, store) => sum + store.tasks.reduce((taskSum: number, task: { progress: number }) => taskSum + task.progress, 0),
+      0,
+    );
+    const completedTasks = storeGroups.reduce((sum, store) => sum + store.completed, 0);
+
     return NextResponse.json({
       success: true,
       period,
       date: date.toISOString().slice(0, 10),
       selectedStoreId: selectedStoreId ? String(selectedStoreId) : 'all',
       availableStores,
-      summary: { stores: 0, totalTasks: 0, completedTasks: 0, verifiedTasks: 0, averageProgress: 0 },
-      stores: [],
+      summary: {
+        stores: storeGroups.length,
+        totalTasks,
+        completedTasks,
+        averageProgress: totalTasks ? Math.round(totalProgress / totalTasks) : 0,
+        completionRate: totalTasks ? Math.round((completedTasks / totalTasks) * 100) : 0,
+      },
+      stores: storeGroups,
     });
-  }
-
-  if (selectedStoreId && roleCode === 'ops' && !allowedStoreIds.includes(selectedStoreId)) {
+  } catch (error) {
+    console.error('GET /api/ops/tasks/marketing-check failed:', error);
     return NextResponse.json(
-      { success: false, error: 'Forbidden: this store is outside your OPS area.' },
-      { status: 403 },
+      { success: false, error: 'Failed to load marketing check tasks.' },
+      { status: 500 },
     );
   }
-
-  const filters = [
-    gte(marketingCheckTasks.date, start),
-    lte(marketingCheckTasks.date, end),
-  ];
-
-  if (selectedStoreId) {
-    filters.push(eq(marketingCheckTasks.storeId, selectedStoreId));
-  } else if (roleCode === 'ops') {
-    filters.push(inArray(marketingCheckTasks.storeId, allowedStoreIds));
-  }
-
-  const rows = await db
-    .select({
-      task: marketingCheckTasks,
-      storeId: stores.id,
-      storeName: stores.name,
-      storeAreaId: stores.areaId,
-      assignedUserId: users.id,
-      assignedUserName: users.name,
-      assignedUserEmail: users.email,
-    })
-    .from(marketingCheckTasks)
-    .innerJoin(stores, eq(marketingCheckTasks.storeId, stores.id))
-    .leftJoin(users, eq(marketingCheckTasks.userId, users.id))
-    .where(and(...filters))
-    .orderBy(stores.name, desc(marketingCheckTasks.date));
-
-  const rawTasks = rows.map((row) => row.task as unknown as Record<string, unknown>);
-  const userIds = collectUserIds(rawTasks, rows);
-
-  const actorRows = userIds.length
-    ? await db
-        .select({ id: users.id, name: users.name, email: users.email })
-        .from(users)
-        .where(inArray(users.id, userIds))
-    : [];
-
-  const userById = new Map(actorRows.map((user) => [user.id, user]));
-  const storeMap = new Map<number, any>();
-
-  for (const row of rows) {
-    const task = row.task as any;
-    const progress = calculateProgress(task, userById);
-    const completedBy = task.completedBy ? toUser(userById.get(task.completedBy)) : null;
-    const assignedUser = row.assignedUserId
-      ? { id: row.assignedUserId, name: row.assignedUserName, email: row.assignedUserEmail }
-      : null;
-
-    const activeEmployee = completedBy
-      ?? progress.checklist.find((item) => item.checkedBy)?.checkedBy
-      ?? assignedUser;
-
-    const monitorTask = {
-      id: String(task.id),
-      scheduleId: String(task.scheduleId),
-      date: toIso(task.date),
-      status: task.status,
-      notes: task.notes,
-      completedAt: toIso(task.completedAt),
-      verifiedAt: toIso(task.verifiedAt),
-      progress: progress.progress,
-      completedFields: progress.completedFields,
-      totalFields: progress.totalFields,
-      checklist: progress.checklist,
-      assignedUser,
-      employee: activeEmployee,
-      completedBy,
-      verifiedBy: task.verifiedBy ? toUser(userById.get(task.verifiedBy)) : null,
-      notesBy: task.notesBy ? toUser(userById.get(task.notesBy)) : null,
-      notesAt: toIso(task.notesAt),
-    };
-
-    const storeGroup = storeMap.get(row.storeId) ?? {
-      storeId: String(row.storeId),
-      storeName: row.storeName,
-      areaId: row.storeAreaId ?? null,
-      total: 0,
-      completed: 0,
-      verified: 0,
-      averageProgress: 0,
-      tasks: [],
-    };
-
-    storeGroup.total += 1;
-    if (isCompletedStatus(task.status)) storeGroup.completed += 1;
-    if (task.status === 'verified') storeGroup.verified += 1;
-    storeGroup.tasks.push(monitorTask);
-
-    storeMap.set(row.storeId, storeGroup);
-  }
-
-  const storeGroups = [...storeMap.values()].map((store) => {
-    const totalProgress = store.tasks.reduce((sum: number, task: { progress: number }) => sum + task.progress, 0);
-    return {
-      ...store,
-      averageProgress: store.tasks.length ? Math.round(totalProgress / store.tasks.length) : 0,
-    };
-  });
-
-  const totalTasks = storeGroups.reduce((sum, store) => sum + store.total, 0);
-  const totalProgress = storeGroups.reduce(
-    (sum, store) => sum + store.tasks.reduce((taskSum: number, task: { progress: number }) => taskSum + task.progress, 0),
-    0,
-  );
-
-  return NextResponse.json({
-    success: true,
-    period,
-    date: date.toISOString().slice(0, 10),
-    range: { start: start.toISOString(), end: end.toISOString() },
-    selectedStoreId: selectedStoreId ? String(selectedStoreId) : 'all',
-    availableStores,
-    summary: {
-      stores: storeGroups.length,
-      totalTasks,
-      completedTasks: storeGroups.reduce((sum, store) => sum + store.completed, 0),
-      verifiedTasks: storeGroups.reduce((sum, store) => sum + store.verified, 0),
-      averageProgress: totalTasks ? Math.round(totalProgress / totalTasks) : 0,
-    },
-    stores: storeGroups,
-  });
 }

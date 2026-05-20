@@ -1,14 +1,21 @@
 // lib/auth.ts
 import { NextAuthOptions } from 'next-auth';
 import CredentialsProvider from 'next-auth/providers/credentials';
-import { db } from '@/lib/db';
-import { users, userRoles, employeeTypes } from '@/lib/db/schema';
+import { getServerSession } from 'next-auth/next';
 import { eq } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
-import { getServerSession } from 'next-auth/next';
+
+import { db } from '@/lib/db';
+import { users, userRoles, employeeTypes } from '@/lib/db/schema';
 
 const isDev = process.env.NODE_ENV === 'development';
-const log = (...args: unknown[]) => { if (isDev) console.log(...args); };
+const log = (...args: unknown[]) => {
+  if (isDev) console.log(...args);
+};
+
+function normalizeNik(value: string): string {
+  return value.trim();
+}
 
 export const authOptions: NextAuthOptions = {
   secret: process.env.NEXTAUTH_SECRET,
@@ -17,63 +24,73 @@ export const authOptions: NextAuthOptions = {
     CredentialsProvider({
       name: 'credentials',
       credentials: {
-        email:    { label: 'Email',    type: 'email'    },
+        nik:      { label: 'NIK',      type: 'text' },
         password: { label: 'Password', type: 'password' },
       },
+
       async authorize(credentials) {
         try {
-          if (!credentials?.email || !credentials?.password) return null;
+          const nik = credentials?.nik ? normalizeNik(credentials.nik) : '';
 
-          // Join users → userRoles, left-join employeeTypes (nullable for ops/admin)
+          if (!nik || !credentials?.password) {
+            return null;
+          }
+
           const result = await db
             .select({
-              id:               users.id,
-              name:             users.name,
-              email:            users.email,
-              password:         users.password,
-              homeStoreId:      users.homeStoreId,
-              areaId:           users.areaId,
-              roleId:           users.roleId,
-              roleCode:         userRoles.code,
-              roleLabel:        userRoles.label,
-              roleActive:       userRoles.isActive,
-              employeeTypeId:   users.employeeTypeId,
-              employeeTypeCode: employeeTypes.code,
-              employeeTypeLabel:employeeTypes.label,
+              id:                users.id,
+              nik:               users.nik,
+              name:              users.name,
+              password:          users.password,
+              isActive:          users.isActive,
+              homeStoreId:       users.homeStoreId,
+              areaId:            users.areaId,
+              roleId:            users.roleId,
+              roleCode:          userRoles.code,
+              roleLabel:         userRoles.label,
+              roleActive:        userRoles.isActive,
+              employeeTypeId:    users.employeeTypeId,
+              employeeTypeCode:  employeeTypes.code,
+              employeeTypeLabel: employeeTypes.label,
             })
             .from(users)
             .innerJoin(userRoles, eq(userRoles.id, users.roleId))
             .leftJoin(employeeTypes, eq(employeeTypes.id, users.employeeTypeId))
-            .where(eq(users.email, credentials.email))
+            .where(eq(users.nik, nik))
             .limit(1);
 
           if (!result.length) {
-            log('❌ No user found:', credentials.email);
+            log('❌ No user found for NIK:', nik);
             return null;
           }
 
           const u = result[0];
 
+          if (!u.isActive) {
+            log('❌ User disabled for NIK:', nik);
+            return null;
+          }
+
           if (!u.roleActive) {
-            log('❌ Role disabled for user:', credentials.email);
+            log('❌ Role disabled for NIK:', nik);
             return null;
           }
 
           const ok = await bcrypt.compare(credentials.password, u.password);
           if (!ok) {
-            log('❌ Invalid password:', credentials.email);
+            log('❌ Invalid password for NIK:', nik);
             return null;
           }
 
-          log('✅ Login OK:', credentials.email);
+          log('✅ Login OK for NIK:', nik);
 
           return {
             id:                u.id,
+            nik:               u.nik,
             name:              u.name,
-            email:             u.email,
-            role:              u.roleCode,                    // stable code, e.g. 'ops'
+            role:              u.roleCode,
             roleLabel:         u.roleLabel,
-            employeeType:      u.employeeTypeCode ?? null,    // e.g. 'pic_1' or null
+            employeeType:      u.employeeTypeCode ?? null,
             employeeTypeLabel: u.employeeTypeLabel ?? null,
             homeStoreId:       u.homeStoreId ?? null,
             areaId:            u.areaId ?? null,
@@ -95,6 +112,7 @@ export const authOptions: NextAuthOptions = {
     async jwt({ token, user }) {
       if (user) {
         token.id                = user.id;
+        token.nik               = user.nik;
         token.role              = user.role;
         token.roleLabel         = user.roleLabel;
         token.employeeType      = user.employeeType;
@@ -102,12 +120,14 @@ export const authOptions: NextAuthOptions = {
         token.homeStoreId       = user.homeStoreId;
         token.areaId            = user.areaId;
       }
+
       return token;
     },
 
     async session({ session, token }) {
       if (token && session.user) {
         session.user.id                = token.id;
+        session.user.nik               = token.nik;
         session.user.role              = token.role;
         session.user.roleLabel         = token.roleLabel;
         session.user.employeeType      = token.employeeType;
@@ -115,11 +135,15 @@ export const authOptions: NextAuthOptions = {
         session.user.homeStoreId       = token.homeStoreId;
         session.user.areaId            = token.areaId;
       }
+
       return session;
     },
   },
 
-  pages: { signIn: '/login' },
+  pages: {
+    signIn: '/login',
+  },
+
   debug: isDev,
 };
 

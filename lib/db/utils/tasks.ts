@@ -21,7 +21,6 @@ import {
   type BriefingTask,
   type GroomingTask,
 } from '@/lib/db/schema';
-import { canManageSchedule } from '@/lib/schedule-utils';
 import { users, areas }      from '@/lib/db/schema';
 import { getOrCreateMarketingCheckForSchedule } from '@/lib/db/utils/marketing-check';
 
@@ -30,13 +29,12 @@ import { getOrCreateMarketingCheckForSchedule } from '@/lib/db/utils/marketing-c
 export const DEFAULT_GEOFENCE_RADIUS_M = 100;
 
 const PENDING_STATUSES: readonly ['pending', 'in_progress'] = ['pending', 'in_progress'] as const;
+const ACTIVE_STATUSES: readonly ['pending', 'in_progress', 'discrepancy'] = ['pending', 'in_progress', 'discrepancy'] as const;
+const FINAL_STATUSES: readonly ['completed'] = ['completed'] as const;
 
-/**
- * Statuses that mean a task is fully resolved and cannot be re-submitted.
- * Typed as a plain string array so TypeScript doesn't narrow comparisons
- * against the enum string-literal union incorrectly.
- */
-const TERMINAL_STATUSES: string[] = ['verified', 'rejected'];
+function isFinalStatus(status: string | null | undefined): boolean {
+  return FINAL_STATUSES.includes(status as 'completed');
+}
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -171,13 +169,6 @@ export interface SubmitGroomingInput {
   skipGeo?:              boolean;
 }
 
-export interface VerifyTaskInput {
-  taskId:  number;
-  actorId: string;
-  storeId: number;
-  approve: boolean;
-  notes?:  string;
-}
 
 export interface FlatTask {
   id:           number;
@@ -191,8 +182,6 @@ export interface FlatTask {
   status:       string | null;
   notes:        string | null;
   completedAt:  string | null;
-  verifiedBy:   string | null;
-  verifiedAt:   string | null;
   isBalanced:   boolean | null;
   parentTaskId: number | null;
   extra:        Record<string, unknown>;
@@ -203,8 +192,6 @@ export interface StoreTaskSummary {
   inProgress:  number;
   completed:   number;
   discrepancy: number;
-  verified:    number;
-  rejected:    number;
   total:       number;
 }
 
@@ -442,43 +429,6 @@ async function replaceCheckedBins(
   );
 }
 
-type VerifyPatch = {
-  status:     'verified' | 'rejected';
-  verifiedBy: string;
-  verifiedAt: Date;
-  notes:      string | undefined;
-  updatedAt:  Date;
-};
-
-async function runVerify(
-  input:     VerifyTaskInput,
-  fetchRow:  (id: number) => Promise<{ id: number; status: string | null } | undefined>,
-  updateRow: (id: number, patch: VerifyPatch) => Promise<void>,
-): Promise<TaskResult<void>> {
-  try {
-    const auth = await canManageSchedule(input.actorId, input.storeId);
-    if (!auth.allowed) return { success: false, error: auth.reason! };
-
-    const row = await fetchRow(input.taskId);
-    if (!row) return { success: false, error: 'Task tidak ditemukan.' };
-
-    if (row.status !== 'completed')
-      return { success: false, error: `Tidak bisa verifikasi task dengan status "${row.status}".` };
-
-    await updateRow(input.taskId, {
-      status:     input.approve ? 'verified' : 'rejected',
-      verifiedBy: input.actorId,
-      verifiedAt: new Date(),
-      notes:      input.notes,
-      updatedAt:  new Date(),
-    });
-
-    return { success: true, data: undefined };
-  } catch (err) {
-    return { success: false, error: `verifyTask: ${err}` };
-  }
-}
-
 // ─── Discrepancy helpers ──────────────────────────────────────────────────────
 
 /**
@@ -500,7 +450,7 @@ export async function getActiveDiscrepancyTask<T extends { id: number; status: s
       eq(table.storeId, storeId),
       gte(table.date, dayStart),
       lte(table.date, dayEnd),
-      inArray(table.status, ['pending', 'in_progress', 'discrepancy']),
+      inArray(table.status, ACTIVE_STATUSES),
     ))
     .orderBy(table.createdAt)
     .limit(1);
@@ -601,7 +551,7 @@ export async function materialiseTasksForSchedule(
         .where(and(
           eq(itemDroppingTasks.storeId, sched.storeId),
           eq(itemDroppingTasks.date, dayStart),
-          inArray(itemDroppingTasks.status, ['pending', 'in_progress', 'discrepancy']),
+          inArray(itemDroppingTasks.status, ACTIVE_STATUSES),
         ))
         .limit(1).then(r => r[0]),
       () => db.insert(itemDroppingTasks).values({ ...base, hasDropping: false }));
@@ -616,7 +566,7 @@ export async function materialiseTasksForSchedule(
         .where(and(
           eq(table.storeId, sched.storeId),
           eq(table.date, dayStart),
-          inArray(table.status, ['pending', 'in_progress', 'discrepancy']),
+          inArray(table.status, ACTIVE_STATUSES),
         ))
         .limit(1).then((r: { id: number }[]) => r[0]);
     }
@@ -694,8 +644,7 @@ export async function materialiseTasksForMonth(
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function deleteTasksForSchedule(scheduleId: number): Promise<void> {
-  const eveningStatuses = [...PENDING_STATUSES, 'discrepancy'] as string[];
-  await Promise.all([
+    await Promise.all([
     // Morning tasks
     db.delete(cekBinTasks)
       .where(and(eq(cekBinTasks.scheduleId, scheduleId), inArray(cekBinTasks.status, PENDING_STATUSES))),
@@ -709,17 +658,17 @@ export async function deleteTasksForSchedule(scheduleId: number): Promise<void> 
         inArray(marketingCheckTasks.status, PENDING_STATUSES),
       )),
     db.delete(itemDroppingTasks)
-      .where(and(eq(itemDroppingTasks.scheduleId, scheduleId), inArray(itemDroppingTasks.status, eveningStatuses as any))),
+      .where(and(eq(itemDroppingTasks.scheduleId, scheduleId), inArray(itemDroppingTasks.status, ACTIVE_STATUSES))),
     // Evening tasks
     db.delete(briefingTasks)
-      .where(and(eq(briefingTasks.scheduleId, scheduleId), inArray(briefingTasks.status, eveningStatuses as any))),
+      .where(and(eq(briefingTasks.scheduleId, scheduleId), inArray(briefingTasks.status, ACTIVE_STATUSES))),
     // edcReconciliation cascade-deletes its edc_transaction_rows children automatically
     db.delete(edcReconciliationTasks)
-      .where(and(eq(edcReconciliationTasks.scheduleId, scheduleId), inArray(edcReconciliationTasks.status, eveningStatuses as any))),
+      .where(and(eq(edcReconciliationTasks.scheduleId, scheduleId), inArray(edcReconciliationTasks.status, ACTIVE_STATUSES))),
     db.delete(eodZReportTasks)
-      .where(and(eq(eodZReportTasks.scheduleId, scheduleId), inArray(eodZReportTasks.status, eveningStatuses as any))),
+      .where(and(eq(eodZReportTasks.scheduleId, scheduleId), inArray(eodZReportTasks.status, ACTIVE_STATUSES))),
     db.delete(openStatementTasks)
-      .where(and(eq(openStatementTasks.scheduleId, scheduleId), inArray(openStatementTasks.status, eveningStatuses as any))),
+      .where(and(eq(openStatementTasks.scheduleId, scheduleId), inArray(openStatementTasks.status, ACTIVE_STATUSES))),
     // Personal
     db.delete(groomingTasks)
       .where(and(eq(groomingTasks.scheduleId, scheduleId as any), inArray(groomingTasks.status, PENDING_STATUSES))),
@@ -752,9 +701,8 @@ export async function submitStoreFront(
     const [existing] = await db.select().from(storeFrontTasks)
       .where(eq(storeFrontTasks.scheduleId, input.scheduleId))
       .limit(1);
-
-    if (existing?.status === 'verified') {
-      return { success: false, error: 'Store Front task sudah diverifikasi.' };
+    if (isFinalStatus(existing?.status)) {
+      return { success: false, error: 'Task sudah completed dan tidak bisa diubah.' };
     }
 
     const shiftMap = await getShiftIdMap();
@@ -798,9 +746,8 @@ export async function submitVmChecklist(
     const [existing] = await db.select().from(vmChecklistTasks)
       .where(eq(vmChecklistTasks.scheduleId, input.scheduleId))
       .limit(1);
-
-    if (existing?.status === 'verified') {
-      return { success: false, error: 'VM checklist sudah diverifikasi.' };
+    if (isFinalStatus(existing?.status)) {
+      return { success: false, error: 'Task sudah completed dan tidak bisa diubah.' };
     }
 
     const shiftMap = await getShiftIdMap();
@@ -859,9 +806,8 @@ export async function submitCekBin(
     const min = minimumBinsToCheck(activeBins.length);
 
     let task = await findCekBinByStoreDate(input.storeId, now);
-
-    if (task?.status === 'verified') {
-      return { success: false, error: 'Cek BIN sudah diverifikasi.' };
+    if (isFinalStatus(task?.status)) {
+      return { success: false, error: 'Task sudah completed dan tidak bisa diubah.' };
     }
 
     const shiftMap = await getShiftIdMap();
@@ -911,7 +857,7 @@ export async function autoSaveCekBin(
   try {
     const [task] = await db.select().from(cekBinTasks).where(eq(cekBinTasks.id, taskId)).limit(1);
     if (!task) return { success: false, error: 'Task Cek BIN tidak ditemukan.' };
-    if (task.status === 'completed' || task.status === 'verified') return { success: true, data: { saved: [] } };
+    if (isFinalStatus(task.status)) return { success: true, data: { saved: [] } };
 
     const saved: string[] = [];
     const update: Partial<typeof cekBinTasks.$inferInsert> = { updatedAt: new Date() };
@@ -1054,8 +1000,8 @@ export async function submitBriefing(
     } else {
       const [existing] = await db.select().from(briefingTasks)
         .where(eq(briefingTasks.scheduleId, input.scheduleId)).limit(1);
-      if (existing?.status != null && TERMINAL_STATUSES.includes(existing.status))
-        return { success: false, error: 'Task sudah selesai dan tidak bisa diubah.' };
+      if (isFinalStatus(existing?.status))
+        return { success: false, error: 'Task sudah completed dan tidak bisa diubah.' };
 
       const values = {
         scheduleId:   input.scheduleId,
@@ -1099,8 +1045,8 @@ export async function submitGrooming(
 
     const [existing] = await db.select().from(groomingTasks)
       .where(eq(groomingTasks.scheduleId, input.scheduleId as any)).limit(1);
-    if (existing?.status === 'verified')
-      return { success: false, error: 'Grooming task sudah diverifikasi.' };
+    if (isFinalStatus(existing?.status))
+      return { success: false, error: 'Task sudah completed dan tidak bisa diubah.' };
 
     const [sched] = await db.select({ shiftId: schedules.shiftId }).from(schedules)
       .where(eq(schedules.id, input.scheduleId)).limit(1);
@@ -1134,54 +1080,6 @@ export async function submitGrooming(
     return { success: false, error: `submitGrooming: ${err}` };
   }
 }
-
-// ─── Verify ───────────────────────────────────────────────────────────────────
-
-export const verifyCekBin = (i: VerifyTaskInput) =>
-  runVerify(i,
-    id => db.select({ id: cekBinTasks.id, status: cekBinTasks.status }).from(cekBinTasks).where(eq(cekBinTasks.id, id)).limit(1).then(r => r[0]),
-    (id, p) => db.update(cekBinTasks).set(p).where(eq(cekBinTasks.id, id)).then(() => {}),
-  );
-
-export const verifyStoreFront = (i: VerifyTaskInput) =>
-  runVerify(i,
-    id => db.select({ id: storeFrontTasks.id, status: storeFrontTasks.status }).from(storeFrontTasks).where(eq(storeFrontTasks.id, id)).limit(1).then(r => r[0]),
-    (id, p) => db.update(storeFrontTasks).set(p).where(eq(storeFrontTasks.id, id)).then(() => {}),
-  );
-
-export const verifyVmChecklist = (i: VerifyTaskInput) =>
-  runVerify(i,
-    id => db.select({ id: vmChecklistTasks.id, status: vmChecklistTasks.status }).from(vmChecklistTasks).where(eq(vmChecklistTasks.id, id)).limit(1).then(r => r[0]),
-    (id, p) => db.update(vmChecklistTasks).set(p).where(eq(vmChecklistTasks.id, id)).then(() => {}),
-  );
-
-export const verifyMarketingCheck = (i: VerifyTaskInput) =>
-  runVerify(i,
-    id => db
-      .select({ id: marketingCheckTasks.id, status: marketingCheckTasks.status })
-      .from(marketingCheckTasks)
-      .where(eq(marketingCheckTasks.id, id))
-      .limit(1)
-      .then(r => r[0]),
-
-    (id, p) => db
-      .update(marketingCheckTasks)
-      .set(p)
-      .where(eq(marketingCheckTasks.id, id))
-      .then(() => {}),
-  );
-
-export const verifyBriefing = (i: VerifyTaskInput) =>
-  runVerify(i,
-    id => db.select({ id: briefingTasks.id, status: briefingTasks.status }).from(briefingTasks).where(eq(briefingTasks.id, id)).limit(1).then(r => r[0]),
-    (id, p) => db.update(briefingTasks).set(p).where(eq(briefingTasks.id, id)).then(() => {}),
-  );
-
-export const verifyGrooming = (i: VerifyTaskInput) =>
-  runVerify(i,
-    id => db.select({ id: groomingTasks.id, status: groomingTasks.status }).from(groomingTasks).where(eq(groomingTasks.id, id)).limit(1).then(r => r[0]),
-    (id, p) => db.update(groomingTasks).set(p).where(eq(groomingTasks.id, id)).then(() => {}),
-  );
 
 // ─── Read helpers ─────────────────────────────────────────────────────────────
 
@@ -1232,8 +1130,6 @@ export async function getDailyTaskSummary(storeId: number, date: Date) {
       inProgress:  rows.find(r => r.status === 'in_progress')?.count ?? 0,
       completed:   rows.find(r => r.status === 'completed')?.count   ?? 0,
       discrepancy: rows.find(r => r.status === 'discrepancy')?.count ?? 0,
-      verified:    rows.find(r => r.status === 'verified')?.count    ?? 0,
-      rejected:    rows.find(r => r.status === 'rejected')?.count    ?? 0,
     };
   }
 
@@ -1277,7 +1173,7 @@ function buildExtra(row: Record<string, unknown>, photoFields: string[] = []): R
   // Fields that live on TaskBase / FlatTask top-level — skip from `extra`
   const skip = new Set([
     'id', 'scheduleId', 'userId', 'storeId', 'shiftId', 'date',
-    'status', 'notes', 'completedAt', 'verifiedBy', 'verifiedAt',
+    'status', 'notes', 'completedAt',
     'createdAt', 'updatedAt', 'submittedLat', 'submittedLng',
     'isBalanced', 'parentTaskId',
     // Discrepancy timing columns — surfaced via dedicated pages, not needed in card extra
@@ -1321,8 +1217,6 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
         status:      t.status ?? null,
         notes:       t.notes ?? null,
         completedAt: t.completedAt instanceof Date ? t.completedAt.toISOString() : null,
-        verifiedBy:  t.verifiedBy ?? null,
-        verifiedAt:  t.verifiedAt instanceof Date ? t.verifiedAt.toISOString() : null,
         isBalanced:  t.isBalanced ?? null,
         parentTaskId: t.parentTaskId ?? null,
         extra:       buildExtra(t, photoFields),
@@ -1365,7 +1259,7 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
 export function summariseTasks(tasks: FlatTask[]): StoreTaskSummary {
   const s: StoreTaskSummary = {
     pending: 0, inProgress: 0, completed: 0,
-    discrepancy: 0, verified: 0, rejected: 0, total: tasks.length,
+    discrepancy: 0, total: tasks.length,
   };
   for (const t of tasks) {
     switch (t.status) {
@@ -1373,8 +1267,6 @@ export function summariseTasks(tasks: FlatTask[]): StoreTaskSummary {
       case 'in_progress': s.inProgress++;  break;
       case 'completed':   s.completed++;   break;
       case 'discrepancy': s.discrepancy++; break;
-      case 'verified':    s.verified++;    break;
-      case 'rejected':    s.rejected++;    break;
     }
   }
   return s;
@@ -1395,77 +1287,19 @@ export async function getAreaTaskOverview(opsUserId: string, date: Date) {
     const daily = await getDailyTaskSummary(s.id, date);
     const summary: StoreTaskSummary = {
       pending: 0, inProgress: 0, completed: 0,
-      discrepancy: 0, verified: 0, rejected: 0, total: 0,
+      discrepancy: 0, total: 0,
     };
     for (const perType of Object.values(daily)) {
       summary.pending     += perType.pending;
       summary.inProgress  += perType.inProgress;
       summary.completed   += perType.completed;
       summary.discrepancy += perType.discrepancy;
-      summary.verified    += perType.verified;
-      summary.rejected    += perType.rejected;
     }
     summary.total =
       summary.pending + summary.inProgress + summary.completed +
-      summary.discrepancy + summary.verified + summary.rejected;
+      summary.discrepancy;
     return { ...s, summary };
   }));
 
   return { area: area ?? null, stores: results };
-}
-
-// ─── Verify dispatch ──────────────────────────────────────────────────────────
-
-const VERIFY_DISPATCH: Record<string, (i: VerifyTaskInput) => Promise<TaskResult<void>>> = {
-  cek_bin:       verifyCekBin,
-  store_front:   verifyStoreFront,
-  vm_checklist:  verifyVmChecklist,
-  briefing:      verifyBriefing,
-  grooming:      verifyGrooming,
-
-  item_dropping: async (i) => {
-    const { verifyItemDropping } = await import('@/lib/db/utils/item-dropping');
-    return verifyItemDropping(i);
-  },
-
-  edc_reconciliation: async (i) => {
-    const { verifyEdcReconciliation } = await import('@/lib/db/utils/edc-reconciliation');
-    return verifyEdcReconciliation(i);
-  },
-
-  // EOD Z-Report is not discrepancy-capable; verify inline (no dedicated util needed)
-  eod_z_report: async (i) => {
-    const auth = await canManageSchedule(i.actorId, i.storeId);
-    if (!auth.allowed) return { success: false, error: auth.reason! };
-    const [row] = await db
-      .select({ id: eodZReportTasks.id, status: eodZReportTasks.status })
-      .from(eodZReportTasks)
-      .where(eq(eodZReportTasks.id, i.taskId))
-      .limit(1);
-    if (!row) return { success: false, error: 'Task tidak ditemukan.' };
-    if (row.status !== 'completed')
-      return { success: false, error: `Tidak bisa verifikasi task dengan status "${row.status}".` };
-    await db.update(eodZReportTasks).set({
-      status:     i.approve ? 'verified' : 'rejected',
-      verifiedBy: i.actorId,
-      verifiedAt: new Date(),
-      notes:      i.notes,
-      updatedAt:  new Date(),
-    }).where(eq(eodZReportTasks.id, i.taskId));
-    return { success: true, data: undefined };
-  },
-
-  open_statement: async (i) => {
-    const { verifyOpenStatement } = await import('@/lib/db/utils/open-statement');
-    return verifyOpenStatement(i);
-  },
-};
-
-export async function verifyTaskByType(
-  type:  string,
-  input: VerifyTaskInput,
-): Promise<TaskResult<void>> {
-  const fn = VERIFY_DISPATCH[type];
-  if (!fn) return { success: false, error: `Unknown task type: ${type}` };
-  return fn(input);
 }

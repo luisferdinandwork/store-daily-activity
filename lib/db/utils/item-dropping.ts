@@ -73,13 +73,6 @@ export interface AutoSaveItemDroppingPatch {
   notes?: string;
 }
 
-export interface VerifyTaskInput {
-  taskId: number;
-  actorId: string;
-  storeId: number;
-  approve: boolean;
-  notes?: string;
-}
 
 function startOfDay(d: Date): Date {
   const r = new Date(d);
@@ -294,11 +287,7 @@ export async function submitItemDropping(
       };
     }
 
-    if (
-      existing.status === 'completed' ||
-      existing.status === 'verified' ||
-      existing.status === 'rejected'
-    ) {
+    if (existing.status === 'completed') {
       return {
         success: false,
         error: 'Task sudah selesai dan tidak bisa diubah.',
@@ -386,11 +375,7 @@ export async function addToEntry(
       return { success: false, error: 'Task tidak ditemukan.' };
     }
 
-    if (
-      task.status === 'completed' ||
-      task.status === 'verified' ||
-      task.status === 'rejected'
-    ) {
+    if (task.status === 'completed') {
       return { success: false, error: 'Task sudah selesai dan tidak bisa diubah.' };
     }
 
@@ -459,11 +444,7 @@ export async function removeToEntry(
       return { success: false, error: 'Task tidak ditemukan.' };
     }
 
-    if (
-      task.status === 'completed' ||
-      task.status === 'verified' ||
-      task.status === 'rejected'
-    ) {
+    if (task.status === 'completed') {
       return { success: false, error: 'Task sudah selesai dan tidak bisa diubah.' };
     }
 
@@ -511,11 +492,7 @@ export async function autoSaveItemDroppingById(
       return { success: false, error: 'Item dropping task not found.' };
     }
 
-    if (
-      existing.status === 'completed' ||
-      existing.status === 'verified' ||
-      existing.status === 'rejected'
-    ) {
+    if (existing.status === 'completed') {
       return { success: true, data: { saved: [] } };
     }
 
@@ -566,54 +543,6 @@ export async function autoSaveItemDropping(
   }
 
   return autoSaveItemDroppingById(existing.id, patch);
-}
-
-export async function verifyItemDropping(
-  input: VerifyTaskInput,
-): Promise<TaskResult<void>> {
-  try {
-    const { canManageSchedule } = await import('@/lib/schedule-utils');
-    const auth = await canManageSchedule(input.actorId, input.storeId);
-
-    if (!auth.allowed) {
-      return { success: false, error: auth.reason! };
-    }
-
-    const [row] = await db
-      .select({
-        id: itemDroppingTasks.id,
-        status: itemDroppingTasks.status,
-      })
-      .from(itemDroppingTasks)
-      .where(eq(itemDroppingTasks.id, input.taskId))
-      .limit(1);
-
-    if (!row) {
-      return { success: false, error: 'Task tidak ditemukan.' };
-    }
-
-    if (row.status !== 'completed') {
-      return {
-        success: false,
-        error: `Tidak bisa verifikasi task dengan status "${row.status}".`,
-      };
-    }
-
-    await db
-      .update(itemDroppingTasks)
-      .set({
-        status: input.approve ? 'verified' : 'rejected',
-        verifiedBy: input.actorId,
-        verifiedAt: new Date(),
-        notes: input.notes,
-        updatedAt: new Date(),
-      })
-      .where(eq(itemDroppingTasks.id, input.taskId));
-
-    return { success: true, data: undefined };
-  } catch (err) {
-    return { success: false, error: `verifyItemDropping: ${err}` };
-  }
 }
 
 export async function materialiseItemDroppingTask(

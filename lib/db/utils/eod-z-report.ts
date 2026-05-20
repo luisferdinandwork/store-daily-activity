@@ -156,7 +156,7 @@ export async function submitEodZReport(
       .where(eq(eodZReportTasks.scheduleId, input.scheduleId))
       .limit(1);
 
-    if (existing?.status === 'completed' || existing?.status === 'verified')
+    if (existing?.status === 'completed')
       return { success: false, error: 'EOD Z-Report sudah disubmit.' };
 
     const eveningShiftId = await getEveningShiftId();
@@ -202,7 +202,7 @@ export async function autoSaveEodZReport(
       .limit(1);
 
     if (!existing) return { success: false, error: 'EOD Z-Report task not found.' };
-    if (existing.status === 'completed' || existing.status === 'verified')
+    if (existing.status === 'completed')
       return { success: true, data: { saved: [] } };
 
     const update: Record<string, unknown> = { updatedAt: new Date() };

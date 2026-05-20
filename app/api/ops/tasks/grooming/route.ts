@@ -15,10 +15,8 @@ import {
   users,
 } from '@/lib/db/schema';
 
-// ─── Types ───────────────────────────────────────────────────────────────────
-
 type Period = 'daily' | 'weekly' | 'monthly';
-type Status = 'pending' | 'in_progress' | 'completed' | 'verified' | 'rejected' | 'discrepancy';
+type Status = 'pending' | 'in_progress' | 'completed' | 'discrepancy';
 
 type GroomingFieldKey =
   | 'uniform'
@@ -54,7 +52,7 @@ interface GroomingTaskRecord {
   employee: {
     id: string;
     name: string;
-    email: string | null;
+    nik: string | null;
     employeeType: {
       code: string | null;
       label: string | null;
@@ -69,8 +67,6 @@ interface GroomingTaskRecord {
   selfiePhotoCount: number;
   notes: string | null;
   completedAt: string | null;
-  verifiedBy: string | null;
-  verifiedAt: string | null;
   createdAt: string | null;
   updatedAt: string | null;
 }
@@ -84,18 +80,15 @@ interface GroomingStoreRow {
     totalEmployees: number;
     totalTasks: number;
     completedTasks: number;
-    verifiedTasks: number;
     pendingTasks: number;
     inProgressTasks: number;
-    rejectedTasks: number;
+    discrepancyTasks: number;
     completionRate: number;
     averageProgress: number;
     statusCount: Record<Status, number>;
   };
   tasks: GroomingTaskRecord[];
 }
-
-// ─── Date helpers ────────────────────────────────────────────────────────────
 
 function startOfDay(d: Date): Date {
   const r = new Date(d);
@@ -112,7 +105,7 @@ function endOfDay(d: Date): Date {
 function startOfWeek(d: Date): Date {
   const r = startOfDay(d);
   const day = r.getDay();
-  const diff = day === 0 ? -6 : 1 - day; // Monday start
+  const diff = day === 0 ? -6 : 1 - day;
   r.setDate(r.getDate() + diff);
   return r;
 }
@@ -179,8 +172,6 @@ function statusCount(): Record<Status, number> {
     pending: 0,
     in_progress: 0,
     completed: 0,
-    verified: 0,
-    rejected: 0,
     discrepancy: 0,
   };
 }
@@ -189,8 +180,6 @@ function percent(done: number, total: number): number {
   if (total <= 0) return 0;
   return Math.round((done / total) * 100);
 }
-
-// ─── Auth / access helpers ───────────────────────────────────────────────────
 
 async function getCurrentUserAccess(userId: string): Promise<CurrentUserAccess | null> {
   const [row] = await db
@@ -227,54 +216,17 @@ async function getAllowedStores(access: CurrentUserAccess) {
   return where ? query.where(where) : query;
 }
 
-// ─── Progress helpers ────────────────────────────────────────────────────────
-
 function buildGroomingFields(task: typeof groomingTasks.$inferSelect | null) {
   const selfiePhotos = parsePhotos(task?.selfiePhotos ?? null);
 
   const fields: GroomingField[] = [
-    {
-      key: 'uniform',
-      label: 'Uniform',
-      active: task?.uniformActive ?? true,
-      done: task?.uniformChecked === true,
-    },
-    {
-      key: 'hair',
-      label: 'Hair',
-      active: task?.hairActive ?? true,
-      done: task?.hairChecked === true,
-    },
-    {
-      key: 'smell',
-      label: 'Smell',
-      active: task?.smellActive ?? true,
-      done: task?.smellChecked === true,
-    },
-    {
-      key: 'makeUp',
-      label: 'Make Up',
-      active: task?.makeUpActive ?? true,
-      done: task?.makeUpChecked === true,
-    },
-    {
-      key: 'shoe',
-      label: 'Shoe',
-      active: task?.shoeActive ?? true,
-      done: task?.shoeChecked === true,
-    },
-    {
-      key: 'nameTag',
-      label: 'Name Tag',
-      active: task?.nameTagActive ?? true,
-      done: task?.nameTagChecked === true,
-    },
-    {
-      key: 'selfie',
-      label: 'Selfie Photo',
-      active: true,
-      done: selfiePhotos.length > 0,
-    },
+    { key: 'uniform', label: 'Uniform', active: task?.uniformActive ?? true, done: task?.uniformChecked === true },
+    { key: 'hair', label: 'Hair', active: task?.hairActive ?? true, done: task?.hairChecked === true },
+    { key: 'smell', label: 'Smell', active: task?.smellActive ?? true, done: task?.smellChecked === true },
+    { key: 'makeUp', label: 'Make Up', active: task?.makeUpActive ?? true, done: task?.makeUpChecked === true },
+    { key: 'shoe', label: 'Shoe', active: task?.shoeActive ?? true, done: task?.shoeChecked === true },
+    { key: 'nameTag', label: 'Name Tag', active: task?.nameTagActive ?? true, done: task?.nameTagChecked === true },
+    { key: 'selfie', label: 'Selfie Photo', active: true, done: selfiePhotos.length > 0 },
   ];
 
   const activeFields = fields.filter((field) => field.active);
@@ -304,10 +256,9 @@ function createEmptyStoreRow(store: {
       totalEmployees: 0,
       totalTasks: 0,
       completedTasks: 0,
-      verifiedTasks: 0,
       pendingTasks: 0,
       inProgressTasks: 0,
-      rejectedTasks: 0,
+      discrepancyTasks: 0,
       completionRate: 0,
       averageProgress: 0,
       statusCount: statusCount(),
@@ -315,8 +266,6 @@ function createEmptyStoreRow(store: {
     tasks: [],
   };
 }
-
-// ─── Route ───────────────────────────────────────────────────────────────────
 
 export async function GET(request: NextRequest) {
   try {
@@ -365,10 +314,9 @@ export async function GET(request: NextRequest) {
             totalEmployees: 0,
             totalTasks: 0,
             completedTasks: 0,
-            verifiedTasks: 0,
             pendingTasks: 0,
             inProgressTasks: 0,
-            rejectedTasks: 0,
+            discrepancyTasks: 0,
             completionRate: 0,
             averageProgress: 0,
           },
@@ -384,7 +332,7 @@ export async function GET(request: NextRequest) {
         employee: {
           id: users.id,
           name: users.name,
-          email: users.email,
+          nik: users.nik,
           employeeTypeId: users.employeeTypeId,
         },
         employeeType: {
@@ -437,7 +385,7 @@ export async function GET(request: NextRequest) {
         employee: {
           id: row.employee.id,
           name: row.employee.name,
-          email: row.employee.email,
+          nik: row.employee.nik,
           employeeType: row.employeeType,
         },
         shift: row.shift,
@@ -445,8 +393,6 @@ export async function GET(request: NextRequest) {
         selfiePhotoCount: progress.selfiePhotos.length,
         notes: task?.notes ?? null,
         completedAt: toIso(task?.completedAt),
-        verifiedBy: task?.verifiedBy ?? null,
-        verifiedAt: toIso(task?.verifiedAt),
         createdAt: toIso(task?.createdAt),
         updatedAt: toIso(task?.updatedAt),
       };
@@ -463,23 +409,17 @@ export async function GET(request: NextRequest) {
       storeRow.summary.statusCount[status] += 1;
 
       if (status === 'completed') storeRow.summary.completedTasks += 1;
-      if (status === 'verified') storeRow.summary.verifiedTasks += 1;
       if (status === 'pending') storeRow.summary.pendingTasks += 1;
       if (status === 'in_progress') storeRow.summary.inProgressTasks += 1;
-      if (status === 'rejected') storeRow.summary.rejectedTasks += 1;
+      if (status === 'discrepancy') storeRow.summary.discrepancyTasks += 1;
     }
 
     const storesData = Array.from(storeMap.values()).map((store): GroomingStoreRow => {
       const uniqueEmployeeIds = new Set(store.tasks.map((task) => task.employee.id));
-      const progressSum = store.tasks.reduce<number>((sum, task) => {
-        return sum + Number(task.progress ?? 0);
-      }, 0);
+      const progressSum = store.tasks.reduce<number>((sum, task) => sum + Number(task.progress ?? 0), 0);
 
       store.summary.totalEmployees = uniqueEmployeeIds.size;
-      store.summary.completionRate = percent(
-        store.summary.completedTasks + store.summary.verifiedTasks,
-        store.summary.totalTasks,
-      );
+      store.summary.completionRate = percent(store.summary.completedTasks, store.summary.totalTasks);
       store.summary.averageProgress = store.summary.totalTasks
         ? Math.round(progressSum / store.summary.totalTasks)
         : 0;
@@ -487,17 +427,11 @@ export async function GET(request: NextRequest) {
       return store;
     });
 
-    const totalTasks = storesData.reduce<number>((sum, store) => {
-      return sum + Number(store.summary.totalTasks ?? 0);
-    }, 0);
-
+    const totalTasks = storesData.reduce<number>((sum, store) => sum + Number(store.summary.totalTasks ?? 0), 0);
     const totalProgress = storesData.reduce<number>((sum, store) => {
       return sum + Number(store.summary.averageProgress ?? 0) * Number(store.summary.totalTasks ?? 0);
     }, 0);
-
-    const completedTaskCount = storesData.reduce<number>((sum, store) => {
-      return sum + Number(store.summary.completedTasks ?? 0) + Number(store.summary.verifiedTasks ?? 0);
-    }, 0);
+    const completedTaskCount = storesData.reduce<number>((sum, store) => sum + Number(store.summary.completedTasks ?? 0), 0);
 
     return NextResponse.json({
       success: true,
@@ -507,25 +441,12 @@ export async function GET(request: NextRequest) {
         availableStores: allowedStores,
         summary: {
           totalStores: storesData.length,
-          totalEmployees: storesData.reduce<number>((sum, store) => {
-            return sum + Number(store.summary.totalEmployees ?? 0);
-          }, 0),
+          totalEmployees: storesData.reduce<number>((sum, store) => sum + Number(store.summary.totalEmployees ?? 0), 0),
           totalTasks,
-          completedTasks: storesData.reduce<number>((sum, store) => {
-            return sum + Number(store.summary.completedTasks ?? 0);
-          }, 0),
-          verifiedTasks: storesData.reduce<number>((sum, store) => {
-            return sum + Number(store.summary.verifiedTasks ?? 0);
-          }, 0),
-          pendingTasks: storesData.reduce<number>((sum, store) => {
-            return sum + Number(store.summary.pendingTasks ?? 0);
-          }, 0),
-          inProgressTasks: storesData.reduce<number>((sum, store) => {
-            return sum + Number(store.summary.inProgressTasks ?? 0);
-          }, 0),
-          rejectedTasks: storesData.reduce<number>((sum, store) => {
-            return sum + Number(store.summary.rejectedTasks ?? 0);
-          }, 0),
+          completedTasks: completedTaskCount,
+          pendingTasks: storesData.reduce<number>((sum, store) => sum + Number(store.summary.pendingTasks ?? 0), 0),
+          inProgressTasks: storesData.reduce<number>((sum, store) => sum + Number(store.summary.inProgressTasks ?? 0), 0),
+          discrepancyTasks: storesData.reduce<number>((sum, store) => sum + Number(store.summary.discrepancyTasks ?? 0), 0),
           completionRate: percent(completedTaskCount, totalTasks),
           averageProgress: totalTasks ? Math.round(totalProgress / totalTasks) : 0,
         },
@@ -533,9 +454,9 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (error) {
-    console.error('[GET /api/ops/tasks/grooming]', error);
+    console.error('GET /api/ops/tasks/grooming failed:', error);
     return NextResponse.json(
-      { success: false, error: 'Failed to load Grooming monitor.' },
+      { success: false, error: 'Failed to load grooming tasks.' },
       { status: 500 },
     );
   }
