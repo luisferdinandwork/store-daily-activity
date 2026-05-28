@@ -1,260 +1,141 @@
 // lib/db/utils/open-statement.ts
 // ─────────────────────────────────────────────────────────────────────────────
-// Dedicated utilities for the Open Statement task.
-//
-// Employee opens the system's Open Statement menu and enters the amount
-// shown. The task pulls an "expected" amount from the dummy generator
-// (simulating a back-office data source). If expected != actual, the task
-// goes into discrepancy until the next shift resolves it.
-//
-// Lifecycle mirrors EDC Reconciliation:
-//   • Expected amount is stable per task (stored in expectedAmount column
-//     on first open).
-//   • isBalanced = expectedAmount === actualAmount.
-//   • discrepancyStartedAt / discrepancyResolvedAt / discrepancyDurationMinutes
-//     are stamped on transitions.
+// Open Statement task.
+// New workflow:
+//   • Employee chooses DONE or ON HOLD.
+//   • DONE      → task is completed immediately.
+//   • ON HOLD   → current task is completed with isOnHold=true, then the next
+//                 morning materialisation creates a carry-over task that must
+//                 be completed by the morning shift employee.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { db } from '@/lib/db';
-import { eq, and, gte, lte, inArray, isNull } from 'drizzle-orm';
+import { eq, and, gte, lte, inArray, isNull, lt, desc } from 'drizzle-orm';
 import {
   openStatementTasks, stores, shifts, attendance,
   type OpenStatementTask,
 } from '@/lib/db/schema';
-import { generateExpectedOpenStatement } from './dummy-evening-data';
-
-// ─── Public types ─────────────────────────────────────────────────────────────
 
 export const DEFAULT_GEOFENCE_RADIUS_M = 100;
 
 export type TaskResult<T = void> =
-  | { success: true;  data: T }
+  | { success: true; data: T }
   | { success: false; error: string };
 
 export interface GeoPoint { lat: number; lng: number; }
 
+export type OpenStatementDecision = 'done' | 'hold';
+
 export interface SubmitOpenStatementInput {
-  scheduleId:   number;
-  userId:       string;
-  storeId:      number;
-  geo:          GeoPoint;
-  skipGeo?:     boolean;
-  actualAmount: string;      // numeric string
-  notes?:       string;
+  scheduleId: number;
+  userId: string;
+  storeId: number;
+  geo: GeoPoint;
+  skipGeo?: boolean;
+  decision: OpenStatementDecision;
+  holdReason?: string;
+  notes?: string;
 }
 
 export interface AutoSaveOpenStatementPatch {
-  actualAmount?: string;
-  notes?:        string;
+  decision?: OpenStatementDecision | null;
+  holdReason?: string | null;
+  notes?: string;
 }
 
-// ─── Private helpers ──────────────────────────────────────────────────────────
-
 function startOfDay(d: Date): Date { const r = new Date(d); r.setHours(0, 0, 0, 0); return r; }
-function endOfDay  (d: Date): Date { const r = new Date(d); r.setHours(23, 59, 59, 999); return r; }
+function endOfDay(d: Date): Date { const r = new Date(d); r.setHours(23, 59, 59, 999); return r; }
 
 function haversineMetres(a: GeoPoint, b: GeoPoint): number {
-  const R  = 6_371_000;
+  const R = 6_371_000;
   const φ1 = (a.lat * Math.PI) / 180;
   const φ2 = (b.lat * Math.PI) / 180;
   const Δφ = ((b.lat - a.lat) * Math.PI) / 180;
   const Δλ = ((b.lng - a.lng) * Math.PI) / 180;
-  const h  = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+  const h = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
 
-let _eveningShiftIdCache: number | null = null;
-async function getEveningShiftId(): Promise<number> {
-  if (_eveningShiftIdCache != null) return _eveningShiftIdCache;
-  const [row] = await db.select({ id: shifts.id }).from(shifts).where(eq(shifts.code, 'evening')).limit(1);
-  if (!row) throw new Error('Evening shift not found in shifts table.');
-  _eveningShiftIdCache = row.id;
-  return row.id;
+async function getShiftCode(shiftId: number): Promise<string | null> {
+  const [row] = await db.select({ code: shifts.code }).from(shifts).where(eq(shifts.id, shiftId)).limit(1);
+  return row?.code ?? null;
 }
 
-// ─── Guards ───────────────────────────────────────────────────────────────────
-
 async function assertCheckedIn(scheduleId: number): Promise<string | null> {
-  const [att] = await db
-    .select({ checkInTime: attendance.checkInTime })
-    .from(attendance)
-    .where(eq(attendance.scheduleId, scheduleId))
-    .limit(1);
-  if (!att?.checkInTime)
-    return 'Kamu belum absen masuk. Lakukan absensi masuk terlebih dahulu sebelum mengerjakan task.';
+  const [att] = await db.select({ checkInTime: attendance.checkInTime }).from(attendance).where(eq(attendance.scheduleId, scheduleId)).limit(1);
+  if (!att?.checkInTime) return 'Kamu belum absen masuk. Lakukan absensi masuk terlebih dahulu sebelum mengerjakan task.';
   return null;
 }
 
 async function assertInGeofence(storeId: number, geo: GeoPoint): Promise<string | null> {
-  const [store] = await db
-    .select({ lat: stores.latitude, lng: stores.longitude, radius: stores.geofenceRadiusM })
-    .from(stores)
-    .where(eq(stores.id, storeId))
-    .limit(1);
-
-  if (!store)                   return 'Toko tidak ditemukan.';
+  const [store] = await db.select({ lat: stores.latitude, lng: stores.longitude, radius: stores.geofenceRadiusM }).from(stores).where(eq(stores.id, storeId)).limit(1);
+  if (!store) return 'Toko tidak ditemukan.';
   if (!store.lat || !store.lng) return null;
-
-  const dist   = haversineMetres(geo, { lat: parseFloat(store.lat), lng: parseFloat(store.lng) });
+  const dist = haversineMetres(geo, { lat: parseFloat(store.lat), lng: parseFloat(store.lng) });
   const radius = store.radius ? parseFloat(store.radius) : DEFAULT_GEOFENCE_RADIUS_M;
-
-  return dist > radius
-    ? `Kamu berada ${Math.round(dist)}m dari toko (batas: ${radius}m). Pastikan kamu berada di dalam toko dan coba lagi.`
-    : null;
+  return dist > radius ? `Kamu berada ${Math.round(dist)}m dari toko (batas: ${radius}m). Pastikan kamu berada di dalam toko dan coba lagi.` : null;
 }
 
-async function assertCanProgressTask(
-  scheduleId: number, storeId: number, geo: GeoPoint, skipGeo?: boolean,
-): Promise<string | null> {
+async function assertCanProgressTask(scheduleId: number, storeId: number, geo: GeoPoint, skipGeo?: boolean): Promise<string | null> {
   const checkInErr = await assertCheckedIn(scheduleId);
   if (checkInErr) return checkInErr;
-  if (!skipGeo) {
-    const geoErr = await assertInGeofence(storeId, geo);
-    if (geoErr) return geoErr;
-  }
+  if (!skipGeo) return assertInGeofence(storeId, geo);
   return null;
 }
 
-// ─── Expected amount fetch (idempotent) ──────────────────────────────────────
-
-/**
- * Ensure the task has an expectedAmount. First open generates and stores.
- * Subsequent opens return the existing value.
- */
-export async function fetchExpectedForTask(
-  taskId: number,
-): Promise<TaskResult<{ expectedAmount: number }>> {
-  try {
-    const [task] = await db
-      .select()
-      .from(openStatementTasks)
-      .where(eq(openStatementTasks.id, taskId))
-      .limit(1);
-    if (!task) return { success: false, error: 'Task tidak ditemukan.' };
-
-    if (task.expectedAmount != null)
-      return { success: true, data: { expectedAmount: Number(task.expectedAmount) } };
-
-    const gen = generateExpectedOpenStatement(task.storeId, task.date, task.id);
-
-    await db
-      .update(openStatementTasks)
-      .set({
-        expectedAmount:    String(gen.amount),
-        expectedFetchedAt: new Date(),
-        updatedAt:         new Date(),
-      })
-      .where(eq(openStatementTasks.id, taskId));
-
-    return { success: true, data: { expectedAmount: gen.amount } };
-  } catch (err) {
-    return { success: false, error: `fetchExpectedForTask: ${err}` };
-  }
-}
-
-// ─── Active task query ────────────────────────────────────────────────────────
-
-export async function getActiveOpenStatementTask(
-  storeId: number,
-  date:    Date,
-): Promise<OpenStatementTask | null> {
+export async function getActiveOpenStatementTask(storeId: number, date: Date): Promise<OpenStatementTask | null> {
   const dayStart = startOfDay(date);
-  const dayEnd   = endOfDay(date);
+  const dayEnd = endOfDay(date);
 
-  const [today] = await db
-    .select()
-    .from(openStatementTasks)
-    .where(and(
-      eq(openStatementTasks.storeId, storeId),
-      gte(openStatementTasks.date, dayStart),
-      lte(openStatementTasks.date, dayEnd),
-      inArray(openStatementTasks.status, ['pending', 'in_progress', 'discrepancy']),
-    ))
-    .orderBy(openStatementTasks.createdAt)
-    .limit(1);
+  const [today] = await db.select().from(openStatementTasks).where(and(
+    eq(openStatementTasks.storeId, storeId),
+    gte(openStatementTasks.date, dayStart),
+    lte(openStatementTasks.date, dayEnd),
+    inArray(openStatementTasks.status, ['pending', 'in_progress']),
+  )).orderBy(openStatementTasks.createdAt).limit(1);
   if (today) return today;
 
-  const [prior] = await db
-    .select()
-    .from(openStatementTasks)
-    .where(and(
-      eq(openStatementTasks.storeId, storeId),
-      eq(openStatementTasks.status, 'discrepancy'),
-      isNull(openStatementTasks.parentTaskId),
-    ))
-    .orderBy(openStatementTasks.createdAt)
-    .limit(1);
+  const [carry] = await db.select().from(openStatementTasks).where(and(
+    eq(openStatementTasks.storeId, storeId),
+    eq(openStatementTasks.isOnHold, true),
+    isNull(openStatementTasks.parentTaskId),
+  )).orderBy(desc(openStatementTasks.createdAt)).limit(1);
 
-  return prior ?? null;
+  return carry ?? null;
 }
 
-// ─── Submit ───────────────────────────────────────────────────────────────────
-
-export async function submitOpenStatement(
-  input: SubmitOpenStatementInput,
-): Promise<TaskResult<OpenStatementTask>> {
+export async function submitOpenStatement(input: SubmitOpenStatementInput): Promise<TaskResult<OpenStatementTask>> {
   try {
     const gateErr = await assertCanProgressTask(input.scheduleId, input.storeId, input.geo, input.skipGeo);
     if (gateErr) return { success: false, error: gateErr };
 
-    if (!input.actualAmount || !input.actualAmount.trim())
-      return { success: false, error: 'Nominal Open Statement wajib diisi.' };
-    const actualNum = Number(input.actualAmount);
-    if (!isFinite(actualNum) || actualNum < 0)
-      return { success: false, error: 'Nominal Open Statement harus angka ≥ 0.' };
+    if (input.decision !== 'done' && input.decision !== 'hold') return { success: false, error: 'Pilih status Open Statement: Done atau On Hold.' };
+    if (input.decision === 'hold' && !input.holdReason?.trim()) return { success: false, error: 'Alasan On Hold wajib diisi.' };
 
-    const [task] = await db
-      .select()
-      .from(openStatementTasks)
-      .where(eq(openStatementTasks.scheduleId, input.scheduleId))
-      .limit(1);
+    const [task] = await db.select().from(openStatementTasks).where(eq(openStatementTasks.scheduleId, input.scheduleId)).limit(1);
     if (!task) return { success: false, error: 'Task tidak ditemukan.' };
-    if (['completed'].includes(task.status ?? ''))
-      return { success: false, error: 'Task sudah final.' };
-    if (task.expectedAmount == null)
-      return { success: false, error: 'Expected data belum di-fetch. Buka task ulang untuk fetch.' };
+    if (task.status === 'completed') return { success: false, error: 'Task sudah final.' };
 
-    const expectedNum = Number(task.expectedAmount);
-    const isBalanced  = expectedNum === actualNum;
-    const newStatus   = isBalanced ? 'completed' as const : 'discrepancy' as const;
+    const now = new Date();
+    const isHold = input.decision === 'hold';
 
-    const now       = new Date();
-    const eveningId = await getEveningShiftId();
-
-    let discrepancyStartedAt       = task.discrepancyStartedAt;
-    let discrepancyResolvedAt      = task.discrepancyResolvedAt;
-    let discrepancyDurationMinutes = task.discrepancyDurationMinutes;
-
-    if (!isBalanced && !discrepancyStartedAt) {
-      discrepancyStartedAt = now;
-    }
-    if (isBalanced && discrepancyStartedAt && !discrepancyResolvedAt) {
-      discrepancyResolvedAt      = now;
-      discrepancyDurationMinutes = Math.max(0,
-        Math.round((now.getTime() - new Date(discrepancyStartedAt).getTime()) / 60_000));
-    }
-
-    const [updated] = await db
-      .update(openStatementTasks)
-      .set({
-        scheduleId:                 input.scheduleId,
-        userId:                     input.userId,
-        storeId:                    input.storeId,
-        shiftId:                    eveningId,
-        actualAmount:               input.actualAmount,
-        isBalanced,
-        status:                     newStatus,
-        discrepancyStartedAt,
-        discrepancyResolvedAt,
-        discrepancyDurationMinutes,
-        submittedLat:               String(input.geo.lat),
-        submittedLng:               String(input.geo.lng),
-        notes:                      input.notes,
-        completedAt:                isBalanced ? now : null,
-        updatedAt:                  now,
-      })
-      .where(eq(openStatementTasks.id, task.id))
-      .returning();
+    const [updated] = await db.update(openStatementTasks).set({
+      scheduleId: input.scheduleId,
+      userId: input.userId,
+      storeId: input.storeId,
+      isDone: !isHold,
+      isOnHold: isHold,
+      holdReason: isHold ? input.holdReason : null,
+      heldBy: isHold ? input.userId : null,
+      heldAt: isHold ? now : null,
+      isBalanced: true,
+      status: 'completed',
+      submittedLat: String(input.geo.lat),
+      submittedLng: String(input.geo.lng),
+      notes: input.notes,
+      completedAt: now,
+      updatedAt: now,
+    }).where(eq(openStatementTasks.id, task.id)).returning();
 
     return { success: true, data: updated };
   } catch (err) {
@@ -262,25 +143,19 @@ export async function submitOpenStatement(
   }
 }
 
-// ─── Auto-save ────────────────────────────────────────────────────────────────
-
-export async function autoSaveOpenStatement(
-  scheduleId: number,
-  patch:      AutoSaveOpenStatementPatch,
-): Promise<TaskResult<{ saved: string[] }>> {
+export async function autoSaveOpenStatement(scheduleId: number, patch: AutoSaveOpenStatementPatch): Promise<TaskResult<{ saved: string[] }>> {
   try {
-    const [existing] = await db
-      .select({ id: openStatementTasks.id, status: openStatementTasks.status })
-      .from(openStatementTasks)
-      .where(eq(openStatementTasks.scheduleId, scheduleId))
-      .limit(1);
+    const [existing] = await db.select({ id: openStatementTasks.id, status: openStatementTasks.status }).from(openStatementTasks).where(eq(openStatementTasks.scheduleId, scheduleId)).limit(1);
     if (!existing) return { success: false, error: 'Task not found.' };
-    if (['completed'].includes(existing.status ?? ''))
-      return { success: true, data: { saved: [] } };
+    if (existing.status === 'completed') return { success: true, data: { saved: [] } };
 
     const update: Record<string, unknown> = { updatedAt: new Date() };
-    if ('actualAmount' in patch) update.actualAmount = patch.actualAmount;
-    if ('notes'        in patch) update.notes        = patch.notes;
+    if ('decision' in patch) {
+      update.isDone = patch.decision === 'done';
+      update.isOnHold = patch.decision === 'hold';
+    }
+    if ('holdReason' in patch) update.holdReason = patch.holdReason;
+    if ('notes' in patch) update.notes = patch.notes;
     if (existing.status === 'pending') update.status = 'in_progress';
 
     await db.update(openStatementTasks).set(update).where(eq(openStatementTasks.id, existing.id));
@@ -290,58 +165,65 @@ export async function autoSaveOpenStatement(
   }
 }
 
-// ─── Read ─────────────────────────────────────────────────────────────────────
-
 export async function getOpenStatementBySchedule(scheduleId: number): Promise<OpenStatementTask | null> {
-  const [row] = await db
-    .select()
-    .from(openStatementTasks)
-    .where(eq(openStatementTasks.scheduleId, scheduleId))
-    .limit(1);
+  const [row] = await db.select().from(openStatementTasks).where(eq(openStatementTasks.scheduleId, scheduleId)).limit(1);
   return row ?? null;
 }
 
 export async function getOpenStatementById(id: number): Promise<OpenStatementTask | null> {
-  const [row] = await db
-    .select()
-    .from(openStatementTasks)
-    .where(eq(openStatementTasks.id, id))
-    .limit(1);
+  const [row] = await db.select().from(openStatementTasks).where(eq(openStatementTasks.id, id)).limit(1);
   return row ?? null;
 }
 
-// ─── Materialise ──────────────────────────────────────────────────────────────
-
-export async function materialiseOpenStatementTask(
-  scheduleId: number,
-  userId:     string,
-  storeId:    number,
-  shiftId:    number,
-  date:       Date,
-): Promise<'created' | 'skipped'> {
+export async function materialiseOpenStatementTask(scheduleId: number, userId: string, storeId: number, shiftId: number, date: Date): Promise<'created' | 'skipped'> {
   const dayStart = startOfDay(date);
-  const dayEnd   = endOfDay(date);
+  const dayEnd = endOfDay(date);
+  const shiftCode = await getShiftCode(shiftId);
 
-  const [active] = await db
-    .select({ id: openStatementTasks.id })
-    .from(openStatementTasks)
-    .where(and(
+  const [today] = await db.select({ id: openStatementTasks.id }).from(openStatementTasks).where(and(
+    eq(openStatementTasks.storeId, storeId),
+    gte(openStatementTasks.date, dayStart),
+    lte(openStatementTasks.date, dayEnd),
+    inArray(openStatementTasks.status, ['pending', 'in_progress']),
+  )).limit(1);
+  if (today) return 'skipped';
+
+  // Morning task is only created when yesterday/prior evening was put on hold.
+  if (shiftCode === 'morning' || shiftCode === 'full_day') {
+    const [held] = await db.select().from(openStatementTasks).where(and(
       eq(openStatementTasks.storeId, storeId),
-      gte(openStatementTasks.date, dayStart),
-      lte(openStatementTasks.date, dayEnd),
-      inArray(openStatementTasks.status, ['pending', 'in_progress', 'discrepancy']),
-    ))
-    .limit(1);
-  if (active) return 'skipped';
+      eq(openStatementTasks.isOnHold, true),
+      lt(openStatementTasks.date, dayStart),
+      isNull(openStatementTasks.parentTaskId),
+    )).orderBy(desc(openStatementTasks.date), desc(openStatementTasks.createdAt)).limit(1);
+
+    if (held) {
+      const [existingCarry] = await db.select({ id: openStatementTasks.id }).from(openStatementTasks).where(and(
+        eq(openStatementTasks.parentTaskId, held.id),
+        gte(openStatementTasks.date, dayStart),
+        lte(openStatementTasks.date, dayEnd),
+      )).limit(1);
+      if (existingCarry) return 'skipped';
+
+      await db.insert(openStatementTasks).values({
+        scheduleId, userId, storeId, shiftId, date: dayStart,
+        parentTaskId: held.id,
+        status: 'pending',
+        notes: held.holdReason ? `Carry-over dari Open Statement sebelumnya: ${held.holdReason}` : 'Carry-over dari Open Statement sebelumnya.',
+      });
+      return 'created';
+    }
+
+    if (shiftCode === 'morning') return 'skipped';
+  }
+
+  // Normal Open Statement is still an evening task.
+  if (shiftCode !== 'evening' && shiftCode !== 'full_day') return 'skipped';
 
   await db.insert(openStatementTasks).values({
-    scheduleId,
-    userId,
-    storeId,
-    shiftId,
-    date:         dayStart,
+    scheduleId, userId, storeId, shiftId, date: dayStart,
     parentTaskId: null,
-    status:       'pending',
+    status: 'pending',
   });
 
   return 'created';

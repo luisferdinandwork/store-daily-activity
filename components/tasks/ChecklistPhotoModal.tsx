@@ -10,6 +10,11 @@
 // IMPORTANT: emitChange runs in a useEffect that watches `drafts`, NOT inside
 // the setState updater. Calling parent setState from within a child setState
 // updater triggers React's "Cannot update a component while rendering" warning.
+//
+// MOBILE NAV:  The fixed bottom nav is h-16 (4rem). The modal footer uses
+// pb-[calc(1rem+env(safe-area-inset-bottom))] inside its own padding so that
+// on devices with a home indicator the buttons are always reachable.
+// The backdrop is always inset-0 so the full screen dims correctly.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useRef, useState } from 'react';
@@ -91,10 +96,9 @@ export default function ChecklistPhotoModal(props: ChecklistPhotoModalProps) {
   const [uploadingKey, setUploadingKey] = useState<string | null>(null);
 
   // Track whether drafts changed because of user action (vs. an open/reset).
-  // Only user-driven changes should be emitted to the parent.
   const userMutatedRef = useRef(false);
 
-  // Reset on open. Mark as non-user mutation so we don't re-emit initial state.
+  // Reset on open.
   useEffect(() => {
     if (open) {
       userMutatedRef.current = false;
@@ -114,8 +118,6 @@ export default function ChecklistPhotoModal(props: ChecklistPhotoModalProps) {
   const isSingle = !props.buckets;
 
   // Emit drafts to parent in an effect — NEVER inside a setState updater.
-  // This is the fix for the "Cannot update a component while rendering"
-  // warning that React throws when a child triggers parent state during render.
   useEffect(() => {
     if (!open) return;
     if (!userMutatedRef.current) return;
@@ -124,9 +126,6 @@ export default function ChecklistPhotoModal(props: ChecklistPhotoModalProps) {
     } else {
       (props as MultiProps).onChangeMulti?.(drafts);
     }
-    // We intentionally only depend on `drafts`. The handlers are stable enough
-    // for our purposes (parent supplies them via useCallback or normal closures);
-    // we don't want to re-emit when only the parent reference changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [drafts, open]);
 
@@ -202,35 +201,66 @@ export default function ChecklistPhotoModal(props: ChecklistPhotoModalProps) {
     onClose();
   }
 
+  const hasClearHandler = isSingle
+    ? !!(props as SingleProps).onClear
+    : !!(props as MultiProps).onClearMulti;
+
   return (
+    // ── Backdrop ────────────────────────────────────────────────────────────
+    // Always inset-0 so the full screen dims. The panel itself sits above the
+    // nav because the nav is z-50 and the modal is z-[60].
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 sm:items-center bottom-16"
+      className="fixed inset-0 z-[60] flex items-end justify-center bg-black/60 sm:items-center"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
       aria-labelledby="checklist-photo-modal-title"
     >
+      {/* ── Panel ─────────────────────────────────────────────────────────── */}
+      {/* On mobile the sheet rises from the bottom. mb-16 lifts it above the
+          h-16 nav bar so the panel never slides under it. On sm+ screens the
+          sheet is centred and the nav offset is irrelevant. */}
       <div
-        className="relative w-full max-w-md rounded-t-3xl bg-background shadow-xl sm:rounded-3xl max-h-[92vh] flex flex-col"
+        className={cn(
+          'relative w-full mx-2 flex flex-col',
+          'bg-background shadow-2xl',
+          // Mobile: bottom sheet above nav — rounded top corners only
+          'rounded-t-3xl max-h-[calc(100dvh-4rem-env(safe-area-inset-bottom))]',
+          // sm+: centred modal — fully rounded
+          'sm:mb-0 sm:rounded-3xl sm:max-h-[90vh]',
+        )}
         onClick={e => e.stopPropagation()}
       >
+
+        {/* Drag handle — mobile affordance */}
+        <div className="flex justify-center pt-3 pb-1 sm:hidden" aria-hidden="true">
+          <div className="h-1 w-10 rounded-full bg-border" />
+        </div>
+
+        {/* ── Header ──────────────────────────────────────────────────────── */}
         <div className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
           <div className="min-w-0 flex-1">
-            <h3 id="checklist-photo-modal-title" className="text-base font-bold text-foreground">{title}</h3>
+            <h3
+              id="checklist-photo-modal-title"
+              className="text-base font-bold text-foreground leading-snug"
+            >
+              {title}
+            </h3>
             {description && (
-              <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
+              <p className="mt-1 text-xs text-muted-foreground leading-relaxed">{description}</p>
             )}
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-secondary text-muted-foreground hover:bg-border"
+            className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-secondary text-muted-foreground hover:bg-border transition-colors"
             aria-label="Tutup"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
+        {/* ── Scrollable body ─────────────────────────────────────────────── */}
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
           {normalizedBuckets.map(bucket => {
             const current   = drafts[bucket.key] ?? [];
@@ -254,24 +284,26 @@ export default function ChecklistPhotoModal(props: ChecklistPhotoModalProps) {
             );
           })}
 
-          {!disabled && hasAnyPhotos && ((isSingle && (props as SingleProps).onClear) || (!isSingle && (props as MultiProps).onClearMulti)) && (
+          {!disabled && hasAnyPhotos && hasClearHandler && (
             <button
               type="button"
               onClick={handleClearAll}
-              className="flex w-full items-center justify-center gap-1.5 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-100"
+              className="flex w-full items-center justify-center gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-xs font-semibold text-red-600 hover:bg-red-100 transition-colors active:scale-[0.98]"
             >
               <Trash2 className="h-3.5 w-3.5" />
-              Hapus Semua & Batalkan Checklist
+              Hapus Semua &amp; Batalkan Checklist
             </button>
           )}
         </div>
 
+        {/* ── Footer actions ───────────────────────────────────────────────── */}
+        {/* Extra bottom padding absorbs the device safe-area inset (home bar). */}
         {!disabled && (
-          <div className="flex gap-2 border-t border-border px-5 py-4">
+          <div className="flex gap-2 border-t border-border px-5 pt-3 pb-4">
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 rounded-xl border border-border bg-card px-4 py-3 text-sm font-semibold text-foreground hover:bg-secondary"
+              className="flex-1 rounded-xl border border-border bg-card px-4 py-3 text-sm font-semibold text-foreground hover:bg-secondary transition-colors active:scale-[0.98]"
             >
               Tutup
             </button>
@@ -280,10 +312,10 @@ export default function ChecklistPhotoModal(props: ChecklistPhotoModalProps) {
               onClick={handleConfirm}
               disabled={!allSatisfied || uploadingKey !== null}
               className={cn(
-                'flex-1 flex items-center justify-center gap-1.5 rounded-xl px-4 py-3 text-sm font-bold transition-all',
+                'flex-1 flex items-center justify-center gap-1.5 rounded-xl px-4 py-3 text-sm font-bold transition-all active:scale-[0.98]',
                 allSatisfied && uploadingKey === null
-                  ? 'bg-primary text-primary-foreground active:scale-[0.98]'
-                  : 'bg-secondary text-muted-foreground opacity-60',
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-secondary text-muted-foreground opacity-60 cursor-not-allowed',
               )}
             >
               <Check className="h-4 w-4" strokeWidth={3} />
@@ -315,11 +347,11 @@ function BucketSection({
   const inputRef = useRef<HTMLInputElement>(null);
 
   const countBadge = needed > 0 ? (
-    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">
+    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700 flex-shrink-0">
       Butuh {needed} lagi
     </span>
   ) : (
-    <span className="flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-bold text-green-700">
+    <span className="flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-bold text-green-700 flex-shrink-0">
       <Check className="h-3 w-3" strokeWidth={3} />
       Cukup
     </span>
@@ -327,52 +359,64 @@ function BucketSection({
 
   return (
     <div className="space-y-2.5">
+      {/* Section header */}
       {showLabel ? (
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2">
           <div className="min-w-0 flex-1">
             <p className="text-xs font-bold text-foreground">{bucket.label}</p>
-            {bucket.hint && <p className="mt-0.5 text-[10px] text-muted-foreground">{bucket.hint}</p>}
+            {bucket.hint && (
+              <p className="mt-0.5 text-[10px] text-muted-foreground">{bucket.hint}</p>
+            )}
           </div>
           {countBadge}
         </div>
       ) : (
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2">
           <p className="text-xs font-semibold text-foreground">
-            {current.length} / {bucket.max} foto
-            <span className="ml-1 text-muted-foreground font-normal">(minimal {bucket.min})</span>
+            {current.length}
+            <span className="text-muted-foreground font-normal"> / {bucket.max} foto</span>
+            <span className="ml-1 text-[10px] text-muted-foreground font-normal">(min {bucket.min})</span>
           </p>
           {countBadge}
         </div>
       )}
 
+      {/* Photo grid */}
       <div className="grid grid-cols-3 gap-2.5">
         {current.map((url, i) => (
-          <div key={`${url}-${i}`} className="relative aspect-square overflow-hidden rounded-xl border border-border bg-secondary">
+          <div
+            key={`${url}-${i}`}
+            className="relative aspect-square overflow-hidden rounded-xl border border-border bg-secondary"
+          >
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={url} alt="" className="h-full w-full object-cover" />
+            <img src={url} alt={`Foto ${i + 1}`} className="h-full w-full object-cover" />
             {!disabled && (
               <button
                 type="button"
                 onClick={() => onRemove(i)}
-                className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80"
+                className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80 transition-colors"
                 aria-label={`Hapus foto ${i + 1}`}
               >
                 <X className="h-3.5 w-3.5" />
               </button>
             )}
-            <div className="absolute bottom-1 left-1 rounded-full bg-black/60 px-1.5 py-0.5 text-[9px] font-bold text-white">
+            <div className="absolute bottom-1 left-1 rounded-full bg-black/60 px-1.5 py-0.5 text-[9px] font-bold text-white leading-none">
               {i + 1}
             </div>
           </div>
         ))}
 
+        {/* Add photo cell */}
         {!disabled && current.length < bucket.max && (
           <button
             type="button"
             onClick={() => inputRef.current?.click()}
             disabled={uploading}
             className={cn(
-              'flex aspect-square flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed bg-secondary text-muted-foreground hover:border-primary/40 hover:text-primary disabled:opacity-50',
+              'flex aspect-square flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed transition-colors',
+              'bg-secondary text-muted-foreground',
+              'hover:border-primary/40 hover:text-primary hover:bg-primary/5',
+              'disabled:opacity-50 disabled:cursor-not-allowed',
               satisfied ? 'border-border' : 'border-amber-300',
             )}
           >
@@ -388,6 +432,7 @@ function BucketSection({
         )}
       </div>
 
+      {/* Sub-label for multi-bucket mode */}
       {showLabel && (
         <p className="text-[10px] text-muted-foreground">
           {current.length}/{bucket.max} foto · minimal {bucket.min}
@@ -401,7 +446,11 @@ function BucketSection({
         capture="environment"
         multiple={bucket.max > 1}
         className="hidden"
-        onChange={e => onFiles(e.target.files)}
+        onChange={e => {
+          onFiles(e.target.files);
+          // Reset input so the same file can be re-selected after removal
+          e.target.value = '';
+        }}
       />
     </div>
   );

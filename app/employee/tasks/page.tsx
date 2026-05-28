@@ -298,7 +298,7 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: 'completed',   label: 'Done'    },
 ];
 
-const MORNING_ONLY_SHARED_TASK_TYPES = new Set<TaskType>([
+const SHIFT_SCOPED_SHARED_TASK_TYPES = new Set<TaskType>([
   'briefing',
   'item_dropping',
   'serah_terima',
@@ -342,29 +342,24 @@ function getTaskScheduleKey(task: TaskItem): string {
   return String(task.data.scheduleId ?? 'unknown-schedule');
 }
 
-function rankMorningSharedCandidate(task: TaskItem): number {
-  // Prefer the new correct row first. If old duplicated rows still exist,
-  // full_day/evening rows can still be shown as Morning until DB cleanup runs.
-  if (task.shift === 'morning') return 0;
-  if (task.shift === 'full_day') return 1;
-  return 2;
+function getShiftScopedDisplayShift(task: TaskItem): 'morning' | 'evening' {
+  // Legacy safety: if old full_day rows still exist for these shared tasks,
+  // treat them as the morning row. New seed/util logic should create only
+  // morning/evening rows for these task types.
+  return task.shift === 'evening' ? 'evening' : 'morning';
 }
 
-function toMorningDisplayTask(task: TaskItem): TaskItem {
-  if (!MORNING_ONLY_SHARED_TASK_TYPES.has(task.type)) return task;
-
-  return {
-    ...task,
-    shift: 'morning',
-    data: {
-      ...task.data,
-      shift: 'morning',
-    },
-  } as TaskItem;
+function rankShiftScopedCandidate(task: TaskItem): number {
+  // Prefer a real morning/evening row over a legacy full_day row, then prefer
+  // tasks needing attention so employees don't miss active/discrepancy work.
+  const shiftRank = task.shift === 'full_day' ? 10 : 0;
+  return shiftRank + (STATUS_PRIORITY[task.data.status] ?? 99);
 }
 
 function getDisplayShift(task: TaskItem): 'morning' | 'evening' {
-  if (MORNING_ONLY_SHARED_TASK_TYPES.has(task.type)) return 'morning';
+  if (SHIFT_SCOPED_SHARED_TASK_TYPES.has(task.type)) {
+    return getShiftScopedDisplayShift(task);
+  }
 
   // Avoid duplicating full_day cards in both sections. Full-day personal/shared
   // rows are displayed in Morning; true evening ops rows should come from the
@@ -376,14 +371,24 @@ function getDisplayShift(task: TaskItem): 'morning' | 'evening' {
 
 function canShowForOwnShifts(task: TaskItem, ownShifts: Set<ShiftCode>): boolean {
   if (ownShifts.size === 0) return true;
-  if (ownShifts.has('full_day')) return true;
 
-  if (MORNING_ONLY_SHARED_TASK_TYPES.has(task.type)) {
-    return ownShifts.has('morning');
+  // Briefing, Item Dropping, and Serah Terima are shared PER SHIFT:
+  // - morning employee sees only morning row
+  // - evening employee sees only evening row
+  // - full_day employee sees only the morning row
+  if (SHIFT_SCOPED_SHARED_TASK_TYPES.has(task.type)) {
+    const displayShift = getShiftScopedDisplayShift(task);
+
+    if (ownShifts.has('full_day')) return displayShift === 'morning';
+    return ownShifts.has(displayShift);
   }
 
+  // Full-day employees can still see the rest of the day's tasks.
+  if (ownShifts.has('full_day')) return true;
+
   if (EVENING_OPERATIONAL_TASK_TYPES.has(task.type)) {
-    return task.shift === 'full_day' || ownShifts.has(task.shift);
+    if (task.shift === 'full_day') return true;
+    return ownShifts.has(task.shift);
   }
 
   if (task.shift === 'full_day') {
@@ -395,27 +400,31 @@ function canShowForOwnShifts(task: TaskItem, ownShifts: Set<ShiftCode>): boolean
 
 function normaliseVisibleTasks(tasks: TaskItem[], ownShifts: Set<ShiftCode>): TaskItem[] {
   const regularSeen = new Set<string>();
-  const morningSharedByKey = new Map<string, TaskItem>();
+  const shiftScopedByKey = new Map<string, TaskItem>();
   const result: TaskItem[] = [];
 
   for (const task of tasks) {
-    if (MORNING_ONLY_SHARED_TASK_TYPES.has(task.type)) {
+    if (SHIFT_SCOPED_SHARED_TASK_TYPES.has(task.type)) {
+      const displayShift = getShiftScopedDisplayShift(task);
       const key = [
         task.type,
         getTaskStoreKey(task),
         getTaskDayKey(task.data.date),
+        displayShift,
       ].join('::');
 
-      const existing = morningSharedByKey.get(key);
-      if (
-        !existing ||
-        rankMorningSharedCandidate(task) < rankMorningSharedCandidate(existing) ||
-        (
-          rankMorningSharedCandidate(task) === rankMorningSharedCandidate(existing) &&
-          (STATUS_PRIORITY[task.data.status] ?? 99) < (STATUS_PRIORITY[existing.data.status] ?? 99)
-        )
-      ) {
-        morningSharedByKey.set(key, toMorningDisplayTask(task));
+      const normalizedTask = {
+        ...task,
+        shift: displayShift,
+        data: {
+          ...task.data,
+          shift: displayShift,
+        },
+      } as TaskItem;
+
+      const existing = shiftScopedByKey.get(key);
+      if (!existing || rankShiftScopedCandidate(normalizedTask) < rankShiftScopedCandidate(existing)) {
+        shiftScopedByKey.set(key, normalizedTask);
       }
 
       continue;
@@ -437,7 +446,7 @@ function normaliseVisibleTasks(tasks: TaskItem[], ownShifts: Set<ShiftCode>): Ta
     result.push(task);
   }
 
-  result.push(...morningSharedByKey.values());
+  result.push(...shiftScopedByKey.values());
 
   return result.filter((task) => canShowForOwnShifts(task, ownShifts));
 }

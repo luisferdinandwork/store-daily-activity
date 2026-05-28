@@ -487,45 +487,70 @@ export default function StoreOpeningDetailPage() {
   };
 
   // ── Login POS modal ────────────────────────────────────────────────────────
-  function confirmLoginPos(photos: string[]) {
-    setCashierDeskPhotos(photos);
-    setLoginPos(true);
-    autoSave({ cashierDeskPhotos: photos, loginPos: true }, { immediate: true });
+  function syncLoginPosPhotos(photos: string[]) {
+    const nextPhotos = Array.isArray(photos) ? photos : [];
+    const done = nextPhotos.length >= PHOTO_RULES.cashierDesk.min;
+
+    setCashierDeskPhotos(nextPhotos);
+    setLoginPos(done);
+
+    // Save immediately on every add/remove from the modal, so closing and
+    // reopening the modal keeps the latest photos without needing Confirm.
+    autoSave(
+      { cashierDeskPhotos: nextPhotos, loginPos: done },
+      { immediate: true },
+    );
   }
+
+  function confirmLoginPos(photos: string[]) {
+    syncLoginPosPhotos(photos);
+  }
+
   function clearLoginPos() {
-    setCashierDeskPhotos([]);
-    setLoginPos(false);
-    autoSave({ cashierDeskPhotos: [], loginPos: false }, { immediate: true });
+    syncLoginPosPhotos([]);
   }
 
   // ── 5R modal ───────────────────────────────────────────────────────────────
-  function confirmFiveR(results: Record<string, string[]>) {
-    const next = results as FiveRPhotos;
-    setFiveRPhotos(next);
+  function normalizeFiveRPhotos(results: Record<string, string[]>): FiveRPhotos {
+    return {
+      kasir:  Array.isArray(results.kasir)  ? results.kasir  : [],
+      depan:  Array.isArray(results.depan)  ? results.depan  : [],
+      kanan:  Array.isArray(results.kanan)  ? results.kanan  : [],
+      kiri:   Array.isArray(results.kiri)   ? results.kiri   : [],
+      gudang: Array.isArray(results.gudang) ? results.gudang : [],
+    };
+  }
+
+  function syncFiveRPhotos(results: Record<string, string[]>) {
+    const next = normalizeFiveRPhotos(results);
     const allDone = FIVE_R_AREAS.every(
       a => (next[a.key]?.length ?? 0) >= PHOTO_RULES.fiveRArea.min,
     );
+
+    setFiveRPhotos(next);
     setFiveR(allDone);
-    autoSave({
-      fiveRAreaKasirPhotos:  next.kasir,
-      fiveRAreaDepanPhotos:  next.depan,
-      fiveRAreaKananPhotos:  next.kanan,
-      fiveRAreaKiriPhotos:   next.kiri,
-      fiveRAreaGudangPhotos: next.gudang,
-      fiveR: allDone,
-    }, { immediate: true });
+
+    // Save immediately on every bucket photo add/remove from the modal.
+    // This makes each 5R area persist as soon as it changes.
+    autoSave(
+      {
+        fiveRAreaKasirPhotos:  next.kasir,
+        fiveRAreaDepanPhotos:  next.depan,
+        fiveRAreaKananPhotos:  next.kanan,
+        fiveRAreaKiriPhotos:   next.kiri,
+        fiveRAreaGudangPhotos: next.gudang,
+        fiveR: allDone,
+      },
+      { immediate: true },
+    );
   }
+
+  function confirmFiveR(results: Record<string, string[]>) {
+    syncFiveRPhotos(results);
+  }
+
   function clearFiveR() {
-    setFiveRPhotos(EMPTY_FIVE_R);
-    setFiveR(false);
-    autoSave({
-      fiveRAreaKasirPhotos:  [],
-      fiveRAreaDepanPhotos:  [],
-      fiveRAreaKananPhotos:  [],
-      fiveRAreaKiriPhotos:   [],
-      fiveRAreaGudangPhotos: [],
-      fiveR: false,
-    }, { immediate: true });
+    syncFiveRPhotos(EMPTY_FIVE_R);
   }
 
   // ── Submit gate ───────────────────────────────────────────────────────────
@@ -797,6 +822,7 @@ export default function StoreOpeningDetailPage() {
         max={PHOTO_RULES.cashierDesk.max}
         initialPhotos={cashierDeskPhotos}
         onConfirm={confirmLoginPos}
+        onChange={syncLoginPosPhotos}
         onClear={clearLoginPos}
         disabled={dis}
       />
@@ -816,6 +842,7 @@ export default function StoreOpeningDetailPage() {
           initialPhotos: fiveRPhotos[area.key] ?? [],
         }))}
         onConfirmMulti={confirmFiveR}
+        onChangeMulti={syncFiveRPhotos}
         onClearMulti={clearFiveR}
         disabled={dis}
       />

@@ -2,10 +2,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Dedicated utilities for the EOD Z-Report task.
 //
-// EOD Z-Report is a SHARED evening task. The employee prints the local POS
-// Z-Report receipt, photographs it, and enters the total nominal. This is the
-// SOURCE OF TRUTH for the downstream EDC Reconciliation and Open Statement
-// tasks — it is NOT discrepancy-capable.
+// EOD Z-Report is a SHARED evening task. The employee only photographs the
+// physical/stuck Z-Report receipt and marks the task as finished. No nominal
+// input is required anymore.
 //
 // Access rules:
 //   • Employee must be checked in.
@@ -38,14 +37,12 @@ export interface SubmitEodZReportInput {
   userId:        string;
   storeId:       number;
   geo:           GeoPoint;
-  totalNominal:  string;      // numeric string (decimal)
   zReportPhotos: string[];    // min 1
   notes?:        string;
   skipGeo?:      boolean;
 }
 
 export interface AutoSaveEodZReportPatch {
-  totalNominal?:  string;
   zReportPhotos?: string[];
   notes?:         string;
 }
@@ -123,12 +120,6 @@ async function assertCanProgressTask(
 // ─── Validation ───────────────────────────────────────────────────────────────
 
 function validatePayload(input: SubmitEodZReportInput): string | null {
-  if (!input.totalNominal || !input.totalNominal.trim())
-    return 'Total nominal Z-Report wajib diisi.';
-  const n = Number(input.totalNominal);
-  if (!isFinite(n) || n <= 0)
-    return 'Total nominal harus angka positif.';
-
   const count = input.zReportPhotos?.length ?? 0;
   if (count < EOD_Z_REPORT_PHOTO_RULES.zReport.min)
     return `Foto Z-Report wajib minimal ${EOD_Z_REPORT_PHOTO_RULES.zReport.min}.`;
@@ -168,7 +159,7 @@ export async function submitEodZReport(
       storeId:       input.storeId,
       shiftId:       eveningShiftId,
       date:          startOfDay(now),
-      totalNominal:  input.totalNominal,
+      totalNominal:  null,
       zReportPhotos: jsonPhotos(input.zReportPhotos),
       submittedLat:  String(input.geo.lat),
       submittedLng:  String(input.geo.lng),
@@ -207,7 +198,6 @@ export async function autoSaveEodZReport(
 
     const update: Record<string, unknown> = { updatedAt: new Date() };
 
-    if ('totalNominal'  in patch) update.totalNominal  = patch.totalNominal;
     if ('notes'         in patch) update.notes         = patch.notes;
     if ('zReportPhotos' in patch) update.zReportPhotos = jsonPhotos(patch.zReportPhotos);
 

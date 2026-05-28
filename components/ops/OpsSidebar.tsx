@@ -68,7 +68,6 @@ const NAV = [
   {
     section: 'People',
     items: [
-      { href: '/ops/users',      label: 'Users',      icon: UsersRound },
       { href: '/ops/schedules',  label: 'Schedules',  icon: Calendar },
       { href: '/ops/attendance', label: 'Attendance', icon: UserCheck },
       { href: '/ops/manage', label: 'Manage', icon: ClipboardCheck },

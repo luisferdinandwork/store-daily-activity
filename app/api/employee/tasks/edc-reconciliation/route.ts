@@ -1,183 +1,87 @@
 // app/api/employee/tasks/edc-reconciliation/route.ts
-// ─────────────────────────────────────────────────────────────────────────────
-//   POST   → final submit (compare + discrepancy bookkeeping)
-//   PATCH  → auto-save top-level (notes)
-//   PUT    → add / update / delete a transaction row
-//             body: { op: 'add' | 'update' | 'delete', ...fields }
-// ─────────────────────────────────────────────────────────────────────────────
-
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession }          from 'next-auth';
-import { authOptions }               from '@/lib/auth';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth';
 import {
-  submitEdcReconciliation,
+  addRow,
   autoSaveEdcReconciliation,
-  addRow, updateRow, deleteRow,
+  deleteRow,
   getEdcReconciliationById,
-  type AutoSaveEdcReconciliationPatch,
+  submitEdcReconciliation,
+  updateRow,
 } from '@/lib/db/utils/edc-reconciliation';
-import type { TxType } from '@/lib/db/utils/dummy-evening-data';
 
-const TX_TYPES = new Set<TxType>(['credit', 'debit', 'qris', 'ewallet', 'cash']);
-
-function toInt(val: unknown, field: string): number {
-  const n = parseInt(String(val ?? ''), 10);
-  if (isNaN(n)) throw new Error(`${field} must be a valid integer, got: ${JSON.stringify(val)}`);
-  return n;
+function unauthorized() {
+  return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 }
 
-function toGeo(geo: unknown, skipGeo: boolean): { lat: number; lng: number } | null {
-  if (skipGeo) return null;
-  if (!geo || typeof geo !== 'object') return null;
-  const { lat, lng } = geo as Record<string, unknown>;
-  if (typeof lat !== 'number' || typeof lng !== 'number') return null;
-  return { lat, lng };
-}
-
-// ─── GET (load task + rows for the detail page) ──────────────────────────────
-
-export async function GET(req: NextRequest) {
+export async function GET(request: NextRequest) {
   const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  if (!session?.user?.id) return unauthorized();
 
-  const { searchParams } = new URL(req.url);
-  const taskIdParam = searchParams.get('taskId');
-  const taskId = taskIdParam ? parseInt(taskIdParam, 10) : NaN;
-  if (isNaN(taskId))
-    return NextResponse.json({ success: false, error: 'taskId query param required' }, { status: 400 });
-
-  try {
-    const result = await getEdcReconciliationById(taskId);
-    if (!result)
-      return NextResponse.json({ success: false, error: 'Task not found' }, { status: 404 });
-    return NextResponse.json({ success: true, data: result });
-  } catch (err) {
-    console.error('[GET /api/employee/tasks/edc-reconciliation]', err);
-    return NextResponse.json({ success: false, error: String(err) }, { status: 500 });
-  }
-}
-
-// ─── POST (final submit) ──────────────────────────────────────────────────────
-
-export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-
-  let body: Record<string, unknown>;
-  try { body = await req.json(); }
-  catch { return NextResponse.json({ success: false, error: 'Invalid JSON body' }, { status: 400 }); }
-
-  let scheduleId: number;
-  let storeId:    number;
-  try {
-    scheduleId = toInt(body.scheduleId, 'scheduleId');
-    storeId    = toInt(body.storeId,    'storeId');
-  } catch (e) {
-    return NextResponse.json({ success: false, error: String(e) }, { status: 400 });
+  const taskId = Number(request.nextUrl.searchParams.get('taskId'));
+  if (!Number.isFinite(taskId)) {
+    return NextResponse.json({ success: false, error: 'Invalid taskId' }, { status: 400 });
   }
 
-  const skipGeo          = body.skipGeo === true;
-  const rawGeo           = toGeo(body.geo, skipGeo);
-  const geo              = rawGeo ?? { lat: 0, lng: 0 };
-  const effectiveSkipGeo = skipGeo || rawGeo === null;
+  const data = await getEdcReconciliationById(taskId);
+  if (!data) return NextResponse.json({ success: false, error: 'Task tidak ditemukan.' }, { status: 404 });
+  return NextResponse.json({ success: true, data });
+}
 
-  try {
-    const result = await submitEdcReconciliation({
-      scheduleId,
-      userId:   session.user.id as string,
-      storeId,
-      geo,
-      skipGeo:  effectiveSkipGeo,
-      notes:    typeof body.notes === 'string' ? body.notes : undefined,
+export async function PUT(request: NextRequest) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) return unauthorized();
+
+  const body = await request.json();
+
+  if (body.op === 'add') {
+    const result = await addRow({
+      taskId: Number(body.taskId),
+      edcName: body.edcName,
+      transactionType: body.transactionType,
+      actualAmount: String(body.actualAmount ?? '0'),
+      actualCount: Number(body.actualCount ?? 0),
+      notes: body.notes,
     });
     return NextResponse.json(result, { status: result.success ? 200 : 400 });
-  } catch (err) {
-    console.error('[POST /api/employee/tasks/edc-reconciliation]', err);
-    return NextResponse.json({ success: false, error: String(err) }, { status: 500 });
   }
-}
 
-// ─── PATCH (auto-save top-level) ─────────────────────────────────────────────
-
-export async function PATCH(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-
-  let body: Record<string, unknown>;
-  try { body = await req.json(); }
-  catch { return NextResponse.json({ success: false, error: 'Invalid JSON body' }, { status: 400 }); }
-
-  let scheduleId: number;
-  try { scheduleId = toInt(body.scheduleId, 'scheduleId'); }
-  catch (e) { return NextResponse.json({ success: false, error: String(e) }, { status: 400 }); }
-
-  const patch: AutoSaveEdcReconciliationPatch = {};
-  if ('notes' in body) patch.notes = typeof body.notes === 'string' ? body.notes : undefined;
-
-  try {
-    const result = await autoSaveEdcReconciliation(scheduleId, patch);
+  if (body.op === 'update') {
+    const result = await updateRow({
+      rowId: Number(body.rowId),
+      edcName: body.edcName,
+      transactionType: body.transactionType,
+      actualAmount: body.actualAmount == null ? undefined : String(body.actualAmount),
+      actualCount: body.actualCount == null ? undefined : Number(body.actualCount),
+      notes: body.notes,
+    });
     return NextResponse.json(result, { status: result.success ? 200 : 400 });
-  } catch (err) {
-    console.error('[PATCH /api/employee/tasks/edc-reconciliation]', err);
-    return NextResponse.json({ success: false, error: String(err) }, { status: 500 });
   }
+
+  if (body.op === 'delete') {
+    const result = await deleteRow(Number(body.rowId));
+    return NextResponse.json(result, { status: result.success ? 200 : 400 });
+  }
+
+  const result = await autoSaveEdcReconciliation(Number(body.scheduleId), { notes: body.notes });
+  return NextResponse.json(result, { status: result.success ? 200 : 400 });
 }
 
-// ─── PUT (row CRUD) ──────────────────────────────────────────────────────────
-
-export async function PUT(req: NextRequest) {
+export async function POST(request: NextRequest) {
   const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  const userId = session?.user?.id;
+  if (!userId) return unauthorized();
 
-  let body: Record<string, unknown>;
-  try { body = await req.json(); }
-  catch { return NextResponse.json({ success: false, error: 'Invalid JSON body' }, { status: 400 }); }
+  const body = await request.json();
+  const result = await submitEdcReconciliation({
+    scheduleId: Number(body.scheduleId),
+    userId,
+    storeId: Number(body.storeId),
+    geo: body.geo ?? { lat: 0, lng: 0 },
+    skipGeo: Boolean(body.skipGeo),
+    notes: body.notes,
+  });
 
-  const op = body.op as string;
-
-  try {
-    if (op === 'add') {
-      const taskId          = toInt(body.taskId, 'taskId');
-      const transactionType = body.transactionType as TxType;
-      if (!TX_TYPES.has(transactionType))
-        return NextResponse.json({ success: false, error: 'Invalid transactionType' }, { status: 400 });
-      if (typeof body.actualAmount !== 'string' && typeof body.actualAmount !== 'number')
-        return NextResponse.json({ success: false, error: 'actualAmount required' }, { status: 400 });
-      if (typeof body.actualCount !== 'number')
-        return NextResponse.json({ success: false, error: 'actualCount required (number)' }, { status: 400 });
-
-      const result = await addRow({
-        taskId,
-        transactionType,
-        actualAmount: String(body.actualAmount),
-        actualCount:  body.actualCount,
-        notes:        typeof body.notes === 'string' ? body.notes : undefined,
-      });
-      return NextResponse.json(result, { status: result.success ? 200 : 400 });
-    }
-
-    if (op === 'update') {
-      const rowId = toInt(body.rowId, 'rowId');
-      const result = await updateRow({
-        rowId,
-        transactionType: typeof body.transactionType === 'string' && TX_TYPES.has(body.transactionType as TxType)
-          ? (body.transactionType as TxType) : undefined,
-        actualAmount:    body.actualAmount != null ? String(body.actualAmount) : undefined,
-        actualCount:     typeof body.actualCount === 'number' ? body.actualCount : undefined,
-        notes:           typeof body.notes === 'string' ? body.notes : undefined,
-      });
-      return NextResponse.json(result, { status: result.success ? 200 : 400 });
-    }
-
-    if (op === 'delete') {
-      const rowId  = toInt(body.rowId, 'rowId');
-      const result = await deleteRow(rowId);
-      return NextResponse.json(result, { status: result.success ? 200 : 400 });
-    }
-
-    return NextResponse.json({ success: false, error: `Unknown op: ${op}` }, { status: 400 });
-  } catch (err) {
-    console.error('[PUT /api/employee/tasks/edc-reconciliation]', err);
-    return NextResponse.json({ success: false, error: String(err) }, { status: 500 });
-  }
+  return NextResponse.json(result, { status: result.success ? 200 : 400 });
 }

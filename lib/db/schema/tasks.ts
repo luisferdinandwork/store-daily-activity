@@ -611,6 +611,20 @@ export const serahTerimaItems = pgTable('serah_terima_items', {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+export const storeEdcTerminals = pgTable('store_edc_terminals', {
+  id: serial('id').primaryKey(),
+  storeId: integer('store_id').references(() => stores.id, { onDelete: 'cascade' }).notNull(),
+  edcName: text('edc_name').notNull(), // BCA | Mandiri | BNI | OCBC
+  terminalCode: text('terminal_code'),
+  isActive: boolean('is_active').default(true).notNull(),
+  sortOrder: integer('sort_order').default(0).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => ({
+  storeEdcUnique: unique('store_edc_terminals_store_name_unique').on(t.storeId, t.edcName),
+  storeIdx: index('store_edc_terminals_store_idx').on(t.storeId),
+}));
+
 export const edcReconciliationTasks = pgTable('edc_reconciliation_tasks', {
   id:         serial('id').primaryKey(),
   scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
@@ -644,6 +658,8 @@ export const edcTransactionRows = pgTable('edc_transaction_rows', {
   id:        serial('id').primaryKey(),
   edcTaskId: integer('edc_task_id').references(() => edcReconciliationTasks.id, { onDelete: 'cascade' }).notNull(),
 
+  edcTerminalId: integer('edc_terminal_id').references(() => storeEdcTerminals.id),
+  edcName: text('edc_name').notNull().default('BCA'),
   transactionType: txTypeEnum('transaction_type').notNull(),
 
   expectedAmount: decimal('expected_amount', { precision: 14, scale: 2 }),
@@ -693,10 +709,18 @@ export const openStatementTasks = pgTable('open_statement_tasks', {
   date:       timestamp('date').notNull(),
 
   parentTaskId:      integer('parent_task_id'),
+  // Old amount/reconciliation columns are kept nullable for backward compatibility.
   expectedAmount:    decimal('expected_amount',    { precision: 14, scale: 2 }),
   expectedFetchedAt: timestamp('expected_fetched_at'),
   actualAmount:      decimal('actual_amount',      { precision: 14, scale: 2 }),
   isBalanced:        boolean('is_balanced'),
+
+  // New simple workflow: done now, or hold and carry to next morning.
+  isDone:       boolean('is_done').default(false).notNull(),
+  isOnHold:     boolean('is_on_hold').default(false).notNull(),
+  holdReason:   text('hold_reason'),
+  heldBy:       text('held_by').references(() => users.id),
+  heldAt:       timestamp('held_at'),
 
   discrepancyStartedAt:       timestamp('discrepancy_started_at'),
   discrepancyResolvedAt:      timestamp('discrepancy_resolved_at'),
@@ -794,6 +818,8 @@ export type OpenStatementTask     = typeof openStatementTasks.$inferSelect;
 export type NewOpenStatementTask  = typeof openStatementTasks.$inferInsert;
 export type GroomingTask          = typeof groomingTasks.$inferSelect;
 export type NewGroomingTask       = typeof groomingTasks.$inferInsert;
+export type StoreEdcTerminal         = typeof storeEdcTerminals.$inferSelect;
+export type NewStoreEdcTerminal      = typeof storeEdcTerminals.$inferInsert;
 export type EdcReconciliationTask    = typeof edcReconciliationTasks.$inferSelect;
 export type NewEdcReconciliationTask = typeof edcReconciliationTasks.$inferInsert;
 export type EdcTransactionRow        = typeof edcTransactionRows.$inferSelect;

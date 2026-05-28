@@ -1,32 +1,30 @@
 'use client';
 // app/employee/tasks/eod-z-report/[id]/page.tsx
-// ─────────────────────────────────────────────────────────────────────────────
-// Dedicated detail page for the EOD Z-Report task.
-//
-// Fields:
-//   • totalNominal  — total from the printed Z-Report (Rupiah-formatted input)
-//   • zReportPhotos — photo(s) of the printed receipt (min 1, max 3)
-//                     opened via ChecklistPhotoModal in single-bucket mode
-//
-// This task is the source of truth — NOT discrepancy-capable.
-// Uses check-in + geofence guards like store-opening.
-// ─────────────────────────────────────────────────────────────────────────────
+// Updated flow:
+// - Employee only uploads photo(s) of the printed/stuck Z-Report.
+// - No total nominal input.
+// - Submit completes the task when at least 1 photo exists.
 
-import { useEffect, useState, useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
-  ArrowLeft, CheckCircle2, Camera, X, Loader2,
-  AlertCircle, Cloud, CloudOff, Save,
-  LogIn, Navigation, NavigationOff, RefreshCw,
-  Receipt,
+  AlertCircle,
+  Camera,
+  CloudOff,
+  Loader2,
+  LogIn,
+  Navigation,
+  NavigationOff,
+  RefreshCw,
+  Save,
+  X,
 } from 'lucide-react';
-import { cn }    from '@/lib/utils';
+
+import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { useAutoSave } from '@/lib/hooks/useAutoSave';
-import { TaskHeader, TaskSubmitBar, SaveIndicator } from '@/components/employee/tasks';
+import { SaveIndicator, TaskHeader, TaskSubmitBar } from '@/components/employee/tasks';
 import ChecklistPhotoModal from '@/components/tasks/ChecklistPhotoModal';
-
-// ─── Types ────────────────────────────────────────────────────────────────────
 
 type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'verified' | 'rejected';
 
@@ -37,84 +35,84 @@ type AccessStatus =
   | { status: 'geo_unavailable' };
 
 interface EodZReportData {
-  id:          string;
-  scheduleId:  string;
-  userId:      string;
-  storeId:     string;
-  shift:       'morning' | 'evening';
-  date:        string;
-  status:      TaskStatus;
-  notes:       string | null;
+  id: string;
+  scheduleId: string;
+  userId: string;
+  storeId: string;
+  shift: 'morning' | 'evening' | 'full_day';
+  date: string;
+  status: TaskStatus;
+  notes: string | null;
   completedAt: string | null;
-  verifiedBy:  string | null;
-  verifiedAt:  string | null;
-  totalNominal:  string | null;
+  verifiedBy: string | null;
+  verifiedAt: string | null;
   zReportPhotos: string[];
 }
 
-// ─── Rupiah formatter ─────────────────────────────────────────────────────────
-
-function formatRupiah(raw: string): string {
-  const digits = raw.replace(/\D/g, '');
-  if (!digits) return 'Rp 0';
-  return 'Rp ' + parseInt(digits, 10).toLocaleString('id-ID');
-}
-
-function parseRupiah(formatted: string): string {
-  const digits = formatted.replace(/\D/g, '');
-  return digits || '0';
-}
-
-// ─── Geo + Access hooks ──────────────────────────────────────────────────────
-
 function useGeo() {
-  const [geo,      setGeo]      = useState<{ lat: number; lng: number } | null>(null);
+  const [geo, setGeo] = useState<{ lat: number; lng: number } | null>(null);
   const [geoError, setGeoError] = useState<string | null>(null);
   const [geoReady, setGeoReady] = useState(false);
 
   const refresh = useCallback(() => {
     setGeoReady(false);
     setGeoError(null);
+
     if (!navigator.geolocation) {
       setGeoError('Geolocation tidak didukung.');
       setGeoReady(true);
       return;
     }
+
     navigator.geolocation.getCurrentPosition(
-      pos => { setGeo({ lat: pos.coords.latitude, lng: pos.coords.longitude }); setGeoReady(true); },
-      ()  => { setGeoError('Lokasi tidak dapat diperoleh.'); setGeoReady(true); },
+      (pos) => {
+        setGeo({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        setGeoReady(true);
+      },
+      () => {
+        setGeoError('Lokasi tidak dapat diperoleh.');
+        setGeoReady(true);
+      },
       { timeout: 10_000, maximumAge: 0 },
     );
   }, []);
 
-  useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
   return { geo, geoError, geoReady, refresh };
 }
 
 function useAccessStatus(
   scheduleId: string,
-  storeId:    string,
-  geo:        { lat: number; lng: number } | null,
-  geoReady:   boolean,
+  storeId: string,
+  geo: { lat: number; lng: number } | null,
+  geoReady: boolean,
   taskStatus: TaskStatus | undefined,
 ) {
-  const [accessStatus,  setAccessStatus]  = useState<AccessStatus | null>(null);
+  const [accessStatus, setAccessStatus] = useState<AccessStatus | null>(null);
   const [accessLoading, setAccessLoading] = useState(true);
 
-  const fetch_ = useCallback(async () => {
+  const fetchAccess = useCallback(async () => {
     if (taskStatus && ['completed', 'verified', 'rejected'].includes(taskStatus)) {
       setAccessStatus({ status: 'ok' });
       setAccessLoading(false);
       return;
     }
+
     if (!scheduleId || !storeId) return;
 
     setAccessLoading(true);
     try {
       const params = new URLSearchParams({ scheduleId, storeId });
-      if (geo) { params.set('lat', String(geo.lat)); params.set('lng', String(geo.lng)); }
-      const res  = await fetch(`/api/employee/tasks/access?${params}`);
-      const data = await res.json() as AccessStatus;
+      if (geo) {
+        params.set('lat', String(geo.lat));
+        params.set('lng', String(geo.lng));
+      }
+
+      const res = await fetch(`/api/employee/tasks/access?${params}`);
+      const data = (await res.json()) as AccessStatus;
       setAccessStatus(data);
     } catch {
       setAccessStatus({ status: 'geo_unavailable' });
@@ -123,79 +121,104 @@ function useAccessStatus(
     }
   }, [scheduleId, storeId, geo, taskStatus]);
 
-  useEffect(() => { if (geoReady) fetch_(); }, [geoReady, fetch_]);
+  useEffect(() => {
+    if (geoReady) fetchAccess();
+  }, [geoReady, fetchAccess]);
 
-  return { accessStatus, accessLoading, refreshAccess: fetch_ };
+  return { accessStatus, accessLoading, refreshAccess: fetchAccess };
 }
 
-// ─── Access banner ────────────────────────────────────────────────────────────
-
 function AccessBanner({
-  accessStatus, accessLoading, geoReady, geo, geoError,
-  onRefreshGeo, onRefreshAccess,
+  accessStatus,
+  accessLoading,
+  geoReady,
+  geo,
+  geoError,
+  onRefreshGeo,
+  onRefreshAccess,
 }: {
-  accessStatus:    AccessStatus | null;
-  accessLoading:   boolean;
-  geoReady:        boolean;
-  geo:             { lat: number; lng: number } | null;
-  geoError:        string | null;
-  onRefreshGeo:    () => void;
+  accessStatus: AccessStatus | null;
+  accessLoading: boolean;
+  geoReady: boolean;
+  geo: { lat: number; lng: number } | null;
+  geoError: string | null;
+  onRefreshGeo: () => void;
   onRefreshAccess: () => void;
 }) {
   if (!geoReady || accessLoading) {
     return (
       <div className="flex items-center gap-2 rounded-xl border border-border bg-secondary px-4 py-2.5">
         <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-        <p className="text-xs text-muted-foreground">{!geoReady ? 'Mendapatkan lokasi…' : 'Memeriksa akses…'}</p>
+        <p className="text-xs text-muted-foreground">
+          {!geoReady ? 'Mendapatkan lokasi…' : 'Memeriksa akses…'}
+        </p>
       </div>
     );
   }
+
   if (!accessStatus) return null;
 
   if (accessStatus.status === 'not_checked_in') {
     return (
       <div className="flex items-start gap-3 rounded-xl border border-red-300 bg-red-50 px-4 py-3.5">
         <LogIn className="mt-0.5 h-5 w-5 flex-shrink-0 text-red-600" />
-        <div className="flex-1 min-w-0">
+        <div className="min-w-0 flex-1">
           <p className="text-sm font-bold text-red-700">Belum absen masuk</p>
-          <p className="mt-0.5 text-xs text-red-600">Kamu harus melakukan absensi masuk terlebih dahulu sebelum dapat mengerjakan task.</p>
+          <p className="mt-0.5 text-xs text-red-600">
+            Kamu harus melakukan absensi masuk terlebih dahulu sebelum dapat mengerjakan task.
+          </p>
         </div>
-        <button onClick={onRefreshAccess} className="flex-shrink-0 flex items-center gap-1 rounded-lg bg-red-100 px-2.5 py-1.5 text-[11px] font-semibold text-red-700 hover:bg-red-200">
-          <RefreshCw className="h-3 w-3" />Cek ulang
+        <button
+          type="button"
+          onClick={onRefreshAccess}
+          className="flex-shrink-0 rounded-lg bg-red-100 px-2.5 py-1.5 text-[11px] font-semibold text-red-700 hover:bg-red-200"
+        >
+          Cek ulang
         </button>
       </div>
     );
   }
+
   if (accessStatus.status === 'outside_geofence') {
     return (
       <div className="flex items-start gap-3 rounded-xl border border-orange-300 bg-orange-50 px-4 py-3.5">
         <NavigationOff className="mt-0.5 h-5 w-5 flex-shrink-0 text-orange-600" />
-        <div className="flex-1 min-w-0">
+        <div className="min-w-0 flex-1">
           <p className="text-sm font-bold text-orange-700">Di luar area toko</p>
           <p className="mt-0.5 text-xs text-orange-600">
             Kamu berada {accessStatus.distanceM}m dari toko (batas: {accessStatus.radiusM}m).
           </p>
         </div>
-        <button onClick={onRefreshGeo} className="flex-shrink-0 flex items-center gap-1 rounded-lg bg-orange-100 px-2.5 py-1.5 text-[11px] font-semibold text-orange-700 hover:bg-orange-200">
-          <RefreshCw className="h-3 w-3" />Perbarui
+        <button
+          type="button"
+          onClick={onRefreshGeo}
+          className="flex-shrink-0 rounded-lg bg-orange-100 px-2.5 py-1.5 text-[11px] font-semibold text-orange-700 hover:bg-orange-200"
+        >
+          Perbarui
         </button>
       </div>
     );
   }
+
   if (accessStatus.status === 'geo_unavailable') {
     return (
       <div className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
         <NavigationOff className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
-        <div className="flex-1 min-w-0">
+        <div className="min-w-0 flex-1">
           <p className="text-xs font-semibold text-amber-800">Lokasi tidak terdeteksi</p>
           <p className="mt-0.5 text-xs text-amber-600">{geoError ?? 'Izin lokasi belum diberikan.'}</p>
         </div>
-        <button onClick={onRefreshGeo} className="flex-shrink-0 flex items-center gap-1 rounded-lg bg-amber-100 px-2.5 py-1.5 text-[11px] font-semibold text-amber-700 hover:bg-amber-200">
-          <RefreshCw className="h-3 w-3" />Coba lagi
+        <button
+          type="button"
+          onClick={onRefreshGeo}
+          className="flex-shrink-0 rounded-lg bg-amber-100 px-2.5 py-1.5 text-[11px] font-semibold text-amber-700 hover:bg-amber-200"
+        >
+          Coba lagi
         </button>
       </div>
     );
   }
+
   return (
     <div className="flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-2.5">
       <Navigation className="h-4 w-4 flex-shrink-0 text-green-600" />
@@ -206,19 +229,21 @@ function AccessBanner({
   );
 }
 
-// ─── Photo tile ──────────────────────────────────────────────────────────────
-
 function PhotoTile({
-  photos, onClick, disabled, min, max,
+  photos,
+  onClick,
+  disabled,
+  min,
+  max,
 }: {
-  photos:   string[];
-  onClick:  () => void;
+  photos: string[];
+  onClick: () => void;
   disabled?: boolean;
-  min:      number;
-  max:      number;
+  min: number;
+  max: number;
 }) {
   const hasPhotos = photos.length > 0;
-  const meetsMin  = photos.length >= min;
+  const meetsMin = photos.length >= min;
 
   return (
     <button
@@ -253,10 +278,12 @@ function PhotoTile({
       </div>
 
       {hasPhotos && (
-        <span className={cn(
-          'flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold',
-          meetsMin ? 'bg-green-100 text-green-700' : 'bg-amber-200 text-amber-800',
-        )}>
+        <span
+          className={cn(
+            'flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold',
+            meetsMin ? 'bg-green-100 text-green-700' : 'bg-amber-200 text-amber-800',
+          )}
+        >
           {photos.length}/{max}
         </span>
       )}
@@ -275,13 +302,12 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 function LockedOverlay({ accessStatus }: { accessStatus: AccessStatus | null }) {
   if (!accessStatus || accessStatus.status === 'ok' || accessStatus.status === 'geo_unavailable') return null;
+
   const isCheckIn = accessStatus.status === 'not_checked_in';
   return (
-    <div className="pointer-events-none absolute inset-0 rounded-2xl bg-background/70 backdrop-blur-[2px] flex flex-col items-center justify-center gap-2 z-10">
+    <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 rounded-2xl bg-background/70 backdrop-blur-[2px]">
       <div className={cn('flex h-12 w-12 items-center justify-center rounded-full', isCheckIn ? 'bg-red-100' : 'bg-orange-100')}>
-        {isCheckIn
-          ? <LogIn className="h-6 w-6 text-red-600" />
-          : <NavigationOff className="h-6 w-6 text-orange-600" />}
+        {isCheckIn ? <LogIn className="h-6 w-6 text-red-600" /> : <NavigationOff className="h-6 w-6 text-orange-600" />}
       </div>
       <p className={cn('text-sm font-bold', isCheckIn ? 'text-red-700' : 'text-orange-700')}>
         {isCheckIn ? 'Absen masuk dulu' : 'Kamu di luar area toko'}
@@ -290,70 +316,76 @@ function LockedOverlay({ accessStatus }: { accessStatus: AccessStatus | null }) 
   );
 }
 
-// ─── Main page ────────────────────────────────────────────────────────────────
-
 export default function EodZReportDetailPage() {
   const params = useParams();
   const router = useRouter();
-  const taskId = params.id as string;
+  const taskId = String(params.id);
 
   const { geo, geoError, geoReady, refresh: refreshGeo } = useGeo();
 
-  const [taskData,       setTaskData]       = useState<EodZReportData | null>(null);
-  const [loading,        setLoading]        = useState(true);
-  const [submitting,     setSubmitting]     = useState(false);
-  const [submitError,    setSubmitError]    = useState<string | null>(null);
+  const [taskData, setTaskData] = useState<EodZReportData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [photoModalOpen, setPhotoModalOpen] = useState(false);
 
-  const [totalNominal, setTotalNominal] = useState('0');
   const [zReportPhotos, setZReportPhotos] = useState<string[]>([]);
   const [notes, setNotes] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res  = await fetch('/api/employee/tasks');
+      const res = await fetch('/api/employee/tasks', { cache: 'no-store' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json() as { tasks: { type: string; data: EodZReportData }[] };
-      const found = data.tasks?.find(t => t.type === 'eod_z_report' && t.data.id === taskId);
-      if (found) {
-        const d = found.data;
-        setTaskData(d);
-        setTotalNominal(d.totalNominal ? parseRupiah(d.totalNominal) : '0');
-        setZReportPhotos(d.zReportPhotos ?? []);
-        setNotes(d.notes ?? '');
-      } else {
+
+      const data = (await res.json()) as { tasks?: Array<{ type: string; data: EodZReportData }> };
+      const found = data.tasks?.find((task) => task.type === 'eod_z_report' && String(task.data.id) === taskId);
+
+      if (!found) {
         setTaskData(null);
+        return;
       }
-    } catch (e) {
-      console.error('[EodZReportDetailPage] load error:', e);
+
+      setTaskData(found.data);
+      setZReportPhotos(found.data.zReportPhotos ?? []);
+      setNotes(found.data.notes ?? '');
+    } catch (error) {
+      console.error('[EodZReportDetailPage] load error:', error);
       toast.error('Gagal memuat data task.');
+      setTaskData(null);
     } finally {
       setLoading(false);
     }
   }, [taskId]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+  }, [load]);
 
   const { accessStatus, accessLoading, refreshAccess } = useAccessStatus(
     taskData?.scheduleId ?? '',
-    taskData?.storeId    ?? '',
+    taskData?.storeId ?? '',
     geo,
     geoReady,
     taskData?.status,
   );
 
-  const scheduleId = taskData ? parseInt(taskData.scheduleId, 10) : 0;
-  const storeId    = taskData ? parseInt(taskData.storeId,    10) : 0;
+  const scheduleId = taskData ? Number(taskData.scheduleId) : 0;
+  const storeId = taskData ? Number(taskData.storeId) : 0;
 
-  const { status: saveStatus, lastSaved, error: saveError, save: autoSave } = useAutoSave({
-    url:        '/api/employee/tasks/eod-z-report',
-    baseBody:   { scheduleId },
+  const {
+    status: saveStatus,
+    lastSaved,
+    error: saveError,
+    save: autoSave,
+  } = useAutoSave({
+    url: '/api/employee/tasks/eod-z-report',
+    baseBody: { scheduleId },
     debounceMs: 800,
   });
 
   const taskStatus = taskData?.status;
-  const readonly   = taskStatus === 'completed' || taskStatus === 'verified';
+  const readonly = taskStatus === 'completed' || taskStatus === 'verified';
   const isRejected = taskStatus === 'rejected';
   const locked =
     !readonly &&
@@ -361,65 +393,80 @@ export default function EodZReportDetailPage() {
     (accessStatus.status === 'not_checked_in' || accessStatus.status === 'outside_geofence');
   const dis = readonly || locked;
 
+  const photosValid = zReportPhotos.length >= 1;
+  const canSubmit = !locked && !readonly && photosValid;
+
   function confirmPhotos(photos: string[]) {
     setZReportPhotos(photos);
     autoSave({ zReportPhotos: photos }, { immediate: true });
   }
+
   function clearPhotos() {
     setZReportPhotos([]);
     autoSave({ zReportPhotos: [] }, { immediate: true });
   }
 
-  const nominalValid = isFinite(Number(totalNominal)) && Number(totalNominal) > 0;
-  const photosValid  = zReportPhotos.length >= 1;
-  const canSubmit    = !locked && nominalValid && photosValid;
-
   async function handleSubmit() {
     if (!taskData) return;
+
     setSubmitError(null);
+
     if (!storeId || !scheduleId) {
-      const msg = 'Data task tidak valid. Muat ulang halaman.';
-      setSubmitError(msg); toast.error(msg); return;
+      const message = 'Data task tidak valid. Muat ulang halaman.';
+      setSubmitError(message);
+      toast.error(message);
+      return;
     }
+
+    if (!photosValid) {
+      const message = 'Minimal 1 foto struk Z-Report wajib diupload.';
+      setSubmitError(message);
+      toast.error(message);
+      return;
+    }
+
     setSubmitting(true);
     try {
       const res = await fetch('/api/employee/tasks/eod-z-report', {
-        method:  'POST',
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          scheduleId, storeId,
-          geo: geo ?? null, skipGeo: geo === null,
-          totalNominal, zReportPhotos,
+          scheduleId,
+          storeId,
+          geo: geo ?? null,
+          skipGeo: geo === null,
+          zReportPhotos,
           notes: notes || undefined,
         }),
       });
+
       let json: Record<string, unknown> = {};
-      if (res.headers.get('content-type')?.includes('application/json')) json = await res.json();
+      if (res.headers.get('content-type')?.includes('application/json')) {
+        json = await res.json();
+      }
+
       if (!res.ok || json.success === false) {
-        const serverMsg =
-          (typeof json.error   === 'string' && json.error) ||
-          (typeof json.message === 'string' && json.message) || `HTTP ${res.status}`;
-        setSubmitError(serverMsg);
-        toast.error(serverMsg, { duration: 6000 });
+        const serverMessage =
+          (typeof json.error === 'string' && json.error) ||
+          (typeof json.message === 'string' && json.message) ||
+          `HTTP ${res.status}`;
+        setSubmitError(serverMessage);
+        toast.error(serverMessage, { duration: 6000 });
         return;
       }
+
       toast.success('EOD Z-Report berhasil disubmit! ✓', { duration: 4000 });
       router.back();
-    } catch (e) {
-      const msg = e instanceof Error ? `Koneksi gagal: ${e.message}` : 'Gagal terhubung ke server.';
-      setSubmitError(msg);
-      toast.error(msg, { duration: 6000 });
+    } catch (error) {
+      const message = error instanceof Error ? `Koneksi gagal: ${error.message}` : 'Gagal terhubung ke server.';
+      setSubmitError(message);
+      toast.error(message, { duration: 6000 });
     } finally {
       setSubmitting(false);
     }
   }
 
-  const submitHint = (() => {
-    if (locked) return '';
-    if (!nominalValid) return 'Total nominal wajib diisi dengan angka positif.';
-    if (!photosValid)  return 'Minimal 1 foto struk Z-Report wajib diupload.';
-    return '';
-  })();
+  const submitHint = locked ? '' : !photosValid ? 'Minimal 1 foto struk Z-Report wajib diupload.' : '';
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
@@ -432,19 +479,20 @@ export default function EodZReportDetailPage() {
         }
         status={taskStatus}
         saveIndicator={
-          !readonly && !loading && taskData ? (
-            <SaveIndicator status={saveStatus} lastSaved={lastSaved ?? null} />
-          ) : null
+          !readonly && !loading && taskData ? <SaveIndicator status={saveStatus} lastSaved={lastSaved ?? null} /> : null
         }
       />
 
-      {/* Body */}
       <div className="flex-1 space-y-4 p-4 pb-10">
         {!readonly && !loading && taskData && (
           <AccessBanner
-            accessStatus={accessStatus} accessLoading={accessLoading}
-            geoReady={geoReady} geo={geo} geoError={geoError}
-            onRefreshGeo={refreshGeo} onRefreshAccess={refreshAccess}
+            accessStatus={accessStatus}
+            accessLoading={accessLoading}
+            geoReady={geoReady}
+            geo={geo}
+            geoError={geoError}
+            onRefreshGeo={refreshGeo}
+            onRefreshAccess={refreshAccess}
           />
         )}
 
@@ -453,9 +501,9 @@ export default function EodZReportDetailPage() {
             <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-600" />
             <div className="min-w-0 flex-1">
               <p className="text-xs font-bold text-red-700">Submit gagal</p>
-              <p className="mt-0.5 text-xs text-red-600 break-words">{submitError}</p>
+              <p className="mt-0.5 break-words text-xs text-red-600">{submitError}</p>
             </div>
-            <button onClick={() => setSubmitError(null)} className="flex-shrink-0 text-red-400 hover:text-red-600">
+            <button type="button" onClick={() => setSubmitError(null)} className="flex-shrink-0 text-red-400 hover:text-red-600">
               <X className="h-4 w-4" />
             </button>
           </div>
@@ -481,12 +529,18 @@ export default function EodZReportDetailPage() {
         {!readonly && !locked && !loading && taskData && (
           <div className="flex items-center gap-2 rounded-xl border border-blue-100 bg-blue-50 px-4 py-2.5">
             <Save className="h-4 w-4 flex-shrink-0 text-blue-500" />
-            <p className="text-xs text-blue-700">Perubahan otomatis tersimpan. Rekan shift lain dapat melanjutkan task ini.</p>
+            <p className="text-xs text-blue-700">
+              Upload foto akan otomatis tersimpan. Rekan shift lain dapat melanjutkan task ini.
+            </p>
           </div>
         )}
 
         {loading ? (
-          <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-14 animate-pulse rounded-xl bg-secondary" />)}</div>
+          <div className="space-y-3">
+            {[1, 2, 3].map((item) => (
+              <div key={item} className="h-14 animate-pulse rounded-xl bg-secondary" />
+            ))}
+          </div>
         ) : !taskData ? (
           <div className="flex flex-col items-center py-20 text-center">
             <AlertCircle className="mb-3 h-8 w-8 text-muted-foreground/40" />
@@ -497,30 +551,6 @@ export default function EodZReportDetailPage() {
             <LockedOverlay accessStatus={accessStatus} />
 
             <div className="space-y-6">
-              <Section title="Total Nominal Z-Report">
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={formatRupiah(totalNominal)}
-                  disabled={dis}
-                  placeholder="Rp 0"
-                  onChange={e => {
-                    const raw = parseRupiah(e.target.value);
-                    setTotalNominal(raw);
-                    autoSave({ totalNominal: raw });
-                  }}
-                  onFocus={e => {
-                    const el  = e.target;
-                    const len = el.value.length;
-                    requestAnimationFrame(() => el.setSelectionRange(len, len));
-                  }}
-                  className="w-full rounded-xl border border-border bg-secondary px-4 py-3 text-sm font-semibold tabular-nums focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
-                />
-                <p className="text-[10px] text-muted-foreground">
-                  Masukkan total nominal dari struk Z-Report yang tercetak.
-                </p>
-              </Section>
-
               <Section title="Foto Struk Z-Report">
                 <PhotoTile
                   photos={zReportPhotos}
@@ -529,12 +559,18 @@ export default function EodZReportDetailPage() {
                   min={1}
                   max={3}
                 />
+                <p className="text-[10px] text-muted-foreground">
+                  Ambil foto struk Z-Report yang sudah tercetak/tertempel, lalu tandai task sebagai selesai.
+                </p>
               </Section>
 
               <Section title="Catatan (opsional)">
                 <textarea
                   value={notes}
-                  onChange={e => { setNotes(e.target.value); autoSave({ notes: e.target.value }); }}
+                  onChange={(event) => {
+                    setNotes(event.target.value);
+                    autoSave({ notes: event.target.value });
+                  }}
                   disabled={dis}
                   rows={3}
                   placeholder="Tambahkan catatan jika ada…"
@@ -543,13 +579,13 @@ export default function EodZReportDetailPage() {
               </Section>
 
               <TaskSubmitBar
-                  label="Submit Z-Report"
-                  onSubmit={handleSubmit}
-                  submitting={submitting}
-                  disabled={!canSubmit}
-                  hidden={readonly}
-                  hint={!canSubmit ? submitHint : undefined}
-                />
+                label="Tandai Z-Report Selesai"
+                onSubmit={handleSubmit}
+                submitting={submitting}
+                disabled={!canSubmit}
+                hidden={readonly}
+                hint={!canSubmit ? submitHint : undefined}
+              />
             </div>
           </div>
         )}
@@ -559,7 +595,7 @@ export default function EodZReportDetailPage() {
         open={photoModalOpen}
         onClose={() => setPhotoModalOpen(false)}
         title="Foto Struk Z-Report"
-        description="Upload 1-3 foto struk Z-Report yang tercetak."
+        description="Upload 1-3 foto struk Z-Report yang tercetak/tertempel."
         photoType="z_report"
         min={1}
         max={3}
