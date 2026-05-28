@@ -12,6 +12,7 @@ import {
   Store, Wallet, Box, Truck,
   Users, CreditCard, BarChart2, ClipboardList,
   User, Sun, Moon, AlertTriangle, Zap,
+  LogIn, LogOut, RefreshCw, Loader2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -26,6 +27,7 @@ export type TaskType =
   | 'marketing_check'
   | 'item_dropping'
   | 'briefing'
+  | 'serah_terima'
   | 'edc_reconciliation'
   | 'eod_z_report'
   | 'open_statement'
@@ -35,12 +37,41 @@ export type TaskStatus =
   | 'pending' | 'in_progress' | 'completed'
   | 'discrepancy' | 'verified' | 'rejected';
 
+type ShiftCode = 'morning' | 'evening' | 'full_day';
+
+interface AttendanceShiftSlot {
+  schedule: {
+    scheduleId?: number;
+    shift: ShiftCode;
+    storeId?: number;
+    date?: string;
+  };
+  attendance?: {
+    attendanceId?: number;
+    scheduleId?: number;
+    status?: string;
+    shift?: ShiftCode;
+    checkInTime?: string | null;
+    checkOutTime?: string | null;
+    onBreak?: boolean;
+    notes?: string | null;
+  } | null;
+}
+
+type AttendanceStatus = {
+  hasSchedule: boolean;
+  checkedIn: boolean;
+  checkedOut: boolean;
+  checkInAt: string | null;
+  checkOutAt: string | null;
+};
+
 interface TaskBase {
   id:          string;
   scheduleId:  string;
   userId:      string;
   storeId:     string;
-  shift:       'morning' | 'evening' | 'full_day';
+  shift:       ShiftCode;
   date:        string;
   status:      TaskStatus;
   notes:       string | null;
@@ -138,19 +169,34 @@ export interface GroomingData extends TaskBase {
   shoeChecked: boolean | null; nameTagChecked: boolean | null; selfiePhotos: string[];
 }
 
+export interface SerahTerimaData extends TaskBase {
+  handoverText: string | null;
+  items: Array<{
+    id: string;
+    taskId: string;
+    receiverTaskId: string | null;
+    message: string;
+    isCompleted: boolean;
+    completedBy: string | null;
+    completedAt: string | null;
+    createdAt: string | null;
+  }>;
+}
+
 export type TaskItem =
-  | { type: 'store_opening';      shift: 'morning' | 'evening' | 'full_day'; data: StoreOpeningData }
-  | { type: 'setoran';            shift: 'morning' | 'evening' | 'full_day'; data: SetoranData }
-  | { type: 'store_front';        shift: 'morning' | 'evening' | 'full_day'; data: StoreFrontData }
-  | { type: 'cek_bin';            shift: 'morning' | 'evening' | 'full_day'; data: CekBinData }
-  | { type: 'vm_checklist';       shift: 'morning' | 'evening' | 'full_day'; data: VmChecklistData }
-  | { type: 'marketing_check';    shift: 'morning' | 'evening' | 'full_day'; data: MarketingCheckData }
-  | { type: 'item_dropping';      shift: 'morning' | 'evening' | 'full_day'; data: ItemDroppingData }
-  | { type: 'briefing';           shift: 'morning' | 'evening' | 'full_day'; data: BriefingData }
-  | { type: 'edc_reconciliation'; shift: 'morning' | 'evening' | 'full_day'; data: EdcReconciliationData }
-  | { type: 'eod_z_report';       shift: 'morning' | 'evening' | 'full_day'; data: EodZReportData }
-  | { type: 'open_statement';     shift: 'morning' | 'evening' | 'full_day'; data: OpenStatementData }
-  | { type: 'grooming';           shift: 'morning' | 'evening' | 'full_day'; data: GroomingData };
+  | { type: 'store_opening';      shift: ShiftCode; data: StoreOpeningData }
+  | { type: 'setoran';            shift: ShiftCode; data: SetoranData }
+  | { type: 'store_front';        shift: ShiftCode; data: StoreFrontData }
+  | { type: 'cek_bin';            shift: ShiftCode; data: CekBinData }
+  | { type: 'vm_checklist';       shift: ShiftCode; data: VmChecklistData }
+  | { type: 'marketing_check';    shift: ShiftCode; data: MarketingCheckData }
+  | { type: 'item_dropping';      shift: ShiftCode; data: ItemDroppingData }
+  | { type: 'briefing';           shift: ShiftCode; data: BriefingData }
+  | { type: 'edc_reconciliation'; shift: ShiftCode; data: EdcReconciliationData }
+  | { type: 'eod_z_report';       shift: ShiftCode; data: EodZReportData }
+  | { type: 'open_statement';     shift: ShiftCode; data: OpenStatementData }
+  | { type: 'grooming';           shift: ShiftCode; data: GroomingData }
+  | { type: 'serah_terima'; shift: ShiftCode; data: SerahTerimaData };
 
 type Filter = 'all' | 'pending' | 'in_progress' | 'completed';
 
@@ -178,20 +224,72 @@ const TASK_META: Record<TaskType, { title: string; description: string; Icon: El
   cek_bin:            { title: 'Cek Bin',            description: 'Input total bin dan pilih minimal 30% bin untuk dicek.', Icon: Box,           hasPhoto: false },
   vm_checklist:       { title: 'VM Checklist',       description: 'Checklist harian Visual Merchandising.', Icon: ClipboardList, hasPhoto: false },
   item_dropping:      { title: 'Item Dropping',      description: 'Log delivery arrival & receipt.',        Icon: Truck,         hasPhoto: true  },
-  briefing:           { title: 'Briefing',           description: 'Conduct evening shift briefing.',        Icon: Users,         hasPhoto: false },
+  briefing:           { title: 'Briefing',           description: 'Selesaikan briefing shift pagi atau malam.', Icon: Users,         hasPhoto: false },
   edc_reconciliation: { title: 'EDC Reconciliation', description: 'Match EDC transactions vs system data.', Icon: CreditCard,    hasPhoto: false },
   eod_z_report:       { title: 'EOD Z-Report',       description: 'Enter Z-report total & upload receipt.', Icon: BarChart2,     hasPhoto: true  },
   open_statement:     { title: 'Open Statement',     description: 'Match actual vs expected cash amount.',  Icon: ClipboardList, hasPhoto: false },
   grooming:           { title: 'Grooming Check',     description: 'Uniform check + full-body selfie.',      Icon: User,          hasPhoto: true  },
   marketing_check:    { title: 'Marketing Check',    description: 'Promo, random checking, dan sell tag.',  Icon: ClipboardList, hasPhoto: false },
+  serah_terima: {
+    title: 'Serah Terima',
+    description: 'Tulis pesan handover untuk shift berikutnya.',
+    Icon: ClipboardList,
+    hasPhoto: false,
+  },
 };
 
 const TASK_ROUTES: Record<TaskType, string> = {
   store_opening: 'store-opening', store_front: 'store-front', setoran: 'setoran', cek_bin: 'cek-bin',
   vm_checklist: 'vm-checklist', item_dropping: 'item-dropping', briefing: 'briefing',
   edc_reconciliation: 'edc-reconciliation', eod_z_report: 'eod-z-report',
-  open_statement: 'open-statement', grooming: 'grooming', marketing_check: 'marketing-check',
+  open_statement: 'open-statement', grooming: 'grooming', marketing_check: 'marketing-check', serah_terima: 'serah-terima',
 };
+
+
+function normaliseTaskType(type: unknown): TaskType | null {
+  if (typeof type !== 'string') return null;
+
+  const value = type.trim().replaceAll('-', '_') as TaskType;
+
+  if (value in TASK_META) return value;
+
+  return null;
+}
+
+function normaliseTaskItem(raw: unknown): TaskItem | null {
+  if (!raw || typeof raw !== 'object') return null;
+
+  const row = raw as Record<string, unknown>;
+  const type = normaliseTaskType(row.type);
+
+  if (!type || !row.data || typeof row.data !== 'object') return null;
+
+  const data = row.data as Record<string, unknown>;
+  const shiftValue = row.shift ?? data.shift;
+  const shift: ShiftCode =
+    shiftValue === 'morning' || shiftValue === 'evening' || shiftValue === 'full_day'
+      ? shiftValue
+      : 'morning';
+
+  const status: TaskStatus = isValidTaskStatus(data.status)
+    ? data.status
+    : 'pending';
+
+  return {
+    ...row,
+    type,
+    shift,
+    data: {
+      ...data,
+      shift,
+      status,
+    },
+  } as TaskItem;
+}
+
+function getTaskRoute(type: TaskType): string {
+  return TASK_ROUTES[type] ?? type.replaceAll('_', '-');
+}
 
 const FILTERS: { key: Filter; label: string }[] = [
   { key: 'all',         label: 'All'     },
@@ -200,7 +298,259 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: 'completed',   label: 'Done'    },
 ];
 
+const MORNING_ONLY_SHARED_TASK_TYPES = new Set<TaskType>([
+  'briefing',
+  'item_dropping',
+  'serah_terima',
+]);
+
+const EVENING_OPERATIONAL_TASK_TYPES = new Set<TaskType>([
+  'edc_reconciliation',
+  'eod_z_report',
+  'open_statement',
+]);
+
+function isValidTaskStatus(value: unknown): value is TaskStatus {
+  return (
+    value === 'pending' ||
+    value === 'in_progress' ||
+    value === 'completed' ||
+    value === 'discrepancy' ||
+    value === 'verified' ||
+    value === 'rejected'
+  );
+}
+
+function getTaskDayKey(value: string | null | undefined): string {
+  if (!value) return 'unknown-date';
+
+  // Your API usually sends an ISO date. Slice first to avoid timezone shifting
+  // a midnight timestamp into the previous/next day on the client.
+  if (/^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10);
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+
+  return date.toISOString().slice(0, 10);
+}
+
+function getTaskStoreKey(task: TaskItem): string {
+  return String(task.data.storeId ?? 'unknown-store');
+}
+
+function getTaskScheduleKey(task: TaskItem): string {
+  return String(task.data.scheduleId ?? 'unknown-schedule');
+}
+
+function rankMorningSharedCandidate(task: TaskItem): number {
+  // Prefer the new correct row first. If old duplicated rows still exist,
+  // full_day/evening rows can still be shown as Morning until DB cleanup runs.
+  if (task.shift === 'morning') return 0;
+  if (task.shift === 'full_day') return 1;
+  return 2;
+}
+
+function toMorningDisplayTask(task: TaskItem): TaskItem {
+  if (!MORNING_ONLY_SHARED_TASK_TYPES.has(task.type)) return task;
+
+  return {
+    ...task,
+    shift: 'morning',
+    data: {
+      ...task.data,
+      shift: 'morning',
+    },
+  } as TaskItem;
+}
+
+function getDisplayShift(task: TaskItem): 'morning' | 'evening' {
+  if (MORNING_ONLY_SHARED_TASK_TYPES.has(task.type)) return 'morning';
+
+  // Avoid duplicating full_day cards in both sections. Full-day personal/shared
+  // rows are displayed in Morning; true evening ops rows should come from the
+  // API/seeder with shift === 'evening'.
+  if (task.shift === 'full_day') return 'morning';
+
+  return task.shift === 'evening' ? 'evening' : 'morning';
+}
+
+function canShowForOwnShifts(task: TaskItem, ownShifts: Set<ShiftCode>): boolean {
+  if (ownShifts.size === 0) return true;
+  if (ownShifts.has('full_day')) return true;
+
+  if (MORNING_ONLY_SHARED_TASK_TYPES.has(task.type)) {
+    return ownShifts.has('morning');
+  }
+
+  if (EVENING_OPERATIONAL_TASK_TYPES.has(task.type)) {
+    return task.shift === 'full_day' || ownShifts.has(task.shift);
+  }
+
+  if (task.shift === 'full_day') {
+    return ownShifts.has('morning') || ownShifts.has('evening');
+  }
+
+  return ownShifts.has(task.shift);
+}
+
+function normaliseVisibleTasks(tasks: TaskItem[], ownShifts: Set<ShiftCode>): TaskItem[] {
+  const regularSeen = new Set<string>();
+  const morningSharedByKey = new Map<string, TaskItem>();
+  const result: TaskItem[] = [];
+
+  for (const task of tasks) {
+    if (MORNING_ONLY_SHARED_TASK_TYPES.has(task.type)) {
+      const key = [
+        task.type,
+        getTaskStoreKey(task),
+        getTaskDayKey(task.data.date),
+      ].join('::');
+
+      const existing = morningSharedByKey.get(key);
+      if (
+        !existing ||
+        rankMorningSharedCandidate(task) < rankMorningSharedCandidate(existing) ||
+        (
+          rankMorningSharedCandidate(task) === rankMorningSharedCandidate(existing) &&
+          (STATUS_PRIORITY[task.data.status] ?? 99) < (STATUS_PRIORITY[existing.data.status] ?? 99)
+        )
+      ) {
+        morningSharedByKey.set(key, toMorningDisplayTask(task));
+      }
+
+      continue;
+    }
+
+    // Personal tasks must stay per schedule; shared tasks can dedupe by type/store/day/shift.
+    const key = task.type === 'grooming'
+      ? [task.type, getTaskScheduleKey(task), task.data.id].join('::')
+      : [
+          task.type,
+          getTaskStoreKey(task),
+          getTaskDayKey(task.data.date),
+          task.shift,
+          task.data.id,
+        ].join('::');
+
+    if (regularSeen.has(key)) continue;
+    regularSeen.add(key);
+    result.push(task);
+  }
+
+  result.push(...morningSharedByKey.values());
+
+  return result.filter((task) => canShowForOwnShifts(task, ownShifts));
+}
+
 // ─── Ring progress (moved here from dashboard) ─────────────────────────────────
+
+
+function fmtAttendanceTime(value: string | null | undefined) {
+  if (!value) return '—';
+
+  return new Date(value).toLocaleTimeString('id-ID', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function AttendanceCheckCard({
+  attendance,
+  loading,
+  onRefresh,
+}: {
+  attendance: AttendanceStatus | null;
+  loading: boolean;
+  onRefresh: () => void;
+}) {
+  if (loading) {
+    return (
+      <div className="flex items-center gap-3 rounded-2xl border border-border bg-card px-4 py-3 shadow-sm">
+        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        <div>
+          <p className="text-sm font-bold text-foreground">Mengecek absensi…</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">Task akan aktif setelah status absensi terbaca.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!attendance) {
+    return (
+      <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-700 shadow-sm">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-bold">Status absensi belum terbaca</p>
+          <p className="mt-0.5 text-xs">Cek ulang absensi sebelum membuka task.</p>
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-amber-100 px-2.5 py-1.5 text-[11px] font-bold text-amber-700 hover:bg-amber-200"
+        >
+          <RefreshCw className="h-3 w-3" />
+          Cek ulang
+        </button>
+      </div>
+    );
+  }
+
+  if (!attendance.hasSchedule) {
+    return (
+      <div className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-card px-4 py-3 shadow-sm">
+        <Inbox className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-bold text-foreground">Tidak ada jadwal hari ini</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">Kamu tidak memiliki shift yang perlu dikerjakan hari ini.</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!attendance.checkedIn) {
+    return (
+      <div className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-red-700 shadow-sm">
+        <LogIn className="mt-0.5 h-4 w-4 shrink-0" />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-bold">Belum absen masuk</p>
+          <p className="mt-0.5 text-xs">Kamu harus melakukan absensi masuk terlebih dahulu sebelum mengerjakan task.</p>
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-red-100 px-2.5 py-1.5 text-[11px] font-bold text-red-700 hover:bg-red-200"
+        >
+          <RefreshCw className="h-3 w-3" />
+          Cek ulang
+        </button>
+      </div>
+    );
+  }
+
+  if (attendance.checkedOut) {
+    return (
+      <div className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-card px-4 py-3 shadow-sm">
+        <LogOut className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-bold text-foreground">Sudah absen pulang</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Check-in {fmtAttendanceTime(attendance.checkInAt)} · Check-out {fmtAttendanceTime(attendance.checkOutAt)}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-start gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-emerald-700 shadow-sm">
+      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-bold">Sudah absen masuk</p>
+        <p className="mt-0.5 text-xs">Check-in {fmtAttendanceTime(attendance.checkInAt)}. Task sudah bisa dikerjakan.</p>
+      </div>
+    </div>
+  );
+}
 
 function RingProgress({ pct }: { pct: number }) {
   const r      = 44;
@@ -226,31 +576,146 @@ export default function EmployeeTasksPage() {
   const { status: sessionStatus } = useSession();
   const router = useRouter();
 
-  const [tasks,   setTasks]   = useState<TaskItem[]>([]);
-  const [shift,   setShift]   = useState<'morning' | 'evening' | 'full_day' | null>(null);
+  const [tasks, setTasks] = useState<TaskItem[]>([]);
+  const [shift, setShift] = useState<ShiftCode | null>(null);
+  const [myShifts, setMyShifts] = useState<Set<ShiftCode>>(new Set());
+  const [attendance, setAttendance] = useState<AttendanceStatus | null>(null);
+  const [attendanceLoading, setAttendanceLoading] = useState(true);
   const [loading, setLoading] = useState(true);
-  const [filter,  setFilter]  = useState<Filter>('all');
+  const [filter, setFilter] = useState<Filter>('all');
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res  = await fetch('/api/employee/tasks');
-      const data = await res.json() as { tasks: TaskItem[]; shift: 'morning' | 'evening' | 'full_day' | null };
-      setTasks(data.tasks ?? []);
+      const res = await fetch('/api/employee/tasks', { cache: 'no-store' });
+      const data = await res.json() as {
+        tasks?: unknown[];
+        shift?: ShiftCode | null;
+      };
+
+      const normalisedTasks = (data.tasks ?? [])
+        .map(normaliseTaskItem)
+        .filter((item): item is TaskItem => item !== null);
+
+      setTasks(normalisedTasks);
       setShift(data.shift ?? null);
+
+      // Fallback while /api/employee/attendance is still loading or if it fails.
+      // The attendance endpoint will override this with the complete shift set.
+      if (data.shift) {
+        setMyShifts(new Set<ShiftCode>([data.shift]));
+      }
     } catch (e) {
-      console.error('[EmployeeTasksPage] load error:', e);
+      console.error('[EmployeeTasksPage] task load error:', e);
+      setTasks([]);
     } finally {
       setLoading(false);
     }
   }, []);
 
+  const loadAttendance = useCallback(async () => {
+    setAttendanceLoading(true);
+
+    try {
+      const res = await fetch('/api/employee/attendance', { cache: 'no-store' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const json = (await res.json()) as {
+        success: boolean;
+        shifts?: AttendanceShiftSlot[];
+        error?: string;
+      };
+
+      if (!json.success) {
+        throw new Error(json.error ?? 'Failed to load attendance.');
+      }
+
+      const slots = json.shifts ?? [];
+
+      const ownShifts = new Set<ShiftCode>();
+      for (const slot of slots) {
+        if (
+          slot.schedule.shift === 'morning' ||
+          slot.schedule.shift === 'evening' ||
+          slot.schedule.shift === 'full_day'
+        ) {
+          ownShifts.add(slot.schedule.shift);
+        }
+      }
+      setMyShifts(ownShifts);
+
+      if (slots.length === 0) {
+        setAttendance({
+          hasSchedule: false,
+          checkedIn: false,
+          checkedOut: false,
+          checkInAt: null,
+          checkOutAt: null,
+        });
+        return;
+      }
+
+      const checkInTimes: string[] = [];
+      const checkOutTimes: string[] = [];
+      let slotsWithCheckIn = 0;
+      let slotsWithCheckOut = 0;
+
+      for (const slot of slots) {
+        const att = slot.attendance;
+        if (!att) continue;
+
+        if (att.checkInTime) {
+          checkInTimes.push(att.checkInTime);
+          slotsWithCheckIn += 1;
+        }
+
+        if (att.checkOutTime) {
+          checkOutTimes.push(att.checkOutTime);
+          slotsWithCheckOut += 1;
+        }
+      }
+
+      const earliestCheckIn = checkInTimes.length
+        ? checkInTimes.reduce((a, b) => (new Date(a) <= new Date(b) ? a : b))
+        : null;
+
+      const latestCheckOut = checkOutTimes.length
+        ? checkOutTimes.reduce((a, b) => (new Date(a) >= new Date(b) ? a : b))
+        : null;
+
+      setAttendance({
+        hasSchedule: true,
+        checkedIn: slotsWithCheckIn > 0,
+        checkedOut: slotsWithCheckIn > 0 && slotsWithCheckOut === slotsWithCheckIn,
+        checkInAt: earliestCheckIn,
+        checkOutAt: latestCheckOut,
+      });
+    } catch (e) {
+      console.error('[EmployeeTasksPage] attendance load error:', e);
+      setAttendance(null);
+      // Keep the fallback shift collected from /api/employee/tasks.
+    } finally {
+      setAttendanceLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    if (sessionStatus === 'authenticated') load();
-  }, [sessionStatus, load]);
+    if (sessionStatus !== 'authenticated') return;
+
+    void load();
+    void loadAttendance();
+  }, [sessionStatus, load, loadAttendance]);
 
   const openTask = useCallback(async (item: TaskItem) => {
+    if (attendanceLoading) return;
+
+    if (!attendance || !attendance.hasSchedule || !attendance.checkedIn) {
+      void loadAttendance();
+      return;
+    }
+
     const { status, id } = item.data;
+
     if (status === 'pending') {
       setTasks(prev =>
         prev.map(t =>
@@ -259,39 +724,59 @@ export default function EmployeeTasksPage() {
             : t,
         ),
       );
+
       fetch('/api/employee/tasks', {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ taskId: id, taskType: item.type, status: 'in_progress' }),
       }).catch(console.error);
     }
-    router.push(`/employee/tasks/${TASK_ROUTES[item.type]}/${id}`);
-  }, [router]);
+
+    router.push(`/employee/tasks/${getTaskRoute(item.type)}/${id}`);
+  }, [attendance, attendanceLoading, loadAttendance, router]);
+
+  const visibleTasks = normaliseVisibleTasks(tasks, myShifts);
 
   const countFilter = (f: Filter) => {
-    if (f === 'all')         return tasks.length;
-    if (f === 'in_progress') return tasks.filter(t => t.data.status === 'in_progress' || t.data.status === 'discrepancy').length;
-    return tasks.filter(t => t.data.status === f).length;
+    if (f === 'all') return visibleTasks.length;
+
+    if (f === 'in_progress') {
+      return visibleTasks.filter(
+        task => task.data.status === 'in_progress' || task.data.status === 'discrepancy',
+      ).length;
+    }
+
+    return visibleTasks.filter(task => task.data.status === f).length;
   };
 
-  const filtered = tasks
-    .filter(t => {
-      if (filter === 'all')         return true;
-      if (filter === 'in_progress') return t.data.status === 'in_progress' || t.data.status === 'discrepancy';
-      return t.data.status === filter;
+  const filtered = visibleTasks
+    .filter(task => {
+      if (filter === 'all') return true;
+
+      if (filter === 'in_progress') {
+        return task.data.status === 'in_progress' || task.data.status === 'discrepancy';
+      }
+
+      return task.data.status === filter;
     })
     .sort((a, b) => (STATUS_PRIORITY[a.data.status] ?? 9) - (STATUS_PRIORITY[b.data.status] ?? 9));
 
-  const morningTasks = filtered.filter(t => t.shift === 'morning' || t.shift === 'full_day');
-  const eveningTasks = filtered.filter(t => t.shift === 'evening' || t.shift === 'full_day');
-  const notScheduled = !loading && tasks.length === 0;
+  const morningTasks = filtered.filter(task => getDisplayShift(task) === 'morning');
+  const eveningTasks = filtered.filter(task => getDisplayShift(task) === 'evening');
+  const noSchedule = !loading && !attendanceLoading && attendance?.hasSchedule === false;
+  const noVisibleTasks = !loading && visibleTasks.length === 0;
 
   // Stats for the ring
   const stats = {
-    pending:    tasks.filter(t => t.data.status === 'pending').length,
-    inProgress: tasks.filter(t => t.data.status === 'in_progress' || t.data.status === 'discrepancy').length,
-    completed:  tasks.filter(t => t.data.status === 'completed' || t.data.status === 'verified').length,
-    total:      tasks.length,
+    pending: visibleTasks.filter(task => task.data.status === 'pending').length,
+    inProgress: visibleTasks.filter(
+      task => task.data.status === 'in_progress' || task.data.status === 'discrepancy',
+    ).length,
+    completed: visibleTasks.filter(
+      task => task.data.status === 'completed' || task.data.status === 'verified',
+    ).length,
+    total: visibleTasks.length,
   };
+
   const pct = stats.total > 0 ? Math.round((stats.completed / stats.total) * 100) : 0;
 
   return (
@@ -375,17 +860,32 @@ export default function EmployeeTasksPage() {
         </div>
       </div>
 
+      {/* ── Attendance check ───────────────────────────────────────────── */}
+      <div className="px-4 pt-4">
+        <AttendanceCheckCard
+          attendance={attendance}
+          loading={attendanceLoading}
+          onRefresh={() => { void loadAttendance(); }}
+        />
+      </div>
+
       {/* ── Task sections ────────────────────────────────────────────────── */}
       <div className="flex-1 p-4 space-y-6">
         {loading ? (
           <div className="space-y-2.5">
             {Array.from({ length: 5 }).map((_, i) => <div key={i} className="h-24 animate-pulse rounded-xl bg-secondary" />)}
           </div>
-        ) : notScheduled ? (
+        ) : noSchedule ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <Inbox className="mb-3 h-10 w-10 text-muted-foreground/40" />
             <p className="text-sm font-semibold text-foreground">No shift today</p>
             <p className="mt-1 text-xs text-muted-foreground">You are not scheduled for any shift today.</p>
+          </div>
+        ) : noVisibleTasks ? (
+          <div className="flex flex-col items-center justify-center py-20 text-center">
+            <Inbox className="mb-3 h-10 w-10 text-muted-foreground/40" />
+            <p className="text-sm font-semibold text-foreground">No tasks today</p>
+            <p className="mt-1 text-xs text-muted-foreground">There are no tasks available for your scheduled shift.</p>
           </div>
         ) : filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">
@@ -431,25 +931,36 @@ export default function EmployeeTasksPage() {
 // ─── Task card ────────────────────────────────────────────────────────────────
 
 function TaskCard({ item, onOpen }: { item: TaskItem; onOpen: (item: TaskItem) => void }) {
-  const { status }    = item.data;
-  const cfg           = STATUS_CFG[status];
-  const meta          = TASK_META[item.type];
-  const StatusIcon    = cfg.Icon;
-  const TaskIcon      = meta.Icon;
-  const isTerminal    = status === 'completed' || status === 'verified';
-  const isRejected    = status === 'rejected';
+  const status = item.data.status ?? 'pending';
+
+  const cfg = STATUS_CFG[status] ?? STATUS_CFG.pending;
+
+  const meta = TASK_META[item.type] ?? {
+    title: item.type.replaceAll('_', ' '),
+    description: 'Task belum memiliki konfigurasi tampilan.',
+    Icon: ClipboardList,
+    hasPhoto: false,
+  };
+
+  const StatusIcon = cfg.Icon;
+  const TaskIcon = meta.Icon;
+
+  const isTerminal = status === 'completed' || status === 'verified';
+  const isRejected = status === 'rejected';
   const isDiscrepancy = status === 'discrepancy';
 
   const showCarryForward =
     isDiscrepancy && (
       item.type === 'item_dropping' ||
       item.type === 'edc_reconciliation' ||
-      item.type === 'open_statement'
+      item.type === 'open_statement' ||
+      item.type === 'serah_terima'
     );
 
   const carryForwardDescription: Partial<Record<TaskType, string>> = {
     edc_reconciliation: 'Rekonsiliasi EDC belum selesai — tap untuk lanjutkan.',
     open_statement:     'Selisih open statement belum terselesaikan — tap untuk lanjutkan.',
+    serah_terima:      'Ada pesan serah terima yang belum selesai — tap untuk lanjutkan.',
   };
 
   const itemDroppingLabel = (() => {

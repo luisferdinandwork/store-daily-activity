@@ -10,10 +10,12 @@ import {
   CheckSquare, ChevronRight, UserCircle,
   Sun, Moon, LogIn, CalendarDays,
   CheckCircle2, Clock, XCircle, AlertCircle, Zap,
-  ShoppingBag, Receipt,
+  ShoppingBag, Receipt, Wallet,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { formatRupiah } from '@/lib/utils';
+
+import { StoreContributionChart } from '@/components/employee/StoreContributionChart';
+import { PerformanceMetricCard }  from '@/components/employee/PerformanceMetricCard';
 
 interface AttSlot {
   schedule: { shift: 'morning' | 'evening' | 'full_day' };
@@ -26,17 +28,35 @@ interface AttSlot {
 }
 
 interface PerformanceData {
-  success:           boolean;
-  employeeName:      string;
-  storeName:         string;
-  date:              string;
+  success: boolean;
+  employeeName: string;
+  storeName:    string;
+  date:      string;
+  yearMonth: string;
   salesAmount:       number;
   salesTarget:       number;
   salesPct:          number;
   transactionCount:  number;
   transactionTarget: number;
   transactionPct:    number;
+  monthlySalesAmount:        number;
+  monthlySalesTarget?:       number;
+  monthlySalesPct?:          number;
+  monthlyTransactionCount:   number;
+  monthlyTransactionTarget?: number;
+  monthlyTransactionPct?:    number;
+  monthlyAtv:                number;
+  storeMonthlySalesAmount:        number;
+  storeMonthlyTransactionCount:   number;
+  storeMonthlySalesTarget?:       number;
+  storeMonthlySalesPct?:          number;
+  storeMonthlyTransactionTarget?: number;
+  storeMonthlyTransactionPct?:    number;
+  employeeStoreContributionPct: number;
+  warning?: string;
 }
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function greeting() {
   const h = new Date().getHours();
@@ -49,14 +69,23 @@ function todayLabel() {
   return new Date().toLocaleDateString('en-ID', { weekday: 'long', day: 'numeric', month: 'long' });
 }
 
+function monthLabelFromYm(ym: string | undefined) {
+  if (!ym) {
+    return new Date().toLocaleDateString('en-ID', { month: 'long', year: 'numeric' });
+  }
+  const [y, m] = ym.split('-').map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString('en-ID', { month: 'long', year: 'numeric' });
+}
+
 function fmtTime(iso: string | null) {
   if (!iso) return null;
   return new Date(iso).toLocaleTimeString('en-ID', { hour: '2-digit', minute: '2-digit' });
 }
 
 function fmtCompact(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}jt`;
-  if (n >= 1_000)     return `${(n / 1_000).toFixed(0)}rb`;
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}M`;
+  if (n >= 1_000_000)     return `${(n / 1_000_000).toFixed(1)}jt`;
+  if (n >= 1_000)         return `${Math.round(n / 1_000)}rb`;
   return String(n);
 }
 
@@ -67,63 +96,34 @@ const ATT_CFG = {
   excused: { Icon: AlertCircle,  label: 'Excused', textClass: 'text-white/60',   bg: 'bg-white/10' },
 };
 
-// ─── Metric card ──────────────────────────────────────────────────────────────
+// ─── PeriodToggle ─────────────────────────────────────────────────────────────
 
-// Mini ring — same SVG technique as the task page RingProgress
-function MiniRing({ pct, color }: { pct: number; color: string }) {
-  const size   = 52;
-  const r      = 22;
-  const circ   = 2 * Math.PI * r;
-  const offset = circ * (1 - Math.min(100, pct) / 100);
-  return (
-    <div className="relative shrink-0" style={{ width: size, height: size }}>
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="-rotate-90">
-        {/* Track */}
-        <circle cx={size / 2} cy={size / 2} r={r}
-          fill="none" stroke="rgba(255,255,255,0.12)" strokeWidth={5} />
-        {/* Progress arc */}
-        <circle cx={size / 2} cy={size / 2} r={r}
-          fill="none" stroke={color} strokeWidth={5}
-          strokeLinecap="round"
-          strokeDasharray={circ}
-          strokeDashoffset={offset}
-          style={{ transition: 'stroke-dashoffset 0.7s ease' }}
-        />
-      </svg>
-      {/* Centre label */}
-      <div className="absolute inset-0 flex items-center justify-center">
-        <span className="text-[10px] font-bold text-white">{pct}%</span>
-      </div>
-    </div>
-  );
-}
-
-function MetricCard({
-  icon: Icon, label, value, sub, pct, accentColor,
+function PeriodToggle({
+  value, onChange,
 }: {
-  icon: React.ElementType;
-  label: string;
-  value: string;
-  sub: string;
-  pct: number;
-  accentColor: string;
+  value: 'daily' | 'monthly';
+  onChange: (v: 'daily' | 'monthly') => void;
 }) {
-  const ringColor = pct >= 100 ? '#4ade80' : pct >= 60 ? '#fbbf24' : 'rgba(255,255,255,0.4)';
-
   return (
-    <div className="flex-1 rounded-2xl border border-white/10 bg-white/[0.08] p-3.5">
-      {/* Top row: icon left, ring right */}
-      <div className="flex items-start justify-between gap-2">
-        <div className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-xl', accentColor)}>
-          <Icon className="h-4 w-4 text-white" strokeWidth={2} />
-        </div>
-        <MiniRing pct={pct} color={ringColor} />
-      </div>
-
-      {/* Value + label */}
-      <p className="mt-2.5 text-xl font-bold leading-none text-white">{value}</p>
-      <p className="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-white/50">{label}</p>
-      <p className="mt-0.5 text-[10px] text-white/35">{sub}</p>
+    <div className="relative flex h-9 w-full overflow-hidden rounded-full border border-slate-200 bg-slate-100 p-1">
+      {/* Sliding pill */}
+      <span
+        className="pointer-events-none absolute top-1 bottom-1 w-[calc(50%-4px)] rounded-full bg-white shadow-sm transition-transform duration-300 ease-out"
+        style={{ transform: value === 'monthly' ? 'translateX(calc(100% + 0px))' : 'translateX(0%)' }}
+      />
+      {(['daily', 'monthly'] as const).map((v) => (
+        <button
+          key={v}
+          type="button"
+          onClick={() => onChange(v)}
+          className={cn(
+            'relative z-10 flex flex-1 items-center justify-center text-[11px] font-bold uppercase tracking-widest transition-colors',
+            value === v ? 'text-violet-700' : 'text-slate-400 hover:text-slate-600',
+          )}
+        >
+          {v === 'daily' ? 'Hari ini' : 'Bulan ini'}
+        </button>
+      ))}
     </div>
   );
 }
@@ -136,6 +136,7 @@ export default function EmployeeDashboard() {
   const [attSlots, setAttSlots] = useState<AttSlot[]>([]);
   const [perf,     setPerf]     = useState<PerformanceData | null>(null);
   const [loading,  setLoading]  = useState(true);
+  const [period,   setPeriod]   = useState<'daily' | 'monthly'>('daily');
 
   const user      = session?.user as any;
   const firstName = user?.name?.split(' ')[0] ?? 'there';
@@ -161,16 +162,19 @@ export default function EmployeeDashboard() {
   const isOnBreak    = primaryAtt?.onBreak ?? false;
   const attCfg       = primaryAtt ? ATT_CFG[primaryAtt.status] : null;
 
+  const hasPerf      = perf && perf.success && !perf.warning;
+  const monthLabel   = monthLabelFromYm(perf?.yearMonth);
+
   return (
     <div className="flex flex-col">
 
-      {/* ── Hero ─────────────────────────────────────────────────────────── */}
-      <div className="relative overflow-hidden bg-primary px-6 pb-7 pt-12">
-        <div className="pointer-events-none absolute -right-12 -top-12 h-48 w-48 rounded-full bg-white/5" />
-        <div className="pointer-events-none absolute -right-4 top-4 h-28 w-28 rounded-full bg-white/5" />
+      {/* ── Hero — greeting + shift status only ────────────────────────── */}
+      <div className="relative overflow-hidden bg-primary px-6 pb-8 pt-10">
+        {/* Decorative atmosphere */}
+        <div className="pointer-events-none absolute -right-16 -top-16 h-56 w-56 rounded-full bg-white/5 blur-2xl" />
+        <div className="pointer-events-none absolute -left-10 top-32 h-40 w-40 rounded-full bg-amber-300/5 blur-3xl" />
 
-        <div className="relative space-y-5">
-
+        <div className="relative space-y-4">
           {/* Greeting */}
           <div>
             <p className="text-xs font-semibold uppercase tracking-widest text-primary-foreground/60">
@@ -179,7 +183,7 @@ export default function EmployeeDashboard() {
             <h1 className="mt-0.5 text-2xl font-bold text-primary-foreground">{firstName} 👋</h1>
             <p className="mt-1 text-xs text-primary-foreground/50">{todayLabel()}</p>
 
-            <div className="mt-4 flex flex-wrap gap-2">
+            <div className="mt-3 flex flex-wrap gap-2">
               {/* Shift pill */}
               <div className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-xs font-medium text-primary-foreground/80">
                 {primaryShift === 'morning'  && <Sun  className="h-3 w-3" />}
@@ -210,55 +214,125 @@ export default function EmployeeDashboard() {
               ) : null}
             </div>
           </div>
-
-          {/* Performance */}
-          <div>
-            <div className="mb-3 flex items-center justify-between">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-primary-foreground/40">
-                Today's Performance
-              </p>
-              {perf && (
-                <p className="text-[10px] text-primary-foreground/30">{perf.storeName}</p>
-              )}
+          {/* Store contribution chart */}
+          {loading ? (
+            <div className="h-56 animate-pulse rounded-2xl border " />
+          ) : hasPerf ? (
+            <div className="rounded-2xl">
+              <StoreContributionChart
+                employeeName={perf!.employeeName}
+                employeeMonthlySales={perf!.monthlySalesAmount}
+                storeMonthlySales={perf!.storeMonthlySalesAmount}
+                contributionPct={perf!.employeeStoreContributionPct}
+                monthLabel={monthLabel}
+              />
             </div>
-
-            {loading ? (
-              <div className="flex gap-3">
-                <div className="h-[7.5rem] flex-1 animate-pulse rounded-2xl bg-white/10" />
-                <div className="h-[7.5rem] flex-1 animate-pulse rounded-2xl bg-white/10" />
-              </div>
-            ) : perf ? (
-              <div className="flex gap-3">
-                <MetricCard
-                  icon={ShoppingBag}
-                  label="Sales"
-                  value={`Rp ${fmtCompact(perf.salesAmount)}`}
-                  sub={`target Rp ${fmtCompact(perf.salesTarget)}`}
-                  pct={perf.salesPct}
-                  accentColor="bg-blue-500/60"
-                />
-                <MetricCard
-                  icon={Receipt}
-                  label="Transaksi"
-                  value={String(perf.transactionCount)}
-                  sub={`target ${perf.transactionTarget}`}
-                  pct={perf.transactionPct}
-                  accentColor="bg-violet-500/60"
-                />
-              </div>
-            ) : (
-              <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-5 text-center">
-                <p className="text-xs text-white/40">Data performa tidak tersedia</p>
-              </div>
-            )}
-          </div>
-
+          ) : (
+            <div className="rounded-2xl border border-dashed px-5 py-8 text-center">
+              <p className="text-xs font-medium text-slate-400">
+                {perf?.warning ?? 'Data performa tidak tersedia'}
+              </p>
+            </div>
+          )}
         </div>
       </div>
 
+      {/* ── Performance section — white background ──────────────────────── */}
+      <div className="bg-white px-4 pt-5 pb-4">
+
+        {/* Section header */}
+        <div className="mb-3 flex items-center justify-between">
+          <p className="text-[11px] font-bold uppercase tracking-widest text-slate-400">
+            Performa
+          </p>
+          {hasPerf && (
+            <p className="text-[10px] font-medium text-slate-400 truncate max-w-[55%] text-right">
+              {perf!.storeName}
+            </p>
+          )}
+        </div>
+
+        
+
+        {/* Period toggle + metric cards */}
+        {hasPerf && (
+          <div className="mt-4 space-y-3">
+            {/* Period label + toggle */}
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
+                {period === 'daily' ? 'Hari ini' : monthLabel}
+              </p>
+            </div>
+
+            <PeriodToggle value={period} onChange={setPeriod} />
+
+            {/* Metric cards */}
+            <div key={period} className="space-y-3 animate-in fade-in duration-300">
+              <div className="flex gap-3">
+                {period === 'daily' ? (
+                  <>
+                    <MetricCardLight
+                      icon={ShoppingBag}
+                      iconBg="bg-violet-100"
+                      iconColor="text-violet-600"
+                      label="Sales"
+                      value={`Rp ${fmtCompact(perf!.salesAmount)}`}
+                      sub={`target Rp ${fmtCompact(perf!.salesTarget)}`}
+                      pct={perf!.salesPct}
+                      pctColor="bg-violet-500"
+                    />
+                    <MetricCardLight
+                      icon={Receipt}
+                      iconBg="bg-blue-100"
+                      iconColor="text-blue-600"
+                      label="Transaksi"
+                      value={String(perf!.transactionCount)}
+                      sub={`target ${perf!.transactionTarget}`}
+                      pct={perf!.transactionPct}
+                      pctColor="bg-blue-500"
+                    />
+                  </>
+                ) : (
+                  <>
+                    <MetricCardLight
+                      icon={ShoppingBag}
+                      iconBg="bg-violet-100"
+                      iconColor="text-violet-600"
+                      label="Sales"
+                      value={`Rp ${fmtCompact(perf!.monthlySalesAmount)}`}
+                      sub={perf!.monthlySalesTarget
+                        ? `target Rp ${fmtCompact(perf!.monthlySalesTarget)}`
+                        : undefined}
+                      pct={perf!.monthlySalesPct ?? 0}
+                      pctColor="bg-violet-500"
+                    />
+                    <MetricCardLight
+                      icon={Receipt}
+                      iconBg="bg-blue-100"
+                      iconColor="text-blue-600"
+                      label="Transaksi"
+                      value={String(perf!.monthlyTransactionCount)}
+                      sub={perf!.monthlyTransactionTarget
+                        ? `target ${perf!.monthlyTransactionTarget}`
+                        : undefined}
+                      pct={perf!.monthlyTransactionPct ?? 0}
+                      pctColor="bg-blue-500"
+                    />
+                  </>
+                )}
+              </div>
+
+              {period === 'monthly' && (
+                <AtvCard atv={perf!.monthlyAtv} />
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* ── Quick actions ─────────────────────────────────────────────────── */}
-      <div className="px-4 pt-5 pb-8">
-        <p className="mb-3 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+      <div className="bg-slate-50 px-4 pt-5 pb-8">
+        <p className="mb-3 text-[11px] font-bold uppercase tracking-widest text-slate-400">
           Quick Actions
         </p>
 
@@ -327,6 +401,73 @@ export default function EmployeeDashboard() {
           </Link>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─── Light MetricCard (for white bg section) ──────────────────────────────────
+
+function MetricCardLight({
+  icon: Icon,
+  iconBg,
+  iconColor,
+  label,
+  value,
+  sub,
+  pct,
+  pctColor,
+}: {
+  icon: React.ElementType;
+  iconBg: string;
+  iconColor: string;
+  label: string;
+  value: string;
+  sub?: string;
+  pct: number;
+  pctColor: string;
+}) {
+  const clamped = Math.min(100, Math.max(0, pct));
+  return (
+    <div className="flex-1 rounded-2xl border border-slate-100 bg-white p-3.5 shadow-sm">
+      <div className="flex items-start justify-between gap-2">
+        <div className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-xl', iconBg)}>
+          <Icon className={cn('h-4 w-4', iconColor)} strokeWidth={2.2} />
+        </div>
+        <span className="text-[10px] font-bold tabular-nums text-slate-500">
+          {Math.round(clamped)}%
+        </span>
+      </div>
+      <p className="mt-2.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">{label}</p>
+      <p className="mt-0.5 text-lg font-bold tabular-nums text-slate-900">{value}</p>
+      {sub && <p className="mt-0.5 text-[10px] text-slate-400">{sub}</p>}
+      {/* Progress bar */}
+      <div className="mt-2.5 h-1 w-full overflow-hidden rounded-full bg-slate-100">
+        <div
+          className={cn('h-full rounded-full transition-all', pctColor)}
+          style={{ width: `${clamped}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ─── ATV card (monthly only) ──────────────────────────────────────────────────
+
+function AtvCard({ atv }: { atv: number }) {
+  return (
+    <div className="flex items-center gap-3 rounded-2xl border border-slate-100 bg-white p-3.5 shadow-sm">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-100">
+        <Wallet className="h-4 w-4 text-emerald-600" strokeWidth={2.2} />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">ATV · Rata-rata transaksi</p>
+        <p className="mt-0.5 text-lg font-bold text-slate-900 tabular-nums">
+          Rp {fmtCompact(atv)}
+        </p>
+      </div>
+      <p className="text-[10px] text-slate-400 max-w-[35%] text-right leading-tight">
+        Sales ÷ transaksi
+      </p>
     </div>
   );
 }

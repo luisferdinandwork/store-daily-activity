@@ -11,6 +11,7 @@ import {
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { useAutoSave } from '@/lib/hooks/useAutoSave';
+import { TaskHeader, TaskSubmitBar, SaveIndicator } from '@/components/employee/tasks';
 
 type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'verified' | 'rejected';
 
@@ -224,26 +225,6 @@ function AccessBanner({
       <p className="text-xs font-medium text-green-700">
         Lokasi terdeteksi ({geo?.lat.toFixed(5)}, {geo?.lng.toFixed(5)})
       </p>
-    </div>
-  );
-}
-
-function SaveIndicator({ status, lastSaved }: {
-  status: 'idle' | 'saving' | 'saved' | 'error';
-  lastSaved: Date | null;
-}) {
-  if (status === 'idle') return null;
-
-  return (
-    <div className={cn(
-      'flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold',
-      status === 'saving' && 'bg-blue-50 text-blue-600',
-      status === 'saved' && 'bg-green-50 text-green-700',
-      status === 'error' && 'bg-red-50 text-red-600',
-    )}>
-      {status === 'saving' && <><Loader2 className="h-3 w-3 animate-spin" />Menyimpan…</>}
-      {status === 'saved' && <><Cloud className="h-3 w-3" />Tersimpan{lastSaved ? ` ${new Date(lastSaved).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}` : ''}</>}
-      {status === 'error' && <><CloudOff className="h-3 w-3" />Simpan gagal</>}
     </div>
   );
 }
@@ -622,24 +603,14 @@ export default function MarketingCheckDetailPage() {
                 />
               </Section>
 
-              {!readonly && (
-                <>
-                  <button
-                    type="button"
-                    onClick={handleSubmit}
-                    disabled={!canSubmit || submitting}
-                    className="flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-primary text-sm font-bold text-primary-foreground transition-all active:scale-[0.98] disabled:opacity-40"
-                  >
-                    {submitting
-                      ? <><Loader2 className="h-4 w-4 animate-spin" />Menyimpan…</>
-                      : <><CheckCircle2 className="h-4 w-4" />Submit Marketing Check</>}
-                  </button>
-
-                  {!canSubmit && submitHint && (
-                    <p className="text-center text-[11px] text-muted-foreground">{submitHint}</p>
-                  )}
-                </>
-              )}
+              <TaskSubmitBar
+                  label="Submit Marketing Check"
+                  onSubmit={handleSubmit}
+                  submitting={submitting}
+                  disabled={!canSubmit}
+                  hidden={readonly}
+                  hint={!canSubmit ? submitHint : undefined}
+                />
             </div>
           </div>
         )}

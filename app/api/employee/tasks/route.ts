@@ -15,6 +15,8 @@ import {
   vmChecklistTasks,
   marketingCheckTasks,
   briefingTasks,
+  serahTerimaTasks,
+  serahTerimaItems,
   edcReconciliationTasks,
   eodZReportTasks,
   openStatementTasks,
@@ -34,6 +36,8 @@ import { getOrCreateVmChecklistForSchedule } from "@/lib/db/utils/vm-checklist";
 import { getOrCreateMarketingCheckForSchedule } from "@/lib/db/utils/marketing-check";
 import { getOrCreateItemDroppingForSchedule } from "@/lib/db/utils/item-dropping";
 import { getOrCreateGroomingForSchedule } from "@/lib/db/utils/grooming";
+import { getOrCreateBriefingForSchedule } from "@/lib/db/utils/briefing";
+import { getOrCreateSerahTerimaForSchedule } from "@/lib/db/utils/serah-terima";
 
 function startOfDay(d: Date): Date {
   const r = new Date(d);
@@ -183,6 +187,8 @@ export async function GET(request: NextRequest) {
       itemDroppingEntryRows,
       edcReconciliationRows,
       briefingRows,
+      serahTerimaRows,
+      serahTerimaItemRows,
       eodZReportRows,
       openStatementRows,
       groomingRows,
@@ -412,19 +418,83 @@ export async function GET(request: NextRequest) {
             .orderBy(desc(edcReconciliationTasks.date))
         : Promise.resolve([]),
 
-      hasEveningTasks
-        ? db
-            .select()
-            .from(briefingTasks)
-            .where(
-              and(
-                inArray(briefingTasks.storeId, storeIds),
-                gte(briefingTasks.date, dayStart),
-                lte(briefingTasks.date, dayEnd),
-              ),
-            )
-            .orderBy(desc(briefingTasks.date))
-        : Promise.resolve([]),
+      (async () => {
+        await Promise.all(
+          todaySchedules.map((s) =>
+            getOrCreateBriefingForSchedule(
+              s.id,
+              userId,
+              s.storeId,
+              s.shiftId,
+              targetDate,
+            ),
+          ),
+        );
+
+        return db
+          .select()
+          .from(briefingTasks)
+          .where(
+            and(
+              inArray(briefingTasks.storeId, storeIds),
+              gte(briefingTasks.date, dayStart),
+              lte(briefingTasks.date, dayEnd),
+            ),
+          )
+          .orderBy(desc(briefingTasks.date));
+      })(),
+
+      (async () => {
+        await Promise.all(
+          todaySchedules.map((s) =>
+            getOrCreateSerahTerimaForSchedule(
+              s.id,
+              userId,
+              s.storeId,
+              s.shiftId,
+              targetDate,
+            ),
+          ),
+        );
+
+        return db
+          .select()
+          .from(serahTerimaTasks)
+          .where(
+            and(
+              inArray(serahTerimaTasks.storeId, storeIds),
+              gte(serahTerimaTasks.date, dayStart),
+              lte(serahTerimaTasks.date, dayEnd),
+            ),
+          )
+          .orderBy(desc(serahTerimaTasks.date));
+      })(),
+
+      (async () => {
+        const taskIds = await db
+          .select({ id: serahTerimaTasks.id })
+          .from(serahTerimaTasks)
+          .where(
+            and(
+              inArray(serahTerimaTasks.storeId, storeIds),
+              gte(serahTerimaTasks.date, dayStart),
+              lte(serahTerimaTasks.date, dayEnd),
+            ),
+          );
+
+        if (!taskIds.length) return [];
+
+        return db
+          .select()
+          .from(serahTerimaItems)
+          .where(
+            inArray(
+              serahTerimaItems.taskId,
+              taskIds.map((r) => r.id),
+            ),
+          )
+          .orderBy(asc(serahTerimaItems.id));
+      })(),
 
       hasEveningTasks
         ? db
@@ -530,6 +600,13 @@ export async function GET(request: NextRequest) {
       const bucket = entriesByTaskId.get(entry.taskId) ?? [];
       bucket.push(entry);
       entriesByTaskId.set(entry.taskId, bucket);
+    }
+
+    const serahItemsByTaskId = new Map<number, typeof serahTerimaItemRows>();
+    for (const item of serahTerimaItemRows) {
+      const bucket = serahItemsByTaskId.get(item.taskId) ?? [];
+      bucket.push(item);
+      serahItemsByTaskId.set(item.taskId, bucket);
     }
 
     const availableBinsByStoreId = new Map<number, typeof availableBinRows>();
@@ -920,6 +997,44 @@ export async function GET(request: NextRequest) {
           },
         })),
 
+      ...serahTerimaRows
+        .filter((r) => inStore(r.storeId))
+        .map((t) => {
+          const items = (serahItemsByTaskId.get(t.id) ?? []).map((item) => ({
+            id: String(item.id),
+            taskId: String(item.taskId),
+            receiverTaskId: item.receiverTaskId ? String(item.receiverTaskId) : null,
+            message: item.message,
+            isCompleted: item.isCompleted,
+            completedBy: item.completedBy,
+            completedAt: toIso(item.completedAt),
+            createdAt: toIso(item.createdAt),
+          }));
+
+          return {
+            type: "serah_terima" as const,
+            shift: (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode,
+            data: {
+              id: String(t.id),
+              scheduleId: String(t.scheduleId),
+              userId: t.userId,
+              storeId: String(t.storeId),
+              shift: (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode,
+              date: t.date.toISOString(),
+
+              handoverText: t.handoverText ?? "",
+              items,
+
+              status: t.status,
+              notes: t.notes,
+              completedAt: toIso(t.completedAt),
+              verifiedBy: t.verifiedBy,
+              verifiedAt: toIso(t.verifiedAt),
+            },
+          };
+        }),
+
+
       ...eodZReportRows
         .filter((r) => inStore(r.storeId))
         .map((t) => ({
@@ -1225,6 +1340,24 @@ export async function PATCH(request: NextRequest) {
             .update(itemDroppingTasks)
             .set({ status: "in_progress", updatedAt: new Date() })
             .where(eq(itemDroppingTasks.id, id))
+            .then(() => {}),
+      },
+
+      serah_terima: {
+        getRow: async (id) =>
+          (
+            await db
+              .select({ status: serahTerimaTasks.status })
+              .from(serahTerimaTasks)
+              .where(eq(serahTerimaTasks.id, id))
+              .limit(1)
+          )[0],
+
+        update: (id) =>
+          db
+            .update(serahTerimaTasks)
+            .set({ status: "in_progress", updatedAt: new Date() })
+            .where(eq(serahTerimaTasks.id, id))
             .then(() => {}),
       },
 

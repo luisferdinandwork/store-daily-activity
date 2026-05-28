@@ -12,6 +12,7 @@ import {
 import { cn }    from '@/lib/utils';
 import { toast } from 'sonner';
 import { useAutoSave } from '@/lib/hooks/useAutoSave';
+import { TaskHeader, TaskSubmitBar, SaveIndicator } from '@/components/employee/tasks';
 import ChecklistPhotoModal from '@/components/tasks/ChecklistPhotoModal';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -140,23 +141,6 @@ function AccessBanner({ accessStatus, accessLoading, geoReady, geo, geoError, on
       <p className="text-xs font-medium text-green-700">
         Lokasi terdeteksi ({geo?.lat.toFixed(5)}, {geo?.lng.toFixed(5)})
       </p>
-    </div>
-  );
-}
-
-// ─── Save indicator ───────────────────────────────────────────────────────────
-
-function SaveIndicator({ status, lastSaved }: { status: 'idle'|'saving'|'saved'|'error'; lastSaved: Date|null }) {
-  if (status === 'idle') return null;
-  return (
-    <div className={cn('flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold',
-      status === 'saving' && 'bg-blue-50 text-blue-600',
-      status === 'saved'  && 'bg-green-50 text-green-700',
-      status === 'error'  && 'bg-red-50 text-red-600',
-    )}>
-      {status === 'saving' && <><Loader2 className="h-3 w-3 animate-spin" />Menyimpan…</>}
-      {status === 'saved'  && <><Cloud className="h-3 w-3" />Tersimpan{lastSaved ? ` ${new Date(lastSaved).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'})}` : ''}</>}
-      {status === 'error'  && <><CloudOff className="h-3 w-3" />Simpan gagal</>}
     </div>
   );
 }
@@ -520,28 +504,20 @@ export default function StoreFrontDetailPage() {
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
-
-      {/* ── Header ── */}
-      <div className="sticky top-0 z-20 flex items-center gap-2 border-b border-border bg-card px-4 py-3">
-        <button
-          onClick={() => router.back()}
-          className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-secondary text-foreground"
-        >
-          <ArrowLeft className="h-4 w-4" />
-        </button>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-bold text-foreground">Store Front</p>
-          {taskData && (
-            <p className="text-[10px] capitalize text-muted-foreground">
-              {taskData.shift} shift · {taskData.status.replace('_', ' ')}
-            </p>
-          )}
-        </div>
-        {!readonly && !loading && taskData && <SaveIndicator status={saveStatus} lastSaved={lastSaved} />}
-        {taskStatus === 'completed' && <span className="flex items-center gap-1 rounded-full bg-green-100 px-2.5 py-1 text-[10px] font-bold text-green-700"><CheckCircle2 className="h-3 w-3" />Selesai</span>}
-        {taskStatus === 'verified'  && <span className="flex items-center gap-1 rounded-full bg-green-200 px-2.5 py-1 text-[10px] font-bold text-green-800"><CheckCircle2 className="h-3 w-3" />Terverifikasi</span>}
-        {taskStatus === 'rejected'  && <span className="flex items-center gap-1 rounded-full bg-red-100   px-2.5 py-1 text-[10px] font-bold text-red-700"><AlertCircle  className="h-3 w-3" />Ditolak</span>}
-      </div>
+      <TaskHeader
+        title="Store Front"
+        subtitle={
+          taskData
+            ? `${String(taskData.shift).replace('_', ' ')} shift · ${String(taskData.status).replace('_', ' ')}`
+            : undefined
+        }
+        status={taskStatus}
+        saveIndicator={
+          !readonly && !loading && taskData ? (
+            <SaveIndicator status={saveStatus} lastSaved={lastSaved ?? null} />
+          ) : null
+        }
+      />
 
       {/* ── Body ── */}
       <div className="flex-1 space-y-4 p-4 pb-10">
@@ -678,23 +654,14 @@ export default function StoreFrontDetailPage() {
               </Section>
 
               {/* ── Submit ────────────────────────────────────────────── */}
-              {!readonly && (
-                <>
-                  <button
-                    type="button"
-                    onClick={handleSubmit}
-                    disabled={!canSubmit || submitting}
-                    className="flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-primary text-sm font-bold text-primary-foreground transition-all active:scale-[0.98] disabled:opacity-40"
-                  >
-                    {submitting
-                      ? <><Loader2 className="h-4 w-4 animate-spin" />Menyimpan…</>
-                      : <><CheckCircle2 className="h-4 w-4" />Submit Store Front</>}
-                  </button>
-                  {!canSubmit && submitHint && (
-                    <p className="text-center text-[11px] text-muted-foreground">{submitHint}</p>
-                  )}
-                </>
-              )}
+              <TaskSubmitBar
+                  label="Submit Store Front"
+                  onSubmit={handleSubmit}
+                  submitting={submitting}
+                  disabled={!canSubmit}
+                  hidden={readonly}
+                  hint={!canSubmit ? submitHint : undefined}
+                />
 
             </div>
           </div>

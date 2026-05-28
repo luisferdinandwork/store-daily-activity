@@ -1,61 +1,151 @@
 // app/api/ops/tasks/_helpers.ts
 import { db } from '@/lib/db';
-import { users, userRoles, stores } from '@/lib/db/schema';
-import { eq } from 'drizzle-orm';
+import {
+  users,
+  userRoles,
+  employeeTypes,
+  stores,
+} from '@/lib/db/schema';
+import { and, eq } from 'drizzle-orm';
 
 export interface OpsActor {
-  id:     string;
-  role:   string | null;
+  id: string;
+  role: string | null;
+  employeeType: string | null;
   areaId: number | null;
+  isOpsHo: boolean;
+  isOpsArea: boolean;
 }
 
 export async function getOpsActor(userId: string): Promise<OpsActor | null> {
   const [row] = await db
     .select({
-      id:     users.id,
-      role:   userRoles.code,
+      id: users.id,
+      role: userRoles.code,
+      employeeType: employeeTypes.code,
       areaId: users.areaId,
     })
     .from(users)
     .leftJoin(userRoles, eq(users.roleId, userRoles.id))
-    .where(eq(users.id, userId))
+    .leftJoin(employeeTypes, eq(users.employeeTypeId, employeeTypes.id))
+    .where(and(eq(users.id, userId), eq(users.isActive, true)))
     .limit(1);
 
-  if (!row || row.role !== 'ops') return null;
-  return row as OpsActor;
+  if (!row) return null;
+
+  if (row.role !== 'ops') return null;
+
+  const isOpsHo = row.employeeType === 'ops_ho';
+  const isOpsArea = row.employeeType === 'ops_area';
+
+  /**
+   * Only allow these 2 OPS types.
+   * This prevents generic ops users or wrongly configured users
+   * from accessing the OPS task dashboard.
+   */
+  if (!isOpsHo && !isOpsArea) return null;
+
+  return {
+    id: row.id,
+    role: row.role,
+    employeeType: row.employeeType,
+    areaId: row.areaId,
+    isOpsHo,
+    isOpsArea,
+  };
 }
 
 export async function assertStoreInActorArea(
-  actor:   OpsActor,
+  actor: OpsActor,
   storeId: number,
 ): Promise<string | null> {
-  if (!actor.areaId) return 'OPS user has no area assigned.';
+  /**
+   * OPS HO can access every store.
+   */
+  if (actor.isOpsHo) return null;
+
+  /**
+   * OPS Area must have an assigned area.
+   */
+  if (!actor.areaId) {
+    return 'OPS user has no area assigned.';
+  }
+
   const [store] = await db
-    .select({ areaId: stores.areaId })
+    .select({
+      id: stores.id,
+      areaId: stores.areaId,
+    })
     .from(stores)
     .where(eq(stores.id, storeId))
     .limit(1);
-  if (!store)                        return 'Store not found.';
-  if (store.areaId !== actor.areaId) return 'This store is not in your area.';
+
+  if (!store) {
+    return 'Store not found.';
+  }
+
+  if (store.areaId !== actor.areaId) {
+    return 'This store is not in your area.';
+  }
+
   return null;
 }
 
-export function parseStoreId(raw: string | null | undefined): { ok: true; id: number } | { ok: false; error: string } {
-  if (raw == null || raw === '') return { ok: false, error: 'storeId required.' };
+export function parseStoreId(
+  raw: string | null | undefined,
+): { ok: true; id: number } | { ok: false; error: string } {
+  if (raw == null || raw.trim() === '') {
+    return { ok: false, error: 'storeId required.' };
+  }
+
   const n = Number(raw);
-  if (isNaN(n)) return { ok: false, error: 'Invalid storeId.' };
+
+  if (!Number.isInteger(n) || n <= 0) {
+    return { ok: false, error: 'Invalid storeId.' };
+  }
+
   return { ok: true, id: n };
 }
 
-export function parseDate(raw: string | null | undefined): { ok: true; date: Date } | { ok: false; error: string } {
-  if (!raw) return { ok: false, error: 'date required.' };
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
-  let d: Date;
-  if (m) {
-    d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 0, 0, 0, 0);
-  } else {
-    d = new Date(raw);
+export function parseDate(
+  raw: string | null | undefined,
+): { ok: true; date: Date } | { ok: false; error: string } {
+  if (!raw || raw.trim() === '') {
+    return { ok: false, error: 'date required.' };
   }
-  if (isNaN(d.getTime())) return { ok: false, error: 'Invalid date.' };
-  return { ok: true, date: d };
+
+  const value = raw.trim();
+
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+
+  let date: Date;
+
+  if (match) {
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+
+    date = new Date(year, month - 1, day, 0, 0, 0, 0);
+
+    /**
+     * Prevent invalid dates like:
+     * 2026-02-31 -> auto becomes March 3 in JS.
+     */
+    const isSameDate =
+      date.getFullYear() === year &&
+      date.getMonth() === month - 1 &&
+      date.getDate() === day;
+
+    if (!isSameDate) {
+      return { ok: false, error: 'Invalid date.' };
+    }
+  } else {
+    date = new Date(value);
+  }
+
+  if (Number.isNaN(date.getTime())) {
+    return { ok: false, error: 'Invalid date.' };
+  }
+
+  return { ok: true, date };
 }

@@ -122,22 +122,34 @@ async function seedSetup() {
     .insert(employeeTypes)
     .values([
       {
+        code: 'ops_ho',
+        label: 'OPS HO',
+        description: 'Head office operations user — can view all stores',
+        sortOrder: 5,
+      },
+      {
+        code: 'ops_area',
+        label: 'OPS Area',
+        description: 'Area operations user — can view stores only in assigned area',
+        sortOrder: 10,
+      },
+      {
         code: 'pic_1',
         label: 'PIC 1',
         description: 'Person in charge — primary',
-        sortOrder: 10,
+        sortOrder: 20,
       },
       {
         code: 'pic_2',
         label: 'PIC 2',
         description: 'Person in charge — secondary',
-        sortOrder: 20,
+        sortOrder: 30,
       },
       {
         code: 'sa',
         label: 'SA',
         description: 'Sales Associate',
-        sortOrder: 30,
+        sortOrder: 40,
       },
     ])
     .returning();
@@ -267,14 +279,27 @@ async function seedSetup() {
   type NewUser = typeof users.$inferInsert;
 
   const userDefs: NewUser[] = [
-    // OPS
+    // OPS HO
+    {
+      id: opsId(),
+      nik: 'OPS-HO-001',
+      name: 'Rangga Pratama',
+      password: pwd,
+      roleId: roleId.ops,
+      employeeTypeId: empTypeId.ops_ho,
+      homeStoreId: null,
+      areaId: null,
+      isActive: true,
+    },
+
+    // OPS Area
     {
       id: opsId(),
       nik: 'OPS-JP-001',
       name: 'Andi Wijaya',
       password: pwd,
       roleId: roleId.ops,
-      employeeTypeId: null,
+      employeeTypeId: empTypeId.ops_area,
       homeStoreId: null,
       areaId: areaJP.id,
       isActive: true,
@@ -285,7 +310,7 @@ async function seedSetup() {
       name: 'Maya Sari',
       password: pwd,
       roleId: roleId.ops,
-      employeeTypeId: null,
+      employeeTypeId: empTypeId.ops_area,
       homeStoreId: null,
       areaId: areaJS.id,
       isActive: true,

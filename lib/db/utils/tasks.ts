@@ -15,6 +15,7 @@ import {
   eodZReportTasks,
   openStatementTasks,
   groomingTasks, itemDroppingTasks,
+  serahTerimaTasks,
   type StoreFrontTask,
   type CekBinTask,
   type VmChecklistTask,
@@ -555,6 +556,34 @@ export async function materialiseTasksForSchedule(
         ))
         .limit(1).then(r => r[0]),
       () => db.insert(itemDroppingTasks).values({ ...base, hasDropping: false }));
+
+    // Briefing — now available on morning and evening shift.
+    await insertShared('briefingMorning',
+      () => db.select({ id: briefingTasks.id }).from(briefingTasks)
+        .where(and(
+          eq(briefingTasks.scheduleId, scheduleId),
+          eq(briefingTasks.shiftId, morningId),
+        ))
+        .limit(1).then(r => r[0]),
+      () => db.insert(briefingTasks).values({
+        ...base,
+        done: false,
+        isBalanced: null,
+        parentTaskId: null,
+      }));
+
+    // Serah Terima — free-text handover list for the next shift.
+    await insertShared('serahTerimaMorning',
+      () => db.select({ id: serahTerimaTasks.id }).from(serahTerimaTasks)
+        .where(and(
+          eq(serahTerimaTasks.scheduleId, scheduleId),
+          eq(serahTerimaTasks.shiftId, morningId),
+        ))
+        .limit(1).then(r => r[0]),
+      () => db.insert(serahTerimaTasks).values({
+        ...base,
+        handoverText: '',
+      }));
   }
 
   // ── Evening ────────────────────────────────────────────────────────────────
@@ -571,10 +600,33 @@ export async function materialiseTasksForSchedule(
         .limit(1).then((r: { id: number }[]) => r[0]);
     }
 
-    // Briefing — unchanged
-    await insertShared('briefing',
-      () => eveningActive(briefingTasks),
-      () => db.insert(briefingTasks).values(base));
+    // Briefing — now simple complete-finish and available on both shifts.
+    await insertShared('briefingEvening',
+      () => db.select({ id: briefingTasks.id }).from(briefingTasks)
+        .where(and(
+          eq(briefingTasks.scheduleId, scheduleId),
+          eq(briefingTasks.shiftId, eveningId),
+        ))
+        .limit(1).then(r => r[0]),
+      () => db.insert(briefingTasks).values({
+        ...base,
+        done: false,
+        isBalanced: null,
+        parentTaskId: null,
+      }));
+
+    // Serah Terima — free-text handover list for the next shift.
+    await insertShared('serahTerimaEvening',
+      () => db.select({ id: serahTerimaTasks.id }).from(serahTerimaTasks)
+        .where(and(
+          eq(serahTerimaTasks.scheduleId, scheduleId),
+          eq(serahTerimaTasks.shiftId, eveningId),
+        ))
+        .limit(1).then(r => r[0]),
+      () => db.insert(serahTerimaTasks).values({
+        ...base,
+        handoverText: '',
+      }));
 
     // EDC Reconciliation — via dedicated util (handles per-row defaults)
     try {
@@ -659,6 +711,8 @@ export async function deleteTasksForSchedule(scheduleId: number): Promise<void> 
       )),
     db.delete(itemDroppingTasks)
       .where(and(eq(itemDroppingTasks.scheduleId, scheduleId), inArray(itemDroppingTasks.status, ACTIVE_STATUSES))),
+    db.delete(serahTerimaTasks)
+      .where(and(eq(serahTerimaTasks.scheduleId, scheduleId), inArray(serahTerimaTasks.status, ACTIVE_STATUSES))),
     // Evening tasks
     db.delete(briefingTasks)
       .where(and(eq(briefingTasks.scheduleId, scheduleId), inArray(briefingTasks.status, ACTIVE_STATUSES))),
@@ -973,57 +1027,43 @@ export async function submitBriefing(
     const gateErr = await assertCanProgressTask(input.scheduleId, input.storeId, input.geo, input.skipGeo);
     if (gateErr) return { success: false, error: gateErr };
 
-    const shiftMap = await getShiftIdMap();
-    const now      = new Date();
-    const status   = input.isBalanced ? ('completed' as const) : ('discrepancy' as const);
+    const [sched] = await db.select({ shiftId: schedules.shiftId, date: schedules.date })
+      .from(schedules).where(eq(schedules.id, input.scheduleId)).limit(1);
 
-    let row: BriefingTask;
+    if (!sched) return { success: false, error: 'Schedule tidak ditemukan.' };
 
-    if (input.parentTaskId) {
-      const [existing] = await db.select().from(briefingTasks)
-        .where(eq(briefingTasks.id, input.parentTaskId)).limit(1);
-      if (!existing)                         return { success: false, error: 'Task carry-forward tidak ditemukan.' };
-      if (existing.status !== 'discrepancy') return { success: false, error: 'Task ini tidak dalam status discrepancy.' };
+    const now = new Date();
 
-      row = (await db.update(briefingTasks).set({
-        scheduleId:   input.scheduleId,
-        userId:       input.userId,
-        done:         input.done,
-        isBalanced:   input.isBalanced,
-        submittedLat: String(input.geo.lat),
-        submittedLng: String(input.geo.lng),
-        notes:        input.notes,
-        status,
-        completedAt:  status === 'completed' ? now : null,
-        updatedAt:    now,
-      }).where(eq(briefingTasks.id, input.parentTaskId)).returning())[0];
-    } else {
-      const [existing] = await db.select().from(briefingTasks)
-        .where(eq(briefingTasks.scheduleId, input.scheduleId)).limit(1);
-      if (isFinalStatus(existing?.status))
-        return { success: false, error: 'Task sudah completed dan tidak bisa diubah.' };
+    const [existing] = await db.select().from(briefingTasks)
+      .where(and(
+        eq(briefingTasks.scheduleId, input.scheduleId),
+        eq(briefingTasks.shiftId, sched.shiftId),
+      ))
+      .limit(1);
 
-      const values = {
-        scheduleId:   input.scheduleId,
-        userId:       input.userId,
-        storeId:      input.storeId,
-        shiftId:      shiftMap['evening'],
-        date:         startOfDay(now),
-        parentTaskId: null as number | null,
-        done:         input.done,
-        isBalanced:   input.isBalanced,
-        submittedLat: String(input.geo.lat),
-        submittedLng: String(input.geo.lng),
-        notes:        input.notes,
-        status,
-        completedAt:  status === 'completed' ? now : null,
-        updatedAt:    now,
-      };
+    if (isFinalStatus(existing?.status))
+      return { success: false, error: 'Task sudah completed dan tidak bisa diubah.' };
 
-      row = existing
-        ? (await db.update(briefingTasks).set(values).where(eq(briefingTasks.id, existing.id)).returning())[0]
-        : (await db.insert(briefingTasks).values(values).returning())[0];
-    }
+    const values = {
+      scheduleId:   input.scheduleId,
+      userId:       input.userId,
+      storeId:      input.storeId,
+      shiftId:      sched.shiftId,
+      date:         startOfDay(sched.date ?? now),
+      parentTaskId: null as number | null,
+      done:         true,
+      isBalanced:   true,
+      submittedLat: String(input.geo.lat),
+      submittedLng: String(input.geo.lng),
+      notes:        input.notes,
+      status:       'completed' as const,
+      completedAt:  now,
+      updatedAt:    now,
+    };
+
+    const row = existing
+      ? (await db.update(briefingTasks).set(values).where(eq(briefingTasks.id, existing.id)).returning())[0]
+      : (await db.insert(briefingTasks).values(values).returning())[0];
 
     return { success: true, data: row };
   } catch (err) {
@@ -1086,7 +1126,7 @@ export async function submitGrooming(
 export async function getTasksForSchedule(scheduleId: number) {
   const [
     storeFront, cekBin, vmChecklist, marketingCheck, itemDropping, briefing,
-    edcReconciliation, eodZReport, openStatement, grooming,
+    serahTerima, edcReconciliation, eodZReport, openStatement, grooming,
   ] = await Promise.all([
     db.select().from(storeFrontTasks)        .where(eq(storeFrontTasks.scheduleId,        scheduleId)).limit(1),
     db.select().from(cekBinTasks)            .where(eq(cekBinTasks.scheduleId,            scheduleId)).limit(1),
@@ -1094,6 +1134,7 @@ export async function getTasksForSchedule(scheduleId: number) {
     db.select().from(marketingCheckTasks)    .where(eq(marketingCheckTasks.scheduleId,    scheduleId)).limit(1),
     db.select().from(itemDroppingTasks)      .where(eq(itemDroppingTasks.scheduleId,      scheduleId)).limit(1),
     db.select().from(briefingTasks)          .where(eq(briefingTasks.scheduleId,          scheduleId)).limit(1),
+    db.select().from(serahTerimaTasks)       .where(eq(serahTerimaTasks.scheduleId,       scheduleId)).limit(1),
     db.select().from(edcReconciliationTasks) .where(eq(edcReconciliationTasks.scheduleId, scheduleId)).limit(1),
     db.select().from(eodZReportTasks)        .where(eq(eodZReportTasks.scheduleId,        scheduleId)).limit(1),
     db.select().from(openStatementTasks)     .where(eq(openStatementTasks.scheduleId,     scheduleId)).limit(1),
@@ -1107,6 +1148,7 @@ export async function getTasksForSchedule(scheduleId: number) {
     marketingCheck:    marketingCheck[0]    ?? null,
     itemDropping:      itemDropping[0]      ?? null,
     briefing:          briefing[0]          ?? null,
+    serahTerima:       serahTerima[0]       ?? null,
     edcReconciliation: edcReconciliation[0] ?? null,
     eodZReport:        eodZReport[0]        ?? null,
     openStatement:     openStatement[0]     ?? null,
@@ -1135,7 +1177,7 @@ export async function getDailyTaskSummary(storeId: number, date: Date) {
 
   const [
     storeFront, cekBin, vmChecklist, marketingCheck, itemDropping, briefing,
-    edcReconciliation, eodZReport, openStatement, grooming,
+    serahTerima, edcReconciliation, eodZReport, openStatement, grooming,
   ] = await Promise.all([
     db.select({ status: storeFrontTasks.status,        count: sql<number>`count(*)::int` }).from(storeFrontTasks)
       .where(and(eq(storeFrontTasks.storeId, storeId),        gte(storeFrontTasks.date, dayStart),        lte(storeFrontTasks.date, dayEnd))).groupBy(storeFrontTasks.status).then(summarise),
@@ -1149,6 +1191,8 @@ export async function getDailyTaskSummary(storeId: number, date: Date) {
       .where(and(eq(itemDroppingTasks.storeId, storeId),      gte(itemDroppingTasks.date, dayStart),      lte(itemDroppingTasks.date, dayEnd))).groupBy(itemDroppingTasks.status).then(summarise),
     db.select({ status: briefingTasks.status,          count: sql<number>`count(*)::int` }).from(briefingTasks)
       .where(and(eq(briefingTasks.storeId, storeId),          gte(briefingTasks.date, dayStart),          lte(briefingTasks.date, dayEnd))).groupBy(briefingTasks.status).then(summarise),
+    db.select({ status: serahTerimaTasks.status,       count: sql<number>`count(*)::int` }).from(serahTerimaTasks)
+      .where(and(eq(serahTerimaTasks.storeId, storeId),       gte(serahTerimaTasks.date, dayStart),       lte(serahTerimaTasks.date, dayEnd))).groupBy(serahTerimaTasks.status).then(summarise),
     db.select({ status: edcReconciliationTasks.status, count: sql<number>`count(*)::int` }).from(edcReconciliationTasks)
       .where(and(eq(edcReconciliationTasks.storeId, storeId), gte(edcReconciliationTasks.date, dayStart), lte(edcReconciliationTasks.date, dayEnd))).groupBy(edcReconciliationTasks.status).then(summarise),
     db.select({ status: eodZReportTasks.status,        count: sql<number>`count(*)::int` }).from(eodZReportTasks)
@@ -1159,7 +1203,7 @@ export async function getDailyTaskSummary(storeId: number, date: Date) {
       .where(and(eq(groomingTasks.storeId, storeId),          gte(groomingTasks.date, dayStart),          lte(groomingTasks.date, dayEnd))).groupBy(groomingTasks.status).then(summarise),
   ]);
 
-  return { storeFront, cekBin, vmChecklist, marketingCheck, itemDropping, briefing, edcReconciliation, eodZReport, openStatement, grooming };
+  return { storeFront, cekBin, vmChecklist, marketingCheck, itemDropping, briefing, serahTerima, edcReconciliation, eodZReport, openStatement, grooming };
 }
 
 function parsePhotosField(raw: unknown): string[] {
@@ -1226,7 +1270,7 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
 
   const [
     storeFront, cekBin, vmChecklist, marketingCheck, itemDropping, briefing,
-    edcReconciliation, eodZReport, openStatement, grooming,
+    serahTerima, edcReconciliation, eodZReport, openStatement, grooming,
   ] = await Promise.all([
     loadTable(storeFrontTasks,        'store_front',        ['storefrontPhotos', 'rollingDoorClosedPhoto']),
     loadTable(cekBinTasks,            'cek_bin',            []),
@@ -1234,6 +1278,7 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
     loadTable(marketingCheckTasks,    'marketing_check',    []),
     loadTable(itemDroppingTasks,      'item_dropping',      ['droppingPhotos', 'receivePhotos']),
     loadTable(briefingTasks,          'briefing',           []),
+    loadTable(serahTerimaTasks,       'serah_terima',       []),
     loadTable(edcReconciliationTasks, 'edc_reconciliation', []),
     loadTable(eodZReportTasks,        'eod_z_report',       ['zReportPhotos']),
     loadTable(openStatementTasks,     'open_statement',     []),
@@ -1242,7 +1287,7 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
 
   const all = [
     ...storeFront, ...cekBin, ...vmChecklist, ...marketingCheck, ...itemDropping, ...briefing,
-    ...edcReconciliation, ...eodZReport, ...openStatement, ...grooming,
+    ...serahTerima, ...edcReconciliation, ...eodZReport, ...openStatement, ...grooming,
   ];
 
   const shiftOrder: Record<string, number> = { morning: 0, full_day: 1, evening: 2 };
@@ -1302,4 +1347,60 @@ export async function getAreaTaskOverview(opsUserId: string, date: Date) {
   }));
 
   return { area: area ?? null, stores: results };
+}
+
+
+export async function getAllTaskOverview(date: Date) {
+  const allStores = await db
+    .select({
+      id: stores.id,
+      name: stores.name,
+      address: stores.address,
+      areaId: stores.areaId,
+      areaName: areas.name,
+    })
+    .from(stores)
+    .leftJoin(areas, eq(stores.areaId, areas.id))
+    .orderBy(areas.name, stores.name);
+
+  const results = await Promise.all(
+    allStores.map(async (s) => {
+      const daily = await getDailyTaskSummary(s.id, date);
+
+      const summary: StoreTaskSummary = {
+        pending: 0,
+        inProgress: 0,
+        completed: 0,
+        discrepancy: 0,
+        total: 0,
+      };
+
+      for (const perType of Object.values(daily)) {
+        summary.pending += perType.pending;
+        summary.inProgress += perType.inProgress;
+        summary.completed += perType.completed;
+        summary.discrepancy += perType.discrepancy;
+      }
+
+      summary.total =
+        summary.pending +
+        summary.inProgress +
+        summary.completed +
+        summary.discrepancy;
+
+      return {
+        id: s.id,
+        name: s.name,
+        address: s.address,
+        areaId: s.areaId,
+        areaName: s.areaName,
+        summary,
+      };
+    }),
+  );
+
+  return {
+    area: null,
+    stores: results,
+  };
 }

@@ -7,6 +7,7 @@ import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
 import { stores } from '@/lib/db/schema';
 import {
+  getAllTaskOverview,
   getAreaTaskOverview,
   getFlatTasksForStoreDate,
   summariseTasks,
@@ -19,13 +20,43 @@ import {
   parseDate,
 } from '../_helpers';
 
-function serializeTask(task: Awaited<ReturnType<typeof getFlatTasksForStoreDate>>[number]) {
-  return {
-    ...task,
-    id: String(task.id),
-    scheduleId: String(task.scheduleId),
-    storeId: String(task.storeId),
-  };
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type RawFlatTask = Awaited<ReturnType<typeof getFlatTasksForStoreDate>>[number];
+
+type TaskSummary = {
+  pending: number;
+  inProgress: number;
+  completed: number;
+  discrepancy: number;
+  verified: number;
+  rejected: number;
+  total: number;
+};
+
+type MaybeTaskSummary = Partial<TaskSummary> & {
+  total?: number;
+  completed?: number;
+};
+
+type SerializableValue =
+  | string
+  | number
+  | boolean
+  | null
+  | SerializableValue[]
+  | { [key: string]: SerializableValue };
+
+// ─── Small helpers ────────────────────────────────────────────────────────────
+
+function stringifyId(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  return String(value);
+}
+
+function toNumber(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
 }
 
 function completionRate(summary: { total: number; completed: number }) {
@@ -33,14 +64,126 @@ function completionRate(summary: { total: number; completed: number }) {
   return Math.round((summary.completed / summary.total) * 100);
 }
 
-function makeEmptyAggregate() {
+function makeEmptyAggregate(): TaskSummary {
   return {
     pending: 0,
     inProgress: 0,
     completed: 0,
     discrepancy: 0,
+    verified: 0,
+    rejected: 0,
     total: 0,
   };
+}
+
+function normalizeSummary(summary: MaybeTaskSummary): TaskSummary {
+  return {
+    pending: toNumber(summary.pending),
+    inProgress: toNumber(summary.inProgress),
+    completed: toNumber(summary.completed),
+    discrepancy: toNumber(summary.discrepancy),
+    verified: toNumber(summary.verified),
+    rejected: toNumber(summary.rejected),
+    total: toNumber(summary.total),
+  };
+}
+
+function withCompletionRate(summary: MaybeTaskSummary) {
+  const normalized = normalizeSummary(summary);
+
+  return {
+    ...normalized,
+    completionRate: completionRate(normalized),
+  };
+}
+
+function addToAggregate(aggregate: TaskSummary, summary: MaybeTaskSummary) {
+  const normalized = normalizeSummary(summary);
+
+  aggregate.pending += normalized.pending;
+  aggregate.inProgress += normalized.inProgress;
+  aggregate.completed += normalized.completed;
+  aggregate.discrepancy += normalized.discrepancy;
+  aggregate.verified += normalized.verified;
+  aggregate.rejected += normalized.rejected;
+  aggregate.total += normalized.total;
+}
+
+function serializeUnknown(value: unknown): SerializableValue {
+  if (value === null || value === undefined) return null;
+
+  if (
+    typeof value === 'string' ||
+    typeof value === 'number' ||
+    typeof value === 'boolean'
+  ) {
+    return value;
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(serializeUnknown);
+  }
+
+  if (typeof value === 'object') {
+    const out: Record<string, SerializableValue> = {};
+
+    for (const [key, item] of Object.entries(value)) {
+      out[key] = serializeUnknown(item);
+    }
+
+    return out;
+  }
+
+  return String(value);
+}
+
+function serializeExtra(extra: Record<string, unknown> | null | undefined) {
+  const safeExtra = (extra ?? {}) as Record<string, unknown>;
+  const serialized = serializeUnknown(safeExtra) as Record<string, SerializableValue>;
+
+  /**
+   * Serah Terima uses nested handover items. Convert nested IDs to string so the
+   * OPS progress page can safely render them without number/string mismatch.
+   */
+  if (Array.isArray(serialized.items)) {
+    serialized.items = serialized.items.map((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
+
+      return {
+        ...item,
+        id: stringifyId(item.id) ?? '',
+        taskId: stringifyId(item.taskId),
+        senderTaskId: stringifyId(item.senderTaskId),
+        receiverTaskId: stringifyId(item.receiverTaskId),
+      };
+    });
+  }
+
+  return serialized;
+}
+
+function serializeTask(task: RawFlatTask) {
+  return {
+    ...task,
+    id: String(task.id),
+    scheduleId: String(task.scheduleId),
+    storeId: String(task.storeId),
+    parentTaskId:
+      task.parentTaskId === null || task.parentTaskId === undefined
+        ? null
+        : Number(task.parentTaskId),
+    extra: serializeExtra(task.extra),
+  };
+}
+
+function storeSummaryFromOverviewStore(store: {
+  summary: MaybeTaskSummary;
+}) {
+  return withCompletionRate(store.summary);
 }
 
 // GET /api/ops/tasks/progress?date=YYYY-MM-DD
@@ -79,6 +222,7 @@ export async function GET(req: NextRequest) {
 
   const rawStoreId = req.nextUrl.searchParams.get('storeId');
 
+  // ── Detail mode: one store ────────────────────────────────────────────────
   if (rawStoreId) {
     const storeParsed = parseStoreId(rawStoreId);
 
@@ -89,6 +233,8 @@ export async function GET(req: NextRequest) {
       );
     }
 
+    // OPS HO passes this automatically in _helpers.ts.
+    // OPS Area still must match the selected store area.
     const areaErr = await assertStoreInActorArea(actor, storeParsed.id);
 
     if (areaErr) {
@@ -103,6 +249,7 @@ export async function GET(req: NextRequest) {
         id: stores.id,
         name: stores.name,
         address: stores.address,
+        areaId: stores.areaId,
       })
       .from(stores)
       .where(eq(stores.id, storeParsed.id))
@@ -115,59 +262,67 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const tasks = await getFlatTasksForStoreDate(storeParsed.id, dateParsed.date);
+    const tasks = await getFlatTasksForStoreDate(
+      storeParsed.id,
+      dateParsed.date,
+    );
+
     const summary = summariseTasks(tasks);
 
     return NextResponse.json({
       success: true,
       mode: 'detail',
+      scope: actor.isOpsHo ? 'all_areas' : 'area',
       date: rawDate,
       store: {
         id: String(storeRow.id),
         name: storeRow.name,
         address: storeRow.address,
+        areaId: storeRow.areaId === null ? null : String(storeRow.areaId),
       },
-      summary: {
-        ...summary,
-        completionRate: completionRate(summary),
-      },
+      summary: withCompletionRate(summary),
       tasks: tasks.map(serializeTask),
     });
   }
 
-  const overview = await getAreaTaskOverview(actor.id, dateParsed.date);
+  // ── Overview mode ─────────────────────────────────────────────────────────
+  const overview = actor.isOpsHo
+    ? await getAllTaskOverview(dateParsed.date)
+    : await getAreaTaskOverview(actor.id, dateParsed.date);
+
   const aggregate = makeEmptyAggregate();
 
   for (const store of overview.stores) {
-    aggregate.pending += store.summary.pending;
-    aggregate.inProgress += store.summary.inProgress;
-    aggregate.completed += store.summary.completed;
-    aggregate.discrepancy += store.summary.discrepancy;
-    aggregate.total += store.summary.total;
+    addToAggregate(aggregate, store.summary);
   }
 
   return NextResponse.json({
     success: true,
     mode: 'overview',
+    scope: actor.isOpsHo ? 'all_areas' : 'area',
     date: rawDate,
-    area: overview.area
-      ? {
-          id: String(overview.area.id),
-          name: overview.area.name,
-        }
-      : null,
-    summary: {
-      ...aggregate,
-      completionRate: completionRate(aggregate),
-    },
+    area: actor.isOpsHo
+      ? null
+      : overview.area
+        ? {
+            id: String(overview.area.id),
+            name: overview.area.name,
+          }
+        : null,
+    summary: withCompletionRate(aggregate),
     stores: overview.stores.map((store) => ({
       id: String(store.id),
       name: store.name,
       address: store.address,
-      summary: {
-        ...store.summary,
-        completionRate: completionRate(store.summary),
-      },
+      areaId:
+        'areaId' in store && store.areaId !== null && store.areaId !== undefined
+          ? String(store.areaId)
+          : null,
+      areaName:
+        'areaName' in store && typeof store.areaName === 'string'
+          ? store.areaName
+          : null,
+      summary: storeSummaryFromOverviewStore(store),
     })),
   });
 }

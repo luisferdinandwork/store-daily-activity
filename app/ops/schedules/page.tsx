@@ -1,5 +1,9 @@
 'use client';
 // app/ops/schedules/page.tsx — OPS multi-store schedule manager (desktop)
+//
+// HO OPS / Admin: sees every area, every store. Stores in the dropdown are
+// grouped by area via <optgroup>.
+// Area OPS: sees only their assigned area's stores (existing behaviour).
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useSession } from 'next-auth/react';
@@ -9,6 +13,7 @@ import {
   Shield, Calendar, X, ChevronLeft, ChevronRight,
   CheckCircle2, AlertCircle, ChevronDown, ChevronUp,
   FileSpreadsheet, Plus, Store as StoreIcon, MapPin, Users, Sunrise,
+  Globe2,
 } from 'lucide-react';
 import { cn }    from '@/lib/utils';
 import { toast } from 'sonner';
@@ -59,9 +64,11 @@ interface EmployeeOption {
 }
 
 interface StoreOption {
-  id:      string;
-  name:    string;
-  address: string;
+  id:       string;
+  name:     string;
+  address:  string;
+  areaId?:  number;
+  areaName?: string;
 }
 
 interface AreaInfo {
@@ -69,11 +76,20 @@ interface AreaInfo {
   name: string;
 }
 
+interface StoresPayload {
+  success: boolean;
+  isHO:    boolean;
+  area:    AreaInfo | null;
+  areas:   AreaInfo[];
+  stores:  StoreOption[];
+  error?:  string;
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const MONTHS      = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 const DAYS_HEADER = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-const EMP_LABEL: Record<string, string> = { pic_1: 'PIC 1', pic_2: 'PIC 2', so: 'SO' };
+const EMP_LABEL: Record<string, string> = { pic_1: 'PIC 1', pic_2: 'PIC 2', so: 'SO', sa: 'SA' };
 
 const STORAGE_KEY_LAST_STORE = 'ops:lastSelectedStoreId';
 
@@ -775,8 +791,11 @@ export default function OpsSchedulesPage() {
   const user = session?.user as any;
   const role = user?.role as string | undefined;
 
+  // ── State ──────────────────────────────────────────────────────────────────
+  const [isHO,          setIsHO]          = useState(false);
   const [stores,        setStores]        = useState<StoreOption[]>([]);
-  const [area,          setArea]          = useState<AreaInfo | null>(null);
+  const [area,          setArea]          = useState<AreaInfo | null>(null);     // single area (area-OPS) or null (HO)
+  const [areas,         setAreas]         = useState<AreaInfo[]>([]);             // every area visible to the actor
   const [selectedStore, setSelectedStore] = useState<string | null>(null);
   const [storesLoading, setStoresLoading] = useState(true);
   const [selectedMonth, setSelectedMonth] = useState(currentYearMonth());
@@ -793,7 +812,8 @@ export default function OpsSchedulesPage() {
   const [savingEntry,   setSavingEntry]   = useState(false);
   const [exporting,     setExporting]     = useState(false);
 
-  const isOps = role === 'ops';
+  // Admin counts as ops for UI purposes
+  const isOps = role === 'ops' || role === 'admin';
 
   useEffect(() => {
     if (authStatus === 'loading') return;
@@ -807,12 +827,16 @@ export default function OpsSchedulesPage() {
       setStoresLoading(true);
       try {
         const res  = await fetch('/api/ops/schedules/stores');
-        const json = await res.json();
+        const json = (await res.json()) as StoresPayload;
         if (!json.success) throw new Error(json.error ?? 'Failed to load stores');
+
+        setIsHO(!!json.isHO);
         setStores(json.stores ?? []);
         setArea(json.area ?? null);
-        const remembered    = typeof window !== 'undefined' ? sessionStorage.getItem(STORAGE_KEY_LAST_STORE) : null;
-        const validRemembered = remembered && (json.stores ?? []).some((s: StoreOption) => s.id === remembered);
+        setAreas(json.areas ?? (json.area ? [json.area] : []));
+
+        const remembered      = typeof window !== 'undefined' ? sessionStorage.getItem(STORAGE_KEY_LAST_STORE) : null;
+        const validRemembered = remembered && (json.stores ?? []).some(s => s.id === remembered);
         setSelectedStore(validRemembered ? remembered : (json.stores?.[0]?.id ?? null));
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Failed to load stores');
@@ -853,6 +877,22 @@ export default function OpsSchedulesPage() {
   function handleDayPress(date: Date, entries: DayEntry[]) { setDetailDate(date); setDetailEntries(entries); }
   function handleEditFromDrawer(entry: DayEntry) { setEditEntry(entry); }
   function handleAddFromDrawer() { if (!detailDate) return; setAddingDate(detailDate); setDetailDate(null); }
+
+  // ── Currently-selected store object (for title, address, etc.) ─────────────
+  const currentStore     = useMemo(() => stores.find(s => s.id === selectedStore) ?? null, [stores, selectedStore]);
+  const currentStoreName = currentStore?.name ?? '—';
+  const currentStoreArea = currentStore?.areaName ?? null;
+
+  // ── Stores grouped by area (used by HO dropdown + by area-OPS as fallback) ──
+  const storesByArea = useMemo(() => {
+    const map = new Map<string, { areaId: number | undefined; areaName: string; list: StoreOption[] }>();
+    for (const s of stores) {
+      const key = s.areaName ?? '—';
+      if (!map.has(key)) map.set(key, { areaId: s.areaId, areaName: key, list: [] });
+      map.get(key)!.list.push(s);
+    }
+    return [...map.values()].sort((a, b) => a.areaName.localeCompare(b.areaName));
+  }, [stores]);
 
   async function handleCreate() {
     if (!selectedStore || schedule) return;
@@ -938,7 +978,6 @@ export default function OpsSchedulesPage() {
     }
   }
 
-  const currentStoreName = useMemo(() => stores.find(s => s.id === selectedStore)?.name ?? '—', [stores, selectedStore]);
   const totalEmployees   = schedule ? new Set(schedule.entries.map(e => e.userId)).size : 0;
   const workingDays      = schedule ? schedule.entries.filter(e => !e.isOff && !e.isLeave && e.shift).length : 0;
   const leaveDays        = schedule ? schedule.entries.filter(e => e.isLeave).length : 0;
@@ -967,13 +1006,20 @@ export default function OpsSchedulesPage() {
         {/* Header */}
         <div className="flex items-start justify-between flex-wrap gap-4">
           <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-500">OPS · Area Schedules</p>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-500">
+              {isHO ? 'OPS · Head Office' : 'OPS · Area Schedules'}
+            </p>
             <h1 className="mt-1 text-3xl font-bold text-slate-900">Schedule Manager</h1>
-            {area && (
+            {isHO ? (
+              <p className="mt-1 flex items-center gap-1.5 text-sm text-slate-500">
+                <Globe2 className="h-3.5 w-3.5" />
+                {areas.length} area{areas.length !== 1 ? 's' : ''} · {stores.length} store{stores.length !== 1 ? 's' : ''}
+              </p>
+            ) : area ? (
               <p className="mt-1 flex items-center gap-1.5 text-sm text-slate-500">
                 <MapPin className="h-3.5 w-3.5" />{area.name} · {stores.length} store{stores.length !== 1 ? 's' : ''}
               </p>
-            )}
+            ) : null}
           </div>
           {selectedStore && (
             <div className="flex items-center gap-2">
@@ -1007,17 +1053,37 @@ export default function OpsSchedulesPage() {
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex items-end gap-4 flex-wrap">
             <div className="flex-1 min-w-[280px]">
-              <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-widest text-slate-400">Store</label>
+              <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                Store {isHO && <span className="text-amber-600">· all areas</span>}
+              </label>
               {storesLoading ? (
                 <div className="h-11 w-full animate-pulse rounded-xl bg-slate-100" />
               ) : stores.length === 0 ? (
-                <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">No stores in your area. Contact an admin.</div>
+                <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  {isHO ? 'No stores in the system yet.' : 'No stores in your area. Contact an admin.'}
+                </div>
               ) : (
                 <div className="relative">
                   <StoreIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                   <select value={selectedStore ?? ''} onChange={e => setSelectedStore(e.target.value)}
                     className="h-11 w-full appearance-none rounded-xl border border-slate-200 bg-white pl-10 pr-10 text-sm font-semibold text-slate-800 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100">
-                    {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    {/*
+                      HO sees stores grouped by area via <optgroup>. Area-OPS
+                      typically has one area so we flatten the list, but if the
+                      payload ever returns multiple areas to a non-HO actor the
+                      same grouping logic still works.
+                    */}
+                    {storesByArea.length > 1 ? (
+                      storesByArea.map(group => (
+                        <optgroup key={group.areaName} label={group.areaName}>
+                          {group.list.map(s => (
+                            <option key={s.id} value={s.id}>{s.name}</option>
+                          ))}
+                        </optgroup>
+                      ))
+                    ) : (
+                      stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)
+                    )}
                   </select>
                   <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                 </div>
@@ -1042,9 +1108,15 @@ export default function OpsSchedulesPage() {
             </div>
           </div>
 
-          {selectedStore && (
-            <div className="mt-4 flex items-center gap-4 border-t border-slate-100 pt-4 text-xs text-slate-500">
-              <span className="flex items-center gap-1.5"><MapPin className="h-3 w-3" />{stores.find(s => s.id === selectedStore)?.address}</span>
+          {selectedStore && currentStore && (
+            <div className="mt-4 flex items-center gap-4 border-t border-slate-100 pt-4 text-xs text-slate-500 flex-wrap">
+              {isHO && currentStoreArea && (
+                <span className="flex items-center gap-1.5">
+                  <Globe2 className="h-3 w-3" />
+                  <span className="font-semibold text-slate-700">{currentStoreArea}</span>
+                </span>
+              )}
+              <span className="flex items-center gap-1.5"><MapPin className="h-3 w-3" />{currentStore.address}</span>
               <span className="flex items-center gap-1.5"><Users className="h-3 w-3" />{employees.length} employee{employees.length !== 1 ? 's' : ''} on roster</span>
             </div>
           )}

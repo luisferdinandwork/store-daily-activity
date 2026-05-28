@@ -9,12 +9,21 @@ import { db } from '@/lib/db';
 import { users, userRoles, employeeTypes } from '@/lib/db/schema';
 
 const isDev = process.env.NODE_ENV === 'development';
+
 const log = (...args: unknown[]) => {
   if (isDev) console.log(...args);
 };
 
 function normalizeNik(value: string): string {
   return value.trim();
+}
+
+function hasAllStoreAccess(role: string | null | undefined, employeeType: string | null | undefined) {
+  return role === 'admin' || employeeType === 'ops_ho';
+}
+
+function isOpsArea(role: string | null | undefined, employeeType: string | null | undefined) {
+  return role === 'ops' && employeeType === 'ops_area';
 }
 
 export const authOptions: NextAuthOptions = {
@@ -24,7 +33,7 @@ export const authOptions: NextAuthOptions = {
     CredentialsProvider({
       name: 'credentials',
       credentials: {
-        nik:      { label: 'NIK',      type: 'text' },
+        nik: { label: 'NIK', type: 'text' },
         password: { label: 'Password', type: 'password' },
       },
 
@@ -38,20 +47,24 @@ export const authOptions: NextAuthOptions = {
 
           const result = await db
             .select({
-              id:                users.id,
-              nik:               users.nik,
-              name:              users.name,
-              password:          users.password,
-              isActive:          users.isActive,
-              homeStoreId:       users.homeStoreId,
-              areaId:            users.areaId,
-              roleId:            users.roleId,
-              roleCode:          userRoles.code,
-              roleLabel:         userRoles.label,
-              roleActive:        userRoles.isActive,
-              employeeTypeId:    users.employeeTypeId,
-              employeeTypeCode:  employeeTypes.code,
+              id: users.id,
+              nik: users.nik,
+              name: users.name,
+              password: users.password,
+              isActive: users.isActive,
+
+              homeStoreId: users.homeStoreId,
+              areaId: users.areaId,
+
+              roleId: users.roleId,
+              roleCode: userRoles.code,
+              roleLabel: userRoles.label,
+              roleActive: userRoles.isActive,
+
+              employeeTypeId: users.employeeTypeId,
+              employeeTypeCode: employeeTypes.code,
               employeeTypeLabel: employeeTypes.label,
+              employeeTypeActive: employeeTypes.isActive,
             })
             .from(users)
             .innerJoin(userRoles, eq(userRoles.id, users.roleId))
@@ -76,24 +89,51 @@ export const authOptions: NextAuthOptions = {
             return null;
           }
 
+          if (u.employeeTypeId && !u.employeeTypeActive) {
+            log('❌ Employee type disabled for NIK:', nik);
+            return null;
+          }
+
           const ok = await bcrypt.compare(credentials.password, u.password);
+
           if (!ok) {
             log('❌ Invalid password for NIK:', nik);
             return null;
           }
 
+          const role = u.roleCode;
+          const employeeType = u.employeeTypeCode ?? null;
+
+          /**
+           * Area ops must have an areaId.
+           * HO ops and admin may have areaId = null because they can view all stores.
+           */
+          if (isOpsArea(role, employeeType) && !u.areaId) {
+            log('❌ ops_area user has no areaId:', nik);
+            return null;
+          }
+
+          const canViewAllStores = hasAllStoreAccess(role, employeeType);
+
           log('✅ Login OK for NIK:', nik);
 
           return {
-            id:                u.id,
-            nik:               u.nik,
-            name:              u.name,
-            role:              u.roleCode,
-            roleLabel:         u.roleLabel,
-            employeeType:      u.employeeTypeCode ?? null,
+            id: u.id,
+            nik: u.nik,
+            name: u.name,
+
+            role,
+            roleLabel: u.roleLabel,
+
+            employeeType,
             employeeTypeLabel: u.employeeTypeLabel ?? null,
-            homeStoreId:       u.homeStoreId ?? null,
-            areaId:            u.areaId ?? null,
+
+            homeStoreId: u.homeStoreId ?? null,
+            areaId: u.areaId ?? null,
+
+            canViewAllStores,
+            isOpsHo: employeeType === 'ops_ho',
+            isOpsArea: employeeType === 'ops_area',
           };
         } catch (error) {
           console.error('💥 Authorization error:', error);
@@ -111,29 +151,41 @@ export const authOptions: NextAuthOptions = {
   callbacks: {
     async jwt({ token, user }) {
       if (user) {
-        token.id                = user.id;
-        token.nik               = user.nik;
-        token.role              = user.role;
-        token.roleLabel         = user.roleLabel;
-        token.employeeType      = user.employeeType;
+        token.id = user.id;
+        token.nik = user.nik;
+        token.role = user.role;
+        token.roleLabel = user.roleLabel;
+
+        token.employeeType = user.employeeType;
         token.employeeTypeLabel = user.employeeTypeLabel;
-        token.homeStoreId       = user.homeStoreId;
-        token.areaId            = user.areaId;
+
+        token.homeStoreId = user.homeStoreId;
+        token.areaId = user.areaId;
+
+        token.canViewAllStores = user.canViewAllStores;
+        token.isOpsHo = user.isOpsHo;
+        token.isOpsArea = user.isOpsArea;
       }
 
       return token;
     },
 
     async session({ session, token }) {
-      if (token && session.user) {
-        session.user.id                = token.id;
-        session.user.nik               = token.nik;
-        session.user.role              = token.role;
-        session.user.roleLabel         = token.roleLabel;
-        session.user.employeeType      = token.employeeType;
+      if (session.user) {
+        session.user.id = token.id;
+        session.user.nik = token.nik;
+        session.user.role = token.role;
+        session.user.roleLabel = token.roleLabel;
+
+        session.user.employeeType = token.employeeType;
         session.user.employeeTypeLabel = token.employeeTypeLabel;
-        session.user.homeStoreId       = token.homeStoreId;
-        session.user.areaId            = token.areaId;
+
+        session.user.homeStoreId = token.homeStoreId;
+        session.user.areaId = token.areaId;
+
+        session.user.canViewAllStores = token.canViewAllStores;
+        session.user.isOpsHo = token.isOpsHo;
+        session.user.isOpsArea = token.isOpsArea;
       }
 
       return session;

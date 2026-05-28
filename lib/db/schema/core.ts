@@ -90,8 +90,17 @@ export const users = pgTable('users', {
 //
 // This table keeps movement history when an employee moves from one store
 // to another or changes role/type.
-// The current user table keeps the latest active assignment,
-// while this table preserves the timeline.
+//
+// New fields:
+//   isTemporary        - if true, this is a time-bound transfer that will
+//                        auto-revert on `effectiveTo`.
+//   previousStoreId    - snapshot of where the user was before this transfer.
+//                        Used by auto-revert.
+//   previousRoleId
+//   previousEmployeeTypeId
+//   previousAreaId
+//   revertedAt         - set when a temp assignment has actually been
+//                        auto-reverted (so we don't process it twice).
 
 export const userStoreAssignments = pgTable('user_store_assignments', {
   id: serial('id').primaryKey(),
@@ -115,18 +124,29 @@ export const userStoreAssignments = pgTable('user_store_assignments', {
     .references(() => employeeTypes.id),
 
   effectiveFrom: timestamp('effective_from').defaultNow().notNull(),
-  effectiveTo: timestamp('effective_to'),
+  effectiveTo:   timestamp('effective_to'),
 
-  isActive: boolean('is_active').default(true).notNull(),
+  isActive:    boolean('is_active').default(true).notNull(),
+  isTemporary: boolean('is_temporary').default(false).notNull(),
+
+  // Snapshot of where this user was BEFORE this assignment took effect.
+  // Used by the auto-revert job for temporary transfers.
+  previousStoreId:        integer('previous_store_id').references(() => stores.id),
+  previousAreaId:         integer('previous_area_id').references(() => areas.id),
+  previousRoleId:         integer('previous_role_id').references(() => userRoles.id),
+  previousEmployeeTypeId: integer('previous_employee_type_id').references(() => employeeTypes.id),
+
+  revertedAt: timestamp('reverted_at'),
 
   assignedBy: text('assigned_by').references(() => users.id),
-  notes: text('notes'),
+  notes:      text('notes'),
 
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
-  userActiveIdx: index('user_store_assignments_user_active_idx').on(t.userId, t.isActive),
-  storeActiveIdx: index('user_store_assignments_store_active_idx').on(t.storeId, t.isActive),
+  userActiveIdx:    index('user_store_assignments_user_active_idx').on(t.userId, t.isActive),
+  storeActiveIdx:   index('user_store_assignments_store_active_idx').on(t.storeId, t.isActive),
+  tempExpiryIdx:    index('user_store_assignments_temp_expiry_idx').on(t.isTemporary, t.isActive, t.effectiveTo),
 }));
 
 // ─── Monthly Schedule ─────────────────────────────────────────────────────────

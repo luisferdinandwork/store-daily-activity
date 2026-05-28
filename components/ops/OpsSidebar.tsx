@@ -71,6 +71,7 @@ const NAV = [
       { href: '/ops/users',      label: 'Users',      icon: UsersRound },
       { href: '/ops/schedules',  label: 'Schedules',  icon: Calendar },
       { href: '/ops/attendance', label: 'Attendance', icon: UserCheck },
+      { href: '/ops/manage', label: 'Manage', icon: ClipboardCheck },
     ],
   },
   {
@@ -104,30 +105,30 @@ export default function OpsSidebar({ storeName = 'Store Manager' }: Props) {
   const taskSectionActive =
     pathname.startsWith('/ops/tasks') && !isActive(TASK_PROGRESS_ITEM.href);
 
-  useEffect(() => {
-    let intervalId: NodeJS.Timeout;
+  // useEffect(() => {
+  //   let intervalId: NodeJS.Timeout;
 
-    async function fetchCounts() {
-      try {
-        const todayKey = new Date().toISOString().split('T')[0];
-        const res = await fetch(`/api/ops/tasks/pending-counts?date=${todayKey}`, {
-          cache: 'no-store',
-        });
+  //   async function fetchCounts() {
+  //     try {
+  //       const todayKey = new Date().toISOString().split('T')[0];
+  //       const res = await fetch(`/api/ops/tasks/pending-counts?date=${todayKey}`, {
+  //         cache: 'no-store',
+  //       });
 
-        if (res.ok) {
-          const data = await res.json();
-          setPendingCounts(data.counts || {});
-        }
-      } catch {
-        console.error('Failed to fetch task pending counts');
-      }
-    }
+  //       if (res.ok) {
+  //         const data = await res.json();
+  //         setPendingCounts(data.counts || {});
+  //       }
+  //     } catch {
+  //       console.error('Failed to fetch task pending counts');
+  //     }
+  //   }
 
-    fetchCounts();
-    intervalId = setInterval(fetchCounts, 5 * 60 * 1000);
+  //   fetchCounts();
+  //   intervalId = setInterval(fetchCounts, 5 * 60 * 1000);
 
-    return () => clearInterval(intervalId);
-  }, []);
+  //   return () => clearInterval(intervalId);
+  // }, []);
 
   return (
     <aside className="flex h-screen w-64 flex-col border-r border-border bg-card">

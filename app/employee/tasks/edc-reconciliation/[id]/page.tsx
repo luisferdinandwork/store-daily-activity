@@ -15,6 +15,7 @@ import {
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { useAutoSave } from '@/lib/hooks/useAutoSave';
+import { TaskHeader, TaskSubmitBar, SaveIndicator } from '@/components/employee/tasks';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -599,11 +600,16 @@ export default function EdcReconciliationDetailPage() {
   const scheduleId = taskData ? parseInt(taskData.scheduleId, 10) : 0;
   const storeId    = taskData ? parseInt(taskData.storeId,    10) : 0;
 
-  const { status: saveStatus, error: saveError, save: autoSave } = useAutoSave({
-    url:        '/api/employee/tasks/edc-reconciliation',
-    baseBody:   { scheduleId },
-    debounceMs: 800,
-  });
+  const {
+  status: saveStatus,
+  lastSaved,
+  error: saveError,
+  save: autoSave,
+} = useAutoSave({
+  url: '/api/employee/tasks/marketing-check',
+  baseBody: {},
+  debounceMs: 800,
+});
 
   const taskStatus = taskData?.status;
   const readonly   = taskStatus === 'completed' || taskStatus === 'verified';
@@ -695,47 +701,20 @@ export default function EdcReconciliationDetailPage() {
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
-
-      {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <div className="sticky top-0 z-20 border-b border-border/60 bg-card/80 backdrop-blur-sm">
-        <div className="flex items-center gap-3 px-4 py-3">
-          <button
-            onClick={() => router.back()}
-            className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-muted/60 text-foreground hover:bg-muted transition-colors"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </button>
-
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-1.5">
-              <CreditCard className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-              <p className="truncate text-sm font-bold text-foreground">EDC Reconciliation</p>
-            </div>
-            {taskData && (
-              <p className="text-[10px] capitalize text-muted-foreground mt-0.5">
-                Shift {taskData.shift === 'morning' ? 'Pagi' : 'Sore'} · {taskData.date}
-              </p>
-            )}
-          </div>
-
-          <div className="flex items-center gap-2">
-            {/* Save indicator */}
-            {!readonly && !loading && taskData && saveStatus !== 'idle' && (
-              <div className={cn(
-                'flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-semibold',
-                saveStatus === 'saving' && 'text-blue-600',
-                saveStatus === 'saved'  && 'text-green-700',
-                saveStatus === 'error'  && 'text-red-600',
-              )}>
-                {saveStatus === 'saving' && <Loader2 className="h-3 w-3 animate-spin" />}
-                {saveStatus === 'saved'  && <Cloud className="h-3 w-3" />}
-                {saveStatus === 'error'  && <CloudOff className="h-3 w-3" />}
-              </div>
-            )}
-            {statusChip()}
-          </div>
-        </div>
-      </div>
+      <TaskHeader
+        title="EDC Reconciliation"
+        subtitle={
+          taskData
+            ? `${String(taskData.shift).replace('_', ' ')} shift · ${String(taskData.status).replace('_', ' ')}`
+            : undefined
+        }
+        status={taskStatus}
+        saveIndicator={
+          !readonly && !loading && taskData ? (
+            <SaveIndicator status={saveStatus} lastSaved={lastSaved ?? null} />
+          ) : null
+        }
+      />
 
       {/* ── Body ───────────────────────────────────────────────────────────── */}
       <div className="flex-1 space-y-4 p-4 pb-10 max-w-lg mx-auto w-full">
@@ -873,27 +852,14 @@ export default function EdcReconciliationDetailPage() {
               />
             </div>
 
-            {/* ── Submit ───────────────────────────────────────────────── */}
-            {!readonly && (
-              <div className="space-y-2 pt-1">
-                <button
-                  type="button"
-                  onClick={handleSubmit}
-                  disabled={!canSubmit || submitting}
-                  className="flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-primary text-sm font-bold text-primary-foreground shadow-sm transition-all active:scale-[0.98] disabled:opacity-40 hover:opacity-90"
-                >
-                  {submitting
-                    ? <><Loader2 className="h-4 w-4 animate-spin" />Memeriksa…</>
-                    : <><CheckCircle2 className="h-4 w-4" />Submit & Bandingkan</>}
-                </button>
-
-                {!canSubmit && !locked && actualRows.length === 0 && (
-                  <p className="text-center text-[11px] text-muted-foreground">
-                    Tambah minimal 1 transaksi untuk submit.
-                  </p>
-                )}
-              </div>
-            )}
+            <TaskSubmitBar
+              label="Submit & Bandingkan"
+              onSubmit={handleSubmit}
+              submitting={submitting}
+              disabled={!canSubmit}
+              hidden={readonly}
+              hint={!canSubmit && !locked && actualRows.length === 0 ? 'Tambah minimal 1 transaksi untuk submit.' : undefined}
+            />
           </>
         )}
       </div>

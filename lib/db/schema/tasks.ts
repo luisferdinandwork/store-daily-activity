@@ -414,7 +414,10 @@ export const itemDroppingTasks = pgTable('item_dropping_tasks', {
   verifiedAt:  timestamp('verified_at'),
   createdAt:   timestamp('created_at').defaultNow().notNull(),
   updatedAt:   timestamp('updated_at').defaultNow().notNull(),
-});
+}, (table) => ({
+  uniqueStoreDateShift: unique('item_dropping_tasks_store_date_shift_unique')
+    .on(table.storeId, table.date, table.shiftId),
+}));
 
 export const itemDroppingEntries = pgTable('item_dropping_entries', {
   id:             serial('id').primaryKey(),
@@ -534,7 +537,77 @@ export const briefingTasks = pgTable('briefing_tasks', {
   verifiedAt:  timestamp('verified_at'),
   createdAt:   timestamp('created_at').defaultNow().notNull(),
   updatedAt:   timestamp('updated_at').defaultNow().notNull(),
-});
+}, (table) => ({
+  uniqueStoreDateShift: unique('briefing_tasks_store_date_shift_unique')
+    .on(table.storeId, table.date, table.shiftId),
+}));
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const serahTerimaTasks = pgTable('serah_terima_tasks', {
+  id:         serial('id').primaryKey(),
+  scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
+  userId:     text('user_id').references(() => users.id).notNull(),
+  storeId:    integer('store_id').references(() => stores.id).notNull(),
+  shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
+  date:       timestamp('date').notNull(),
+
+  /**
+   * Free-text input written by the current shift.
+   * Backend splits this into serah_terima_items so the next shift can tick
+   * each message/action independently.
+   */
+  handoverText: text('handover_text'),
+
+  submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
+  submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
+
+  status:      taskStatusEnum('status').default('pending').notNull(),
+  notes:       text('notes'),
+  completedAt: timestamp('completed_at'),
+  verifiedBy:  text('verified_by').references(() => users.id),
+  verifiedAt:  timestamp('verified_at'),
+  createdAt:   timestamp('created_at').defaultNow().notNull(),
+  updatedAt:   timestamp('updated_at').defaultNow().notNull(),
+}, (table) => ({
+  scheduleShiftUnique: unique('serah_terima_tasks_schedule_shift_unique')
+    .on(table.scheduleId, table.shiftId),
+  storeDateShiftUnique: unique('serah_terima_tasks_store_date_shift_unique')
+    .on(table.storeId, table.date, table.shiftId),
+  storeDateShiftIdx: index('serah_terima_tasks_store_date_shift_idx')
+    .on(table.storeId, table.date, table.shiftId),
+}));
+
+export const serahTerimaItems = pgTable('serah_terima_items', {
+  id:     serial('id').primaryKey(),
+  taskId: integer('task_id')
+    .references(() => serahTerimaTasks.id, { onDelete: 'cascade' })
+    .notNull(),
+
+  /**
+   * The task that receives this message.
+   * It is filled when the next shift task exists/materialises.
+   */
+  receiverTaskId: integer('receiver_task_id'),
+
+  storeId:     integer('store_id').references(() => stores.id).notNull(),
+  sourceUserId:text('source_user_id').references(() => users.id).notNull(),
+  targetShiftId: integer('target_shift_id').references(() => shifts.id).notNull(),
+
+  message: text('message').notNull(),
+
+  isCompleted: boolean('is_completed').default(false).notNull(),
+  completedBy: text('completed_by').references(() => users.id),
+  completedAt: timestamp('completed_at'),
+
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (table) => ({
+  taskIdx: index('serah_terima_items_task_idx').on(table.taskId),
+  receiverTaskIdx: index('serah_terima_items_receiver_task_idx').on(table.receiverTaskId),
+  storeTargetShiftIdx: index('serah_terima_items_store_target_shift_idx')
+    .on(table.storeId, table.targetShiftId),
+}));
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -710,6 +783,11 @@ export type ItemDroppingEntry     = typeof itemDroppingEntries.$inferSelect;
 export type NewItemDroppingEntry  = typeof itemDroppingEntries.$inferInsert;
 
 export type BriefingTask          = typeof briefingTasks.$inferSelect;
+export type NewBriefingTask       = typeof briefingTasks.$inferInsert;
+export type SerahTerimaTask       = typeof serahTerimaTasks.$inferSelect;
+export type NewSerahTerimaTask    = typeof serahTerimaTasks.$inferInsert;
+export type SerahTerimaItem       = typeof serahTerimaItems.$inferSelect;
+export type NewSerahTerimaItem    = typeof serahTerimaItems.$inferInsert;
 export type EodZReportTask        = typeof eodZReportTasks.$inferSelect;
 export type NewEodZReportTask     = typeof eodZReportTasks.$inferInsert;
 export type OpenStatementTask     = typeof openStatementTasks.$inferSelect;

@@ -151,51 +151,108 @@ export async function canManageSchedule(
   targetEntryStoreId?: number,
 ): Promise<{ allowed: boolean; reason?: string }> {
   const [actor] = await db
-    .select({ roleId: users.roleId, employeeTypeId: users.employeeTypeId, homeStoreId: users.homeStoreId, areaId: users.areaId })
+    .select({
+      roleId:         users.roleId,
+      employeeTypeId: users.employeeTypeId,
+      homeStoreId:    users.homeStoreId,
+      areaId:         users.areaId,
+    })
     .from(users)
     .where(eq(users.id, actorId))
     .limit(1);
-
+ 
   if (!actor) return { allowed: false, reason: 'Actor not found.' };
-
+ 
+  // ── Resolve role + employee type codes ──────────────────────────────────
+  let roleCode: string | null = null;
   if (actor.roleId) {
-    const [role] = await db.select({ code: userRoles.code }).from(userRoles)
-      .where(eq(userRoles.id, actor.roleId)).limit(1);
-
-    if (role?.code === 'ops') {
-      if (!actor.areaId) return { allowed: false, reason: 'OPS user has no area assigned.' };
-
-      const [targetStore] = await db.select({ areaId: stores.areaId }).from(stores)
-        .where(eq(stores.id, storeId)).limit(1);
-      if (!targetStore)                        return { allowed: false, reason: 'Store not found.' };
-      if (targetStore.areaId !== actor.areaId) return { allowed: false, reason: 'This store is not in your area.' };
-
-      if (targetEntryStoreId && targetEntryStoreId !== storeId) {
-        const [entryStore] = await db.select({ areaId: stores.areaId }).from(stores)
-          .where(eq(stores.id, targetEntryStoreId)).limit(1);
-        if (!entryStore)                        return { allowed: false, reason: 'Cross-post target store not found.' };
-        if (entryStore.areaId !== actor.areaId) return { allowed: false, reason: 'Cross-post target store is not in your area.' };
-      }
-
-      return { allowed: true };
-    }
+    const [r] = await db
+      .select({ code: userRoles.code })
+      .from(userRoles)
+      .where(eq(userRoles.id, actor.roleId))
+      .limit(1);
+    roleCode = r?.code ?? null;
   }
-
+ 
+  let empTypeCode: string | null = null;
   if (actor.employeeTypeId) {
-    const [empType] = await db.select({ code: employeeTypes.code }).from(employeeTypes)
-      .where(eq(employeeTypes.id, actor.employeeTypeId)).limit(1);
-
-    if (empType?.code === 'pic_1') {
-      if (Number(actor.homeStoreId) !== Number(storeId))
-        return { allowed: false, reason: 'PIC 1 can only manage schedules for their home store.' };
-      if (targetEntryStoreId && targetEntryStoreId !== storeId)
-        return { allowed: false, reason: 'PIC 1 can only assign employees to their home store.' };
-      return { allowed: true };
-    }
+    const [t] = await db
+      .select({ code: employeeTypes.code })
+      .from(employeeTypes)
+      .where(eq(employeeTypes.id, actor.employeeTypeId))
+      .limit(1);
+    empTypeCode = t?.code ?? null;
   }
-
-  return { allowed: false, reason: 'Only OPS (for their area) or PIC 1 (for their store) can manage schedules.' };
+ 
+  // ── HO / Admin bypass ───────────────────────────────────────────────────
+  if (roleCode === 'admin' || (roleCode === 'ops' && empTypeCode === 'ops_ho')) {
+    // HO can manage any store. Still validate that the stores exist so we
+    // give a useful error instead of a foreign-key failure later.
+    const [targetStore] = await db
+      .select({ id: stores.id })
+      .from(stores)
+      .where(eq(stores.id, storeId))
+      .limit(1);
+    if (!targetStore) return { allowed: false, reason: 'Store not found.' };
+ 
+    if (targetEntryStoreId && targetEntryStoreId !== storeId) {
+      const [entryStore] = await db
+        .select({ id: stores.id })
+        .from(stores)
+        .where(eq(stores.id, targetEntryStoreId))
+        .limit(1);
+      if (!entryStore) return { allowed: false, reason: 'Cross-post target store not found.' };
+    }
+ 
+    return { allowed: true };
+  }
+ 
+  // ── Area OPS ────────────────────────────────────────────────────────────
+  if (roleCode === 'ops') {
+    if (!actor.areaId) return { allowed: false, reason: 'OPS user has no area assigned.' };
+ 
+    const [targetStore] = await db
+      .select({ areaId: stores.areaId })
+      .from(stores)
+      .where(eq(stores.id, storeId))
+      .limit(1);
+    if (!targetStore) return { allowed: false, reason: 'Store not found.' };
+    if (targetStore.areaId !== actor.areaId) {
+      return { allowed: false, reason: 'This store is not in your area.' };
+    }
+ 
+    if (targetEntryStoreId && targetEntryStoreId !== storeId) {
+      const [entryStore] = await db
+        .select({ areaId: stores.areaId })
+        .from(stores)
+        .where(eq(stores.id, targetEntryStoreId))
+        .limit(1);
+      if (!entryStore) return { allowed: false, reason: 'Cross-post target store not found.' };
+      if (entryStore.areaId !== actor.areaId) {
+        return { allowed: false, reason: 'Cross-post target store is not in your area.' };
+      }
+    }
+ 
+    return { allowed: true };
+  }
+ 
+  // ── PIC 1 (employee) ────────────────────────────────────────────────────
+  if (empTypeCode === 'pic_1') {
+    if (Number(actor.homeStoreId) !== Number(storeId)) {
+      return { allowed: false, reason: 'PIC 1 can only manage schedules for their home store.' };
+    }
+    if (targetEntryStoreId && targetEntryStoreId !== storeId) {
+      return { allowed: false, reason: 'PIC 1 can only assign employees to their home store.' };
+    }
+    return { allowed: true };
+  }
+ 
+  return {
+    allowed: false,
+    reason:  'Only OPS (for their area), HO OPS / Admin (any area), or PIC 1 (their store) can manage schedules.',
+  };
 }
+
 
 // ─── Monthly Schedule CRUD ────────────────────────────────────────────────────
 

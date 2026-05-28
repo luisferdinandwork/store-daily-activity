@@ -11,6 +11,7 @@ import {
 import { cn }    from '@/lib/utils';
 import { toast } from 'sonner';
 import { useAutoSave } from '@/lib/hooks/useAutoSave';
+import { TaskHeader, TaskSubmitBar, SaveIndicator } from '@/components/employee/tasks';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -94,23 +95,6 @@ function toNonNegativeInt(v: string) {
 function fmtLong(iso: string | null) {
   if (!iso) return '–';
   return new Date(iso).toLocaleString('id-ID', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-}
-
-// ─── Save indicator ───────────────────────────────────────────────────────────
-
-function SaveIndicator({ status, lastSaved }: { status: 'idle'|'saving'|'saved'|'error'; lastSaved: Date|null }) {
-  if (status === 'idle') return null;
-  return (
-    <div className={cn('flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold',
-      status === 'saving' && 'bg-blue-50 text-blue-600',
-      status === 'saved'  && 'bg-green-50 text-green-700',
-      status === 'error'  && 'bg-red-50 text-red-600',
-    )}>
-      {status === 'saving' && <><Loader2 className="h-3 w-3 animate-spin" />Menyimpan…</>}
-      {status === 'saved'  && <><Cloud   className="h-3 w-3" />Tersimpan{lastSaved ? ` ${new Date(lastSaved).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'})}` : ''}</>}
-      {status === 'error'  && <><CloudOff className="h-3 w-3" />Simpan gagal</>}
-    </div>
-  );
 }
 
 // ─── Access banner — Store Opening colors ─────────────────────────────────────
@@ -427,22 +411,20 @@ export default function CekBinDetailPage() {
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
-
-      {/* Header */}
-      <div className="sticky top-0 z-20 flex items-center gap-2 border-b border-border bg-card px-4 py-3">
-        <button onClick={() => router.back()}
-          className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-secondary text-foreground">
-          <ArrowLeft className="h-4 w-4" />
-        </button>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-bold text-foreground">Cek BIN</p>
-          {taskData && <p className="text-[10px] capitalize text-muted-foreground">{taskData.shift} shift · {taskData.status.replace('_', ' ')}</p>}
-        </div>
-        {!readonly && !loading && taskData && <SaveIndicator status={saveStatus} lastSaved={lastSaved} />}
-        {taskStatus === 'completed' && <span className="flex items-center gap-1 rounded-full bg-green-100 px-2.5 py-1 text-[10px] font-bold text-green-700"><CheckCircle2 className="h-3 w-3" />Selesai</span>}
-        {taskStatus === 'verified'  && <span className="flex items-center gap-1 rounded-full bg-green-200 px-2.5 py-1 text-[10px] font-bold text-green-800"><CheckCircle2 className="h-3 w-3" />Terverifikasi</span>}
-        {taskStatus === 'rejected'  && <span className="flex items-center gap-1 rounded-full bg-red-100   px-2.5 py-1 text-[10px] font-bold text-red-700"><AlertCircle   className="h-3 w-3" />Ditolak</span>}
-      </div>
+      <TaskHeader
+        title="Cek BIN"
+        subtitle={
+          taskData
+            ? `${String(taskData.shift).replace('_', ' ')} shift · ${String(taskData.status).replace('_', ' ')}`
+            : undefined
+        }
+        status={taskStatus}
+        saveIndicator={
+          !readonly && !loading && taskData ? (
+            <SaveIndicator status={saveStatus} lastSaved={lastSaved ?? null} />
+          ) : null
+        }
+      />
 
       {/* Body */}
       <main className="flex-1 space-y-5 px-4 py-4 pb-32">
@@ -602,19 +584,14 @@ export default function CekBinDetailPage() {
         )}
       </main>
 
-      {/* Sticky submit */}
-      {!readonly && !loading && taskData && (
-        <div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 px-4 py-4 backdrop-blur-sm supports-[padding:max(0px)]:pb-[max(1rem,env(safe-area-inset-bottom))]">
-          <button type="button" onClick={handleSubmit}
-            disabled={!canSubmit || submitting}
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-primary text-sm font-bold text-primary-foreground transition-all active:scale-[0.98] disabled:opacity-40">
-            {submitting
-              ? <><Loader2 className="h-4 w-4 animate-spin" />Menyimpan…</>
-              : <><CheckCircle2 className="h-4 w-4" />Submit Cek BIN</>}
-          </button>
-          {!canSubmit && submitHint && <p className="mt-2 text-center text-[11px] text-muted-foreground">{submitHint}</p>}
-        </div>
-      )}
+      <TaskSubmitBar
+        label="Submit Cek BIN"
+        onSubmit={handleSubmit}
+        submitting={submitting}
+        disabled={!canSubmit || loading || !taskData}
+        hidden={readonly || loading || !taskData}
+        hint={!canSubmit ? submitHint : undefined}
+      />
     </div>
   );
 }

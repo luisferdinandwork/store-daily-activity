@@ -5,11 +5,12 @@ import {
   itemDroppingTasks,
   itemDroppingEntries,
   stores,
-  shifts,
+  schedules,
   attendance,
   type ItemDroppingTask,
   type ItemDroppingEntry,
 } from '@/lib/db/schema';
+import { getMorningShiftId } from '@/lib/db/utils/shared-daily-morning-task';
 
 export const DEFAULT_GEOFENCE_RADIUS_M = 100;
 
@@ -102,23 +103,6 @@ function haversineMetres(a: GeoPoint, b: GeoPoint): number {
 
 function jsonPhotos(paths: string[] | undefined): string | null {
   return paths && paths.length > 0 ? JSON.stringify(paths) : null;
-}
-
-const _shiftIdCache: Record<string, number> = {};
-
-async function getShiftIdByCode(code: string): Promise<number> {
-  if (_shiftIdCache[code] != null) return _shiftIdCache[code];
-
-  const [row] = await db
-    .select({ id: shifts.id })
-    .from(shifts)
-    .where(eq(shifts.code, code))
-    .limit(1);
-
-  if (!row) throw new Error(`Shift not found for code: ${code}`);
-
-  _shiftIdCache[code] = row.id;
-  return row.id;
 }
 
 async function assertCheckedIn(scheduleId: number): Promise<string | null> {
@@ -214,18 +198,19 @@ function validateToEntry(entry: ToEntry, index: number): string | null {
 
 export async function getActiveItemDroppingTask(
   storeId: number,
-  shiftId: number,
+  _shiftId: number,
   date: Date,
 ): Promise<ItemDroppingTask | null> {
   const dayStart = startOfDay(date);
   const dayEnd = endOfDay(date);
+  const morningShiftId = await getMorningShiftId();
 
   const [today] = await db
     .select()
     .from(itemDroppingTasks)
     .where(and(
       eq(itemDroppingTasks.storeId, storeId),
-      eq(itemDroppingTasks.shiftId, shiftId),
+      eq(itemDroppingTasks.shiftId, morningShiftId),
       gte(itemDroppingTasks.date, dayStart),
       lte(itemDroppingTasks.date, dayEnd),
     ))
@@ -272,13 +257,27 @@ export async function submitItemDropping(
     }
 
     const now = new Date();
-    const today = startOfDay(now);
+    const morningShiftId = await getMorningShiftId();
 
-    const [existing] = await db
-      .select()
-      .from(itemDroppingTasks)
-      .where(eq(itemDroppingTasks.scheduleId, input.scheduleId))
+    const [schedule] = await db
+      .select({ date: schedules.date })
+      .from(schedules)
+      .where(eq(schedules.id, input.scheduleId))
       .limit(1);
+
+    const taskDate = schedule?.date ?? now;
+
+    let existing = await getActiveItemDroppingTask(input.storeId, morningShiftId, taskDate);
+
+    if (!existing) {
+      existing = await getOrCreateItemDroppingForSchedule(
+        input.scheduleId,
+        input.userId,
+        input.storeId,
+        morningShiftId,
+        taskDate,
+      );
+    }
 
     if (!existing) {
       return {
@@ -300,8 +299,8 @@ export async function submitItemDropping(
         scheduleId: input.scheduleId,
         userId: input.userId,
         storeId: input.storeId,
-        shiftId: existing.shiftId,
-        date: today,
+        shiftId: morningShiftId,
+        date: startOfDay(taskDate),
         hasDropping: input.hasDropping,
         submittedLat: input.skipGeo ? null : String(input.geo.lat),
         submittedLng: input.skipGeo ? null : String(input.geo.lng),
@@ -313,11 +312,11 @@ export async function submitItemDropping(
       .where(eq(itemDroppingTasks.id, existing.id))
       .returning();
 
-    if (input.hasDropping && input.entries && input.entries.length > 0) {
-      await db
-        .delete(itemDroppingEntries)
-        .where(eq(itemDroppingEntries.taskId, task.id));
+    await db
+      .delete(itemDroppingEntries)
+      .where(eq(itemDroppingEntries.taskId, task.id));
 
+    if (input.hasDropping && input.entries && input.entries.length > 0) {
       await db.insert(itemDroppingEntries).values(
         input.entries.map((entry) => ({
           taskId: task.id,
@@ -532,11 +531,18 @@ export async function autoSaveItemDropping(
   scheduleId: number,
   patch: AutoSaveItemDroppingPatch,
 ): Promise<TaskResult<{ saved: string[] }>> {
-  const [existing] = await db
-    .select({ id: itemDroppingTasks.id })
-    .from(itemDroppingTasks)
-    .where(eq(itemDroppingTasks.scheduleId, scheduleId))
+  const [schedule] = await db
+    .select({ storeId: schedules.storeId, date: schedules.date })
+    .from(schedules)
+    .where(eq(schedules.id, scheduleId))
     .limit(1);
+
+  if (!schedule) {
+    return { success: false, error: 'Schedule not found.' };
+  }
+
+  const morningShiftId = await getMorningShiftId();
+  const existing = await getActiveItemDroppingTask(schedule.storeId, morningShiftId, schedule.date);
 
   if (!existing) {
     return { success: false, error: 'Item dropping task not found.' };
@@ -549,18 +555,19 @@ export async function materialiseItemDroppingTask(
   scheduleId: number,
   userId: string,
   storeId: number,
-  shiftId: number,
+  _shiftId: number,
   date: Date,
 ): Promise<'created' | 'skipped'> {
   const dayStart = startOfDay(date);
   const dayEnd = endOfDay(date);
+  const morningShiftId = await getMorningShiftId();
 
   const [existing] = await db
     .select({ id: itemDroppingTasks.id })
     .from(itemDroppingTasks)
     .where(and(
       eq(itemDroppingTasks.storeId, storeId),
-      eq(itemDroppingTasks.shiftId, shiftId),
+      eq(itemDroppingTasks.shiftId, morningShiftId),
       gte(itemDroppingTasks.date, dayStart),
       lte(itemDroppingTasks.date, dayEnd),
     ))
@@ -572,7 +579,7 @@ export async function materialiseItemDroppingTask(
     scheduleId,
     userId,
     storeId,
-    shiftId,
+    shiftId: morningShiftId,
     date: dayStart,
     hasDropping: false,
     status: 'pending',
@@ -585,10 +592,12 @@ export async function getOrCreateItemDroppingForSchedule(
   scheduleId: number,
   userId: string,
   storeId: number,
-  shiftId: number,
+  _shiftId: number,
   date: Date,
 ): Promise<ItemDroppingTask> {
-  const existing = await getActiveItemDroppingTask(storeId, shiftId, date);
+  const morningShiftId = await getMorningShiftId();
+
+  const existing = await getActiveItemDroppingTask(storeId, morningShiftId, date);
   if (existing) return existing;
 
   const dayStart = startOfDay(date);
@@ -599,7 +608,7 @@ export async function getOrCreateItemDroppingForSchedule(
       scheduleId,
       userId,
       storeId,
-      shiftId,
+      shiftId: morningShiftId,
       date: dayStart,
       hasDropping: false,
       status: 'pending',
@@ -607,19 +616,22 @@ export async function getOrCreateItemDroppingForSchedule(
     .onConflictDoNothing()
     .returning();
 
-  return row ?? (await getActiveItemDroppingTask(storeId, shiftId, date))!;
+  return row ?? (await getActiveItemDroppingTask(storeId, morningShiftId, date))!;
 }
 
 export async function getItemDroppingBySchedule(
   scheduleId: number,
 ): Promise<ItemDroppingTask | null> {
-  const [row] = await db
-    .select()
-    .from(itemDroppingTasks)
-    .where(eq(itemDroppingTasks.scheduleId, scheduleId))
+  const [schedule] = await db
+    .select({ storeId: schedules.storeId, date: schedules.date })
+    .from(schedules)
+    .where(eq(schedules.id, scheduleId))
     .limit(1);
 
-  return row ?? null;
+  if (!schedule) return null;
+
+  const morningShiftId = await getMorningShiftId();
+  return getActiveItemDroppingTask(schedule.storeId, morningShiftId, schedule.date);
 }
 
 export async function getItemDroppingById(
