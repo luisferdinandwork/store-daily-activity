@@ -13,6 +13,7 @@ import {
   Users, CreditCard, BarChart2, ClipboardList,
   User, Sun, Moon, AlertTriangle, Zap,
   LogIn, LogOut, RefreshCw, Loader2,
+  History,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -156,11 +157,14 @@ export interface EodZReportData extends TaskBase {
   totalNominal: string | null; zReportPhotos: string[];
 }
 export interface OpenStatementData extends TaskBase {
-  parentTaskId: number | null; expectedAmount: string | null;
-  expectedFetchedAt: string | null; actualAmount: string | null;
-  isBalanced: boolean | null; discrepancyStartedAt: string | null;
-  discrepancyResolvedAt: string | null; discrepancyDurationMinutes: number | null;
+  parentTaskId: number | null;
+  isDone: boolean | null;
+  isOnHold: boolean | null;
+  holdReason: string | null;
+  heldBy: string | null;
+  heldAt: string | null;
 }
+
 export interface GroomingData extends TaskBase {
   uniformActive: boolean; hairActive: boolean; smellActive: boolean;
   makeUpActive: boolean; shoeActive: boolean; nameTagActive: boolean;
@@ -227,7 +231,7 @@ const TASK_META: Record<TaskType, { title: string; description: string; Icon: El
   briefing:           { title: 'Briefing',           description: 'Selesaikan briefing shift pagi atau malam.', Icon: Users,         hasPhoto: false },
   edc_reconciliation: { title: 'EDC Reconciliation', description: 'Match EDC transactions vs system data.', Icon: CreditCard,    hasPhoto: false },
   eod_z_report:       { title: 'EOD Z-Report',       description: 'Enter Z-report total & upload receipt.', Icon: BarChart2,     hasPhoto: true  },
-  open_statement:     { title: 'Open Statement',     description: 'Match actual vs expected cash amount.',  Icon: ClipboardList, hasPhoto: false },
+  open_statement:     { title: 'Open Statement',     description: 'Tandai Done bila sudah dikerjakan, atau On Hold untuk dilanjutkan shift berikutnya.',  Icon: ClipboardList, hasPhoto: false },
   grooming:           { title: 'Grooming Check',     description: 'Uniform check + full-body selfie.',      Icon: User,          hasPhoto: true  },
   marketing_check:    { title: 'Marketing Check',    description: 'Promo, random checking, dan sell tag.',  Icon: ClipboardList, hasPhoto: false },
   serah_terima: {
@@ -307,7 +311,6 @@ const SHIFT_SCOPED_SHARED_TASK_TYPES = new Set<TaskType>([
 const EVENING_OPERATIONAL_TASK_TYPES = new Set<TaskType>([
   'edc_reconciliation',
   'eod_z_report',
-  'open_statement',
 ]);
 
 function isValidTaskStatus(value: unknown): value is TaskStatus {
@@ -957,6 +960,9 @@ function TaskCard({ item, onOpen }: { item: TaskItem; onOpen: (item: TaskItem) =
   const isTerminal = status === 'completed' || status === 'verified';
   const isRejected = status === 'rejected';
   const isDiscrepancy = status === 'discrepancy';
+  const isOpenStatementCarryOver =
+    item.type === 'open_statement' &&
+    (item.data as OpenStatementData).parentTaskId != null;
 
   const showCarryForward =
     isDiscrepancy && (
@@ -1007,14 +1013,21 @@ function TaskCard({ item, onOpen }: { item: TaskItem; onOpen: (item: TaskItem) =
   const hasSetoranDeficit = item.type === 'setoran' && !!setoranDeficitLabel;
   const needsAttention    = isDiscrepancy || hasSetoranDeficit || isRejected;
 
+  const openStatementLabel =
+    isOpenStatementCarryOver && !isTerminal
+      ? 'Lanjutan Open Statement dari shift sebelumnya — selesaikan (Done) atau On Hold lagi.'
+      : null;
+
   const description =
     itemDroppingLabel
       ? itemDroppingLabel
       : setoranDeficitLabel
         ? setoranDeficitLabel
-        : showCarryForward
-          ? (carryForwardDescription[item.type] ?? meta.description)
-          : meta.description;
+        : openStatementLabel
+          ? openStatementLabel
+          : showCarryForward
+            ? (carryForwardDescription[item.type] ?? meta.description)
+            : meta.description;
 
   return (
     <Card
@@ -1072,6 +1085,12 @@ function TaskCard({ item, onOpen }: { item: TaskItem; onOpen: (item: TaskItem) =
                 <Badge variant="outline" className="h-[18px] px-1.5 text-[10px] text-violet-600 border-violet-200">Personal</Badge>
               ) : (
                 <Badge variant="outline" className="h-[18px] px-1.5 text-[10px]">Shared</Badge>
+              )}
+
+              {isOpenStatementCarryOver && (
+                <Badge className="h-[18px] gap-1 px-1.5 text-[10px] font-semibold bg-indigo-500 text-white hover:bg-indigo-500">
+                  <History className="h-2.5 w-2.5" />Lanjutan
+                </Badge>
               )}
 
               {meta.hasPhoto && (

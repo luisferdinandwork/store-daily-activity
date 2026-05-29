@@ -4,6 +4,12 @@
 // HO OPS / Admin: sees every area, every store. Stores in the dropdown are
 // grouped by area via <optgroup>.
 // Area OPS: sees only their assigned area's stores (existing behaviour).
+//
+// Day interactions all live in ONE right-side panel (SchedulePanel) that swaps
+// between three views: 'detail' → 'add' → 'edit'. Because the panel chrome is
+// mounted once and only its inner content changes, two overlays can never be
+// open at the same time, and Add/Edit stay visually consistent with the day
+// drawer instead of popping up as centred modals.
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useSession } from 'next-auth/react';
@@ -158,7 +164,7 @@ function shiftHours(shift: Shift | null): string {
   return '';
 }
 
-// ─── Shift mode options (shared by Add + Edit modals) ─────────────────────────
+// ─── Shift mode options (shared by Add + Edit views) ──────────────────────────
 
 const SHIFT_OPTIONS = [
   { key: 'morning',  label: 'Morning',  sub: '07:00 – 15:00', icon: <Sun     className="h-5 w-5" />, accent: '#ea580c' },
@@ -169,155 +175,168 @@ const SHIFT_OPTIONS = [
 ] as const;
 
 type ShiftMode = 'morning' | 'evening' | 'full_day' | 'off' | 'leave';
+type PanelView = 'detail' | 'add' | 'edit';
 
-// ─── DayDetailDrawer ─────────────────────────────────────────────────────────
+// ─── Shared shift-mode picker ─────────────────────────────────────────────────
 
-function DayDetailDrawer({ date, entries, onEdit, onAdd, onClose }: {
-  date:    Date;
+function ShiftModePicker({ value, onChange }: {
+  value:    ShiftMode;
+  onChange: (m: ShiftMode) => void;
+}) {
+  return (
+    <div className="grid grid-cols-3 gap-2">
+      {SHIFT_OPTIONS.map(opt => {
+        const active = value === opt.key;
+        return (
+          <button
+            key={opt.key}
+            onClick={() => onChange(opt.key)}
+            className="relative flex flex-col items-start gap-1.5 rounded-2xl border-2 px-3 py-3 text-left transition-all"
+            style={{
+              borderColor: active ? opt.accent : '#e2e8f0',
+              background:  active ? `${opt.accent}12` : '#f8fafc',
+              boxShadow:   active ? `0 0 0 3px ${opt.accent}20` : 'none',
+            }}
+          >
+            <span style={{ color: active ? opt.accent : '#94a3b8' }}>{opt.icon}</span>
+            <div>
+              <p className="text-xs font-bold" style={{ color: active ? opt.accent : '#334155' }}>{opt.label}</p>
+              <p className="text-[9px] text-slate-400">{opt.sub}</p>
+            </div>
+            {active && (
+              <span className="absolute right-2 top-2 flex h-4 w-4 items-center justify-center rounded-full" style={{ background: opt.accent }}>
+                <CheckCircle2 className="h-3 w-3 text-white" />
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Panel views ──────────────────────────────────────────────────────────────
+// Each view is mounted only while it is active, so its local form state resets
+// cleanly whenever the user switches views.
+
+function DetailView({ entries, onEdit, onAdd }: {
   entries: DayEntry[];
   onEdit:  (e: DayEntry) => void;
   onAdd:   () => void;
-  onClose: () => void;
 }) {
-  const label   = date.toLocaleDateString('en-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
   const working = entries.filter(e => !e.isOff && !e.isLeave && e.shift);
   const leave   = entries.filter(e => e.isLeave);
   const off     = entries.filter(e => e.isOff && !e.isLeave);
 
   return (
-    <div className="fixed inset-0 z-50 flex" onClick={onClose}>
-      <div className="flex-1 bg-slate-900/50 backdrop-blur-sm" />
-      <div
-        className="w-[420px] bg-white shadow-2xl flex flex-col overflow-hidden"
-        style={{ animation: 'slideInRight 0.25s ease-out' }}
-        onClick={e => e.stopPropagation()}
+    <div className="flex-1 overflow-y-auto px-5 py-4">
+      <button
+        onClick={onAdd}
+        className="mb-4 flex w-full items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-indigo-200 bg-indigo-50 py-2.5 text-xs font-bold text-indigo-600 hover:bg-indigo-100 transition"
       >
-        <div className="border-b border-slate-100 px-6 py-5">
-          <div className="flex items-start justify-between">
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Schedule</p>
-              <p className="mt-0.5 text-lg font-bold text-slate-900">{label}</p>
-            </div>
-            <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-slate-400 hover:bg-slate-200">
-              <X className="h-4 w-4" />
-            </button>
-          </div>
+        <Plus className="h-3.5 w-3.5" />Add employee
+      </button>
+
+      {entries.length === 0 ? (
+        <div className="flex flex-col items-center gap-3 py-10 text-center">
+          <Calendar className="h-8 w-8 text-slate-200" />
+          <p className="text-sm text-slate-400">No employees scheduled on this day.</p>
         </div>
-
-        <div className="flex-1 overflow-y-auto px-5 py-4">
-          <button
-            onClick={onAdd}
-            className="mb-4 flex w-full items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-indigo-200 bg-indigo-50 py-2.5 text-xs font-bold text-indigo-600 hover:bg-indigo-100 transition"
-          >
-            <Plus className="h-3.5 w-3.5" />Add employee
-          </button>
-
-          {entries.length === 0 ? (
-            <div className="flex flex-col items-center gap-3 py-10 text-center">
-              <Calendar className="h-8 w-8 text-slate-200" />
-              <p className="text-sm text-slate-400">No employees scheduled on this day.</p>
+      ) : (
+        <div className="space-y-4">
+          {working.length > 0 && (
+            <div>
+              <p className="mb-1.5 px-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">Working</p>
+              <div className="space-y-2">
+                {working.map(entry => {
+                  const cfg = getShiftCfg(entry)!;
+                  return (
+                    <button
+                      key={entry.id}
+                      onClick={() => onEdit(entry)}
+                      className="flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-all hover:shadow-sm"
+                      style={{ borderColor: cfg.border, background: cfg.bg }}
+                    >
+                      <div
+                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-xs font-extrabold"
+                        style={{ background: cfg.dot + '30', color: cfg.text }}
+                      >
+                        {cfg.label}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-bold text-slate-800 truncate">{entry.userName}</p>
+                        <p className="text-[11px] text-slate-400">
+                          {EMP_LABEL[entry.userType ?? ''] ?? entry.userType ?? '—'} · {shiftHours(entry.shift)}
+                        </p>
+                      </div>
+                      <div
+                        className="rounded-lg px-2 py-0.5 text-[10px] font-bold"
+                        style={{ background: cfg.dot + '20', color: cfg.text }}
+                      >
+                        {shiftLabel(entry.shift)}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-          ) : (
-            <div className="space-y-4">
-              {working.length > 0 && (
-                <div>
-                  <p className="mb-1.5 px-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">Working</p>
-                  <div className="space-y-2">
-                    {working.map(entry => {
-                      const cfg = getShiftCfg(entry)!;
-                      return (
-                        <button
-                          key={entry.id}
-                          onClick={() => onEdit(entry)}
-                          className="flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-all hover:shadow-sm"
-                          style={{ borderColor: cfg.border, background: cfg.bg }}
-                        >
-                          <div
-                            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-xs font-extrabold"
-                            style={{ background: cfg.dot + '30', color: cfg.text }}
-                          >
-                            {cfg.label}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-bold text-slate-800 truncate">{entry.userName}</p>
-                            <p className="text-[11px] text-slate-400">
-                              {EMP_LABEL[entry.userType ?? ''] ?? entry.userType ?? '—'} · {shiftHours(entry.shift)}
-                            </p>
-                          </div>
-                          <div
-                            className="rounded-lg px-2 py-0.5 text-[10px] font-bold"
-                            style={{ background: cfg.dot + '20', color: cfg.text }}
-                          >
-                            {shiftLabel(entry.shift)}
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
+          )}
 
-              {leave.length > 0 && (
-                <div>
-                  <p className="mb-1.5 px-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">On Leave</p>
-                  <div className="space-y-2">
-                    {leave.map(entry => (
-                      <button key={entry.id} onClick={() => onEdit(entry)}
-                        className="flex w-full items-center gap-3 rounded-2xl border border-indigo-100 bg-indigo-50 px-4 py-3 text-left hover:shadow-sm transition">
-                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-indigo-100 text-xs font-extrabold text-indigo-600">AL</div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-bold text-slate-800 truncate">{entry.userName}</p>
-                          <p className="text-[11px] text-slate-400">{EMP_LABEL[entry.userType ?? ''] ?? '—'}</p>
-                        </div>
-                        <span className="rounded-lg bg-indigo-100 px-2 py-0.5 text-[10px] font-bold text-indigo-600">Leave</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
+          {leave.length > 0 && (
+            <div>
+              <p className="mb-1.5 px-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">On Leave</p>
+              <div className="space-y-2">
+                {leave.map(entry => (
+                  <button key={entry.id} onClick={() => onEdit(entry)}
+                    className="flex w-full items-center gap-3 rounded-2xl border border-indigo-100 bg-indigo-50 px-4 py-3 text-left hover:shadow-sm transition">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-indigo-100 text-xs font-extrabold text-indigo-600">AL</div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-bold text-slate-800 truncate">{entry.userName}</p>
+                      <p className="text-[11px] text-slate-400">{EMP_LABEL[entry.userType ?? ''] ?? '—'}</p>
+                    </div>
+                    <span className="rounded-lg bg-indigo-100 px-2 py-0.5 text-[10px] font-bold text-indigo-600">Leave</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
-              {off.length > 0 && (
-                <div>
-                  <p className="mb-1.5 px-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">Day Off</p>
-                  <div className="space-y-2">
-                    {off.map(entry => (
-                      <button key={entry.id} onClick={() => onEdit(entry)}
-                        className="flex w-full items-center gap-3 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-left hover:shadow-sm transition">
-                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-xs font-bold text-slate-400">—</div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-bold text-slate-500 truncate">{entry.userName}</p>
-                          <p className="text-[11px] text-slate-400">{EMP_LABEL[entry.userType ?? ''] ?? '—'}</p>
-                        </div>
-                        <span className="rounded-lg bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-400">Off</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
+          {off.length > 0 && (
+            <div>
+              <p className="mb-1.5 px-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">Day Off</p>
+              <div className="space-y-2">
+                {off.map(entry => (
+                  <button key={entry.id} onClick={() => onEdit(entry)}
+                    className="flex w-full items-center gap-3 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-left hover:shadow-sm transition">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-xs font-bold text-slate-400">—</div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-bold text-slate-500 truncate">{entry.userName}</p>
+                      <p className="text-[11px] text-slate-400">{EMP_LABEL[entry.userType ?? ''] ?? '—'}</p>
+                    </div>
+                    <span className="rounded-lg bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-400">Off</span>
+                  </button>
+                ))}
+              </div>
             </div>
           )}
         </div>
-      </div>
-      <style>{`@keyframes slideInRight{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
+      )}
     </div>
   );
 }
 
-// ─── AddEntryModal ────────────────────────────────────────────────────────────
-
-function AddEntryModal({ date, employees, existingUserIds, onSave, onClose, saving }: {
-  date:            Date;
-  employees:       EmployeeOption[];
-  existingUserIds: Set<string>;
-  onSave:          (p: { userId: string; shift: Shift | null; isOff: boolean; isLeave: boolean }) => Promise<void>;
-  onClose:         () => void;
-  saving:          boolean;
+function AddView({ entries, employees, saving, onSave, onCancel }: {
+  entries:   DayEntry[];
+  employees: EmployeeOption[];
+  saving:    boolean;
+  onSave:    (p: { userId: string; shift: Shift | null; isOff: boolean; isLeave: boolean }) => void;
+  onCancel:  () => void;
 }) {
   const [selectedUserId, setSelectedUserId] = useState<string>('');
   const [mode, setMode] = useState<ShiftMode>('morning');
 
-  const label     = date.toLocaleDateString('en-ID', { weekday: 'long', day: 'numeric', month: 'long' });
-  const available = employees.filter(e => !existingUserIds.has(e.id));
+  const existing  = new Set(entries.map(e => e.userId));
+  const available = employees.filter(e => !existing.has(e.id));
 
   function handleSubmit() {
     if (!selectedUserId) { toast.error('Please select an employee'); return; }
@@ -330,127 +349,74 @@ function AddEntryModal({ date, employees, existingUserIds, onSave, onClose, savi
   }
 
   return (
-    <div
-      className="fixed inset-0 z-[100] flex items-center justify-center p-6"
-      style={{ background: 'rgba(15,23,42,0.65)', backdropFilter: 'blur(6px)' }}
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl"
-        style={{ animation: 'fadeUp 0.25s cubic-bezier(0.34,1.56,0.64,1)', maxHeight: '90vh', overflow: 'auto' }}
-        onClick={e => e.stopPropagation()}
-      >
-        <div className="mb-5 flex items-start justify-between">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Add Employee</p>
-            <p className="mt-0.5 text-lg font-bold text-slate-900">{label}</p>
-          </div>
-          <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-slate-400 hover:bg-slate-200">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
+    <>
+      <div className="flex-1 overflow-y-auto px-5 py-4">
         {/* Employee picker */}
-        <div className="mb-5">
-          <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Employee</p>
-          {available.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 py-6 text-center">
-              <p className="text-xs text-slate-400">All employees already assigned to this day.</p>
-            </div>
-          ) : (
-            <div className="max-h-48 space-y-1.5 overflow-y-auto pr-1">
-              {available.map(emp => {
-                const active = selectedUserId === emp.id;
-                return (
-                  <button
-                    key={emp.id}
-                    onClick={() => setSelectedUserId(emp.id)}
-                    className="flex w-full items-center gap-3 rounded-xl border-2 px-3 py-2.5 text-left transition-all"
-                    style={{ borderColor: active ? '#6366f1' : '#e2e8f0', background: active ? '#eef2ff' : '#f8fafc' }}
+        <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Employee</p>
+        {available.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 py-6 text-center">
+            <p className="text-xs text-slate-400">All employees already assigned to this day.</p>
+          </div>
+        ) : (
+          <div className="space-y-1.5">
+            {available.map(emp => {
+              const active = selectedUserId === emp.id;
+              return (
+                <button
+                  key={emp.id}
+                  onClick={() => setSelectedUserId(emp.id)}
+                  className="flex w-full items-center gap-3 rounded-xl border-2 px-3 py-2.5 text-left transition-all"
+                  style={{ borderColor: active ? '#6366f1' : '#e2e8f0', background: active ? '#eef2ff' : '#f8fafc' }}
+                >
+                  <div
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xs font-bold"
+                    style={{ background: active ? '#6366f1' : '#e2e8f0', color: active ? 'white' : '#64748b' }}
                   >
-                    <div
-                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xs font-bold"
-                      style={{ background: active ? '#6366f1' : '#e2e8f0', color: active ? 'white' : '#64748b' }}
-                    >
-                      {emp.name.slice(0, 2).toUpperCase()}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-bold text-slate-800 truncate">{emp.name}</p>
-                      <p className="text-[10px] text-slate-400">{EMP_LABEL[emp.employeeType ?? ''] ?? '—'}</p>
-                    </div>
-                    {active && <CheckCircle2 className="h-4 w-4 shrink-0 text-indigo-500" />}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
+                    {emp.name.slice(0, 2).toUpperCase()}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-bold text-slate-800 truncate">{emp.name}</p>
+                    <p className="text-[10px] text-slate-400">{EMP_LABEL[emp.employeeType ?? ''] ?? '—'}</p>
+                  </div>
+                  {active && <CheckCircle2 className="h-4 w-4 shrink-0 text-indigo-500" />}
+                </button>
+              );
+            })}
+          </div>
+        )}
 
-        {/* Shift picker — 3 cols for 5 options */}
-        <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Shift</p>
-        <div className="mb-6 grid grid-cols-3 gap-2">
-          {SHIFT_OPTIONS.map(opt => {
-            const active = mode === opt.key;
-            return (
-              <button
-                key={opt.key}
-                onClick={() => setMode(opt.key)}
-                className="relative flex flex-col items-start gap-1.5 rounded-2xl border-2 px-3 py-3 text-left transition-all"
-                style={{
-                  borderColor: active ? opt.accent : '#e2e8f0',
-                  background:  active ? `${opt.accent}12` : '#f8fafc',
-                  boxShadow:   active ? `0 0 0 3px ${opt.accent}20` : 'none',
-                }}
-              >
-                <span style={{ color: active ? opt.accent : '#94a3b8' }}>{opt.icon}</span>
-                <div>
-                  <p className="text-xs font-bold" style={{ color: active ? opt.accent : '#334155' }}>{opt.label}</p>
-                  <p className="text-[9px] text-slate-400">{opt.sub}</p>
-                </div>
-                {active && (
-                  <span className="absolute right-2 top-2 flex h-4 w-4 items-center justify-center rounded-full" style={{ background: opt.accent }}>
-                    <CheckCircle2 className="h-3 w-3 text-white" />
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="flex gap-2.5">
-          <button onClick={onClose}
-            className="flex h-12 flex-1 items-center justify-center rounded-2xl border border-slate-200 bg-white text-sm font-semibold text-slate-600 hover:bg-slate-50">
-            Cancel
-          </button>
-          <button
-            onClick={handleSubmit}
-            disabled={saving || !selectedUserId || available.length === 0}
-            className="flex h-12 flex-[2] items-center justify-center gap-2 rounded-2xl text-sm font-bold text-white transition-all disabled:opacity-60"
-            style={{ background: 'linear-gradient(135deg, #4f46e5, #7c3aed)' }}
-          >
-            {saving ? <><Loader2 className="h-4 w-4 animate-spin" />Adding…</> : 'Add to Schedule'}
-          </button>
-        </div>
+        {/* Shift picker */}
+        <p className="mb-2 mt-5 text-[10px] font-bold uppercase tracking-widest text-slate-400">Shift</p>
+        <ShiftModePicker value={mode} onChange={setMode} />
       </div>
-      <style>{`@keyframes fadeUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}`}</style>
-    </div>
+
+      <div className="flex gap-2.5 border-t border-slate-100 px-5 py-4">
+        <button onClick={onCancel}
+          className="flex h-12 flex-1 items-center justify-center rounded-2xl border border-slate-200 bg-white text-sm font-semibold text-slate-600 hover:bg-slate-50">
+          Cancel
+        </button>
+        <button
+          onClick={handleSubmit}
+          disabled={saving || !selectedUserId || available.length === 0}
+          className="flex h-12 flex-[2] items-center justify-center gap-2 rounded-2xl text-sm font-bold text-white transition-all disabled:opacity-60"
+          style={{ background: 'linear-gradient(135deg, #4f46e5, #7c3aed)' }}
+        >
+          {saving ? <><Loader2 className="h-4 w-4 animate-spin" />Adding…</> : 'Add to Schedule'}
+        </button>
+      </div>
+    </>
   );
 }
 
-// ─── EditDayModal ─────────────────────────────────────────────────────────────
-
-function EditDayModal({ entry, onSave, onClose, saving }: {
-  entry:   DayEntry;
-  onSave:  (p: { shift: Shift | null; isOff: boolean; isLeave: boolean }) => Promise<void>;
-  onClose: () => void;
-  saving:  boolean;
+function EditView({ entry, saving, onSave, onCancel }: {
+  entry:    DayEntry;
+  saving:   boolean;
+  onSave:   (p: { shift: Shift | null; isOff: boolean; isLeave: boolean }) => void;
+  onCancel: () => void;
 }) {
   const [shift,   setShift]   = useState<Shift | null>(entry.shift);
   const [isOff,   setIsOff]   = useState(entry.isOff);
   const [isLeave, setIsLeave] = useState(entry.isLeave);
-
-  const dateObj = new Date(entry.date);
-  const label   = dateObj.toLocaleDateString('en-ID', { weekday: 'long', day: 'numeric', month: 'long' });
 
   function pick(mode: ShiftMode) {
     if (mode === 'morning' || mode === 'evening' || mode === 'full_day') {
@@ -465,71 +431,112 @@ function EditDayModal({ entry, onSave, onClose, saving }: {
   const current: ShiftMode = isLeave ? 'leave' : isOff ? 'off' : (shift ?? 'off') as ShiftMode;
 
   return (
-    <div
-      className="fixed inset-0 z-[100] flex items-center justify-center p-6"
-      style={{ background: 'rgba(15,23,42,0.65)', backdropFilter: 'blur(6px)' }}
-      onClick={onClose}
-    >
+    <>
+      <div className="flex-1 overflow-y-auto px-5 py-4">
+        <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Shift</p>
+        <ShiftModePicker value={current} onChange={pick} />
+      </div>
+
+      <div className="flex gap-2.5 border-t border-slate-100 px-5 py-4">
+        <button onClick={onCancel}
+          className="flex h-12 flex-1 items-center justify-center rounded-2xl border border-slate-200 bg-white text-sm font-semibold text-slate-600 hover:bg-slate-50">
+          Cancel
+        </button>
+        <button
+          onClick={() => onSave({ shift, isOff, isLeave })}
+          disabled={saving}
+          className="flex h-12 flex-[2] items-center justify-center gap-2 rounded-2xl text-sm font-bold text-white transition-all disabled:opacity-60"
+          style={{ background: 'linear-gradient(135deg, #4f46e5, #7c3aed)' }}
+        >
+          {saving ? <><Loader2 className="h-4 w-4 animate-spin" />Saving…</> : 'Save Changes'}
+        </button>
+      </div>
+    </>
+  );
+}
+
+// ─── SchedulePanel ─────────────────────────────────────────────────────────────
+// One right-side drawer. The chrome (backdrop + sliding panel) is mounted once;
+// only the inner view swaps, so there is never more than one overlay on screen
+// and Detail / Add / Edit all share the same look and position.
+
+function SchedulePanel({
+  date, view, entries, editEntry, employees, saving,
+  onClose, onBack, onAdd, onEdit, onSaveNew, onSaveEdit,
+}: {
+  date:       Date;
+  view:       PanelView;
+  entries:    DayEntry[];
+  editEntry:  DayEntry | null;
+  employees:  EmployeeOption[];
+  saving:     boolean;
+  onClose:    () => void;
+  onBack:     () => void;
+  onAdd:      () => void;
+  onEdit:     (e: DayEntry) => void;
+  onSaveNew:  (p: { userId: string; shift: Shift | null; isOff: boolean; isLeave: boolean }) => void;
+  onSaveEdit: (p: { shift: Shift | null; isOff: boolean; isLeave: boolean }) => void;
+}) {
+  const fullLabel  = date.toLocaleDateString('en-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const shortLabel = date.toLocaleDateString('en-ID', { weekday: 'long', day: 'numeric', month: 'long' });
+
+  const eyebrow = view === 'detail' ? 'Schedule' : view === 'add' ? 'Add Employee' : 'Edit Shift';
+  const title   = view === 'edit' && editEntry ? (editEntry.userName ?? '—') : view === 'detail' ? fullLabel : shortLabel;
+
+  return (
+    <div className="fixed inset-0 z-50 flex" onClick={onClose}>
+      <div className="flex-1 bg-slate-900/50 backdrop-blur-sm" />
       <div
-        className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl"
-        style={{ animation: 'fadeUp 0.25s cubic-bezier(0.34,1.56,0.64,1)' }}
+        className="flex w-[440px] max-w-full flex-col overflow-hidden bg-white shadow-2xl"
+        style={{ animation: 'slideInRight 0.25s ease-out' }}
         onClick={e => e.stopPropagation()}
       >
-        <div className="mb-5 flex items-start justify-between">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Edit Shift</p>
-            <p className="mt-0.5 text-lg font-bold text-slate-900">{entry.userName}</p>
-            <p className="text-sm text-slate-500">{label}</p>
+        {/* Header */}
+        <div className="border-b border-slate-100 px-6 py-5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 items-start gap-2.5">
+              {view !== 'detail' && (
+                <button
+                  onClick={onBack}
+                  className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200"
+                  aria-label="Back"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+              )}
+              <div className="min-w-0">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{eyebrow}</p>
+                <p className="mt-0.5 truncate text-lg font-bold text-slate-900">{title}</p>
+                {view === 'edit' && editEntry && <p className="truncate text-sm text-slate-500">{shortLabel}</p>}
+              </div>
+            </div>
+            <button onClick={onClose} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-400 hover:bg-slate-200">
+              <X className="h-4 w-4" />
+            </button>
           </div>
-          <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-slate-400 hover:bg-slate-200">
-            <X className="h-4 w-4" />
-          </button>
         </div>
 
-        <div className="grid grid-cols-3 gap-2 mb-6">
-          {SHIFT_OPTIONS.map(opt => {
-            const active = current === opt.key;
-            return (
-              <button
-                key={opt.key}
-                onClick={() => pick(opt.key)}
-                className="relative flex flex-col items-start gap-1.5 rounded-2xl border-2 px-3 py-3 text-left transition-all"
-                style={{
-                  borderColor: active ? opt.accent : '#e2e8f0',
-                  background:  active ? `${opt.accent}12` : '#f8fafc',
-                  boxShadow:   active ? `0 0 0 3px ${opt.accent}20` : 'none',
-                }}
-              >
-                <span style={{ color: active ? opt.accent : '#94a3b8' }}>{opt.icon}</span>
-                <div>
-                  <p className="text-xs font-bold" style={{ color: active ? opt.accent : '#334155' }}>{opt.label}</p>
-                  <p className="text-[9px] text-slate-400">{opt.sub}</p>
-                </div>
-                {active && (
-                  <span className="absolute right-2 top-2 flex h-4 w-4 items-center justify-center rounded-full" style={{ background: opt.accent }}>
-                    <CheckCircle2 className="h-3 w-3 text-white" />
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="flex gap-2.5">
-          <button onClick={onClose}
-            className="flex h-12 flex-1 items-center justify-center rounded-2xl border border-slate-200 bg-white text-sm font-semibold text-slate-600 hover:bg-slate-50">
-            Cancel
-          </button>
-          <button
-            onClick={() => onSave({ shift, isOff, isLeave })}
-            disabled={saving}
-            className="flex h-12 flex-[2] items-center justify-center gap-2 rounded-2xl text-sm font-bold text-white transition-all disabled:opacity-60"
-            style={{ background: 'linear-gradient(135deg, #4f46e5, #7c3aed)' }}
-          >
-            {saving ? <><Loader2 className="h-4 w-4 animate-spin" />Saving…</> : 'Save Changes'}
-          </button>
+        {/* Body — keyed so each view swap gets a subtle fade, while the panel itself never re-slides */}
+        <div
+          key={`${view}:${editEntry?.id ?? ''}`}
+          className="flex min-h-0 flex-1 flex-col"
+          style={{ animation: 'panelFade 0.2s ease-out' }}
+        >
+          {view === 'detail' && (
+            <DetailView entries={entries} onEdit={onEdit} onAdd={onAdd} />
+          )}
+          {view === 'add' && (
+            <AddView entries={entries} employees={employees} saving={saving} onSave={onSaveNew} onCancel={onBack} />
+          )}
+          {view === 'edit' && editEntry && (
+            <EditView entry={editEntry} saving={saving} onSave={onSaveEdit} onCancel={onBack} />
+          )}
         </div>
       </div>
+      <style>{`
+        @keyframes slideInRight{from{transform:translateX(100%)}to{transform:translateX(0)}}
+        @keyframes panelFade{from{opacity:0;transform:translateX(8px)}to{opacity:1;transform:translateX(0)}}
+      `}</style>
     </div>
   );
 }
@@ -680,7 +687,7 @@ function ImportButton({ storeId, storeName, onImported }: {
 function CalendarGrid({ schedule, yearMonth, onDayPress }: {
   schedule:   MonthlySchedule;
   yearMonth:  string;
-  onDayPress: (date: Date, entries: DayEntry[]) => void;
+  onDayPress: (date: Date) => void;
 }) {
   const grid = buildCalendarGrid(yearMonth);
   const [today, setToday] = useState(() => isoDate(new Date()));
@@ -730,7 +737,7 @@ function CalendarGrid({ schedule, yearMonth, onDayPress }: {
           const leave    = entries.filter(e => e.isLeave);
 
           return (
-            <button key={ds} onClick={() => onDayPress(date, entries)}
+            <button key={ds} onClick={() => onDayPress(date)}
               className={cn(
                 'group relative flex min-h-[110px] flex-col gap-1 p-2 text-left transition-colors hover:bg-indigo-50/40',
                 'border-b border-slate-100', !isLastInRow && 'border-r',
@@ -804,13 +811,13 @@ export default function OpsSchedulesPage() {
   const [creating,      setCreating]      = useState(false);
   const [deleting,      setDeleting]      = useState(false);
   const [employees,     setEmployees]     = useState<EmployeeOption[]>([]);
-  const [addingDate,    setAddingDate]    = useState<Date | null>(null);
-  const [addingEntry,   setAddingEntry]   = useState(false);
-  const [detailDate,    setDetailDate]    = useState<Date | null>(null);
-  const [detailEntries, setDetailEntries] = useState<DayEntry[]>([]);
-  const [editEntry,     setEditEntry]     = useState<DayEntry | null>(null);
-  const [savingEntry,   setSavingEntry]   = useState(false);
   const [exporting,     setExporting]     = useState(false);
+
+  // ── Single right-side panel state ───────────────────────────────────────────
+  const [panelDate,      setPanelDate]      = useState<Date | null>(null);
+  const [panelView,      setPanelView]      = useState<PanelView>('detail');
+  const [panelEditEntry, setPanelEditEntry] = useState<DayEntry | null>(null);
+  const [panelSaving,    setPanelSaving]    = useState(false);
 
   // Admin counts as ops for UI purposes
   const isOps = role === 'ops' || role === 'admin';
@@ -873,15 +880,27 @@ export default function OpsSchedulesPage() {
     if (selectedStore) loadSchedule(selectedStore, selectedMonth);
   }, [selectedStore, selectedMonth, loadSchedule]);
 
-  function handleMonthChange(ym: string) { setSelectedMonth(ym); setDetailDate(null); }
-  function handleDayPress(date: Date, entries: DayEntry[]) { setDetailDate(date); setDetailEntries(entries); }
-  function handleEditFromDrawer(entry: DayEntry) { setEditEntry(entry); }
-  function handleAddFromDrawer() { if (!detailDate) return; setAddingDate(detailDate); setDetailDate(null); }
+  // ── Panel control ────────────────────────────────────────────────────────────
+  function closePanel()             { setPanelDate(null); setPanelView('detail'); setPanelEditEntry(null); }
+  function panelBack()              { setPanelView('detail'); setPanelEditEntry(null); }
+  function panelGoAdd()             { setPanelView('add'); }
+  function panelGoEdit(e: DayEntry) { setPanelEditEntry(e); setPanelView('edit'); }
+
+  function handleMonthChange(ym: string) { setSelectedMonth(ym); closePanel(); }
+  function handleDayPress(date: Date)    { setPanelDate(date); setPanelView('detail'); setPanelEditEntry(null); }
 
   // ── Currently-selected store object (for title, address, etc.) ─────────────
   const currentStore     = useMemo(() => stores.find(s => s.id === selectedStore) ?? null, [stores, selectedStore]);
   const currentStoreName = currentStore?.name ?? '—';
   const currentStoreArea = currentStore?.areaName ?? null;
+
+  // ── Entries for the open day — derived from the live schedule so the panel ──
+  //    always reflects the latest data after a save (no stale snapshot). ──────
+  const panelEntries = useMemo(() => {
+    if (!panelDate || !schedule) return [];
+    const key = isoDate(panelDate);
+    return schedule.entries.filter(e => toLocalDateKey(e.date) === key);
+  }, [panelDate, schedule]);
 
   // ── Stores grouped by area (used by HO dropdown + by area-OPS as fallback) ──
   const storesByArea = useMemo(() => {
@@ -917,39 +936,39 @@ export default function OpsSchedulesPage() {
       const json = await res.json();
       if (!json.success) throw new Error(json.error);
       toast.success(json.lockedCount > 0 ? `Cleared — ${json.lockedCount} attended day(s) preserved` : 'Schedule deleted');
+      closePanel();
       loadSchedule(selectedStore, selectedMonth);
     } catch (e) { toast.error(e instanceof Error ? e.message : 'Delete failed'); }
     finally { setDeleting(false); }
   }
 
   async function handleSaveEntry(patch: { shift: Shift | null; isOff: boolean; isLeave: boolean }) {
-    if (!editEntry) return;
-    setSavingEntry(true);
+    if (!panelEditEntry) return;
+    setPanelSaving(true);
     try {
-      const res  = await fetch(`/api/ops/schedules/entry/${editEntry.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) });
+      const res  = await fetch(`/api/ops/schedules/entry/${panelEditEntry.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) });
       const json = await res.json();
       if (!json.success) throw new Error(json.error);
       toast.success('Day updated');
-      setEditEntry(null); setDetailDate(null);
-      if (selectedStore) loadSchedule(selectedStore, selectedMonth);
+      if (selectedStore) await loadSchedule(selectedStore, selectedMonth);
+      panelBack();   // return to the day's detail view (panel stays open, shows the update)
     } catch (e) { toast.error(e instanceof Error ? e.message : 'Update failed'); }
-    finally { setSavingEntry(false); }
+    finally { setPanelSaving(false); }
   }
 
   async function handleSaveNewEntry(payload: { userId: string; shift: Shift | null; isOff: boolean; isLeave: boolean }) {
-    if (!addingDate || !selectedStore) return;
-    setAddingEntry(true);
+    if (!panelDate || !selectedStore) return;
+    setPanelSaving(true);
     try {
-      const res  = await fetch('/api/ops/schedules/entry', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, storeId: selectedStore, date: isoDate(addingDate) }) });
+      const res  = await fetch('/api/ops/schedules/entry', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, storeId: selectedStore, date: isoDate(panelDate) }) });
       const json = await res.json();
       if (!json.success) throw new Error(json.error || `HTTP ${res.status}`);
       toast.success('Employee added');
-      setAddingDate(null);
-      loadSchedule(selectedStore, selectedMonth);
+      if (selectedStore) await loadSchedule(selectedStore, selectedMonth);
+      panelBack();   // back to detail view, now showing the new employee
     } catch (e) { toast.error(e instanceof Error ? e.message : 'Add failed'); }
-    finally { setAddingEntry(false); }
+    finally { setPanelSaving(false); }
   }
-
 
   async function handleExport() {
     if (!selectedStore || !schedule) return;
@@ -1187,34 +1206,21 @@ export default function OpsSchedulesPage() {
         )}
       </div>
 
-      {/* Modals */}
-      {addingDate && selectedStore && (
-        <AddEntryModal
-          date={addingDate}
+      {/* One panel for everything — detail / add / edit, all on the right side */}
+      {panelDate && selectedStore && (
+        <SchedulePanel
+          date={panelDate}
+          view={panelView}
+          entries={panelEntries}
+          editEntry={panelEditEntry}
           employees={employees}
-          existingUserIds={new Set((schedule?.entries ?? []).filter(e => toLocalDateKey(e.date) === isoDate(addingDate)).map(e => e.userId))}
-          onSave={handleSaveNewEntry}
-          onClose={() => setAddingDate(null)}
-          saving={addingEntry}
-        />
-      )}
-
-      {detailDate && !editEntry && !addingDate && (
-        <DayDetailDrawer
-          date={detailDate}
-          entries={detailEntries}
-          onEdit={handleEditFromDrawer}
-          onAdd={handleAddFromDrawer}
-          onClose={() => setDetailDate(null)}
-        />
-      )}
-
-      {editEntry && (
-        <EditDayModal
-          entry={editEntry}
-          onSave={handleSaveEntry}
-          onClose={() => setEditEntry(null)}
-          saving={savingEntry}
+          saving={panelSaving}
+          onClose={closePanel}
+          onBack={panelBack}
+          onAdd={panelGoAdd}
+          onEdit={panelGoEdit}
+          onSaveNew={handleSaveNewEntry}
+          onSaveEdit={handleSaveEntry}
         />
       )}
     </div>

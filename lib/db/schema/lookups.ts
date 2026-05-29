@@ -36,16 +36,23 @@ import {
 } from 'drizzle-orm/pg-core';
 
 // ─── User Roles ───────────────────────────────────────────────────────────────
+//
+// canReceiveIssues:
+//   When true, this role is offered to employees as an issue-report destination
+//   (e.g. Operations, Finance, IT). Add a new department by inserting a role
+//   with canReceiveIssues = true — no schema or code change needed. 'employee'
+//   and 'admin' are left false so they don't appear in the picker.
 
 export const userRoles = pgTable('user_roles', {
-  id:          serial('id').primaryKey(),
-  code:        text('code').notNull().unique(),
-  label:       text('label').notNull(),
-  description: text('description'),
-  isActive:    boolean('is_active').default(true).notNull(),
-  sortOrder:   integer('sort_order').default(0).notNull(),
-  createdAt:   timestamp('created_at').defaultNow().notNull(),
-  updatedAt:   timestamp('updated_at').defaultNow().notNull(),
+  id:               serial('id').primaryKey(),
+  code:             text('code').notNull().unique(),
+  label:            text('label').notNull(),
+  description:      text('description'),
+  canReceiveIssues: boolean('can_receive_issues').default(false).notNull(),
+  isActive:         boolean('is_active').default(true).notNull(),
+  sortOrder:        integer('sort_order').default(0).notNull(),
+  createdAt:        timestamp('created_at').defaultNow().notNull(),
+  updatedAt:        timestamp('updated_at').defaultNow().notNull(),
 });
 
 // ─── Employee Types ───────────────────────────────────────────────────────────

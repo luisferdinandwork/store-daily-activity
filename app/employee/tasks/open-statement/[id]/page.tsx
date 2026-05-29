@@ -14,6 +14,7 @@ import {
   Clock,
   CloudOff,
   FileText,
+  History,
   PauseCircle,
   Save,
   X,
@@ -50,6 +51,16 @@ interface OpenStatementData {
   holdReason: string | null;
   heldBy: string | null;
   heldAt: string | null;
+}
+
+interface ParentStatement {
+  id: number;
+  shiftId: number | null;
+  date: string;
+  holdReason: string | null;
+  heldAt: string | null;
+  notes: string | null;
+  completedAt: string | null;
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -143,6 +154,8 @@ export default function OpenStatementDetailPage() {
   const [holdReason, setHoldReason] = useState('');
   const [notes, setNotes] = useState('');
 
+  const [parent, setParent] = useState<ParentStatement | null>(null);
+
   const {
     status: saveStatus,
     lastSaved,
@@ -175,6 +188,18 @@ export default function OpenStatementDetailPage() {
       setDecision(task.isDone ? 'done' : task.isOnHold ? 'hold' : null);
       setHoldReason(task.holdReason ?? '');
       setNotes(task.notes ?? '');
+
+      if (task.parentTaskId != null) {
+        try {
+          const pres = await fetch(`/api/employee/tasks/open-statement?taskId=${task.id}`, { cache: 'no-store' });
+          const pjson = await pres.json();
+          if (pres.ok && pjson.success) setParent(pjson.parent ?? null);
+        } catch {
+          /* non-fatal: panel just won't show */
+        }
+      } else {
+        setParent(null);
+      }
     } catch (error) {
       console.error('[OpenStatement] load error:', error);
       toast.error('Gagal memuat data Open Statement.');
@@ -189,6 +214,7 @@ export default function OpenStatementDetailPage() {
   }, [load]);
 
   const taskStatus = taskData?.status;
+  const isCarryOver = taskData?.parentTaskId != null;
   const readonlyHeader = taskStatus === 'completed' || taskStatus === 'verified';
 
   const scheduleId = taskData ? Number(taskData.scheduleId) : 0;
@@ -285,7 +311,8 @@ export default function OpenStatementDetailPage() {
       if (decision === 'done') {
         toast.success('Open Statement selesai! ✓', { duration: 4000 });
       } else {
-        toast.success('Open Statement ditandai On Hold. Task akan muncul untuk shift pagi berikutnya.', { duration: 5000 });
+        const nextShiftLabel = taskData.shift === 'morning' ? 'shift sore hari ini' : 'shift pagi berikutnya';
+        toast.success(`Open Statement ditandai On Hold. Task lanjutan akan muncul untuk ${nextShiftLabel}.`, { duration: 5000 });
       }
 
       router.back();
@@ -304,7 +331,7 @@ export default function OpenStatementDetailPage() {
         title="Open Statement"
         subtitle={
           taskData
-            ? `${taskData.shift.replace('_', ' ')} shift · ${taskData.status.replace('_', ' ')}`
+            ? `${isCarryOver ? 'Lanjutan · ' : ''}${taskData.shift.replace('_', ' ')} shift · ${taskData.status.replace('_', ' ')}`
             : undefined
         }
         status={taskStatus}
@@ -331,6 +358,46 @@ export default function OpenStatementDetailPage() {
               <>
                 <div className="flex-1 space-y-4 p-4 pb-32">
                   {!readonly && banner}
+
+                  {isCarryOver && (
+                    <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+                      <History className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600" />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-bold text-amber-700">Task lanjutan dari shift sebelumnya</p>
+                        <p className="mt-0.5 text-xs text-amber-600">
+                          Open Statement sebelumnya ditandai On Hold. Selesaikan (Done) atau On Hold lagi bila masih belum bisa.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {isCarryOver && parent && (
+                    <Section title="Jawaban shift sebelumnya">
+                      <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">
+                            <PauseCircle className="h-3 w-3" />
+                            On Hold
+                          </span>
+                          <span className="text-[11px] text-muted-foreground">
+                            {formatDateTime(parent.heldAt ?? parent.completedAt)}
+                          </span>
+                        </div>
+                        {parent.holdReason ? (
+                          <p className="mt-2 text-xs text-slate-700">
+                            <span className="font-semibold">Alasan hold:</span> {parent.holdReason}
+                          </p>
+                        ) : (
+                          <p className="mt-2 text-xs italic text-muted-foreground">Tidak ada alasan tercatat.</p>
+                        )}
+                        {parent.notes && (
+                          <p className="mt-1 text-xs text-slate-500">
+                            <span className="font-semibold">Catatan:</span> {parent.notes}
+                          </p>
+                        )}
+                      </div>
+                    </Section>
+                  )}
 
                   {taskData.isOnHold && (
                     <div className="flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3">
@@ -390,14 +457,14 @@ export default function OpenStatementDetailPage() {
                     </div>
                   )}
 
-                  {!readonly && !locked && (
+                  {/* {!readonly && !locked && (
                     <div className="flex items-center gap-2 rounded-xl border border-blue-100 bg-blue-50 px-4 py-2.5">
                       <Save className="h-4 w-4 flex-shrink-0 text-blue-500" />
                       <p className="text-xs text-blue-700">
                         Pilihan Open Statement otomatis tersimpan. Pilih Done jika selesai, atau On Hold jika harus dilanjutkan shift pagi berikutnya.
                       </p>
                     </div>
-                  )}
+                  )} */}
 
                   <div className="relative">
                     {lockedOverlay}

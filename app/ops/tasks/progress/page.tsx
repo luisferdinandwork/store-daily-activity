@@ -18,9 +18,11 @@ import {
   ClipboardList,
   CreditCard,
   FileText,
+  History,
   LayoutGrid,
   Loader2,
   MapPin,
+  PauseCircle,
   RefreshCw,
   Search,
   Store,
@@ -547,16 +549,26 @@ function SerahTerimaDetail({ task }: { task: FlatTask }) {
 }
 
 function EdcReconciliationDetail({ task }: { task: FlatTask }) {
+  const isCarryOver = task.parentTaskId != null;
   return (
     <div className="space-y-1 divide-y divide-slate-100">
-      <InfoRow label="Balanced" value={task.isBalanced === null ? '—'
-        : task.isBalanced
-          ? <span className="text-emerald-600">Seimbang</span>
-          : <span className="flex items-center gap-1 text-amber-600"><AlertTriangle className="h-3 w-3" />Tidak seimbang</span>}
+      <InfoRow
+        label="Balanced"
+        value={task.isBalanced == null ? '—'
+          : task.isBalanced
+            ? <span className="flex items-center gap-1 text-emerald-600"><CheckCircle2 className="h-3 w-3" />Seimbang</span>
+            : <span className="flex items-center gap-1 text-amber-600"><AlertTriangle className="h-3 w-3" />Tidak seimbang</span>}
       />
-      {task.parentTaskId && (
-        <InfoRow label="Carry-forward dari" value={`Task #${task.parentTaskId}`} />
+      {task.status === 'discrepancy' && (
+        <InfoRow label="Status" value={<span className="font-bold text-amber-600">Discrepancy — perlu tindak lanjut</span>} />
       )}
+      {isCarryOver && (
+        <InfoRow
+          label="Lanjutan dari"
+          value={<span className="flex items-center gap-1 text-indigo-600"><History className="h-3 w-3" />Task #{task.parentTaskId}</span>}
+        />
+      )}
+      {task.completedAt && <InfoRow label="Selesai pada" value={fmtTime(task.completedAt)} />}
       {task.notes && <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">{task.notes}</p>}
     </div>
   );
@@ -567,8 +579,13 @@ function EodZReportDetail({ task }: { task: FlatTask }) {
   const photos = (e.zReportPhotos as string[] | undefined) ?? [];
   return (
     <div className="space-y-1 divide-y divide-slate-100">
-      <InfoRow label="Total nominal" value={fmtAmount(e.totalNominal)} />
-      <InfoRow label="Foto Z-report"  value={photos.length > 0 ? `${photos.length} foto` : '—'} />
+      <InfoRow
+        label="Foto Z-report"
+        value={photos.length > 0
+          ? <span className="flex items-center gap-1 text-emerald-600"><Camera className="h-3 w-3" />{photos.length} foto</span>
+          : <span className="text-amber-500">Belum ada</span>}
+      />
+      {task.completedAt && <InfoRow label="Selesai pada" value={fmtTime(task.completedAt)} />}
       {task.notes && <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">{task.notes}</p>}
     </div>
   );
@@ -576,18 +593,56 @@ function EodZReportDetail({ task }: { task: FlatTask }) {
 
 function OpenStatementDetail({ task }: { task: FlatTask }) {
   const e = task.extra as Record<string, unknown>;
+  const isOnHold = !!e.isOnHold;
+  const isDone = !!e.isDone;
+  const isCarryOver = task.parentTaskId != null;
+  const heldAt = (e.heldAt as string | null | undefined) ?? null;
+  const holdReason = (e.holdReason as string | null | undefined) ?? null;
+
+  const outcome =
+    task.status === 'completed' && isOnHold
+      ? { label: 'On Hold', cls: 'text-amber-600', Icon: PauseCircle }
+      : task.status === 'completed'
+        ? { label: 'Done', cls: 'text-emerald-600', Icon: CheckCircle2 }
+        : { label: 'Belum dikerjakan', cls: 'text-amber-500', Icon: Circle };
+
+  const Outcome = outcome.Icon;
+
   return (
     <div className="space-y-1 divide-y divide-slate-100">
-      <InfoRow label="Expected"  value={fmtAmount(e.expectedAmount)} />
-      <InfoRow label="Aktual"    value={fmtAmount(e.actualAmount)} />
-      <InfoRow label="Balanced"  value={task.isBalanced === null ? '—'
-        : task.isBalanced
-          ? <span className="text-emerald-600">Seimbang</span>
-          : <span className="flex items-center gap-1 text-amber-600"><AlertTriangle className="h-3 w-3" />Tidak seimbang</span>}
+      <InfoRow
+        label="Hasil"
+        value={
+          <span className={cn('flex items-center gap-1 font-bold', outcome.cls)}>
+            <Outcome className="h-3 w-3" />
+            {outcome.label}
+          </span>
+        }
       />
-      {task.parentTaskId && (
-        <InfoRow label="Carry-forward dari" value={`Task #${task.parentTaskId}`} />
+
+      {isCarryOver && (
+        <InfoRow
+          label="Lanjutan dari"
+          value={
+            <span className="flex items-center gap-1 text-indigo-600">
+              <History className="h-3 w-3" />
+              Task #{task.parentTaskId}
+            </span>
+          }
+        />
       )}
+
+      {isOnHold && heldAt && <InfoRow label="Ditahan pada" value={fmtTime(heldAt)} />}
+
+      {isOnHold && holdReason && (
+        <div className="py-1.5">
+          <p className="text-xs font-semibold text-slate-400">Alasan hold</p>
+          <p className="mt-1 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">{holdReason}</p>
+        </div>
+      )}
+
+      {isDone && task.completedAt && <InfoRow label="Selesai pada" value={fmtTime(task.completedAt)} />}
+
       {task.notes && <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">{task.notes}</p>}
     </div>
   );
@@ -814,7 +869,15 @@ function TaskRow({ task }: { task: FlatTask }) {
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
             <div>
-              <p className="text-sm font-bold text-slate-900">{label}</p>
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-bold text-slate-900">{label}</p>
+                {task.parentTaskId != null && (
+                  <span className="inline-flex items-center gap-0.5 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-indigo-600">
+                    <History className="h-2.5 w-2.5" />
+                    Lanjutan
+                  </span>
+                )}
+              </div>
               <p className="mt-0.5 text-[11px] text-slate-400">PIC: {task.userName ?? task.userId}</p>
             </div>
             <div className="flex shrink-0 flex-col items-end gap-1">

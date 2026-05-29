@@ -1,122 +1,134 @@
 // app/api/employee/issues/route.ts
-import { NextRequest, NextResponse } from 'next/server';
+//
+// GET  — list the current employee's own reported issues (optional ?status=)
+// POST — create a new issue, routed to a chosen role/department
+
+import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
-import { issues } from '@/lib/db/schema';
-import { eq, desc, and } from 'drizzle-orm';
-import { z } from 'zod';
+import { issues, users, userRoles } from '@/lib/db/schema';
+import { and, eq, desc } from 'drizzle-orm';
 
-// ─── Validation ───────────────────────────────────────────────────────────────
+// ─── helpers ───────────────────────────────────────────────────────────────
 
-const createIssueSchema = z.object({
-  title:          z.string().min(3, 'Title must be at least 3 characters').max(120),
-  description:    z.string().min(10, 'Please describe the issue in more detail').max(2000),
-  // Accept any non-empty string — values are /public/issue-report/ paths,
-  // not necessarily full URLs, so z.string().url() would incorrectly reject them.
-  attachmentUrls: z.array(z.string().min(1)).max(5).optional(),
-});
-
-// ─── GET /api/employee/issues ─────────────────────────────────────────────────
-// Returns all issues reported by the current employee (their store).
-
-export async function GET(req: NextRequest) {
-  try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const user = session.user as { id: string; storeId?: string; role: string };
-
-    if (!user.storeId) {
-      return NextResponse.json({ error: 'No store assigned' }, { status: 400 });
-    }
-
-    const { searchParams } = new URL(req.url);
-    const statusFilter = searchParams.get('status'); // optional filter
-
-    const conditions = [eq(issues.storeId, user.storeId)];
-
-    // Employees only see their own reports unless they're ops/admin
-    if (user.role === 'employee') {
-      conditions.push(eq(issues.userId, user.id));
-    }
-
-    if (statusFilter && ['reported', 'in_review', 'resolved'].includes(statusFilter)) {
-      conditions.push(eq(issues.status, statusFilter as any));
-    }
-
-    const rows = await db
-      .select()
-      .from(issues)
-      .where(and(...conditions))
-      .orderBy(desc(issues.createdAt));
-
-    return NextResponse.json({ issues: rows });
-  } catch (err) {
-    console.error('[GET /api/employee/issues]', err);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
-  }
+function parseUrls(v: unknown): string[] {
+  if (!v) return [];
+  if (Array.isArray(v)) return v as string[];
+  try { const p = JSON.parse(v as string); return Array.isArray(p) ? p : []; }
+  catch { return []; }
 }
 
-// ─── POST /api/employee/issues ────────────────────────────────────────────────
-// Creates a new issue report for the current employee.
+type Row = {
+  id: number; title: string; description: string;
+  userId: string; storeId: number; status: string;
+  attachmentUrls: string | null; reviewedBy: string | null; reviewedAt: Date | null;
+  createdAt: Date; updatedAt: Date;
+  assignedToRoleId: number; roleCode: string | null; roleLabel: string | null;
+};
 
-export async function POST(req: NextRequest) {
-  try {
-    const session = await getServerSession(authOptions);
-    if (!session?.user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+function serialize(r: Row) {
+  return {
+    id:          String(r.id),
+    title:       r.title,
+    description: r.description,
+    userId:      r.userId,
+    storeId:     String(r.storeId),
+    status:      r.status,
+    assignedTo:  r.roleCode ? { id: r.assignedToRoleId, code: r.roleCode, label: r.roleLabel } : null,
+    reviewedBy:  r.reviewedBy,
+    reviewedAt:  r.reviewedAt,
+    attachmentUrls: parseUrls(r.attachmentUrls),
+    createdAt:   r.createdAt,
+    updatedAt:   r.updatedAt,
+  };
+}
 
-    const user = session.user as { id: string; storeId?: string };
+const ISSUE_COLUMNS = {
+  id: issues.id, title: issues.title, description: issues.description,
+  userId: issues.userId, storeId: issues.storeId, status: issues.status,
+  attachmentUrls: issues.attachmentUrls, reviewedBy: issues.reviewedBy, reviewedAt: issues.reviewedAt,
+  createdAt: issues.createdAt, updatedAt: issues.updatedAt,
+  assignedToRoleId: issues.assignedToRoleId, roleCode: userRoles.code, roleLabel: userRoles.label,
+};
 
-    if (!user.storeId) {
-      return NextResponse.json({ error: 'No store assigned to your account' }, { status: 400 });
-    }
+// ─── GET ───────────────────────────────────────────────────────────────────
 
-    const body = await req.json();
-    const parsed = createIssueSchema.safeParse(body);
+export async function GET(req: Request) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    if (!parsed.success) {
-      return NextResponse.json(
-        { error: 'Validation failed', details: parsed.error.flatten().fieldErrors },
-        { status: 422 },
-      );
-    }
+  const userId = (session.user as any).id as string;
+  const status = new URL(req.url).searchParams.get('status');
 
-    const { title, description, attachmentUrls } = parsed.data;
+  const conditions = [eq(issues.userId, userId)];
+  if (status) conditions.push(eq(issues.status, status));
 
-    // Serialize attachment URLs as a JSON string for storage in the text column.
-    // Schema: attachmentUrls text('attachment_urls') on the issues table.
-    const attachmentUrlsJson = attachmentUrls && attachmentUrls.length > 0
-      ? JSON.stringify(attachmentUrls)
-      : null;
+  const rows = await db
+    .select(ISSUE_COLUMNS)
+    .from(issues)
+    .leftJoin(userRoles, eq(issues.assignedToRoleId, userRoles.id))
+    .where(and(...conditions))
+    .orderBy(desc(issues.createdAt));
 
-    const [newIssue] = await db
-      .insert(issues)
-      .values({
-        title,
-        description,
-        userId:         user.id,
-        storeId:        user.storeId,
-        status:         'reported',
-        attachmentUrls: attachmentUrlsJson,
-      })
-      .returning();
+  return NextResponse.json({ success: true, issues: rows.map(r => serialize(r as Row)) });
+}
 
-    // Parse stored JSON back to array for the response
-    const parsedUrls = newIssue.attachmentUrls
-      ? JSON.parse(newIssue.attachmentUrls) as string[]
-      : [];
+// ─── POST ──────────────────────────────────────────────────────────────────
 
-    return NextResponse.json(
-      { issue: { ...newIssue, attachmentUrls: parsedUrls } },
-      { status: 201 },
-    );
-  } catch (err) {
-    console.error('[POST /api/employee/issues]', err);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+export async function POST(req: Request) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  const userId = (session.user as any).id as string;
+  const body = await req.json().catch(() => ({}));
+
+  const title          = String(body.title ?? '').trim();
+  const description    = String(body.description ?? '').trim();
+  const attachmentUrls = Array.isArray(body.attachmentUrls) ? body.attachmentUrls : [];
+  const assignedToRoleId = Number(body.assignedToRoleId);
+
+  if (title.length < 3)        return NextResponse.json({ error: 'Title must be at least 3 characters.' }, { status: 400 });
+  if (description.length < 10) return NextResponse.json({ error: 'Please describe the issue in more detail.' }, { status: 400 });
+  if (!assignedToRoleId)       return NextResponse.json({ error: 'Please choose who to send this to.' }, { status: 400 });
+
+  // Reporter's store comes from their profile — never trusted from the client.
+  const [me] = await db
+    .select({ id: users.id, homeStoreId: users.homeStoreId })
+    .from(users)
+    .where(eq(users.id, userId));
+
+  if (!me?.homeStoreId) {
+    return NextResponse.json({ error: 'Your account has no assigned store. Contact an admin.' }, { status: 400 });
   }
+
+  // The destination role must be a real, active, issue-receiving role.
+  const [role] = await db
+    .select({ id: userRoles.id, code: userRoles.code, label: userRoles.label })
+    .from(userRoles)
+    .where(and(
+      eq(userRoles.id, assignedToRoleId),
+      eq(userRoles.canReceiveIssues, true),
+      eq(userRoles.isActive, true),
+    ));
+
+  if (!role) return NextResponse.json({ error: 'Invalid destination.' }, { status: 400 });
+
+  const [row] = await db
+    .insert(issues)
+    .values({
+      title,
+      description,
+      userId: me.id,
+      storeId: me.homeStoreId,
+      assignedToRoleId: role.id,
+      status: 'reported',
+      attachmentUrls: JSON.stringify(attachmentUrls),
+    })
+    .returning();
+
+  return NextResponse.json({
+    success: true,
+    issue: serialize({ ...(row as any), roleCode: role.code, roleLabel: role.label } as Row),
+  });
 }

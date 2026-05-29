@@ -23,7 +23,7 @@ import {
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 
-import { Sheet, SheetContent } from '@/components/ui/sheet';
+import { Sheet, SheetContent, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
@@ -100,6 +100,11 @@ export function EmployeeDetailSheet({ employee, stores, employeeTypes, employeeR
   return (
     <Sheet open onOpenChange={(o) => !o && onClose()}>
       <SheetContent side="right" className="w-full max-w-xl p-0 sm:max-w-xl">
+        <SheetTitle className="sr-only">Detail karyawan {employee.name}</SheetTitle>
+        <SheetDescription className="sr-only">
+          Panel untuk transfer, jadwal, dan riwayat karyawan.
+        </SheetDescription>
+
         <div className="flex h-full flex-col">
           {/* ── Header ── */}
           <div className="relative shrink-0 overflow-hidden border-b border-slate-200 px-6 pb-5 pt-6 bg-gradient-to-br from-violet-50 to-white">

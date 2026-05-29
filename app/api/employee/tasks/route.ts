@@ -38,6 +38,7 @@ import { getOrCreateItemDroppingForSchedule } from "@/lib/db/utils/item-dropping
 import { getOrCreateGroomingForSchedule } from "@/lib/db/utils/grooming";
 import { getOrCreateBriefingForSchedule } from "@/lib/db/utils/briefing";
 import { getOrCreateSerahTerimaForSchedule } from "@/lib/db/utils/serah-terima";
+import { materialiseOpenStatementTask } from "@/lib/db/utils/open-statement";
 
 function startOfDay(d: Date): Date {
   const r = new Date(d);
@@ -510,19 +511,34 @@ export async function GET(request: NextRequest) {
             .orderBy(desc(eodZReportTasks.date))
         : Promise.resolve([]),
 
-      hasEveningTasks
-        ? db
-            .select()
-            .from(openStatementTasks)
-            .where(
-              and(
-                inArray(openStatementTasks.storeId, storeIds),
-                gte(openStatementTasks.date, dayStart),
-                lte(openStatementTasks.date, dayEnd),
-              ),
-            )
-            .orderBy(desc(openStatementTasks.date))
-        : Promise.resolve([]),
+      (async () => {
+        // Materialise per schedule: morning schedules pull carry-overs from a
+        // held evening (prior day); evening schedules create the primary + any
+        // same-day carry-over from a held morning. Idempotent (see util).
+        await Promise.all(
+          todaySchedules.map((s) =>
+            materialiseOpenStatementTask(
+              s.id,
+              userId,
+              s.storeId,
+              s.shiftId,
+              targetDate,
+            ),
+          ),
+        );
+
+        return db
+          .select()
+          .from(openStatementTasks)
+          .where(
+            and(
+              inArray(openStatementTasks.storeId, storeIds),
+              gte(openStatementTasks.date, dayStart),
+              lte(openStatementTasks.date, dayEnd),
+            ),
+          )
+          .orderBy(desc(openStatementTasks.date));
+      })(),
 
       (async () => {
         await Promise.all(

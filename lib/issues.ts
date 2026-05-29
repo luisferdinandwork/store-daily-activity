@@ -3,6 +3,14 @@
 
 export type IssueStatus = 'reported' | 'in_review' | 'resolved';
 
+/** A department/role an employee can route an issue to (ops, finance, it, …). */
+export interface AssignableRole {
+  id:          number;
+  code:        string;
+  label:       string;
+  description: string | null;
+}
+
 export interface Issue {
   id:             string;
   title:          string;
@@ -10,6 +18,8 @@ export interface Issue {
   userId:         string;
   storeId:        string;
   status:         IssueStatus;
+  /** Which role/department the issue was routed to. */
+  assignedTo:     { id: number; code: string; label: string } | null;
   reviewedBy:     string | null;
   reviewedAt:     string | null;
   // Stored as a JSON string in DB; deserialized to string[] by the API helpers.
@@ -19,10 +29,11 @@ export interface Issue {
 }
 
 export interface CreateIssuePayload {
-  title:          string;
-  description:    string;
-  storeName?:     string; // passed through to the upload helper for filename generation
-  attachmentUrls?: string[];
+  title:            string;
+  description:      string;
+  assignedToRoleId: number;     // required — chosen destination department
+  storeName?:       string;     // passed through to the upload helper for filename generation
+  attachmentUrls?:  string[];
 }
 
 // ─── Status helpers ───────────────────────────────────────────────────────────
@@ -41,6 +52,24 @@ export const STATUS_COLORS: Record<IssueStatus, { bg: string; text: string; dot:
 
 // ─── API helpers ──────────────────────────────────────────────────────────────
 
+/** Roles the current user may route a new issue to (Ops, Finance, IT, …). */
+export async function fetchAssignableRoles(): Promise<AssignableRole[]> {
+  const res = await fetch('/api/issues/assignable-roles', { cache: 'no-store' });
+  if (!res.ok) throw new Error('Failed to load destinations');
+  const data = await res.json();
+  return (data.roles ?? []) as AssignableRole[];
+}
+
+function normaliseIssue(raw: any): Issue {
+  return {
+    ...raw,
+    assignedTo: raw.assignedTo ?? null,
+    attachmentUrls: raw.attachmentUrls
+      ? (typeof raw.attachmentUrls === 'string' ? JSON.parse(raw.attachmentUrls) : raw.attachmentUrls)
+      : [],
+  } as Issue;
+}
+
 /**
  * Fetch the current user's issues.
  * Pass a status string to filter (e.g. 'reported').
@@ -54,15 +83,7 @@ export async function fetchIssues(status?: IssueStatus): Promise<Issue[]> {
   if (!res.ok) throw new Error('Failed to fetch issues');
   const data = await res.json();
 
-  // The DB stores attachmentUrls as a JSON string — deserialize each row.
-  return (data.issues as any[]).map(issue => ({
-    ...issue,
-    attachmentUrls: issue.attachmentUrls
-      ? (typeof issue.attachmentUrls === 'string'
-          ? JSON.parse(issue.attachmentUrls)
-          : issue.attachmentUrls)
-      : [],
-  })) as Issue[];
+  return (data.issues as any[]).map(normaliseIssue);
 }
 
 /**
@@ -82,7 +103,7 @@ export async function createIssue(payload: CreateIssuePayload): Promise<Issue> {
   }
 
   const data = await res.json();
-  return data.issue as Issue;
+  return normaliseIssue(data.issue);
 }
 
 /**

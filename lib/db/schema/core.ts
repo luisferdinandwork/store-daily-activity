@@ -241,19 +241,47 @@ export const pettyCashTransactions = pgTable('petty_cash_transactions', {
   updatedAt:   timestamp('updated_at').defaultNow().notNull(),
 });
 
+// ─── Issues ─────────────────────────────────────────────────────────────────
+//
+// When an employee reports an issue they now choose WHO it should go to. That
+// target is a *role* (Operations, Finance, IT, …) rather than a single named
+// person, so the routing keeps working as people join/leave and so new
+// departments can be added purely from the admin lookup table — no schema
+// change required.
+//
+//   assignedToRoleId → userRoles.id
+//     Only roles with userRoles.canReceiveIssues = true are offered in the UI.
+//     Whoever holds that role and is in scope (e.g. Ops for the store's area,
+//     or Ops HO globally) is responsible for following the issue up.
+//
+// `attachmentUrls` is still stored as a JSON-encoded string[] for backwards
+// compatibility with the existing upload flow.
+
 export const issues = pgTable('issues', {
   id:             serial('id').primaryKey(),
   title:          text('title').notNull(),
   description:    text('description').notNull(),
-  userId:         text('user_id').references(() => users.id).notNull(),
+
+  userId:         text('user_id').references(() => users.id).notNull(),   // reporter
   storeId:        integer('store_id').references(() => stores.id).notNull(),
-  status:         text('status').default('reported').notNull(),
-  attachmentUrls: text('attachment_urls'),
+
+  // Routing target — which role/department should handle this issue.
+  assignedToRoleId: integer('assigned_to_role_id').references(() => userRoles.id).notNull(),
+
+  status:         text('status').default('reported').notNull(), // reported | in_review | resolved
+  attachmentUrls: text('attachment_urls'),                       // JSON string[]
+
   reviewedBy:     text('reviewed_by').references(() => users.id),
   reviewedAt:     timestamp('reviewed_at'),
+
   createdAt:      timestamp('created_at').defaultNow().notNull(),
   updatedAt:      timestamp('updated_at').defaultNow().notNull(),
-});
+}, (t) => ({
+  reporterIdx:     index('issues_reporter_idx').on(t.userId),
+  storeIdx:        index('issues_store_idx').on(t.storeId),
+  assignedRoleIdx: index('issues_assigned_role_idx').on(t.assignedToRoleId),
+  statusIdx:       index('issues_status_idx').on(t.status),
+}));
 
 export const dailyReports = pgTable('daily_reports', {
   id:            serial('id').primaryKey(),
@@ -286,3 +314,6 @@ export type NewMonthlyScheduleEntry = typeof monthlyScheduleEntries.$inferInsert
 export type Schedule                = typeof schedules.$inferSelect;
 export type Attendance              = typeof attendance.$inferSelect;
 export type BreakSession            = typeof breakSessions.$inferSelect;
+export type Issue                   = typeof issues.$inferSelect;
+export type NewIssue                = typeof issues.$inferInsert;
+export type DailyReport             = typeof dailyReports.$inferSelect;
