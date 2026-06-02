@@ -169,7 +169,7 @@ export default function SetoranTaskPage() {
       taskStatus={task.status}
       requireGeo={false}
     >
-      {({ readonly, dis, accessStatus, banner, lockedOverlay }) => (
+      {({ readonly, dis, locked, banner, lockedOverlay }) => (
         <SetoranPageBody
           task={task}
           actualReceivedAmount={actualReceivedAmount}
@@ -189,7 +189,7 @@ export default function SetoranTaskPage() {
           isOverStored={isOverStored}
           readonly={readonly}
           dis={dis}
-          accessOk={accessStatus?.status === 'ok'}
+          accessOk={!locked} 
           banner={banner}
           lockedOverlay={lockedOverlay}
           submitting={submitting}
@@ -378,7 +378,7 @@ function SetoranPageBody(props: BodyProps) {
 
   const submitHint = (() => {
     if (readonly) return undefined;
-    if (!accessOk) return undefined; // banner already explains why
+    if (!accessOk) return 'Pastikan kamu sudah absen masuk.'; // ← was: return undefined
     if (storedNumber <= 0) return 'Isi nominal yang disetor terlebih dahulu.';
     if (isOverStored) return 'Uang disetor melebihi total wajib disetor.';
     if (!resiPhoto) return 'Foto resi belum diupload.';

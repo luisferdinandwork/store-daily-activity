@@ -4,6 +4,10 @@ import { eq, and, gte, lte, inArray, sql, isNull, or } from 'drizzle-orm';
 import {
   schedules, stores, shifts, attendance,
   monthlySchedules, monthlyScheduleEntries,
+
+  storeOpeningTasks,
+  setoranTasks,
+
   storeFrontTasks,
   cekBinTasks,
   storeBins,
@@ -14,8 +18,12 @@ import {
   edcReconciliationTasks,
   eodZReportTasks,
   openStatementTasks,
-  groomingTasks, itemDroppingTasks,
+  groomingTasks,
+  itemDroppingTasks,
   serahTerimaTasks,
+
+  type StoreOpeningTask,
+  type SetoranTask,
   type StoreFrontTask,
   type CekBinTask,
   type VmChecklistTask,
@@ -172,20 +180,25 @@ export interface SubmitGroomingInput {
 
 
 export interface FlatTask {
-  id:           number;
-  type:         string;
-  scheduleId:   number;
-  userId:       string;
-  userName:     string | null;
-  storeId:      number;
-  shift:        'morning' | 'evening' | 'full_day' | null;
-  date:         string;
-  status:       string | null;
-  notes:        string | null;
-  completedAt:  string | null;
-  isBalanced:   boolean | null;
-  parentTaskId: number | null;
-  extra:        Record<string, unknown>;
+  id:              number;
+  type:            string;
+  scheduleId:      number;
+  userId:          string;
+  userName:        string | null;
+  completedBy:     string | null;
+  completedByName: string | null;
+  verifiedBy:      string | null;
+  verifiedByName:  string | null;
+  verifiedAt:      string | null;
+  storeId:         number;
+  shift:           'morning' | 'evening' | 'full_day' | null;
+  date:            string;
+  status:          string | null;
+  notes:           string | null;
+  completedAt:     string | null;
+  isBalanced:      boolean | null;
+  parentTaskId:    number | null;
+  extra:           Record<string, unknown>;
 }
 
 export interface StoreTaskSummary {
@@ -516,6 +529,28 @@ export async function materialiseTasksForSchedule(
         .limit(1).then(r => r[0]),
       () => db.insert(storeFrontTasks).values(base));
 
+    await insertShared('storeOpening',
+      () => db.select({ id: storeOpeningTasks.id }).from(storeOpeningTasks)
+        .where(and(
+          eq(storeOpeningTasks.storeId, sched.storeId),
+          eq(storeOpeningTasks.date, dayStart),
+        ))
+        .limit(1).then(r => r[0]),
+      () => db.insert(storeOpeningTasks).values(base));
+
+    await insertShared('setoran',
+      () => db.select({ id: setoranTasks.id }).from(setoranTasks)
+        .where(and(
+          eq(setoranTasks.storeId, sched.storeId),
+          eq(setoranTasks.date, dayStart),
+        ))
+        .limit(1).then(r => r[0]),
+      () => db.insert(setoranTasks).values({
+        ...base,
+        carriedDeficit: '0',
+        unpaidAmount: '0',
+      }));
+
     await insertShared('cekBin',
       () => db.select({ id: cekBinTasks.id }).from(cekBinTasks)
         .where(and(eq(cekBinTasks.storeId, sched.storeId), eq(cekBinTasks.date, dayStart)))
@@ -698,6 +733,17 @@ export async function materialiseTasksForMonth(
 export async function deleteTasksForSchedule(scheduleId: number): Promise<void> {
     await Promise.all([
     // Morning tasks
+    db.delete(storeOpeningTasks)
+      .where(and(
+        eq(storeOpeningTasks.scheduleId, scheduleId),
+        inArray(storeOpeningTasks.status, PENDING_STATUSES),
+      )),
+
+    db.delete(setoranTasks)
+      .where(and(
+        eq(setoranTasks.scheduleId, scheduleId),
+        inArray(setoranTasks.status, PENDING_STATUSES),
+      )),
     db.delete(cekBinTasks)
       .where(and(eq(cekBinTasks.scheduleId, scheduleId), inArray(cekBinTasks.status, PENDING_STATUSES))),
     db.delete(storeFrontTasks)
@@ -1125,9 +1171,12 @@ export async function submitGrooming(
 
 export async function getTasksForSchedule(scheduleId: number) {
   const [
+    storeOpening, setoran,
     storeFront, cekBin, vmChecklist, marketingCheck, itemDropping, briefing,
     serahTerima, edcReconciliation, eodZReport, openStatement, grooming,
   ] = await Promise.all([
+    db.select().from(storeOpeningTasks)      .where(eq(storeOpeningTasks.scheduleId,      scheduleId)).limit(1),
+    db.select().from(setoranTasks)           .where(eq(setoranTasks.scheduleId,           scheduleId)).limit(1),
     db.select().from(storeFrontTasks)        .where(eq(storeFrontTasks.scheduleId,        scheduleId)).limit(1),
     db.select().from(cekBinTasks)            .where(eq(cekBinTasks.scheduleId,            scheduleId)).limit(1),
     db.select().from(vmChecklistTasks)       .where(eq(vmChecklistTasks.scheduleId,       scheduleId)).limit(1),
@@ -1142,6 +1191,8 @@ export async function getTasksForSchedule(scheduleId: number) {
   ]);
 
   return {
+    storeOpening:      storeOpening[0]      ?? null,
+    setoran:           setoran[0]           ?? null,
     storeFront:        storeFront[0]        ?? null,
     cekBin:            cekBin[0]            ?? null,
     vmChecklist:       vmChecklist[0]       ?? null,
@@ -1176,9 +1227,14 @@ export async function getDailyTaskSummary(storeId: number, date: Date) {
   }
 
   const [
+    storeOpening, setoran,
     storeFront, cekBin, vmChecklist, marketingCheck, itemDropping, briefing,
     serahTerima, edcReconciliation, eodZReport, openStatement, grooming,
   ] = await Promise.all([
+    db.select({ status: storeOpeningTasks.status,      count: sql<number>`count(*)::int` }).from(storeOpeningTasks)
+      .where(and(eq(storeOpeningTasks.storeId, storeId),      gte(storeOpeningTasks.date, dayStart),      lte(storeOpeningTasks.date, dayEnd))).groupBy(storeOpeningTasks.status).then(summarise),
+    db.select({ status: setoranTasks.status,           count: sql<number>`count(*)::int` }).from(setoranTasks)
+      .where(and(eq(setoranTasks.storeId, storeId),           gte(setoranTasks.date, dayStart),           lte(setoranTasks.date, dayEnd))).groupBy(setoranTasks.status).then(summarise),
     db.select({ status: storeFrontTasks.status,        count: sql<number>`count(*)::int` }).from(storeFrontTasks)
       .where(and(eq(storeFrontTasks.storeId, storeId),        gte(storeFrontTasks.date, dayStart),        lte(storeFrontTasks.date, dayEnd))).groupBy(storeFrontTasks.status).then(summarise),
     db.select({ status: cekBinTasks.status,            count: sql<number>`count(*)::int` }).from(cekBinTasks)
@@ -1203,94 +1259,212 @@ export async function getDailyTaskSummary(storeId: number, date: Date) {
       .where(and(eq(groomingTasks.storeId, storeId),          gte(groomingTasks.date, dayStart),          lte(groomingTasks.date, dayEnd))).groupBy(groomingTasks.status).then(summarise),
   ]);
 
-  return { storeFront, cekBin, vmChecklist, marketingCheck, itemDropping, briefing, serahTerima, edcReconciliation, eodZReport, openStatement, grooming };
+  return { storeOpening, setoran, storeFront, cekBin, vmChecklist, marketingCheck, itemDropping, briefing, serahTerima, edcReconciliation, eodZReport, openStatement, grooming };
 }
 
 function parsePhotosField(raw: unknown): string[] {
   if (raw == null) return [];
   if (Array.isArray(raw)) return raw as string[];
   if (typeof raw !== 'string') return [];
-  try { const p = JSON.parse(raw); return Array.isArray(p) ? p : []; } catch { return []; }
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
+
 function buildExtra(row: Record<string, unknown>, photoFields: string[] = []): Record<string, unknown> {
-  // Fields that live on TaskBase / FlatTask top-level — skip from `extra`
   const skip = new Set([
     'id', 'scheduleId', 'userId', 'storeId', 'shiftId', 'date',
-    'status', 'notes', 'completedAt',
-    'createdAt', 'updatedAt', 'submittedLat', 'submittedLng',
-    'isBalanced', 'parentTaskId',
-    // Discrepancy timing columns — surfaced via dedicated pages, not needed in card extra
+    'status', 'notes', 'completedAt', 'createdAt', 'updatedAt',
+    'submittedLat', 'submittedLng', 'isBalanced', 'parentTaskId',
+    'verifiedBy', 'verifiedAt',
     'discrepancyStartedAt', 'discrepancyResolvedAt', 'discrepancyDurationMinutes',
-    'expectedFetchedAt', 'expectedSnapshot',
-    'expectedAmount', 'actualAmount', 'totalNominal',
+    'expectedFetchedAt', 'expectedSnapshot', 'expectedAmount', 'actualAmount', 'totalNominal',
   ]);
+
   const extra: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(row)) {
-    if (skip.has(k)) continue;
-    extra[k] = photoFields.includes(k) ? parsePhotosField(v) : v;
+
+  for (const [key, value] of Object.entries(row)) {
+    if (skip.has(key)) continue;
+    extra[key] = photoFields.includes(key) ? parsePhotosField(value) : value;
   }
+
   return extra;
+}
+
+function isUserIdLike(value: unknown): value is string {
+  return typeof value === 'string' && value.length >= 10;
+}
+
+const ACTOR_KEYS = new Set([
+  'userId', 'completedBy', 'verifiedBy', 'claimedBy', 'sourceUserId',
+]);
+
+function isActorKey(key: string): boolean {
+  return ACTOR_KEYS.has(key) || key.endsWith('By');
+}
+
+async function getUserNameMapFromRows(rows: Record<string, unknown>[]) {
+  const ids = new Set<string>();
+
+  for (const row of rows) {
+    for (const [key, value] of Object.entries(row)) {
+      if (isActorKey(key) && typeof value === 'string' && value.length > 0) {
+        ids.add(value);
+      }
+    }
+  }
+
+  if (ids.size === 0) return new Map<string, string>();
+
+  const rowsUsers = await db
+    .select({ id: users.id, name: users.name })
+    .from(users)
+    .where(inArray(users.id, [...ids]));
+
+  return new Map(rowsUsers.map((u) => [u.id, u.name]));
+}
+
+function addActorNamesToExtra(
+  extra: Record<string, unknown>,
+  userNameById: Map<string, string>,
+) {
+  const out = { ...extra };
+
+  for (const [key, value] of Object.entries(extra)) {
+    if (
+      typeof value === 'string' &&
+      (
+        key === 'completedBy' ||
+        key === 'verifiedBy' ||
+        key === 'claimedBy' ||
+        key === 'sourceUserId' ||
+        key.endsWith('By')
+      )
+    ) {
+      out[`${key}Name`] = userNameById.get(value) ?? value;
+    }
+  }
+
+  return out;
 }
 
 export async function getFlatTasksForStoreDate(storeId: number, date: Date): Promise<FlatTask[]> {
   const dayStart = startOfDay(date);
-  const dayEnd   = endOfDay(date);
+  const dayEnd = endOfDay(date);
 
   const shiftRows = await db.select({ id: shifts.id, code: shifts.code }).from(shifts);
   const shiftCodeById = new Map<number, 'morning' | 'evening' | 'full_day'>(
-    shiftRows.map(s => [s.id, s.code as 'morning' | 'evening' | 'full_day']),
+    shiftRows.map((s) => [s.id, s.code as 'morning' | 'evening' | 'full_day']),
   );
 
   async function loadTable(table: any, type: string, photoFields: string[]): Promise<FlatTask[]> {
-    const rows = await db.select({ task: table, userName: users.name })
-      .from(table).leftJoin(users, eq(table.userId, users.id))
-      .where(and(eq(table.storeId, storeId), gte(table.date, dayStart), lte(table.date, dayEnd)));
+    const rows = await db
+      .select({ task: table, userName: users.name })
+      .from(table)
+      .leftJoin(users, eq(table.userId, users.id))
+      .where(and(
+        eq(table.storeId, storeId),
+        gte(table.date, dayStart),
+        lte(table.date, dayEnd),
+      ));
+
+    const rawTasks = rows.map((r) => r.task as Record<string, unknown>);
+    const userNameById = await getUserNameMapFromRows(rawTasks);
 
     return rows.map(({ task, userName }) => {
       const t = task as any;
+      const extra = addActorNamesToExtra(buildExtra(t, photoFields), userNameById);
+
       return {
-        id:          t.id,
+        id: t.id,
         type,
-        scheduleId:  t.scheduleId,
-        userId:      t.userId,
-        userName:    userName ?? null,
-        storeId:     t.storeId,
-        shift:       shiftCodeById.get(t.shiftId) ?? null,
-        date:        t.date instanceof Date ? t.date.toISOString() : String(t.date),
-        status:      t.status ?? null,
-        notes:       t.notes ?? null,
+        scheduleId: t.scheduleId,
+        userId: t.userId,
+        userName: userName ?? userNameById.get(t.userId) ?? null,
+        completedBy: t.completedBy ?? null,
+        completedByName: t.completedBy ? userNameById.get(t.completedBy) ?? t.completedBy : null,
+        verifiedBy: t.verifiedBy ?? null,
+        verifiedByName: t.verifiedBy ? userNameById.get(t.verifiedBy) ?? t.verifiedBy : null,
+        verifiedAt: t.verifiedAt instanceof Date ? t.verifiedAt.toISOString() : t.verifiedAt ?? null,
+        storeId: t.storeId,
+        shift: shiftCodeById.get(t.shiftId) ?? null,
+        date: t.date instanceof Date ? t.date.toISOString() : String(t.date),
+        status: t.status ?? null,
+        notes: t.notes ?? null,
         completedAt: t.completedAt instanceof Date ? t.completedAt.toISOString() : null,
-        isBalanced:  t.isBalanced ?? null,
+        isBalanced: t.isBalanced ?? null,
         parentTaskId: t.parentTaskId ?? null,
-        extra:       buildExtra(t, photoFields),
+        extra,
       };
     });
   }
 
   const [
-    storeFront, cekBin, vmChecklist, marketingCheck, itemDropping, briefing,
-    serahTerima, edcReconciliation, eodZReport, openStatement, grooming,
+    storeOpening,
+    setoran,
+    storeFront,
+    cekBin,
+    vmChecklist,
+    marketingCheck,
+    itemDropping,
+    briefing,
+    serahTerima,
+    edcReconciliation,
+    eodZReport,
+    openStatement,
+    grooming,
   ] = await Promise.all([
-    loadTable(storeFrontTasks,        'store_front',        ['storefrontPhotos', 'rollingDoorClosedPhoto']),
-    loadTable(cekBinTasks,            'cek_bin',            []),
-    loadTable(vmChecklistTasks,       'vm_checklist',       []),
-    loadTable(marketingCheckTasks,    'marketing_check',    []),
-    loadTable(itemDroppingTasks,      'item_dropping',      ['droppingPhotos', 'receivePhotos']),
-    loadTable(briefingTasks,          'briefing',           []),
-    loadTable(serahTerimaTasks,       'serah_terima',       []),
+    loadTable(storeOpeningTasks, 'store_opening', [
+      'cashDrawerPhotos',
+      'cashierDeskPhotos',
+      'fiveRAreaKasirPhotos',
+      'fiveRAreaDepanPhotos',
+      'fiveRAreaKananPhotos',
+      'fiveRAreaKiriPhotos',
+      'fiveRAreaGudangPhotos',
+    ]),
+    loadTable(setoranTasks, 'setoran', [
+      'resiPhoto',
+      'atmCardSelfiePhoto',
+    ]),
+    loadTable(storeFrontTasks, 'store_front', [
+      'storefrontPhotos',
+      'rollingDoorClosedPhoto',
+    ]),
+    loadTable(cekBinTasks, 'cek_bin', []),
+    loadTable(vmChecklistTasks, 'vm_checklist', []),
+    loadTable(marketingCheckTasks, 'marketing_check', []),
+    loadTable(itemDroppingTasks, 'item_dropping', []),
+    loadTable(briefingTasks, 'briefing', []),
+    loadTable(serahTerimaTasks, 'serah_terima', []),
     loadTable(edcReconciliationTasks, 'edc_reconciliation', []),
-    loadTable(eodZReportTasks,        'eod_z_report',       ['zReportPhotos']),
-    loadTable(openStatementTasks,     'open_statement',     []),
-    loadTable(groomingTasks,          'grooming',           ['selfiePhotos']),
+    loadTable(eodZReportTasks, 'eod_z_report', ['zReportPhotos']),
+    loadTable(openStatementTasks, 'open_statement', []),
+    loadTable(groomingTasks, 'grooming', ['selfiePhotos']),
   ]);
 
   const all = [
-    ...storeFront, ...cekBin, ...vmChecklist, ...marketingCheck, ...itemDropping, ...briefing,
-    ...serahTerima, ...edcReconciliation, ...eodZReport, ...openStatement, ...grooming,
+    ...storeOpening,
+    ...setoran,
+    ...storeFront,
+    ...cekBin,
+    ...vmChecklist,
+    ...marketingCheck,
+    ...itemDropping,
+    ...briefing,
+    ...serahTerima,
+    ...edcReconciliation,
+    ...eodZReport,
+    ...openStatement,
+    ...grooming,
   ];
 
   const shiftOrder: Record<string, number> = { morning: 0, full_day: 1, evening: 2 };
+
   all.sort((a, b) => {
     const sa = a.shift ? shiftOrder[a.shift] ?? 3 : 3;
     const sb = b.shift ? shiftOrder[b.shift] ?? 3 : 3;
@@ -1298,6 +1472,7 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
     if (a.type !== b.type) return a.type.localeCompare(b.type);
     return (a.userName ?? '').localeCompare(b.userName ?? '');
   });
+
   return all;
 }
 

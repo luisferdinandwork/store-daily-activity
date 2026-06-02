@@ -65,6 +65,7 @@ CREATE TABLE "issues" (
 	"description" text NOT NULL,
 	"user_id" text NOT NULL,
 	"store_id" integer NOT NULL,
+	"assigned_to_role_id" integer NOT NULL,
 	"status" text DEFAULT 'reported' NOT NULL,
 	"attachment_urls" text,
 	"reviewed_by" text,
@@ -203,6 +204,7 @@ CREATE TABLE "user_roles" (
 	"code" text NOT NULL,
 	"label" text NOT NULL,
 	"description" text,
+	"can_receive_issues" boolean DEFAULT false NOT NULL,
 	"is_active" boolean DEFAULT true NOT NULL,
 	"sort_order" integer DEFAULT 0 NOT NULL,
 	"created_at" timestamp DEFAULT now() NOT NULL,
@@ -297,6 +299,8 @@ CREATE TABLE "edc_reconciliation_tasks" (
 CREATE TABLE "edc_transaction_rows" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"edc_task_id" integer NOT NULL,
+	"edc_terminal_id" integer,
+	"edc_name" text DEFAULT 'BCA' NOT NULL,
 	"transaction_type" "tx_type" NOT NULL,
 	"expected_amount" numeric(14, 2),
 	"expected_count" integer,
@@ -448,6 +452,11 @@ CREATE TABLE "open_statement_tasks" (
 	"expected_fetched_at" timestamp,
 	"actual_amount" numeric(14, 2),
 	"is_balanced" boolean,
+	"is_done" boolean DEFAULT false NOT NULL,
+	"is_on_hold" boolean DEFAULT false NOT NULL,
+	"hold_reason" text,
+	"held_by" text,
+	"held_at" timestamp,
 	"discrepancy_started_at" timestamp,
 	"discrepancy_resolved_at" timestamp,
 	"discrepancy_duration_minutes" integer,
@@ -584,6 +593,18 @@ CREATE TABLE "store_bins" (
 	CONSTRAINT "store_bins_store_bin_unique" UNIQUE("store_id","bin")
 );
 --> statement-breakpoint
+CREATE TABLE "store_edc_terminals" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"store_id" integer NOT NULL,
+	"edc_name" text NOT NULL,
+	"terminal_code" text,
+	"is_active" boolean DEFAULT true NOT NULL,
+	"sort_order" integer DEFAULT 0 NOT NULL,
+	"created_at" timestamp DEFAULT now() NOT NULL,
+	"updated_at" timestamp DEFAULT now() NOT NULL,
+	CONSTRAINT "store_edc_terminals_store_name_unique" UNIQUE("store_id","edc_name")
+);
+--> statement-breakpoint
 CREATE TABLE "store_front_tasks" (
 	"id" serial PRIMARY KEY NOT NULL,
 	"schedule_id" integer NOT NULL,
@@ -710,6 +731,7 @@ ALTER TABLE "daily_reports" ADD CONSTRAINT "daily_reports_issue_id_issues_id_fk"
 ALTER TABLE "daily_reports" ADD CONSTRAINT "daily_reports_verified_by_users_id_fk" FOREIGN KEY ("verified_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "issues" ADD CONSTRAINT "issues_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "issues" ADD CONSTRAINT "issues_store_id_stores_id_fk" FOREIGN KEY ("store_id") REFERENCES "public"."stores"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "issues" ADD CONSTRAINT "issues_assigned_to_role_id_user_roles_id_fk" FOREIGN KEY ("assigned_to_role_id") REFERENCES "public"."user_roles"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "issues" ADD CONSTRAINT "issues_reviewed_by_users_id_fk" FOREIGN KEY ("reviewed_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "monthly_schedule_entries" ADD CONSTRAINT "monthly_schedule_entries_monthly_schedule_id_monthly_schedules_id_fk" FOREIGN KEY ("monthly_schedule_id") REFERENCES "public"."monthly_schedules"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "monthly_schedule_entries" ADD CONSTRAINT "monthly_schedule_entries_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -757,6 +779,7 @@ ALTER TABLE "edc_reconciliation_tasks" ADD CONSTRAINT "edc_reconciliation_tasks_
 ALTER TABLE "edc_reconciliation_tasks" ADD CONSTRAINT "edc_reconciliation_tasks_shift_id_shifts_id_fk" FOREIGN KEY ("shift_id") REFERENCES "public"."shifts"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "edc_reconciliation_tasks" ADD CONSTRAINT "edc_reconciliation_tasks_verified_by_users_id_fk" FOREIGN KEY ("verified_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "edc_transaction_rows" ADD CONSTRAINT "edc_transaction_rows_edc_task_id_edc_reconciliation_tasks_id_fk" FOREIGN KEY ("edc_task_id") REFERENCES "public"."edc_reconciliation_tasks"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "edc_transaction_rows" ADD CONSTRAINT "edc_transaction_rows_edc_terminal_id_store_edc_terminals_id_fk" FOREIGN KEY ("edc_terminal_id") REFERENCES "public"."store_edc_terminals"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "eod_z_report_tasks" ADD CONSTRAINT "eod_z_report_tasks_schedule_id_schedules_id_fk" FOREIGN KEY ("schedule_id") REFERENCES "public"."schedules"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "eod_z_report_tasks" ADD CONSTRAINT "eod_z_report_tasks_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "eod_z_report_tasks" ADD CONSTRAINT "eod_z_report_tasks_store_id_stores_id_fk" FOREIGN KEY ("store_id") REFERENCES "public"."stores"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -793,6 +816,7 @@ ALTER TABLE "open_statement_tasks" ADD CONSTRAINT "open_statement_tasks_schedule
 ALTER TABLE "open_statement_tasks" ADD CONSTRAINT "open_statement_tasks_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "open_statement_tasks" ADD CONSTRAINT "open_statement_tasks_store_id_stores_id_fk" FOREIGN KEY ("store_id") REFERENCES "public"."stores"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "open_statement_tasks" ADD CONSTRAINT "open_statement_tasks_shift_id_shifts_id_fk" FOREIGN KEY ("shift_id") REFERENCES "public"."shifts"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "open_statement_tasks" ADD CONSTRAINT "open_statement_tasks_held_by_users_id_fk" FOREIGN KEY ("held_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "open_statement_tasks" ADD CONSTRAINT "open_statement_tasks_verified_by_users_id_fk" FOREIGN KEY ("verified_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "serah_terima_items" ADD CONSTRAINT "serah_terima_items_task_id_serah_terima_tasks_id_fk" FOREIGN KEY ("task_id") REFERENCES "public"."serah_terima_tasks"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "serah_terima_items" ADD CONSTRAINT "serah_terima_items_store_id_stores_id_fk" FOREIGN KEY ("store_id") REFERENCES "public"."stores"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -829,6 +853,7 @@ ALTER TABLE "setoran_tasks" ADD CONSTRAINT "setoran_tasks_completed_by_users_id_
 ALTER TABLE "setoran_tasks" ADD CONSTRAINT "setoran_tasks_completed_by_schedule_id_schedules_id_fk" FOREIGN KEY ("completed_by_schedule_id") REFERENCES "public"."schedules"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "setoran_tasks" ADD CONSTRAINT "setoran_tasks_verified_by_users_id_fk" FOREIGN KEY ("verified_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "store_bins" ADD CONSTRAINT "store_bins_store_id_stores_id_fk" FOREIGN KEY ("store_id") REFERENCES "public"."stores"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "store_edc_terminals" ADD CONSTRAINT "store_edc_terminals_store_id_stores_id_fk" FOREIGN KEY ("store_id") REFERENCES "public"."stores"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "store_front_tasks" ADD CONSTRAINT "store_front_tasks_schedule_id_schedules_id_fk" FOREIGN KEY ("schedule_id") REFERENCES "public"."schedules"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "store_front_tasks" ADD CONSTRAINT "store_front_tasks_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "store_front_tasks" ADD CONSTRAINT "store_front_tasks_store_id_stores_id_fk" FOREIGN KEY ("store_id") REFERENCES "public"."stores"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -861,6 +886,10 @@ ALTER TABLE "vm_checklist_tasks" ADD CONSTRAINT "vm_checklist_tasks_user_id_user
 ALTER TABLE "vm_checklist_tasks" ADD CONSTRAINT "vm_checklist_tasks_store_id_stores_id_fk" FOREIGN KEY ("store_id") REFERENCES "public"."stores"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "vm_checklist_tasks" ADD CONSTRAINT "vm_checklist_tasks_shift_id_shifts_id_fk" FOREIGN KEY ("shift_id") REFERENCES "public"."shifts"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "vm_checklist_tasks" ADD CONSTRAINT "vm_checklist_tasks_verified_by_users_id_fk" FOREIGN KEY ("verified_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "issues_reporter_idx" ON "issues" USING btree ("user_id");--> statement-breakpoint
+CREATE INDEX "issues_store_idx" ON "issues" USING btree ("store_id");--> statement-breakpoint
+CREATE INDEX "issues_assigned_role_idx" ON "issues" USING btree ("assigned_to_role_id");--> statement-breakpoint
+CREATE INDEX "issues_status_idx" ON "issues" USING btree ("status");--> statement-breakpoint
 CREATE INDEX "user_store_assignments_user_active_idx" ON "user_store_assignments" USING btree ("user_id","is_active");--> statement-breakpoint
 CREATE INDEX "user_store_assignments_store_active_idx" ON "user_store_assignments" USING btree ("store_id","is_active");--> statement-breakpoint
 CREATE INDEX "user_store_assignments_temp_expiry_idx" ON "user_store_assignments" USING btree ("is_temporary","is_active","effective_to");--> statement-breakpoint
@@ -874,4 +903,5 @@ CREATE INDEX "serah_terima_items_receiver_task_idx" ON "serah_terima_items" USIN
 CREATE INDEX "serah_terima_items_store_target_shift_idx" ON "serah_terima_items" USING btree ("store_id","target_shift_id");--> statement-breakpoint
 CREATE INDEX "serah_terima_tasks_store_date_shift_idx" ON "serah_terima_tasks" USING btree ("store_id","date","shift_id");--> statement-breakpoint
 CREATE INDEX "setoran_money_storage_store_date_idx" ON "setoran_money_storage" USING btree ("store_id","date");--> statement-breakpoint
-CREATE INDEX "store_bins_store_idx" ON "store_bins" USING btree ("store_id");
+CREATE INDEX "store_bins_store_idx" ON "store_bins" USING btree ("store_id");--> statement-breakpoint
+CREATE INDEX "store_edc_terminals_store_idx" ON "store_edc_terminals" USING btree ("store_id");

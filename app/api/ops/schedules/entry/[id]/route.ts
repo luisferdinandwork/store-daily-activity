@@ -4,7 +4,7 @@ import { getServerSession }           from 'next-auth';
 import { authOptions }                from '@/lib/auth';
 import { updateMonthlyScheduleEntry } from '@/lib/schedule-utils';
 import { db }                         from '@/lib/db';
-import { monthlyScheduleEntries }     from '@/lib/db/schema';
+import { monthlyScheduleEntries, monthlySchedules } from '@/lib/db/schema';
 import { eq }                         from 'drizzle-orm';
 import { getOpsActor, assertStoreInActorArea } from '../../_helpers';
 
@@ -22,14 +22,16 @@ export async function PATCH(
   const entryId = Number(id);
   if (isNaN(entryId)) return NextResponse.json({ success: false, error: 'Invalid entry id.' }, { status: 400 });
 
-  // Look up the entry's storeId so we can verify it's in the actor's area
+  // storeId lives on monthlySchedules — resolve it via the entry's join.
   const [entry] = await db
-    .select({ storeId: monthlyScheduleEntries.storeId })
+    .select({ storeId: monthlySchedules.storeId })
     .from(monthlyScheduleEntries)
+    .innerJoin(monthlySchedules, eq(monthlyScheduleEntries.monthlyScheduleId, monthlySchedules.id))
     .where(eq(monthlyScheduleEntries.id, entryId))
     .limit(1);
   if (!entry) return NextResponse.json({ success: false, error: 'Entry not found.' }, { status: 404 });
 
+  // Area OPS → only their area; HO → any store (handled inside the helper).
   const areaErr = await assertStoreInActorArea(actor, entry.storeId);
   if (areaErr) return NextResponse.json({ success: false, error: areaErr }, { status: 403 });
 

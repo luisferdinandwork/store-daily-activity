@@ -6,41 +6,34 @@ import {
   AlertCircle,
   AlertTriangle,
   ArrowRight,
-  Box,
   CalendarDays,
   CalendarRange,
-  Camera,
-  CheckCircle2,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Circle,
   ClipboardList,
-  CreditCard,
-  FileText,
   History,
   LayoutGrid,
   Loader2,
   MapPin,
-  PauseCircle,
   RefreshCw,
   Search,
   Store,
   User,
-  Users,
-  Wallet,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import {
+  type FlatTask,
+  type TaskStatus,
+  TASK_LABELS,
+  TASK_ICONS,
+  fmtTime,
+  statusBadgeClass,
+  statusLabel,
+  TaskDetailView,
+} from './task-detail';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-
-type TaskStatus =
-  | 'pending'
-  | 'in_progress'
-  | 'completed'
-  | 'discrepancy'
-  | 'verified'
-  | 'rejected';
 
 type StoreSummary = {
   pending: number;
@@ -73,25 +66,6 @@ type OverviewResponse = {
   stores: StoreRow[];
 };
 
-type FlatTask = {
-  id: string;
-  type: string;
-  scheduleId: string;
-  userId: string;
-  userName: string | null;
-  storeId: string;
-  shift: 'morning' | 'evening' | 'full_day' | null;
-  date: string;
-  status: TaskStatus | string | null;
-  notes: string | null;
-  completedAt: string | null;
-  verifiedBy: string | null;
-  verifiedAt: string | null;
-  isBalanced: boolean | null;
-  parentTaskId: number | null;
-  extra: Record<string, unknown>;
-};
-
 type DetailResponse = {
   success: boolean;
   error?: string;
@@ -121,39 +95,18 @@ type DayMatrixRow = {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const TASK_LABELS: Record<string, string> = {
-  store_front: 'Store Front',
-  store_opening: 'Store Opening',
-  setoran: 'Setoran',
-  cek_bin: 'Cek Bin',
-  vm_checklist: 'VM Checklist',
-  marketing_check: 'Marketing Check',
-  item_dropping: 'Item Dropping',
-  briefing: 'Briefing',
-  edc_reconciliation: 'EDC Reconciliation',
-  eod_z_report: 'EOD Z Report',
-  open_statement: 'Open Statement',
-  grooming: 'Grooming',
-  serah_terima: 'Serah Terima',
-};
-
-const TASK_ICONS: Record<string, React.ElementType> = {
-  store_opening: Store,
-  store_front: Camera,
-  setoran: Wallet,
-  cek_bin: Box,
-  vm_checklist: ClipboardList,
-  marketing_check: ClipboardList,
-  item_dropping: Box,
-  briefing: Users,
-  edc_reconciliation: CreditCard,
-  eod_z_report: FileText,
-  open_statement: ClipboardList,
-  grooming: User,
-  serah_terima: ClipboardList,
-};
-
 const ID_WEEKDAY_SHORT = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
+
+// ─── Task identity ────────────────────────────────────────────────────────────
+//
+// IMPORTANT: every task type is a separate DB table with its own auto-increment
+// id, so `task.id` is NOT unique across types (a cek_bin row and a store_front
+// row can both be id "3"). Always identify a task by `type-id`, otherwise a
+// lookup by id alone returns the wrong row (usually whichever sorts first).
+
+function taskKey(t: Pick<FlatTask, 'type' | 'id'>): string {
+  return `${t.type}-${t.id}`;
+}
 
 // ─── Date helpers (local-time, ISO-style YYYY-MM-DD keys) ────────────────────
 
@@ -209,17 +162,6 @@ function fmtMonthLabel(date: Date) {
   return date.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
 }
 
-function fmtTime(iso: string | null | undefined) {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
-}
-
-function fmtAmount(val: unknown): string {
-  const n = Number(val);
-  if (!val || isNaN(n)) return '—';
-  return `Rp ${n.toLocaleString('id-ID')}`;
-}
-
 /** 0% = amber, in-progress = indigo, 100% = green */
 function progressBarClass(rate: number): string {
   if (rate === 0) return 'bg-amber-300';
@@ -237,24 +179,6 @@ function progressRingColor(rate: number): string {
   if (rate === 0) return '#fbbf24';
   if (rate >= 100) return '#10b981';
   return '#6366f1';
-}
-
-function statusBadgeClass(status: string | null | undefined) {
-  switch (status) {
-    case 'completed':  return 'bg-emerald-50 text-emerald-700 border-emerald-200';
-    case 'in_progress': return 'bg-indigo-50 text-indigo-700 border-indigo-200';
-    case 'discrepancy': return 'bg-amber-50 text-amber-700 border-amber-300';
-    default:            return 'bg-amber-50 text-amber-600 border-amber-200';
-  }
-}
-
-function statusLabel(status: string | null | undefined): string {
-  switch (status) {
-    case 'completed':   return 'Selesai';
-    case 'in_progress': return 'Aktif';
-    case 'discrepancy': return 'Discrepancy';
-    default:            return 'Pending';
-  }
 }
 
 // ─── Shared mini-atoms ────────────────────────────────────────────────────────
@@ -287,414 +211,74 @@ function ProgressBar({ pct, className }: { pct: number; className?: string }) {
   );
 }
 
-function CheckRow({ label, done, by, at }: { label: string; done: boolean; by?: string | null; at?: string | null }) {
+// ─── Selectable TaskRow (opens detail in the right panel) ─────────────────────
+
+function TaskRow({ task, onSelect }: { task: FlatTask; onSelect: () => void }) {
+  const label    = TASK_LABELS[task.type] ?? task.type.replaceAll('_', ' ');
+  const status   = task.status ?? 'pending';
+  const TaskIcon = TASK_ICONS[task.type] ?? ClipboardList;
+
+  const accentClass =
+    status === 'completed'   ? 'bg-emerald-500' :
+    status === 'in_progress' ? 'bg-indigo-500' :
+    status === 'discrepancy' ? 'bg-amber-400 animate-pulse' :
+    'bg-amber-300';
+
+  const iconBg =
+    status === 'completed'   ? 'bg-emerald-50 text-emerald-600' :
+    status === 'in_progress' ? 'bg-indigo-50 text-indigo-600' :
+    status === 'discrepancy' ? 'bg-amber-50 text-amber-600' :
+    'bg-amber-50 text-amber-500';
+
   return (
-    <div className="flex items-start justify-between gap-3 py-1.5">
-      <div className="flex items-center gap-2">
-        {done
-          ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
-          : <Circle className="h-3.5 w-3.5 shrink-0 text-amber-400" />}
-        <span className={cn('text-xs font-medium', done ? 'text-slate-700' : 'text-amber-700')}>{label}</span>
+    <button
+      type="button"
+      onClick={onSelect}
+      className="relative flex w-full items-start gap-3 overflow-hidden rounded-xl border border-slate-100 bg-white px-4 py-3 text-left transition hover:bg-slate-50"
+    >
+      <div className={cn('absolute left-0 top-0 bottom-0 w-1 rounded-l-xl', accentClass)} />
+      <div className={cn('mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg pl-1', iconBg)}>
+        <TaskIcon className="h-4 w-4" strokeWidth={2} />
       </div>
-      {done && (by || at) && (
-        <span className="shrink-0 text-[10px] text-slate-400">{by ? `${by}` : ''}{at ? ` · ${fmtTime(at)}` : ''}</span>
-      )}
-    </div>
-  );
-}
-
-function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
-  return (
-    <div className="flex items-center justify-between gap-3 py-1.5">
-      <span className="text-xs font-semibold text-slate-400">{label}</span>
-      <span className="text-xs font-semibold text-slate-700">{value}</span>
-    </div>
-  );
-}
-
-// ─── Task-type-specific detail panels (unchanged from original) ──────────────
-
-function StoreOpeningDetail({ task }: { task: FlatTask }) {
-  const e = task.extra as Record<string, unknown>;
-  const checks = [
-    { label: 'Login POS / Kasir',      done: !!e.loginPos,          by: e.loginPosBy as string,          at: e.loginPosAt as string },
-    { label: 'Cek Absen Sunfish',      done: !!e.checkAbsenSunfish, by: e.checkAbsenSunfishBy as string, at: e.checkAbsenSunfishAt as string },
-    { label: 'Tarik SOH & Sales',      done: !!e.tarikSohSales,     by: e.tarikSohSalesBy as string,     at: e.tarikSohSalesAt as string },
-    { label: '5R (area kasir)',         done: !!(e.fiveR && e.fiveRAreaKasirPhotos && (e.fiveRAreaKasirPhotos as string[]).length > 0),  by: e.fiveRAreaKasirBy as string,  at: e.fiveRAreaKasirAt as string },
-    { label: '5R (depan toko)',         done: !!(e.fiveR && e.fiveRAreaDepanPhotos && (e.fiveRAreaDepanPhotos as string[]).length > 0),  by: e.fiveRAreaDepanBy as string,  at: e.fiveRAreaDepanAt as string },
-    { label: '5R (sisi kanan)',         done: !!(e.fiveR && e.fiveRAreaKananPhotos && (e.fiveRAreaKananPhotos as string[]).length > 0),  by: e.fiveRAreaKananBy as string,  at: e.fiveRAreaKananAt as string },
-    { label: '5R (sisi kiri)',          done: !!(e.fiveR && e.fiveRAreaKiriPhotos  && (e.fiveRAreaKiriPhotos  as string[]).length > 0),  by: e.fiveRAreaKiriBy as string,   at: e.fiveRAreaKiriAt as string },
-    { label: '5R (gudang)',             done: !!(e.fiveR && e.fiveRAreaGudangPhotos && (e.fiveRAreaGudangPhotos as string[]).length > 0), by: e.fiveRAreaGudangBy as string, at: e.fiveRAreaGudangAt as string },
-    { label: 'Cek Lampu',              done: !!e.cekLamp,           by: e.cekLampBy as string,           at: e.cekLampAt as string },
-    { label: 'Cek Sound System',       done: !!e.cekSoundSystem,    by: e.cekSoundSystemBy as string,    at: e.cekSoundSystemAt as string },
-    { label: 'Foto Cash Drawer',       done: !!(e.cashDrawerPhotos && (e.cashDrawerPhotos as string[]).length > 0), by: e.cashDrawerBy as string, at: e.cashDrawerAt as string },
-  ];
-  const done = checks.filter(c => c.done).length;
-  return (
-    <div>
-      <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">{done}/{checks.length} item selesai</p>
-      <div className="divide-y divide-slate-100">
-        {checks.map(c => <CheckRow key={c.label} {...c} />)}
-      </div>
-      {task.notes && <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">{task.notes}</p>}
-    </div>
-  );
-}
-
-function StoreFrontDetail({ task }: { task: FlatTask }) {
-  const e = task.extra as Record<string, unknown>;
-  const storefrontPhotos = (e.storefrontPhotos as string[] | undefined) ?? [];
-  const hasRolling = !!e.rollingDoorClosedPhoto;
-  const completedBy = e.completedBy as string | null;
-  return (
-    <div className="space-y-1 divide-y divide-slate-100">
-      <InfoRow label="Dikerjakan oleh" value={task.userName ?? task.userId} />
-      {completedBy && completedBy !== task.userId && (
-        <InfoRow label="Diselesaikan oleh" value={String(completedBy)} />
-      )}
-      <InfoRow label="Foto storefront" value={storefrontPhotos.length > 0 ? `${storefrontPhotos.length} foto` : '—'} />
-      <InfoRow label="Foto rolling door" value={hasRolling
-        ? <span className="flex items-center gap-1 text-emerald-600"><CheckCircle2 className="h-3 w-3" />Ada</span>
-        : <span className="text-amber-500">Belum</span>}
-      />
-      {task.notes && <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">{task.notes}</p>}
-    </div>
-  );
-}
-
-function SetoranDetail({ task }: { task: FlatTask }) {
-  const e = task.extra as Record<string, unknown>;
-  const actualReceived: unknown = e.actualReceivedAmount  ?? e.expectedAmount;
-  const previousUnpaid: unknown = e.previousUnpaidAmount  ?? e.carriedDeficit;
-  const requiredStore: unknown  = e.requiredStoreAmount;
-  const stored: unknown         = e.storedAmount           ?? e.amount;
-  const unpaid: unknown         = e.unpaidAmount;
-  return (
-    <div className="space-y-1 divide-y divide-slate-100">
-      <InfoRow label="Uang diterima"    value={fmtAmount(actualReceived)} />
-      {Number(previousUnpaid) > 0 && (
-        <InfoRow label="Sisa kemarin"   value={<span className="text-amber-600">{fmtAmount(previousUnpaid)}</span>} />
-      )}
-      {Boolean(requiredStore) && (
-        <InfoRow label="Wajib disetor"  value={fmtAmount(requiredStore)} />
-      )}
-      <InfoRow label="Disetor"          value={fmtAmount(stored)} />
-      {Number(unpaid) > 0 && (
-        <InfoRow label="Belum lunas"    value={<span className="text-amber-600 font-bold">{fmtAmount(unpaid)}</span>} />
-      )}
-      <InfoRow label="Foto resi"        value={(e.resiPhoto as string | null)
-        ? <span className="flex items-center gap-1 text-emerald-600"><CheckCircle2 className="h-3 w-3" />Ada</span>
-        : <span className="text-amber-500">Belum</span>}
-      />
-      {task.notes && <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">{task.notes}</p>}
-    </div>
-  );
-}
-
-function CekBinDetail({ task }: { task: FlatTask }) {
-  const e = task.extra as Record<string, unknown>;
-  const total   = Number(e.totalStoreBins      ?? 0);
-  const minimum = Number(e.minimumBinsToCheck  ?? 0);
-  const checked = Number(e.checkedBinsCount    ?? 0);
-  const pct     = total > 0 ? Math.round((checked / total) * 100) : 0;
-  return (
-    <div className="space-y-1 divide-y divide-slate-100">
-      <InfoRow label="Total BIN toko"   value={total} />
-      <InfoRow label="Minimum dicek"    value={minimum} />
-      <InfoRow label="Sudah dicek"      value={
-        <span className={cn('font-bold', checked >= minimum ? 'text-emerald-600' : 'text-amber-600')}>{checked} ({pct}%)</span>
-      } />
-      {task.notes && <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">{task.notes}</p>}
-    </div>
-  );
-}
-
-function VmChecklistDetail({ task }: { task: FlatTask }) {
-  const e = task.extra as Record<string, unknown>;
-  const items = [
-    { label: 'Shoe lace / filler / price tag / hangtag / label K3L', done: !!e.shoeLaceShoeFillerPriceTagHangtagLabelK3L },
-    { label: 'Last pair & pigskin hangtag',                           done: !!e.lastPairAndPigskinHangtag },
-    { label: 'POP promo update',                                      done: !!e.popPromoUpdate },
-    { label: 'Display table / wall shelving / showcase / hangbar / stacking / pedestal', done: !!e.displayTableWallShelvingShowcaseHangbarStackingPedestal },
-    { label: 'Floor display cleanliness',                             done: !!e.floorDisplayCleanliness },
-    { label: 'VM tools storage',                                      done: !!e.vmToolsStorage },
-  ];
-  return (
-    <div className="divide-y divide-slate-100">
-      {items.map(i => <CheckRow key={i.label} label={i.label} done={i.done} />)}
-      {task.notes && <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">{task.notes}</p>}
-    </div>
-  );
-}
-
-function MarketingCheckDetail({ task }: { task: FlatTask }) {
-  const e = task.extra as Record<string, unknown>;
-  const items = [
-    { label: 'Nama promo',             done: !!e.promoName,           by: e.promoNameBy as string,         at: e.promoNameAt as string },
-    { label: 'Periode promo',          done: !!e.promoPeriod,         by: e.promoPeriodBy as string,       at: e.promoPeriodAt as string },
-    { label: 'Mekanisme promo',        done: !!e.promoMechanism,      by: e.promoMechanismBy as string,    at: e.promoMechanismAt as string },
-    { label: 'Random item sepatu',     done: !!e.randomShoeItems,     by: e.randomShoeItemsBy as string,   at: e.randomShoeItemsAt as string },
-    { label: 'Random item non-sepatu', done: !!e.randomNonShoeItems,  by: e.randomNonShoeItemsBy as string,at: e.randomNonShoeItemsAt as string },
-    { label: 'Sell tag',               done: !!e.sellTag,             by: e.sellTagBy as string,           at: e.sellTagAt as string },
-  ];
-  return (
-    <div className="divide-y divide-slate-100">
-      {items.map(i => <CheckRow key={i.label} {...i} />)}
-      {task.notes && <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">{task.notes}</p>}
-    </div>
-  );
-}
-
-function ItemDroppingDetail({ task }: { task: FlatTask }) {
-  const e    = task.extra as Record<string, unknown>;
-  const entries = (e.entries as unknown[] | undefined) ?? [];
-  if (!e.hasDropping) {
-    return <p className="py-2 text-xs text-slate-400">Tidak ada dropping hari ini.</p>;
-  }
-  return (
-    <div>
-      {entries.length === 0
-        ? <p className="py-2 text-xs text-amber-600">Dropping ada, belum ada entri.</p>
-        : entries.map((entry: unknown, i: number) => {
-            const en = entry as Record<string, unknown>;
-            return (
-              <div key={i} className="border-t border-slate-100 py-2 first:border-0">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-700">TO #{en.toNumber as string}</span>
-                  <span className="text-[10px] text-slate-400">{fmtTime(en.dropTime as string)}</span>
-                </div>
-                <p className="mt-0.5 text-[11px] text-slate-500">Qty: {String(en.quantity)}</p>
-              </div>
-            );
-          })
-      }
-      {task.notes && <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">{task.notes}</p>}
-    </div>
-  );
-}
-
-function BriefingDetail({ task }: { task: FlatTask }) {
-  const e = task.extra as Record<string, unknown>;
-  const done = task.status === 'completed' || Boolean(e.done);
-
-  return (
-    <div className="space-y-1 divide-y divide-slate-100">
-      <InfoRow
-        label="Briefing selesai"
-        value={done
-          ? <span className="flex items-center gap-1 text-emerald-600"><CheckCircle2 className="h-3 w-3" />Ya</span>
-          : <span className="text-amber-500">Belum</span>}
-      />
-
-      {task.completedAt && (
-        <InfoRow label="Selesai pada" value={fmtTime(task.completedAt)} />
-      )}
-
-      {task.notes && (
-        <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
-          {task.notes}
-        </p>
-      )}
-    </div>
-  );
-}
-
-function SerahTerimaDetail({ task }: { task: FlatTask }) {
-  const e = task.extra as Record<string, unknown>;
-
-  const items = Array.isArray(e.items)
-    ? (e.items as Array<Record<string, unknown>>)
-    : [];
-
-  const handoverText =
-    typeof e.handoverText === 'string' ? e.handoverText : '';
-
-  const doneItems = items.filter(item => Boolean(item.isCompleted)).length;
-
-  return (
-    <div>
-      <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">
-        {items.length > 0 ? `${doneItems}/${items.length} pesan selesai` : 'Pesan handover'}
-      </p>
-
-      {items.length > 0 ? (
-        <div className="divide-y divide-slate-100">
-          {items.map((item, index) => (
-            <CheckRow
-              key={String(item.id ?? index)}
-              label={String(item.message ?? '')}
-              done={Boolean(item.isCompleted)}
-              by={item.completedBy as string | null}
-              at={item.completedAt as string | null}
-            />
-          ))}
-        </div>
-      ) : handoverText ? (
-        <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs font-medium leading-relaxed text-slate-600 whitespace-pre-line">
-          {handoverText}
-        </div>
-      ) : (
-        <p className="py-2 text-xs text-slate-400">
-          Belum ada pesan serah terima.
-        </p>
-      )}
-
-      {task.notes && (
-        <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
-          {task.notes}
-        </p>
-      )}
-    </div>
-  );
-}
-
-function EdcReconciliationDetail({ task }: { task: FlatTask }) {
-  const isCarryOver = task.parentTaskId != null;
-  return (
-    <div className="space-y-1 divide-y divide-slate-100">
-      <InfoRow
-        label="Balanced"
-        value={task.isBalanced == null ? '—'
-          : task.isBalanced
-            ? <span className="flex items-center gap-1 text-emerald-600"><CheckCircle2 className="h-3 w-3" />Seimbang</span>
-            : <span className="flex items-center gap-1 text-amber-600"><AlertTriangle className="h-3 w-3" />Tidak seimbang</span>}
-      />
-      {task.status === 'discrepancy' && (
-        <InfoRow label="Status" value={<span className="font-bold text-amber-600">Discrepancy — perlu tindak lanjut</span>} />
-      )}
-      {isCarryOver && (
-        <InfoRow
-          label="Lanjutan dari"
-          value={<span className="flex items-center gap-1 text-indigo-600"><History className="h-3 w-3" />Task #{task.parentTaskId}</span>}
-        />
-      )}
-      {task.completedAt && <InfoRow label="Selesai pada" value={fmtTime(task.completedAt)} />}
-      {task.notes && <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">{task.notes}</p>}
-    </div>
-  );
-}
-
-function EodZReportDetail({ task }: { task: FlatTask }) {
-  const e = task.extra as Record<string, unknown>;
-  const photos = (e.zReportPhotos as string[] | undefined) ?? [];
-  return (
-    <div className="space-y-1 divide-y divide-slate-100">
-      <InfoRow
-        label="Foto Z-report"
-        value={photos.length > 0
-          ? <span className="flex items-center gap-1 text-emerald-600"><Camera className="h-3 w-3" />{photos.length} foto</span>
-          : <span className="text-amber-500">Belum ada</span>}
-      />
-      {task.completedAt && <InfoRow label="Selesai pada" value={fmtTime(task.completedAt)} />}
-      {task.notes && <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">{task.notes}</p>}
-    </div>
-  );
-}
-
-function OpenStatementDetail({ task }: { task: FlatTask }) {
-  const e = task.extra as Record<string, unknown>;
-  const isOnHold = !!e.isOnHold;
-  const isDone = !!e.isDone;
-  const isCarryOver = task.parentTaskId != null;
-  const heldAt = (e.heldAt as string | null | undefined) ?? null;
-  const holdReason = (e.holdReason as string | null | undefined) ?? null;
-
-  const outcome =
-    task.status === 'completed' && isOnHold
-      ? { label: 'On Hold', cls: 'text-amber-600', Icon: PauseCircle }
-      : task.status === 'completed'
-        ? { label: 'Done', cls: 'text-emerald-600', Icon: CheckCircle2 }
-        : { label: 'Belum dikerjakan', cls: 'text-amber-500', Icon: Circle };
-
-  const Outcome = outcome.Icon;
-
-  return (
-    <div className="space-y-1 divide-y divide-slate-100">
-      <InfoRow
-        label="Hasil"
-        value={
-          <span className={cn('flex items-center gap-1 font-bold', outcome.cls)}>
-            <Outcome className="h-3 w-3" />
-            {outcome.label}
-          </span>
-        }
-      />
-
-      {isCarryOver && (
-        <InfoRow
-          label="Lanjutan dari"
-          value={
-            <span className="flex items-center gap-1 text-indigo-600">
-              <History className="h-3 w-3" />
-              Task #{task.parentTaskId}
-            </span>
-          }
-        />
-      )}
-
-      {isOnHold && heldAt && <InfoRow label="Ditahan pada" value={fmtTime(heldAt)} />}
-
-      {isOnHold && holdReason && (
-        <div className="py-1.5">
-          <p className="text-xs font-semibold text-slate-400">Alasan hold</p>
-          <p className="mt-1 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">{holdReason}</p>
-        </div>
-      )}
-
-      {isDone && task.completedAt && <InfoRow label="Selesai pada" value={fmtTime(task.completedAt)} />}
-
-      {task.notes && <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">{task.notes}</p>}
-    </div>
-  );
-}
-
-function GroomingEmployeeDetail({ task }: { task: FlatTask }) {
-  const e = task.extra as Record<string, unknown>;
-  const fields: { label: string; active: boolean; checked: boolean | null }[] = [
-    { label: 'Seragam',    active: e.uniformActive  !== false, checked: (e.uniformChecked  ?? null) as boolean | null },
-    { label: 'Rambut',     active: e.hairActive     !== false, checked: (e.hairChecked     ?? null) as boolean | null },
-    { label: 'Aroma',      active: e.smellActive    !== false, checked: (e.smellChecked    ?? null) as boolean | null },
-    { label: 'Make-up',    active: e.makeUpActive   !== false, checked: (e.makeUpChecked   ?? null) as boolean | null },
-    { label: 'Sepatu',     active: e.shoeActive     !== false, checked: (e.shoeChecked     ?? null) as boolean | null },
-    { label: 'Name tag',   active: e.nameTagActive  !== false, checked: (e.nameTagChecked  ?? null) as boolean | null },
-  ];
-  const activeFields  = fields.filter(f => f.active);
-  const doneCount     = activeFields.filter(f => f.checked === true).length;
-  const photos        = (e.selfiePhotos as string[] | undefined) ?? [];
-
-  return (
-    <div>
-      <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">
-        {doneCount}/{activeFields.length} item aktif selesai
-      </p>
-      <div className="divide-y divide-slate-100">
-        {fields.map(f => (
-          <div key={f.label} className={cn('flex items-center justify-between py-1.5', !f.active && 'opacity-40')}>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-start justify-between gap-2">
+          <div>
             <div className="flex items-center gap-2">
-              {!f.active
-                ? <Circle className="h-3.5 w-3.5 text-slate-300" />
-                : f.checked
-                  ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
-                  : <Circle className="h-3.5 w-3.5 text-amber-400" />
-              }
-              <span className="text-xs font-medium text-slate-700">{f.label}</span>
+              <p className="text-sm font-bold text-slate-900">{label}</p>
+              {task.parentTaskId != null && (
+                <span className="inline-flex items-center gap-0.5 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-indigo-600">
+                  <History className="h-2.5 w-2.5" />
+                  Lanjutan
+                </span>
+              )}
             </div>
-            {!f.active && <span className="text-[10px] font-bold uppercase tracking-wider text-slate-300">N/A</span>}
+            <p className="mt-0.5 text-[11px] text-slate-400">PIC: {task.userName ?? task.userId}</p>
           </div>
-        ))}
+          <div className="flex shrink-0 flex-col items-end gap-1">
+            <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-bold', statusBadgeClass(status))}>
+              {statusLabel(status)}
+            </span>
+            {task.completedAt && (
+              <span className="text-[10px] text-slate-400">{fmtTime(task.completedAt)}</span>
+            )}
+          </div>
+        </div>
       </div>
-      <div className="mt-2 flex items-center gap-3 text-[11px] text-slate-400">
-        {photos.length > 0 && <span className="flex items-center gap-1"><Camera className="h-3 w-3" />{photos.length} selfie</span>}
-        {task.completedAt && <span>Selesai {fmtTime(task.completedAt)}</span>}
-      </div>
-      {task.notes && <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">{task.notes}</p>}
-    </div>
+      <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-slate-300" />
+    </button>
   );
 }
 
-function GroomingGroupCard({ tasks }: { tasks: FlatTask[] }) {
+// ─── Grooming group card (employees open in the right panel) ──────────────────
+
+function GroomingGroupCard({
+  tasks,
+  onSelectEmployee,
+}: {
+  tasks: FlatTask[];
+  onSelectEmployee?: (taskKey: string) => void;
+}) {
   const [expanded, setExpanded] = useState(false);
-  const [openEmployees, setOpenEmployees] = useState<Set<string>>(new Set());
 
   const totalEmployees = tasks.length;
   const doneEmployees  = tasks.filter(t => t.status === 'completed').length;
@@ -718,14 +302,6 @@ function GroomingGroupCard({ tasks }: { tasks: FlatTask[] }) {
     aggregateStatus === 'in_progress' ? 'bg-indigo-50 text-indigo-600' :
     aggregateStatus === 'discrepancy' ? 'bg-amber-50 text-amber-600' :
     'bg-amber-50 text-amber-500';
-
-  const toggleEmployee = (id: string) => {
-    setOpenEmployees(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-  };
 
   return (
     <div className="overflow-hidden rounded-xl border border-slate-100 bg-white">
@@ -770,131 +346,36 @@ function GroomingGroupCard({ tasks }: { tasks: FlatTask[] }) {
         <div className="border-t border-slate-100 bg-slate-50/70 p-3">
           <div className="space-y-2">
             {tasks.map(task => {
-              const isOpen = openEmployees.has(task.id);
               const empStatus = task.status ?? 'pending';
               return (
-                <div key={task.id} className="overflow-hidden rounded-lg border border-slate-200 bg-white">
-                  <button
-                    type="button"
-                    onClick={() => toggleEmployee(task.id)}
-                    className="flex w-full items-center gap-3 px-3 py-2 text-left transition hover:bg-slate-50"
-                  >
-                    <div className={cn('flex h-7 w-7 shrink-0 items-center justify-center rounded-md',
-                      empStatus === 'completed'   ? 'bg-emerald-50 text-emerald-600' :
-                      empStatus === 'in_progress' ? 'bg-indigo-50 text-indigo-600' :
-                      empStatus === 'discrepancy' ? 'bg-amber-50 text-amber-600' :
-                      'bg-amber-50 text-amber-500'
-                    )}>
-                      <User className="h-3.5 w-3.5" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-xs font-bold text-slate-900">{task.userName ?? task.userId}</p>
-                      {task.completedAt && (
-                        <p className="text-[10px] text-slate-400">Selesai {fmtTime(task.completedAt)}</p>
-                      )}
-                    </div>
-                    <span className={cn('shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-bold', statusBadgeClass(empStatus))}>
-                      {statusLabel(empStatus)}
-                    </span>
-                    <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-slate-300 transition-transform', isOpen && 'rotate-180')} />
-                  </button>
-                  {isOpen && (
-                    <div className="border-t border-slate-100 bg-slate-50/50 px-3 py-2.5">
-                      <GroomingEmployeeDetail task={task} />
-                    </div>
-                  )}
-                </div>
+                <button
+                  key={task.id}
+                  type="button"
+                  onClick={() => onSelectEmployee?.(taskKey(task))}
+                  className="flex w-full items-center gap-3 overflow-hidden rounded-lg border border-slate-200 bg-white px-3 py-2 text-left transition hover:bg-slate-50"
+                >
+                  <div className={cn('flex h-7 w-7 shrink-0 items-center justify-center rounded-md',
+                    empStatus === 'completed'   ? 'bg-emerald-50 text-emerald-600' :
+                    empStatus === 'in_progress' ? 'bg-indigo-50 text-indigo-600' :
+                    empStatus === 'discrepancy' ? 'bg-amber-50 text-amber-600' :
+                    'bg-amber-50 text-amber-500'
+                  )}>
+                    <User className="h-3.5 w-3.5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs font-bold text-slate-900">{task.userName ?? task.userId}</p>
+                    {task.completedAt && (
+                      <p className="text-[10px] text-slate-400">Selesai {fmtTime(task.completedAt)}</p>
+                    )}
+                  </div>
+                  <span className={cn('shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-bold', statusBadgeClass(empStatus))}>
+                    {statusLabel(empStatus)}
+                  </span>
+                  <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-300" />
+                </button>
               );
             })}
           </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function TaskDetail({ task }: { task: FlatTask }) {
-  switch (task.type) {
-    case 'store_opening':      return <StoreOpeningDetail task={task} />;
-    case 'store_front':        return <StoreFrontDetail task={task} />;
-    case 'setoran':            return <SetoranDetail task={task} />;
-    case 'cek_bin':            return <CekBinDetail task={task} />;
-    case 'vm_checklist':       return <VmChecklistDetail task={task} />;
-    case 'marketing_check':    return <MarketingCheckDetail task={task} />;
-    case 'item_dropping':      return <ItemDroppingDetail task={task} />;
-    case 'briefing':           return <BriefingDetail task={task} />;
-    case 'serah_terima':       return <SerahTerimaDetail task={task} />;
-    case 'edc_reconciliation': return <EdcReconciliationDetail task={task} />;
-    case 'eod_z_report':       return <EodZReportDetail task={task} />;
-    case 'open_statement':     return <OpenStatementDetail task={task} />;
-
-    default:
-      return task.notes
-        ? <p className="py-2 text-xs text-slate-500">{task.notes}</p>
-        : <p className="py-2 text-xs text-slate-400">Tidak ada detail tambahan.</p>;
-  }
-}
-
-// ─── Expandable TaskRow ───────────────────────────────────────────────────────
-
-function TaskRow({ task }: { task: FlatTask }) {
-  const [expanded, setExpanded] = useState(false);
-  const label      = TASK_LABELS[task.type] ?? task.type.replaceAll('_', ' ');
-  const status     = task.status ?? 'pending';
-  const TaskIcon   = TASK_ICONS[task.type] ?? ClipboardList;
-
-  const accentClass =
-    status === 'completed'   ? 'bg-emerald-500' :
-    status === 'in_progress' ? 'bg-indigo-500' :
-    status === 'discrepancy' ? 'bg-amber-400 animate-pulse' :
-    'bg-amber-300';
-
-  const iconBg =
-    status === 'completed'   ? 'bg-emerald-50 text-emerald-600' :
-    status === 'in_progress' ? 'bg-indigo-50 text-indigo-600' :
-    status === 'discrepancy' ? 'bg-amber-50 text-amber-600' :
-    'bg-amber-50 text-amber-500';
-
-  return (
-    <div className="overflow-hidden rounded-xl border border-slate-100 bg-white">
-      <button
-        type="button"
-        onClick={() => setExpanded(v => !v)}
-        className="relative flex w-full items-start gap-3 px-4 py-3 text-left transition hover:bg-slate-50"
-      >
-        <div className={cn('absolute left-0 top-0 bottom-0 w-1 rounded-l-xl', accentClass)} />
-        <div className={cn('mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg pl-1', iconBg)}>
-          <TaskIcon className="h-4 w-4" strokeWidth={2} />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-2">
-            <div>
-              <div className="flex items-center gap-2">
-                <p className="text-sm font-bold text-slate-900">{label}</p>
-                {task.parentTaskId != null && (
-                  <span className="inline-flex items-center gap-0.5 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-indigo-600">
-                    <History className="h-2.5 w-2.5" />
-                    Lanjutan
-                  </span>
-                )}
-              </div>
-              <p className="mt-0.5 text-[11px] text-slate-400">PIC: {task.userName ?? task.userId}</p>
-            </div>
-            <div className="flex shrink-0 flex-col items-end gap-1">
-              <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-bold', statusBadgeClass(status))}>
-                {statusLabel(status)}
-              </span>
-              {task.completedAt && (
-                <span className="text-[10px] text-slate-400">{fmtTime(task.completedAt)}</span>
-              )}
-            </div>
-          </div>
-        </div>
-        <ChevronDown className={cn('mt-1 h-4 w-4 shrink-0 text-slate-300 transition-transform', expanded && 'rotate-180')} />
-      </button>
-      {expanded && (
-        <div className="border-t border-slate-100 bg-slate-50/70 px-4 py-3 pl-5">
-          <TaskDetail task={task} />
         </div>
       )}
     </div>
@@ -927,10 +408,6 @@ function SummaryBreakdown({ summary }: { summary: StoreSummary }) {
 function StoreProgressCard({ store, active, onOpen }: {
   store: StoreRow; active: boolean; onOpen: () => void;
 }) {
-  const rate    = store.summary.completionRate;
-  const done    = store.summary.completed;
-  const hasIssue = store.summary.discrepancy > 0;
-
   return (
     <button
       type="button"
@@ -945,14 +422,7 @@ function StoreProgressCard({ store, active, onOpen }: {
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
           <p className={cn('truncate text-sm font-bold', active ? 'text-indigo-900' : 'text-slate-900')}>{store.name}</p>
-          {/* <span className={cn('shrink-0 text-xs font-bold tabular-nums', progressTextClass(rate))}>{rate}%</span> */}
         </div>
-        {/* <ProgressBar pct={rate} className="mt-1.5" /> */}
-        {/* <p className="mt-1.5 text-[11px] font-semibold text-slate-500">
-          {done}/{store.summary.total} selesai
-          {store.summary.inProgress > 0 && <span className="text-indigo-500"> · {store.summary.inProgress} aktif</span>}
-          {hasIssue && <span className="text-amber-600"> · {store.summary.discrepancy} discrepancy</span>}
-        </p> */}
       </div>
       <ChevronRight className={cn('h-4 w-4 shrink-0', active ? 'text-indigo-500' : 'text-slate-300')} />
     </button>
@@ -960,10 +430,6 @@ function StoreProgressCard({ store, active, onOpen }: {
 }
 
 // ─── Area group with store list ───────────────────────────────────────────────
-//
-// HO mode change: clicking the *area row itself* (not just the chevron) selects
-// the area, which opens the area-grid panel on the right. The chevron still
-// controls expand/collapse of the inline store list inside the sidebar.
 
 function AreaStoreGroup({
   areaName,
@@ -988,7 +454,6 @@ function AreaStoreGroup({
 }) {
   const [open, setOpen] = useState(initiallyOpen);
 
-  // Area aggregate stats — shown on header for HO.
   const areaAggregate = useMemo(() => {
     const sum = stores.reduce(
       (acc, s) => {
@@ -1028,7 +493,6 @@ function AreaStoreGroup({
           )} />
         </button>
 
-        {/* For HO: the area name acts as a button to open the grid view */}
         {isHo && onSelectArea ? (
           <button
             type="button"
@@ -1062,7 +526,6 @@ function AreaStoreGroup({
         </span>
       </div>
 
-      {/* Inline store list */}
       {open && (
         <div className="divide-y divide-slate-100 bg-white">
           {stores.map(store => (
@@ -1080,10 +543,6 @@ function AreaStoreGroup({
 }
 
 // ─── Area grid panel (OPS HO, right side) ─────────────────────────────────────
-//
-// When the OPS HO user clicks an area name in the sidebar, this panel renders
-// on the right side as a grid of store cards. Clicking a card opens the
-// existing detail panel (replacing this grid).
 
 function AreaGridPanel({
   areaName,
@@ -1112,7 +571,6 @@ function AreaGridPanel({
 
   return (
     <article className="flex max-h-[calc(100vh-9rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      {/* Header */}
       <div className="shrink-0 border-b border-slate-100 p-4 sm:p-5">
         <div className="flex items-center gap-4">
           <ProgressRing pct={aggregate.rate} size={64} stroke={6} />
@@ -1134,7 +592,6 @@ function AreaGridPanel({
         </div>
       </div>
 
-      {/* Grid */}
       <div className="flex-1 overflow-y-auto p-4">
         {stores.length === 0 ? (
           <div className="p-8 text-center text-sm text-slate-400">
@@ -1193,9 +650,6 @@ function AreaGridPanel({
 }
 
 // ─── Range matrix panel (weekly/monthly) ──────────────────────────────────────
-//
-// One row per day; columns are task types; cell is a thin % completion bar.
-// The matrix is rendered for a SINGLE selected store across the date range.
 
 function StoreRangeMatrixPanel({
   storeName,
@@ -1210,7 +664,6 @@ function StoreRangeMatrixPanel({
   loading: boolean;
   periodLabel: string;
 }) {
-  // Aggregate for the whole period (shown in the panel header ring).
   const aggregate = useMemo(() => {
     const sum = rows.reduce(
       (acc, r) => {
@@ -1224,13 +677,10 @@ function StoreRangeMatrixPanel({
     return { ...sum, rate };
   }, [rows]);
 
-  // Hide days that fall in the future (or simply have no scheduled tasks)
-  // from the active list, but keep the count so the user knows the range size.
   const visibleRows = rows.filter(r => r.aggregate.total > 0);
 
   return (
     <article className="flex max-h-[calc(100vh-9rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      {/* Header */}
       <div className="shrink-0 border-b border-slate-100 p-4 sm:p-5">
         <div className="flex items-center gap-4">
           <ProgressRing pct={aggregate.rate} size={64} stroke={6} />
@@ -1249,7 +699,6 @@ function StoreRangeMatrixPanel({
         </div>
       </div>
 
-      {/* Day list */}
       <div className="flex-1 overflow-y-auto">
         {loading ? (
           <div className="flex h-full items-center justify-center p-8">
@@ -1273,7 +722,6 @@ function StoreRangeMatrixPanel({
                     row.isToday && 'bg-indigo-50/40',
                   )}
                 >
-                  {/* Date pill */}
                   <div className={cn(
                     'flex h-11 w-11 shrink-0 flex-col items-center justify-center rounded-xl',
                     row.isToday ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600',
@@ -1286,7 +734,6 @@ function StoreRangeMatrixPanel({
                     </span>
                   </div>
 
-                  {/* Progress */}
                   <div className="min-w-0 flex-1">
                     <div className="flex items-baseline justify-between gap-2">
                       <p className="text-xs font-semibold text-slate-500">
@@ -1316,10 +763,11 @@ function StoreRangeMatrixPanel({
 
 // ─── Store detail panel (daily mode) ──────────────────────────────────────────
 
-function StoreDetailPanel({ detail, loading, emptyMessage }: {
+function StoreDetailPanel({ detail, loading, emptyMessage, onSelectTask }: {
   detail: DetailResponse | null;
   loading: boolean;
   emptyMessage?: string;
+  onSelectTask?: (taskKey: string) => void;
 }) {
   const groupedTasks = useMemo(() => {
     const groups: Record<string, { regular: FlatTask[]; grooming: FlatTask[] }> = {
@@ -1423,8 +871,16 @@ function StoreDetailPanel({ detail, loading, emptyMessage }: {
                     </span>
                   </div>
                   <div className="space-y-2">
-                    {grooming.length > 0 && <GroomingGroupCard tasks={grooming} />}
-                    {regular.map(task => <TaskRow key={`${task.type}-${task.id}`} task={task} />)}
+                    {grooming.length > 0 && (
+                      <GroomingGroupCard tasks={grooming} onSelectEmployee={onSelectTask} />
+                    )}
+                    {regular.map(task => (
+                      <TaskRow
+                        key={taskKey(task)}
+                        task={task}
+                        onSelect={() => onSelectTask?.(taskKey(task))}
+                      />
+                    ))}
                   </div>
                 </div>
               );
@@ -1598,19 +1054,15 @@ export default function OpsTaskProgressPage() {
   const [detail, setDetail]                       = useState<DetailResponse | null>(null);
   const [selectedStoreId, setSelectedStoreId]     = useState<string | null>(null);
   const [selectedAreaId, setSelectedAreaId]       = useState<string | null>(null);
+  // Stored as the composite `type-id` key (see taskKey), NOT the bare row id.
+  const [selectedTaskKey, setSelectedTaskKey]     = useState<string | null>(null);
   const [loadingOverview, setLoadingOverview]     = useState(true);
   const [loadingDetail, setLoadingDetail]         = useState(false);
   const [loadingRange, setLoadingRange]           = useState(false);
   const [error, setError]                         = useState<string | null>(null);
 
-  // Per-day detail cache used to build the weekly/monthly matrix.
-  // Keyed as `${storeId}__${YYYY-MM-DD}`.
   const [rangeMatrixRows, setRangeMatrixRows] = useState<DayMatrixRow[]>([]);
 
-  // For overview, when period === daily we use the user-selected date directly.
-  // When period === weekly/monthly we still need an overview (used for the
-  // sidebar store list); we drive that off the *anchor* date — typically today
-  // when inside the range, otherwise the range start.
   const overviewDate = useMemo(() => {
     if (period === 'daily') return date;
     const cur = fromKey(date);
@@ -1621,7 +1073,6 @@ export default function OpsTaskProgressPage() {
       if (today >= start && today <= end) return todayKey();
       return toKey(start);
     }
-    // monthly
     const start = startOfMonth(cur);
     const end = endOfMonth(cur);
     if (today >= start && today <= end) return todayKey();
@@ -1655,8 +1106,6 @@ export default function OpsTaskProgressPage() {
     } finally { setLoadingDetail(false); }
   }, []);
 
-  // For range views: fetch the detail of the selected store for each day in
-  // the range and build the matrix.
   const loadRangeMatrix = useCallback(async (storeId: string, days: Date[]) => {
     setLoadingRange(true); setError(null);
     try {
@@ -1667,7 +1116,6 @@ export default function OpsTaskProgressPage() {
           const res = await fetch(`/api/ops/tasks/progress?${params}`, { cache: 'no-store' });
           const json = (await res.json()) as DetailResponse;
           if (!res.ok || !json.success) {
-            // Treat a per-day failure as empty so the matrix still renders.
             return [key, null] as const;
           }
           return [key, json] as const;
@@ -1686,7 +1134,6 @@ export default function OpsTaskProgressPage() {
 
   useEffect(() => { void loadOverview(); }, [loadOverview]);
 
-  // Compute days in the active range. Used by weekly/monthly matrix loaders.
   const rangeDays: Date[] = useMemo(() => {
     if (period === 'daily') return [];
     const cur = fromKey(date);
@@ -1701,7 +1148,6 @@ export default function OpsTaskProgressPage() {
     return out;
   }, [period, date]);
 
-  // Load store-level data based on current selection + period.
   useEffect(() => {
     if (!selectedStoreId) {
       setDetail(null);
@@ -1714,6 +1160,12 @@ export default function OpsTaskProgressPage() {
       void loadRangeMatrix(selectedStoreId, rangeDays);
     }
   }, [selectedStoreId, period, date, rangeDays, loadDetail, loadRangeMatrix]);
+
+  // Whenever the store / date / period context changes, drop the open task so
+  // the right panel falls back to the task list instead of a stale detail.
+  useEffect(() => {
+    setSelectedTaskKey(null);
+  }, [selectedStoreId, date, period]);
 
   const isHo = overview?.scope === 'all_areas';
 
@@ -1746,14 +1198,11 @@ export default function OpsTaskProgressPage() {
       .sort((a, b) => a.areaName.localeCompare(b.areaName));
   }, [filteredStores, overview?.area?.id, overview?.area?.name]);
 
-  // When user picks an area in the sidebar, deselect any store.
   const handleSelectArea = (areaId: string) => {
     setSelectedAreaId(cur => cur === areaId ? null : areaId);
     setSelectedStoreId(null);
   };
 
-  // When user picks a store, area selection no longer drives the right panel
-  // (the store detail takes over).
   const handleSelectStore = (storeId: string) => {
     setSelectedStoreId(cur => cur === storeId ? null : storeId);
   };
@@ -1763,14 +1212,10 @@ export default function OpsTaskProgressPage() {
     [groupedStores, selectedAreaId],
   );
 
-  // Period change: clear store/area selection if we no longer have a usable
-  // detail context. Keep store selection across period changes so a user
-  // toggling daily ↔ weekly on the same store keeps focus.
   useEffect(() => {
     if (period !== 'daily') setSelectedAreaId(null);
   }, [period]);
 
-  // ── Heading sub-label ────────────────────────────────────────────────────
   const headingScope = isHo
     ? 'All Areas'
     : (overview?.area?.name ?? 'Area');
@@ -1786,18 +1231,32 @@ export default function OpsTaskProgressPage() {
   }, [period, date]);
 
   // ── Right-panel routing ──────────────────────────────────────────────────
-  // Priority:
-  //   1) If a store is selected:
-  //      - daily   → StoreDetailPanel
-  //      - weekly  → StoreRangeMatrixPanel
-  //      - monthly → StoreRangeMatrixPanel
-  //   2) Else if HO + area is selected → AreaGridPanel
-  //   3) Else → empty state
   const renderRightPanel = () => {
     if (selectedStoreId) {
       if (period === 'daily') {
-        return <StoreDetailPanel detail={detail} loading={loadingDetail} />;
+        // Resolve by composite key so the correct task type is opened.
+        const selectedTask = selectedTaskKey
+          ? detail?.tasks.find(t => taskKey(t) === selectedTaskKey) ?? null
+          : null;
+
+        if (selectedTask) {
+          return (
+            <TaskDetailView
+              task={selectedTask}
+              onBack={() => setSelectedTaskKey(null)}
+            />
+          );
+        }
+
+        return (
+          <StoreDetailPanel
+            detail={detail}
+            loading={loadingDetail}
+            onSelectTask={setSelectedTaskKey}
+          />
+        );
       }
+
       const selectedStore = overview?.stores.find(s => s.id === selectedStoreId);
       return (
         <StoreRangeMatrixPanel
@@ -1836,7 +1295,7 @@ export default function OpsTaskProgressPage() {
   return (
     <main className="min-h-screen bg-slate-50">
       {/* ── Header ── */}
-      <div className="sticky top-0 z-20 border-b border-slate-200 bg-white/90 backdrop-blur">
+      <div className="sticky top-0 border-b border-slate-200 bg-white/90 backdrop-blur">
         <div className="mx-auto px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
@@ -1924,9 +1383,6 @@ export default function OpsTaskProgressPage() {
                         selectedStoreId={selectedStoreId}
                         selectedAreaId={selectedAreaId}
                         isHo={isHo}
-                        // HO defaults each area's inline list to collapsed,
-                        // since the right-panel grid is the primary view.
-                        // Non-HO defaults to open like before.
                         initiallyOpen={!isHo}
                         onToggleStore={handleSelectStore}
                         onSelectArea={isHo ? handleSelectArea : undefined}
@@ -1936,7 +1392,7 @@ export default function OpsTaskProgressPage() {
             </div>
           </aside>
 
-          {/* ── Right panel (detail / area grid / range matrix) ── */}
+          {/* ── Right panel ── */}
           <div className="lg:sticky lg:top-[6.5rem]">
             {renderRightPanel()}
           </div>

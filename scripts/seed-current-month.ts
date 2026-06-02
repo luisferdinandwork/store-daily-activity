@@ -220,14 +220,13 @@ async function seedMonth(target: TargetMonth) {
     return { id: created.id, created: true };
   }
 
-  async function findSchedule(userId: string, storeId: number, shiftId: number, date: Date) {
+  async function findSchedule(userId: string, storeId: number, date: Date) {
     const [row] = await db
       .select({ id: schedules.id })
       .from(schedules)
       .where(and(
         eq(schedules.userId, userId),
         eq(schedules.storeId, storeId),
-        eq(schedules.shiftId, shiftId),
         gte(schedules.date, startOfDay(date)),
         lte(schedules.date, endOfDay(date)),
       ))
@@ -242,12 +241,16 @@ async function seedMonth(target: TargetMonth) {
     date: Date;
     monthlyScheduleEntryId: number;
   }) {
-    const existing = await findSchedule(input.userId, input.storeId, input.shiftId, input.date);
+    const existing = await findSchedule(input.userId, input.storeId, input.date);
 
     if (existing) {
       await db
         .update(schedules)
-        .set({ monthlyScheduleEntryId: input.monthlyScheduleEntryId, isHoliday: false } as any)
+        .set({
+          shiftId: input.shiftId,
+          monthlyScheduleEntryId: input.monthlyScheduleEntryId,
+          isHoliday: false,
+        } as any)
         .where(eq(schedules.id, existing.id));
       return { id: existing.id, created: false };
     }
@@ -438,16 +441,25 @@ async function seedMonth(target: TargetMonth) {
       monthlyCreated++;
     }
 
-    for (const [empIndex, emp] of (employees as any[]).entries()) {
+    // One employee per store must be available for the whole day every day.
+    // Prefer PIC 1 when available; otherwise use the first employee in that store.
+    const fullDayEmployee =
+      (employees as any[]).find((e: any) => e.employeeTypeId != null && empTypeCodeById[e.employeeTypeId] === 'pic_1')
+      ?? (employees as any[])[0];
+
+    console.log(`   🌕 Full-day daily employee: ${fullDayEmployee.name}`);
+
+    for (const [, emp] of (employees as any[]).entries()) {
       const empTypeCode = emp.employeeTypeId != null ? empTypeCodeById[emp.employeeTypeId] ?? 'default' : 'default';
       const pattern = PATTERNS[empTypeCode] ?? PATTERNS.default;
+      const isDailyFullDayEmployee = emp.id === fullDayEmployee.id;
 
       let empEntriesCreated = 0;
       let empSchedulesCreated = 0;
       let empSchedulesEnsured = 0;
 
       for (const date of eachDayOfMonth(target.year, target.monthIndex)) {
-        const patternCode = date.getDate() === 15 && empIndex === 0
+        const patternCode = isDailyFullDayEmployee
           ? 'FD'
           : pattern[date.getDay()] ?? 'OFF';
         const { shiftCode, shiftId } = patternToShift(patternCode, shiftIdByCode);

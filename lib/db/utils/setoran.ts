@@ -396,8 +396,10 @@ export async function submitSetoran(
     const [updated] = await db
       .update(setoranTasks)
       .set({
-        scheduleId: input.scheduleId,
-        userId: input.userId,
+        // Keep the original shared Setoran owner.
+        // The final submitter is stored separately in completedBy.
+        scheduleId: existing.scheduleId,
+        userId: existing.userId,
         expectedAmount: money(actualReceived),
         amount: money(stored),
         carriedDeficit: money(previousUnpaid),
@@ -420,8 +422,8 @@ export async function submitSetoran(
       .insert(setoranMoneyStorage)
       .values({
         taskId: updated.id,
-        scheduleId: input.scheduleId,
-        userId: input.userId,
+        scheduleId: updated.scheduleId,
+        userId: updated.userId,
         storeId: updated.storeId,
         shiftId: updated.shiftId,
         date: startOfDay(updated.date),
@@ -451,8 +453,8 @@ export async function submitSetoran(
       .onConflictDoUpdate({
         target: setoranMoneyStorage.taskId,
         set: {
-          scheduleId: input.scheduleId,
-          userId: input.userId,
+          scheduleId: updated.scheduleId,
+          userId: updated.userId,
           storeId: updated.storeId,
           shiftId: updated.shiftId,
           date: startOfDay(updated.date),
