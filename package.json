@@ -16,8 +16,9 @@
     "seed:schedules": "dotenv -e .env.local -- tsx scripts/seed-current-month.ts",
     "seed:attendance": "dotenv -e .env.local -- tsx scripts/seed-attendance.ts",
     "seed:tasks": "dotenv -e .env.local -- tsx scripts/seed-tasks.ts",
-    "seed:all": "npm run seed:setup && npm run seed:schedules && npm run seed:tasks && npm run seed:attendance"
-  },
+    "seed:shift-tasks": "dotenv -e .env.local -- tsx scripts/seed-shift-tasks.ts",
+    "seed:all": "npm run seed:setup && npm run seed:shift-tasks && npm run seed:schedules && npm run seed:tasks && npm run seed:attendance"
+    },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.11.1",
     "@neondatabase/serverless": "^1.0.2",

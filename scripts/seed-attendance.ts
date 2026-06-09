@@ -1,25 +1,42 @@
 // scripts/seed-attendance.ts
-// Robust, idempotent attendance seeder.
+// Fast attendance + historical task completion seeder.
 //
-// Default target: previous calendar month only.
-// This intentionally leaves the current month schedules without attendance rows
-// so you can test live attendance on a new day.
+// Optimized changes:
+// - Preloads existing attendance once.
+// - Bulk inserts new attendance rows and breaks.
+// - Preloads task rows once per task table instead of SELECTing inside every loop.
 //
-// Optional:
-//   SEED_ATTENDANCE_MONTH=previous  -> previous month (default)
-//   SEED_ATTENDANCE_MONTH=current   -> current month, only if you explicitly want it
-//   SEED_ATTENDANCE_MONTH=YYYY-MM   -> specific month
-//
-// Examples:
-//   npx tsx scripts/seed-current-month.ts
-//   npx tsx scripts/seed-attendance.ts
-//   $env:SEED_ATTENDANCE_MONTH="2026-04"; npx tsx scripts/seed-attendance.ts
+// Supported env:
+//   SEED_ATTENDANCE_MONTH=previous | current | YYYY-MM
+//   SEED_MONTH=previous | current | YYYY-MM
 
 import { config } from 'dotenv';
 config({ path: '.env.local' });
 config({ path: '.env' });
 
-import { and, eq, gte, lte, inArray } from 'drizzle-orm';
+import { and, eq, gte, inArray, lte } from 'drizzle-orm';
+import { db } from '@/lib/db';
+import {
+  schedules,
+  attendance,
+  breakSessions,
+  shifts,
+  storeOpeningTasks,
+  storeFrontTasks,
+  setoranTasks,
+  setoranMoneyStorage,
+  cekBinTasks,
+  storeBins,
+  cekBinTaskBins,
+  vmChecklistTasks,
+  marketingCheckTasks,
+  itemDroppingTasks,
+  briefingTasks,
+  edcReconciliationTasks,
+  eodZReportTasks,
+  openStatementTasks,
+  groomingTasks,
+} from '@/lib/db/schema';
 
 type ShiftCode = 'morning' | 'evening' | 'full_day';
 
@@ -32,6 +49,9 @@ type BreakCfg = {
   durationMax: number;
 };
 
+const BATCH_SIZE = Number(process.env.SEED_BATCH_SIZE ?? 500);
+const LATE_AFTER_MINUTES = 30;
+
 const FALLBACK_SHIFT_TIMES: Record<ShiftCode, { startTime: string; endTime: string }> = {
   morning: { startTime: '07:00:00', endTime: '15:00:00' },
   evening: { startTime: '15:00:00', endTime: '23:00:00' },
@@ -39,19 +59,13 @@ const FALLBACK_SHIFT_TIMES: Record<ShiftCode, { startTime: string; endTime: stri
 };
 
 const BREAK_CONFIG: Record<ShiftCode, BreakCfg[]> = {
-  morning: [
-    { breakType: 'lunch', hour: 12, minuteMin: 0, minuteMax: 30, durationMin: 25, durationMax: 45 },
-  ],
-  evening: [
-    { breakType: 'dinner', hour: 18, minuteMin: 0, minuteMax: 30, durationMin: 25, durationMax: 45 },
-  ],
+  morning: [{ breakType: 'lunch', hour: 12, minuteMin: 0, minuteMax: 30, durationMin: 25, durationMax: 45 }],
+  evening: [{ breakType: 'dinner', hour: 18, minuteMin: 0, minuteMax: 30, durationMin: 25, durationMax: 45 }],
   full_day: [
     { breakType: 'full_day_lunch', hour: 12, minuteMin: 0, minuteMax: 30, durationMin: 30, durationMax: 45 },
     { breakType: 'full_day_dinner', hour: 18, minuteMin: 0, minuteMax: 30, durationMin: 30, durationMax: 45 },
   ],
 };
-
-const LATE_AFTER_MINUTES = 30;
 
 function startOfDay(d: Date): Date {
   const r = new Date(d);
@@ -63,6 +77,10 @@ function endOfDay(d: Date): Date {
   const r = new Date(d);
   r.setHours(23, 59, 59, 999);
   return r;
+}
+
+function ymd(d: Date): string {
+  return startOfDay(d).toISOString().slice(0, 10);
 }
 
 function resolveTargetMonth(defaultMode: 'current' | 'previous' = 'current') {
@@ -84,7 +102,7 @@ function resolveTargetMonth(defaultMode: 'current' | 'previous' = 'current') {
     year = y;
     monthIndex = m - 1;
   } else {
-    throw new Error('Invalid SEED_MONTH. Use current, previous, or YYYY-MM.');
+    throw new Error('Invalid SEED_ATTENDANCE_MONTH. Use current, previous, or YYYY-MM.');
   }
 
   const start = new Date(year, monthIndex, 1, 0, 0, 0, 0);
@@ -123,34 +141,50 @@ function parseNum(value: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-async function main() {
-  const { db } = await import('../lib/db');
-  const schema = await import('../lib/db/schema');
-  const {
-    schedules,
-    attendance,
-    breakSessions,
-    shifts,
-    storeOpeningTasks,
-    storeFrontTasks,
-    setoranTasks,
-    setoranMoneyStorage,
-    cekBinTasks,
-    storeBins,
-    cekBinTaskBins,
-    vmChecklistTasks,
-    marketingCheckTasks,
-    itemDroppingTasks,
-    briefingTasks,
-    edcReconciliationTasks,
-    eodZReportTasks,
-    openStatementTasks,
-    groomingTasks,
-  } = schema;
+async function insertInBatches<T extends Record<string, unknown>>(table: any, rows: T[], batchSize = BATCH_SIZE) {
+  if (!rows.length) return [] as any[];
+  const inserted: any[] = [];
 
+  for (let i = 0; i < rows.length; i += batchSize) {
+    const batch = rows.slice(i, i + batchSize);
+    const result = await db.insert(table).values(batch as any).returning();
+    inserted.push(...(result as any[]));
+  }
+
+  return inserted;
+}
+
+async function updateTaskByIds(table: any, ids: number[], patch: Record<string, unknown>) {
+  if (!ids.length) return 0;
+  let updated = 0;
+
+  for (let i = 0; i < ids.length; i += BATCH_SIZE) {
+    const batch = ids.slice(i, i + BATCH_SIZE);
+    await db.update(table).set(patch as any).where(inArray(table.id, batch));
+    updated += batch.length;
+  }
+
+  return updated;
+}
+
+async function loadTaskMap(table: any, scheduleIds: number[]) {
+  if (!scheduleIds.length) return new Map<number, any>();
+  const rows = await db
+    .select()
+    .from(table)
+    .where(inArray(table.scheduleId, scheduleIds));
+
+  const map = new Map<number, any>();
+  for (const row of rows as any[]) {
+    if (!map.has(row.scheduleId)) map.set(row.scheduleId, row);
+  }
+  return map;
+}
+
+async function main() {
   const target = resolveTargetMonth('previous');
-  console.log(`\n📋 seed-attendance: ${target.yearMonth}`);
-  console.log(`   Range: ${target.start.toISOString().slice(0, 10)} → ${target.end.toISOString().slice(0, 10)}\n`);
+  console.log(`\n📋 seed-attendance fast mode: ${target.yearMonth}`);
+  console.log(`   Range: ${ymd(target.start)} → ${ymd(target.end)}\n`);
 
   const scheduleRows = await db
     .select({
@@ -169,411 +203,399 @@ async function main() {
     .orderBy(schedules.date, shifts.sortOrder);
 
   if (!scheduleRows.length) {
-    throw new Error(
-      `No schedule rows found for ${target.yearMonth}. Run seed-current-month.ts with the same SEED_MONTH first.`,
-    );
+    throw new Error(`No schedules found for ${target.yearMonth}. Run seed-current-month.ts with the same month first.`);
   }
 
-  async function getAttendance(scheduleId: number) {
-    const [row] = await db
-      .select({ id: attendance.id, status: attendance.status, checkInTime: attendance.checkInTime, checkOutTime: attendance.checkOutTime })
-      .from(attendance)
-      .where(eq(attendance.scheduleId, scheduleId))
-      .limit(1);
-    return row ?? null;
-  }
+  const scheduleIds = (scheduleRows as any[]).map((r) => r.sched.id);
+  const storeIds = [...new Set((scheduleRows as any[]).map((r) => r.sched.storeId))];
 
-  async function completeTask(table: any, scheduleId: number, checkIn: Date, extra: Record<string, unknown>) {
-    const [row] = await db
-      .select({ id: table.id, status: table.status })
-      .from(table)
-      .where(eq(table.scheduleId, scheduleId))
-      .limit(1);
+  const existingAttendanceRows = await db
+    .select()
+    .from(attendance)
+    .where(inArray(attendance.scheduleId, scheduleIds));
 
-    if (!row || row.status !== 'pending') return null;
+  const attendanceByScheduleId = new Map<number, any>();
+  for (const row of existingAttendanceRows as any[]) attendanceByScheduleId.set(row.scheduleId, row);
 
-    const completedAt = new Date(checkIn);
-    completedAt.setMinutes(completedAt.getMinutes() + rand(5, 35));
-
-    await db
-      .update(table)
-      .set({ ...extra, status: 'completed', completedAt, updatedAt: new Date() } as any)
-      .where(eq(table.id, row.id));
-
-    return row.id as number;
-  }
-
-  async function completeSetoran(sched: any, checkIn: Date) {
-    const [row] = await db
-      .select({ id: setoranTasks.id, status: setoranTasks.status, carriedDeficit: setoranTasks.carriedDeficit })
-      .from(setoranTasks)
-      .where(eq(setoranTasks.scheduleId, sched.id))
-      .limit(1);
-
-    if (!row || row.status !== 'pending') return false;
-
-    const actualReceivedAmount = rand(850_000, 2_500_000);
-    const previousUnpaidAmount = parseNum(row.carriedDeficit);
-    const requiredStoreAmount = actualReceivedAmount + previousUnpaidAmount;
-    const storedAmount = chance(0.85)
-      ? requiredStoreAmount
-      : Math.max(0, requiredStoreAmount - rand(50_000, 250_000));
-    const unpaidAmount = Math.max(0, requiredStoreAmount - storedAmount);
-
-    const completedAt = new Date(checkIn);
-    completedAt.setMinutes(completedAt.getMinutes() + rand(15, 45));
-    const now = new Date();
-
-    await db
-      .update(setoranTasks)
-      .set({
-        expectedAmount: String(actualReceivedAmount),
-        carriedDeficit: String(previousUnpaidAmount),
-        amount: String(storedAmount),
-        unpaidAmount: String(unpaidAmount),
-        resiPhoto: 'setoran/resi/sample.jpg',
-        atmCardSelfiePhoto: 'setoran/atm-card-selfie/sample.jpg',
-        notes: unpaidAmount > 0 ? 'Auto seed: ada unpaid untuk carry-forward.' : null,
-        status: 'completed',
-        completedAt,
-        updatedAt: now,
-      } as any)
-      .where(eq(setoranTasks.id, row.id));
-
-    await db
-      .insert(setoranMoneyStorage)
-      .values({
-        taskId: row.id,
-        scheduleId: sched.id,
-        userId: sched.userId,
-        storeId: sched.storeId,
-        shiftId: sched.shiftId,
-        date: startOfDay(sched.date),
-        actualReceivedAmount: String(actualReceivedAmount),
-        previousUnpaidAmount: String(previousUnpaidAmount),
-        requiredStoreAmount: String(requiredStoreAmount),
-        storedAmount: String(storedAmount),
-        unpaidAmount: String(unpaidAmount),
-        resiPhoto: 'setoran/resi/sample.jpg',
-        atmCardSelfiePhoto: 'setoran/atm-card-selfie/sample.jpg',
-        notes: unpaidAmount > 0 ? 'Auto seed: carry-forward test row.' : null,
-        updatedAt: now,
-      } as any)
-      .onConflictDoUpdate({
-        target: setoranMoneyStorage.taskId,
-        set: {
-          actualReceivedAmount: String(actualReceivedAmount),
-          previousUnpaidAmount: String(previousUnpaidAmount),
-          requiredStoreAmount: String(requiredStoreAmount),
-          storedAmount: String(storedAmount),
-          unpaidAmount: String(unpaidAmount),
-          resiPhoto: 'setoran/resi/sample.jpg',
-          atmCardSelfiePhoto: 'setoran/atm-card-selfie/sample.jpg',
-          notes: unpaidAmount > 0 ? 'Auto seed: carry-forward test row.' : null,
-          updatedAt: now,
-        } as any,
-      });
-
-    return true;
-  }
-
-  async function completeCekBin(scheduleId: number, storeId: number, checkIn: Date) {
-    const [row] = await db
-      .select({ id: cekBinTasks.id, status: cekBinTasks.status })
-      .from(cekBinTasks)
-      .where(eq(cekBinTasks.scheduleId, scheduleId))
-      .limit(1);
-
-    if (!row || row.status !== 'pending') return false;
-
-    const bins = await db
-      .select()
-      .from(storeBins)
-      .where(and(eq(storeBins.storeId, storeId), eq(storeBins.isActive, true)))
-      .limit(200);
-
-    const totalStoreBins = bins.length;
-    const minimumBinsToCheck = Math.ceil(totalStoreBins * 0.3);
-    const checkedBins = bins.slice(0, Math.max(0, minimumBinsToCheck));
-    const completedAt = new Date(checkIn);
-    completedAt.setMinutes(completedAt.getMinutes() + rand(20, 50));
-
-    await db
-      .update(cekBinTasks)
-      .set({
-        totalStoreBins,
-        minimumBinsToCheck,
-        checkedBinsCount: checkedBins.length,
-        notes: checkedBins.length ? 'Auto seed cek bin.' : 'No active bins seeded for this store.',
-        status: 'completed',
-        completedAt,
-        updatedAt: new Date(),
-      } as any)
-      .where(eq(cekBinTasks.id, row.id));
-
-    await db.delete(cekBinTaskBins).where(eq(cekBinTaskBins.taskId, row.id));
-
-    if (checkedBins.length) {
-      await db.insert(cekBinTaskBins).values(
-        checkedBins.map((bin: any) => ({
-          taskId: row.id,
-          binId: bin.id,
-          bin: bin.bin,
-          nama: bin.nama,
-          qtyBc: bin.qtyBc,
-          qtySesuaiBin: bin.qtySesuaiBin,
-          qtyTidakSesuaiBin: bin.qtyTidakSesuaiBin,
-          notes: chance(0.15) ? 'Ada minor selisih, perlu follow up.' : null,
-        })) as any,
-      );
-    }
-
-    return true;
-  }
-
-  let createdAttendance = 0;
-  let existingAttendance = 0;
   let absentCount = 0;
   let presentCount = 0;
   let lateCount = 0;
-  let breakCount = 0;
-  let tasksCompleted = 0;
+
+  const attendanceRowsToInsert: Array<typeof attendance.$inferInsert> = [];
+  const generatedByScheduleId = new Map<number, { checkIn: Date; checkOut: Date; isAbsent: boolean; status: string }>();
 
   for (const { sched, shiftCode, shiftStartTime, shiftEndTime } of scheduleRows as any[]) {
     if (shiftCode !== 'morning' && shiftCode !== 'evening' && shiftCode !== 'full_day') continue;
+    if (attendanceByScheduleId.has(sched.id)) continue;
 
     const code = shiftCode as ShiftCode;
     const fallback = FALLBACK_SHIFT_TIMES[code];
     const shiftStart = dateWithTime(sched.date, shiftStartTime, fallback.startTime);
     const shiftEnd = dateWithTime(sched.date, shiftEndTime, fallback.endTime);
 
-    const existing = await getAttendance(sched.id);
-    let attendanceId = existing?.id as number | undefined;
-    let checkIn = existing?.checkInTime ? new Date(existing.checkInTime) : new Date(shiftStart);
-    let checkOut = existing?.checkOutTime ? new Date(existing.checkOutTime) : new Date(shiftEnd);
-    let isAbsent = existing?.status === 'absent';
+    const roll = Math.random();
+    const isAbsent = roll < 0.05;
 
-    if (existing) {
-      existingAttendance++;
-    } else {
-      const roll = Math.random();
-      isAbsent = roll < 0.05;
-
-      if (isAbsent) {
-        const [att] = await db
-          .insert(attendance)
-          .values({
-            scheduleId: sched.id,
-            userId: sched.userId,
-            storeId: sched.storeId,
-            date: startOfDay(sched.date),
-            shiftId: sched.shiftId,
-            status: 'absent',
-            onBreak: false,
-            recordedBy: sched.userId,
-          } as any)
-          .returning({ id: attendance.id });
-        attendanceId = att.id;
-        absentCount++;
-      } else {
-        const late = roll < 0.15;
-        checkIn = new Date(shiftStart);
-        if (late) checkIn.setMinutes(checkIn.getMinutes() + rand(LATE_AFTER_MINUTES + 1, LATE_AFTER_MINUTES + 30));
-        else checkIn.setMinutes(checkIn.getMinutes() - rand(0, 15));
-
-        checkOut = new Date(shiftEnd);
-        checkOut.setMinutes(checkOut.getMinutes() + rand(0, 20));
-
-        const [att] = await db
-          .insert(attendance)
-          .values({
-            scheduleId: sched.id,
-            userId: sched.userId,
-            storeId: sched.storeId,
-            date: startOfDay(sched.date),
-            shiftId: sched.shiftId,
-            status: late ? 'late' : 'present',
-            checkInTime: checkIn,
-            checkOutTime: checkOut,
-            onBreak: false,
-            recordedBy: sched.userId,
-          } as any)
-          .returning({ id: attendance.id });
-
-        attendanceId = att.id;
-        if (late) lateCount++;
-        else presentCount++;
-      }
-
-      createdAttendance++;
+    if (isAbsent) {
+      attendanceRowsToInsert.push({
+        scheduleId: sched.id,
+        userId: sched.userId,
+        storeId: sched.storeId,
+        date: startOfDay(sched.date),
+        shiftId: sched.shiftId,
+        status: 'absent',
+        onBreak: false,
+        recordedBy: sched.userId,
+      } as any);
+      generatedByScheduleId.set(sched.id, { checkIn: shiftStart, checkOut: shiftEnd, isAbsent: true, status: 'absent' });
+      absentCount++;
+      continue;
     }
 
-    if (!attendanceId || isAbsent) continue;
+    const late = roll < 0.15;
+    const checkIn = new Date(shiftStart);
+    if (late) checkIn.setMinutes(checkIn.getMinutes() + rand(LATE_AFTER_MINUTES + 1, LATE_AFTER_MINUTES + 30));
+    else checkIn.setMinutes(checkIn.getMinutes() - rand(0, 15));
 
-    // Breaks are idempotent enough for seeding: only create if there are none for this attendance row.
-    const [existingBreak] = await db
-      .select({ id: breakSessions.id })
-      .from(breakSessions)
-      .where(eq(breakSessions.attendanceId, attendanceId))
-      .limit(1);
+    const checkOut = new Date(shiftEnd);
+    checkOut.setMinutes(checkOut.getMinutes() + rand(0, 20));
 
-    if (!existingBreak) {
-      for (const cfg of BREAK_CONFIG[code]) {
-        if (!chance(code === 'full_day' ? 0.75 : 0.8)) continue;
+    const status = late ? 'late' : 'present';
+    attendanceRowsToInsert.push({
+      scheduleId: sched.id,
+      userId: sched.userId,
+      storeId: sched.storeId,
+      date: startOfDay(sched.date),
+      shiftId: sched.shiftId,
+      status,
+      checkInTime: checkIn,
+      checkOutTime: checkOut,
+      onBreak: false,
+      recordedBy: sched.userId,
+    } as any);
+    generatedByScheduleId.set(sched.id, { checkIn, checkOut, isAbsent: false, status });
 
-        const breakStart = new Date(sched.date);
-        breakStart.setHours(cfg.hour, rand(cfg.minuteMin, cfg.minuteMax), 0, 0);
-        const breakEnd = new Date(breakStart);
-        breakEnd.setMinutes(breakEnd.getMinutes() + rand(cfg.durationMin, cfg.durationMax));
+    if (late) lateCount++;
+    else presentCount++;
+  }
 
-        if (breakStart > checkIn && breakEnd < checkOut) {
-          const cashOut = money();
-          const cashIn = chance(0.95) ? cashOut : String(Math.max(parseInt(cashOut, 10) - 50_000, 0));
+  const insertedAttendance = await insertInBatches(attendance, attendanceRowsToInsert);
+  for (const row of insertedAttendance) attendanceByScheduleId.set(row.scheduleId, row);
 
-          await db.insert(breakSessions).values({
-            attendanceId,
-            userId: sched.userId,
-            storeId: sched.storeId,
-            breakType: cfg.breakType,
-            breakOutTime: breakStart,
-            returnTime: breakEnd,
-            cashOut,
-            cashIn,
-          } as any);
-          breakCount++;
-        }
+  const existingBreakRows = await db
+    .select({ attendanceId: breakSessions.attendanceId })
+    .from(breakSessions)
+    .where(inArray(breakSessions.attendanceId, [...attendanceByScheduleId.values()].map((a: any) => a.id)));
+  const breakAttendanceIds = new Set((existingBreakRows as any[]).map((r) => r.attendanceId));
+
+  const breakRows: Array<typeof breakSessions.$inferInsert> = [];
+
+  for (const { sched, shiftCode, shiftStartTime, shiftEndTime } of scheduleRows as any[]) {
+    if (shiftCode !== 'morning' && shiftCode !== 'evening' && shiftCode !== 'full_day') continue;
+
+    const att = attendanceByScheduleId.get(sched.id);
+    if (!att || att.status === 'absent' || breakAttendanceIds.has(att.id)) continue;
+
+    const code = shiftCode as ShiftCode;
+    const fallback = FALLBACK_SHIFT_TIMES[code];
+    const checkIn = att.checkInTime ? new Date(att.checkInTime) : dateWithTime(sched.date, shiftStartTime, fallback.startTime);
+    const checkOut = att.checkOutTime ? new Date(att.checkOutTime) : dateWithTime(sched.date, shiftEndTime, fallback.endTime);
+
+    for (const cfg of BREAK_CONFIG[code]) {
+      if (!chance(code === 'full_day' ? 0.75 : 0.8)) continue;
+
+      const breakStart = new Date(sched.date);
+      breakStart.setHours(cfg.hour, rand(cfg.minuteMin, cfg.minuteMax), 0, 0);
+      const breakEnd = new Date(breakStart);
+      breakEnd.setMinutes(breakEnd.getMinutes() + rand(cfg.durationMin, cfg.durationMax));
+
+      if (breakStart > checkIn && breakEnd < checkOut) {
+        const cashOut = money();
+        const cashIn = chance(0.95) ? cashOut : String(Math.max(parseInt(cashOut, 10) - 50_000, 0));
+
+        breakRows.push({
+          attendanceId: att.id,
+          userId: sched.userId,
+          storeId: sched.storeId,
+          breakType: cfg.breakType,
+          breakOutTime: breakStart,
+          returnTime: breakEnd,
+          cashOut,
+          cashIn,
+        } as any);
       }
-    }
-
-    const hasMorningTasks = code === 'morning' || code === 'full_day';
-    const hasEveningTasks = code === 'evening' || code === 'full_day';
-
-    if (hasMorningTasks) {
-      if (chance(0.9)) {
-        const ok = await completeTask(storeOpeningTasks, sched.id, checkIn, {
-          loginPos: true,
-          checkAbsenSunfish: true,
-          tarikSohSales: true,
-          fiveR: true,
-          fiveRAreaKasirPhotos: json(['opening/5r-kasir.jpg']),
-          fiveRAreaDepanPhotos: json(['opening/5r-depan.jpg']),
-          fiveRAreaKananPhotos: json(['opening/5r-kanan.jpg']),
-          fiveRAreaKiriPhotos: json(['opening/5r-kiri.jpg']),
-          fiveRAreaGudangPhotos: json(['opening/5r-gudang.jpg']),
-          cekLamp: true,
-          cekSoundSystem: true,
-          cashDrawerPhotos: json(['opening/sample-cashdrawer.jpg']),
-          notes: null,
-        });
-        if (ok) tasksCompleted++;
-      }
-
-      if (chance(0.9)) {
-        const ok = await completeTask(storeFrontTasks, sched.id, checkIn, {
-          storefrontPhotos: json(['store-front/storefront/team.jpg']),
-          rollingDoorClosedPhoto: 'store-front/rolling-door/closed.jpg',
-          notes: null,
-        });
-        if (ok) tasksCompleted++;
-      }
-
-      if (chance(0.8) && await completeSetoran(sched, checkIn)) tasksCompleted++;
-      if (chance(0.8) && await completeCekBin(sched.id, sched.storeId, checkIn)) tasksCompleted++;
-
-      if (chance(0.9)) {
-        const ok = await completeTask(vmChecklistTasks, sched.id, checkIn, {
-          shoeLaceShoeFillerPriceTagHangtagLabelK3L: true,
-          lastPairAndPigskinHangtag: true,
-          popPromoUpdate: true,
-          displayTableWallShelvingShowcaseHangbarStackingPedestal: true,
-          floorDisplayCleanliness: true,
-          vmToolsStorage: true,
-          notes: null,
-        });
-        if (ok) tasksCompleted++;
-      }
-
-      if (chance(0.9)) {
-        const ok = await completeTask(marketingCheckTasks, sched.id, checkIn, {
-          promoName: true,
-          promoPeriod: true,
-          promoMechanism: true,
-          randomShoeItems: true,
-          randomNonShoeItems: true,
-          sellTag: true,
-          notes: null,
-        });
-        if (ok) tasksCompleted++;
-      }
-
-      if (chance(0.75)) {
-        const ok = await completeTask(itemDroppingTasks, sched.id, checkIn, {
-          hasDropping: chance(0.6),
-          notes: null,
-        });
-        if (ok) tasksCompleted++;
-      }
-    }
-
-    if (hasEveningTasks) {
-      if (chance(0.85)) {
-        const ok = await completeTask(briefingTasks, sched.id, checkIn, { done: true, isBalanced: true, notes: null });
-        if (ok) tasksCompleted++;
-      }
-      if (chance(0.85)) {
-        const ok = await completeTask(edcReconciliationTasks, sched.id, checkIn, { isBalanced: true, notes: null });
-        if (ok) tasksCompleted++;
-      }
-      if (chance(0.85)) {
-        const ok = await completeTask(eodZReportTasks, sched.id, checkIn, {
-          totalNominal: String(rand(1_000_000, 5_000_000)),
-          zReportPhotos: json(['eod/z-report/sample.jpg']),
-          notes: null,
-        });
-        if (ok) tasksCompleted++;
-      }
-      if (chance(0.85)) {
-        const ok = await completeTask(openStatementTasks, sched.id, checkIn, {
-          expectedAmount: String(rand(1_000_000, 5_000_000)),
-          actualAmount: String(rand(1_000_000, 5_000_000)),
-          isBalanced: true,
-          notes: null,
-        });
-        if (ok) tasksCompleted++;
-      }
-    }
-
-    if (chance(0.9)) {
-      const ok = await completeTask(groomingTasks, sched.id, checkIn, {
-        uniformActive: true,
-        hairActive: true,
-        smellActive: true,
-        makeUpActive: true,
-        shoeActive: true,
-        nameTagActive: true,
-        uniformChecked: true,
-        hairChecked: true,
-        smellChecked: true,
-        makeUpChecked: true,
-        shoeChecked: true,
-        nameTagChecked: true,
-        selfiePhotos: json(['grooming/selfie/sample.jpg']),
-        notes: null,
-      });
-      if (ok) tasksCompleted++;
     }
   }
 
+  const insertedBreaks = await insertInBatches(breakSessions, breakRows);
+
+  const [
+    storeOpeningMap,
+    storeFrontMap,
+    setoranMap,
+    cekBinMap,
+    vmMap,
+    marketingMap,
+    itemDroppingMap,
+    briefingMap,
+    edcMap,
+    eodMap,
+    openStatementMap,
+    groomingMap,
+  ] = await Promise.all([
+    loadTaskMap(storeOpeningTasks, scheduleIds),
+    loadTaskMap(storeFrontTasks, scheduleIds),
+    loadTaskMap(setoranTasks, scheduleIds),
+    loadTaskMap(cekBinTasks, scheduleIds),
+    loadTaskMap(vmChecklistTasks, scheduleIds),
+    loadTaskMap(marketingCheckTasks, scheduleIds),
+    loadTaskMap(itemDroppingTasks, scheduleIds),
+    loadTaskMap(briefingTasks, scheduleIds),
+    loadTaskMap(edcReconciliationTasks, scheduleIds),
+    loadTaskMap(eodZReportTasks, scheduleIds),
+    loadTaskMap(openStatementTasks, scheduleIds),
+    loadTaskMap(groomingTasks, scheduleIds),
+  ]);
+
+  const completedAt = new Date();
+  const now = new Date();
+  let tasksCompleted = 0;
+
+  function pendingIds(map: Map<number, any>, probability: number, sourceSchedules: any[]) {
+    const ids: number[] = [];
+    for (const { sched } of sourceSchedules) {
+      const task = map.get(sched.id);
+      if (!task || task.status !== 'pending') continue;
+      if (!chance(probability)) continue;
+      ids.push(task.id);
+    }
+    return ids;
+  }
+
+  const morningSchedules = (scheduleRows as any[]).filter((r) => r.shiftCode === 'morning' || r.shiftCode === 'full_day');
+  const eveningSchedules = (scheduleRows as any[]).filter((r) => r.shiftCode === 'evening' || r.shiftCode === 'full_day');
+
+  const storeOpeningIds = pendingIds(storeOpeningMap, 0.9, morningSchedules);
+  tasksCompleted += await updateTaskByIds(storeOpeningTasks, storeOpeningIds, {
+    loginPos: true,
+    checkAbsenSunfish: true,
+    tarikSohSales: true,
+    fiveR: true,
+    fiveRAreaKasirPhotos: json(['opening/5r-kasir.jpg']),
+    fiveRAreaDepanPhotos: json(['opening/5r-depan.jpg']),
+    fiveRAreaKananPhotos: json(['opening/5r-kanan.jpg']),
+    fiveRAreaKiriPhotos: json(['opening/5r-kiri.jpg']),
+    fiveRAreaGudangPhotos: json(['opening/5r-gudang.jpg']),
+    cekLamp: true,
+    cekSoundSystem: true,
+    cashDrawerPhotos: json(['opening/sample-cashdrawer.jpg']),
+    notes: null,
+    status: 'completed',
+    completedAt,
+    updatedAt: now,
+  });
+
+  tasksCompleted += await updateTaskByIds(storeFrontTasks, pendingIds(storeFrontMap, 0.9, morningSchedules), {
+    storefrontPhotos: json(['store-front/storefront/team.jpg']),
+    rollingDoorClosedPhoto: 'store-front/rolling-door/closed.jpg',
+    notes: null,
+    status: 'completed',
+    completedAt,
+    updatedAt: now,
+  });
+
+  // Setoran needs per-row amounts, so it stays row-by-row but without row SELECTs.
+  const setoranStorageRows: Array<typeof setoranMoneyStorage.$inferInsert> = [];
+  for (const { sched } of morningSchedules) {
+    const task = setoranMap.get(sched.id);
+    if (!task || task.status !== 'pending' || !chance(0.8)) continue;
+
+    const actualReceivedAmount = rand(850_000, 2_500_000);
+    const previousUnpaidAmount = parseNum(task.carriedDeficit);
+    const requiredStoreAmount = actualReceivedAmount + previousUnpaidAmount;
+    const storedAmount = chance(0.85) ? requiredStoreAmount : Math.max(0, requiredStoreAmount - rand(50_000, 250_000));
+    const unpaidAmount = Math.max(0, requiredStoreAmount - storedAmount);
+
+    await db.update(setoranTasks).set({
+      expectedAmount: String(actualReceivedAmount),
+      carriedDeficit: String(previousUnpaidAmount),
+      amount: String(storedAmount),
+      unpaidAmount: String(unpaidAmount),
+      resiPhoto: 'setoran/resi/sample.jpg',
+      atmCardSelfiePhoto: 'setoran/atm-card-selfie/sample.jpg',
+      notes: unpaidAmount > 0 ? 'Auto seed: ada unpaid untuk carry-forward.' : null,
+      status: 'completed',
+      completedAt,
+      updatedAt: now,
+    } as any).where(eq(setoranTasks.id, task.id));
+
+    setoranStorageRows.push({
+      taskId: task.id,
+      scheduleId: sched.id,
+      userId: sched.userId,
+      storeId: sched.storeId,
+      shiftId: sched.shiftId,
+      date: startOfDay(sched.date),
+      actualReceivedAmount: String(actualReceivedAmount),
+      previousUnpaidAmount: String(previousUnpaidAmount),
+      requiredStoreAmount: String(requiredStoreAmount),
+      storedAmount: String(storedAmount),
+      unpaidAmount: String(unpaidAmount),
+      resiPhoto: 'setoran/resi/sample.jpg',
+      atmCardSelfiePhoto: 'setoran/atm-card-selfie/sample.jpg',
+      notes: unpaidAmount > 0 ? 'Auto seed: carry-forward test row.' : null,
+      updatedAt: now,
+    } as any);
+    tasksCompleted++;
+  }
+  await insertInBatches(setoranMoneyStorage, setoranStorageRows);
+
+  // Cek Bin needs child rows.
+  const activeBins = await db
+    .select()
+    .from(storeBins)
+    .where(and(inArray(storeBins.storeId, storeIds), eq(storeBins.isActive, true)));
+  const binsByStoreId = new Map<number, any[]>();
+  for (const bin of activeBins as any[]) {
+    const list = binsByStoreId.get(bin.storeId) ?? [];
+    list.push(bin);
+    binsByStoreId.set(bin.storeId, list);
+  }
+
+  const cekBinTaskBinsRows: Array<typeof cekBinTaskBins.$inferInsert> = [];
+  for (const { sched } of morningSchedules) {
+    const task = cekBinMap.get(sched.id);
+    if (!task || task.status !== 'pending' || !chance(0.8)) continue;
+    const bins = binsByStoreId.get(sched.storeId) ?? [];
+    const minToCheck = Math.max(1, Math.ceil(bins.length * 0.3));
+    const checkedBins = bins.slice(0, minToCheck);
+
+    await db.update(cekBinTasks).set({
+      totalStoreBins: bins.length,
+      minimumBinsToCheck: minToCheck,
+      checkedBinsCount: checkedBins.length,
+      notes: checkedBins.length ? 'Auto seed cek bin.' : 'No active bins seeded for this store.',
+      status: 'completed',
+      completedAt,
+      updatedAt: now,
+    } as any).where(eq(cekBinTasks.id, task.id));
+
+    for (const bin of checkedBins) {
+      cekBinTaskBinsRows.push({
+        taskId: task.id,
+        binId: bin.id,
+        bin: bin.bin,
+        nama: bin.nama,
+        qtyBc: bin.qtyBc,
+        qtySesuaiBin: bin.qtySesuaiBin,
+        qtyTidakSesuaiBin: bin.qtyTidakSesuaiBin,
+        notes: chance(0.15) ? 'Ada minor selisih, perlu follow up.' : null,
+      } as any);
+    }
+    tasksCompleted++;
+  }
+  await insertInBatches(cekBinTaskBins, cekBinTaskBinsRows);
+
+  tasksCompleted += await updateTaskByIds(vmChecklistTasks, pendingIds(vmMap, 0.9, morningSchedules), {
+    shoeLaceShoeFillerPriceTagHangtagLabelK3L: true,
+    lastPairAndPigskinHangtag: true,
+    popPromoUpdate: true,
+    displayTableWallShelvingShowcaseHangbarStackingPedestal: true,
+    floorDisplayCleanliness: true,
+    vmToolsStorage: true,
+    notes: null,
+    status: 'completed',
+    completedAt,
+    updatedAt: now,
+  });
+
+  tasksCompleted += await updateTaskByIds(marketingCheckTasks, pendingIds(marketingMap, 0.9, morningSchedules), {
+    promoName: true,
+    promoPeriod: true,
+    promoMechanism: true,
+    randomShoeItems: true,
+    randomNonShoeItems: true,
+    sellTag: true,
+    notes: null,
+    status: 'completed',
+    completedAt,
+    updatedAt: now,
+  });
+
+  tasksCompleted += await updateTaskByIds(itemDroppingTasks, pendingIds(itemDroppingMap, 0.75, morningSchedules), {
+    hasDropping: true,
+    notes: null,
+    status: 'completed',
+    completedAt,
+    updatedAt: now,
+  });
+
+  tasksCompleted += await updateTaskByIds(briefingTasks, pendingIds(briefingMap, 0.85, eveningSchedules), {
+    done: true,
+    isBalanced: true,
+    notes: null,
+    status: 'completed',
+    completedAt,
+    updatedAt: now,
+  });
+
+  tasksCompleted += await updateTaskByIds(edcReconciliationTasks, pendingIds(edcMap, 0.85, eveningSchedules), {
+    isBalanced: true,
+    notes: null,
+    status: 'completed',
+    completedAt,
+    updatedAt: now,
+  });
+
+  tasksCompleted += await updateTaskByIds(eodZReportTasks, pendingIds(eodMap, 0.85, eveningSchedules), {
+    totalNominal: String(rand(1_000_000, 5_000_000)),
+    zReportPhotos: json(['eod/z-report/sample.jpg']),
+    notes: null,
+    status: 'completed',
+    completedAt,
+    updatedAt: now,
+  });
+
+  tasksCompleted += await updateTaskByIds(openStatementTasks, pendingIds(openStatementMap, 0.85, eveningSchedules), {
+    expectedAmount: String(rand(1_000_000, 5_000_000)),
+    actualAmount: String(rand(1_000_000, 5_000_000)),
+    isBalanced: true,
+    notes: null,
+    status: 'completed',
+    completedAt,
+    updatedAt: now,
+  });
+
+  tasksCompleted += await updateTaskByIds(groomingTasks, pendingIds(groomingMap, 0.9, scheduleRows as any[]), {
+    uniformActive: true,
+    hairActive: true,
+    smellActive: true,
+    makeUpActive: true,
+    shoeActive: true,
+    nameTagActive: true,
+    uniformChecked: true,
+    hairChecked: true,
+    smellChecked: true,
+    makeUpChecked: true,
+    shoeChecked: true,
+    nameTagChecked: true,
+    selfiePhotos: json(['grooming/selfie/sample.jpg']),
+    notes: null,
+    status: 'completed',
+    completedAt,
+    updatedAt: now,
+  });
+
   console.log('\n═══════════════════════════════════════════════════════════');
   console.log(`✅ seed-attendance complete (${target.yearMonth})`);
-  console.log(`   Schedule rows scanned    : ${scheduleRows.length}`);
-  console.log(`   Attendance created       : ${createdAttendance}`);
-  console.log(`   Attendance already existed: ${existingAttendance}`);
-  console.log(`   Present                  : ${presentCount}`);
-  console.log(`   Late                     : ${lateCount}`);
-  console.log(`   Absent                   : ${absentCount}`);
-  console.log(`   Break rows created       : ${breakCount}`);
-  console.log(`   Tasks completed          : ${tasksCompleted}`);
+  console.log(`   Schedule rows scanned     : ${scheduleRows.length}`);
+  console.log(`   Attendance created        : ${insertedAttendance.length}`);
+  console.log(`   Attendance already existed: ${existingAttendanceRows.length}`);
+  console.log(`   Present                   : ${presentCount}`);
+  console.log(`   Late                      : ${lateCount}`);
+  console.log(`   Absent                    : ${absentCount}`);
+  console.log(`   Break rows created        : ${insertedBreaks.length}`);
+  console.log(`   Tasks completed           : ${tasksCompleted}`);
   console.log('═══════════════════════════════════════════════════════════\n');
 }
 

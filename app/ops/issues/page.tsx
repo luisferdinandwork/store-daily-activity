@@ -12,12 +12,13 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   AlertTriangle, Store as StoreIcon, MapPin, Clock, User, ChevronDown,
-  CheckCircle2, Eye, Loader2, X, ArrowRight, RefreshCw, Globe2,
+  CheckCircle2, Eye, Loader2, X, ArrowRight, Globe2,
   AlertCircle, Shield,
 } from 'lucide-react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
+import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -344,11 +345,11 @@ export default function OpsIssuesPage() {
   ];
 
   if (authStatus === 'loading' || !session) return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50"><Loader2 className="h-6 w-6 animate-spin text-indigo-400" /></div>
+    <div className="flex min-h-full items-center justify-center bg-slate-50"><Loader2 className="h-6 w-6 animate-spin text-indigo-400" /></div>
   );
 
   if (!isOps) return (
-    <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-slate-50 p-8 text-center">
+    <div className="flex min-h-full flex-col items-center justify-center gap-4 bg-slate-50 p-8 text-center">
       <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-red-50"><Shield className="h-8 w-8 text-red-500" /></div>
       <p className="text-base font-bold text-slate-800">Access Restricted</p>
       <p className="text-sm text-slate-500">Only OPS users can review issue reports.</p>
@@ -356,26 +357,35 @@ export default function OpsIssuesPage() {
   );
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <div className="mx-auto max-w-7xl space-y-6 p-6 lg:p-8">
+    <div className="min-h-full bg-slate-50">
+      <OpsPageHeader
+        scope={isHO ? 'OPS · Head Office' : 'OPS · Area Issues'}
+        title="Issue Reports"
+        subtitle={
+          <span className="inline-flex items-center gap-1.5">
+            {isHO ? (
+              <>
+                <Globe2 className="h-3.5 w-3.5" />
+                All areas
+              </>
+            ) : (
+              <>
+                <MapPin className="h-3.5 w-3.5" />
+                {areaName ?? 'Your area'}
+              </>
+            )}
+            <span>·</span>
+            <span>
+              {issuesList.length} issue{issuesList.length !== 1 ? 's' : ''} routed to Ops
+            </span>
+          </span>
+        }
+        onRefresh={() => load(true)}
+        refreshing={refreshing}
+        contentClassName="w-full"
+      />
 
-        {/* Header */}
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-500">
-              {isHO ? 'OPS · Head Office' : 'OPS · Area Issues'}
-            </p>
-            <h1 className="mt-1 text-3xl font-bold text-slate-900">Issue Reports</h1>
-            <p className="mt-1 flex items-center gap-1.5 text-sm text-slate-500">
-              {isHO ? <><Globe2 className="h-3.5 w-3.5" />All areas</> : <><MapPin className="h-3.5 w-3.5" />{areaName ?? 'Your area'}</>}
-              {' · '}{issuesList.length} issue{issuesList.length !== 1 ? 's' : ''} routed to Ops
-            </p>
-          </div>
-          <button onClick={() => load(true)} disabled={refreshing}
-            className="flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-600 hover:bg-slate-50">
-            <RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} />Refresh
-          </button>
-        </div>
+      <div className="mx-auto max-w-7xl space-y-6 p-6 lg:p-8">
 
         {/* Store filter */}
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">

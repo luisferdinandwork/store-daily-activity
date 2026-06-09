@@ -6,6 +6,8 @@ import { db } from "@/lib/db";
 import {
   schedules,
   shifts,
+  shiftTasks,
+  taskDefinitions,
   storeOpeningTasks,
   storeFrontTasks,
   setoranTasks,
@@ -39,6 +41,31 @@ import { getOrCreateGroomingForSchedule } from "@/lib/db/utils/grooming";
 import { getOrCreateBriefingForSchedule } from "@/lib/db/utils/briefing";
 import { getOrCreateSerahTerimaForSchedule } from "@/lib/db/utils/serah-terima";
 import { materialiseOpenStatementTask } from "@/lib/db/utils/open-statement";
+// IMPORTANT:
+// Do not import SHIFT_TASK_MAP here. The employee task page must use the
+// admin-managed DB mapping from task_definitions + shift_tasks.
+// The constants below are only the task types this API knows how to materialise/read.
+const SUPPORTED_TASK_TYPES = [
+  "store_opening",
+  "store_front",
+  "setoran",
+  "cek_bin",
+  "vm_checklist",
+  "marketing_check",
+  "item_dropping",
+  "briefing",
+  "serah_terima",
+  "edc_reconciliation",
+  "eod_z_report",
+  "open_statement",
+  "grooming",
+] as const;
+
+type TaskType = (typeof SUPPORTED_TASK_TYPES)[number];
+
+function isSupportedTaskType(value: string): value is TaskType {
+  return (SUPPORTED_TASK_TYPES as readonly string[]).includes(value);
+}
 
 function startOfDay(d: Date): Date {
   const r = new Date(d);
@@ -79,7 +106,7 @@ function toIso(d: Date | null | undefined): string | null {
   return d ? d.toISOString() : null;
 }
 
-type ShiftCode = "morning" | "evening" | "full_day";
+type ShiftCode = string;
 
 let _shiftCodeCache: Record<number, string> | null = null;
 
@@ -92,6 +119,113 @@ async function getShiftCodeMap(): Promise<Record<number, string>> {
 
   _shiftCodeCache = Object.fromEntries(rows.map((r) => [r.id, r.code]));
   return _shiftCodeCache;
+}
+
+type ShiftTaskConfig = {
+  assignedTaskTypes: Set<TaskType>;
+  shiftTaskMap: Record<string, TaskType[]>;
+  unsupportedTaskDefinitions: Array<{
+    shiftId: number;
+    shiftCode: string;
+    code: string;
+    label: string;
+  }>;
+};
+
+async function getAssignedTaskTypesFromDb(
+  shiftIds: number[],
+  shiftCodeMap: Record<number, string>,
+): Promise<ShiftTaskConfig> {
+  if (!shiftIds.length) {
+    return {
+      assignedTaskTypes: new Set<TaskType>(),
+      shiftTaskMap: {},
+      unsupportedTaskDefinitions: [],
+    };
+  }
+
+  const rows = await db
+    .select({
+      shiftId: shiftTasks.shiftId,
+      taskCode: taskDefinitions.code,
+      taskLabel: taskDefinitions.label,
+      taskSortOrder: taskDefinitions.sortOrder,
+      assignmentSortOrder: shiftTasks.sortOrder,
+    })
+    .from(shiftTasks)
+    .innerJoin(
+      taskDefinitions,
+      eq(taskDefinitions.id, shiftTasks.taskDefinitionId),
+    )
+    .where(
+      and(
+        inArray(shiftTasks.shiftId, shiftIds),
+        eq(shiftTasks.isActive, true),
+        eq(taskDefinitions.isActive, true),
+      ),
+    )
+    .orderBy(
+      asc(shiftTasks.shiftId),
+      asc(shiftTasks.sortOrder),
+      asc(taskDefinitions.sortOrder),
+    );
+
+  const assignedTaskTypes = new Set<TaskType>();
+  const shiftTaskMap: Record<string, TaskType[]> = {};
+  const unsupportedTaskDefinitions: ShiftTaskConfig["unsupportedTaskDefinitions"] =
+    [];
+
+  for (const row of rows) {
+    const shiftCode = shiftCodeMap[row.shiftId] ?? String(row.shiftId);
+
+    if (!shiftTaskMap[shiftCode]) {
+      shiftTaskMap[shiftCode] = [];
+    }
+
+    if (!isSupportedTaskType(row.taskCode)) {
+      unsupportedTaskDefinitions.push({
+        shiftId: row.shiftId,
+        shiftCode,
+        code: row.taskCode,
+        label: row.taskLabel,
+      });
+      continue;
+    }
+
+    assignedTaskTypes.add(row.taskCode);
+
+    if (!shiftTaskMap[shiftCode].includes(row.taskCode)) {
+      shiftTaskMap[shiftCode].push(row.taskCode);
+    }
+  }
+
+  return { assignedTaskTypes, shiftTaskMap, unsupportedTaskDefinitions };
+}
+
+function taskAllowedForEmployeeShift(
+  taskType: TaskType,
+  taskShift: string,
+  employeeShiftCodes: string[],
+  shiftTaskMap: Record<string, TaskType[]>,
+) {
+  // A task is visible when it belongs to one of the employee's scheduled shifts.
+  // This supports custom shifts created from OPS because it reads shiftTaskMap from DB.
+  return employeeShiftCodes.some((shiftCode) => {
+    const allowedForShift = shiftTaskMap[shiftCode] ?? [];
+    if (!allowedForShift.includes(taskType)) return false;
+
+    // Store-level shared rows can be created on a different schedule/shift row.
+    // When the task type is assigned to this employee's shift, let them see it.
+    if (taskShift === shiftCode) return true;
+    if (
+      taskShift === "morning" ||
+      taskShift === "evening" ||
+      taskShift === "full_day"
+    )
+      return true;
+
+    return taskShift === shiftCode;
+  });
 }
 
 export async function GET(request: NextRequest) {
@@ -145,13 +279,15 @@ export async function GET(request: NextRequest) {
       ...new Set(todaySchedules.map((s) => shiftCodeMap[s.shiftId] ?? "")),
     ].filter(Boolean) as ShiftCode[];
 
-    const hasMorningTasks = shiftCodesRaw.some(
-      (c) => c === "morning" || c === "full_day",
-    );
+    const shiftIds = [...new Set(todaySchedules.map((s) => s.shiftId))];
+    const {
+      assignedTaskTypes: allowedTaskTypes,
+      shiftTaskMap,
+      unsupportedTaskDefinitions,
+    } = await getAssignedTaskTypesFromDb(shiftIds, shiftCodeMap);
 
-    const hasEveningTasks = shiftCodesRaw.some(
-      (c) => c === "evening" || c === "full_day",
-    );
+    const shouldLoadTask = (taskType: TaskType) =>
+      allowedTaskTypes.has(taskType);
 
     const primaryShift: ShiftCode | null = shiftCodesRaw[0] ?? null;
     const inStore = (storeId: number) => storeIds.includes(storeId);
@@ -194,7 +330,7 @@ export async function GET(request: NextRequest) {
       openStatementRows,
       groomingRows,
     ] = await Promise.all([
-      hasMorningTasks
+      shouldLoadTask("store_opening")
         ? (async () => {
             await Promise.all(
               morningSchedules.map((s) =>
@@ -221,7 +357,7 @@ export async function GET(request: NextRequest) {
           })()
         : Promise.resolve([]),
 
-      hasMorningTasks
+      shouldLoadTask("store_front")
         ? (async () => {
             await Promise.all(
               morningSchedules.map((s) =>
@@ -249,7 +385,7 @@ export async function GET(request: NextRequest) {
           })()
         : Promise.resolve([]),
 
-      hasMorningTasks
+      shouldLoadTask("setoran")
         ? (async () => {
             await Promise.all(
               morningSchedules.map((s) => getOrCreateSetoranForSchedule(s.id)),
@@ -269,7 +405,7 @@ export async function GET(request: NextRequest) {
           })()
         : Promise.resolve([]),
 
-      hasMorningTasks
+      shouldLoadTask("cek_bin")
         ? (async () => {
             await Promise.all(
               morningSchedules.map((s) =>
@@ -297,7 +433,7 @@ export async function GET(request: NextRequest) {
           })()
         : Promise.resolve([]),
 
-      hasMorningTasks
+      shouldLoadTask("vm_checklist")
         ? (async () => {
             await Promise.all(
               morningSchedules.map((s) =>
@@ -325,7 +461,7 @@ export async function GET(request: NextRequest) {
           })()
         : Promise.resolve([]),
 
-      hasMorningTasks
+      shouldLoadTask("marketing_check")
         ? (async () => {
             await Promise.all(
               morningSchedules.map((s) =>
@@ -353,59 +489,63 @@ export async function GET(request: NextRequest) {
           })()
         : Promise.resolve([]),
 
-      (async () => {
-        await Promise.all(
-          todaySchedules.map((s) =>
-            getOrCreateItemDroppingForSchedule(
-              s.id,
-              userId,
-              s.storeId,
-              s.shiftId,
-              targetDate,
-            ),
-          ),
-        );
+      shouldLoadTask("item_dropping")
+        ? (async () => {
+            await Promise.all(
+              todaySchedules.map((s) =>
+                getOrCreateItemDroppingForSchedule(
+                  s.id,
+                  userId,
+                  s.storeId,
+                  s.shiftId,
+                  targetDate,
+                ),
+              ),
+            );
 
-        return db
-          .select()
-          .from(itemDroppingTasks)
-          .where(
-            and(
-              inArray(itemDroppingTasks.storeId, storeIds),
-              gte(itemDroppingTasks.date, dayStart),
-              lte(itemDroppingTasks.date, dayEnd),
-            ),
-          )
-          .orderBy(desc(itemDroppingTasks.date));
-      })(),
+            return db
+              .select()
+              .from(itemDroppingTasks)
+              .where(
+                and(
+                  inArray(itemDroppingTasks.storeId, storeIds),
+                  gte(itemDroppingTasks.date, dayStart),
+                  lte(itemDroppingTasks.date, dayEnd),
+                ),
+              )
+              .orderBy(desc(itemDroppingTasks.date));
+          })()
+        : Promise.resolve([]),
 
-      (async () => {
-        const taskIds = await db
-          .select({ id: itemDroppingTasks.id })
-          .from(itemDroppingTasks)
-          .where(
-            and(
-              inArray(itemDroppingTasks.storeId, storeIds),
-              gte(itemDroppingTasks.date, dayStart),
-              lte(itemDroppingTasks.date, dayEnd),
-            ),
-          );
+      shouldLoadTask("item_dropping")
+        ? (async () => {
+            const taskIds = await db
+              .select({ id: itemDroppingTasks.id })
+              .from(itemDroppingTasks)
+              .where(
+                and(
+                  inArray(itemDroppingTasks.storeId, storeIds),
+                  gte(itemDroppingTasks.date, dayStart),
+                  lte(itemDroppingTasks.date, dayEnd),
+                ),
+              );
 
-        if (!taskIds.length) return [];
+            if (!taskIds.length) return [];
 
-        return db
-          .select()
-          .from(itemDroppingEntries)
-          .where(
-            inArray(
-              itemDroppingEntries.taskId,
-              taskIds.map((r) => r.id),
-            ),
-          )
-          .orderBy(itemDroppingEntries.dropTime);
-      })(),
+            return db
+              .select()
+              .from(itemDroppingEntries)
+              .where(
+                inArray(
+                  itemDroppingEntries.taskId,
+                  taskIds.map((r) => r.id),
+                ),
+              )
+              .orderBy(itemDroppingEntries.dropTime);
+          })()
+        : Promise.resolve([]),
 
-      hasEveningTasks
+      shouldLoadTask("edc_reconciliation")
         ? db
             .select()
             .from(edcReconciliationTasks)
@@ -419,85 +559,91 @@ export async function GET(request: NextRequest) {
             .orderBy(desc(edcReconciliationTasks.date))
         : Promise.resolve([]),
 
-      (async () => {
-        await Promise.all(
-          todaySchedules.map((s) =>
-            getOrCreateBriefingForSchedule(
-              s.id,
-              userId,
-              s.storeId,
-              s.shiftId,
-              targetDate,
-            ),
-          ),
-        );
+      shouldLoadTask("briefing")
+        ? (async () => {
+            await Promise.all(
+              todaySchedules.map((s) =>
+                getOrCreateBriefingForSchedule(
+                  s.id,
+                  userId,
+                  s.storeId,
+                  s.shiftId,
+                  targetDate,
+                ),
+              ),
+            );
 
-        return db
-          .select()
-          .from(briefingTasks)
-          .where(
-            and(
-              inArray(briefingTasks.storeId, storeIds),
-              gte(briefingTasks.date, dayStart),
-              lte(briefingTasks.date, dayEnd),
-            ),
-          )
-          .orderBy(desc(briefingTasks.date));
-      })(),
+            return db
+              .select()
+              .from(briefingTasks)
+              .where(
+                and(
+                  inArray(briefingTasks.storeId, storeIds),
+                  gte(briefingTasks.date, dayStart),
+                  lte(briefingTasks.date, dayEnd),
+                ),
+              )
+              .orderBy(desc(briefingTasks.date));
+          })()
+        : Promise.resolve([]),
 
-      (async () => {
-        await Promise.all(
-          todaySchedules.map((s) =>
-            getOrCreateSerahTerimaForSchedule(
-              s.id,
-              userId,
-              s.storeId,
-              s.shiftId,
-              targetDate,
-            ),
-          ),
-        );
+      shouldLoadTask("serah_terima")
+        ? (async () => {
+            await Promise.all(
+              todaySchedules.map((s) =>
+                getOrCreateSerahTerimaForSchedule(
+                  s.id,
+                  userId,
+                  s.storeId,
+                  s.shiftId,
+                  targetDate,
+                ),
+              ),
+            );
 
-        return db
-          .select()
-          .from(serahTerimaTasks)
-          .where(
-            and(
-              inArray(serahTerimaTasks.storeId, storeIds),
-              gte(serahTerimaTasks.date, dayStart),
-              lte(serahTerimaTasks.date, dayEnd),
-            ),
-          )
-          .orderBy(desc(serahTerimaTasks.date));
-      })(),
+            return db
+              .select()
+              .from(serahTerimaTasks)
+              .where(
+                and(
+                  inArray(serahTerimaTasks.storeId, storeIds),
+                  gte(serahTerimaTasks.date, dayStart),
+                  lte(serahTerimaTasks.date, dayEnd),
+                ),
+              )
+              .orderBy(desc(serahTerimaTasks.date));
+          })()
+        : Promise.resolve([]),
 
-      (async () => {
-        const taskIds = await db
-          .select({ id: serahTerimaTasks.id })
-          .from(serahTerimaTasks)
-          .where(
-            and(
-              inArray(serahTerimaTasks.storeId, storeIds),
-              gte(serahTerimaTasks.date, dayStart),
-              lte(serahTerimaTasks.date, dayEnd),
-            ),
-          );
+      shouldLoadTask("serah_terima")
+        ? (async () => {
+            const taskIds = await db
+              .select({ id: serahTerimaTasks.id })
+              .from(serahTerimaTasks)
+              .where(
+                and(
+                  inArray(serahTerimaTasks.storeId, storeIds),
+                  gte(serahTerimaTasks.date, dayStart),
+                  lte(serahTerimaTasks.date, dayEnd),
+                ),
+              );
 
-        if (!taskIds.length) return [];
+            if (!taskIds.length) return [];
 
-        return db
-          .select()
-          .from(serahTerimaItems)
-          .where(
-            inArray(
-              serahTerimaItems.taskId,
-              taskIds.map((r) => r.id),
-            ),
-          )
-          .orderBy(asc(serahTerimaItems.id));
-      })(),
+            return db
+              .select()
+              .from(serahTerimaItems)
+              .where(
+                inArray(
+                  serahTerimaItems.taskId,
+                  taskIds.map((r) => r.id),
+                ),
+              )
+              .orderBy(asc(serahTerimaItems.id));
+          })()
+        : Promise.resolve([]),
 
-      hasEveningTasks
+      shouldLoadTask("eod_z_report")
         ? db
             .select()
             .from(eodZReportTasks)
@@ -511,67 +657,71 @@ export async function GET(request: NextRequest) {
             .orderBy(desc(eodZReportTasks.date))
         : Promise.resolve([]),
 
-      (async () => {
-        // Materialise per schedule: morning schedules pull carry-overs from a
-        // held evening (prior day); evening schedules create the primary + any
-        // same-day carry-over from a held morning. Idempotent (see util).
-        await Promise.all(
-          todaySchedules.map((s) =>
-            materialiseOpenStatementTask(
-              s.id,
-              userId,
-              s.storeId,
-              s.shiftId,
-              targetDate,
-            ),
-          ),
-        );
+      shouldLoadTask("open_statement")
+        ? (async () => {
+            // Materialise per schedule: morning schedules pull carry-overs from a
+            // held evening (prior day); evening schedules create the primary + any
+            // same-day carry-over from a held morning. Idempotent (see util).
+            await Promise.all(
+              todaySchedules.map((s) =>
+                materialiseOpenStatementTask(
+                  s.id,
+                  userId,
+                  s.storeId,
+                  s.shiftId,
+                  targetDate,
+                ),
+              ),
+            );
 
-        return db
-          .select()
-          .from(openStatementTasks)
-          .where(
-            and(
-              inArray(openStatementTasks.storeId, storeIds),
-              gte(openStatementTasks.date, dayStart),
-              lte(openStatementTasks.date, dayEnd),
-            ),
-          )
-          .orderBy(desc(openStatementTasks.date));
-      })(),
+            return db
+              .select()
+              .from(openStatementTasks)
+              .where(
+                and(
+                  inArray(openStatementTasks.storeId, storeIds),
+                  gte(openStatementTasks.date, dayStart),
+                  lte(openStatementTasks.date, dayEnd),
+                ),
+              )
+              .orderBy(desc(openStatementTasks.date));
+          })()
+        : Promise.resolve([]),
 
-      (async () => {
-        await Promise.all(
-          todaySchedules.map((s) =>
-            getOrCreateGroomingForSchedule(
-              s.id,
-              userId,
-              s.storeId,
-              s.shiftId,
-              targetDate,
-            ),
-          ),
-        );
+      shouldLoadTask("grooming")
+        ? (async () => {
+            await Promise.all(
+              todaySchedules.map((s) =>
+                getOrCreateGroomingForSchedule(
+                  s.id,
+                  userId,
+                  s.storeId,
+                  s.shiftId,
+                  targetDate,
+                ),
+              ),
+            );
 
-        return db
-          .select()
-          .from(groomingTasks)
-          .where(
-            and(
-              eq(groomingTasks.userId, userId),
-              inArray(groomingTasks.storeId, storeIds),
-              gte(groomingTasks.date, dayStart),
-              lte(groomingTasks.date, dayEnd),
-            ),
-          )
-          .orderBy(desc(groomingTasks.date));
-      })(),
+            return db
+              .select()
+              .from(groomingTasks)
+              .where(
+                and(
+                  eq(groomingTasks.userId, userId),
+                  inArray(groomingTasks.storeId, storeIds),
+                  gte(groomingTasks.date, dayStart),
+                  lte(groomingTasks.date, dayEnd),
+                ),
+              )
+              .orderBy(desc(groomingTasks.date));
+          })()
+        : Promise.resolve([]),
     ]);
 
     const cekBinTaskIds = cekBinRows.map((r) => r.id);
 
     const [availableBinRows, checkedBinRows] = await Promise.all([
-      hasMorningTasks
+      shouldLoadTask("cek_bin")
         ? db
             .select({
               id: storeBins.id,
@@ -678,19 +828,29 @@ export async function GET(request: NextRequest) {
             fiveRAt: toIso(t.fiveRAt),
             fiveRAreaKasirBy: t.fiveRAreaKasirBy,
             fiveRAreaKasirAt: toIso(t.fiveRAreaKasirAt),
-            fiveRAreaKasirPhotoActors: parseJsonArray(t.fiveRAreaKasirPhotoActors),
+            fiveRAreaKasirPhotoActors: parseJsonArray(
+              t.fiveRAreaKasirPhotoActors,
+            ),
             fiveRAreaDepanBy: t.fiveRAreaDepanBy,
             fiveRAreaDepanAt: toIso(t.fiveRAreaDepanAt),
-            fiveRAreaDepanPhotoActors: parseJsonArray(t.fiveRAreaDepanPhotoActors),
+            fiveRAreaDepanPhotoActors: parseJsonArray(
+              t.fiveRAreaDepanPhotoActors,
+            ),
             fiveRAreaKananBy: t.fiveRAreaKananBy,
             fiveRAreaKananAt: toIso(t.fiveRAreaKananAt),
-            fiveRAreaKananPhotoActors: parseJsonArray(t.fiveRAreaKananPhotoActors),
+            fiveRAreaKananPhotoActors: parseJsonArray(
+              t.fiveRAreaKananPhotoActors,
+            ),
             fiveRAreaKiriBy: t.fiveRAreaKiriBy,
             fiveRAreaKiriAt: toIso(t.fiveRAreaKiriAt),
-            fiveRAreaKiriPhotoActors: parseJsonArray(t.fiveRAreaKiriPhotoActors),
+            fiveRAreaKiriPhotoActors: parseJsonArray(
+              t.fiveRAreaKiriPhotoActors,
+            ),
             fiveRAreaGudangBy: t.fiveRAreaGudangBy,
             fiveRAreaGudangAt: toIso(t.fiveRAreaGudangAt),
-            fiveRAreaGudangPhotoActors: parseJsonArray(t.fiveRAreaGudangPhotoActors),
+            fiveRAreaGudangPhotoActors: parseJsonArray(
+              t.fiveRAreaGudangPhotoActors,
+            ),
             cekLampBy: t.cekLampBy,
             cekLampAt: toIso(t.cekLampAt),
             cekSoundSystemBy: t.cekSoundSystemBy,
@@ -698,7 +858,9 @@ export async function GET(request: NextRequest) {
             cashDrawerBy: t.cashDrawerBy,
             cashDrawerAt: toIso(t.cashDrawerAt),
             completedBy: t.completedBy,
-            completedByScheduleId: t.completedByScheduleId ? String(t.completedByScheduleId) : null,
+            completedByScheduleId: t.completedByScheduleId
+              ? String(t.completedByScheduleId)
+              : null,
 
             status: t.status,
             notes: t.notes,
@@ -937,7 +1099,9 @@ export async function GET(request: NextRequest) {
             notesBy: t.notesBy,
             notesAt: toIso(t.notesAt),
             completedBy: t.completedBy,
-            completedByScheduleId: t.completedByScheduleId ? String(t.completedByScheduleId) : null,
+            completedByScheduleId: t.completedByScheduleId
+              ? String(t.completedByScheduleId)
+              : null,
 
             status: t.status,
             notes: t.notes,
@@ -1019,7 +1183,9 @@ export async function GET(request: NextRequest) {
           const items = (serahItemsByTaskId.get(t.id) ?? []).map((item) => ({
             id: String(item.id),
             taskId: String(item.taskId),
-            receiverTaskId: item.receiverTaskId ? String(item.receiverTaskId) : null,
+            receiverTaskId: item.receiverTaskId
+              ? String(item.receiverTaskId)
+              : null,
             message: item.message,
             isCompleted: item.isCompleted,
             completedBy: item.completedBy,
@@ -1049,7 +1215,6 @@ export async function GET(request: NextRequest) {
             },
           };
         }),
-
 
       ...eodZReportRows
         .filter((r) => inStore(r.storeId))
@@ -1173,6 +1338,17 @@ export async function GET(request: NextRequest) {
       }),
     ];
 
+    const visibleTasks = tasks.filter((task) => {
+      if (!allowedTaskTypes.has(task.type)) return false;
+
+      return taskAllowedForEmployeeShift(
+        task.type,
+        task.shift,
+        shiftCodesRaw,
+        shiftTaskMap,
+      );
+    });
+
     const STATUS_ORDER: Record<string, number> = {
       pending: 0,
       in_progress: 1,
@@ -1188,7 +1364,7 @@ export async function GET(request: NextRequest) {
       evening: 2,
     };
 
-    tasks.sort((a, b) => {
+    visibleTasks.sort((a, b) => {
       const statusSort =
         (STATUS_ORDER[a.data.status] ?? 9) - (STATUS_ORDER[b.data.status] ?? 9);
 
@@ -1199,9 +1375,13 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      tasks,
+      tasks: visibleTasks,
       shift: primaryShift,
+      shifts: shiftCodesRaw,
       scheduleIds,
+      shiftTaskMap,
+      assignedTaskTypes: [...allowedTaskTypes],
+      unsupportedTaskDefinitions,
     });
   } catch (error) {
     console.error("[GET /api/employee/tasks]", error);

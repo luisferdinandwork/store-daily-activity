@@ -1,13 +1,11 @@
 'use client';
+// app/ops/attendance/page.tsx
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { useSession } from 'next-auth/react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
-import {
-  ChevronLeft, ChevronRight, RefreshCw, Store, ArrowLeft, Download, X,
-} from 'lucide-react';
+import { Store, ArrowLeft, Download, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
 import { toast } from 'sonner';
 import StoreAttendanceDetail from '@/components/ops/StoreAttendanceDetail';
 import AttendanceExportModal from '@/components/ops/AttendanceExportModal';
@@ -36,9 +34,6 @@ function fmtDateLong(d: Date) {
   });
 }
 
-function monthLabel(d: Date) {
-  return d.toLocaleDateString('en-ID', { month: 'long', year: 'numeric' });
-}
 
 type HealthStatus = 'good' | 'risk' | 'critical' | 'pending' | 'none';
 
@@ -318,11 +313,6 @@ export default function OpsAttendancePage() {
   ];
   while (cells.length % 7 !== 0) cells.push(null);
 
-  const stepMonth = (delta: number) => {
-    setViewMonth((p) => new Date(p.getFullYear(), p.getMonth() + delta, 1));
-    setSelectedDate(null);
-    setActiveStore(null);
-  };
 
   // Aggregate stats for the visible month
   const monthStats = Object.entries(cache)
@@ -339,64 +329,82 @@ export default function OpsAttendancePage() {
   // ── Employee detail ───────────────────────────────────────────────────────
   if (activeStore && selectedDate) {
     return (
-      <div className="space-y-5 p-6">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setActiveStore(null)}>
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-          <div>
-            <h1 className="text-xl font-bold tracking-tight text-foreground">{activeStore.name}</h1>
-            <p className="text-xs text-muted-foreground">{fmtDateLong(selectedDate)}</p>
-          </div>
-          <div className="ml-auto">
-            <Button
-              variant="outline" size="sm" className="gap-1.5"
-              onClick={() => window.open(
-                `/api/ops/attendance/export?storeId=${activeStore.id}&date=${selectedDate.toISOString()}`,
-                '_blank',
-              )}
-            >
-              <Download className="h-3.5 w-3.5" />
-              Export
-            </Button>
-          </div>
+      <div className="min-h-full bg-slate-50">
+        <OpsPageHeader
+          scope="OPS · Attendance"
+          title={activeStore.name}
+          subtitle={fmtDateLong(selectedDate)}
+          contentClassName="w-full"
+          actions={
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-10 gap-1.5 rounded-xl border-slate-200 bg-white font-semibold text-slate-600 hover:bg-slate-50"
+                onClick={() => setActiveStore(null)}
+              >
+                <ArrowLeft className="h-3.5 w-3.5" />
+                Back
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-10 gap-1.5 rounded-xl border-slate-200 bg-white font-semibold text-slate-600 hover:bg-slate-50"
+                onClick={() =>
+                  window.open(
+                    `/api/ops/attendance/export?storeId=${activeStore.id}&date=${selectedDate.toISOString()}`,
+                    '_blank',
+                  )
+                }
+              >
+                <Download className="h-3.5 w-3.5" />
+                Export
+              </Button>
+            </>
+          }
+        />
+
+        <div className="mx-auto max-w-7xl p-6 lg:p-8">
+          <StoreAttendanceDetail storeId={activeStore.id} date={selectedDate} />
         </div>
-        <StoreAttendanceDetail storeId={activeStore.id} date={selectedDate} />
       </div>
     );
   }
 
   // ── Calendar view ─────────────────────────────────────────────────────────
   return (
-    <div className="space-y-4 p-6">
-      {/* Header */}
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">Attendance</h1>
-          <p className="mt-0.5 text-sm text-muted-foreground">Monthly overview — all stores</p>
-        </div>
-        <div className="flex items-center gap-2">
+    <div className="min-h-full bg-slate-50">
+      <OpsPageHeader
+        scope="OPS · People"
+        title="Attendance"
+        subtitle="Monthly overview — all stores"
+        periodProps={{
+          period: 'monthly',
+          date: toKey(viewMonth),
+          onDateChange: (dateKey) => {
+            const next = new Date(`${dateKey}T00:00:00`);
+            setViewMonth(new Date(next.getFullYear(), next.getMonth(), 1));
+            setSelectedDate(null);
+            setActiveStore(null);
+          },
+        }}
+        onRefresh={() => fetchMonth(viewMonth)}
+        refreshing={loadingMonth}
+        contentClassName="max-w-7xl"
+        actions={
           <Button
-            variant="outline" 
-            size="sm" 
-            className="gap-1.5"
+            variant="outline"
+            size="sm"
+            className="h-10 gap-1.5 rounded-xl border-slate-200 bg-white font-semibold text-slate-600 hover:bg-slate-50"
             onClick={() => setExportOpen(true)}
           >
             <Download className="h-3.5 w-3.5" />
             Export
           </Button>
-          <Button
-            variant="outline" 
-            size="sm" 
-            className="gap-1.5"
-            onClick={() => fetchMonth(viewMonth)}
-            disabled={loadingMonth}
-          >
-            <RefreshCw className={cn('h-3.5 w-3.5', loadingMonth && 'animate-spin')} />
-            Refresh
-          </Button>
-        </div>
-      </div>
+        }
+      />
+
+      <div className="mx-auto max-w-7xl space-y-4 p-6 lg:p-8">
 
       {/* Month stats bar */}
       {monthStats.total > 0 && (
@@ -431,18 +439,6 @@ export default function OpsAttendancePage() {
         </div>
       )}
 
-      {/* Month nav */}
-      <div className="flex items-center gap-2">
-        <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => stepMonth(-1)}>
-          <ChevronLeft className="h-4 w-4" />
-        </Button>
-        <div className="flex-1 rounded-xl border border-border bg-card px-4 py-2 text-center">
-          <p className="text-sm font-semibold text-foreground">{monthLabel(viewMonth)}</p>
-        </div>
-        <Button variant="outline" size="icon" className="h-9 w-9" onClick={() => stepMonth(1)}>
-          <ChevronRight className="h-4 w-4" />
-        </Button>
-      </div>
 
       {/* Legend */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-muted-foreground">
@@ -530,6 +526,7 @@ export default function OpsAttendancePage() {
         onClose={() => setExportOpen(false)}
         stores={storeList}
       />
+      </div>
     </div>
   );
 }

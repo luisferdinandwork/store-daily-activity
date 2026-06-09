@@ -1,47 +1,111 @@
 // app/api/ops/schedules/entry/[id]/route.ts
-import { NextRequest, NextResponse }  from 'next/server';
-import { getServerSession }           from 'next-auth';
-import { authOptions }                from '@/lib/auth';
+import { NextRequest, NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth';
+import { eq } from 'drizzle-orm';
+
+import { authOptions } from '@/lib/auth';
+import { db } from '@/lib/db';
+import {
+  monthlyScheduleEntries,
+  monthlySchedules,
+} from '@/lib/db/schema';
 import { updateMonthlyScheduleEntry } from '@/lib/schedule-utils';
-import { db }                         from '@/lib/db';
-import { monthlyScheduleEntries, monthlySchedules } from '@/lib/db/schema';
-import { eq }                         from 'drizzle-orm';
-import { getOpsActor, assertStoreInActorArea } from '../../_helpers';
+
+import {
+  assertStoreInActorArea,
+  getOpsActor,
+  normalizeShiftCode,
+} from '../../_helpers';
+
+async function resolveId(ctx: { params: { id: string } | Promise<{ id: string }> }) {
+  const params = await ctx.params;
+  return Number(params.id);
+}
 
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: Promise<{ id: string }> },
+  ctx: { params: { id: string } | Promise<{ id: string }> },
 ) {
   const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
-  const actor = await getOpsActor((session.user as any).id);
-  if (!actor) return NextResponse.json({ success: false, error: 'OPS only.' }, { status: 403 });
+  if (!session?.user?.id) {
+    return NextResponse.json(
+      { success: false, error: 'Unauthorized' },
+      { status: 401 },
+    );
+  }
 
-  const { id } = await params;
-  const entryId = Number(id);
-  if (isNaN(entryId)) return NextResponse.json({ success: false, error: 'Invalid entry id.' }, { status: 400 });
+  const actor = await getOpsActor(session.user.id);
 
-  // storeId lives on monthlySchedules — resolve it via the entry's join.
+  if (!actor) {
+    return NextResponse.json(
+      { success: false, error: 'OPS only.' },
+      { status: 403 },
+    );
+  }
+
+  const entryId = await resolveId(ctx);
+
+  if (!Number.isInteger(entryId)) {
+    return NextResponse.json(
+      { success: false, error: 'Invalid entry id.' },
+      { status: 400 },
+    );
+  }
+
   const [entry] = await db
-    .select({ storeId: monthlySchedules.storeId })
+    .select({
+      storeId: monthlySchedules.storeId,
+    })
     .from(monthlyScheduleEntries)
-    .innerJoin(monthlySchedules, eq(monthlyScheduleEntries.monthlyScheduleId, monthlySchedules.id))
+    .innerJoin(
+      monthlySchedules,
+      eq(monthlySchedules.id, monthlyScheduleEntries.monthlyScheduleId),
+    )
     .where(eq(monthlyScheduleEntries.id, entryId))
     .limit(1);
-  if (!entry) return NextResponse.json({ success: false, error: 'Entry not found.' }, { status: 404 });
 
-  // Area OPS → only their area; HO → any store (handled inside the helper).
-  const areaErr = await assertStoreInActorArea(actor, entry.storeId);
-  if (areaErr) return NextResponse.json({ success: false, error: areaErr }, { status: 403 });
+  if (!entry) {
+    return NextResponse.json(
+      { success: false, error: 'Entry not found.' },
+      { status: 404 },
+    );
+  }
 
-  const body = await req.json();
-  const patch: { shift?: 'morning' | 'evening' | null; isOff?: boolean; isLeave?: boolean } = {};
-  if ('shift'   in body) patch.shift   = body.shift;
-  if ('isOff'   in body) patch.isOff   = !!body.isOff;
-  if ('isLeave' in body) patch.isLeave = !!body.isLeave;
+  const areaError = await assertStoreInActorArea(actor, entry.storeId);
+
+  if (areaError) {
+    return NextResponse.json(
+      { success: false, error: areaError },
+      { status: 403 },
+    );
+  }
+
+  const body = await req.json().catch(() => ({}));
+
+  const patch: {
+    shift?: string | null;
+    isOff?: boolean;
+    isLeave?: boolean;
+  } = {};
+
+  if ('shift' in body) {
+    patch.shift = normalizeShiftCode(body.shift);
+  }
+
+  if ('isOff' in body) {
+    patch.isOff = !!body.isOff;
+  }
+
+  if ('isLeave' in body) {
+    patch.isLeave = !!body.isLeave;
+  }
 
   const result = await updateMonthlyScheduleEntry(entryId, patch, actor.id);
-  if (!result.success) return NextResponse.json(result, { status: 400 });
+
+  if (!result.success) {
+    return NextResponse.json(result, { status: 400 });
+  }
+
   return NextResponse.json(result);
 }

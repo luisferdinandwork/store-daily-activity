@@ -1,12 +1,19 @@
 'use client';
 // app/employee/attendance/page.tsx
+//
+// Shift behaviour (breaks) and styling (accent/icon) come from the `shifts`
+// lookup, surfaced per slot by /api/employee/attendance. The page renders ANY
+// shift the lookup provides — adding a shift row + scheduling an employee on it
+// is enough for them to attend with the right break flow. No shift codes are
+// hardcoded here; the LEGACY_* maps below are only a graceful fallback for a
+// slot whose API response predates the lookup metadata.
 
 import { useState, useEffect, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import {
-  CheckCircle2, Clock, LogIn, LogOut, Sun, Moon,
+  CheckCircle2, Clock, LogIn, LogOut, Sun, Moon, Sunrise,
   AlertCircle, Loader2, XCircle, CalendarX, Info,
   Coffee, UtensilsCrossed, RotateCcw, Zap, AlertTriangle,
   Banknote,
@@ -17,8 +24,16 @@ import { toast } from 'sonner';
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type AttStatus  = 'present' | 'late' | 'absent' | 'excused';
-type ShiftCode  = 'morning' | 'evening' | 'full_day' | string;
-type BreakType  = 'lunch' | 'dinner' | 'full_day_lunch' | 'full_day_dinner';
+type ShiftCode  = string;
+type BreakType  = 'lunch' | 'dinner' | 'full_day_lunch' | 'full_day_dinner' | (string & {});
+type PaletteKey = 'amber' | 'violet' | 'emerald' | 'sky' | 'rose' | 'slate';
+
+/** Break definition as configured on the shift lookup row. */
+interface ShiftBreakDef {
+  type:    BreakType;
+  label:   string;
+  accent?: PaletteKey;
+}
 
 interface BreakSession {
   id:           number;
@@ -50,6 +65,10 @@ interface ShiftSlot {
     endTime:    string | null;
     storeId:    number;
     date:       string;
+    // ── Lookup-driven metadata (added by the API; optional for back-compat) ──
+    accent?:    string | null;
+    icon?:      string | null;
+    breaks?:    ShiftBreakDef[] | null;
   };
   attendance: AttRecord | null;
 }
@@ -59,24 +78,44 @@ interface AttResponse {
   shifts:  ShiftSlot[];
 }
 
-// ─── Break config per shift ───────────────────────────────────────────────────
+// ─── Palette registry ─────────────────────────────────────────────────────────
+// Class strings are written literally so Tailwind's JIT keeps them. A shift's
+// `accent` (and each break's `accent`) is just a key into this map.
 
-interface BreakConfig {
-  breakType:  BreakType;
-  label:      string;
-  accentCls:  string;
-  bgCls:      string;
-  isAmber:    boolean;
-}
+const PALETTE: Record<PaletteKey, {
+  border: string; bg: string; text: string; sub: string; icon: string;
+  btnText: string; hoverBg: string; ring: string; inputText: string; strong: string;
+}> = {
+  amber:   { border: 'border-amber-200',   bg: 'bg-amber-50',   text: 'text-amber-800',   sub: 'text-amber-600',   icon: 'text-amber-500',   btnText: 'text-amber-700',   hoverBg: 'hover:bg-amber-50',   ring: 'focus:ring-amber-200',   inputText: 'text-amber-900 placeholder:text-amber-300',   strong: 'text-amber-700'   },
+  violet:  { border: 'border-violet-200',  bg: 'bg-violet-50',  text: 'text-violet-800',  sub: 'text-violet-600',  icon: 'text-violet-500',  btnText: 'text-violet-700',  hoverBg: 'hover:bg-violet-50',  ring: 'focus:ring-violet-200',  inputText: 'text-violet-900 placeholder:text-violet-300', strong: 'text-violet-700'  },
+  emerald: { border: 'border-emerald-200', bg: 'bg-emerald-50', text: 'text-emerald-800', sub: 'text-emerald-600', icon: 'text-emerald-500', btnText: 'text-emerald-700', hoverBg: 'hover:bg-emerald-50', ring: 'focus:ring-emerald-200', inputText: 'text-emerald-900 placeholder:text-emerald-300', strong: 'text-emerald-700' },
+  sky:     { border: 'border-sky-200',     bg: 'bg-sky-50',     text: 'text-sky-800',     sub: 'text-sky-600',     icon: 'text-sky-500',     btnText: 'text-sky-700',     hoverBg: 'hover:bg-sky-50',     ring: 'focus:ring-sky-200',     inputText: 'text-sky-900 placeholder:text-sky-300',       strong: 'text-sky-700'     },
+  rose:    { border: 'border-rose-200',    bg: 'bg-rose-50',    text: 'text-rose-800',    sub: 'text-rose-600',    icon: 'text-rose-500',    btnText: 'text-rose-700',    hoverBg: 'hover:bg-rose-50',    ring: 'focus:ring-rose-200',    inputText: 'text-rose-900 placeholder:text-rose-300',     strong: 'text-rose-700'    },
+  slate:   { border: 'border-slate-200',   bg: 'bg-slate-50',   text: 'text-slate-800',   sub: 'text-slate-600',   icon: 'text-slate-500',   btnText: 'text-slate-700',   hoverBg: 'hover:bg-slate-50',   ring: 'focus:ring-slate-200',   inputText: 'text-slate-900 placeholder:text-slate-300',   strong: 'text-slate-700'   },
+};
+const paletteFor = (key?: string | null) => PALETTE[(key as PaletteKey)] ?? PALETTE.slate;
 
-const SHIFT_BREAKS: Record<string, BreakConfig[]> = {
-  morning:  [{ breakType: 'lunch',            label: 'Lunch',         accentCls: 'border-amber-200 text-amber-700',  bgCls: 'hover:bg-amber-50',  isAmber: true  }],
-  evening:  [{ breakType: 'dinner',           label: 'Dinner',        accentCls: 'border-violet-200 text-violet-700', bgCls: 'hover:bg-violet-50', isAmber: false }],
+const ICONS: Record<string, React.ElementType> = {
+  sun: Sun, moon: Moon, zap: Zap, sunrise: Sunrise, clock: Clock, coffee: Coffee,
+};
+
+// Fallbacks so the seeded shifts still look right if the API hasn't been
+// updated to return the new fields yet. Unknown codes degrade to slate/clock/no-break.
+const LEGACY_ACCENT: Record<string, PaletteKey> = { morning: 'amber', evening: 'violet', full_day: 'emerald' };
+const LEGACY_ICON:   Record<string, string>     = { morning: 'sun',   evening: 'moon',   full_day: 'zap'     };
+const LEGACY_BREAKS: Record<string, ShiftBreakDef[]> = {
+  morning:  [{ type: 'lunch',  label: 'Lunch',  accent: 'amber'  }],
+  evening:  [{ type: 'dinner', label: 'Dinner', accent: 'violet' }],
   full_day: [
-    { breakType: 'full_day_lunch',  label: 'Lunch Break',  accentCls: 'border-amber-200 text-amber-700',  bgCls: 'hover:bg-amber-50',  isAmber: true  },
-    { breakType: 'full_day_dinner', label: 'Dinner Break', accentCls: 'border-violet-200 text-violet-700', bgCls: 'hover:bg-violet-50', isAmber: false },
+    { type: 'full_day_lunch',  label: 'Lunch Break',  accent: 'amber'  },
+    { type: 'full_day_dinner', label: 'Dinner Break', accent: 'violet' },
   ],
 };
+
+type ScheduleMeta = ShiftSlot['schedule'];
+const accentKeyOf = (s: ScheduleMeta): PaletteKey => (s.accent as PaletteKey) ?? LEGACY_ACCENT[s.shift] ?? 'slate';
+const iconNameOf  = (s: ScheduleMeta): string     => s.icon ?? LEGACY_ICON[s.shift] ?? 'clock';
+const breaksOf    = (s: ScheduleMeta): ShiftBreakDef[] => Array.isArray(s.breaks) ? s.breaks : (LEGACY_BREAKS[s.shift] ?? []);
 
 // ─── Status config ────────────────────────────────────────────────────────────
 
@@ -109,19 +148,10 @@ function todayFull() {
   return new Date().toLocaleDateString('en-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 }
 
-
-function shiftIcon(code: ShiftCode) {
-  if (code === 'morning')  return <Sun  className="h-5 w-5 flex-shrink-0 text-amber-500" />;
-  if (code === 'evening')  return <Moon className="h-5 w-5 flex-shrink-0 text-violet-500" />;
-  if (code === 'full_day') return <Zap  className="h-5 w-5 flex-shrink-0 text-emerald-500" />;
-  return <Clock className="h-5 w-5 flex-shrink-0 text-slate-500" />;
-}
-
-function shiftAccent(code: ShiftCode) {
-  if (code === 'morning')  return { border: 'border-amber-200',   bg: 'bg-amber-50',   text: 'text-amber-800',   sub: 'text-amber-600'   };
-  if (code === 'evening')  return { border: 'border-violet-200',  bg: 'bg-violet-50',  text: 'text-violet-800',  sub: 'text-violet-600'  };
-  if (code === 'full_day') return { border: 'border-emerald-200', bg: 'bg-emerald-50', text: 'text-emerald-800', sub: 'text-emerald-600' };
-  return { border: 'border-slate-200', bg: 'bg-slate-50', text: 'text-slate-800', sub: 'text-slate-600' };
+/** Renders the shift's glyph. `plain` skips the accent colour (e.g. on the header chips). */
+function ShiftIcon({ schedule, className, plain = false }: { schedule: ScheduleMeta; className?: string; plain?: boolean }) {
+  const I = ICONS[iconNameOf(schedule)] ?? Clock;
+  return <I className={cn(className ?? 'h-5 w-5 flex-shrink-0', !plain && paletteFor(accentKeyOf(schedule)).icon)} />;
 }
 
 function getMinutesElapsedSince(timeStr: string | null): number | null {
@@ -140,23 +170,18 @@ function CashInput({
   label,
   value,
   onChange,
-  isAmber,
+  accent = 'amber',
   disabled,
   required = true,
 }: {
-  label:    string;
-  value:    string;
-  onChange: (v: string) => void;
-  isAmber:  boolean;
-  disabled: boolean;
+  label:     string;
+  value:     string;
+  onChange:  (v: string) => void;
+  accent?:   PaletteKey;
+  disabled:  boolean;
   required?: boolean;
 }) {
-  const border  = isAmber ? 'border-amber-200'  : 'border-violet-200';
-  const bg      = isAmber ? 'bg-amber-50'       : 'bg-violet-50';
-  const text    = isAmber ? 'text-amber-800'    : 'text-violet-800';
-  const subtext = isAmber ? 'text-amber-600'    : 'text-violet-600';
-  const ring    = isAmber ? 'focus:ring-amber-200' : 'focus:ring-violet-200';
-  const inputTx = isAmber ? 'text-amber-900 placeholder:text-amber-300' : 'text-violet-900 placeholder:text-violet-300';
+  const pal = paletteFor(accent);
 
   // While focused: raw digits so the user can edit freely.
   // On blur: Rupiah-formatted number (dots as thousand separators, e.g. "150.000").
@@ -167,16 +192,14 @@ function CashInput({
     : value;
 
   return (
-    <div className={cn('rounded-xl border px-3.5 py-3 space-y-2', border, bg)}>
+    <div className={cn('rounded-xl border px-3.5 py-3 space-y-2', pal.border, pal.bg)}>
       <div className="flex items-center gap-2">
-        <Banknote className={cn('h-4 w-4 flex-shrink-0', isAmber ? 'text-amber-500' : 'text-violet-500')} />
-        <p className={cn('text-sm font-semibold flex-1', text)}>{label}</p>
-        {required && (
-          <span className={cn('text-xs font-medium', subtext)}>Required</span>
-        )}
+        <Banknote className={cn('h-4 w-4 flex-shrink-0', pal.icon)} />
+        <p className={cn('text-sm font-semibold flex-1', pal.text)}>{label}</p>
+        {required && <span className={cn('text-xs font-medium', pal.sub)}>Required</span>}
       </div>
       <div className="flex items-center gap-2">
-        <span className={cn('text-sm font-bold', isAmber ? 'text-amber-700' : 'text-violet-700')}>Rp</span>
+        <span className={cn('text-sm font-bold', pal.strong)}>Rp</span>
         <input
           type="text"
           inputMode="numeric"
@@ -184,15 +207,8 @@ function CashInput({
           value={displayValue}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
-          onChange={e => {
-            // Keep only digits in state so numeric parsing stays clean
-            const digits = e.target.value.replace(/\D/g, '');
-            onChange(digits);
-          }}
-          className={cn(
-            'flex-1 rounded-lg border bg-white px-3 py-2 text-sm font-semibold outline-none transition focus:ring-2',
-            border, inputTx, ring,
-          )}
+          onChange={e => onChange(e.target.value.replace(/\D/g, ''))}
+          className={cn('flex-1 rounded-lg border bg-white px-3 py-2 text-sm font-semibold outline-none transition focus:ring-2', pal.border, pal.inputText, pal.ring)}
           disabled={disabled}
         />
       </div>
@@ -212,19 +228,14 @@ function ShiftCard({ slot, onAction }: {
     cashIn?:    number,
   ) => Promise<void>;
 }) {
-  const [acting, setActing]           = useState<string | null>(null);
-  const [cashOutInputs, setCashOutInputs] = useState<Partial<Record<BreakType, string>>>({});
+  const [acting, setActing]               = useState<string | null>(null);
+  const [cashOutInputs, setCashOutInputs] = useState<Partial<Record<string, string>>>({});
   const [cashInInput,   setCashInInput]   = useState('');
-
-  useEffect(() => {
-    const interval = setInterval(() => {}, 60000);
-    return () => clearInterval(interval);
-  }, []);
 
   const { schedule, attendance: att } = slot;
   const shift     = schedule.shift;
-  const accent    = shiftAccent(shift);
-  const breakCfgs = SHIFT_BREAKS[shift] ?? SHIFT_BREAKS['morning'];
+  const accent    = paletteFor(accentKeyOf(schedule));
+  const breakDefs = breaksOf(schedule);
 
   const checkedIn  = Boolean(att?.checkInTime);
   const checkedOut = Boolean(att?.checkOutTime);
@@ -235,9 +246,10 @@ function ShiftCard({ slot, onAction }: {
   const isLateByTime = minutesLate !== null && minutesLate > 0;
   const timeStr      = [formatTime(schedule.startTime), formatTime(schedule.endTime)].filter(Boolean).join(' – ');
 
-  const usedBreakTypes    = new Set((att?.breaks ?? []).map(b => b.breakType));
-  const availableBreaks   = breakCfgs.filter(bc => !usedBreakTypes.has(bc.breakType));
-  const openBreak         = att?.breaks?.find(b => !b.returnTime) ?? null;
+  const usedBreakTypes  = new Set((att?.breaks ?? []).map(b => b.breakType));
+  const availableBreaks = breakDefs.filter(b => !usedBreakTypes.has(b.type));
+  const openBreak       = att?.breaks?.find(b => !b.returnTime) ?? null;
+  const openAccent      = (openBreak ? breakDefs.find(d => d.type === openBreak.breakType)?.accent : undefined) ?? 'amber';
 
   async function act(action: string, breakType?: BreakType, cashOut?: number, cashIn?: number) {
     setActing(breakType ?? action);
@@ -245,7 +257,6 @@ function ShiftCard({ slot, onAction }: {
     finally { setActing(null); }
   }
 
-  // cashIn validation
   const cashInNum   = parseFloat(cashInInput);
   const cashInValid = cashInInput !== '' && !isNaN(cashInNum) && cashInNum >= 0;
 
@@ -253,14 +264,12 @@ function ShiftCard({ slot, onAction }: {
     <div className="space-y-3">
       {/* Shift header */}
       <div className={cn('flex items-center gap-3 rounded-xl border px-3.5 py-3', accent.border, accent.bg)}>
-        {shiftIcon(shift)}
+        <ShiftIcon schedule={schedule} className="h-5 w-5 flex-shrink-0" />
         <div className="flex-1">
-          <p className={cn('text-sm font-semibold', accent.text)}>
-            {schedule.shiftLabel ?? shift}
-          </p>
+          <p className={cn('text-sm font-semibold', accent.text)}>{schedule.shiftLabel ?? shift}</p>
           <p className={cn('text-xs', accent.sub)}>
             {timeStr && <>{timeStr} · </>}
-            {breakCfgs.map(b => b.label).join(' & ')} break
+            {breakDefs.length > 0 ? `${breakDefs.map(b => b.label).join(' & ')} break` : 'No scheduled break'}
           </p>
         </div>
         {cfg && (
@@ -268,9 +277,7 @@ function ShiftCard({ slot, onAction }: {
             'inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold',
             onBreak ? 'bg-amber-100 text-amber-700' : `${cfg.bgCls} ${cfg.textCls}`,
           )}>
-            {onBreak
-              ? <><Coffee className="h-3 w-3" /> On Break</>
-              : <><cfg.Icon className="h-3 w-3" /> {cfg.label}</>}
+            {onBreak ? <><Coffee className="h-3 w-3" /> On Break</> : <><cfg.Icon className="h-3 w-3" /> {cfg.label}</>}
           </span>
         )}
       </div>
@@ -297,11 +304,7 @@ function ShiftCard({ slot, onAction }: {
               </div>
             )}
 
-            <Button
-              className="h-12 w-full gap-2 text-sm font-bold tracking-wide"
-              onClick={() => act('checkin')}
-              disabled={acting !== null}
-            >
+            <Button className="h-12 w-full gap-2 text-sm font-bold tracking-wide" onClick={() => act('checkin')} disabled={acting !== null}>
               {acting === 'checkin' ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
               {acting === 'checkin' ? 'Checking in…' : 'Check In Now'}
             </Button>
@@ -353,17 +356,14 @@ function ShiftCard({ slot, onAction }: {
                   label="Cash brought back"
                   value={cashInInput}
                   onChange={setCashInInput}
-                  isAmber={true}
+                  accent={openAccent}
                   disabled={acting !== null}
-                  required={true}
+                  required
                 />
 
                 <Button
                   className="h-12 w-full gap-2 bg-amber-500 text-sm font-bold text-white hover:bg-amber-600"
-                  onClick={() => {
-                    act('endbreak', undefined, undefined, cashInNum);
-                    setCashInInput('');
-                  }}
+                  onClick={() => { act('endbreak', undefined, undefined, cashInNum); setCashInInput(''); }}
                   disabled={acting !== null || !cashInValid}
                   title={!cashInValid ? 'Enter cash amount to continue' : undefined}
                 >
@@ -433,14 +433,8 @@ function ShiftCard({ slot, onAction }: {
                             </span>
                           </div>
                           {b.cashIn != null
-                            ? (
-                              <span className="text-xs text-muted-foreground">
-                                In: <span className="font-semibold text-foreground">{formatRupiah(b.cashIn)}</span>
-                              </span>
-                            )
-                            : (
-                              <span className="text-xs font-medium text-amber-500">awaiting return</span>
-                            )}
+                            ? <span className="text-xs text-muted-foreground">In: <span className="font-semibold text-foreground">{formatRupiah(b.cashIn)}</span></span>
+                            : <span className="text-xs font-medium text-amber-500">awaiting return</span>}
                         </div>
                       </div>
                       {i < arr.length - 1 && <div className="h-px bg-border" />}
@@ -467,38 +461,32 @@ function ShiftCard({ slot, onAction }: {
           {/* ── Action buttons ─────────────────────────────────────────────── */}
           {checkedIn && !checkedOut && (
             <div className="space-y-3">
-              {/* Break buttons — one per available break type, each with cash input */}
+              {/* One block per still-available break, themed by the break's accent */}
               {!onBreak && availableBreaks.map(bc => {
-                const inputVal   = cashOutInputs[bc.breakType] ?? '';
+                const pal        = paletteFor(bc.accent);
+                const inputVal   = cashOutInputs[bc.type] ?? '';
                 const cashOutNum = parseFloat(inputVal);
                 const isValid    = inputVal !== '' && !isNaN(cashOutNum) && cashOutNum >= 0;
 
                 return (
-                  <div key={bc.breakType} className="space-y-2">
+                  <div key={bc.type} className="space-y-2">
                     <CashInput
                       label={`Cash taken out — ${bc.label}`}
                       value={inputVal}
-                      onChange={v => setCashOutInputs(prev => ({ ...prev, [bc.breakType]: v }))}
-                      isAmber={bc.isAmber}
+                      onChange={v => setCashOutInputs(prev => ({ ...prev, [bc.type]: v }))}
+                      accent={bc.accent ?? 'amber'}
                       disabled={acting !== null}
-                      required={true}
+                      required
                     />
-
                     <Button
                       variant="outline"
-                      className={cn('h-12 w-full gap-2 text-sm font-semibold', bc.accentCls, bc.bgCls)}
-                      onClick={() => {
-                        act('startbreak', bc.breakType, cashOutNum, undefined);
-                        // Clear this input after submitting
-                        setCashOutInputs(prev => ({ ...prev, [bc.breakType]: '' }));
-                      }}
+                      className={cn('h-12 w-full gap-2 text-sm font-semibold', pal.border, pal.btnText, pal.hoverBg)}
+                      onClick={() => { act('startbreak', bc.type, cashOutNum, undefined); setCashOutInputs(prev => ({ ...prev, [bc.type]: '' })); }}
                       disabled={acting !== null || !isValid}
                       title={!isValid ? 'Enter cash amount to continue' : undefined}
                     >
-                      {acting === bc.breakType
-                        ? <Loader2 className="h-4 w-4 animate-spin" />
-                        : <Coffee className="h-4 w-4" />}
-                      {acting === bc.breakType ? 'Starting break…' : `Take ${bc.label}`}
+                      {acting === bc.type ? <Loader2 className="h-4 w-4 animate-spin" /> : <Coffee className="h-4 w-4" />}
+                      {acting === bc.type ? 'Starting break…' : `Take ${bc.label}`}
                     </Button>
                   </div>
                 );
@@ -515,9 +503,7 @@ function ShiftCard({ slot, onAction }: {
                 {acting === 'checkout' ? 'Checking out…' : 'Check Out'}
               </Button>
 
-              {onBreak && (
-                <p className="text-center text-xs text-muted-foreground">Return from break first to enable check-out</p>
-              )}
+              {onBreak && <p className="text-center text-xs text-muted-foreground">Return from break first to enable check-out</p>}
             </div>
           )}
 
@@ -525,9 +511,7 @@ function ShiftCard({ slot, onAction }: {
           {checkedOut && (
             <div className="flex items-center justify-center gap-2 rounded-xl border border-green-200 bg-green-50 py-4">
               <CheckCircle2 className="h-4 w-4 text-green-600" />
-              <span className="text-sm font-semibold text-green-700">
-                Shift complete · {fmtDuration(att.checkInTime, att.checkOutTime)}
-              </span>
+              <span className="text-sm font-semibold text-green-700">Shift complete · {fmtDuration(att.checkInTime, att.checkOutTime)}</span>
             </div>
           )}
         </>
@@ -580,9 +564,9 @@ export default function EmployeeAttendancePage() {
   ) {
     try {
       const body: Record<string, string | number> = { action, shift };
-      if (breakType)           body.breakType = breakType;
-      if (cashOut  != null)    body.cashOut   = cashOut;
-      if (cashIn   != null)    body.cashIn    = cashIn;
+      if (breakType)        body.breakType = breakType;
+      if (cashOut != null)  body.cashOut   = cashOut;
+      if (cashIn  != null)  body.cashIn    = cashIn;
 
       const res  = await fetch('/api/employee/attendance', {
         method:  'POST',
@@ -634,21 +618,15 @@ export default function EmployeeAttendancePage() {
         {slots.length > 0 && (
           <div className="relative mt-4 flex flex-wrap gap-2">
             {slots.map(({ schedule, attendance: att }) => (
-              <span
-                key={schedule.scheduleId}
-                className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-xs font-medium text-primary-foreground"
-              >
-                {schedule.shift === 'morning'
-                  ? <Sun  className="h-3 w-3" />
-                  : schedule.shift === 'evening'
-                    ? <Moon className="h-3 w-3" />
-                    : <Zap  className="h-3 w-3" />}
+              <span key={schedule.scheduleId}
+                className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-xs font-medium text-primary-foreground">
+                <ShiftIcon schedule={schedule} className="h-3 w-3" plain />
                 <span>{schedule.shiftLabel ?? schedule.shift}</span>
                 {att && (
                   <>
                     <span className="opacity-40">·</span>
                     <span className={cn(
-                      att.onBreak          ? 'text-amber-300'
+                      att.onBreak                ? 'text-amber-300'
                       : att.status === 'present' ? 'text-green-300'
                       : att.status === 'late'    ? 'text-amber-300'
                       : 'text-red-300',

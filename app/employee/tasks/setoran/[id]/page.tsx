@@ -3,12 +3,20 @@
 //
 // Setoran does not enforce location. AccessGuard runs in check-in-only mode
 // (`requireGeo={false}`), and no `geo` is sent on autosave/submit.
+//
+// UI: a single calm column instead of stacked cards —
+//   • two amount inputs
+//   • one summary "table" (label → value rows) for the breakdown
+//   • two slim photo rows
+//   • a collapsible note
+// All business logic (autosave, no-geo guard, upload, submit gating) is
+// unchanged from the previous version.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
-  AlertTriangle, Camera, CreditCard, Loader2,
-  Receipt, Wallet, AlertCircle, X,
+  AlertCircle, AlertTriangle, Camera, Check, CreditCard,
+  Loader2, Receipt, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -142,7 +150,7 @@ export default function SetoranTaskPage() {
         <TaskHeader title="Setoran" />
         <div className="space-y-3 p-4">
           {[1, 2, 3].map((i) => (
-            <div key={i} className="h-24 animate-pulse rounded-2xl bg-secondary" />
+            <div key={i} className="h-20 animate-pulse rounded-2xl bg-secondary" />
           ))}
         </div>
       </main>
@@ -189,7 +197,7 @@ export default function SetoranTaskPage() {
           isOverStored={isOverStored}
           readonly={readonly}
           dis={dis}
-          accessOk={!locked} 
+          accessOk={!locked}
           banner={banner}
           lockedOverlay={lockedOverlay}
           submitting={submitting}
@@ -378,13 +386,15 @@ function SetoranPageBody(props: BodyProps) {
 
   const submitHint = (() => {
     if (readonly) return undefined;
-    if (!accessOk) return 'Pastikan kamu sudah absen masuk.'; // ← was: return undefined
+    if (!accessOk) return 'Pastikan kamu sudah absen masuk.';
     if (storedNumber <= 0) return 'Isi nominal yang disetor terlebih dahulu.';
     if (isOverStored) return 'Uang disetor melebihi total wajib disetor.';
     if (!resiPhoto) return 'Foto resi belum diupload.';
     if (!atmCardSelfiePhoto) return 'Foto selfie dengan kartu ATM belum diupload.';
     return undefined;
   })();
+
+  const photosDone = (resiPhoto ? 1 : 0) + (atmCardSelfiePhoto ? 1 : 0);
 
   return (
     <main className="flex min-h-screen flex-col bg-background">
@@ -401,9 +411,7 @@ function SetoranPageBody(props: BodyProps) {
         {submitError && (
           <div className="flex items-start gap-2.5 rounded-xl border border-red-300 bg-red-50 px-4 py-3">
             <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-600" />
-            <div className="min-w-0 flex-1">
-              <p className="text-xs text-red-700 break-words">{submitError}</p>
-            </div>
+            <p className="min-w-0 flex-1 text-xs text-red-700 break-words">{submitError}</p>
             <button onClick={() => setSubmitError(null)} className="flex-shrink-0 text-red-400 hover:text-red-600" aria-label="Tutup">
               <X className="h-4 w-4" />
             </button>
@@ -424,9 +432,9 @@ function SetoranPageBody(props: BodyProps) {
         <div className="relative">
           {lockedOverlay}
 
-          <div className="space-y-4">
+          <div className="space-y-5">
             {previousUnpaidAmount > 0 && (
-              <div className="flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3">
+              <div className="flex items-start gap-2.5 rounded-xl border border-amber-300 bg-amber-50 px-3.5 py-2.5">
                 <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-700" />
                 <p className="text-xs text-amber-900">
                   Sisa unpaid sebelumnya <span className="font-bold">{rupiah(previousUnpaidAmount)}</span> ditambahkan ke total hari ini.
@@ -434,8 +442,8 @@ function SetoranPageBody(props: BodyProps) {
               </div>
             )}
 
-            {/* ─── Amounts ──────────────────────────────────────────────── */}
-            <SectionCard icon={<Wallet className="h-4 w-4" />} title="Deposit Amount">
+            {/* ─── Inputs ─────────────────────────────────────────────────── */}
+            <div className="space-y-3">
               <AmountField
                 label="Uang aktual diterima hari ini"
                 value={actualReceivedAmount}
@@ -444,13 +452,6 @@ function SetoranPageBody(props: BodyProps) {
                 disabled={dis}
                 placeholder="1.000.000"
               />
-
-              <div className="rounded-xl bg-secondary px-3 py-2.5 text-xs">
-                <RowKV label="Unpaid sebelumnya" value={rupiah(previousUnpaidAmount)} />
-                <div className="my-1.5 h-px bg-border" />
-                <RowKV label="Total wajib disetor" value={rupiah(requiredStoreAmount)} emphasis />
-              </div>
-
               <AmountField
                 label="Nominal yang disetor"
                 value={storedAmount}
@@ -460,30 +461,50 @@ function SetoranPageBody(props: BodyProps) {
                 error={isOverStored ? 'Tidak boleh melebihi total wajib disetor.' : undefined}
                 placeholder="950.000"
               />
+            </div>
 
-              <ResultBadge unpaidAmount={unpaidAmount} />
-            </SectionCard>
+            {/* ─── Breakdown table ────────────────────────────────────────── */}
+            <SummaryTable>
+              <SummaryRow label="Uang diterima" value={rupiah(actualReceivedNumberOf(actualReceivedAmount))} />
+              <SummaryRow label="Unpaid sebelumnya" value={rupiah(previousUnpaidAmount)} muted={previousUnpaidAmount === 0} />
+              <SummaryRow label="Total wajib disetor" value={rupiah(requiredStoreAmount)} strong />
+              <SummaryRow label="Disetor" value={rupiah(storedNumber)} />
+              <SummaryRow
+                label={unpaidAmount === 0 ? 'Status' : 'Sisa belum disetor'}
+                value={unpaidAmount === 0 ? 'Setoran cukup' : rupiah(unpaidAmount)}
+                tone={unpaidAmount === 0 ? 'ok' : 'warn'}
+                strong
+                last
+              />
+            </SummaryTable>
 
-            {/* ─── Photos ────────────────────────────────────────────────── */}
-            <SectionCard icon={<Receipt className="h-4 w-4" />} title="Photo Evidence">
-              <PhotoSlot
-                title="Foto Resi"
-                description="Bukti resi setoran."
-                photo={resiPhoto}
-                disabled={dis || uploading !== null}
-                loading={uploading === 'resi'}
-                onClick={() => resiInputRef.current?.click()}
-                icon={<Receipt className="h-5 w-5 text-amber-700" />}
-              />
-              <PhotoSlot
-                title="Selfie dengan Kartu ATM"
-                description="Foto wajah memegang kartu ATM."
-                photo={atmCardSelfiePhoto}
-                disabled={dis || uploading !== null}
-                loading={uploading === 'atm_card_selfie'}
-                onClick={() => atmInputRef.current?.click()}
-                icon={<CreditCard className="h-5 w-5 text-amber-700" />}
-              />
+            {/* ─── Photos ─────────────────────────────────────────────────── */}
+            <div>
+              <SectionLabel>
+                Foto bukti
+                <span className="ml-1 font-normal text-muted-foreground">{photosDone}/2</span>
+              </SectionLabel>
+              <div className="overflow-hidden rounded-xl border border-border">
+                <PhotoRow
+                  title="Foto Resi"
+                  hint="Bukti resi setoran"
+                  photo={resiPhoto}
+                  disabled={dis || uploading !== null}
+                  loading={uploading === 'resi'}
+                  onClick={() => resiInputRef.current?.click()}
+                  icon={<Receipt className="h-4 w-4" />}
+                />
+                <div className="h-px bg-border" />
+                <PhotoRow
+                  title="Selfie + Kartu ATM"
+                  hint="Wajah memegang kartu ATM"
+                  photo={atmCardSelfiePhoto}
+                  disabled={dis || uploading !== null}
+                  loading={uploading === 'atm_card_selfie'}
+                  onClick={() => atmInputRef.current?.click()}
+                  icon={<CreditCard className="h-4 w-4" />}
+                />
+              </div>
 
               <input
                 ref={resiInputRef}
@@ -509,20 +530,21 @@ function SetoranPageBody(props: BodyProps) {
                   if (file) void uploadPhoto(file, 'atm_card_selfie');
                 }}
               />
-            </SectionCard>
+            </div>
 
-            {/* ─── Notes ─────────────────────────────────────────────────── */}
-            <SectionCard title="Notes" subtitle="Opsional">
+            {/* ─── Notes ──────────────────────────────────────────────────── */}
+            <div>
+              <SectionLabel>Catatan <span className="font-normal text-muted-foreground">opsional</span></SectionLabel>
               <textarea
                 disabled={dis}
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
                 onBlur={() => autoSave({ notes })}
                 placeholder="Tambahkan catatan jika ada…"
-                rows={3}
-                className="w-full resize-none rounded-xl border border-border bg-secondary px-4 py-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
+                rows={2}
+                className="w-full resize-none rounded-xl border border-border bg-secondary px-3.5 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
               />
-            </SectionCard>
+            </div>
           </div>
         </div>
       </div>
@@ -539,25 +561,19 @@ function SetoranPageBody(props: BodyProps) {
   );
 }
 
+// Small local helper so the table's "Uang diterima" row matches the input live.
+function actualReceivedNumberOf(raw: string): number {
+  const n = Number(raw ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
 // ─── Local UI pieces ────────────────────────────────────────────────────────
 
-function SectionCard({
-  icon, title, subtitle, children,
-}: {
-  icon?: React.ReactNode;
-  title: string;
-  subtitle?: string;
-  children: React.ReactNode;
-}) {
+function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <section className="space-y-3 rounded-2xl border border-border bg-card p-4">
-      <div className="flex items-center gap-2">
-        {icon && <span className="text-primary">{icon}</span>}
-        <h2 className="text-sm font-bold text-foreground">{title}</h2>
-        {subtitle && <span className="text-[10px] font-medium uppercase tracking-widest text-muted-foreground">{subtitle}</span>}
-      </div>
-      <div className="space-y-3">{children}</div>
-    </section>
+    <p className="mb-1.5 px-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+      {children}
+    </p>
   );
 }
 
@@ -575,7 +591,7 @@ function AmountField({
   const formatted = value ? Number(value).toLocaleString('id-ID') : '';
   return (
     <label className="block space-y-1.5">
-      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      <span className="px-0.5 text-xs font-medium text-muted-foreground">{label}</span>
       <div className="relative">
         <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-semibold text-muted-foreground">
           Rp
@@ -594,22 +610,49 @@ function AmountField({
           )}
         />
       </div>
-      {error && <p className="text-[11px] font-medium text-red-600">{error}</p>}
+      {error && <p className="px-0.5 text-[11px] font-medium text-red-600">{error}</p>}
     </label>
   );
 }
 
-function RowKV({
-  label, value, emphasis,
-}: { label: string; value: string; emphasis?: boolean }) {
+// A clean key→value table: one bordered container, hairline-separated rows.
+function SummaryTable({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between gap-3">
-      <span className={cn('text-muted-foreground', emphasis && 'font-semibold text-foreground')}>
+    <div className="overflow-hidden rounded-xl border border-border bg-card">
+      {children}
+    </div>
+  );
+}
+
+function SummaryRow({
+  label, value, strong, muted, last, tone,
+}: {
+  label: string;
+  value: string;
+  strong?: boolean;
+  muted?: boolean;
+  last?: boolean;
+  tone?: 'ok' | 'warn';
+}) {
+  const toneClass =
+    tone === 'ok' ? 'text-green-700'
+    : tone === 'warn' ? 'text-amber-700'
+    : 'text-foreground';
+
+  return (
+    <div className={cn(
+      'flex items-center justify-between gap-3 px-3.5 py-2.5',
+      !last && 'border-b border-border',
+      tone === 'ok' && 'bg-green-50',
+      tone === 'warn' && 'bg-amber-50',
+    )}>
+      <span className={cn('text-xs', muted ? 'text-muted-foreground' : 'text-muted-foreground', strong && 'font-semibold text-foreground')}>
         {label}
       </span>
       <span className={cn(
         'tabular-nums',
-        emphasis ? 'text-base font-bold text-foreground' : 'font-semibold text-foreground',
+        strong ? 'text-sm font-bold' : 'text-sm font-semibold',
+        toneClass,
       )}>
         {value}
       </span>
@@ -617,28 +660,12 @@ function RowKV({
   );
 }
 
-function ResultBadge({ unpaidAmount }: { unpaidAmount: number }) {
-  const isOk = unpaidAmount === 0;
-  return (
-    <div className={cn(
-      'flex items-center justify-between gap-3 rounded-xl border px-3 py-2.5',
-      isOk ? 'border-green-200 bg-green-50' : 'border-amber-300 bg-amber-50',
-    )}>
-      <span className={cn('text-xs font-semibold', isOk ? 'text-green-800' : 'text-amber-900')}>
-        {isOk ? 'Setoran cukup' : 'Sisa belum disetor'}
-      </span>
-      <span className={cn('text-base font-bold tabular-nums', isOk ? 'text-green-800' : 'text-amber-900')}>
-        {rupiah(unpaidAmount)}
-      </span>
-    </div>
-  );
-}
-
-function PhotoSlot({
-  title, description, photo, onClick, disabled, loading, icon,
+// A single compact photo row — thumbnail/icon, label, and state on the right.
+function PhotoRow({
+  title, hint, photo, onClick, disabled, loading, icon,
 }: {
   title: string;
-  description: string;
+  hint: string;
   photo: string | null;
   onClick: () => void;
   disabled?: boolean;
@@ -650,28 +677,33 @@ function PhotoSlot({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className={cn(
-        'flex w-full items-center gap-3 rounded-xl border-2 p-3 text-left transition active:scale-[0.99] disabled:opacity-60',
-        photo ? 'border-green-200 bg-green-50' : 'border-dashed border-amber-300 bg-amber-50',
-      )}
+      className="flex w-full items-center gap-3 bg-card px-3.5 py-3 text-left transition active:bg-secondary disabled:opacity-60"
     >
       {photo ? (
-        <div className="h-14 w-14 flex-shrink-0 overflow-hidden rounded-lg border border-border bg-background">
+        <div className="h-11 w-11 flex-shrink-0 overflow-hidden rounded-lg border border-border bg-background">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={photo} alt={title} className="h-full w-full object-cover" />
         </div>
       ) : (
-        <div className="flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-lg bg-background">
-          {loading ? <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /> : icon}
+        <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-lg bg-secondary text-violet-700">
+          {loading ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : icon}
         </div>
       )}
+
       <div className="min-w-0 flex-1">
         <p className="text-sm font-semibold text-foreground">{title}</p>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          {photo ? 'Tap untuk ganti foto.' : description}
-        </p>
+        <p className="mt-0.5 text-xs text-muted-foreground">{photo ? 'Tap untuk ganti' : hint}</p>
       </div>
-      {!photo && <Camera className="h-4 w-4 flex-shrink-0 text-amber-700" />}
+
+      {photo ? (
+        <span className="flex flex-shrink-0 items-center gap-1 rounded-full bg-green-50 px-2 py-0.5 text-[11px] font-semibold text-green-700">
+          <Check className="h-3 w-3" /> Ada
+        </span>
+      ) : (
+        <span className="flex flex-shrink-0 items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-semibold text-violet-700">
+          <Camera className="h-3 w-3" /> Foto
+        </span>
+      )}
     </button>
   );
 }

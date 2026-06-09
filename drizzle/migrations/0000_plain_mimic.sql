@@ -192,6 +192,9 @@ CREATE TABLE "shifts" (
 	"description" text,
 	"start_time" time,
 	"end_time" time,
+	"accent" text,
+	"icon" text,
+	"breaks" jsonb,
 	"is_active" boolean DEFAULT true NOT NULL,
 	"sort_order" integer DEFAULT 0 NOT NULL,
 	"created_at" timestamp DEFAULT now() NOT NULL,
@@ -717,6 +720,34 @@ CREATE TABLE "vm_checklist_tasks" (
 	CONSTRAINT "vm_checklist_tasks_store_date_unique" UNIQUE("store_id","date")
 );
 --> statement-breakpoint
+CREATE TABLE "shift_tasks" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"shift_id" integer NOT NULL,
+	"task_definition_id" integer NOT NULL,
+	"is_required" boolean DEFAULT true NOT NULL,
+	"is_active" boolean DEFAULT true NOT NULL,
+	"sort_order" integer DEFAULT 0 NOT NULL,
+	"assigned_by" text,
+	"created_at" timestamp DEFAULT now() NOT NULL,
+	"updated_at" timestamp DEFAULT now() NOT NULL,
+	CONSTRAINT "shift_tasks_shift_task_unique" UNIQUE("shift_id","task_definition_id")
+);
+--> statement-breakpoint
+CREATE TABLE "task_definitions" (
+	"id" serial PRIMARY KEY NOT NULL,
+	"code" text NOT NULL,
+	"label" text NOT NULL,
+	"description" text,
+	"icon" text,
+	"accent" text,
+	"is_personal" boolean DEFAULT false NOT NULL,
+	"is_active" boolean DEFAULT true NOT NULL,
+	"sort_order" integer DEFAULT 0 NOT NULL,
+	"created_at" timestamp DEFAULT now() NOT NULL,
+	"updated_at" timestamp DEFAULT now() NOT NULL,
+	CONSTRAINT "task_definitions_code_unique" UNIQUE("code")
+);
+--> statement-breakpoint
 ALTER TABLE "attendance" ADD CONSTRAINT "attendance_schedule_id_schedules_id_fk" FOREIGN KEY ("schedule_id") REFERENCES "public"."schedules"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "attendance" ADD CONSTRAINT "attendance_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "attendance" ADD CONSTRAINT "attendance_store_id_stores_id_fk" FOREIGN KEY ("store_id") REFERENCES "public"."stores"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -886,6 +917,9 @@ ALTER TABLE "vm_checklist_tasks" ADD CONSTRAINT "vm_checklist_tasks_user_id_user
 ALTER TABLE "vm_checklist_tasks" ADD CONSTRAINT "vm_checklist_tasks_store_id_stores_id_fk" FOREIGN KEY ("store_id") REFERENCES "public"."stores"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "vm_checklist_tasks" ADD CONSTRAINT "vm_checklist_tasks_shift_id_shifts_id_fk" FOREIGN KEY ("shift_id") REFERENCES "public"."shifts"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "vm_checklist_tasks" ADD CONSTRAINT "vm_checklist_tasks_verified_by_users_id_fk" FOREIGN KEY ("verified_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "shift_tasks" ADD CONSTRAINT "shift_tasks_shift_id_shifts_id_fk" FOREIGN KEY ("shift_id") REFERENCES "public"."shifts"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "shift_tasks" ADD CONSTRAINT "shift_tasks_task_definition_id_task_definitions_id_fk" FOREIGN KEY ("task_definition_id") REFERENCES "public"."task_definitions"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "shift_tasks" ADD CONSTRAINT "shift_tasks_assigned_by_users_id_fk" FOREIGN KEY ("assigned_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "issues_reporter_idx" ON "issues" USING btree ("user_id");--> statement-breakpoint
 CREATE INDEX "issues_store_idx" ON "issues" USING btree ("store_id");--> statement-breakpoint
 CREATE INDEX "issues_assigned_role_idx" ON "issues" USING btree ("assigned_to_role_id");--> statement-breakpoint
@@ -904,4 +938,7 @@ CREATE INDEX "serah_terima_items_store_target_shift_idx" ON "serah_terima_items"
 CREATE INDEX "serah_terima_tasks_store_date_shift_idx" ON "serah_terima_tasks" USING btree ("store_id","date","shift_id");--> statement-breakpoint
 CREATE INDEX "setoran_money_storage_store_date_idx" ON "setoran_money_storage" USING btree ("store_id","date");--> statement-breakpoint
 CREATE INDEX "store_bins_store_idx" ON "store_bins" USING btree ("store_id");--> statement-breakpoint
-CREATE INDEX "store_edc_terminals_store_idx" ON "store_edc_terminals" USING btree ("store_id");
+CREATE INDEX "store_edc_terminals_store_idx" ON "store_edc_terminals" USING btree ("store_id");--> statement-breakpoint
+CREATE INDEX "shift_tasks_shift_idx" ON "shift_tasks" USING btree ("shift_id");--> statement-breakpoint
+CREATE INDEX "shift_tasks_task_def_idx" ON "shift_tasks" USING btree ("task_definition_id");--> statement-breakpoint
+CREATE INDEX "task_definitions_active_idx" ON "task_definitions" USING btree ("is_active");

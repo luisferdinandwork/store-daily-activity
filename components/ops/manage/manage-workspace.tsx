@@ -372,9 +372,31 @@ function AreaGroup({
                 {s.employeeCount}
               </div>
               <div className="min-w-0 flex-1">
-                <p className={cn('truncate text-[13px] font-bold', active ? 'text-violet-900' : 'text-slate-800')}>{s.name}</p>
+                {(() => {
+                  const match = s.name.match(/^([A-Z0-9]+(?:\s*-\s*[A-Z0-9]+)?)\s*-\s*(.+)$/);
+                  const code = match?.[1] ?? null;
+                  const label = match?.[2] ?? s.name;
+                  return (
+                    <>
+                      {code && (
+                        <p className={cn(
+                          'text-[10px] font-bold leading-none mb-0.5 tracking-wide',
+                          active ? 'text-violet-500' : 'text-slate-400',
+                        )}>
+                          {code}
+                        </p>
+                      )}
+                      <p className={cn(
+                        'text-[12px] font-bold leading-snug',
+                        active ? 'text-violet-900' : 'text-slate-800',
+                      )}>
+                        {label}
+                      </p>
+                    </>
+                  );
+                })()}
                 {tempInStore > 0 && (
-                  <p className={cn('flex items-center gap-1 text-[10px] font-semibold', active ? 'text-amber-500' : 'text-amber-600')}>
+                  <p className={cn('mt-0.5 flex items-center gap-1 text-[10px] font-semibold', active ? 'text-amber-500' : 'text-amber-600')}>
                     <CalendarClock className="h-2.5 w-2.5" />
                     {tempInStore} periode
                   </p>

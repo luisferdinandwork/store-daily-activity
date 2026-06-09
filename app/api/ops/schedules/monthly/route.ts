@@ -1,114 +1,207 @@
 // app/api/ops/schedules/monthly/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession }          from 'next-auth';
-import { authOptions }               from '@/lib/auth';
+import { getServerSession } from 'next-auth';
+
+import { authOptions } from '@/lib/auth';
 import {
-  getMonthlySchedule,
-  deleteMonthlySchedule,
   createEmptyMonthlySchedule,
+  deleteMonthlySchedule,
+  getMonthlySchedule,
 } from '@/lib/schedule-utils';
-import { db }                        from '@/lib/db';
-import { shifts }                    from '@/lib/db/schema';
-import { eq }                        from 'drizzle-orm';
-import { getOpsActor, assertStoreInActorArea, parseStoreId } from '../_helpers';
+
+import {
+  assertStoreInActorArea,
+  getOpsActor,
+  parseStoreId,
+} from '../_helpers';
+
+function mapSchedule(rawSchedule: Awaited<ReturnType<typeof getMonthlySchedule>>) {
+  if (!rawSchedule) return null;
+
+  return {
+    ...rawSchedule.schedule,
+    id: String(rawSchedule.schedule.id),
+    storeId: String(rawSchedule.schedule.storeId),
+    entries: rawSchedule.entries.map((entry: any) => ({
+      id: String(entry.id),
+      userId: entry.userId,
+      userName: entry.userName,
+      userType: entry.userEmployeeType,
+      date: entry.date,
+      shiftId: entry.shiftId,
+      shift: entry.shiftCode ?? null,
+      shiftCode: entry.shiftCode ?? null,
+      shiftLabel: entry.shiftLabel ?? entry.shiftCode ?? null,
+      isOff: entry.isOff,
+      isLeave: entry.isLeave,
+    })),
+  };
+}
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
-  const actor = await getOpsActor((session.user as any).id);
-  if (!actor) return NextResponse.json({ success: false, error: 'OPS only.' }, { status: 403 });
+  if (!session?.user?.id) {
+    return NextResponse.json(
+      { success: false, error: 'Unauthorized' },
+      { status: 401 },
+    );
+  }
 
-  const storeIdRaw = req.nextUrl.searchParams.get('storeId');
-  const yearMonth  = req.nextUrl.searchParams.get('yearMonth');
+  const actor = await getOpsActor(session.user.id);
 
-  const parsed = parseStoreId(storeIdRaw);
-  if (!parsed.ok) return NextResponse.json({ success: false, error: parsed.error }, { status: 400 });
-  if (!yearMonth)  return NextResponse.json({ success: false, error: 'yearMonth required.' }, { status: 400 });
+  if (!actor) {
+    return NextResponse.json(
+      { success: false, error: 'OPS only.' },
+      { status: 403 },
+    );
+  }
 
-  const areaErr = await assertStoreInActorArea(actor, parsed.id);
-  if (areaErr) return NextResponse.json({ success: false, error: areaErr }, { status: 403 });
+  const parsedStore = parseStoreId(req.nextUrl.searchParams.get('storeId'));
+  const yearMonth = req.nextUrl.searchParams.get('yearMonth');
 
-  const rawSchedule = await getMonthlySchedule(parsed.id, yearMonth);
-  if (!rawSchedule) return NextResponse.json({ success: true, schedule: null });
+  if (!parsedStore.ok) {
+    return NextResponse.json(
+      { success: false, error: parsedStore.error },
+      { status: 400 },
+    );
+  }
 
-  // Append shift code per entry (mirrors the PIC route)
-  const mappedEntries = await Promise.all(
-    rawSchedule.entries.map(async (entry) => {
-      let shiftCode: string | null = null;
-      if (entry.shiftId) {
-        const [row] = await db
-          .select({ code: shifts.code })
-          .from(shifts)
-          .where(eq(shifts.id, entry.shiftId))
-          .limit(1);
-        shiftCode = row?.code ?? null;
-      }
-      return {
-        id:       String(entry.id),
-        userId:   entry.userId,
-        userName: entry.userName,
-        userType: entry.userEmployeeType,
-        date:     entry.date,
-        shiftId:  entry.shiftId,
-        shift:    shiftCode as 'morning' | 'evening' | null,
-        isOff:    entry.isOff,
-        isLeave:  entry.isLeave,
-      };
-    }),
-  );
+  if (!yearMonth) {
+    return NextResponse.json(
+      { success: false, error: 'yearMonth required.' },
+      { status: 400 },
+    );
+  }
+
+  const areaError = await assertStoreInActorArea(actor, parsedStore.id);
+
+  if (areaError) {
+    return NextResponse.json(
+      { success: false, error: areaError },
+      { status: 403 },
+    );
+  }
+
+  const rawSchedule = await getMonthlySchedule(parsedStore.id, yearMonth);
 
   return NextResponse.json({
     success: true,
-    schedule: {
-      ...rawSchedule.schedule,
-      id:      String(rawSchedule.schedule.id),
-      storeId: String(rawSchedule.schedule.storeId),
-      entries: mappedEntries,
-    },
+    schedule: mapSchedule(rawSchedule),
   });
 }
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
-  const actor = await getOpsActor((session.user as any).id);
-  if (!actor) return NextResponse.json({ success: false, error: 'OPS only.' }, { status: 403 });
+  if (!session?.user?.id) {
+    return NextResponse.json(
+      { success: false, error: 'Unauthorized' },
+      { status: 401 },
+    );
+  }
 
-  const body      = await req.json().catch(() => ({}));
-  const parsed    = parseStoreId(body.storeId);
-  if (!parsed.ok) return NextResponse.json({ success: false, error: parsed.error }, { status: 400 });
-  const yearMonth = body.yearMonth as string | undefined;
-  const note      = body.note      as string | undefined;
-  if (!yearMonth) return NextResponse.json({ success: false, error: 'yearMonth required.' }, { status: 400 });
+  const actor = await getOpsActor(session.user.id);
 
-  const areaErr = await assertStoreInActorArea(actor, parsed.id);
-  if (areaErr) return NextResponse.json({ success: false, error: areaErr }, { status: 403 });
+  if (!actor) {
+    return NextResponse.json(
+      { success: false, error: 'OPS only.' },
+      { status: 403 },
+    );
+  }
 
-  const result = await createEmptyMonthlySchedule(parsed.id, yearMonth, actor.id, note);
-  if (!result.success) return NextResponse.json(result, { status: 400 });
+  const body = await req.json().catch(() => ({}));
+  const parsedStore = parseStoreId(body.storeId);
+  const yearMonth = typeof body.yearMonth === 'string' ? body.yearMonth : null;
+  const note = typeof body.note === 'string' ? body.note : undefined;
+
+  if (!parsedStore.ok) {
+    return NextResponse.json(
+      { success: false, error: parsedStore.error },
+      { status: 400 },
+    );
+  }
+
+  if (!yearMonth) {
+    return NextResponse.json(
+      { success: false, error: 'yearMonth required.' },
+      { status: 400 },
+    );
+  }
+
+  const areaError = await assertStoreInActorArea(actor, parsedStore.id);
+
+  if (areaError) {
+    return NextResponse.json(
+      { success: false, error: areaError },
+      { status: 403 },
+    );
+  }
+
+  const result = await createEmptyMonthlySchedule(
+    parsedStore.id,
+    yearMonth,
+    actor.id,
+    note,
+  );
+
+  if (!result.success) {
+    return NextResponse.json(result, { status: 400 });
+  }
+
   return NextResponse.json(result);
 }
 
 export async function DELETE(req: NextRequest) {
   const session = await getServerSession(authOptions);
-  if (!session?.user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
-  const actor = await getOpsActor((session.user as any).id);
-  if (!actor) return NextResponse.json({ success: false, error: 'OPS only.' }, { status: 403 });
+  if (!session?.user?.id) {
+    return NextResponse.json(
+      { success: false, error: 'Unauthorized' },
+      { status: 401 },
+    );
+  }
 
-  const storeIdRaw = req.nextUrl.searchParams.get('storeId');
-  const yearMonth  = req.nextUrl.searchParams.get('yearMonth');
+  const actor = await getOpsActor(session.user.id);
 
-  const parsed = parseStoreId(storeIdRaw);
-  if (!parsed.ok) return NextResponse.json({ success: false, error: parsed.error }, { status: 400 });
-  if (!yearMonth)  return NextResponse.json({ success: false, error: 'yearMonth required.' }, { status: 400 });
+  if (!actor) {
+    return NextResponse.json(
+      { success: false, error: 'OPS only.' },
+      { status: 403 },
+    );
+  }
 
-  const areaErr = await assertStoreInActorArea(actor, parsed.id);
-  if (areaErr) return NextResponse.json({ success: false, error: areaErr }, { status: 403 });
+  const parsedStore = parseStoreId(req.nextUrl.searchParams.get('storeId'));
+  const yearMonth = req.nextUrl.searchParams.get('yearMonth');
 
-  const result = await deleteMonthlySchedule(parsed.id, yearMonth, actor.id);
-  if (!result.success) return NextResponse.json(result, { status: 400 });
+  if (!parsedStore.ok) {
+    return NextResponse.json(
+      { success: false, error: parsedStore.error },
+      { status: 400 },
+    );
+  }
+
+  if (!yearMonth) {
+    return NextResponse.json(
+      { success: false, error: 'yearMonth required.' },
+      { status: 400 },
+    );
+  }
+
+  const areaError = await assertStoreInActorArea(actor, parsedStore.id);
+
+  if (areaError) {
+    return NextResponse.json(
+      { success: false, error: areaError },
+      { status: 403 },
+    );
+  }
+
+  const result = await deleteMonthlySchedule(parsedStore.id, yearMonth, actor.id);
+
+  if (!result.success) {
+    return NextResponse.json(result, { status: 400 });
+  }
+
   return NextResponse.json(result);
 }

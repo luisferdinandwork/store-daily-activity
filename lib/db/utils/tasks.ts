@@ -1579,3 +1579,99 @@ export async function getAllTaskOverview(date: Date) {
     stores: results,
   };
 }
+
+// ─── Range aggregation (weekly / monthly) ─────────────────────────────────────
+
+export type StoreDateSummary = {
+  storeId:     number;
+  date:        string; // YYYY-MM-DD
+  pending:     number;
+  inProgress:  number;
+  completed:   number;
+  discrepancy: number;
+  total:       number;
+};
+
+/**
+ * Returns per-(storeId, date) task summaries for all stores in a date range.
+ * Queries each task table once with a single date-range filter instead of
+ * one query per store per day.
+ */
+export async function getStoreSummariesForRange(
+  storeIds: number[],
+  startDate: Date,
+  endDate: Date,
+): Promise<StoreDateSummary[]> {
+  if (!storeIds.length) return [];
+
+  const dayStart = startOfDay(startDate);
+  const dayEnd   = endOfDay(endDate);
+
+  type RawRow = { storeId: number; date: Date; status: string | null };
+
+  async function loadTable(table: any): Promise<RawRow[]> {
+    return db
+      .select({ storeId: table.storeId, date: table.date, status: table.status })
+      .from(table)
+      .where(and(
+        inArray(table.storeId, storeIds),
+        gte(table.date, dayStart),
+        lte(table.date, dayEnd),
+      ));
+  }
+
+  const [
+    storeOpening, setoran, storeFront, cekBin, vmChecklist,
+    marketingCheck, itemDropping, briefing, serahTerima,
+    edcReconciliation, eodZReport, openStatement, grooming,
+  ] = await Promise.all([
+    loadTable(storeOpeningTasks),
+    loadTable(setoranTasks),
+    loadTable(storeFrontTasks),
+    loadTable(cekBinTasks),
+    loadTable(vmChecklistTasks),
+    loadTable(marketingCheckTasks),
+    loadTable(itemDroppingTasks),
+    loadTable(briefingTasks),
+    loadTable(serahTerimaTasks),
+    loadTable(edcReconciliationTasks),
+    loadTable(eodZReportTasks),
+    loadTable(openStatementTasks),
+    loadTable(groomingTasks),
+  ]);
+
+  const all: RawRow[] = [
+    ...storeOpening, ...setoran, ...storeFront, ...cekBin, ...vmChecklist,
+    ...marketingCheck, ...itemDropping, ...briefing, ...serahTerima,
+    ...edcReconciliation, ...eodZReport, ...openStatement, ...grooming,
+  ];
+
+  // Aggregate into a map keyed by "storeId::YYYY-MM-DD"
+  const map = new Map<string, StoreDateSummary>();
+
+  for (const row of all) {
+    const dateKey = toKey(row.date instanceof Date ? row.date : new Date(row.date));
+    const key     = `${row.storeId}::${dateKey}`;
+
+    let entry = map.get(key);
+    if (!entry) {
+      entry = { storeId: row.storeId, date: dateKey, pending: 0, inProgress: 0, completed: 0, discrepancy: 0, total: 0 };
+      map.set(key, entry);
+    }
+
+    entry.total++;
+    switch (row.status) {
+      case 'pending':     entry.pending++;     break;
+      case 'in_progress': entry.inProgress++;  break;
+      case 'completed':   entry.completed++;   break;
+      case 'discrepancy': entry.discrepancy++; break;
+    }
+  }
+
+  return [...map.values()];
+}
+
+// toKey is already defined as a private helper above; expose it here for the route
+function toKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}

@@ -29,17 +29,16 @@ function toMoneyString(v: unknown): string | undefined {
 
   if (typeof v === 'string') {
     const trimmed = v.trim();
-    if (!trimmed) return '';
+    if (!trimmed) return undefined;   // ← was: return ''  (this is the bug)
 
-    // Accept plain values like "150000", "150000.50", and also UI formatted values
-    // like "Rp 150.000" or "150,000" by stripping non-number separators.
     const normalized = trimmed
       .replace(/rp/gi, '')
       .replace(/\s/g, '')
       .replace(/,/g, '')
       .replace(/\.(?=\d{3}(\D|$))/g, '');
 
-    return normalized;
+    // Guard against any leftover non-numeric junk reaching a numeric column.
+    return /^-?\d+(\.\d+)?$/.test(normalized) ? normalized : undefined;
   }
 
   return undefined;
