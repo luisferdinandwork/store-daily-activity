@@ -2,16 +2,35 @@
 
 // app/employee/issues/page.tsx — mobile-first issue reporting for store staff.
 //
-// Employees now choose WHO an issue goes to (Ops, Finance, IT, …) when they
-// report it. The destination list is fetched from /api/issues/assignable-roles
-// so new departments appear automatically.
+// Styling intentionally follows the previous page. Logic updates:
+// - draft status is supported
+// - draft issues can be edited by the reporter
+// - draft issues can be sent to OPS by changing status draft -> reported
+// - destinations support multiple roles/departments
 
 import { useState, useRef, useCallback, useEffect } from 'react';
 import {
-  AlertTriangle, Plus, X, ImagePlus, Loader2, ChevronRight, Clock,
-  CheckCircle2, Eye, ArrowLeft, Users, Wallet, Monitor, Building2, Send,
+  AlertTriangle,
+  Plus,
+  X,
+  ImagePlus,
+  Loader2,
+  ChevronRight,
+  Clock,
+  CheckCircle2,
+  Eye,
+  ArrowLeft,
+  Users,
+  Wallet,
+  Monitor,
+  Building2,
+  Send,
+  Pencil,
+  Trash2,
+  Save,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+
 import { cn } from '@/lib/utils';
 import {
   type Issue,
@@ -22,6 +41,9 @@ import {
   fetchIssues,
   fetchAssignableRoles,
   createIssue,
+  updateIssue,
+  sendDraftIssue,
+  deleteIssue,
   uploadIssueImages,
   formatRelativeTime,
 } from '@/lib/issues';
@@ -30,18 +52,36 @@ import {
 
 type View = 'list' | 'new' | 'detail';
 
+type IssueFormMode = 'create' | 'edit';
+
 // Icon per destination role code, with a safe fallback for roles added later.
 const ROLE_ICON: Record<string, LucideIcon> = {
-  ops:     Users,
+  ops: Users,
+  operation: Users,
+  operations: Users,
   finance: Wallet,
-  it:      Monitor,
+  it: Monitor,
 };
+
 const roleIcon = (code: string): LucideIcon => ROLE_ICON[code] ?? Building2;
+
+function getIssueRoles(issue: Issue): Array<{ id: number; code: string; label: string; description?: string | null }> {
+  if (Array.isArray(issue.assignedToRoles) && issue.assignedToRoles.length > 0) {
+    return issue.assignedToRoles;
+  }
+
+  return issue.assignedTo ? [issue.assignedTo] : [];
+}
+
+function roleIdsFromIssue(issue: Issue): number[] {
+  return getIssueRoles(issue).map((role) => role.id);
+}
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function StatusBadge({ status }: { status: IssueStatus }) {
   const c = STATUS_COLORS[status];
+
   return (
     <span className={cn('inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold', c.bg, c.text)}>
       <span className={cn('h-1.5 w-1.5 rounded-full', c.dot)} />
@@ -50,14 +90,23 @@ function StatusBadge({ status }: { status: IssueStatus }) {
   );
 }
 
-function AssigneeChip({ issue }: { issue: Issue }) {
-  if (!issue.assignedTo) return null;
-  const Icon = roleIcon(issue.assignedTo.code);
+function AssigneeChips({ issue }: { issue: Issue }) {
+  const roles = getIssueRoles(issue);
+  if (!roles.length) return null;
+
   return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-      <Icon className="h-3 w-3" />
-      {issue.assignedTo.label}
-    </span>
+    <>
+      {roles.map((role) => {
+        const Icon = roleIcon(role.code);
+
+        return (
+          <span key={role.id} className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+            <Icon className="h-3 w-3" />
+            {role.label}
+          </span>
+        );
+      })}
+    </>
   );
 }
 
@@ -74,11 +123,13 @@ function IssueCard({ issue, onClick }: { issue: Issue; onClick: () => void }) {
         </div>
         <ChevronRight className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/50 transition-transform group-hover:translate-x-0.5" />
       </div>
+
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <StatusBadge status={issue.status} />
-        <AssigneeChip issue={issue} />
+        <AssigneeChips issue={issue} />
         <span className="ml-auto flex items-center gap-1 text-[11px] text-muted-foreground">
-          <Clock className="h-3 w-3" />{formatRelativeTime(issue.createdAt)}
+          <Clock className="h-3 w-3" />
+          {formatRelativeTime(issue.createdAt)}
         </span>
       </div>
     </button>
@@ -87,6 +138,7 @@ function IssueCard({ issue, onClick }: { issue: Issue; onClick: () => void }) {
 
 function ImagePreview({ file, onRemove }: { file: File; onRemove: () => void }) {
   const [src, setSrc] = useState<string | null>(() => URL.createObjectURL(file));
+
   useEffect(() => {
     const url = URL.createObjectURL(file);
     setSrc(url);
@@ -95,68 +147,216 @@ function ImagePreview({ file, onRemove }: { file: File; onRemove: () => void }) 
 
   return (
     <div className="relative h-20 w-20 shrink-0 overflow-hidden rounded-xl border border-border bg-muted">
-      {src
+      {src ? (
         // eslint-disable-next-line @next/next/no-img-element
-        ? <img src={src} alt={file.name} className="h-full w-full object-cover" />
-        : <div className="flex h-full w-full items-center justify-center"><Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /></div>}
-      <button type="button" onClick={onRemove}
-        className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-black/70 text-white transition-opacity hover:bg-black">
+        <img src={src} alt={file.name} className="h-full w-full object-cover" />
+      ) : (
+        <div className="flex h-full w-full items-center justify-center">
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={onRemove}
+        className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-black/70 text-white transition-opacity hover:bg-black"
+      >
         <X className="h-3 w-3" />
       </button>
     </div>
   );
 }
 
-// ─── New Issue Form ───────────────────────────────────────────────────────────
+function ExistingImagePreview({ url, onRemove }: { url: string; onRemove: () => void }) {
+  return (
+    <div className="relative h-20 w-20 shrink-0 overflow-hidden rounded-xl border border-border bg-muted">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={url} alt="Existing attachment" className="h-full w-full object-cover" />
+      <button
+        type="button"
+        onClick={onRemove}
+        className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-black/70 text-white transition-opacity hover:bg-black"
+      >
+        <X className="h-3 w-3" />
+      </button>
+    </div>
+  );
+}
 
-function NewIssueForm({ onSuccess, onCancel }: { onSuccess: (issue: Issue) => void; onCancel: () => void }) {
-  const [title, setTitle]             = useState('');
-  const [description, setDescription] = useState('');
-  const [images, setImages]           = useState<File[]>([]);
-  const [loading, setLoading]         = useState(false);
-  const [error, setError]             = useState<string | null>(null);
+function RolePicker({
+  roles,
+  rolesLoading,
+  selectedIds,
+  onToggle,
+}: {
+  roles: AssignableRole[];
+  rolesLoading: boolean;
+  selectedIds: number[];
+  onToggle: (roleId: number) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <label className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+        Send to <span className="text-destructive">*</span>
+      </label>
 
-  const [roles, setRoles]             = useState<AssignableRole[]>([]);
+      {rolesLoading ? (
+        <div className="grid grid-cols-2 gap-2">
+          {[0, 1].map((i) => (
+            <div key={i} className="h-16 animate-pulse rounded-2xl bg-muted" />
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-2">
+          {roles.map((role) => {
+            const Icon = roleIcon(role.code);
+            const active = selectedIds.includes(role.id);
+
+            return (
+              <button
+                key={role.id}
+                type="button"
+                onClick={() => onToggle(role.id)}
+                className={cn(
+                  'flex items-center gap-3 rounded-2xl border-2 px-3 py-3 text-left transition-all active:scale-[0.98]',
+                  active ? 'border-primary bg-primary/5' : 'border-border bg-muted/40 hover:border-primary/30',
+                )}
+              >
+                <div className={cn(
+                  'flex h-9 w-9 shrink-0 items-center justify-center rounded-xl',
+                  active ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground',
+                )}>
+                  <Icon className="h-4 w-4" />
+                </div>
+
+                <div className="min-w-0">
+                  <p className={cn('truncate text-sm font-bold', active ? 'text-primary' : 'text-foreground')}>
+                    {role.label}
+                  </p>
+                  {role.description && <p className="truncate text-[10px] text-muted-foreground">{role.description}</p>}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── New / Edit Issue Form ────────────────────────────────────────────────────
+
+function IssueForm({
+  mode,
+  issue,
+  onSuccess,
+  onCancel,
+}: {
+  mode: IssueFormMode;
+  issue?: Issue;
+  onSuccess: (issue: Issue) => void;
+  onCancel: () => void;
+}) {
+  const [title, setTitle] = useState(issue?.title ?? '');
+  const [description, setDescription] = useState(issue?.description ?? '');
+  const [images, setImages] = useState<File[]>([]);
+  const [existingUrls, setExistingUrls] = useState<string[]>(issue?.attachmentUrls ?? []);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const [roles, setRoles] = useState<AssignableRole[]>([]);
   const [rolesLoading, setRolesLoading] = useState(true);
-  const [assigneeId, setAssigneeId]   = useState<number | null>(null);
+  const [selectedRoleIds, setSelectedRoleIds] = useState<number[]>(issue ? roleIdsFromIssue(issue) : []);
 
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let alive = true;
+
     fetchAssignableRoles()
-      .then(rs => { if (!alive) return; setRoles(rs); if (rs.length) setAssigneeId(rs[0].id); })
-      .catch(() => { if (alive) setError('Could not load destinations. Pull to refresh.'); })
-      .finally(() => { if (alive) setRolesLoading(false); });
-    return () => { alive = false; };
-  }, []);
+      .then((loadedRoles) => {
+        if (!alive) return;
+
+        setRoles(loadedRoles);
+
+        if (!issue && loadedRoles.length) {
+          setSelectedRoleIds([loadedRoles[0].id]);
+        }
+      })
+      .catch(() => {
+        if (alive) setError('Could not load destinations. Pull to refresh.');
+      })
+      .finally(() => {
+        if (alive) setRolesLoading(false);
+      });
+
+    return () => {
+      alive = false;
+    };
+  }, [issue]);
 
   const addImages = useCallback((files: FileList | null) => {
     if (!files) return;
-    const valid = Array.from(files).filter(f => f.type.startsWith('image/'));
-    setImages(prev => [...prev, ...valid].slice(0, 5));
-  }, []);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+    const valid = Array.from(files).filter((file) => file.type.startsWith('image/'));
+    const remainingSlots = Math.max(0, 5 - existingUrls.length);
+
+    setImages((prev) => [...prev, ...valid].slice(0, remainingSlots));
+  }, [existingUrls.length]);
+
+  const toggleRole = (roleId: number) => {
+    setSelectedRoleIds((prev) => (
+      prev.includes(roleId)
+        ? prev.filter((id) => id !== roleId)
+        : [...prev, roleId]
+    ));
+  };
+
+  const submit = async (status: IssueStatus) => {
     setError(null);
 
-    if (title.trim().length < 3)         { setError('Title must be at least 3 characters.'); return; }
-    if (description.trim().length < 10)  { setError('Please describe the issue in more detail (at least 10 characters).'); return; }
-    if (!assigneeId)                     { setError('Please choose who to send this to.'); return; }
+    if (title.trim().length < 3) {
+      setError('Title must be at least 3 characters.');
+      return;
+    }
+
+    if (description.trim().length < 10) {
+      setError('Please describe the issue in more detail (at least 10 characters).');
+      return;
+    }
+
+    if (!selectedRoleIds.length) {
+      setError('Please choose at least one destination.');
+      return;
+    }
 
     setLoading(true);
-    try {
-      let attachmentUrls: string[] = [];
-      if (images.length > 0) attachmentUrls = await uploadIssueImages(images, title.trim());
 
-      const issue = await createIssue({
-        title:            title.trim(),
-        description:      description.trim(),
-        assignedToRoleId: assigneeId,
-        attachmentUrls,
-      });
-      onSuccess(issue);
+    try {
+      let uploadedUrls: string[] = [];
+      if (images.length > 0) {
+        uploadedUrls = await uploadIssueImages(images, title.trim());
+      }
+
+      const attachmentUrls = [...existingUrls, ...uploadedUrls];
+
+      const savedIssue = mode === 'edit' && issue
+        ? await updateIssue(issue.id, {
+            title: title.trim(),
+            description: description.trim(),
+            assignedToRoleIds: selectedRoleIds,
+            attachmentUrls,
+            status,
+          })
+        : await createIssue({
+            title: title.trim(),
+            description: description.trim(),
+            assignedToRoleIds: selectedRoleIds,
+            attachmentUrls,
+            status,
+          });
+
+      onSuccess(savedIssue);
     } catch (err: any) {
       setError(err?.message ?? 'Something went wrong. Please try again.');
     } finally {
@@ -164,65 +364,41 @@ function NewIssueForm({ onSuccess, onCancel }: { onSuccess: (issue: Issue) => vo
     }
   };
 
+  const totalImages = existingUrls.length + images.length;
+  const titleText = mode === 'edit' ? 'Edit Draft Issue' : 'Report an Issue';
+  const subtitleText = mode === 'edit' ? 'Update draft before sending to OPS' : 'Pick who should handle it';
+
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
       <div className="flex items-center gap-3 border-b border-border px-4 py-4">
-        <button type="button" onClick={onCancel}
-          className="flex h-8 w-8 items-center justify-center rounded-full bg-muted text-muted-foreground transition-colors hover:bg-muted/80">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="flex h-8 w-8 items-center justify-center rounded-full bg-muted text-muted-foreground transition-colors hover:bg-muted/80"
+        >
           <ArrowLeft className="h-4 w-4" />
         </button>
         <div>
-          <h2 className="font-semibold text-foreground">Report an Issue</h2>
-          <p className="text-xs text-muted-foreground">Pick who should handle it</p>
+          <h2 className="font-semibold text-foreground">{titleText}</h2>
+          <p className="text-xs text-muted-foreground">{subtitleText}</p>
         </div>
       </div>
 
-      <form onSubmit={handleSubmit} className="flex flex-1 flex-col gap-5 overflow-y-auto px-4 py-5">
+      <form className="flex flex-1 flex-col gap-5 overflow-y-auto px-4 py-5" onSubmit={(event) => event.preventDefault()}>
         {error && (
           <div className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{error}
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            {error}
           </div>
         )}
 
-        {/* Destination picker */}
-        <div className="flex flex-col gap-2">
-          <label className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
-            Send to <span className="text-destructive">*</span>
-          </label>
-          {rolesLoading ? (
-            <div className="grid grid-cols-2 gap-2">
-              {[0, 1].map(i => <div key={i} className="h-16 animate-pulse rounded-2xl bg-muted" />)}
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 gap-2">
-              {roles.map(r => {
-                const Icon = roleIcon(r.code);
-                const active = assigneeId === r.id;
-                return (
-                  <button
-                    key={r.id}
-                    type="button"
-                    onClick={() => setAssigneeId(r.id)}
-                    className={cn(
-                      'flex items-center gap-3 rounded-2xl border-2 px-3 py-3 text-left transition-all active:scale-[0.98]',
-                      active ? 'border-primary bg-primary/5' : 'border-border bg-muted/40 hover:border-primary/30',
-                    )}
-                  >
-                    <div className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-xl',
-                      active ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground')}>
-                      <Icon className="h-4 w-4" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className={cn('truncate text-sm font-bold', active ? 'text-primary' : 'text-foreground')}>{r.label}</p>
-                      {r.description && <p className="truncate text-[10px] text-muted-foreground">{r.description}</p>}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
+        <RolePicker
+          roles={roles}
+          rolesLoading={rolesLoading}
+          selectedIds={selectedRoleIds}
+          onToggle={toggleRole}
+        />
 
         {/* Title */}
         <div className="flex flex-col gap-1.5">
@@ -230,9 +406,11 @@ function NewIssueForm({ onSuccess, onCancel }: { onSuccess: (issue: Issue) => vo
             Issue Title <span className="text-destructive">*</span>
           </label>
           <input
-            value={title} onChange={e => setTitle(e.target.value)}
-            placeholder="e.g. Broken AC unit in back room" maxLength={120}
-            className="w-full rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all"
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            placeholder="e.g. Broken AC unit in back room"
+            maxLength={120}
+            className="w-full rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/60 transition-all focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-primary/20"
           />
           <span className="self-end text-[11px] text-muted-foreground">{title.length}/120</span>
         </div>
@@ -243,10 +421,12 @@ function NewIssueForm({ onSuccess, onCancel }: { onSuccess: (issue: Issue) => vo
             Description <span className="text-destructive">*</span>
           </label>
           <textarea
-            value={description} onChange={e => setDescription(e.target.value)}
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
             placeholder="Describe the issue clearly — what happened, when, and any relevant context..."
-            rows={5} maxLength={2000}
-            className="w-full resize-none rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all"
+            rows={5}
+            maxLength={2000}
+            className="w-full resize-none rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/60 transition-all focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-primary/20"
           />
           <span className="self-end text-[11px] text-muted-foreground">{description.length}/2000</span>
         </div>
@@ -257,25 +437,66 @@ function NewIssueForm({ onSuccess, onCancel }: { onSuccess: (issue: Issue) => vo
             Photos <span className="font-normal normal-case tracking-normal text-muted-foreground/50">(optional, up to 5)</span>
           </label>
           <div className="flex flex-wrap gap-2">
-            {images.map((file, i) => (
-              <ImagePreview key={`${file.name}-${i}`} file={file} onRemove={() => setImages(prev => prev.filter((_, idx) => idx !== i))} />
+            {existingUrls.map((url) => (
+              <ExistingImagePreview
+                key={url}
+                url={url}
+                onRemove={() => setExistingUrls((prev) => prev.filter((item) => item !== url))}
+              />
             ))}
-            {images.length < 5 && (
-              <button type="button" onClick={() => fileRef.current?.click()}
-                className="flex h-20 w-20 shrink-0 flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-border text-muted-foreground/60 transition-colors hover:border-primary/40 hover:text-primary/60">
-                <ImagePlus className="h-5 w-5" /><span className="text-[10px]">Add</span>
+
+            {images.map((file, index) => (
+              <ImagePreview
+                key={`${file.name}-${index}`}
+                file={file}
+                onRemove={() => setImages((prev) => prev.filter((_, idx) => idx !== index))}
+              />
+            ))}
+
+            {totalImages < 5 && (
+              <button
+                type="button"
+                onClick={() => fileRef.current?.click()}
+                className="flex h-20 w-20 shrink-0 flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-border text-muted-foreground/60 transition-colors hover:border-primary/40 hover:text-primary/60"
+              >
+                <ImagePlus className="h-5 w-5" />
+                <span className="text-[10px]">Add</span>
               </button>
             )}
           </div>
-          <input ref={fileRef} type="file" accept="image/*" multiple className="hidden" onChange={e => addImages(e.target.files)} />
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            onChange={(event) => addImages(event.target.files)}
+          />
         </div>
 
         <div className="flex-1" />
 
-        <button type="submit" disabled={loading || rolesLoading}
-          className="flex w-full items-center justify-center gap-2 rounded-2xl bg-primary py-3.5 font-semibold text-primary-foreground transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-60">
-          {loading ? <><Loader2 className="h-4 w-4 animate-spin" />Submitting…</> : <><Send className="h-4 w-4" />Submit Report</>}
-        </button>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            disabled={loading || rolesLoading}
+            onClick={() => submit('draft')}
+            className="flex w-full items-center justify-center gap-2 rounded-2xl border border-border bg-card py-3.5 font-semibold text-foreground transition-all hover:bg-muted active:scale-[0.98] disabled:opacity-60"
+          >
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            Draft
+          </button>
+
+          <button
+            type="button"
+            disabled={loading || rolesLoading}
+            onClick={() => submit('reported')}
+            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-primary py-3.5 font-semibold text-primary-foreground transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-60"
+          >
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+            Send
+          </button>
+        </div>
       </form>
     </div>
   );
@@ -283,9 +504,72 @@ function NewIssueForm({ onSuccess, onCancel }: { onSuccess: (issue: Issue) => vo
 
 // ─── Issue Detail ─────────────────────────────────────────────────────────────
 
-function IssueDetail({ issue, onBack }: { issue: Issue; onBack: () => void }) {
-  const steps: IssueStatus[] = ['reported', 'in_review', 'resolved'];
+function IssueDetail({
+  issue,
+  onBack,
+  onIssueUpdated,
+  onIssueDeleted,
+}: {
+  issue: Issue;
+  onBack: () => void;
+  onIssueUpdated: (issue: Issue) => void;
+  onIssueDeleted: (issueId: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const steps: IssueStatus[] = ['draft', 'reported', 'in_review', 'resolved'];
   const currentIdx = steps.indexOf(issue.status);
+  const canEditDraft = issue.canEdit ?? (issue.status === 'draft' && issue.isOwner !== false);
+  const canDeleteDraft = issue.canDelete ?? canEditDraft;
+  const canSendDraft = issue.canSendToOps ?? canEditDraft;
+
+  const handleSendDraft = async () => {
+    setActionError(null);
+    setActionLoading(true);
+
+    try {
+      const updated = await sendDraftIssue(issue.id);
+      onIssueUpdated(updated);
+    } catch (err: any) {
+      setActionError(err?.message ?? 'Failed to send draft to OPS.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    setActionError(null);
+
+    const ok = window.confirm('Delete this draft issue?');
+    if (!ok) return;
+
+    setActionLoading(true);
+
+    try {
+      await deleteIssue(issue.id);
+      onIssueDeleted(issue.id);
+    } catch (err: any) {
+      setActionError(err?.message ?? 'Failed to delete issue.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  if (editing) {
+    return (
+      <IssueForm
+        mode="edit"
+        issue={issue}
+        onCancel={() => setEditing(false)}
+        onSuccess={(updated) => {
+          setEditing(false);
+          onIssueUpdated(updated);
+        }}
+      />
+    );
+  }
 
   return (
     <div className="flex h-full flex-col">
@@ -299,37 +583,66 @@ function IssueDetail({ issue, onBack }: { issue: Issue; onBack: () => void }) {
       </div>
 
       <div className="flex flex-1 flex-col gap-5 overflow-y-auto px-4 py-5">
+        {actionError && (
+          <div className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            {actionError}
+          </div>
+        )}
+
+        {issue.status === 'draft' && issue.isOwner !== false && (
+          <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
+            <p className="text-sm font-semibold text-amber-600 dark:text-amber-400">Draft issue</p>
+            <p className="mt-1 text-xs leading-relaxed text-amber-700/80 dark:text-amber-300/80">
+              This issue is still editable by store employee. Send it to OPS when the details are ready.
+            </p>
+          </div>
+        )}
+
         <div className="flex flex-wrap items-center gap-2">
           <StatusBadge status={issue.status} />
-          <AssigneeChip issue={issue} />
+          <AssigneeChips issue={issue} />
           <span className="text-xs text-muted-foreground">Reported {formatRelativeTime(issue.createdAt)}</span>
         </div>
 
         {/* Status timeline */}
         <div className="flex items-center gap-0">
-          {steps.map((s, i, arr) => {
-            const done = i <= currentIdx;
-            const isLast = i === arr.length - 1;
+          {steps.map((status, index, arr) => {
+            const done = index <= currentIdx;
+            const isLast = index === arr.length - 1;
+
             return (
-              <div key={s} className="flex flex-1 items-center">
-                <div className={cn('flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 text-xs font-bold transition-colors',
-                  done ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-card text-muted-foreground')}>
-                  {done ? <CheckCircle2 className="h-3.5 w-3.5" /> : i + 1}
+              <div key={status} className="flex flex-1 items-center">
+                <div className={cn(
+                  'flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 text-xs font-bold transition-colors',
+                  done ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-card text-muted-foreground',
+                )}>
+                  {done ? <CheckCircle2 className="h-3.5 w-3.5" /> : index + 1}
                 </div>
-                <span className={cn('ml-1 mr-1 text-[10px] font-semibold', done ? 'text-primary' : 'text-muted-foreground')}>{STATUS_LABELS[s]}</span>
-                {!isLast && <div className={cn('mx-1 h-0.5 flex-1', i < currentIdx ? 'bg-primary' : 'bg-border')} />}
+                <span className={cn('ml-1 mr-1 text-[10px] font-semibold', done ? 'text-primary' : 'text-muted-foreground')}>
+                  {STATUS_LABELS[status]}
+                </span>
+                {!isLast && <div className={cn('mx-1 h-0.5 flex-1', index < currentIdx ? 'bg-primary' : 'bg-border')} />}
               </div>
             );
           })}
         </div>
 
         {/* Destination */}
-        {issue.assignedTo && (
-          <div className="flex items-center gap-3 rounded-2xl border border-border bg-muted/30 p-4">
-            {(() => { const Icon = roleIcon(issue.assignedTo.code); return <Icon className="h-5 w-5 shrink-0 text-primary" />; })()}
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Sent to</p>
-              <p className="text-sm font-semibold text-foreground">{issue.assignedTo.label}</p>
+        {getIssueRoles(issue).length > 0 && (
+          <div className="rounded-2xl border border-border bg-muted/30 p-4">
+            <p className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Sent to</p>
+            <div className="flex flex-col gap-2">
+              {getIssueRoles(issue).map((role) => {
+                const Icon = roleIcon(role.code);
+
+                return (
+                  <div key={role.id} className="flex items-center gap-3">
+                    <Icon className="h-5 w-5 shrink-0 text-primary" />
+                    <p className="text-sm font-semibold text-foreground">{role.label}</p>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
@@ -343,13 +656,20 @@ function IssueDetail({ issue, onBack }: { issue: Issue; onBack: () => void }) {
         {/* Photos */}
         {issue.attachmentUrls.length > 0 && (
           <div>
-            <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-muted-foreground">Photos ({issue.attachmentUrls.length})</p>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+              Photos ({issue.attachmentUrls.length})
+            </p>
             <div className="flex flex-wrap gap-2">
-              {issue.attachmentUrls.map((url, i) => (
-                <a key={i} href={url} target="_blank" rel="noopener noreferrer"
-                  className="block h-24 w-24 shrink-0 overflow-hidden rounded-xl border border-border bg-muted transition-opacity hover:opacity-80">
+              {issue.attachmentUrls.map((url, index) => (
+                <a
+                  key={url}
+                  href={url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block h-24 w-24 shrink-0 overflow-hidden rounded-xl border border-border bg-muted transition-opacity hover:opacity-80"
+                >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={url} alt={`Attachment ${i + 1}`} className="h-full w-full object-cover" />
+                  <img src={url} alt={`Attachment ${index + 1}`} className="h-full w-full object-cover" />
                 </a>
               ))}
             </div>
@@ -363,6 +683,40 @@ function IssueDetail({ issue, onBack }: { issue: Issue; onBack: () => void }) {
           </div>
         )}
 
+        {(canEditDraft || canSendDraft || canDeleteDraft) && (
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              disabled={actionLoading || !canEditDraft}
+              onClick={() => setEditing(true)}
+              className="flex w-full items-center justify-center gap-2 rounded-2xl border border-border bg-card py-3.5 font-semibold text-foreground transition-all hover:bg-muted active:scale-[0.98] disabled:opacity-60"
+            >
+              <Pencil className="h-4 w-4" />
+              Edit
+            </button>
+
+            <button
+              type="button"
+              disabled={actionLoading || !canSendDraft}
+              onClick={handleSendDraft}
+              className="flex w-full items-center justify-center gap-2 rounded-2xl bg-primary py-3.5 font-semibold text-primary-foreground transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-60"
+            >
+              {actionLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              Send to OPS
+            </button>
+
+            <button
+              type="button"
+              disabled={actionLoading || !canDeleteDraft}
+              onClick={handleDelete}
+              className="col-span-2 flex w-full items-center justify-center gap-2 rounded-2xl border border-destructive/30 bg-destructive/10 py-3.5 font-semibold text-destructive transition-all hover:bg-destructive/15 active:scale-[0.98] disabled:opacity-60"
+            >
+              <Trash2 className="h-4 w-4" />
+              Delete Draft
+            </button>
+          </div>
+        )}
+
         <p className="text-center text-[11px] text-muted-foreground/50">Ref: {issue.id.padStart(6, '0')}</p>
       </div>
     </div>
@@ -372,15 +726,17 @@ function IssueDetail({ issue, onBack }: { issue: Issue; onBack: () => void }) {
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function IssuesPage() {
-  const [view, setView]               = useState<View>('list');
-  const [issuesList, setIssuesList]   = useState<Issue[]>([]);
-  const [selected, setSelected]       = useState<Issue | null>(null);
-  const [loading, setLoading]         = useState(true);
-  const [filter, setFilter]           = useState<IssueStatus | 'all'>('all');
+  const [view, setView] = useState<View>('list');
+  const [issuesList, setIssuesList] = useState<Issue[]>([]);
+  const [selected, setSelected] = useState<Issue | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<IssueStatus | 'all'>('all');
   const [showSuccess, setShowSuccess] = useState(false);
+  const [successText, setSuccessText] = useState('Issue reported! The team has been notified.');
 
   const loadIssues = useCallback(async () => {
     setLoading(true);
+
     try {
       setIssuesList(await fetchIssues(filter === 'all' ? undefined : filter));
     } catch {
@@ -390,26 +746,56 @@ export default function IssuesPage() {
     }
   }, [filter]);
 
-  useEffect(() => { loadIssues(); }, [loadIssues]);
+  useEffect(() => {
+    loadIssues();
+  }, [loadIssues]);
 
-  const handleSuccess = (issue: Issue) => {
-    setIssuesList(prev => [issue, ...prev]);
+  const flashSuccess = (message: string) => {
+    setSuccessText(message);
     setShowSuccess(true);
-    setView('list');
     setTimeout(() => setShowSuccess(false), 4000);
   };
 
+  const upsertIssue = (issue: Issue) => {
+    setIssuesList((prev) => {
+      const exists = prev.some((item) => item.id === issue.id);
+      return exists
+        ? prev.map((item) => (item.id === issue.id ? issue : item))
+        : [issue, ...prev];
+    });
+    setSelected(issue);
+  };
+
+  const handleCreated = (issue: Issue) => {
+    upsertIssue(issue);
+    setView('list');
+    flashSuccess(issue.status === 'draft' ? 'Draft saved. You can edit it before sending to OPS.' : 'Issue reported! The team has been notified.');
+  };
+
+  const handleUpdated = (issue: Issue) => {
+    upsertIssue(issue);
+    flashSuccess(issue.status === 'reported' ? 'Issue sent to OPS.' : 'Issue updated.');
+  };
+
+  const handleDeleted = (issueId: string) => {
+    setIssuesList((prev) => prev.filter((issue) => issue.id !== issueId));
+    setSelected(null);
+    setView('list');
+    flashSuccess('Draft deleted.');
+  };
+
   const FILTERS: { value: IssueStatus | 'all'; label: string }[] = [
-    { value: 'all',       label: 'All'       },
-    { value: 'reported',  label: 'Reported'  },
+    { value: 'all', label: 'All' },
+    { value: 'draft', label: 'Draft' },
+    { value: 'reported', label: 'Reported' },
     { value: 'in_review', label: 'In Review' },
-    { value: 'resolved',  label: 'Resolved'  },
+    { value: 'resolved', label: 'Resolved' },
   ];
 
   if (view === 'new') {
     return (
       <div className="flex h-full flex-col bg-background pb-16">
-        <NewIssueForm onSuccess={handleSuccess} onCancel={() => setView('list')} />
+        <IssueForm mode="create" onSuccess={handleCreated} onCancel={() => setView('list')} />
       </div>
     );
   }
@@ -417,7 +803,12 @@ export default function IssuesPage() {
   if (view === 'detail' && selected) {
     return (
       <div className="flex h-full flex-col bg-background pb-16">
-        <IssueDetail issue={selected} onBack={() => setView('list')} />
+        <IssueDetail
+          issue={selected}
+          onBack={() => setView('list')}
+          onIssueUpdated={handleUpdated}
+          onIssueDeleted={handleDeleted}
+        />
       </div>
     );
   }
@@ -429,11 +820,14 @@ export default function IssuesPage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold text-foreground">Issue Reports</h1>
-            <p className="mt-0.5 text-xs text-muted-foreground">Report problems to the right team</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">Drafts are private. Sent issues are visible to your store.</p>
           </div>
-          <button onClick={() => setView('new')}
-            className="flex items-center gap-1.5 rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground shadow-sm transition-all hover:opacity-90 active:scale-95">
-            <Plus className="h-3.5 w-3.5" />New Report
+          <button
+            onClick={() => setView('new')}
+            className="flex items-center gap-1.5 rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground shadow-sm transition-all hover:opacity-90 active:scale-95"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            New Report
           </button>
         </div>
       </div>
@@ -441,17 +835,24 @@ export default function IssuesPage() {
       {showSuccess && (
         <div className="mx-4 mb-2 flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3">
           <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
-          <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400">Issue reported! The team has been notified.</p>
+          <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400">{successText}</p>
         </div>
       )}
 
       {/* Filter tabs */}
       <div className="scrollbar-none flex gap-2 overflow-x-auto px-4 pb-3">
-        {FILTERS.map(f => (
-          <button key={f.value} onClick={() => setFilter(f.value)}
-            className={cn('shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold transition-colors',
-              filter === f.value ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80')}>
-            {f.label}
+        {FILTERS.map((filterOption) => (
+          <button
+            key={filterOption.value}
+            onClick={() => setFilter(filterOption.value)}
+            className={cn(
+              'shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold transition-colors',
+              filter === filterOption.value
+                ? 'bg-primary text-primary-foreground'
+                : 'bg-muted text-muted-foreground hover:bg-muted/80',
+            )}
+          >
+            {filterOption.label}
           </button>
         ))}
       </div>
@@ -459,20 +860,33 @@ export default function IssuesPage() {
       {/* List */}
       <div className="flex flex-1 flex-col gap-2.5 overflow-y-auto px-4 py-1">
         {loading ? (
-          <div className="flex flex-1 items-center justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
+          <div className="flex flex-1 items-center justify-center py-16">
+            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          </div>
         ) : issuesList.length === 0 ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 py-16 text-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-muted"><AlertTriangle className="h-6 w-6 text-muted-foreground/50" /></div>
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-muted">
+              <AlertTriangle className="h-6 w-6 text-muted-foreground/50" />
+            </div>
             <div>
               <p className="text-sm font-semibold text-foreground">No issues found</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                {filter === 'all' ? 'Tap "New Report" to report a problem.' : `No issues with status "${STATUS_LABELS[filter as IssueStatus]}".`}
+                {filter === 'all'
+                  ? 'Tap "New Report" to report a problem.'
+                  : `No issues with status "${STATUS_LABELS[filter as IssueStatus]}".`}
               </p>
             </div>
           </div>
         ) : (
-          issuesList.map(issue => (
-            <IssueCard key={issue.id} issue={issue} onClick={() => { setSelected(issue); setView('detail'); }} />
+          issuesList.map((issue) => (
+            <IssueCard
+              key={issue.id}
+              issue={issue}
+              onClick={() => {
+                setSelected(issue);
+                setView('detail');
+              }}
+            />
           ))
         )}
       </div>

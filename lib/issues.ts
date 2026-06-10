@@ -1,7 +1,7 @@
 // lib/issues.ts
 // Client-side utilities for the issue report feature.
 
-export type IssueStatus = 'reported' | 'in_review' | 'resolved';
+export type IssueStatus = 'draft' | 'reported' | 'in_review' | 'resolved';
 
 /** A department/role an employee can route an issue to (ops, finance, it, …). */
 export interface AssignableRole {
@@ -18,41 +18,70 @@ export interface Issue {
   userId:         string;
   storeId:        string;
   status:         IssueStatus;
-  /** Which role/department the issue was routed to. */
+
+  /** Backward-compatible primary destination. */
   assignedTo:     { id: number; code: string; label: string } | null;
+
+  /** New multi-role destinations. */
+  assignedToRoles: Array<{ id: number; code: string; label: string; description?: string | null }>;
+
   reviewedBy:     string | null;
   reviewedAt:     string | null;
-  // Stored as a JSON string in DB; deserialized to string[] by the API helpers.
   attachmentUrls: string[];
   createdAt:      string;
   updatedAt:      string;
+
+  /** Store visibility helpers returned by the employee issue API. */
+  isOwner?:       boolean;
+  canEdit?:       boolean;
+  canDelete?:     boolean;
+  canSendToOps?:  boolean;
 }
 
 export interface CreateIssuePayload {
-  title:            string;
-  description:      string;
-  assignedToRoleId: number;     // required — chosen destination department
-  storeName?:       string;     // passed through to the upload helper for filename generation
-  attachmentUrls?:  string[];
+  title: string;
+  description: string;
+
+  /** New multi-role assignment. */
+  assignedToRoleIds?: number[];
+
+  /** Backward-compatible fallback. */
+  assignedToRoleId?: number;
+
+  storeName?: string;
+  attachmentUrls?: string[];
+
+  /** Manual issue page defaults to reported; Store Closing can create draft. */
+  status?: IssueStatus;
+}
+
+export interface UpdateIssuePayload {
+  title?: string;
+  description?: string;
+  attachmentUrls?: string[];
+  assignedToRoleIds?: number[];
+  assignedToRoleId?: number;
+  status?: IssueStatus;
 }
 
 // ─── Status helpers ───────────────────────────────────────────────────────────
 
 export const STATUS_LABELS: Record<IssueStatus, string> = {
+  draft:     'Draft',
   reported:  'Reported',
   in_review: 'In Review',
   resolved:  'Resolved',
 };
 
 export const STATUS_COLORS: Record<IssueStatus, { bg: string; text: string; dot: string }> = {
-  reported:  { bg: 'bg-amber-500/10',  text: 'text-amber-500',  dot: 'bg-amber-500'  },
-  in_review: { bg: 'bg-blue-500/10',   text: 'text-blue-500',   dot: 'bg-blue-500'   },
-  resolved:  { bg: 'bg-emerald-500/10',text: 'text-emerald-500',dot: 'bg-emerald-500' },
+  draft:     { bg: 'bg-slate-500/10',   text: 'text-slate-500',   dot: 'bg-slate-500'   },
+  reported:  { bg: 'bg-amber-500/10',   text: 'text-amber-500',   dot: 'bg-amber-500'   },
+  in_review: { bg: 'bg-blue-500/10',    text: 'text-blue-500',    dot: 'bg-blue-500'    },
+  resolved:  { bg: 'bg-emerald-500/10', text: 'text-emerald-500', dot: 'bg-emerald-500' },
 };
 
 // ─── API helpers ──────────────────────────────────────────────────────────────
 
-/** Roles the current user may route a new issue to (Ops, Finance, IT, …). */
 export async function fetchAssignableRoles(): Promise<AssignableRole[]> {
   const res = await fetch('/api/issues/assignable-roles', { cache: 'no-store' });
   if (!res.ok) throw new Error('Failed to load destinations');
@@ -60,20 +89,34 @@ export async function fetchAssignableRoles(): Promise<AssignableRole[]> {
   return (data.roles ?? []) as AssignableRole[];
 }
 
+function parseUrls(v: unknown): string[] {
+  if (!v) return [];
+  if (Array.isArray(v)) return v as string[];
+  try {
+    const parsed = JSON.parse(v as string);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 function normaliseIssue(raw: any): Issue {
+  const assignedToRoles = Array.isArray(raw.assignedToRoles)
+    ? raw.assignedToRoles
+    : raw.assignedTo
+      ? [raw.assignedTo]
+      : [];
+
   return {
     ...raw,
-    assignedTo: raw.assignedTo ?? null,
-    attachmentUrls: raw.attachmentUrls
-      ? (typeof raw.attachmentUrls === 'string' ? JSON.parse(raw.attachmentUrls) : raw.attachmentUrls)
-      : [],
+    id: String(raw.id),
+    storeId: String(raw.storeId),
+    assignedTo: raw.assignedTo ?? assignedToRoles[0] ?? null,
+    assignedToRoles,
+    attachmentUrls: parseUrls(raw.attachmentUrls),
   } as Issue;
 }
 
-/**
- * Fetch the current user's issues.
- * Pass a status string to filter (e.g. 'reported').
- */
 export async function fetchIssues(status?: IssueStatus): Promise<Issue[]> {
   const url = status
     ? `/api/employee/issues?status=${status}`
@@ -86,15 +129,11 @@ export async function fetchIssues(status?: IssueStatus): Promise<Issue[]> {
   return (data.issues as any[]).map(normaliseIssue);
 }
 
-/**
- * Submit a new issue report.
- * `attachmentUrls` should be pre-uploaded URLs (e.g. from your storage bucket).
- */
 export async function createIssue(payload: CreateIssuePayload): Promise<Issue> {
   const res = await fetch('/api/employee/issues', {
-    method:  'POST',
+    method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify(payload),
+    body: JSON.stringify(payload),
   });
 
   if (!res.ok) {
@@ -106,27 +145,47 @@ export async function createIssue(payload: CreateIssuePayload): Promise<Issue> {
   return normaliseIssue(data.issue);
 }
 
-/**
- * Upload all issue-report images in a single multipart request.
- * Files are saved to /public/issue-report/<title>_<store>_<date>_<n>.<ext>
- *
- * @param files     - Image files selected by the employee (max 5)
- * @param title     - Issue title  (used in filename)
- * @param storeName - Store name   (used in filename)
- */
+export async function updateIssue(id: string, payload: UpdateIssuePayload): Promise<Issue> {
+  const res = await fetch(`/api/employee/issues/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.error ?? 'Failed to update issue');
+  }
+
+  const data = await res.json();
+  return normaliseIssue(data.issue);
+}
+
+export async function sendDraftIssue(id: string): Promise<Issue> {
+  return updateIssue(id, { status: 'reported' });
+}
+
+export async function deleteIssue(id: string): Promise<void> {
+  const res = await fetch(`/api/employee/issues/${id}`, { method: 'DELETE' });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.error ?? 'Failed to delete issue');
+  }
+}
+
 export async function uploadIssueImages(
-  files:      File[],
-  title?:     string,
+  files: File[],
+  title?: string,
   storeName?: string,
 ): Promise<string[]> {
   if (!files.length) return [];
 
-  // Send all files in a single request using the 'files' field name
   const form = new FormData();
   for (const file of files) {
-    form.append('files', file);       // 'files' — server calls getAll('files')
+    form.append('files', file);
   }
-  if (title)     form.append('title',     title);
+  if (title) form.append('title', title);
   if (storeName) form.append('storeName', storeName);
 
   const res = await fetch('/api/upload/issue', { method: 'POST', body: form });
@@ -139,23 +198,19 @@ export async function uploadIssueImages(
   return urls as string[];
 }
 
-/**
- * Format a date string to a human-readable relative time.
- * e.g. "2 hours ago", "3 days ago"
- */
 export function formatRelativeTime(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime();
-  const mins  = Math.floor(diff / 60_000);
+  const mins = Math.floor(diff / 60_000);
   const hours = Math.floor(diff / 3_600_000);
-  const days  = Math.floor(diff / 86_400_000);
+  const days = Math.floor(diff / 86_400_000);
 
-  if (mins  < 1)  return 'just now';
-  if (mins  < 60) return `${mins}m ago`;
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
   if (hours < 24) return `${hours}h ago`;
-  if (days  < 7)  return `${days}d ago`;
+  if (days < 7) return `${days}d ago`;
 
   return new Date(dateStr).toLocaleDateString('en-US', {
     month: 'short',
-    day:   'numeric',
+    day: 'numeric',
   });
 }

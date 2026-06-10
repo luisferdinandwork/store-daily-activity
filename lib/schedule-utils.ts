@@ -10,7 +10,7 @@
  * - No db.transaction() usage, so this stays compatible with Neon HTTP.
  */
 
-import { db } from '@/lib/db';
+import { db } from "@/lib/db";
 import {
   areas,
   users,
@@ -31,18 +31,17 @@ import {
   marketingCheckTasks,
   itemDroppingTasks,
   briefingTasks,
-  eodZReportTasks,
-  edcReconciliationTasks,
-  openStatementTasks,
+  serahTerimaTasks,
+  storeClosingTasks,
   groomingTasks,
   type Area,
   type MonthlySchedule,
   type MonthlyScheduleEntry,
-} from '@/lib/db/schema';
-import { and, eq, gte, inArray, isNull, lte, sql } from 'drizzle-orm';
+} from "@/lib/db/schema";
+import { and, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
 
-export type { BreakType } from '@/lib/db/schema';
-import type { BreakType } from '@/lib/db/schema';
+export type { BreakType } from "@/lib/db/schema";
+import type { BreakType } from "@/lib/db/schema";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 // Legacy default break rules. These keep existing morning/evening/full_day
@@ -50,24 +49,24 @@ import type { BreakType } from '@/lib/db/schema';
 
 export const SHIFT_CONFIG = {
   morning: {
-    breakTypes: ['lunch'] as BreakType[],
+    breakTypes: ["lunch"] as BreakType[],
     maxBreaks: 1,
   },
   evening: {
-    breakTypes: ['dinner'] as BreakType[],
+    breakTypes: ["dinner"] as BreakType[],
     maxBreaks: 1,
   },
   full_day: {
-    breakTypes: ['full_day_lunch', 'full_day_dinner'] as BreakType[],
+    breakTypes: ["full_day_lunch", "full_day_dinner"] as BreakType[],
     maxBreaks: 2,
   },
 } as const;
 
 export const VALID_BREAK_TYPES = [
-  'lunch',
-  'dinner',
-  'full_day_lunch',
-  'full_day_dinner',
+  "lunch",
+  "dinner",
+  "full_day_lunch",
+  "full_day_dinner",
 ] as const satisfies readonly BreakType[];
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -131,16 +130,19 @@ export function endOfDay(d: Date): Date {
 }
 
 export function yearMonthToDate(ym: string): Date {
-  const [y, m] = ym.split('-').map(Number);
+  const [y, m] = ym.split("-").map(Number);
   return new Date(y, m - 1, 1, 0, 0, 0, 0);
 }
 
 export function dateToYearMonth(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
 function isValidBreakType(value: unknown): value is BreakType {
-  return typeof value === 'string' && (VALID_BREAK_TYPES as readonly string[]).includes(value);
+  return (
+    typeof value === "string" &&
+    (VALID_BREAK_TYPES as readonly string[]).includes(value)
+  );
 }
 
 async function getShiftRows(activeOnly = false): Promise<ShiftLookupRow[]> {
@@ -162,12 +164,17 @@ async function getShiftRows(activeOnly = false): Promise<ShiftLookupRow[]> {
   return rows;
 }
 
-async function getShiftIdMap(activeOnly = false): Promise<Record<string, number>> {
+async function getShiftIdMap(
+  activeOnly = false,
+): Promise<Record<string, number>> {
   const rows = await getShiftRows(activeOnly);
   return Object.fromEntries(rows.map((r) => [r.code, r.id]));
 }
 
-async function getShiftByCode(code: string, activeOnly = true): Promise<ShiftLookupRow | null> {
+async function getShiftByCode(
+  code: string,
+  activeOnly = true,
+): Promise<ShiftLookupRow | null> {
   const filters = activeOnly
     ? and(eq(shifts.code, code), eq(shifts.isActive, true))
     : eq(shifts.code, code);
@@ -193,10 +200,13 @@ async function resolveActiveShiftId(code: string): Promise<number | null> {
   return row?.id ?? null;
 }
 
-function getLegacyBreakConfig(shiftCode: string): { breakTypes: BreakType[]; maxBreaks: number } {
-  if (shiftCode === 'morning') return SHIFT_CONFIG.morning;
-  if (shiftCode === 'evening') return SHIFT_CONFIG.evening;
-  if (shiftCode === 'full_day') return SHIFT_CONFIG.full_day;
+function getLegacyBreakConfig(shiftCode: string): {
+  breakTypes: BreakType[];
+  maxBreaks: number;
+} {
+  if (shiftCode === "morning") return SHIFT_CONFIG.morning;
+  if (shiftCode === "evening") return SHIFT_CONFIG.evening;
+  if (shiftCode === "full_day") return SHIFT_CONFIG.full_day;
 
   // Custom shifts are dynamic. The API should send an allowed break type based
   // on shifts.breaks. The util keeps a safe default so direct callers still work.
@@ -206,27 +216,73 @@ function getLegacyBreakConfig(shiftCode: string): { breakTypes: BreakType[]; max
   };
 }
 
+// Keep schedule/task cleanup compatible with Neon HTTP by avoiding giant IN queries.
+// This is also the only task-table cleanup owned by schedule-utils. The actual
+// task-generation rules live in lib/db/utils/tasks.ts.
+const SCHEDULE_TASK_DELETE_BATCH_SIZE = 150;
+
+function uniqueNumbers(values: number[]): number[] {
+  return [...new Set(values.filter((value) => Number.isFinite(value)))];
+}
+
+function chunkArray<T>(
+  items: T[],
+  size = SCHEDULE_TASK_DELETE_BATCH_SIZE,
+): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size)
+    chunks.push(items.slice(i, i + size));
+  return chunks;
+}
+
 /**
  * Delete all task rows referencing the given schedule IDs.
- * Uses Drizzle ORM queries, so it works with Neon HTTP.
+ *
+ * Store Closing replaces the removed evening task tables:
+ *   - edc_reconciliation_tasks
+ *   - eod_z_report_tasks
+ *   - open_statement_tasks
+ *
+ * Those tables must not be referenced here anymore after the destructive
+ * migration, otherwise schedule replace/delete will fail at build/runtime.
  */
-async function deleteAllTasksForSchedules(scheduleIds: number[]): Promise<void> {
-  if (scheduleIds.length === 0) return;
+async function deleteAllTasksForSchedules(
+  scheduleIds: number[],
+): Promise<void> {
+  const ids = uniqueNumbers(scheduleIds);
+  if (ids.length === 0) return;
 
-  await Promise.all([
-    db.delete(storeOpeningTasks).where(inArray(storeOpeningTasks.scheduleId, scheduleIds)),
-    db.delete(storeFrontTasks).where(inArray(storeFrontTasks.scheduleId, scheduleIds)),
-    db.delete(setoranTasks).where(inArray(setoranTasks.scheduleId, scheduleIds)),
-    db.delete(cekBinTasks).where(inArray(cekBinTasks.scheduleId, scheduleIds)),
-    db.delete(vmChecklistTasks).where(inArray(vmChecklistTasks.scheduleId, scheduleIds)),
-    db.delete(marketingCheckTasks).where(inArray(marketingCheckTasks.scheduleId, scheduleIds)),
-    db.delete(itemDroppingTasks).where(inArray(itemDroppingTasks.scheduleId, scheduleIds)),
-    db.delete(briefingTasks).where(inArray(briefingTasks.scheduleId, scheduleIds)),
-    db.delete(edcReconciliationTasks).where(inArray(edcReconciliationTasks.scheduleId, scheduleIds)),
-    db.delete(eodZReportTasks).where(inArray(eodZReportTasks.scheduleId, scheduleIds)),
-    db.delete(openStatementTasks).where(inArray(openStatementTasks.scheduleId, scheduleIds)),
-    db.delete(groomingTasks).where(inArray(groomingTasks.scheduleId, scheduleIds as any)),
-  ]);
+  for (const batch of chunkArray(ids)) {
+    await Promise.all([
+      db
+        .delete(storeOpeningTasks)
+        .where(inArray(storeOpeningTasks.scheduleId, batch)),
+      db
+        .delete(storeFrontTasks)
+        .where(inArray(storeFrontTasks.scheduleId, batch)),
+      db.delete(setoranTasks).where(inArray(setoranTasks.scheduleId, batch)),
+      db.delete(cekBinTasks).where(inArray(cekBinTasks.scheduleId, batch)),
+      db
+        .delete(vmChecklistTasks)
+        .where(inArray(vmChecklistTasks.scheduleId, batch)),
+      db
+        .delete(marketingCheckTasks)
+        .where(inArray(marketingCheckTasks.scheduleId, batch)),
+      db
+        .delete(itemDroppingTasks)
+        .where(inArray(itemDroppingTasks.scheduleId, batch)),
+      db.delete(briefingTasks).where(inArray(briefingTasks.scheduleId, batch)),
+      db
+        .delete(serahTerimaTasks)
+        .where(inArray(serahTerimaTasks.scheduleId, batch)),
+      db
+        .delete(storeClosingTasks)
+        .where(inArray(storeClosingTasks.scheduleId, batch)),
+      db
+        .delete(groomingTasks)
+        .where(inArray(groomingTasks.scheduleId, batch as any)),
+    ]);
+  }
 }
 
 // ─── Authorization ────────────────────────────────────────────────────────────
@@ -240,7 +296,11 @@ export async function getStoreArea(storeId: number): Promise<Area | null> {
 
   if (!store?.areaId) return null;
 
-  const [area] = await db.select().from(areas).where(eq(areas.id, store.areaId)).limit(1);
+  const [area] = await db
+    .select()
+    .from(areas)
+    .where(eq(areas.id, store.areaId))
+    .limit(1);
   return area ?? null;
 }
 
@@ -253,7 +313,10 @@ export async function getStoresForOps(opsUserId: string): Promise<number[]> {
 
   if (!opsUser?.areaId) return [];
 
-  const areaStores = await db.select({ id: stores.id }).from(stores).where(eq(stores.areaId, opsUser.areaId));
+  const areaStores = await db
+    .select({ id: stores.id })
+    .from(stores)
+    .where(eq(stores.areaId, opsUser.areaId));
   return areaStores.map((s) => s.id);
 }
 
@@ -280,7 +343,7 @@ export async function canManageSchedule(
     .where(eq(users.id, actorId))
     .limit(1);
 
-  if (!actor) return { allowed: false, reason: 'Actor not found.' };
+  if (!actor) return { allowed: false, reason: "Actor not found." };
 
   let roleCode: string | null = null;
   if (actor.roleId) {
@@ -302,24 +365,34 @@ export async function canManageSchedule(
     empTypeCode = type?.code ?? null;
   }
 
-  const isAdmin = roleCode === 'admin';
-  const isOpsHo = roleCode === 'ops' || empTypeCode === 'ops_ho';
-  const isOpsArea = empTypeCode === 'ops_area';
+  const isAdmin = roleCode === "admin";
+  const isOpsHo = roleCode === "ops" || empTypeCode === "ops_ho";
+  const isOpsArea = empTypeCode === "ops_area";
 
-  if (isAdmin || empTypeCode === 'ops_ho') {
-    const [targetStore] = await db.select({ id: stores.id }).from(stores).where(eq(stores.id, storeId)).limit(1);
-    if (!targetStore) return { allowed: false, reason: 'Store not found.' };
+  if (isAdmin || empTypeCode === "ops_ho") {
+    const [targetStore] = await db
+      .select({ id: stores.id })
+      .from(stores)
+      .where(eq(stores.id, storeId))
+      .limit(1);
+    if (!targetStore) return { allowed: false, reason: "Store not found." };
 
     if (targetEntryStoreId && targetEntryStoreId !== storeId) {
-      const [entryStore] = await db.select({ id: stores.id }).from(stores).where(eq(stores.id, targetEntryStoreId)).limit(1);
-      if (!entryStore) return { allowed: false, reason: 'Cross-post target store not found.' };
+      const [entryStore] = await db
+        .select({ id: stores.id })
+        .from(stores)
+        .where(eq(stores.id, targetEntryStoreId))
+        .limit(1);
+      if (!entryStore)
+        return { allowed: false, reason: "Cross-post target store not found." };
     }
 
     return { allowed: true };
   }
 
-  if (isOpsHo || isOpsArea || roleCode === 'ops') {
-    if (!actor.areaId) return { allowed: false, reason: 'OPS user has no area assigned.' };
+  if (isOpsHo || isOpsArea || roleCode === "ops") {
+    if (!actor.areaId)
+      return { allowed: false, reason: "OPS user has no area assigned." };
 
     const [targetStore] = await db
       .select({ areaId: stores.areaId })
@@ -327,8 +400,9 @@ export async function canManageSchedule(
       .where(eq(stores.id, storeId))
       .limit(1);
 
-    if (!targetStore) return { allowed: false, reason: 'Store not found.' };
-    if (targetStore.areaId !== actor.areaId) return { allowed: false, reason: 'This store is not in your area.' };
+    if (!targetStore) return { allowed: false, reason: "Store not found." };
+    if (targetStore.areaId !== actor.areaId)
+      return { allowed: false, reason: "This store is not in your area." };
 
     if (targetEntryStoreId && targetEntryStoreId !== storeId) {
       const [entryStore] = await db
@@ -337,20 +411,31 @@ export async function canManageSchedule(
         .where(eq(stores.id, targetEntryStoreId))
         .limit(1);
 
-      if (!entryStore) return { allowed: false, reason: 'Cross-post target store not found.' };
-      if (entryStore.areaId !== actor.areaId) return { allowed: false, reason: 'Cross-post target store is not in your area.' };
+      if (!entryStore)
+        return { allowed: false, reason: "Cross-post target store not found." };
+      if (entryStore.areaId !== actor.areaId)
+        return {
+          allowed: false,
+          reason: "Cross-post target store is not in your area.",
+        };
     }
 
     return { allowed: true };
   }
 
-  if (empTypeCode === 'pic_1') {
+  if (empTypeCode === "pic_1") {
     if (Number(actor.homeStoreId) !== Number(storeId)) {
-      return { allowed: false, reason: 'PIC 1 can only manage schedules for their home store.' };
+      return {
+        allowed: false,
+        reason: "PIC 1 can only manage schedules for their home store.",
+      };
     }
 
     if (targetEntryStoreId && targetEntryStoreId !== storeId) {
-      return { allowed: false, reason: 'PIC 1 can only assign employees to their home store.' };
+      return {
+        allowed: false,
+        reason: "PIC 1 can only assign employees to their home store.",
+      };
     }
 
     return { allowed: true };
@@ -358,7 +443,7 @@ export async function canManageSchedule(
 
   return {
     allowed: false,
-    reason: 'Only OPS, OPS Area, OPS HO, Admin, or PIC 1 can manage schedules.',
+    reason: "Only OPS, OPS Area, OPS HO, Admin, or PIC 1 can manage schedules.",
   };
 }
 
@@ -375,16 +460,25 @@ export async function createEmptyMonthlySchedule(
     if (!auth.allowed) return { success: false, error: auth.reason };
 
     if (!/^\d{4}-\d{2}$/.test(yearMonth)) {
-      return { success: false, error: 'yearMonth must be in YYYY-MM format.' };
+      return { success: false, error: "yearMonth must be in YYYY-MM format." };
     }
 
     const [existing] = await db
       .select({ id: monthlySchedules.id })
       .from(monthlySchedules)
-      .where(and(eq(monthlySchedules.storeId, storeId), eq(monthlySchedules.yearMonth, yearMonth)))
+      .where(
+        and(
+          eq(monthlySchedules.storeId, storeId),
+          eq(monthlySchedules.yearMonth, yearMonth),
+        ),
+      )
       .limit(1);
 
-    if (existing) return { success: false, error: `A schedule for ${yearMonth} already exists.` };
+    if (existing)
+      return {
+        success: false,
+        error: `A schedule for ${yearMonth} already exists.`,
+      };
 
     const [ms] = await db
       .insert(monthlySchedules)
@@ -403,26 +497,44 @@ export async function createOrReplaceMonthlySchedule(
   try {
     const auth = await canManageSchedule(data.importedBy, data.storeId);
     if (!auth.allowed) return { success: false, error: auth.reason };
-    if (!data.entries.length) return { success: false, error: 'No entries provided.' };
+    if (!data.entries.length)
+      return { success: false, error: "No entries provided." };
 
-    const uniqueEntryStoreIds = [...new Set(data.entries.map((e) => e.storeId).filter((id) => id !== data.storeId))];
+    const uniqueEntryStoreIds = [
+      ...new Set(
+        data.entries.map((e) => e.storeId).filter((id) => id !== data.storeId),
+      ),
+    ];
     for (const entryStoreId of uniqueEntryStoreIds) {
-      const crossCheck = await canManageSchedule(data.importedBy, data.storeId, entryStoreId);
-      if (!crossCheck.allowed) return { success: false, error: crossCheck.reason };
+      const crossCheck = await canManageSchedule(
+        data.importedBy,
+        data.storeId,
+        entryStoreId,
+      );
+      if (!crossCheck.allowed)
+        return { success: false, error: crossCheck.reason };
     }
 
     const activeShiftMap = await getShiftIdMap(true);
     for (const entry of data.entries) {
       const shouldHaveShift = !entry.isOff && !entry.isLeave && entry.shift;
       if (shouldHaveShift && !activeShiftMap[entry.shift!]) {
-        return { success: false, error: `Unknown or inactive shift "${entry.shift}".` };
+        return {
+          success: false,
+          error: `Unknown or inactive shift "${entry.shift}".`,
+        };
       }
     }
 
     const [existing] = await db
       .select({ id: monthlySchedules.id })
       .from(monthlySchedules)
-      .where(and(eq(monthlySchedules.storeId, data.storeId), eq(monthlySchedules.yearMonth, data.yearMonth)))
+      .where(
+        and(
+          eq(monthlySchedules.storeId, data.storeId),
+          eq(monthlySchedules.yearMonth, data.yearMonth),
+        ),
+      )
       .limit(1);
 
     let monthlyScheduleId: number;
@@ -439,7 +551,10 @@ export async function createOrReplaceMonthlySchedule(
 
       if (entryIds.length > 0) {
         const entrySchedules = await db
-          .select({ id: schedules.id, entryId: schedules.monthlyScheduleEntryId })
+          .select({
+            id: schedules.id,
+            entryId: schedules.monthlyScheduleEntryId,
+          })
           .from(schedules)
           .where(inArray(schedules.monthlyScheduleEntryId, entryIds));
 
@@ -455,18 +570,28 @@ export async function createOrReplaceMonthlySchedule(
           for (const a of attended) lockedSchedIds.add(a.scheduleId);
         }
 
-        const deletableSchedIds = entrySchedules.filter((s) => !lockedSchedIds.has(s.id)).map((s) => s.id);
+        const deletableSchedIds = entrySchedules
+          .filter((s) => !lockedSchedIds.has(s.id))
+          .map((s) => s.id);
         const lockedEntryIds = new Set(
           entrySchedules
             .filter((s) => lockedSchedIds.has(s.id))
             .map((s) => s.entryId)
             .filter((id): id is number => id != null),
         );
-        const deletableEntryIds = entryIds.filter((id) => !lockedEntryIds.has(id));
+        const deletableEntryIds = entryIds.filter(
+          (id) => !lockedEntryIds.has(id),
+        );
 
         await deleteAllTasksForSchedules(deletableSchedIds);
-        if (deletableSchedIds.length > 0) await db.delete(schedules).where(inArray(schedules.id, deletableSchedIds));
-        if (deletableEntryIds.length > 0) await db.delete(monthlyScheduleEntries).where(inArray(monthlyScheduleEntries.id, deletableEntryIds));
+        if (deletableSchedIds.length > 0)
+          await db
+            .delete(schedules)
+            .where(inArray(schedules.id, deletableSchedIds));
+        if (deletableEntryIds.length > 0)
+          await db
+            .delete(monthlyScheduleEntries)
+            .where(inArray(monthlyScheduleEntries.id, deletableEntryIds));
       }
 
       await db
@@ -476,7 +601,12 @@ export async function createOrReplaceMonthlySchedule(
     } else {
       const [ms] = await db
         .insert(monthlySchedules)
-        .values({ storeId: data.storeId, yearMonth: data.yearMonth, importedBy: data.importedBy, note: data.note })
+        .values({
+          storeId: data.storeId,
+          yearMonth: data.yearMonth,
+          importedBy: data.importedBy,
+          note: data.note,
+        })
         .returning({ id: monthlySchedules.id });
       monthlyScheduleId = ms.id;
     }
@@ -496,14 +626,20 @@ export async function createOrReplaceMonthlySchedule(
               userId: e.userId,
               storeId: e.storeId,
               date: startOfDay(e.date),
-              shiftId: normalisedShift ? activeShiftMap[normalisedShift] ?? null : null,
+              shiftId: normalisedShift
+                ? (activeShiftMap[normalisedShift] ?? null)
+                : null,
               isOff: e.isOff,
               isLeave: e.isLeave,
             };
           }),
         )
         .onConflictDoUpdate({
-          target: [monthlyScheduleEntries.monthlyScheduleId, monthlyScheduleEntries.userId, monthlyScheduleEntries.date],
+          target: [
+            monthlyScheduleEntries.monthlyScheduleId,
+            monthlyScheduleEntries.userId,
+            monthlyScheduleEntries.date,
+          ],
           set: {
             shiftId: sql`excluded.shift_id`,
             isOff: sql`excluded.is_off`,
@@ -526,8 +662,12 @@ export async function updateMonthlyScheduleEntry(
   actorId: string,
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    const [entry] = await db.select().from(monthlyScheduleEntries).where(eq(monthlyScheduleEntries.id, entryId)).limit(1);
-    if (!entry) return { success: false, error: 'Entry not found.' };
+    const [entry] = await db
+      .select()
+      .from(monthlyScheduleEntries)
+      .where(eq(monthlyScheduleEntries.id, entryId))
+      .limit(1);
+    if (!entry) return { success: false, error: "Entry not found." };
 
     const [ms] = await db
       .select({ storeId: monthlySchedules.storeId })
@@ -535,34 +675,54 @@ export async function updateMonthlyScheduleEntry(
       .where(eq(monthlySchedules.id, entry.monthlyScheduleId))
       .limit(1);
 
-    if (!ms) return { success: false, error: 'Monthly schedule not found.' };
+    if (!ms) return { success: false, error: "Monthly schedule not found." };
 
     const auth = await canManageSchedule(actorId, ms.storeId, entry.storeId);
     if (!auth.allowed) return { success: false, error: auth.reason };
 
-    const [sched] = await db.select({ id: schedules.id }).from(schedules).where(eq(schedules.monthlyScheduleEntryId, entryId)).limit(1);
+    const [sched] = await db
+      .select({ id: schedules.id })
+      .from(schedules)
+      .where(eq(schedules.monthlyScheduleEntryId, entryId))
+      .limit(1);
 
     if (sched) {
-      const [att] = await db.select({ id: attendance.id }).from(attendance).where(eq(attendance.scheduleId, sched.id)).limit(1);
-      if (att) return { success: false, error: 'Cannot edit a day that already has an attendance record.' };
+      const [att] = await db
+        .select({ id: attendance.id })
+        .from(attendance)
+        .where(eq(attendance.scheduleId, sched.id))
+        .limit(1);
+      if (att)
+        return {
+          success: false,
+          error: "Cannot edit a day that already has an attendance record.",
+        };
 
       await deleteAllTasksForSchedules([sched.id]);
       await db.delete(schedules).where(eq(schedules.id, sched.id));
     }
 
     const currentShiftCode = entry.shiftId
-      ? Object.entries(await getShiftIdMap(false)).find(([, id]) => id === entry.shiftId)?.[0] ?? null
+      ? (Object.entries(await getShiftIdMap(false)).find(
+          ([, id]) => id === entry.shiftId,
+        )?.[0] ?? null)
       : null;
 
     const finalIsOff = patch.isOff !== undefined ? patch.isOff : entry.isOff;
-    const finalIsLeave = patch.isLeave !== undefined ? patch.isLeave : entry.isLeave;
-    const finalShift = patch.shift !== undefined ? patch.shift : currentShiftCode;
+    const finalIsLeave =
+      patch.isLeave !== undefined ? patch.isLeave : entry.isLeave;
+    const finalShift =
+      patch.shift !== undefined ? patch.shift : currentShiftCode;
     const normalisedShift = finalIsOff || finalIsLeave ? null : finalShift;
 
     let shiftIdToUse: number | null = null;
     if (normalisedShift) {
       shiftIdToUse = await resolveActiveShiftId(normalisedShift);
-      if (!shiftIdToUse) return { success: false, error: `Unknown or inactive shift "${normalisedShift}".` };
+      if (!shiftIdToUse)
+        return {
+          success: false,
+          error: `Unknown or inactive shift "${normalisedShift}".`,
+        };
     }
 
     await db
@@ -603,7 +763,10 @@ export async function updateMonthlyScheduleEntry(
         .limit(1);
 
       if (existingAtt) {
-        await db.update(attendance).set({ scheduleId: newSched.id, updatedAt: new Date() }).where(eq(attendance.id, existingAtt.id));
+        await db
+          .update(attendance)
+          .set({ scheduleId: newSched.id, updatedAt: new Date() })
+          .where(eq(attendance.id, existingAtt.id));
       }
     }
 
@@ -625,10 +788,15 @@ export async function deleteMonthlySchedule(
     const [ms] = await db
       .select({ id: monthlySchedules.id })
       .from(monthlySchedules)
-      .where(and(eq(monthlySchedules.storeId, storeId), eq(monthlySchedules.yearMonth, yearMonth)))
+      .where(
+        and(
+          eq(monthlySchedules.storeId, storeId),
+          eq(monthlySchedules.yearMonth, yearMonth),
+        ),
+      )
       .limit(1);
 
-    if (!ms) return { success: false, error: 'Monthly schedule not found.' };
+    if (!ms) return { success: false, error: "Monthly schedule not found." };
 
     const allEntries = await db
       .select({ id: monthlyScheduleEntries.id })
@@ -637,12 +805,16 @@ export async function deleteMonthlySchedule(
 
     const entryIds = allEntries.map((e) => e.id);
 
-    const entrySchedules = entryIds.length > 0
-      ? await db
-          .select({ id: schedules.id, entryId: schedules.monthlyScheduleEntryId })
-          .from(schedules)
-          .where(inArray(schedules.monthlyScheduleEntryId, entryIds))
-      : [];
+    const entrySchedules =
+      entryIds.length > 0
+        ? await db
+            .select({
+              id: schedules.id,
+              entryId: schedules.monthlyScheduleEntryId,
+            })
+            .from(schedules)
+            .where(inArray(schedules.monthlyScheduleEntryId, entryIds))
+        : [];
 
     const lockedSchedIds = new Set<number>();
     if (entrySchedules.length > 0) {
@@ -655,7 +827,9 @@ export async function deleteMonthlySchedule(
       for (const a of attended) lockedSchedIds.add(a.scheduleId);
     }
 
-    const deletableSchedIds = entrySchedules.filter((s) => !lockedSchedIds.has(s.id)).map((s) => s.id);
+    const deletableSchedIds = entrySchedules
+      .filter((s) => !lockedSchedIds.has(s.id))
+      .map((s) => s.id);
     const lockedCount = lockedSchedIds.size;
     const lockedEntryIds = new Set(
       entrySchedules
@@ -665,14 +839,25 @@ export async function deleteMonthlySchedule(
     );
 
     await deleteAllTasksForSchedules(deletableSchedIds);
-    if (deletableSchedIds.length > 0) await db.delete(schedules).where(inArray(schedules.id, deletableSchedIds));
+    if (deletableSchedIds.length > 0)
+      await db
+        .delete(schedules)
+        .where(inArray(schedules.id, deletableSchedIds));
 
     if (lockedCount === 0) {
-      if (entryIds.length > 0) await db.delete(monthlyScheduleEntries).where(inArray(monthlyScheduleEntries.id, entryIds));
+      if (entryIds.length > 0)
+        await db
+          .delete(monthlyScheduleEntries)
+          .where(inArray(monthlyScheduleEntries.id, entryIds));
       await db.delete(monthlySchedules).where(eq(monthlySchedules.id, ms.id));
     } else {
-      const deletableEntryIds = entryIds.filter((id) => !lockedEntryIds.has(id));
-      if (deletableEntryIds.length > 0) await db.delete(monthlyScheduleEntries).where(inArray(monthlyScheduleEntries.id, deletableEntryIds));
+      const deletableEntryIds = entryIds.filter(
+        (id) => !lockedEntryIds.has(id),
+      );
+      if (deletableEntryIds.length > 0)
+        await db
+          .delete(monthlyScheduleEntries)
+          .where(inArray(monthlyScheduleEntries.id, deletableEntryIds));
     }
 
     return { success: true, lockedCount };
@@ -702,13 +887,26 @@ export async function createMonthlyScheduleEntry(
     const [ms] = await db
       .select({ id: monthlySchedules.id })
       .from(monthlySchedules)
-      .where(and(eq(monthlySchedules.storeId, storeId), eq(monthlySchedules.yearMonth, yearMonth)))
+      .where(
+        and(
+          eq(monthlySchedules.storeId, storeId),
+          eq(monthlySchedules.yearMonth, yearMonth),
+        ),
+      )
       .limit(1);
 
-    if (!ms) return { success: false, error: `No monthly schedule for ${yearMonth}. Create one first.` };
+    if (!ms)
+      return {
+        success: false,
+        error: `No monthly schedule for ${yearMonth}. Create one first.`,
+      };
 
-    const [u] = await db.select({ id: users.id }).from(users).where(eq(users.id, userId)).limit(1);
-    if (!u) return { success: false, error: 'User not found.' };
+    const [u] = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    if (!u) return { success: false, error: "User not found." };
 
     const dateStart = startOfDay(date);
 
@@ -724,16 +922,26 @@ export async function createMonthlyScheduleEntry(
       )
       .limit(1);
 
-    if (existingEntry) return { success: false, error: 'This employee already has a schedule for this day. Edit it instead.' };
+    if (existingEntry)
+      return {
+        success: false,
+        error:
+          "This employee already has a schedule for this day. Edit it instead.",
+      };
 
     const finalIsOff = !!state.isOff;
     const finalIsLeave = !!state.isLeave;
-    const normalisedShift = finalIsOff || finalIsLeave ? null : state.shift ?? null;
+    const normalisedShift =
+      finalIsOff || finalIsLeave ? null : (state.shift ?? null);
 
     let shiftIdToUse: number | null = null;
     if (normalisedShift) {
       shiftIdToUse = await resolveActiveShiftId(normalisedShift);
-      if (!shiftIdToUse) return { success: false, error: `Unknown or inactive shift "${normalisedShift}".` };
+      if (!shiftIdToUse)
+        return {
+          success: false,
+          error: `Unknown or inactive shift "${normalisedShift}".`,
+        };
     }
 
     const [newEntry] = await db
@@ -766,11 +974,19 @@ export async function createMonthlyScheduleEntry(
   }
 }
 
-export async function getMonthlySchedule(storeId: number, yearMonth: string): Promise<MonthlyScheduleWithEntries | null> {
+export async function getMonthlySchedule(
+  storeId: number,
+  yearMonth: string,
+): Promise<MonthlyScheduleWithEntries | null> {
   const [ms] = await db
     .select()
     .from(monthlySchedules)
-    .where(and(eq(monthlySchedules.storeId, storeId), eq(monthlySchedules.yearMonth, yearMonth)))
+    .where(
+      and(
+        eq(monthlySchedules.storeId, storeId),
+        eq(monthlySchedules.yearMonth, yearMonth),
+      ),
+    )
     .limit(1);
 
   if (!ms) return null;
@@ -801,7 +1017,9 @@ export async function getMonthlySchedule(storeId: number, yearMonth: string): Pr
   };
 }
 
-export async function listMonthlySchedules(storeId: number): Promise<MonthlySchedule[]> {
+export async function listMonthlySchedules(
+  storeId: number,
+): Promise<MonthlySchedule[]> {
   return db
     .select()
     .from(monthlySchedules)
@@ -821,10 +1039,15 @@ export async function materialiseSchedulesForMonth(
   const [ms] = await db
     .select({ id: monthlySchedules.id })
     .from(monthlySchedules)
-    .where(and(eq(monthlySchedules.storeId, storeId), eq(monthlySchedules.yearMonth, yearMonth)))
+    .where(
+      and(
+        eq(monthlySchedules.storeId, storeId),
+        eq(monthlySchedules.yearMonth, yearMonth),
+      ),
+    )
     .limit(1);
 
-  if (!ms) return { schedulesCreated, errors: ['Monthly schedule not found'] };
+  if (!ms) return { schedulesCreated, errors: ["Monthly schedule not found"] };
 
   const entries = await db
     .select()
@@ -884,7 +1107,10 @@ export async function materialiseSchedulesForMonth(
         .limit(1);
 
       if (existingAtt) {
-        await db.update(attendance).set({ scheduleId: newSched.id, updatedAt: new Date() }).where(eq(attendance.id, existingAtt.id));
+        await db
+          .update(attendance)
+          .set({ scheduleId: newSched.id, updatedAt: new Date() })
+          .where(eq(attendance.id, existingAtt.id));
       }
     } catch (err) {
       errors.push(`Entry ${entry.id}: ${err}`);
@@ -902,7 +1128,7 @@ export async function employeeCheckIn(
   shift: Shift,
 ): Promise<{
   success: boolean;
-  action?: 'checked_in' | 'returned_from_break';
+  action?: "checked_in" | "returned_from_break";
   attendanceId?: number;
   scheduleId?: number;
   status?: string;
@@ -914,8 +1140,13 @@ export async function employeeCheckIn(
     const dayEnd = endOfDay(now);
 
     const shiftData = await getShiftByCode(shift, true);
-    if (!shiftData) return { success: false, error: `Unknown or inactive shift "${shift}".` };
-    if (!shiftData.startTime) return { success: false, error: `Shift start time is not configured in the database.` };
+    if (!shiftData)
+      return { success: false, error: `Unknown or inactive shift "${shift}".` };
+    if (!shiftData.startTime)
+      return {
+        success: false,
+        error: `Shift start time is not configured in the database.`,
+      };
 
     const [sched] = await db
       .select()
@@ -932,16 +1163,24 @@ export async function employeeCheckIn(
       )
       .limit(1);
 
-    if (!sched) return { success: false, error: 'You are not scheduled for this shift today.' };
+    if (!sched)
+      return {
+        success: false,
+        error: "You are not scheduled for this shift today.",
+      };
 
-    const [existing] = await db.select().from(attendance).where(eq(attendance.scheduleId, sched.id)).limit(1);
+    const [existing] = await db
+      .select()
+      .from(attendance)
+      .where(eq(attendance.scheduleId, sched.id))
+      .limit(1);
 
     if (!existing) {
-      const [hours, minutes] = shiftData.startTime.split(':').map(Number);
+      const [hours, minutes] = shiftData.startTime.split(":").map(Number);
       const shiftStart = new Date(now);
       shiftStart.setHours(hours, minutes, 0, 0);
 
-      const attStatus = now > shiftStart ? 'late' : 'present';
+      const attStatus = now > shiftStart ? "late" : "present";
 
       const [att] = await db
         .insert(attendance)
@@ -958,12 +1197,24 @@ export async function employeeCheckIn(
         })
         .returning({ id: attendance.id });
 
-      return { success: true, action: 'checked_in', attendanceId: att.id, scheduleId: sched.id, status: attStatus };
+      return {
+        success: true,
+        action: "checked_in",
+        attendanceId: att.id,
+        scheduleId: sched.id,
+        status: attStatus,
+      };
     }
 
     if (existing.onBreak) return endBreak(userId, storeId, existing.id);
 
-    return { success: true, action: 'checked_in', attendanceId: existing.id, scheduleId: sched.id, status: existing.status };
+    return {
+      success: true,
+      action: "checked_in",
+      attendanceId: existing.id,
+      scheduleId: sched.id,
+      status: existing.status,
+    };
   } catch (err) {
     return { success: false, error: `Check-in failed: ${err}` };
   }
@@ -978,7 +1229,8 @@ export async function employeeCheckOut(
     const now = new Date();
 
     const shiftData = await getShiftByCode(shift, true);
-    if (!shiftData) return { success: false, error: `Unknown or inactive shift "${shift}".` };
+    if (!shiftData)
+      return { success: false, error: `Unknown or inactive shift "${shift}".` };
 
     const [sched] = await db
       .select({ id: schedules.id })
@@ -995,14 +1247,27 @@ export async function employeeCheckOut(
       )
       .limit(1);
 
-    if (!sched) return { success: false, error: `No ${shift} schedule found for today.` };
+    if (!sched)
+      return { success: false, error: `No ${shift} schedule found for today.` };
 
-    const [att] = await db.select().from(attendance).where(eq(attendance.scheduleId, sched.id)).limit(1);
-    if (!att) return { success: false, error: 'No check-in record found.' };
-    if (att.checkOutTime) return { success: false, error: 'Already checked out.' };
-    if (att.onBreak) return { success: false, error: 'Currently on break. Please return first.' };
+    const [att] = await db
+      .select()
+      .from(attendance)
+      .where(eq(attendance.scheduleId, sched.id))
+      .limit(1);
+    if (!att) return { success: false, error: "No check-in record found." };
+    if (att.checkOutTime)
+      return { success: false, error: "Already checked out." };
+    if (att.onBreak)
+      return {
+        success: false,
+        error: "Currently on break. Please return first.",
+      };
 
-    await db.update(attendance).set({ checkOutTime: now, updatedAt: new Date() }).where(eq(attendance.id, att.id));
+    await db
+      .update(attendance)
+      .set({ checkOutTime: now, updatedAt: new Date() })
+      .where(eq(attendance.id, att.id));
     return { success: true };
   } catch (err) {
     return { success: false, error: `Check-out failed: ${err}` };
@@ -1015,25 +1280,38 @@ export async function startBreak(
   shift: Shift,
   breakType: BreakType,
   cashOut: number,
-): Promise<{ success: boolean; breakSessionId?: number; breakType?: BreakType; error?: string }> {
+): Promise<{
+  success: boolean;
+  breakSessionId?: number;
+  breakType?: BreakType;
+  error?: string;
+}> {
   try {
     if (cashOut == null || Number.isNaN(cashOut) || cashOut < 0) {
-      return { success: false, error: 'Cash amount taken out is required and must be a non-negative number.' };
+      return {
+        success: false,
+        error:
+          "Cash amount taken out is required and must be a non-negative number.",
+      };
     }
 
     if (!isValidBreakType(breakType)) {
-      return { success: false, error: `Invalid break type "${String(breakType)}".` };
+      return {
+        success: false,
+        error: `Invalid break type "${String(breakType)}".`,
+      };
     }
 
     const now = new Date();
     const shiftData = await getShiftByCode(shift, true);
-    if (!shiftData) return { success: false, error: `Unknown or inactive shift "${shift}".` };
+    if (!shiftData)
+      return { success: false, error: `Unknown or inactive shift "${shift}".` };
 
     const cfg = getLegacyBreakConfig(shiftData.code);
     if (!(cfg.breakTypes as readonly string[]).includes(breakType)) {
       return {
         success: false,
-        error: `Break type "${breakType}" is not valid for a ${shift} shift. Valid: ${cfg.breakTypes.join(', ')}.`,
+        error: `Break type "${breakType}" is not valid for a ${shift} shift. Valid: ${cfg.breakTypes.join(", ")}.`,
       };
     }
 
@@ -1052,21 +1330,37 @@ export async function startBreak(
       )
       .limit(1);
 
-    if (!sched) return { success: false, error: `No ${shift} schedule found for today.` };
+    if (!sched)
+      return { success: false, error: `No ${shift} schedule found for today.` };
 
-    const [att] = await db.select().from(attendance).where(eq(attendance.scheduleId, sched.id)).limit(1);
-    if (!att || !att.checkInTime) return { success: false, error: 'Not checked in yet.' };
-    if (att.checkOutTime) return { success: false, error: 'Already checked out.' };
-    if (att.onBreak) return { success: false, error: 'Already on break.' };
+    const [att] = await db
+      .select()
+      .from(attendance)
+      .where(eq(attendance.scheduleId, sched.id))
+      .limit(1);
+    if (!att || !att.checkInTime)
+      return { success: false, error: "Not checked in yet." };
+    if (att.checkOutTime)
+      return { success: false, error: "Already checked out." };
+    if (att.onBreak) return { success: false, error: "Already on break." };
 
-    const priorBreaks = await db.select().from(breakSessions).where(eq(breakSessions.attendanceId, att.id));
+    const priorBreaks = await db
+      .select()
+      .from(breakSessions)
+      .where(eq(breakSessions.attendanceId, att.id));
 
     if (priorBreaks.length >= cfg.maxBreaks) {
-      return { success: false, error: `Already used all ${cfg.maxBreaks} break(s) for this ${shift} shift.` };
+      return {
+        success: false,
+        error: `Already used all ${cfg.maxBreaks} break(s) for this ${shift} shift.`,
+      };
     }
 
     if (priorBreaks.some((b) => b.breakType === breakType)) {
-      return { success: false, error: `Already used the "${breakType}" break for this shift.` };
+      return {
+        success: false,
+        error: `Already used the "${breakType}" break for this shift.`,
+      };
     }
 
     const [session] = await db
@@ -1081,7 +1375,10 @@ export async function startBreak(
       })
       .returning({ id: breakSessions.id });
 
-    await db.update(attendance).set({ onBreak: true, updatedAt: new Date() }).where(eq(attendance.id, att.id));
+    await db
+      .update(attendance)
+      .set({ onBreak: true, updatedAt: new Date() })
+      .where(eq(attendance.id, att.id));
 
     return { success: true, breakSessionId: session.id, breakType };
   } catch (err) {
@@ -1096,7 +1393,7 @@ export async function endBreak(
   cashIn: number = 0,
 ): Promise<{
   success: boolean;
-  action?: 'returned_from_break';
+  action?: "returned_from_break";
   attendanceId?: number;
   scheduleId?: number;
   status?: string;
@@ -1104,7 +1401,11 @@ export async function endBreak(
 }> {
   try {
     if (cashIn == null || Number.isNaN(cashIn) || cashIn < 0) {
-      return { success: false, error: 'Cash amount brought back is required and must be a non-negative number.' };
+      return {
+        success: false,
+        error:
+          "Cash amount brought back is required and must be a non-negative number.",
+      };
     }
 
     const now = new Date();
@@ -1112,25 +1413,40 @@ export async function endBreak(
     const [openBreak] = await db
       .select()
       .from(breakSessions)
-      .where(and(eq(breakSessions.attendanceId, attendanceId), eq(breakSessions.userId, userId), isNull(breakSessions.returnTime)))
+      .where(
+        and(
+          eq(breakSessions.attendanceId, attendanceId),
+          eq(breakSessions.userId, userId),
+          isNull(breakSessions.returnTime),
+        ),
+      )
       .limit(1);
 
-    if (!openBreak) return { success: false, error: 'No active break session found.' };
+    if (!openBreak)
+      return { success: false, error: "No active break session found." };
 
     await db
       .update(breakSessions)
-      .set({ returnTime: now, cashIn: cashIn.toString(), updatedAt: new Date() })
+      .set({
+        returnTime: now,
+        cashIn: cashIn.toString(),
+        updatedAt: new Date(),
+      })
       .where(eq(breakSessions.id, openBreak.id));
 
     const [updatedAtt] = await db
       .update(attendance)
       .set({ onBreak: false, updatedAt: new Date() })
       .where(eq(attendance.id, attendanceId))
-      .returning({ id: attendance.id, scheduleId: attendance.scheduleId, status: attendance.status });
+      .returning({
+        id: attendance.id,
+        scheduleId: attendance.scheduleId,
+        status: attendance.status,
+      });
 
     return {
       success: true,
-      action: 'returned_from_break',
+      action: "returned_from_break",
       attendanceId: updatedAtt.id,
       scheduleId: updatedAtt.scheduleId,
       status: updatedAtt.status,
@@ -1146,12 +1462,23 @@ export async function getTodayAttendance(userId: string, storeId: number) {
     .select({ att: attendance, schedule: schedules })
     .from(attendance)
     .leftJoin(schedules, eq(attendance.scheduleId, schedules.id))
-    .where(and(eq(attendance.userId, userId), eq(attendance.storeId, storeId), gte(attendance.date, startOfDay(now)), lte(attendance.date, endOfDay(now))))
+    .where(
+      and(
+        eq(attendance.userId, userId),
+        eq(attendance.storeId, storeId),
+        gte(attendance.date, startOfDay(now)),
+        lte(attendance.date, endOfDay(now)),
+      ),
+    )
     .limit(1);
 
   if (!rows[0]) return null;
 
-  const breaks = await db.select().from(breakSessions).where(eq(breakSessions.attendanceId, rows[0].att.id)).orderBy(breakSessions.breakOutTime);
+  const breaks = await db
+    .select()
+    .from(breakSessions)
+    .where(eq(breakSessions.attendanceId, rows[0].att.id))
+    .orderBy(breakSessions.breakOutTime);
 
   return { ...rows[0], breaks };
 }
@@ -1162,28 +1489,46 @@ export async function getAttendanceForDate(storeId: number, date: Date) {
     .from(schedules)
     .leftJoin(users, eq(schedules.userId, users.id))
     .leftJoin(attendance, eq(attendance.scheduleId, schedules.id))
-    .where(and(eq(schedules.storeId, storeId), eq(schedules.isHoliday, false), gte(schedules.date, startOfDay(date)), lte(schedules.date, endOfDay(date))))
+    .where(
+      and(
+        eq(schedules.storeId, storeId),
+        eq(schedules.isHoliday, false),
+        gte(schedules.date, startOfDay(date)),
+        lte(schedules.date, endOfDay(date)),
+      ),
+    )
     .orderBy(schedules.shiftId, users.name);
 }
 
 export async function opsMarkAttendance(
   scheduleId: number,
-  status: 'present' | 'absent' | 'late' | 'excused',
+  status: "present" | "absent" | "late" | "excused",
   actorId: string,
   notes?: string,
 ): Promise<{ success: boolean; attendanceId?: number; error?: string }> {
   try {
-    const [sched] = await db.select().from(schedules).where(eq(schedules.id, scheduleId)).limit(1);
-    if (!sched) return { success: false, error: 'Schedule not found.' };
+    const [sched] = await db
+      .select()
+      .from(schedules)
+      .where(eq(schedules.id, scheduleId))
+      .limit(1);
+    if (!sched) return { success: false, error: "Schedule not found." };
 
     const auth = await canManageSchedule(actorId, sched.storeId);
     if (!auth.allowed) return { success: false, error: auth.reason };
 
-    const [existing] = await db.select().from(attendance).where(eq(attendance.scheduleId, scheduleId)).limit(1);
+    const [existing] = await db
+      .select()
+      .from(attendance)
+      .where(eq(attendance.scheduleId, scheduleId))
+      .limit(1);
     let attendanceId: number;
 
     if (existing) {
-      await db.update(attendance).set({ status, notes, recordedBy: actorId, updatedAt: new Date() }).where(eq(attendance.id, existing.id));
+      await db
+        .update(attendance)
+        .set({ status, notes, recordedBy: actorId, updatedAt: new Date() })
+        .where(eq(attendance.id, existing.id));
       attendanceId = existing.id;
     } else {
       const [att] = await db
@@ -1218,7 +1563,9 @@ export async function resolveNextScheduleForStore(
   const morningShiftId = shiftMap.morning;
   const fullDayShiftId = shiftMap.full_day;
 
-  const eligibleShiftIds = [morningShiftId, fullDayShiftId].filter((id): id is number => Boolean(id));
+  const eligibleShiftIds = [morningShiftId, fullDayShiftId].filter(
+    (id): id is number => Boolean(id),
+  );
   if (eligibleShiftIds.length === 0) return null;
 
   const dayAfter = startOfDay(new Date(afterDate));
@@ -1231,7 +1578,14 @@ export async function resolveNextScheduleForStore(
       date: schedules.date,
     })
     .from(schedules)
-    .where(and(eq(schedules.storeId, storeId), eq(schedules.isHoliday, false), gte(schedules.date, dayAfter), inArray(schedules.shiftId, eligibleShiftIds)))
+    .where(
+      and(
+        eq(schedules.storeId, storeId),
+        eq(schedules.isHoliday, false),
+        gte(schedules.date, dayAfter),
+        inArray(schedules.shiftId, eligibleShiftIds),
+      ),
+    )
     .orderBy(schedules.date)
     .limit(1);
 

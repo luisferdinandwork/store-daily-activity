@@ -10,8 +10,8 @@ import {
   unique,
   index,
 } from 'drizzle-orm/pg-core';
-import { taskStatusEnum, txTypeEnum } from './enums';
-import { schedules, users, stores } from './core';
+import { taskStatusEnum } from './enums';
+import { schedules, users, stores, issues } from './core';
 import { shifts } from './lookups';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -611,132 +611,92 @@ export const serahTerimaItems = pgTable('serah_terima_items', {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const storeEdcTerminals = pgTable('store_edc_terminals', {
-  id: serial('id').primaryKey(),
-  storeId: integer('store_id').references(() => stores.id, { onDelete: 'cascade' }).notNull(),
-  edcName: text('edc_name').notNull(), // BCA | Mandiri | BNI | OCBC
-  terminalCode: text('terminal_code'),
-  isActive: boolean('is_active').default(true).notNull(),
-  sortOrder: integer('sort_order').default(0).notNull(),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+/**
+ * Store Closing Task (evening / full_day, shared)
+ *
+ * Replaces these removed task tables:
+ *   • edc_reconciliation_tasks
+ *   • eod_z_report_tasks
+ *   • open_statement_tasks
+ *
+ * Sections:
+ *   1. EOD Z-Report photo evidence
+ *   2. EDC Settlement checklist
+ *   3. EDC Summary checklist
+ *   4. Open Statement decision: post statement / on hold
+ *
+ * On Hold:
+ *   • status stays "discrepancy"
+ *   • isOnHold = true
+ *   • holdIssueId links to the issue generated automatically
+ *   • future store_closing_tasks still generate per day
+ *   • when the issue is resolved, utils reopen this row as in_progress
+ */
+export const storeClosingTasks = pgTable('store_closing_tasks', {
+  id:         serial('id').primaryKey(),
+  scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
+  userId:     text('user_id').references(() => users.id).notNull(),
+  storeId:    integer('store_id').references(() => stores.id).notNull(),
+  shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
+  date:       timestamp('date').notNull(),
+
+  // 1. EOD Z-Report checklist
+  eodZReportDone: boolean('eod_z_report_done').default(false).notNull(),
+  eodZReportBy:   text('eod_z_report_by').references(() => users.id),
+  eodZReportAt:   timestamp('eod_z_report_at'),
+
+  // 2. Required evidence photo
+  // Employee uploads one image showing EOD and EDC settlement side by side.
+  eodEdcSettlementPhoto:   text('eod_edc_settlement_photo'),
+  eodEdcSettlementPhotoBy: text('eod_edc_settlement_photo_by').references(() => users.id),
+  eodEdcSettlementPhotoAt: timestamp('eod_edc_settlement_photo_at'),
+
+  // 3. EDC Settlement
+  edcSettlementDone:  boolean('edc_settlement_done').default(false).notNull(),
+  edcSettlementNotes: text('edc_settlement_notes'),
+  edcSettlementBy:    text('edc_settlement_by').references(() => users.id),
+  edcSettlementAt:    timestamp('edc_settlement_at'),
+
+  // 4. EDC Summary
+  edcSummaryDone:  boolean('edc_summary_done').default(false).notNull(),
+  edcSummaryNotes: text('edc_summary_notes'),
+  edcSummaryBy:    text('edc_summary_by').references(() => users.id),
+  edcSummaryAt:    timestamp('edc_summary_at'),
+
+  // 5. Open Statement
+  openStatementDecision:   text('open_statement_decision').$type<'post_statement' | 'on_hold' | null>(),
+  openStatementHoldReason: text('open_statement_hold_reason'),
+  openStatementBy:         text('open_statement_by').references(() => users.id),
+  openStatementAt:         timestamp('open_statement_at'),
+
+  // Hold / issue workflow
+  isOnHold:    boolean('is_on_hold').default(false).notNull(),
+  holdIssueId: integer('hold_issue_id').references(() => issues.id),
+  heldBy:      text('held_by').references(() => users.id),
+  heldAt:      timestamp('held_at'),
+
+  holdResolvedAt: timestamp('hold_resolved_at'),
+  reopenedAt:     timestamp('reopened_at'),
+
+  completedBy:           text('completed_by').references(() => users.id),
+  completedByScheduleId: integer('completed_by_schedule_id').references(() => schedules.id),
+
+  submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
+  submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
+
+  status:      taskStatusEnum('status').default('pending').notNull(),
+  notes:       text('notes'),
+  completedAt: timestamp('completed_at'),
+  verifiedBy:  text('verified_by').references(() => users.id),
+  verifiedAt:  timestamp('verified_at'),
+  createdAt:   timestamp('created_at').defaultNow().notNull(),
+  updatedAt:   timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
-  storeEdcUnique: unique('store_edc_terminals_store_name_unique').on(t.storeId, t.edcName),
-  storeIdx: index('store_edc_terminals_store_idx').on(t.storeId),
+  uniqueStoreDate: unique('store_closing_tasks_store_date_unique').on(t.storeId, t.date),
+  storeDateIdx:    index('store_closing_tasks_store_date_idx').on(t.storeId, t.date),
+  holdIssueIdx:    index('store_closing_tasks_hold_issue_idx').on(t.holdIssueId),
+  statusIdx:       index('store_closing_tasks_status_idx').on(t.status),
 }));
-
-export const edcReconciliationTasks = pgTable('edc_reconciliation_tasks', {
-  id:         serial('id').primaryKey(),
-  scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
-  userId:     text('user_id').references(() => users.id).notNull(),
-  storeId:    integer('store_id').references(() => stores.id).notNull(),
-  shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
-  date:       timestamp('date').notNull(),
-
-  parentTaskId:      integer('parent_task_id'),
-  expectedFetchedAt: timestamp('expected_fetched_at'),
-  expectedSnapshot:  text('expected_snapshot'),
-  isBalanced:        boolean('is_balanced'),
-
-  discrepancyStartedAt:       timestamp('discrepancy_started_at'),
-  discrepancyResolvedAt:      timestamp('discrepancy_resolved_at'),
-  discrepancyDurationMinutes: integer('discrepancy_duration_minutes'),
-
-  submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
-  submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
-
-  status:      taskStatusEnum('status').default('pending').notNull(),
-  notes:       text('notes'),
-  completedAt: timestamp('completed_at'),
-  verifiedBy:  text('verified_by').references(() => users.id),
-  verifiedAt:  timestamp('verified_at'),
-  createdAt:   timestamp('created_at').defaultNow().notNull(),
-  updatedAt:   timestamp('updated_at').defaultNow().notNull(),
-});
-
-export const edcTransactionRows = pgTable('edc_transaction_rows', {
-  id:        serial('id').primaryKey(),
-  edcTaskId: integer('edc_task_id').references(() => edcReconciliationTasks.id, { onDelete: 'cascade' }).notNull(),
-
-  edcTerminalId: integer('edc_terminal_id').references(() => storeEdcTerminals.id),
-  edcName: text('edc_name').notNull().default('BCA'),
-  transactionType: txTypeEnum('transaction_type').notNull(),
-
-  expectedAmount: decimal('expected_amount', { precision: 14, scale: 2 }),
-  expectedCount:  integer('expected_count'),
-  actualAmount:   decimal('actual_amount',   { precision: 14, scale: 2 }),
-  actualCount:    integer('actual_count'),
-  matches:        boolean('matches'),
-
-  notes:     text('notes'),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-export const eodZReportTasks = pgTable('eod_z_report_tasks', {
-  id:         serial('id').primaryKey(),
-  scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
-  userId:     text('user_id').references(() => users.id).notNull(),
-  storeId:    integer('store_id').references(() => stores.id).notNull(),
-  shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
-  date:       timestamp('date').notNull(),
-
-  totalNominal:  decimal('total_nominal', { precision: 14, scale: 2 }),
-  zReportPhotos: text('z_report_photos'),
-
-  submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
-  submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
-
-  status:      taskStatusEnum('status').default('pending').notNull(),
-  notes:       text('notes'),
-  completedAt: timestamp('completed_at'),
-  verifiedBy:  text('verified_by').references(() => users.id),
-  verifiedAt:  timestamp('verified_at'),
-  createdAt:   timestamp('created_at').defaultNow().notNull(),
-  updatedAt:   timestamp('updated_at').defaultNow().notNull(),
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-export const openStatementTasks = pgTable('open_statement_tasks', {
-  id:         serial('id').primaryKey(),
-  scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
-  userId:     text('user_id').references(() => users.id).notNull(),
-  storeId:    integer('store_id').references(() => stores.id).notNull(),
-  shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
-  date:       timestamp('date').notNull(),
-
-  parentTaskId:      integer('parent_task_id'),
-  // Old amount/reconciliation columns are kept nullable for backward compatibility.
-  expectedAmount:    decimal('expected_amount',    { precision: 14, scale: 2 }),
-  expectedFetchedAt: timestamp('expected_fetched_at'),
-  actualAmount:      decimal('actual_amount',      { precision: 14, scale: 2 }),
-  isBalanced:        boolean('is_balanced'),
-
-  // New simple workflow: done now, or hold and carry to next morning.
-  isDone:       boolean('is_done').default(false).notNull(),
-  isOnHold:     boolean('is_on_hold').default(false).notNull(),
-  holdReason:   text('hold_reason'),
-  heldBy:       text('held_by').references(() => users.id),
-  heldAt:       timestamp('held_at'),
-
-  discrepancyStartedAt:       timestamp('discrepancy_started_at'),
-  discrepancyResolvedAt:      timestamp('discrepancy_resolved_at'),
-  discrepancyDurationMinutes: integer('discrepancy_duration_minutes'),
-
-  submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
-  submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
-
-  status:      taskStatusEnum('status').default('pending').notNull(),
-  notes:       text('notes'),
-  completedAt: timestamp('completed_at'),
-  verifiedBy:  text('verified_by').references(() => users.id),
-  verifiedAt:  timestamp('verified_at'),
-  createdAt:   timestamp('created_at').defaultNow().notNull(),
-  updatedAt:   timestamp('updated_at').defaultNow().notNull(),
-});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BOTH SHIFTS — PERSONAL TASKS
@@ -812,18 +772,10 @@ export type SerahTerimaTask       = typeof serahTerimaTasks.$inferSelect;
 export type NewSerahTerimaTask    = typeof serahTerimaTasks.$inferInsert;
 export type SerahTerimaItem       = typeof serahTerimaItems.$inferSelect;
 export type NewSerahTerimaItem    = typeof serahTerimaItems.$inferInsert;
-export type EodZReportTask        = typeof eodZReportTasks.$inferSelect;
-export type NewEodZReportTask     = typeof eodZReportTasks.$inferInsert;
-export type OpenStatementTask     = typeof openStatementTasks.$inferSelect;
-export type NewOpenStatementTask  = typeof openStatementTasks.$inferInsert;
+export type StoreClosingTask      = typeof storeClosingTasks.$inferSelect;
+export type NewStoreClosingTask   = typeof storeClosingTasks.$inferInsert;
 export type GroomingTask          = typeof groomingTasks.$inferSelect;
 export type NewGroomingTask       = typeof groomingTasks.$inferInsert;
-export type StoreEdcTerminal         = typeof storeEdcTerminals.$inferSelect;
-export type NewStoreEdcTerminal      = typeof storeEdcTerminals.$inferInsert;
-export type EdcReconciliationTask    = typeof edcReconciliationTasks.$inferSelect;
-export type NewEdcReconciliationTask = typeof edcReconciliationTasks.$inferInsert;
-export type EdcTransactionRow        = typeof edcTransactionRows.$inferSelect;
-export type NewEdcTransactionRow     = typeof edcTransactionRows.$inferInsert;
 export type MarketingCheckTask    = typeof marketingCheckTasks.$inferSelect;
 export type NewMarketingCheckTask = typeof marketingCheckTasks.$inferInsert;
 export type StoreFrontTask        = typeof storeFrontTasks.$inferSelect;

@@ -8,7 +8,6 @@ import { eq }                        from 'drizzle-orm';
 import {
   getFlatTasksForStoreDate,
   summariseTasks,
-  verifyTaskByType,
 } from '@/lib/db/utils/tasks';
 import {
   getOpsActor, assertStoreInActorArea, parseStoreId, parseDate,
@@ -81,14 +80,13 @@ export async function PATCH(req: NextRequest) {
   const areaErr = await assertStoreInActorArea(actor, storeParsed.id);
   if (areaErr) return NextResponse.json({ success: false, error: areaErr }, { status: 403 });
 
-  const result = await verifyTaskByType(taskType, {
-    taskId,
-    actorId: actor.id,
-    storeId: storeParsed.id,
-    approve: action === 'verify',
-    notes,
-  });
-
-  if (!result.success) return NextResponse.json(result, { status: 400 });
-  return NextResponse.json({ success: true });
+  // const result = await verifyTaskByType(taskType, {
+  //   taskId,
+  //   actorId: actor.id,
+  //   storeId: storeParsed.id,
+  //   approve: action === 'verify',
+  //   notes,
+  // });
+  // if (!result.success) return NextResponse.json(result, { status: 400 });
+  // return NextResponse.json({ success: true });
 }

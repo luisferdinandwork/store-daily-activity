@@ -20,7 +20,6 @@ import {
   Truck,
   Users,
   CreditCard,
-  BarChart2,
   ClipboardList,
   User,
   Sun,
@@ -47,9 +46,7 @@ export type TaskType =
   | "item_dropping"
   | "briefing"
   | "serah_terima"
-  | "edc_reconciliation"
-  | "eod_z_report"
-  | "open_statement"
+  | "store_closing"
   | "grooming";
 
 export type TaskStatus =
@@ -96,6 +93,13 @@ type AttendanceStatus = {
 interface TaskBase {
   id: string;
   scheduleId: string;
+
+  // Shared task rows can be created by another employee's schedule.
+  // scheduleId is always the logged-in employee's acting schedule for guards.
+  // originalScheduleId/assignedUserId keep the stored shared row metadata.
+  originalScheduleId?: string | null;
+  assignedUserId?: string | null;
+
   userId: string;
   storeId: string;
   shift: ShiftCode;
@@ -204,26 +208,37 @@ export interface BriefingData extends TaskBase {
   isBalanced: boolean | null;
   parentTaskId: number | null;
 }
-export interface EdcReconciliationData extends TaskBase {
-  parentTaskId: number | null;
-  isBalanced: boolean | null;
-  expectedFetchedAt: string | null;
-  expectedSnapshot: string | null;
-  discrepancyStartedAt: string | null;
-  discrepancyResolvedAt: string | null;
-  discrepancyDurationMinutes: number | null;
-}
-export interface EodZReportData extends TaskBase {
-  totalNominal: string | null;
-  zReportPhotos: string[];
-}
-export interface OpenStatementData extends TaskBase {
-  parentTaskId: number | null;
-  isDone: boolean | null;
-  isOnHold: boolean | null;
-  holdReason: string | null;
+export interface StoreClosingData extends TaskBase {
+  eodZReportDone: boolean;
+  eodZReportBy?: string | null;
+  eodZReportAt?: string | null;
+
+  /** Required evidence: photo of EOD and EDC settlement side by side. */
+  eodEdcSettlementPhoto: string | null;
+  eodEdcSettlementPhotoBy?: string | null;
+  eodEdcSettlementPhotoAt?: string | null;
+
+  edcSettlementDone: boolean;
+  edcSettlementNotes: string | null;
+  edcSettlementBy?: string | null;
+  edcSettlementAt?: string | null;
+
+  edcSummaryDone: boolean;
+  edcSummaryNotes: string | null;
+  edcSummaryBy?: string | null;
+  edcSummaryAt?: string | null;
+
+  openStatementDecision: "post_statement" | "on_hold" | null;
+  openStatementHoldReason: string | null;
+  openStatementBy?: string | null;
+  openStatementAt?: string | null;
+
+  isOnHold: boolean;
+  holdIssueId: string | number | null;
   heldBy: string | null;
   heldAt: string | null;
+  holdResolvedAt?: string | null;
+  reopenedAt?: string | null;
 }
 
 export interface GroomingData extends TaskBase {
@@ -265,13 +280,7 @@ export type TaskItem =
   | { type: "marketing_check"; shift: ShiftCode; data: MarketingCheckData }
   | { type: "item_dropping"; shift: ShiftCode; data: ItemDroppingData }
   | { type: "briefing"; shift: ShiftCode; data: BriefingData }
-  | {
-      type: "edc_reconciliation";
-      shift: ShiftCode;
-      data: EdcReconciliationData;
-    }
-  | { type: "eod_z_report"; shift: ShiftCode; data: EodZReportData }
-  | { type: "open_statement"; shift: ShiftCode; data: OpenStatementData }
+  | { type: "store_closing"; shift: ShiftCode; data: StoreClosingData }
   | { type: "grooming"; shift: ShiftCode; data: GroomingData }
   | { type: "serah_terima"; shift: ShiftCode; data: SerahTerimaData };
 
@@ -381,24 +390,12 @@ const TASK_META: Record<
     Icon: Users,
     hasPhoto: false,
   },
-  edc_reconciliation: {
-    title: "EDC Reconciliation",
-    description: "Match EDC transactions vs system data.",
-    Icon: CreditCard,
-    hasPhoto: false,
-  },
-  eod_z_report: {
-    title: "EOD Z-Report",
-    description: "Enter Z-report total & upload receipt.",
-    Icon: BarChart2,
-    hasPhoto: true,
-  },
-  open_statement: {
-    title: "Open Statement",
+  store_closing: {
+    title: "Store Closing",
     description:
-      "Tandai Done bila sudah dikerjakan, atau On Hold untuk dilanjutkan shift berikutnya.",
-    Icon: ClipboardList,
-    hasPhoto: false,
+      "Checklist EOD Z-Report, EDC settlement, EDC summary, foto EOD+EDC, dan Open Statement.",
+    Icon: CreditCard,
+    hasPhoto: true,
   },
   grooming: {
     title: "Grooming Check",
@@ -428,9 +425,7 @@ const TASK_ROUTES: Record<TaskType, string> = {
   vm_checklist: "vm-checklist",
   item_dropping: "item-dropping",
   briefing: "briefing",
-  edc_reconciliation: "edc-reconciliation",
-  eod_z_report: "eod-z-report",
-  open_statement: "open-statement",
+  store_closing: "store-closing",
   grooming: "grooming",
   marketing_check: "marketing-check",
   serah_terima: "serah-terima",
@@ -453,9 +448,7 @@ const DEFAULT_SHIFT_TASK_MAP: ShiftTaskMap = {
     "item_dropping",
     "briefing",
     "serah_terima",
-    "edc_reconciliation",
-    "eod_z_report",
-    "open_statement",
+    "store_closing",
     "grooming",
   ],
   full_day: [
@@ -468,9 +461,7 @@ const DEFAULT_SHIFT_TASK_MAP: ShiftTaskMap = {
     "item_dropping",
     "briefing",
     "serah_terima",
-    "edc_reconciliation",
-    "eod_z_report",
-    "open_statement",
+    "store_closing",
     "grooming",
   ],
 };
@@ -553,11 +544,6 @@ const SHIFT_SCOPED_SHARED_TASK_TYPES = new Set<TaskType>([
   "briefing",
   "item_dropping",
   "serah_terima",
-]);
-
-const EVENING_OPERATIONAL_TASK_TYPES = new Set<TaskType>([
-  "edc_reconciliation",
-  "eod_z_report",
 ]);
 
 function isValidTaskStatus(value: unknown): value is TaskStatus {
@@ -1366,21 +1352,20 @@ function TaskCard({
   const isTerminal = status === "completed" || status === "verified";
   const isRejected = status === "rejected";
   const isDiscrepancy = status === "discrepancy";
-  const isOpenStatementCarryOver =
-    item.type === "open_statement" &&
-    (item.data as OpenStatementData).parentTaskId != null;
+  const isStoreClosingHold =
+    item.type === "store_closing" &&
+    ((item.data as StoreClosingData).isOnHold ||
+      (item.data as StoreClosingData).openStatementDecision === "on_hold");
 
   const showCarryForward =
     isDiscrepancy &&
     (item.type === "item_dropping" ||
-      item.type === "edc_reconciliation" ||
-      item.type === "open_statement" ||
+      item.type === "store_closing" ||
       item.type === "serah_terima");
 
   const carryForwardDescription: Partial<Record<TaskType, string>> = {
-    edc_reconciliation: "Rekonsiliasi EDC belum selesai — tap untuk lanjutkan.",
-    open_statement:
-      "Selisih open statement belum terselesaikan — tap untuk lanjutkan.",
+    store_closing:
+      "Store Closing tertahan karena Open Statement On Hold — tap untuk lanjutkan setelah issue resolved.",
     serah_terima:
       "Ada pesan serah terima yang belum selesai — tap untuk lanjutkan.",
   };
@@ -1434,17 +1419,17 @@ function TaskCard({
   const hasSetoranDeficit = item.type === "setoran" && !!setoranDeficitLabel;
   const needsAttention = isDiscrepancy || hasSetoranDeficit || isRejected;
 
-  const openStatementLabel =
-    isOpenStatementCarryOver && !isTerminal
-      ? "Lanjutan Open Statement dari shift sebelumnya — selesaikan (Done) atau On Hold lagi."
+  const storeClosingHoldLabel =
+    isStoreClosingHold && !isTerminal
+      ? "Open Statement sedang On Hold. Setelah issue resolved, task ini akan bisa diselesaikan lagi."
       : null;
 
   const description = itemDroppingLabel
     ? itemDroppingLabel
     : setoranDeficitLabel
       ? setoranDeficitLabel
-      : openStatementLabel
-        ? openStatementLabel
+      : storeClosingHoldLabel
+        ? storeClosingHoldLabel
         : showCarryForward
           ? (carryForwardDescription[item.type] ?? meta.description)
           : meta.description;
@@ -1542,10 +1527,10 @@ function TaskCard({
                 </Badge>
               )}
 
-              {isOpenStatementCarryOver && (
+              {isStoreClosingHold && (
                 <Badge className="h-[18px] gap-1 px-1.5 text-[10px] font-semibold bg-indigo-500 text-white hover:bg-indigo-500">
                   <History className="h-2.5 w-2.5" />
-                  Lanjutan
+                  On Hold
                 </Badge>
               )}
 

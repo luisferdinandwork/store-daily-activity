@@ -10,11 +10,9 @@ const ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'im
 const MAX_SIZE_MB = 10;
 
 type PhotoType =
-  // New Store Front task
+  // Store Front task
   | 'storefront'
   | 'rolling_door_closed'
-
-  // Backward-compatible alias. Prefer `storefront` on the frontend.
   | 'store_front'
 
   // Store Opening task
@@ -25,20 +23,28 @@ type PhotoType =
   | 'five_r_kiri'
   | 'five_r_gudang'
 
-  // Other employee tasks
-  | 'grooming_selfie'
+  // Setoran task
   | 'resi'
   | 'atm_card_selfie'
+
+  // Item Dropping task
   | 'item_dropping'
   | 'item_dropping_receive'
+
+  // Grooming task
+  | 'grooming_selfie'
+
+  // Store Closing task
+  | 'eod_edc_settlement_photo'
+
+  // Backward-compatible aliases
+  | 'eod_edc_settlement'
   | 'z_report';
 
 const PHOTO_FOLDER: Record<PhotoType, string> = {
-  // New Store Front task folders
+  // Store Front task folders
   storefront: 'store-front/storefront',
   rolling_door_closed: 'store-front/rolling-door-closed',
-
-  // Backward-compatible alias for existing frontend calls.
   store_front: 'store-front/storefront',
 
   // Store Opening task folders
@@ -49,20 +55,28 @@ const PHOTO_FOLDER: Record<PhotoType, string> = {
   five_r_kiri: 'store-opening/five-r/kiri',
   five_r_gudang: 'store-opening/five-r/gudang',
 
-  // Other task folders
+  // Setoran task folders
   resi: 'setoran/resi',
   atm_card_selfie: 'setoran/atm-card-selfie',
+
+  // Item Dropping task folders
   item_dropping: 'item-dropping/drop',
   item_dropping_receive: 'item-dropping/receive',
+
+  // Grooming task folders
   grooming_selfie: 'grooming/selfie',
-  z_report: 'eod/z-report',
+
+  // Store Closing task folders
+  eod_edc_settlement_photo: 'store-closing/eod-edc-settlement',
+
+  // Backward-compatible aliases
+  eod_edc_settlement: 'store-closing/eod-edc-settlement',
+  z_report: 'store-closing/eod-edc-settlement',
 };
 
 const PHOTO_LIMITS: Record<PhotoType, number> = {
   storefront: 3,
   rolling_door_closed: 1,
-
-  // Backward-compatible alias.
   store_front: 3,
 
   cashier_desk: 2,
@@ -71,12 +85,21 @@ const PHOTO_LIMITS: Record<PhotoType, number> = {
   five_r_kanan: 2,
   five_r_kiri: 2,
   five_r_gudang: 2,
+
   resi: 1,
   atm_card_selfie: 1,
+
   item_dropping: 5,
   item_dropping_receive: 5,
+
   grooming_selfie: 3,
-  z_report: 3,
+
+  // Store Closing only needs 1 required side-by-side image.
+  eod_edc_settlement_photo: 1,
+
+  // Backward-compatible aliases.
+  eod_edc_settlement: 1,
+  z_report: 1,
 };
 
 function sanitizeExtension(fileName: string, mimeType: string): string {
@@ -94,6 +117,17 @@ function sanitizeExtension(fileName: string, mimeType: string): string {
   return 'jpg';
 }
 
+function normalizePhotoType(value: string): PhotoType | null {
+  if (value in PHOTO_FOLDER) return value as PhotoType;
+
+  // Extra safety for possible frontend naming variants.
+  if (value === 'eodEdcSettlementPhoto') return 'eod_edc_settlement_photo';
+  if (value === 'eod_edc_settlement_image') return 'eod_edc_settlement_photo';
+  if (value === 'store_closing') return 'eod_edc_settlement_photo';
+
+  return null;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
@@ -104,7 +138,7 @@ export async function POST(request: NextRequest) {
 
     const formData = await request.formData();
     const file = formData.get('file') as File | null;
-    const photoType = formData.get('photoType') as string | null;
+    const rawPhotoType = formData.get('photoType') as string | null;
 
     if (!file) {
       return NextResponse.json({ error: 'No file provided' }, { status: 400 });
@@ -124,14 +158,18 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!photoType || !(photoType in PHOTO_FOLDER)) {
+    const typedPhotoType = rawPhotoType ? normalizePhotoType(rawPhotoType) : null;
+
+    if (!typedPhotoType) {
       return NextResponse.json(
-        { error: `photoType must be one of: ${Object.keys(PHOTO_FOLDER).join(', ')}` },
+        {
+          error: `photoType must be one of: ${Object.keys(PHOTO_FOLDER).join(', ')}`,
+          received: rawPhotoType,
+        },
         { status: 400 },
       );
     }
 
-    const typedPhotoType = photoType as PhotoType;
     const folder = PHOTO_FOLDER[typedPhotoType];
     const timestamp = Date.now();
     const random = Math.random().toString(36).slice(2, 8);

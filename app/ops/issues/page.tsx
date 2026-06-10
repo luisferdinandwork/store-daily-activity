@@ -24,17 +24,24 @@ import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
 
 type IssueStatus = 'reported' | 'in_review' | 'resolved';
 
+interface AssignedIssueRole {
+  id: number;
+  code: string;
+  label: string;
+}
+
 interface OpsIssue {
-  id:             string;
-  title:          string;
-  description:    string;
-  status:         IssueStatus;
+  id: string;
+  title: string;
+  description: string;
+  status: IssueStatus;
   attachmentUrls: string[];
-  createdAt:      string;
-  updatedAt:      string;
-  reviewedAt:     string | null;
-  reviewedBy:     string | null;
-  store:    { id: string; name: string; areaId: string | null; areaName: string | null };
+  createdAt: string;
+  updatedAt: string;
+  reviewedAt: string | null;
+  reviewedBy: string | null;
+  assignedToRoles?: AssignedIssueRole[];
+  store: { id: string; name: string; areaId: string | null; areaName: string | null };
   reporter: { id: string; name: string; nik: string };
 }
 

@@ -15,9 +15,7 @@ import {
   vmChecklistTasks,
   marketingCheckTasks,
   briefingTasks,
-  edcReconciliationTasks,
-  eodZReportTasks,
-  openStatementTasks,
+  storeClosingTasks,
   groomingTasks,
   itemDroppingTasks,
   serahTerimaTasks,
@@ -625,16 +623,6 @@ export async function materialiseTasksForSchedule(
   if (isEvening) {
     const base = { ...baseCommon, shiftId: eveningId };
 
-    async function eveningActive(table: any): Promise<{ id: number } | undefined> {
-      return db.select({ id: table.id }).from(table)
-        .where(and(
-          eq(table.storeId, sched.storeId),
-          eq(table.date, dayStart),
-          inArray(table.status, ACTIVE_STATUSES),
-        ))
-        .limit(1).then((r: { id: number }[]) => r[0]);
-    }
-
     // Briefing — now simple complete-finish and available on both shifts.
     await insertShared('briefingEvening',
       () => db.select({ id: briefingTasks.id }).from(briefingTasks)
@@ -663,34 +651,22 @@ export async function materialiseTasksForSchedule(
         handoverText: '',
       }));
 
-    // EDC Reconciliation — via dedicated util (handles per-row defaults)
-    try {
-      const { materialiseEdcReconciliationTask } = await import('@/lib/db/utils/edc-reconciliation');
-      const r = await materialiseEdcReconciliationTask(
-        scheduleId, sched.userId, sched.storeId, eveningId, dayStart,
-      );
-      if (r === 'created') created.push('edcReconciliation');
-      else                 skipped.push('edcReconciliation');
-    } catch (err) {
-      errors.push(`edcReconciliation: ${err}`);
-    }
-
-    // EOD Z-Report — simple shared task, no discrepancy pattern
-    await insertShared('eodZReport',
-      () => eveningActive(eodZReportTasks),
-      () => db.insert(eodZReportTasks).values(base));
-
-    // Open Statement — via dedicated util
-    try {
-      const { materialiseOpenStatementTask } = await import('@/lib/db/utils/open-statement');
-      const r = await materialiseOpenStatementTask(
-        scheduleId, sched.userId, sched.storeId, eveningId, dayStart,
-      );
-      if (r === 'created') created.push('openStatement');
-      else                 skipped.push('openStatement');
-    } catch (err) {
-      errors.push(`openStatement: ${err}`);
-    }
+    // Store Closing — replaces old EDC Reconciliation + EOD Z-Report + Open Statement.
+    // One shared row per store/date. Historical On Hold rows can stay open while
+    // future days still generate their own Store Closing row.
+    await insertShared('storeClosing',
+      () => db.select({ id: storeClosingTasks.id }).from(storeClosingTasks)
+        .where(and(
+          eq(storeClosingTasks.storeId, sched.storeId),
+          eq(storeClosingTasks.date, dayStart),
+        ))
+        .limit(1).then(r => r[0]),
+      () => db.insert(storeClosingTasks).values({
+        ...baseCommon,
+        // keep the task attached to the actual employee schedule shift.
+        // This allows both evening and full_day users to submit it.
+        shiftId: sched.shiftId,
+      }));
   }
 
   // ── Grooming — personal, all shifts ───────────────────────────────────────
@@ -762,13 +738,8 @@ export async function deleteTasksForSchedule(scheduleId: number): Promise<void> 
     // Evening tasks
     db.delete(briefingTasks)
       .where(and(eq(briefingTasks.scheduleId, scheduleId), inArray(briefingTasks.status, ACTIVE_STATUSES))),
-    // edcReconciliation cascade-deletes its edc_transaction_rows children automatically
-    db.delete(edcReconciliationTasks)
-      .where(and(eq(edcReconciliationTasks.scheduleId, scheduleId), inArray(edcReconciliationTasks.status, ACTIVE_STATUSES))),
-    db.delete(eodZReportTasks)
-      .where(and(eq(eodZReportTasks.scheduleId, scheduleId), inArray(eodZReportTasks.status, ACTIVE_STATUSES))),
-    db.delete(openStatementTasks)
-      .where(and(eq(openStatementTasks.scheduleId, scheduleId), inArray(openStatementTasks.status, ACTIVE_STATUSES))),
+    db.delete(storeClosingTasks)
+      .where(and(eq(storeClosingTasks.scheduleId, scheduleId), inArray(storeClosingTasks.status, ACTIVE_STATUSES))),
     // Personal
     db.delete(groomingTasks)
       .where(and(eq(groomingTasks.scheduleId, scheduleId as any), inArray(groomingTasks.status, PENDING_STATUSES))),
@@ -1173,7 +1144,7 @@ export async function getTasksForSchedule(scheduleId: number) {
   const [
     storeOpening, setoran,
     storeFront, cekBin, vmChecklist, marketingCheck, itemDropping, briefing,
-    serahTerima, edcReconciliation, eodZReport, openStatement, grooming,
+    serahTerima, storeClosing, grooming,
   ] = await Promise.all([
     db.select().from(storeOpeningTasks)      .where(eq(storeOpeningTasks.scheduleId,      scheduleId)).limit(1),
     db.select().from(setoranTasks)           .where(eq(setoranTasks.scheduleId,           scheduleId)).limit(1),
@@ -1184,9 +1155,7 @@ export async function getTasksForSchedule(scheduleId: number) {
     db.select().from(itemDroppingTasks)      .where(eq(itemDroppingTasks.scheduleId,      scheduleId)).limit(1),
     db.select().from(briefingTasks)          .where(eq(briefingTasks.scheduleId,          scheduleId)).limit(1),
     db.select().from(serahTerimaTasks)       .where(eq(serahTerimaTasks.scheduleId,       scheduleId)).limit(1),
-    db.select().from(edcReconciliationTasks) .where(eq(edcReconciliationTasks.scheduleId, scheduleId)).limit(1),
-    db.select().from(eodZReportTasks)        .where(eq(eodZReportTasks.scheduleId,        scheduleId)).limit(1),
-    db.select().from(openStatementTasks)     .where(eq(openStatementTasks.scheduleId,     scheduleId)).limit(1),
+    db.select().from(storeClosingTasks)      .where(eq(storeClosingTasks.scheduleId,      scheduleId)).limit(1),
     db.select().from(groomingTasks)          .where(eq(groomingTasks.scheduleId,          scheduleId as any)).limit(1),
   ]);
 
@@ -1200,9 +1169,7 @@ export async function getTasksForSchedule(scheduleId: number) {
     itemDropping:      itemDropping[0]      ?? null,
     briefing:          briefing[0]          ?? null,
     serahTerima:       serahTerima[0]       ?? null,
-    edcReconciliation: edcReconciliation[0] ?? null,
-    eodZReport:        eodZReport[0]        ?? null,
-    openStatement:     openStatement[0]     ?? null,
+    storeClosing:      storeClosing[0]      ?? null,
     grooming:          grooming[0]          ?? null,
   };
 }
@@ -1229,7 +1196,7 @@ export async function getDailyTaskSummary(storeId: number, date: Date) {
   const [
     storeOpening, setoran,
     storeFront, cekBin, vmChecklist, marketingCheck, itemDropping, briefing,
-    serahTerima, edcReconciliation, eodZReport, openStatement, grooming,
+    serahTerima, storeClosing, grooming,
   ] = await Promise.all([
     db.select({ status: storeOpeningTasks.status,      count: sql<number>`count(*)::int` }).from(storeOpeningTasks)
       .where(and(eq(storeOpeningTasks.storeId, storeId),      gte(storeOpeningTasks.date, dayStart),      lte(storeOpeningTasks.date, dayEnd))).groupBy(storeOpeningTasks.status).then(summarise),
@@ -1249,17 +1216,13 @@ export async function getDailyTaskSummary(storeId: number, date: Date) {
       .where(and(eq(briefingTasks.storeId, storeId),          gte(briefingTasks.date, dayStart),          lte(briefingTasks.date, dayEnd))).groupBy(briefingTasks.status).then(summarise),
     db.select({ status: serahTerimaTasks.status,       count: sql<number>`count(*)::int` }).from(serahTerimaTasks)
       .where(and(eq(serahTerimaTasks.storeId, storeId),       gte(serahTerimaTasks.date, dayStart),       lte(serahTerimaTasks.date, dayEnd))).groupBy(serahTerimaTasks.status).then(summarise),
-    db.select({ status: edcReconciliationTasks.status, count: sql<number>`count(*)::int` }).from(edcReconciliationTasks)
-      .where(and(eq(edcReconciliationTasks.storeId, storeId), gte(edcReconciliationTasks.date, dayStart), lte(edcReconciliationTasks.date, dayEnd))).groupBy(edcReconciliationTasks.status).then(summarise),
-    db.select({ status: eodZReportTasks.status,        count: sql<number>`count(*)::int` }).from(eodZReportTasks)
-      .where(and(eq(eodZReportTasks.storeId, storeId),        gte(eodZReportTasks.date, dayStart),        lte(eodZReportTasks.date, dayEnd))).groupBy(eodZReportTasks.status).then(summarise),
-    db.select({ status: openStatementTasks.status,     count: sql<number>`count(*)::int` }).from(openStatementTasks)
-      .where(and(eq(openStatementTasks.storeId, storeId),     gte(openStatementTasks.date, dayStart),     lte(openStatementTasks.date, dayEnd))).groupBy(openStatementTasks.status).then(summarise),
+    db.select({ status: storeClosingTasks.status,      count: sql<number>`count(*)::int` }).from(storeClosingTasks)
+      .where(and(eq(storeClosingTasks.storeId, storeId),      gte(storeClosingTasks.date, dayStart),      lte(storeClosingTasks.date, dayEnd))).groupBy(storeClosingTasks.status).then(summarise),
     db.select({ status: groomingTasks.status,          count: sql<number>`count(*)::int` }).from(groomingTasks)
       .where(and(eq(groomingTasks.storeId, storeId),          gte(groomingTasks.date, dayStart),          lte(groomingTasks.date, dayEnd))).groupBy(groomingTasks.status).then(summarise),
   ]);
 
-  return { storeOpening, setoran, storeFront, cekBin, vmChecklist, marketingCheck, itemDropping, briefing, serahTerima, edcReconciliation, eodZReport, openStatement, grooming };
+  return { storeOpening, setoran, storeFront, cekBin, vmChecklist, marketingCheck, itemDropping, briefing, serahTerima, storeClosing, grooming };
 }
 
 function parsePhotosField(raw: unknown): string[] {
@@ -1282,7 +1245,7 @@ function buildExtra(row: Record<string, unknown>, photoFields: string[] = []): R
     'submittedLat', 'submittedLng', 'isBalanced', 'parentTaskId',
     'verifiedBy', 'verifiedAt',
     'discrepancyStartedAt', 'discrepancyResolvedAt', 'discrepancyDurationMinutes',
-    'expectedFetchedAt', 'expectedSnapshot', 'expectedAmount', 'actualAmount', 'totalNominal',
+    'expectedFetchedAt', 'expectedSnapshot', 'expectedAmount', 'actualAmount',
   ]);
 
   const extra: Record<string, unknown> = {};
@@ -1413,9 +1376,7 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
     itemDropping,
     briefing,
     serahTerima,
-    edcReconciliation,
-    eodZReport,
-    openStatement,
+    storeClosing,
     grooming,
   ] = await Promise.all([
     loadTable(storeOpeningTasks, 'store_opening', [
@@ -1441,9 +1402,7 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
     loadTable(itemDroppingTasks, 'item_dropping', []),
     loadTable(briefingTasks, 'briefing', []),
     loadTable(serahTerimaTasks, 'serah_terima', []),
-    loadTable(edcReconciliationTasks, 'edc_reconciliation', []),
-    loadTable(eodZReportTasks, 'eod_z_report', ['zReportPhotos']),
-    loadTable(openStatementTasks, 'open_statement', []),
+    loadTable(storeClosingTasks, 'store_closing', ['eodEdcSettlementPhoto']),
     loadTable(groomingTasks, 'grooming', ['selfiePhotos']),
   ]);
 
@@ -1457,9 +1416,7 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
     ...itemDropping,
     ...briefing,
     ...serahTerima,
-    ...edcReconciliation,
-    ...eodZReport,
-    ...openStatement,
+    ...storeClosing,
     ...grooming,
   ];
 
@@ -1580,23 +1537,32 @@ export async function getAllTaskOverview(date: Date) {
   };
 }
 
-// ─── Range aggregation (weekly / monthly) ─────────────────────────────────────
-
-export type StoreDateSummary = {
-  storeId:     number;
-  date:        string; // YYYY-MM-DD
-  pending:     number;
-  inProgress:  number;
-  completed:   number;
-  discrepancy: number;
-  total:       number;
-};
-
 /**
  * Returns per-(storeId, date) task summaries for all stores in a date range.
- * Queries each task table once with a single date-range filter instead of
- * one query per store per day.
+ *
+ * Used by OPS Progress range page.
+ *
+ * Important:
+ * The old evening closing tasks were removed:
+ * - edc_reconciliation
+ * - eod_z_report
+ * - open_statement
+ *
+ * They are now represented by one shared task table:
+ * - store_closing_tasks
  */
+
+
+export interface StoreDateSummary {
+  storeId: number;
+  date: string;
+  pending: number;
+  inProgress: number;
+  completed: number;
+  discrepancy: number;
+  total: number;
+}
+
 export async function getStoreSummariesForRange(
   storeIds: number[],
   startDate: Date,
@@ -1605,25 +1571,43 @@ export async function getStoreSummariesForRange(
   if (!storeIds.length) return [];
 
   const dayStart = startOfDay(startDate);
-  const dayEnd   = endOfDay(endDate);
+  const dayEnd = endOfDay(endDate);
 
-  type RawRow = { storeId: number; date: Date; status: string | null };
+  type RawRow = {
+    storeId: number;
+    date: Date;
+    status: string | null;
+  };
 
   async function loadTable(table: any): Promise<RawRow[]> {
     return db
-      .select({ storeId: table.storeId, date: table.date, status: table.status })
+      .select({
+        storeId: table.storeId,
+        date: table.date,
+        status: table.status,
+      })
       .from(table)
-      .where(and(
-        inArray(table.storeId, storeIds),
-        gte(table.date, dayStart),
-        lte(table.date, dayEnd),
-      ));
+      .where(
+        and(
+          inArray(table.storeId, storeIds),
+          gte(table.date, dayStart),
+          lte(table.date, dayEnd),
+        ),
+      );
   }
 
   const [
-    storeOpening, setoran, storeFront, cekBin, vmChecklist,
-    marketingCheck, itemDropping, briefing, serahTerima,
-    edcReconciliation, eodZReport, openStatement, grooming,
+    storeOpening,
+    setoran,
+    storeFront,
+    cekBin,
+    vmChecklist,
+    marketingCheck,
+    itemDropping,
+    briefing,
+    serahTerima,
+    storeClosing,
+    grooming,
   ] = await Promise.all([
     loadTable(storeOpeningTasks),
     loadTable(setoranTasks),
@@ -1634,44 +1618,73 @@ export async function getStoreSummariesForRange(
     loadTable(itemDroppingTasks),
     loadTable(briefingTasks),
     loadTable(serahTerimaTasks),
-    loadTable(edcReconciliationTasks),
-    loadTable(eodZReportTasks),
-    loadTable(openStatementTasks),
+    loadTable(storeClosingTasks),
     loadTable(groomingTasks),
   ]);
 
   const all: RawRow[] = [
-    ...storeOpening, ...setoran, ...storeFront, ...cekBin, ...vmChecklist,
-    ...marketingCheck, ...itemDropping, ...briefing, ...serahTerima,
-    ...edcReconciliation, ...eodZReport, ...openStatement, ...grooming,
+    ...storeOpening,
+    ...setoran,
+    ...storeFront,
+    ...cekBin,
+    ...vmChecklist,
+    ...marketingCheck,
+    ...itemDropping,
+    ...briefing,
+    ...serahTerima,
+    ...storeClosing,
+    ...grooming,
   ];
 
-  // Aggregate into a map keyed by "storeId::YYYY-MM-DD"
   const map = new Map<string, StoreDateSummary>();
 
   for (const row of all) {
-    const dateKey = toKey(row.date instanceof Date ? row.date : new Date(row.date));
-    const key     = `${row.storeId}::${dateKey}`;
+    const rowDate = row.date instanceof Date ? row.date : new Date(row.date);
+    const dateKey = toKey(rowDate);
+    const key = `${row.storeId}::${dateKey}`;
 
     let entry = map.get(key);
+
     if (!entry) {
-      entry = { storeId: row.storeId, date: dateKey, pending: 0, inProgress: 0, completed: 0, discrepancy: 0, total: 0 };
+      entry = {
+        storeId: row.storeId,
+        date: dateKey,
+        pending: 0,
+        inProgress: 0,
+        completed: 0,
+        discrepancy: 0,
+        total: 0,
+      };
+
       map.set(key, entry);
     }
 
     entry.total++;
+
     switch (row.status) {
-      case 'pending':     entry.pending++;     break;
-      case 'in_progress': entry.inProgress++;  break;
-      case 'completed':   entry.completed++;   break;
-      case 'discrepancy': entry.discrepancy++; break;
+      case 'pending':
+        entry.pending++;
+        break;
+
+      case 'in_progress':
+        entry.inProgress++;
+        break;
+
+      case 'completed':
+        entry.completed++;
+        break;
+
+      case 'discrepancy':
+        entry.discrepancy++;
+        break;
     }
   }
 
   return [...map.values()];
 }
 
-// toKey is already defined as a private helper above; expose it here for the route
 function toKey(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+    d.getDate(),
+  ).padStart(2, '0')}`;
 }

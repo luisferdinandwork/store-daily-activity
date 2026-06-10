@@ -19,9 +19,7 @@ import {
   briefingTasks,
   serahTerimaTasks,
   serahTerimaItems,
-  edcReconciliationTasks,
-  eodZReportTasks,
-  openStatementTasks,
+  storeClosingTasks,
   groomingTasks,
   itemDroppingTasks,
   itemDroppingEntries,
@@ -40,7 +38,10 @@ import { getOrCreateItemDroppingForSchedule } from "@/lib/db/utils/item-dropping
 import { getOrCreateGroomingForSchedule } from "@/lib/db/utils/grooming";
 import { getOrCreateBriefingForSchedule } from "@/lib/db/utils/briefing";
 import { getOrCreateSerahTerimaForSchedule } from "@/lib/db/utils/serah-terima";
-import { materialiseOpenStatementTask } from "@/lib/db/utils/open-statement";
+import {
+  getOrCreateStoreClosingForSchedule,
+  getVisibleStoreClosingTasksForStores,
+} from "@/lib/db/utils/store-closing";
 // IMPORTANT:
 // Do not import SHIFT_TASK_MAP here. The employee task page must use the
 // admin-managed DB mapping from task_definitions + shift_tasks.
@@ -55,9 +56,7 @@ const SUPPORTED_TASK_TYPES = [
   "item_dropping",
   "briefing",
   "serah_terima",
-  "edc_reconciliation",
-  "eod_z_report",
-  "open_statement",
+  "store_closing",
   "grooming",
 ] as const;
 
@@ -292,21 +291,38 @@ export async function GET(request: NextRequest) {
     const primaryShift: ShiftCode | null = shiftCodesRaw[0] ?? null;
     const inStore = (storeId: number) => storeIds.includes(storeId);
 
-    // Store-level shared tasks must use the current employee's schedule when submitting,
-    // even if the shared task row was originally seeded/created by another employee.
-    const scheduleByStoreId = new Map<
-      number,
-      (typeof todaySchedules)[number]
-    >();
-    for (const schedule of todaySchedules) {
-      const current = scheduleByStoreId.get(schedule.storeId);
-      const currentCode = current ? shiftCodeMap[current.shiftId] : null;
-      const nextCode = shiftCodeMap[schedule.shiftId];
+    // Store-level shared tasks can be created by one employee but completed by another
+    // employee from the same store/day. For AccessGuard + submit guards, the scheduleId
+    // sent to the task detail page must be the logged-in employee's own scheduleId.
+    const buildPreferredScheduleByStoreId = (preferredShiftCodes: string[]) => {
+      const rank = (shiftId: number) => {
+        const code = shiftCodeMap[shiftId] ?? "";
+        const idx = preferredShiftCodes.indexOf(code);
+        return idx === -1 ? preferredShiftCodes.length + 1 : idx;
+      };
 
-      if (!current || (currentCode !== "morning" && nextCode === "morning")) {
-        scheduleByStoreId.set(schedule.storeId, schedule);
+      const map = new Map<number, (typeof todaySchedules)[number]>();
+
+      for (const schedule of todaySchedules) {
+        const current = map.get(schedule.storeId);
+
+        if (!current || rank(schedule.shiftId) < rank(current.shiftId)) {
+          map.set(schedule.storeId, schedule);
+        }
       }
-    }
+
+      return map;
+    };
+
+    const morningScheduleByStoreId = buildPreferredScheduleByStoreId([
+      "morning",
+      "full_day",
+    ]);
+
+    const closingScheduleByStoreId = buildPreferredScheduleByStoreId([
+      "evening",
+      "full_day",
+    ]);
 
     const morningSchedules = todaySchedules.filter((s) => {
       const code = shiftCodeMap[s.shiftId];
@@ -322,12 +338,10 @@ export async function GET(request: NextRequest) {
       marketingCheckRows,
       itemDroppingRows,
       itemDroppingEntryRows,
-      edcReconciliationRows,
+      storeClosingRows,
       briefingRows,
       serahTerimaRows,
       serahTerimaItemRows,
-      eodZReportRows,
-      openStatementRows,
       groomingRows,
     ] = await Promise.all([
       shouldLoadTask("store_opening")
@@ -545,18 +559,27 @@ export async function GET(request: NextRequest) {
           })()
         : Promise.resolve([]),
 
-      shouldLoadTask("edc_reconciliation")
-        ? db
-            .select()
-            .from(edcReconciliationTasks)
-            .where(
-              and(
-                inArray(edcReconciliationTasks.storeId, storeIds),
-                gte(edcReconciliationTasks.date, dayStart),
-                lte(edcReconciliationTasks.date, dayEnd),
+      shouldLoadTask("store_closing")
+        ? (async () => {
+            const closingSchedules = todaySchedules.filter((s) => {
+              const code = shiftCodeMap[s.shiftId];
+              return code === "evening" || code === "full_day";
+            });
+
+            await Promise.all(
+              closingSchedules.map((s) =>
+                getOrCreateStoreClosingForSchedule(
+                  s.id,
+                  userId,
+                  s.storeId,
+                  s.shiftId,
+                  targetDate,
+                ),
               ),
-            )
-            .orderBy(desc(edcReconciliationTasks.date))
+            );
+
+            return getVisibleStoreClosingTasksForStores(storeIds, targetDate);
+          })()
         : Promise.resolve([]),
 
       shouldLoadTask("briefing")
@@ -640,51 +663,6 @@ export async function GET(request: NextRequest) {
                 ),
               )
               .orderBy(asc(serahTerimaItems.id));
-          })()
-        : Promise.resolve([]),
-
-      shouldLoadTask("eod_z_report")
-        ? db
-            .select()
-            .from(eodZReportTasks)
-            .where(
-              and(
-                inArray(eodZReportTasks.storeId, storeIds),
-                gte(eodZReportTasks.date, dayStart),
-                lte(eodZReportTasks.date, dayEnd),
-              ),
-            )
-            .orderBy(desc(eodZReportTasks.date))
-        : Promise.resolve([]),
-
-      shouldLoadTask("open_statement")
-        ? (async () => {
-            // Materialise per schedule: morning schedules pull carry-overs from a
-            // held evening (prior day); evening schedules create the primary + any
-            // same-day carry-over from a held morning. Idempotent (see util).
-            await Promise.all(
-              todaySchedules.map((s) =>
-                materialiseOpenStatementTask(
-                  s.id,
-                  userId,
-                  s.storeId,
-                  s.shiftId,
-                  targetDate,
-                ),
-              ),
-            );
-
-            return db
-              .select()
-              .from(openStatementTasks)
-              .where(
-                and(
-                  inArray(openStatementTasks.storeId, storeIds),
-                  gte(openStatementTasks.date, dayStart),
-                  lte(openStatementTasks.date, dayEnd),
-                ),
-              )
-              .orderBy(desc(openStatementTasks.date));
           })()
         : Promise.resolve([]),
 
@@ -873,7 +851,7 @@ export async function GET(request: NextRequest) {
       ...storeFrontRows
         .filter((r) => inStore(r.storeId))
         .map((t) => {
-          const actorSchedule = scheduleByStoreId.get(t.storeId);
+          const actorSchedule = morningScheduleByStoreId.get(t.storeId);
           const actorScheduleId = actorSchedule?.id ?? t.scheduleId;
           const actorShiftId = actorSchedule?.shiftId ?? t.shiftId;
           const shift = (shiftCodeMap[actorShiftId] ?? "morning") as ShiftCode;
@@ -1216,87 +1194,76 @@ export async function GET(request: NextRequest) {
           };
         }),
 
-      ...eodZReportRows
+      ...storeClosingRows
         .filter((r) => inStore(r.storeId))
-        .map((t) => ({
-          type: "eod_z_report" as const,
-          shift: (shiftCodeMap[t.shiftId] ?? "evening") as ShiftCode,
-          data: {
-            id: String(t.id),
-            scheduleId: String(t.scheduleId),
-            userId: t.userId,
-            storeId: String(t.storeId),
-            shift: (shiftCodeMap[t.shiftId] ?? "evening") as ShiftCode,
-            date: t.date.toISOString(),
+        .map((t) => {
+          const actorSchedule = closingScheduleByStoreId.get(t.storeId);
+          const actorScheduleId = actorSchedule?.id ?? t.scheduleId;
+          const actorShiftId = actorSchedule?.shiftId ?? t.shiftId;
+          const shift = (shiftCodeMap[actorShiftId] ?? "evening") as ShiftCode;
 
-            totalNominal: t.totalNominal,
-            zReportPhotos: parsePhotos(t.zReportPhotos),
+          return {
+            type: "store_closing" as const,
+            shift,
+            data: {
+              id: String(t.id),
 
-            status: t.status,
-            notes: t.notes,
-            completedAt: toIso(t.completedAt),
-            verifiedBy: t.verifiedBy,
-            verifiedAt: toIso(t.verifiedAt),
-          },
-        })),
+              // IMPORTANT:
+              // Store Closing is shared per store/day. The row may have been created
+              // with another employee's scheduleId, but AccessGuard checks attendance
+              // by scheduleId. Send the logged-in employee's own evening/full_day
+              // scheduleId here, and keep the DB row schedule for audit/debug.
+              scheduleId: String(actorScheduleId),
+              originalScheduleId: String(t.scheduleId),
+              userId,
+              assignedUserId: t.userId,
+              storeId: String(t.storeId),
+              shift,
+              date: t.date.toISOString(),
 
-      ...edcReconciliationRows
-        .filter((r) => inStore(r.storeId))
-        .map((t) => ({
-          type: "edc_reconciliation" as const,
-          shift: (shiftCodeMap[t.shiftId] ?? "evening") as ShiftCode,
-          data: {
-            id: String(t.id),
-            scheduleId: String(t.scheduleId),
-            userId: t.userId,
-            storeId: String(t.storeId),
-            shift: (shiftCodeMap[t.shiftId] ?? "evening") as ShiftCode,
-            date: t.date.toISOString(),
+              eodZReportDone: t.eodZReportDone,
+              eodZReportBy: t.eodZReportBy,
+              eodZReportAt: toIso(t.eodZReportAt),
 
-            parentTaskId: t.parentTaskId,
-            isBalanced: t.isBalanced,
-            expectedFetchedAt: toIso(t.expectedFetchedAt),
-            discrepancyStartedAt: toIso(t.discrepancyStartedAt),
-            discrepancyResolvedAt: toIso(t.discrepancyResolvedAt),
-            discrepancyDurationMinutes: t.discrepancyDurationMinutes,
+              eodEdcSettlementPhoto: t.eodEdcSettlementPhoto,
+              eodEdcSettlementPhotoBy: t.eodEdcSettlementPhotoBy,
+              eodEdcSettlementPhotoAt: toIso(t.eodEdcSettlementPhotoAt),
 
-            status: t.status,
-            notes: t.notes,
-            completedAt: toIso(t.completedAt),
-            verifiedBy: t.verifiedBy,
-            verifiedAt: toIso(t.verifiedAt),
-          },
-        })),
+              edcSettlementDone: t.edcSettlementDone,
+              edcSettlementNotes: t.edcSettlementNotes,
+              edcSettlementBy: t.edcSettlementBy,
+              edcSettlementAt: toIso(t.edcSettlementAt),
 
-      ...openStatementRows
-        .filter((r) => inStore(r.storeId))
-        .map((t) => ({
-          type: "open_statement" as const,
-          shift: (shiftCodeMap[t.shiftId] ?? "evening") as ShiftCode,
-          data: {
-            id: String(t.id),
-            scheduleId: String(t.scheduleId),
-            userId: t.userId,
-            storeId: String(t.storeId),
-            shift: (shiftCodeMap[t.shiftId] ?? "evening") as ShiftCode,
-            date: t.date.toISOString(),
+              edcSummaryDone: t.edcSummaryDone,
+              edcSummaryNotes: t.edcSummaryNotes,
+              edcSummaryBy: t.edcSummaryBy,
+              edcSummaryAt: toIso(t.edcSummaryAt),
 
-            parentTaskId: t.parentTaskId,
-            expectedAmount: t.expectedAmount,
-            expectedFetchedAt: toIso(t.expectedFetchedAt),
-            actualAmount: t.actualAmount,
-            isBalanced: t.isBalanced,
-            discrepancyStartedAt: toIso(t.discrepancyStartedAt),
-            discrepancyResolvedAt: toIso(t.discrepancyResolvedAt),
-            discrepancyDurationMinutes: t.discrepancyDurationMinutes,
+              openStatementDecision: t.openStatementDecision,
+              openStatementHoldReason: t.openStatementHoldReason,
+              openStatementBy: t.openStatementBy,
+              openStatementAt: toIso(t.openStatementAt),
 
-            status: t.status,
-            notes: t.notes,
-            completedAt: toIso(t.completedAt),
-            verifiedBy: t.verifiedBy,
-            verifiedAt: toIso(t.verifiedAt),
-          },
-        })),
+              isOnHold: t.isOnHold,
+              holdIssueId: t.holdIssueId ? String(t.holdIssueId) : null,
+              heldBy: t.heldBy,
+              heldAt: toIso(t.heldAt),
+              holdResolvedAt: toIso(t.holdResolvedAt),
+              reopenedAt: toIso(t.reopenedAt),
+
+              completedBy: t.completedBy,
+              completedByScheduleId: t.completedByScheduleId
+                ? String(t.completedByScheduleId)
+                : null,
+
+              status: t.status,
+              notes: t.notes,
+              completedAt: toIso(t.completedAt),
+              verifiedBy: t.verifiedBy,
+              verifiedAt: toIso(t.verifiedAt),
+            },
+          };
+        }),
 
       ...groomingRows.map((t) => {
         const code = (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode;
@@ -1575,57 +1542,21 @@ export async function PATCH(request: NextRequest) {
             .then(() => {}),
       },
 
-      edc_reconciliation: {
+      store_closing: {
         getRow: async (id) =>
           (
             await db
-              .select({ status: edcReconciliationTasks.status })
-              .from(edcReconciliationTasks)
-              .where(eq(edcReconciliationTasks.id, id))
+              .select({ status: storeClosingTasks.status })
+              .from(storeClosingTasks)
+              .where(eq(storeClosingTasks.id, id))
               .limit(1)
           )[0],
 
         update: (id) =>
           db
-            .update(edcReconciliationTasks)
+            .update(storeClosingTasks)
             .set({ status: "in_progress", updatedAt: new Date() })
-            .where(eq(edcReconciliationTasks.id, id))
-            .then(() => {}),
-      },
-
-      eod_z_report: {
-        getRow: async (id) =>
-          (
-            await db
-              .select({ status: eodZReportTasks.status })
-              .from(eodZReportTasks)
-              .where(eq(eodZReportTasks.id, id))
-              .limit(1)
-          )[0],
-
-        update: (id) =>
-          db
-            .update(eodZReportTasks)
-            .set({ status: "in_progress", updatedAt: new Date() })
-            .where(eq(eodZReportTasks.id, id))
-            .then(() => {}),
-      },
-
-      open_statement: {
-        getRow: async (id) =>
-          (
-            await db
-              .select({ status: openStatementTasks.status })
-              .from(openStatementTasks)
-              .where(eq(openStatementTasks.id, id))
-              .limit(1)
-          )[0],
-
-        update: (id) =>
-          db
-            .update(openStatementTasks)
-            .set({ status: "in_progress", updatedAt: new Date() })
-            .where(eq(openStatementTasks.id, id))
+            .where(eq(storeClosingTasks.id, id))
             .then(() => {}),
       },
     };

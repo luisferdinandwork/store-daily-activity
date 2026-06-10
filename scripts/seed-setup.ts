@@ -1,9 +1,9 @@
 // scripts/seed-setup.ts
-import { config } from 'dotenv';
-config({ path: '.env.local' });
-config({ path: '.env' });
+import { config } from "dotenv";
+config({ path: ".env.local" });
+config({ path: ".env" });
 
-import { db } from '@/lib/db';
+import { db } from "@/lib/db";
 import {
   userRoles,
   employeeTypes,
@@ -26,43 +26,41 @@ import {
   marketingCheckTasks,
   itemDroppingTasks,
   briefingTasks,
-  edcReconciliationTasks,
-  eodZReportTasks,
-  openStatementTasks,
+  storeClosingTasks,
   groomingTasks,
   storeBins,
   cekBinTaskBins,
-} from '@/lib/db/schema';
-import { hash } from 'bcryptjs';
+} from "@/lib/db/schema";
+import { hash } from "bcryptjs";
 
 const SALT_ROUNDS = 10;
-const DEFAULT_PASSWORD = process.env.SEED_DEFAULT_PASSWORD ?? 'password123';
+const DEFAULT_PASSWORD = process.env.SEED_DEFAULT_PASSWORD ?? "password123";
 
 function makeId(prefix: string, n: number): string {
-  return `${prefix}-${String(n).padStart(3, '0')}`;
+  return `${prefix}-${String(n).padStart(3, "0")}`;
 }
 
-function normalizeStatusToEmployeeTypeCode(status: string): 'pic_1' | 'pic_2' | 'sa' {
+function normalizeStatusToEmployeeTypeCode(
+  status: string,
+): "pic_1" | "pic_2" | "sa" {
   const upper = status.trim().toUpperCase();
 
-  if (upper === 'PIC 1') return 'pic_1';
-  if (upper === 'PIC 2') return 'pic_2';
+  if (upper === "PIC 1") return "pic_1";
+  if (upper === "PIC 2") return "pic_2";
 
-  return 'sa';
+  return "sa";
 }
 
 async function seedSetup() {
-  console.log('🌱  seed-setup: lookups → area groups → stores → users\n');
+  console.log("🌱  seed-setup: lookups → area groups → stores → users\n");
 
   // ── 0. CLEAR ALL (FK order: children → parents) ───────────────────────────
-  console.log('🗑️   Clearing existing data…');
+  console.log("🗑️   Clearing existing data…");
 
   await db.delete(breakSessions);
 
   await db.delete(groomingTasks);
-  await db.delete(openStatementTasks);
-  await db.delete(eodZReportTasks);
-  await db.delete(edcReconciliationTasks);
+  await db.delete(storeClosingTasks);
   await db.delete(briefingTasks);
   await db.delete(itemDroppingTasks);
   await db.delete(marketingCheckTasks);
@@ -93,36 +91,39 @@ async function seedSetup() {
   await db.delete(employeeTypes);
   await db.delete(userRoles);
 
-  console.log('✓   Cleared\n');
+  console.log("✓   Cleared\n");
 
   // ── 1. LOOKUP TABLES ──────────────────────────────────────────────────────
-  console.log('📋  Seeding lookup tables…');
+  console.log("📋  Seeding lookup tables…");
 
   const insertedRoles = await db
     .insert(userRoles)
     .values([
       {
-        code: 'employee',
-        label: 'Employee',
-        description: 'Store-level staff',
+        code: "employee",
+        label: "Employee",
+        description: "Store-level staff",
         sortOrder: 10,
       },
       {
-        code: 'ops',
-        label: 'Operations',
-        description: 'Area operations manager',
+        code: "ops",
+        label: "Operations",
+        description: "Area operations manager",
+        canReceiveIssues: true,
         sortOrder: 20,
       },
       {
-        code: 'finance',
-        label: 'Finance',
-        description: 'Finance team',
+        code: "finance",
+        label: "Finance",
+        description: "Finance team",
+        canReceiveIssues: true,
         sortOrder: 30,
       },
       {
-        code: 'admin',
-        label: 'Admin',
-        description: 'System administrator',
+        code: "admin",
+        label: "Admin",
+        description: "System administrator",
+        canReceiveIssues: true,
         sortOrder: 40,
       },
     ])
@@ -132,33 +133,34 @@ async function seedSetup() {
     .insert(employeeTypes)
     .values([
       {
-        code: 'ops_ho',
-        label: 'OPS HO',
-        description: 'Head office operations user — can view all stores',
+        code: "ops_ho",
+        label: "OPS HO",
+        description: "Head office operations user — can view all stores",
         sortOrder: 5,
       },
       {
-        code: 'ops_area',
-        label: 'OPS Area',
-        description: 'Area operations user — can view stores only in assigned area',
+        code: "ops_area",
+        label: "OPS Area",
+        description:
+          "Area operations user — can view stores only in assigned area",
         sortOrder: 10,
       },
       {
-        code: 'pic_1',
-        label: 'PIC 1',
-        description: 'Person in charge — primary',
+        code: "pic_1",
+        label: "PIC 1",
+        description: "Person in charge — primary",
         sortOrder: 20,
       },
       {
-        code: 'pic_2',
-        label: 'PIC 2',
-        description: 'Person in charge — secondary',
+        code: "pic_2",
+        label: "PIC 2",
+        description: "Person in charge — secondary",
         sortOrder: 30,
       },
       {
-        code: 'sa',
-        label: 'SA',
-        description: 'Sales Associate',
+        code: "sa",
+        label: "SA",
+        description: "Sales Associate",
         sortOrder: 40,
       },
     ])
@@ -168,38 +170,46 @@ async function seedSetup() {
     .insert(shifts)
     .values([
       {
-        code: 'morning',
-        label: 'Morning',
-        description: 'Morning opening shift',
-        startTime: '07:00:00',
-        endTime: '15:00:00',
-        accent: 'amber',
-        icon: 'sun',
-        breaks: [{ type: 'lunch', label: 'Lunch', accent: 'amber' }],
+        code: "morning",
+        label: "Morning",
+        description: "Morning opening shift",
+        startTime: "07:00:00",
+        endTime: "15:00:00",
+        accent: "amber",
+        icon: "sun",
+        breaks: [{ type: "lunch", label: "Lunch", accent: "amber" }],
         sortOrder: 10,
       },
       {
-        code: 'evening',
-        label: 'Evening',
-        description: 'Evening closing shift',
-        startTime: '15:00:00',
-        endTime: '23:00:00',
-        accent: 'violet',
-        icon: 'moon',
-        breaks: [{ type: 'dinner', label: 'Dinner', accent: 'violet' }],
+        code: "evening",
+        label: "Evening",
+        description: "Evening closing shift",
+        startTime: "15:00:00",
+        endTime: "23:00:00",
+        accent: "violet",
+        icon: "moon",
+        breaks: [{ type: "dinner", label: "Dinner", accent: "violet" }],
         sortOrder: 20,
       },
       {
-        code: 'full_day',
-        label: 'Full Day',
-        description: 'Full day shift covering opening and closing tasks',
-        startTime: '07:00:00',
-        endTime: '23:00:00',
-        accent: 'sky',
-        icon: 'zap',
+        code: "full_day",
+        label: "Full Day",
+        description: "Full day shift covering opening and closing tasks",
+        startTime: "07:00:00",
+        endTime: "23:00:00",
+        accent: "sky",
+        icon: "zap",
         breaks: [
-          { type: 'full_day_lunch', label: 'Lunch (Full Day)', accent: 'amber' },
-          { type: 'full_day_dinner', label: 'Dinner (Full Day)', accent: 'violet' },
+          {
+            type: "full_day_lunch",
+            label: "Lunch (Full Day)",
+            accent: "amber",
+          },
+          {
+            type: "full_day_dinner",
+            label: "Dinner (Full Day)",
+            accent: "violet",
+          },
         ],
         sortOrder: 30,
       },
@@ -207,7 +217,9 @@ async function seedSetup() {
     .returning();
 
   const roleId = Object.fromEntries(insertedRoles.map((r) => [r.code, r.id]));
-  const empTypeId = Object.fromEntries(insertedEmpTypes.map((r) => [r.code, r.id]));
+  const empTypeId = Object.fromEntries(
+    insertedEmpTypes.map((r) => [r.code, r.id]),
+  );
 
   console.log(
     `✓   ${insertedRoles.length} roles, ${insertedEmpTypes.length} employee types, ${insertedShifts.length} shifts\n`,
@@ -218,14 +230,11 @@ async function seedSetup() {
   // - AREA is the operational area group, e.g. "DKI - BALI".
   // - SUB AREA is store location grouping, e.g. DKI, BALI, JAWA BARAT, SUMATERA.
   // - Awan and Jayanti are OPS Area users, not area names.
-  console.log('🗺️   Creating operational area groups…');
+  console.log("🗺️   Creating operational area groups…");
 
   const [areaDkiBali, areaJabarSumatera] = await db
     .insert(areas)
-    .values([
-      { name: 'DKI - BALI' },
-      { name: 'JAWA BARAT - SUMATERA' },
-    ])
+    .values([{ name: "DKI - BALI" }, { name: "JAWA BARAT - SUMATERA" }])
     .returning();
 
   console.log(
@@ -233,49 +242,49 @@ async function seedSetup() {
   );
 
   // ── 3. STORES ─────────────────────────────────────────────────────────────
-  console.log('🏪  Creating stores…');
+  console.log("🏪  Creating stores…");
 
   const [storeFF001, storeFS033, storeFF012, storeFS020] = await db
     .insert(stores)
     .values([
       // 2 stores from DKI - BALI area group.
       {
-        name: 'FF001 - Fisik Football - Daan Mogot',
-        address: 'DKI · Daan Mogot, DKI Jakarta',
+        name: "FF001 - Fisik Football - Daan Mogot",
+        address: "DKI · Daan Mogot, DKI Jakarta",
         areaId: areaDkiBali.id,
-        latitude: '-6.1630687',
-        longitude: '106.7739266',
-        geofenceRadiusM: '150',
-        pettyCashBalance: '1000000',
+        latitude: "-6.1630687",
+        longitude: "106.7739266",
+        geofenceRadiusM: "150",
+        pettyCashBalance: "1000000",
       },
       {
-        name: 'FS033 - Fisik - Living World Denpasar',
-        address: 'BALI · Living World Denpasar, Bali',
+        name: "FS033 - Fisik - Living World Denpasar",
+        address: "BALI · Living World Denpasar, Bali",
         areaId: areaDkiBali.id,
-        latitude: '-8.6500000',
-        longitude: '115.2166670',
-        geofenceRadiusM: '150',
-        pettyCashBalance: '1000000',
+        latitude: "-8.6500000",
+        longitude: "115.2166670",
+        geofenceRadiusM: "150",
+        pettyCashBalance: "1000000",
       },
 
       // 2 stores from JAWA BARAT - SUMATERA area group.
       {
-        name: 'FF012 - Fisik Football - Summarecon Mall Bekasi',
-        address: 'JAWA BARAT · Summarecon Mall Bekasi',
+        name: "FF012 - Fisik Football - Summarecon Mall Bekasi",
+        address: "JAWA BARAT · Summarecon Mall Bekasi",
         areaId: areaJabarSumatera.id,
-        latitude: '-6.2400000',
-        longitude: '107.0000000',
-        geofenceRadiusM: '150',
-        pettyCashBalance: '1000000',
+        latitude: "-6.2400000",
+        longitude: "107.0000000",
+        geofenceRadiusM: "150",
+        pettyCashBalance: "1000000",
       },
       {
-        name: 'FS020 - Fisik - Plaza Medan Fair',
-        address: 'SUMATERA · Plaza Medan Fair, Medan',
+        name: "FS020 - Fisik - Plaza Medan Fair",
+        address: "SUMATERA · Plaza Medan Fair, Medan",
         areaId: areaJabarSumatera.id,
-        latitude: '3.5900000',
-        longitude: '98.6700000',
-        geofenceRadiusM: '150',
-        pettyCashBalance: '1000000',
+        latitude: "3.5900000",
+        longitude: "98.6700000",
+        geofenceRadiusM: "150",
+        pettyCashBalance: "1000000",
       },
     ])
     .returning();
@@ -301,25 +310,26 @@ async function seedSetup() {
   );
 
   // ── 3b. STORE BINS ────────────────────────────────────────────────────────
-  console.log('🗃️   Creating store bins…');
+  console.log("🗃️   Creating store bins…");
 
-  const binRows = [storeFF001, storeFS033, storeFF012, storeFS020].flatMap((store) =>
-    Array.from({ length: 12 }, (_, i) => {
-      const n = i + 1;
-      const qtyBc = 20 + ((n * 3) % 25);
-      const qtyTidakSesuaiBin = n % 5 === 0 ? 1 : 0;
-      const qtySesuaiBin = Math.max(qtyBc - qtyTidakSesuaiBin, 0);
+  const binRows = [storeFF001, storeFS033, storeFF012, storeFS020].flatMap(
+    (store) =>
+      Array.from({ length: 12 }, (_, i) => {
+        const n = i + 1;
+        const qtyBc = 20 + ((n * 3) % 25);
+        const qtyTidakSesuaiBin = n % 5 === 0 ? 1 : 0;
+        const qtySesuaiBin = Math.max(qtyBc - qtyTidakSesuaiBin, 0);
 
-      return {
-        storeId: store.id,
-        bin: `BIN-${String(n).padStart(2, '0')}`,
-        qtyBc,
-        qtySesuaiBin,
-        qtyTidakSesuaiBin,
-        nama: `Bin ${n}`,
-        isActive: true,
-      };
-    }),
+        return {
+          storeId: store.id,
+          bin: `BIN-${String(n).padStart(2, "0")}`,
+          qtyBc,
+          qtySesuaiBin,
+          qtyTidakSesuaiBin,
+          nama: `Bin ${n}`,
+          isActive: true,
+        };
+      }),
   );
 
   await db.insert(storeBins).values(binRows);
@@ -327,15 +337,15 @@ async function seedSetup() {
   console.log(`✓   ${binRows.length} store bins\n`);
 
   // ── 4. USERS ──────────────────────────────────────────────────────────────
-  console.log('👥  Creating users…');
+  console.log("👥  Creating users…");
 
   const pwd = await hash(DEFAULT_PASSWORD, SALT_ROUNDS);
 
   let opsN = 0;
   let empN = 0;
 
-  const opsId = () => makeId('OPS', ++opsN);
-  const empId = () => makeId('EMP', ++empN);
+  const opsId = () => makeId("OPS", ++opsN);
+  const empId = () => makeId("EMP", ++empN);
 
   type NewUser = typeof users.$inferInsert;
 
@@ -347,42 +357,157 @@ async function seedSetup() {
   }> = [
     // Real employees from the previous DKI/BALI spreadsheet data.
     // The spreadsheet store text used "F001" for Daan Mogot, while the latest area data uses "FF001".
-    { nik: 'A201902047', name: 'Bagas Dwi Cahyo', storeCode: 'FF001', status: 'PIC 1' },
-    { nik: 'A202301017', name: 'Ratna Kemala', storeCode: 'FF001', status: 'PIC 2' },
-    { nik: 'A202312196', name: 'M. Rifal Agustian', storeCode: 'FF001', status: 'SA 1' },
-    { nik: 'A202401013', name: 'Salwa Adelia', storeCode: 'FF001', status: 'SA 2' },
-    { nik: 'A202508100', name: 'Naila Naziha', storeCode: 'FF001', status: 'SA 3' },
-    { nik: 'A202511141', name: 'Kheir Tsar Muhammad Ali', storeCode: 'FF001', status: 'SA 4' },
-    { nik: 'A202511149', name: 'Rifqi Fahriza', storeCode: 'FF001', status: 'SA 5' },
-    { nik: 'A202601008', name: 'Gemilang Dwi Ramadhan', storeCode: 'FF001', status: 'SA 6' },
-    { nik: 'A202603040', name: 'Amelia', storeCode: 'FF001', status: 'SA 7' },
+    {
+      nik: "A201902047",
+      name: "Bagas Dwi Cahyo",
+      storeCode: "FF001",
+      status: "PIC 1",
+    },
+    {
+      nik: "A202301017",
+      name: "Ratna Kemala",
+      storeCode: "FF001",
+      status: "PIC 2",
+    },
+    {
+      nik: "A202312196",
+      name: "M. Rifal Agustian",
+      storeCode: "FF001",
+      status: "SA 1",
+    },
+    {
+      nik: "A202401013",
+      name: "Salwa Adelia",
+      storeCode: "FF001",
+      status: "SA 2",
+    },
+    {
+      nik: "A202508100",
+      name: "Naila Naziha",
+      storeCode: "FF001",
+      status: "SA 3",
+    },
+    {
+      nik: "A202511141",
+      name: "Kheir Tsar Muhammad Ali",
+      storeCode: "FF001",
+      status: "SA 4",
+    },
+    {
+      nik: "A202511149",
+      name: "Rifqi Fahriza",
+      storeCode: "FF001",
+      status: "SA 5",
+    },
+    {
+      nik: "A202601008",
+      name: "Gemilang Dwi Ramadhan",
+      storeCode: "FF001",
+      status: "SA 6",
+    },
+    { nik: "A202603040", name: "Amelia", storeCode: "FF001", status: "SA 7" },
 
-    { nik: 'A09030101', name: 'Agus Fauzi', storeCode: 'FS033', status: 'PIC 1' },
-    { nik: 'A202507087', name: 'Muhamad Zehan Pratama', storeCode: 'FS033', status: 'PIC 2' },
-    { nik: 'A202603054', name: 'Salsa Juliannisa Harfi Awal', storeCode: 'FS033', status: 'SA 1' },
-    { nik: 'A202604074', name: 'Adit Paramuditiya Rahmat', storeCode: 'FS033', status: 'SA 2' },
-    { nik: 'A202605072', name: 'Ani Pratiwi', storeCode: 'FS033', status: 'SA 3' },
+    {
+      nik: "A09030101",
+      name: "Agus Fauzi",
+      storeCode: "FS033",
+      status: "PIC 1",
+    },
+    {
+      nik: "A202507087",
+      name: "Muhamad Zehan Pratama",
+      storeCode: "FS033",
+      status: "PIC 2",
+    },
+    {
+      nik: "A202603054",
+      name: "Salsa Juliannisa Harfi Awal",
+      storeCode: "FS033",
+      status: "SA 1",
+    },
+    {
+      nik: "A202604074",
+      name: "Adit Paramuditiya Rahmat",
+      storeCode: "FS033",
+      status: "SA 2",
+    },
+    {
+      nik: "A202605072",
+      name: "Ani Pratiwi",
+      storeCode: "FS033",
+      status: "SA 3",
+    },
 
     // Dummy employees because JAWA BARAT - SUMATERA employee data is not available yet.
-    { nik: 'DUMMY-FF012-01', name: 'Dummy FF012 PIC 1', storeCode: 'FF012', status: 'PIC 1' },
-    { nik: 'DUMMY-FF012-02', name: 'Dummy FF012 PIC 2', storeCode: 'FF012', status: 'PIC 2' },
-    { nik: 'DUMMY-FF012-03', name: 'Dummy FF012 SA 1', storeCode: 'FF012', status: 'SA 1' },
-    { nik: 'DUMMY-FF012-04', name: 'Dummy FF012 SA 2', storeCode: 'FF012', status: 'SA 2' },
-    { nik: 'DUMMY-FF012-05', name: 'Dummy FF012 SA 3', storeCode: 'FF012', status: 'SA 3' },
+    {
+      nik: "DUMMY-FF012-01",
+      name: "Dummy FF012 PIC 1",
+      storeCode: "FF012",
+      status: "PIC 1",
+    },
+    {
+      nik: "DUMMY-FF012-02",
+      name: "Dummy FF012 PIC 2",
+      storeCode: "FF012",
+      status: "PIC 2",
+    },
+    {
+      nik: "DUMMY-FF012-03",
+      name: "Dummy FF012 SA 1",
+      storeCode: "FF012",
+      status: "SA 1",
+    },
+    {
+      nik: "DUMMY-FF012-04",
+      name: "Dummy FF012 SA 2",
+      storeCode: "FF012",
+      status: "SA 2",
+    },
+    {
+      nik: "DUMMY-FF012-05",
+      name: "Dummy FF012 SA 3",
+      storeCode: "FF012",
+      status: "SA 3",
+    },
 
-    { nik: 'DUMMY-FS020-01', name: 'Dummy FS020 PIC 1', storeCode: 'FS020', status: 'PIC 1' },
-    { nik: 'DUMMY-FS020-02', name: 'Dummy FS020 PIC 2', storeCode: 'FS020', status: 'PIC 2' },
-    { nik: 'DUMMY-FS020-03', name: 'Dummy FS020 SA 1', storeCode: 'FS020', status: 'SA 1' },
-    { nik: 'DUMMY-FS020-04', name: 'Dummy FS020 SA 2', storeCode: 'FS020', status: 'SA 2' },
-    { nik: 'DUMMY-FS020-05', name: 'Dummy FS020 SA 3', storeCode: 'FS020', status: 'SA 3' },
+    {
+      nik: "DUMMY-FS020-01",
+      name: "Dummy FS020 PIC 1",
+      storeCode: "FS020",
+      status: "PIC 1",
+    },
+    {
+      nik: "DUMMY-FS020-02",
+      name: "Dummy FS020 PIC 2",
+      storeCode: "FS020",
+      status: "PIC 2",
+    },
+    {
+      nik: "DUMMY-FS020-03",
+      name: "Dummy FS020 SA 1",
+      storeCode: "FS020",
+      status: "SA 1",
+    },
+    {
+      nik: "DUMMY-FS020-04",
+      name: "Dummy FS020 SA 2",
+      storeCode: "FS020",
+      status: "SA 2",
+    },
+    {
+      nik: "DUMMY-FS020-05",
+      name: "Dummy FS020 SA 3",
+      storeCode: "FS020",
+      status: "SA 3",
+    },
   ];
 
   const userDefs: NewUser[] = [
     // OPS HO dummy user.
     {
       id: opsId(),
-      nik: 'OPS-HO-001',
-      name: 'Dummy OPS HO',
+      nik: "OPS-HO-001",
+      name: "Dummy OPS HO",
       password: pwd,
       roleId: roleId.ops,
       employeeTypeId: empTypeId.ops_ho,
@@ -394,8 +519,8 @@ async function seedSetup() {
     // OPS Area users.
     {
       id: opsId(),
-      nik: 'OPS-DKI-BALI-001',
-      name: 'Awan',
+      nik: "OPS-DKI-BALI-001",
+      name: "Awan",
       password: pwd,
       roleId: roleId.ops,
       employeeTypeId: empTypeId.ops_area,
@@ -405,8 +530,8 @@ async function seedSetup() {
     },
     {
       id: opsId(),
-      nik: 'OPS-JABAR-SUMATERA-001',
-      name: 'Jayanti',
+      nik: "OPS-JABAR-SUMATERA-001",
+      name: "Jayanti",
       password: pwd,
       roleId: roleId.ops,
       employeeTypeId: empTypeId.ops_area,
@@ -418,7 +543,9 @@ async function seedSetup() {
     // Store employees.
     ...employeeRows.map((employee) => {
       const store = storeByCode[employee.storeCode];
-      const employeeTypeCode = normalizeStatusToEmployeeTypeCode(employee.status);
+      const employeeTypeCode = normalizeStatusToEmployeeTypeCode(
+        employee.status,
+      );
 
       return {
         id: empId(),
@@ -445,18 +572,15 @@ async function seedSetup() {
   }> = [];
 
   for (const u of userDefs) {
-    const [row] = await db
-      .insert(users)
-      .values(u)
-      .returning({
-        id: users.id,
-        nik: users.nik,
-        name: users.name,
-        roleId: users.roleId,
-        employeeTypeId: users.employeeTypeId,
-        homeStoreId: users.homeStoreId,
-        areaId: users.areaId,
-      });
+    const [row] = await db.insert(users).values(u).returning({
+      id: users.id,
+      nik: users.nik,
+      name: users.name,
+      roleId: users.roleId,
+      employeeTypeId: users.employeeTypeId,
+      homeStoreId: users.homeStoreId,
+      areaId: users.areaId,
+    });
 
     insertedUsers.push(row);
   }
@@ -464,7 +588,7 @@ async function seedSetup() {
   console.log(`✓   ${insertedUsers.length} users\n`);
 
   // ── 5. USER STORE ASSIGNMENT HISTORY ──────────────────────────────────────
-  console.log('🧭  Creating user store assignment history…');
+  console.log("🧭  Creating user store assignment history…");
 
   const assignmentRows = insertedUsers
     .filter((u) => u.homeStoreId != null)
@@ -475,7 +599,7 @@ async function seedSetup() {
       roleId: u.roleId,
       employeeTypeId: u.employeeTypeId,
       isActive: true,
-      notes: 'Initial seed assignment',
+      notes: "Initial seed assignment",
     }));
 
   if (assignmentRows.length > 0) {
@@ -485,9 +609,9 @@ async function seedSetup() {
   console.log(`✓   ${assignmentRows.length} assignment rows\n`);
 
   // ── SUMMARY ───────────────────────────────────────────────────────────────
-  console.log('═══════════════════════════════════════════════════════════');
-  console.log('✅  seed-setup complete!');
-  console.log('🗺️   Areas & Stores:');
+  console.log("═══════════════════════════════════════════════════════════");
+  console.log("✅  seed-setup complete!");
+  console.log("🗺️   Areas & Stores:");
   console.log(`    DKI - BALI (id=${areaDkiBali.id})`);
   console.log(`      → ${storeFF001.name} (${storeFF001.id})`);
   console.log(`      → ${storeFS033.name} (${storeFS033.id})`);
@@ -495,24 +619,30 @@ async function seedSetup() {
   console.log(`      → ${storeFF012.name} (${storeFF012.id})`);
   console.log(`      → ${storeFS020.name} (${storeFS020.id})\n`);
 
-  console.log('👤  OPS users:');
-  console.log('    OPS-HO-001                 Dummy OPS HO  → OPS HO / all areas');
-  console.log('    OPS-DKI-BALI-001           Awan          → OPS Area / DKI - BALI');
-  console.log('    OPS-JABAR-SUMATERA-001     Jayanti       → OPS Area / JAWA BARAT - SUMATERA\n');
+  console.log("👤  OPS users:");
+  console.log(
+    "    OPS-HO-001                 Dummy OPS HO  → OPS HO / all areas",
+  );
+  console.log(
+    "    OPS-DKI-BALI-001           Awan          → OPS Area / DKI - BALI",
+  );
+  console.log(
+    "    OPS-JABAR-SUMATERA-001     Jayanti       → OPS Area / JAWA BARAT - SUMATERA\n",
+  );
 
-  console.log('👥  Users created:');
+  console.log("👥  Users created:");
   for (const u of insertedUsers) {
     console.log(`    ${u.id.padEnd(8)}  NIK=${u.nik.padEnd(24)}  ${u.name}`);
   }
 
   console.log(`\n🔐  All passwords: ${DEFAULT_PASSWORD}`);
-  console.log('🔑  Login uses NIK, not email.');
-  console.log('═══════════════════════════════════════════════════════════');
+  console.log("🔑  Login uses NIK, not email.");
+  console.log("═══════════════════════════════════════════════════════════");
 }
 
 seedSetup()
   .then(() => process.exit(0))
   .catch((err) => {
-    console.error('❌  seed-setup failed:', err);
+    console.error("❌  seed-setup failed:", err);
     process.exit(1);
   });

@@ -13,6 +13,7 @@ import {
 import {
   attendanceStatusEnum,
   breakTypeEnum,
+  issueStatusEnum,
 } from './enums';
 import { userRoles, employeeTypes, shifts } from './lookups';
 
@@ -265,10 +266,11 @@ export const issues = pgTable('issues', {
   userId:         text('user_id').references(() => users.id).notNull(),   // reporter
   storeId:        integer('store_id').references(() => stores.id).notNull(),
 
-  // Routing target — which role/department should handle this issue.
+  // Primary routing target kept for backward compatibility.
+  // New multi-role routing is stored in issueRoleAssignments below.
   assignedToRoleId: integer('assigned_to_role_id').references(() => userRoles.id).notNull(),
 
-  status:         text('status').default('reported').notNull(), // reported | in_review | resolved
+  status:         issueStatusEnum('status').default('reported').notNull(),
   attachmentUrls: text('attachment_urls'),                       // JSON string[]
 
   reviewedBy:     text('reviewed_by').references(() => users.id),
@@ -281,6 +283,28 @@ export const issues = pgTable('issues', {
   storeIdx:        index('issues_store_idx').on(t.storeId),
   assignedRoleIdx: index('issues_assigned_role_idx').on(t.assignedToRoleId),
   statusIdx:       index('issues_status_idx').on(t.status),
+}));
+
+// Multi-role routing for issues.
+// One issue can be sent to Ops + Finance + IT, etc.
+// For Operations visibility, app/API logic scopes Ops Area users to the issue
+// store's area and lets Ops HO see all operation-routed issues.
+export const issueRoleAssignments = pgTable('issue_role_assignments', {
+  id: serial('id').primaryKey(),
+
+  issueId: integer('issue_id')
+    .references(() => issues.id, { onDelete: 'cascade' })
+    .notNull(),
+
+  roleId: integer('role_id')
+    .references(() => userRoles.id, { onDelete: 'cascade' })
+    .notNull(),
+
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => ({
+  uniqIssueRole: unique('issue_role_assignments_issue_role_unique').on(t.issueId, t.roleId),
+  issueIdx:      index('issue_role_assignments_issue_idx').on(t.issueId),
+  roleIdx:       index('issue_role_assignments_role_idx').on(t.roleId),
 }));
 
 export const dailyReports = pgTable('daily_reports', {
@@ -316,4 +340,6 @@ export type Attendance              = typeof attendance.$inferSelect;
 export type BreakSession            = typeof breakSessions.$inferSelect;
 export type Issue                   = typeof issues.$inferSelect;
 export type NewIssue                = typeof issues.$inferInsert;
+export type IssueRoleAssignment     = typeof issueRoleAssignments.$inferSelect;
+export type NewIssueRoleAssignment  = typeof issueRoleAssignments.$inferInsert;
 export type DailyReport             = typeof dailyReports.$inferSelect;

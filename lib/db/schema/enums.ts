@@ -2,6 +2,7 @@
 import { pgEnum } from 'drizzle-orm/pg-core';
 
 export const issueStatusEnum = pgEnum('issue_status', [
+  'draft',
   'reported',
   'in_review',
   'resolved',
