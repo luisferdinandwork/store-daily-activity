@@ -12,11 +12,17 @@
 // So a checklist field that records `loginPosBy` also carries `loginPosByName`.
 // Use `actorName(extra, 'loginPos')` to prefer the readable name and fall back
 // to the raw id only when no name was resolved.
+//
+// Store Closing
+// ─────────────
+// `store_closing` replaces the old edc_reconciliation / eod_z_report /
+// open_statement tasks. Its detail body reads everything from `extra`
+// (eodZReportDone, edcSummaryDone, edcSettlementDone, the side-by-side evidence
+// photo, and the open-statement decision / hold state).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useCallback, useEffect, useState } from 'react';
 import {
-  AlertTriangle,
   Box,
   Camera,
   CheckCircle2,
@@ -25,8 +31,6 @@ import {
   Circle,
   ClipboardList,
   CreditCard,
-  FileText,
-  History,
   PauseCircle,
   ShieldCheck,
   Store,
@@ -81,11 +85,9 @@ export const TASK_LABELS: Record<string, string> = {
   marketing_check: 'Marketing Check',
   item_dropping: 'Item Dropping',
   briefing: 'Briefing',
-  edc_reconciliation: 'EDC Reconciliation',
-  eod_z_report: 'EOD Z Report',
-  open_statement: 'Open Statement',
-  grooming: 'Grooming',
   serah_terima: 'Serah Terima',
+  store_closing: 'Store Closing',
+  grooming: 'Grooming',
 };
 
 export const TASK_ICONS: Record<string, React.ElementType> = {
@@ -97,11 +99,9 @@ export const TASK_ICONS: Record<string, React.ElementType> = {
   marketing_check: ClipboardList,
   item_dropping: Box,
   briefing: Users,
-  edc_reconciliation: CreditCard,
-  eod_z_report: FileText,
-  open_statement: ClipboardList,
-  grooming: User,
   serah_terima: ClipboardList,
+  store_closing: CreditCard,
+  grooming: User,
 };
 
 // ─── Formatters ──────────────────────────────────────────────────────────────
@@ -666,73 +666,111 @@ function SerahTerimaDetail({ task }: { task: FlatTask }) {
   );
 }
 
-function EdcReconciliationDetail({ task }: { task: FlatTask }) {
-  const isCarryOver = task.parentTaskId != null;
-  return (
-    <div className="space-y-1 divide-y divide-slate-100">
-      <InfoRow
-        label="Balanced"
-        value={task.isBalanced == null ? '—'
-          : task.isBalanced
-            ? <span className="flex items-center gap-1 text-emerald-600"><CheckCircle2 className="h-3 w-3" />Seimbang</span>
-            : <span className="flex items-center gap-1 text-amber-600"><AlertTriangle className="h-3 w-3" />Tidak seimbang</span>}
-      />
-      {task.status === 'discrepancy' && (
-        <InfoRow label="Status" value={<span className="font-bold text-amber-600">Discrepancy — perlu tindak lanjut</span>} />
-      )}
-      {isCarryOver && (
-        <InfoRow label="Lanjutan dari" value={<span className="flex items-center gap-1 text-indigo-600"><History className="h-3 w-3" />Task #{task.parentTaskId}</span>} />
-      )}
-      <ActorFooter task={task} />
-      <NotesBlock notes={task.notes} />
-    </div>
-  );
-}
-
-function EodZReportDetail({ task }: { task: FlatTask }) {
+// Store Closing — replaces edc_reconciliation + eod_z_report + open_statement.
+// Order per OPS request: EOD Z-Report → EDC Summary → EDC Settlement → evidence
+// photo → Open Statement.
+function StoreClosingDetail({ task }: { task: FlatTask }) {
   const e = task.extra;
+
+  const decision    = (e.openStatementDecision as string | null) ?? null;
+  const isOnHold    = !!e.isOnHold;
+  const heldAt      = (e.heldAt as string | null | undefined) ?? null;
+  const holdReason  = (e.openStatementHoldReason as string | null | undefined) ?? null;
+  const reopenedAt  = (e.reopenedAt as string | null | undefined) ?? null;
+
+  const edcSummaryNotes    = typeof e.edcSummaryNotes === 'string' ? e.edcSummaryNotes.trim() : '';
+  const edcSettlementNotes = typeof e.edcSettlementNotes === 'string' ? e.edcSettlementNotes.trim() : '';
+
+  const openStatement =
+    decision === 'post_statement'
+      ? { label: 'Post Statement', cls: 'text-emerald-600', Icon: CheckCircle2 }
+      : decision === 'on_hold'
+        ? { label: 'On Hold', cls: 'text-amber-600', Icon: PauseCircle }
+        : { label: 'Belum dipilih', cls: 'text-amber-500', Icon: Circle };
+  const OpenIcon = openStatement.Icon;
+
   return (
     <div>
-      <PhotoGrid label="Foto Z-Report" photos={e.zReportPhotos} columns={2} emptyHint="Belum ada foto Z-Report." />
-      <ActorFooter task={task} />
-      <NotesBlock notes={task.notes} />
-    </div>
-  );
-}
-
-function OpenStatementDetail({ task }: { task: FlatTask }) {
-  const e = task.extra;
-  const isOnHold = !!e.isOnHold;
-  const isDone = !!e.isDone;
-  const isCarryOver = task.parentTaskId != null;
-  const heldAt = (e.heldAt as string | null | undefined) ?? null;
-  const holdReason = (e.holdReason as string | null | undefined) ?? null;
-
-  const outcome =
-    task.status === 'completed' && isOnHold
-      ? { label: 'On Hold', cls: 'text-amber-600', Icon: PauseCircle }
-      : task.status === 'completed'
-        ? { label: 'Done', cls: 'text-emerald-600', Icon: CheckCircle2 }
-        : { label: 'Belum dikerjakan', cls: 'text-amber-500', Icon: Circle };
-  const Outcome = outcome.Icon;
-
-  return (
-    <div className="space-y-1 divide-y divide-slate-100">
-      <InfoRow
-        label="Hasil"
-        value={<span className={cn('flex items-center gap-1 font-bold', outcome.cls)}><Outcome className="h-3 w-3" />{outcome.label}</span>}
-      />
-      {isCarryOver && (
-        <InfoRow label="Lanjutan dari" value={<span className="flex items-center gap-1 text-indigo-600"><History className="h-3 w-3" />Task #{task.parentTaskId}</span>} />
+      {isOnHold && (
+        <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
+          <PauseCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-bold text-amber-800">Open Statement On Hold</p>
+            <p className="mt-0.5 text-[10px] text-amber-700">
+              Issue terkait sedang ditangani; task dibuka kembali setelah resolved.
+              {heldAt ? ` · Ditahan ${fmtTime(heldAt)}` : ''}
+            </p>
+          </div>
+        </div>
       )}
-      {isOnHold && heldAt && <InfoRow label="Ditahan pada" value={fmtTime(heldAt)} />}
+
+      {/* 1 · EOD Z-Report */}
+      <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">EOD Z-Report</p>
+      <div className="divide-y divide-slate-100">
+        <CheckRow
+          label="EOD Z-Report selesai"
+          done={!!e.eodZReportDone}
+          by={actorName(e, 'eodZReport')}
+          at={actorAt(e, 'eodZReport')}
+        />
+      </div>
+
+      {/* 2 · EDC Summary (shown before Settlement) */}
+      <p className="mb-1 mt-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">EDC Summary</p>
+      <div className="divide-y divide-slate-100">
+        <CheckRow
+          label="EDC Summary selesai"
+          done={!!e.edcSummaryDone}
+          by={actorName(e, 'edcSummary')}
+          at={actorAt(e, 'edcSummary')}
+        />
+      </div>
+      {edcSummaryNotes && (
+        <p className="mt-1 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">{edcSummaryNotes}</p>
+      )}
+
+      {/* 3 · EDC Settlement */}
+      <p className="mb-1 mt-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">EDC Settlement</p>
+      <div className="divide-y divide-slate-100">
+        <CheckRow
+          label="EDC Settlement selesai"
+          done={!!e.edcSettlementDone}
+          by={actorName(e, 'edcSettlement')}
+          at={actorAt(e, 'edcSettlement')}
+        />
+      </div>
+      {edcSettlementNotes && (
+        <p className="mt-1 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">{edcSettlementNotes}</p>
+      )}
+
+      {/* 4 · Evidence photo (EOD + EDC settlement side by side) */}
+      <div className="mt-3">
+        <PhotoGrid
+          label="Foto EOD + EDC Settlement"
+          photos={e.eodEdcSettlementPhoto}
+          columns={2}
+          emptyHint="Belum ada foto bukti EOD + EDC Settlement."
+        />
+      </div>
+
+      {/* 5 · Open Statement */}
+      <div className="mt-3 space-y-1 divide-y divide-slate-100">
+        <InfoRow
+          label="Open Statement"
+          value={<span className={cn('flex items-center gap-1 font-bold', openStatement.cls)}><OpenIcon className="h-3 w-3" />{openStatement.label}</span>}
+        />
+        {reopenedAt && (
+          <InfoRow label="Dibuka kembali" value={<span className="text-indigo-600">{fmtTime(reopenedAt)}</span>} />
+        )}
+      </div>
       {isOnHold && holdReason && (
         <div className="py-1.5">
           <p className="text-xs font-semibold text-slate-400">Alasan hold</p>
           <p className="mt-1 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">{holdReason}</p>
         </div>
       )}
-      {isDone && <ActorFooter task={task} />}
+
+      <ActorFooter task={task} />
       <NotesBlock notes={task.notes} />
     </div>
   );
@@ -782,19 +820,17 @@ export function GroomingEmployeeDetail({ task }: { task: FlatTask }) {
 
 export function TaskDetailBody({ task }: { task: FlatTask }) {
   switch (task.type) {
-    case 'store_opening':      return <StoreOpeningDetail task={task} />;
-    case 'store_front':        return <StoreFrontDetail task={task} />;
-    case 'setoran':            return <SetoranDetail task={task} />;
-    case 'cek_bin':            return <CekBinDetail task={task} />;
-    case 'vm_checklist':       return <VmChecklistDetail task={task} />;
-    case 'marketing_check':    return <MarketingCheckDetail task={task} />;
-    case 'item_dropping':      return <ItemDroppingDetail task={task} />;
-    case 'briefing':           return <BriefingDetail task={task} />;
-    case 'serah_terima':       return <SerahTerimaDetail task={task} />;
-    case 'edc_reconciliation': return <EdcReconciliationDetail task={task} />;
-    case 'eod_z_report':       return <EodZReportDetail task={task} />;
-    case 'open_statement':     return <OpenStatementDetail task={task} />;
-    case 'grooming':           return <GroomingEmployeeDetail task={task} />;
+    case 'store_opening':   return <StoreOpeningDetail task={task} />;
+    case 'store_front':     return <StoreFrontDetail task={task} />;
+    case 'setoran':         return <SetoranDetail task={task} />;
+    case 'cek_bin':         return <CekBinDetail task={task} />;
+    case 'vm_checklist':    return <VmChecklistDetail task={task} />;
+    case 'marketing_check': return <MarketingCheckDetail task={task} />;
+    case 'item_dropping':   return <ItemDroppingDetail task={task} />;
+    case 'briefing':        return <BriefingDetail task={task} />;
+    case 'serah_terima':    return <SerahTerimaDetail task={task} />;
+    case 'store_closing':   return <StoreClosingDetail task={task} />;
+    case 'grooming':        return <GroomingEmployeeDetail task={task} />;
     default:
       return task.notes
         ? <p className="py-2 text-xs text-slate-500">{task.notes}</p>
@@ -842,11 +878,6 @@ export function TaskDetailView({
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <h2 className="truncate text-lg font-bold text-slate-900">{label}</h2>
-              {task.parentTaskId != null && (
-                <span className="inline-flex items-center gap-0.5 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-indigo-600">
-                  <History className="h-2.5 w-2.5" />Lanjutan
-                </span>
-              )}
             </div>
             <p className="mt-0.5 text-[11px] text-slate-400">PIC: {task.userName ?? task.userId}</p>
           </div>

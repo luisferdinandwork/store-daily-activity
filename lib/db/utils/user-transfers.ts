@@ -45,9 +45,7 @@ import {
   marketingCheckTasks,
   itemDroppingTasks,
   briefingTasks,
-  edcReconciliationTasks,
-  eodZReportTasks,
-  openStatementTasks,
+  storeClosingTasks,
   groomingTasks,
   breakSessions,
 } from '@/lib/db/schema';
@@ -235,9 +233,7 @@ async function deleteAllTasksForSchedules(scheduleIds: number[]): Promise<void> 
     db.delete(marketingCheckTasks).where(inArray(marketingCheckTasks.scheduleId, scheduleIds)),
     db.delete(itemDroppingTasks).where(inArray(itemDroppingTasks.scheduleId, scheduleIds)),
     db.delete(briefingTasks).where(inArray(briefingTasks.scheduleId, scheduleIds)),
-    db.delete(edcReconciliationTasks).where(inArray(edcReconciliationTasks.scheduleId, scheduleIds)),
-    db.delete(eodZReportTasks).where(inArray(eodZReportTasks.scheduleId, scheduleIds)),
-    db.delete(openStatementTasks).where(inArray(openStatementTasks.scheduleId, scheduleIds)),
+    db.delete(storeClosingTasks).where(inArray(storeClosingTasks.scheduleId, scheduleIds)),
     db.delete(groomingTasks).where(inArray(groomingTasks.scheduleId, scheduleIds)),
   ]);
 }

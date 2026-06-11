@@ -23,7 +23,7 @@ import {
   ACCENT_PALETTE, PALETTE_KEYS, paletteOf, SHIFT_ICON_NAMES,
   shiftTimeRange, trimTime,
   BREAK_TYPES, BREAK_TYPE_LABELS,
-  type PaletteKey, type ShiftBreakDef,
+  type PaletteKey, type ShiftBreakDef, type BreakTypeCode,
   type ShiftWithTasks, type TaskDefinitionDTO, type ShiftTasksPayload,
 } from '@/lib/shift-tasks';
 
@@ -313,7 +313,7 @@ function BreakEditor({ value, onChange }: {
   onChange: (b: ShiftBreakDef[]) => void;
 }) {
   const usedTypes = new Set(value.map(b => b.type));
-  const addable = (BREAK_TYPES as readonly string[]).filter(t => !usedTypes.has(t));
+  const addable = BREAK_TYPES.filter(t => !usedTypes.has(t));
 
   const update = (i: number, patch: Partial<ShiftBreakDef>) =>
     onChange(value.map((b, idx) => (idx === i ? { ...b, ...patch } : b)));
@@ -340,10 +340,10 @@ function BreakEditor({ value, onChange }: {
               <Coffee className="h-4 w-4 shrink-0" style={{ color: pal.text }} />
               <select
                 value={b.type}
-                onChange={e => update(i, { type: e.target.value })}
+                onChange={e => update(i, { type: e.target.value as BreakTypeCode })}
                 className="h-9 flex-1 rounded-lg border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 focus:border-indigo-400 focus:outline-none"
               >
-                {(BREAK_TYPES as readonly string[])
+                {BREAK_TYPES
                   .filter(t => t === b.type || !usedTypes.has(t))
                   .map(t => (
                     <option key={t} value={t}>{BREAK_TYPE_LABELS[t] ?? t}</option>

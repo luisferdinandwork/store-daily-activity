@@ -89,7 +89,7 @@ export default function OpsManagePage() {
         contentClassName="w-full"
       />
 
-      <div className="mx-auto max-w-7xl p-6 lg:p-8">
+      <div className="mx-auto p-6 lg:p-8">
         {loading || !data ? (
           <div className="flex min-h-[360px] items-center justify-center">
             <div className="flex flex-col items-center gap-3">

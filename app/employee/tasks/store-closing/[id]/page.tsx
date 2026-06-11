@@ -649,8 +649,27 @@ export default function StoreClosingDetailPage() {
                       />
                     </Section>
 
-                    {/* ── 2. EDC Settlement ───────────────────────────────── */}
-                    <Section title="2 · EDC Settlement">
+                    {/* ── 2. EDC Summary ──────────────────────────────────── */}
+                    <Section title="2 · EDC Summary">
+                      <SimpleCheckItem
+                        label="EDC Summary selesai"
+                        description="Konfirmasi laporan summary EDC sudah dicetak/dicatat."
+                        checked={edcSummaryDone}
+                        onChange={v => { setEdcSummaryDone(v); autoSave({ edcSummaryDone: v }); }}
+                        disabled={dis}
+                        icon={<BarChart3 className="h-4 w-4" />}
+                      />
+                      <NotesInput
+                        label="Catatan EDC Summary (opsional)"
+                        value={edcSummaryNotes}
+                        onChange={handleEdcSummaryNotes}
+                        disabled={dis}
+                        placeholder="Tambahkan catatan summary jika ada…"
+                      />
+                    </Section>
+
+                    {/* ── 3. EDC Settlement ───────────────────────────────── */}
+                    <Section title="3 · EDC Settlement">
                       <SimpleCheckItem
                         label="EDC Settlement selesai"
                         description="Konfirmasi proses settlement EDC sudah dilakukan."
@@ -668,24 +687,7 @@ export default function StoreClosingDetailPage() {
                       />
                     </Section>
 
-                    {/* ── 3. EDC Summary ──────────────────────────────────── */}
-                    <Section title="3 · EDC Summary">
-                      <SimpleCheckItem
-                        label="EDC Summary selesai"
-                        description="Konfirmasi laporan summary EDC sudah dicetak/dicatat."
-                        checked={edcSummaryDone}
-                        onChange={v => { setEdcSummaryDone(v); autoSave({ edcSummaryDone: v }); }}
-                        disabled={dis}
-                        icon={<BarChart3 className="h-4 w-4" />}
-                      />
-                      <NotesInput
-                        label="Catatan EDC Summary (opsional)"
-                        value={edcSummaryNotes}
-                        onChange={handleEdcSummaryNotes}
-                        disabled={dis}
-                        placeholder="Tambahkan catatan summary jika ada…"
-                      />
-                    </Section>
+                    
 
                     {/* ── 4. Foto Bukti EOD + EDC Settlement ─────────────── */}
                     <Section title="4 · Foto Bukti EOD + EDC Settlement">

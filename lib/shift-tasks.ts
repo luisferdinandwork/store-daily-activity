@@ -4,7 +4,7 @@
 //
 // This file is used by:
 //   • scripts/seed-shift-tasks.ts
-//   • OPS Shift & Tasks admin page
+//   • OPS Shift & Tasks admin page + /api/ops/shift-tasks routes
 //   • any helper that needs stable task codes/labels
 //
 // IMPORTANT:
@@ -386,4 +386,106 @@ export const SHIFT_TASK_MAP: Record<ShiftCode, TaskType[]> = {
 
 export function getDefaultTasksForShift(shiftCode: ShiftCode): TaskType[] {
   return [...SHIFT_TASK_MAP[shiftCode]];
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Plumbing for the OPS "Shift & Tasks" admin UI + API.
+// (Display/validation helpers and the DTOs exchanged with /api/ops/shift-tasks.)
+// These were part of the original shift-tasks helper and are kept here so the
+// admin page and routes keep compiling against a single module.
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ─── Shift icon names ─────────────────────────────────────────────────────────
+// Glyph NAMES only (strings). The client maps these to lucide-react components.
+
+export const SHIFT_ICON_NAMES = [
+  'sun', 'moon', 'zap', 'sunrise', 'clock', 'coffee',
+] as const;
+export type ShiftIconName = typeof SHIFT_ICON_NAMES[number];
+
+// ─── Custom shift code helpers ────────────────────────────────────────────────
+// SHIFT_CODES above are the three seeded shifts. OPS can also create NEW shifts
+// from the UI; these keep a hand-entered code slug-safe + stable.
+
+export function normalizeShiftCode(input: string): string {
+  return input
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+export function isValidShiftCode(code: string): boolean {
+  return /^[a-z0-9]+(?:_[a-z0-9]+)*$/.test(code);
+}
+
+// ─── DTOs shared by the API and the page ──────────────────────────────────────
+
+export interface TaskDefinitionDTO {
+  id:          number;
+  code:        string;
+  label:       string;
+  description: string | null;
+  icon:        string | null;
+  accent:      string | null;
+  isPersonal:  boolean;
+  isActive:    boolean;
+  sortOrder:   number;
+}
+
+export interface ShiftTaskAssignment {
+  id:               number;   // shift_tasks.id
+  taskDefinitionId: number;
+  code:             string;
+  label:            string;
+  icon:             string | null;
+  accent:           string | null;
+  isPersonal:       boolean;
+  isRequired:       boolean;
+  isActive:         boolean;
+  sortOrder:        number;
+}
+
+export interface ShiftWithTasks {
+  id:          number;
+  code:        string;
+  label:       string;
+  description: string | null;
+  startTime:   string | null;
+  endTime:     string | null;
+  accent:      string | null;
+  icon:        string | null;
+  breaks:      ShiftBreakDef[] | null;
+  isActive:    boolean;
+  sortOrder:   number;
+  tasks:       ShiftTaskAssignment[];
+}
+
+export interface ShiftTasksPayload {
+  success: boolean;
+  error?:  string;
+  shifts:  ShiftWithTasks[];
+  catalog: TaskDefinitionDTO[];
+}
+
+// ─── Small view helpers ───────────────────────────────────────────────────────
+
+/** "07:00:00" → "07:00"; null-safe. */
+export function trimTime(t: string | null | undefined): string {
+  if (!t) return '';
+  return t.slice(0, 5);
+}
+
+/** "07:00–22:00" style range for a shift, or "" when no times set. */
+export function shiftTimeRange(start: string | null, end: string | null): string {
+  const s = trimTime(start);
+  const e = trimTime(end);
+  if (s && e) return `${s}–${e}`;
+  if (s) return `from ${s}`;
+  if (e) return `until ${e}`;
+  return '';
+}
+
+export function activeTaskCount(shift: ShiftWithTasks): number {
+  return shift.tasks.filter((t) => t.isActive).length;
 }

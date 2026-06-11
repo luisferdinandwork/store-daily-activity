@@ -1,227 +1,187 @@
 // scripts/seed-shift-tasks.ts
 // ─────────────────────────────────────────────────────────────────────────────
-// Seeds the Shift ↔ Task configuration.
+// Seeds the shift/task configuration:
 //
-// Idempotent behavior:
-// - removes old task definitions replaced by Store Closing
-// - refreshes task_definitions from TASK_CATALOG
-// - refreshes shift_tasks from SHIFT_TASK_MAP
-// - keeps existing shift IDs from the shifts lookup table
+//   1. task_definitions  — catalog of assignable task types (from TASK_CATALOG).
+//   2. retire            — deactivate task types replaced by `store_closing`
+//                          (edc_reconciliation, eod_z_report, open_statement),
+//                          plus any shift_tasks rows still pointing at them.
+//   3. shift_tasks       — default shift→task mapping (SHIFT_TASK_MAP).
 //
-// Run after seed-setup.ts, because seed-setup creates the shifts:
-//   npm run seed:shift-tasks
+// Idempotent: catalog rows are upserted by `code`; assignments are inserted only
+// when the (shiftId, taskDefinitionId) pair doesn't already exist.
+//
+// Run with:  npm run seed:shift-tasks   (after npm run seed:setup)
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { config } from "dotenv";
-config({ path: ".env.local" });
-config({ path: ".env" });
+import { config } from 'dotenv';
+config({ path: '.env.local' });
 
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from 'drizzle-orm';
+import { db } from '@/lib/db';
+import { shifts, shiftTasks, taskDefinitions } from '@/lib/db/schema';
+import { TASK_CATALOG, SHIFT_TASK_MAP, REMOVED_TASK_TYPES } from '@/lib/shift-tasks';
 
-import { db } from "@/lib/db";
-import { shifts, shiftTasks, taskDefinitions } from "@/lib/db/schema";
-import {
-  REMOVED_TASK_TYPES,
-  SHIFT_TASK_MAP,
-  TASK_CATALOG,
-  type ShiftCode,
-  type TaskType,
-} from "@/lib/shift-tasks";
+// ── 1. Catalog ────────────────────────────────────────────────────────────────
 
-const DEFAULT_SHIFT_CODES = Object.keys(SHIFT_TASK_MAP) as ShiftCode[];
+export async function seedTaskDefinitions() {
+  let inserted = 0;
+  let updated = 0;
 
-async function removeReplacedTaskDefinitions() {
-  const removedCodes = [...REMOVED_TASK_TYPES];
+  for (const entry of TASK_CATALOG) {
+    const existing = await db
+      .select({ id: taskDefinitions.id })
+      .from(taskDefinitions)
+      .where(eq(taskDefinitions.code, entry.code))
+      .limit(1);
 
-  const oldDefinitions = await db
-    .select({ id: taskDefinitions.id, code: taskDefinitions.code })
-    .from(taskDefinitions)
-    .where(inArray(taskDefinitions.code, removedCodes));
-
-  if (!oldDefinitions.length) {
-    return { definitions: 0, assignments: 0 };
+    if (existing.length) {
+      await db
+        .update(taskDefinitions)
+        .set({
+          label:       entry.label,
+          description: entry.description ?? null,
+          icon:        entry.icon,
+          accent:      entry.accent,
+          isPersonal:  entry.isPersonal,
+          sortOrder:   entry.sortOrder,
+          isActive:    true, // re-activate if it had been retired previously
+          updatedAt:   new Date(),
+        })
+        .where(eq(taskDefinitions.id, existing[0].id));
+      updated += 1;
+    } else {
+      await db.insert(taskDefinitions).values({
+        code:        entry.code,
+        label:       entry.label,
+        description: entry.description ?? null,
+        icon:        entry.icon,
+        accent:      entry.accent,
+        isPersonal:  entry.isPersonal,
+        sortOrder:   entry.sortOrder,
+      });
+      inserted += 1;
+    }
   }
 
-  const oldDefinitionIds = oldDefinitions.map((row) => row.id);
-
-  // Explicit delete keeps this compatible even if cascade behavior differs per setup.
-  await db
-    .delete(shiftTasks)
-    .where(inArray(shiftTasks.taskDefinitionId, oldDefinitionIds));
-  await db
-    .delete(taskDefinitions)
-    .where(inArray(taskDefinitions.id, oldDefinitionIds));
-
-  return {
-    definitions: oldDefinitions.length,
-    assignments: oldDefinitionIds.length,
-  };
+  return { inserted, updated, total: TASK_CATALOG.length };
 }
 
-async function seedTaskDefinitions() {
-  const removed = await removeReplacedTaskDefinitions();
-  const codes = TASK_CATALOG.map((entry) => entry.code);
+// ── 2. Retire replaced task types ───────────────────────────────────────────
 
-  const existingRows = codes.length
-    ? await db
-        .select({ id: taskDefinitions.id, code: taskDefinitions.code })
-        .from(taskDefinitions)
-        .where(inArray(taskDefinitions.code, codes))
-    : [];
+export async function retireRemovedTaskDefinitions() {
+  const codes = [...REMOVED_TASK_TYPES];
 
-  const existingIdByCode = new Map(
-    existingRows.map((row) => [row.code, row.id]),
-  );
-
-  const toInsert = TASK_CATALOG.filter(
-    (entry) => !existingIdByCode.has(entry.code),
-  );
-  const toUpdate = TASK_CATALOG.filter((entry) =>
-    existingIdByCode.has(entry.code),
-  );
-
-  if (toInsert.length) {
-    await db.insert(taskDefinitions).values(
-      toInsert.map((entry) => ({
-        code: entry.code,
-        label: entry.label,
-        description: entry.description ?? null,
-        icon: entry.icon,
-        accent: entry.accent,
-        isPersonal: entry.isPersonal,
-        isActive: true,
-        sortOrder: entry.sortOrder,
-        updatedAt: new Date(),
-      })),
-    );
-  }
-
-  for (const entry of toUpdate) {
-    await db
-      .update(taskDefinitions)
-      .set({
-        label: entry.label,
-        description: entry.description ?? null,
-        icon: entry.icon,
-        accent: entry.accent,
-        isPersonal: entry.isPersonal,
-        isActive: true,
-        sortOrder: entry.sortOrder,
-        updatedAt: new Date(),
-      })
-      .where(eq(taskDefinitions.id, existingIdByCode.get(entry.code)!));
-  }
-
-  const refreshedRows = await db
-    .select({ id: taskDefinitions.id, code: taskDefinitions.code })
+  const removed = await db
+    .select({ id: taskDefinitions.id })
     .from(taskDefinitions)
     .where(inArray(taskDefinitions.code, codes));
 
-  const taskDefinitionIdByCode = new Map<TaskType, number>();
-  for (const row of refreshedRows) {
-    taskDefinitionIdByCode.set(row.code as TaskType, row.id);
-  }
+  if (!removed.length) return { deactivatedDefs: 0, deactivatedAssignments: 0 };
 
-  return {
-    removed,
-    inserted: toInsert.length,
-    updated: toUpdate.length,
-    total: TASK_CATALOG.length,
-    taskDefinitionIdByCode,
-  };
+  const ids = removed.map((r) => r.id);
+
+  await db
+    .update(taskDefinitions)
+    .set({ isActive: false, updatedAt: new Date() })
+    .where(inArray(taskDefinitions.id, ids));
+
+  await db
+    .update(shiftTasks)
+    .set({ isActive: false, updatedAt: new Date() })
+    .where(inArray(shiftTasks.taskDefinitionId, ids));
+
+  return { deactivatedDefs: ids.length, deactivatedAssignments: ids.length };
 }
 
-async function seedShiftTaskAssignments(
-  taskDefinitionIdByCode: Map<TaskType, number>,
-) {
-  const shiftRows = await db
-    .select({ id: shifts.id, code: shifts.code, label: shifts.label })
-    .from(shifts)
-    .where(inArray(shifts.code, DEFAULT_SHIFT_CODES));
+// ── 3. Default assignments ──────────────────────────────────────────────────
 
-  const shiftByCode = new Map(
-    shiftRows.map((shift) => [shift.code as ShiftCode, shift]),
-  );
-  const missingShiftCodes = DEFAULT_SHIFT_CODES.filter(
-    (code) => !shiftByCode.has(code),
-  );
+export async function seedShiftTaskAssignments() {
+  let inserted = 0;
+  let reactivated = 0;
+  let skipped = 0;
+  const missingShifts: string[] = [];
+  const missingTasks: string[] = [];
 
-  if (missingShiftCodes.length) {
-    throw new Error(
-      `Missing shift lookup rows: ${missingShiftCodes.join(", ")}. Run scripts/seed-setup.ts first.`,
-    );
-  }
+  const shiftRows = await db.select({ id: shifts.id, code: shifts.code }).from(shifts);
+  const shiftIdByCode = new Map(shiftRows.map((s) => [s.code, s.id]));
 
-  const shiftIds = shiftRows.map((shift) => shift.id);
+  const defRows = await db
+    .select({ id: taskDefinitions.id, code: taskDefinitions.code })
+    .from(taskDefinitions);
+  const defIdByCode = new Map(defRows.map((d) => [d.code, d.id]));
 
-  const assignmentRows: Array<typeof shiftTasks.$inferInsert> = [];
+  for (const [shiftCode, codes] of Object.entries(SHIFT_TASK_MAP)) {
+    const shiftId = shiftIdByCode.get(shiftCode);
+    if (!shiftId) {
+      missingShifts.push(shiftCode);
+      continue;
+    }
 
-  for (const shiftCode of DEFAULT_SHIFT_CODES) {
-    const shift = shiftByCode.get(shiftCode)!;
-    const taskCodes = SHIFT_TASK_MAP[shiftCode];
-
-    taskCodes.forEach((taskCode, index) => {
-      const taskDefinitionId = taskDefinitionIdByCode.get(taskCode);
-      if (!taskDefinitionId) {
-        throw new Error(`Missing task_definition for code "${taskCode}"`);
+    let order = 0;
+    for (const code of codes) {
+      order += 10;
+      const defId = defIdByCode.get(code);
+      if (!defId) {
+        if (!missingTasks.includes(code)) missingTasks.push(code);
+        continue;
       }
 
-      assignmentRows.push({
-        shiftId: shift.id,
-        taskDefinitionId,
+      const existing = await db
+        .select({ id: shiftTasks.id })
+        .from(shiftTasks)
+        .where(and(eq(shiftTasks.shiftId, shiftId), eq(shiftTasks.taskDefinitionId, defId)))
+        .limit(1);
+
+      if (existing.length) {
+        // Make sure a default pairing is active (it may have been disabled).
+        await db
+          .update(shiftTasks)
+          .set({ isActive: true, updatedAt: new Date() })
+          .where(eq(shiftTasks.id, existing[0].id));
+        skipped += 1;
+        reactivated += 1;
+        continue;
+      }
+
+      await db.insert(shiftTasks).values({
+        shiftId,
+        taskDefinitionId: defId,
         isRequired: true,
-        isActive: true,
-        sortOrder: (index + 1) * 10,
-        assignedBy: null,
-        updatedAt: new Date(),
+        sortOrder: order,
       });
-    });
+      inserted += 1;
+    }
   }
 
-  // Neon HTTP driver does not support transactions.
-  // This refresh only deletes mappings for seeded shifts.
-  await db.delete(shiftTasks).where(inArray(shiftTasks.shiftId, shiftIds));
-
-  if (assignmentRows.length) {
-    await db.insert(shiftTasks).values(assignmentRows);
-  }
-
-  return {
-    shifts: shiftRows.length,
-    assignments: assignmentRows.length,
-  };
+  return { inserted, reactivated, skipped, missingShifts, missingTasks };
 }
 
+// ── Runner ────────────────────────────────────────────────────────────────────
+
 async function main() {
-  console.log("\n🌱 seed-shift-tasks: task_definitions + shift_tasks");
+  const cat = await seedTaskDefinitions();
+  console.log(`✅ task_definitions — inserted ${cat.inserted}, updated ${cat.updated}`);
 
-  const definitions = await seedTaskDefinitions();
-  const assignments = await seedShiftTaskAssignments(
-    definitions.taskDefinitionIdByCode,
-  );
-
-  console.log(
-    `\n✅ removed replaced task definitions: ${definitions.removed.definitions} definitions`,
-  );
-  console.log(
-    `✅ task_definitions: inserted ${definitions.inserted}, updated ${definitions.updated}, total ${definitions.total}`,
-  );
-  console.log(
-    `✅ shift_tasks: refreshed ${assignments.assignments} assignments across ${assignments.shifts} shifts`,
-  );
-
-  console.log("\n📌 Current mapping:");
-  for (const shiftCode of DEFAULT_SHIFT_CODES) {
-    console.log(
-      `   ${shiftCode.padEnd(8)} → ${SHIFT_TASK_MAP[shiftCode].join(", ")}`,
-    );
+  const ret = await retireRemovedTaskDefinitions();
+  if (ret.deactivatedDefs) {
+    console.log(`🧹 retired ${ret.deactivatedDefs} replaced task type(s) → store_closing`);
   }
-  console.log("");
+
+  const asg = await seedShiftTaskAssignments();
+  console.log(`✅ shift_tasks       — inserted ${asg.inserted}, skipped ${asg.skipped}`);
+
+  if (asg.missingShifts.length) {
+    console.warn(`⚠️  Shifts not found (run "npm run seed:setup" first): ${asg.missingShifts.join(', ')}`);
+  }
+  if (asg.missingTasks.length) {
+    console.warn(`⚠️  Task codes not in catalog: ${asg.missingTasks.join(', ')}`);
+  }
 }
 
 main()
   .then(() => process.exit(0))
   .catch((err) => {
-    console.error("💥 seed-shift-tasks failed:", err);
+    console.error('💥 seed:shift-tasks failed:', err);
     process.exit(1);
   });
