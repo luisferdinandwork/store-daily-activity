@@ -1,18 +1,7 @@
 // app/api/employee/petty-cash/route.ts
-//
-// GET  — returns the employee's store current monthly petty cash balance
-//        + this month's transaction history.
-//
-// POST — submit a new petty cash transaction:
-//          { amount, description, imageUrl, imageKey }
-//
-// Important:
-//   - Uses petty_cash_periods as the real monthly petty cash ledger.
-//   - Does NOT use db.transaction(), so it is safer for Neon HTTP.
-//   - Uses one atomic SQL CTE for "deduct balance + insert transaction".
 
 import { NextRequest, NextResponse } from 'next/server';
-import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { getServerSession } from 'next-auth';
 
 import { db } from '@/lib/db';
@@ -23,8 +12,6 @@ import {
   pettyCashPeriods,
   pettyCashTransactions,
 } from '@/lib/db/schema/petty-cash';
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function currentYearMonth() {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -41,9 +28,7 @@ function currentYearMonth() {
 
 async function getEmployeeStore(userId: string) {
   const [user] = await db
-    .select({
-      homeStoreId: users.homeStoreId,
-    })
+    .select({ homeStoreId: users.homeStoreId })
     .from(users)
     .where(eq(users.id, userId))
     .limit(1);
@@ -85,7 +70,20 @@ async function ensurePettyCashPeriod(storeId: number, yearMonth: string) {
   return period ?? null;
 }
 
-// ─── GET /api/employee/petty-cash ─────────────────────────────────────────────
+function getRows(result: unknown): unknown[] {
+  if (Array.isArray(result)) return result;
+
+  if (
+    result &&
+    typeof result === 'object' &&
+    'rows' in result &&
+    Array.isArray((result as { rows: unknown[] }).rows)
+  ) {
+    return (result as { rows: unknown[] }).rows;
+  }
+
+  return [];
+}
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -104,9 +102,7 @@ export async function GET() {
   const month = currentYearMonth();
 
   const [store] = await db
-    .select({
-      name: stores.name,
-    })
+    .select({ name: stores.name })
     .from(stores)
     .where(eq(stores.id, storeId))
     .limit(1);
@@ -129,7 +125,11 @@ export async function GET() {
       id: pettyCashTransactions.id,
       amount: pettyCashTransactions.amount,
       description: pettyCashTransactions.description,
+      status: pettyCashTransactions.status,
       imageUrl: pettyCashTransactions.imageUrl,
+      approvedAt: pettyCashTransactions.approvedAt,
+      rejectedAt: pettyCashTransactions.rejectedAt,
+      rejectionReason: pettyCashTransactions.rejectionReason,
       verifiedAt: pettyCashTransactions.verifiedAt,
       createdAt: pettyCashTransactions.createdAt,
     })
@@ -138,7 +138,6 @@ export async function GET() {
       and(
         eq(pettyCashTransactions.storeId, storeId),
         eq(pettyCashTransactions.yearMonth, month),
-        isNull(pettyCashTransactions.archivedAt),
       ),
     )
     .orderBy(desc(pettyCashTransactions.createdAt));
@@ -155,14 +154,16 @@ export async function GET() {
       id: t.id,
       amount: t.amount,
       description: t.description,
+      status: t.status,
       imageUrl: t.imageUrl,
+      approvedAt: t.approvedAt ? new Date(t.approvedAt).toISOString() : null,
+      rejectedAt: t.rejectedAt ? new Date(t.rejectedAt).toISOString() : null,
+      rejectionReason: t.rejectionReason,
       verifiedAt: t.verifiedAt ? new Date(t.verifiedAt).toISOString() : null,
       createdAt: new Date(t.createdAt).toISOString(),
     })),
   });
 }
-
-// ─── POST /api/employee/petty-cash ────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -175,8 +176,6 @@ export async function POST(req: NextRequest) {
   let body: {
     amount?: unknown;
     description?: unknown;
-    imageUrl?: unknown;
-    imageKey?: unknown;
   };
 
   try {
@@ -188,14 +187,6 @@ export async function POST(req: NextRequest) {
   const amount = Number(body.amount);
   const description =
     typeof body.description === 'string' ? body.description.trim() : '';
-  const imageUrl =
-    typeof body.imageUrl === 'string' && body.imageUrl.trim()
-      ? body.imageUrl.trim()
-      : null;
-  const imageKey =
-    typeof body.imageKey === 'string' && body.imageKey.trim()
-      ? body.imageKey.trim()
-      : null;
 
   if (!Number.isFinite(amount) || amount <= 0) {
     return NextResponse.json(
@@ -207,13 +198,6 @@ export async function POST(req: NextRequest) {
   if (!description) {
     return NextResponse.json(
       { error: 'Description is required.' },
-      { status: 422 },
-    );
-  }
-
-  if (!imageUrl) {
-    return NextResponse.json(
-      { error: 'Receipt photo is required.' },
       { status: 422 },
     );
   }
@@ -242,94 +226,104 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const currentBalance = Number(period.currentBalance ?? 0);
-
-  if (amount > currentBalance) {
-    return NextResponse.json(
-      { error: `Insufficient balance. Current: ${currentBalance}` },
-      { status: 422 },
-    );
-  }
-
-  const amountValue = amount.toFixed(2);
-
-  // Neon HTTP-safe atomic write:
-  //
-  // 1. Deduct from petty_cash_periods only if balance is still enough.
-  // 2. Insert the transaction only if the deduction succeeded.
-  // 3. Return the transaction id and new balance.
-  //
-  // This prevents two concurrent submissions from overspending the balance.
-  const rawResult = await db.execute(sql`
-    WITH updated_period AS (
-      UPDATE petty_cash_periods
-      SET
-        current_balance = current_balance - ${amountValue}::numeric,
-        updated_at = NOW()
-      WHERE id = ${period.id}
-        AND status = 'open'
-        AND current_balance >= ${amountValue}::numeric
-      RETURNING
-        id,
-        current_balance::text AS new_balance
-    ),
-    inserted_tx AS (
-      INSERT INTO petty_cash_transactions (
-        period_id,
-        user_id,
-        store_id,
-        amount,
-        description,
-        image_url,
-        image_key,
-        year_month
-      )
-      SELECT
-        updated_period.id,
-        ${userId},
-        ${storeId},
-        ${amountValue}::numeric,
-        ${description},
-        ${imageUrl},
-        ${imageKey},
-        ${month}
-      FROM updated_period
-      RETURNING id
-    )
-    SELECT
-      inserted_tx.id::int AS tx_id,
-      updated_period.new_balance
-    FROM inserted_tx
-    CROSS JOIN updated_period
-  `);
-
-  const rows = Array.isArray(rawResult)
-    ? rawResult
-    : 'rows' in rawResult
-      ? rawResult.rows
-      : [];
-
-  const row = rows[0] as
-    | {
-        tx_id: number;
-        new_balance: string;
-      }
-    | undefined;
-
-  if (!row) {
-    return NextResponse.json(
-      { error: 'Insufficient balance. Please refresh and try again.' },
-      { status: 409 },
-    );
-  }
+  const [inserted] = await db
+    .insert(pettyCashTransactions)
+    .values({
+      periodId: period.id,
+      userId,
+      storeId,
+      amount: amount.toFixed(2),
+      description,
+      status: 'pending_ops',
+      imageUrl: null,
+      imageKey: null,
+      yearMonth: month,
+    })
+    .returning({
+      id: pettyCashTransactions.id,
+    });
 
   return NextResponse.json(
     {
       success: true,
-      txId: row.tx_id,
-      newBalance: row.new_balance,
-      month,
+      txId: inserted.id,
+      status: 'pending_ops',
+      message: 'Petty cash request sent to OPS for approval.',
     },
     { status: 201 },
   );
+}
+
+export async function PATCH(req: NextRequest) {
+  const session = await getServerSession(authOptions);
+  const userId = session?.user?.id as string | undefined;
+
+  if (!userId) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  let body: {
+    txId?: unknown;
+    imageUrl?: unknown;
+    imageKey?: unknown;
+  };
+
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON.' }, { status: 400 });
+  }
+
+  const txId = Number(body.txId);
+  const imageUrl =
+    typeof body.imageUrl === 'string' && body.imageUrl.trim()
+      ? body.imageUrl.trim()
+      : null;
+  const imageKey =
+    typeof body.imageKey === 'string' && body.imageKey.trim()
+      ? body.imageKey.trim()
+      : null;
+
+  if (!Number.isFinite(txId)) {
+    return NextResponse.json({ error: 'Invalid txId.' }, { status: 400 });
+  }
+
+  if (!imageUrl) {
+    return NextResponse.json(
+      { error: 'Receipt photo is required.' },
+      { status: 422 },
+    );
+  }
+
+  const result = await db.execute(sql`
+    UPDATE petty_cash_transactions
+    SET
+      image_url = ${imageUrl},
+      image_key = ${imageKey},
+      updated_at = NOW()
+    WHERE id = ${txId}
+      AND user_id = ${userId}
+      AND status = 'ops_approved'
+      AND verified_at IS NULL
+    RETURNING id::int
+  `);
+
+  const rows = getRows(result);
+  const row = rows[0] as { id: number } | undefined;
+
+  if (!row) {
+    return NextResponse.json(
+      {
+        error:
+          'Receipt upload failed. Request must be OPS approved and not yet verified.',
+      },
+      { status: 409 },
+    );
+  }
+
+  return NextResponse.json({
+    success: true,
+    txId: row.id,
+    imageUrl,
+  });
 }

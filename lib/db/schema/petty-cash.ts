@@ -65,6 +65,8 @@ export const pettyCashPeriods = pgTable(
   }),
 );
 
+// lib/db/schema/petty-cash.ts
+
 export const pettyCashTransactions = pgTable(
   'petty_cash_transactions',
   {
@@ -80,23 +82,31 @@ export const pettyCashTransactions = pgTable(
     userId: text('user_id').references(() => users.id).notNull(),
     storeId: integer('store_id').references(() => stores.id).notNull(),
 
+    // New request status:
+    // pending_ops   = employee requested, waiting OPS approval
+    // ops_approved  = OPS approved, balance deducted
+    // ops_rejected  = OPS rejected, no balance deduction
+    status: text('status').default('pending_ops').notNull(),
+
     imageUrl: text('image_url'),
     imageKey: text('image_key'),
 
-    // Important: keep this for fast monthly filtering
     yearMonth: text('year_month').notNull(),
 
+    // Use this as OPS approval now.
     approvedBy: text('approved_by').references(() => users.id),
     approvedAt: timestamp('approved_at'),
 
+    rejectedBy: text('rejected_by').references(() => users.id),
+    rejectedAt: timestamp('rejected_at'),
+    rejectionReason: text('rejection_reason'),
+
+    // Finance verification after receipt image exists.
     verifiedBy: text('verified_by').references(() => users.id),
     verifiedAt: timestamp('verified_at'),
 
-    // Do not use this to hide old rows from Finance history anymore.
+    // Keep column if already exists, but do not use image deletion anymore.
     archivedAt: timestamp('archived_at'),
-
-    // New: image cleanup only, transaction data stays forever
-    imageDeletedAt: timestamp('image_deleted_at'),
 
     createdAt: timestamp('created_at').defaultNow().notNull(),
     updatedAt: timestamp('updated_at').$onUpdate(() => new Date()).notNull(),
@@ -104,9 +114,9 @@ export const pettyCashTransactions = pgTable(
   (t) => ({
     periodIdx: index('pct_period_idx').on(t.periodId),
     storeMonthIdx: index('pct_store_month_idx').on(t.storeId, t.yearMonth),
+    statusIdx: index('pct_status_idx').on(t.status),
     verifiedIdx: index('pct_verified_idx').on(t.verifiedAt),
     yearMonthIdx: index('pct_year_month_idx').on(t.yearMonth),
-    imageCleanupIdx: index('pct_image_cleanup_idx').on(t.imageKey, t.createdAt),
   }),
 );
 

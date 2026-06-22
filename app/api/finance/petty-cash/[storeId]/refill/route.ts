@@ -1,7 +1,7 @@
 // app/api/finance/petty-cash/[storeId]/refill/route.ts
 
 import { NextRequest, NextResponse } from 'next/server';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import { resolveFinanceScope } from '@/lib/finance/scope';
@@ -128,6 +128,8 @@ export async function POST(req: NextRequest, { params }: Params) {
   const txRows = await db
     .select({
       amount: pettyCashTransactions.amount,
+      status: pettyCashTransactions.status,
+      imageUrl: pettyCashTransactions.imageUrl,
       verifiedAt: pettyCashTransactions.verifiedAt,
     })
     .from(pettyCashTransactions)
@@ -135,17 +137,44 @@ export async function POST(req: NextRequest, { params }: Params) {
       and(
         eq(pettyCashTransactions.storeId, storeId),
         eq(pettyCashTransactions.yearMonth, yearMonth),
-        isNull(pettyCashTransactions.archivedAt),
       ),
     );
 
-  const unverifiedCount = txRows.filter((tx) => !tx.verifiedAt).length;
+  const pendingOpsCount = txRows.filter((tx) => tx.status === 'pending_ops').length;
+
+  const missingReceiptCount = txRows.filter(
+    (tx) => tx.status === 'ops_approved' && !tx.imageUrl,
+  ).length;
+
+  const unverifiedCount = txRows.filter(
+    (tx) => tx.status === 'ops_approved' && tx.imageUrl && !tx.verifiedAt,
+  ).length;
+
+  if (pendingOpsCount > 0) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'There are still petty cash requests waiting for OPS approval.',
+      },
+      { status: 422 },
+    );
+  }
+
+  if (missingReceiptCount > 0) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'There are approved petty cash requests without receipt photos.',
+      },
+      { status: 422 },
+    );
+  }
 
   if (unverifiedCount > 0) {
     return NextResponse.json(
       {
         success: false,
-        error: 'Verify all transactions before issuing a refill.',
+        error: 'Verify all receipt photos before issuing a refill.',
       },
       { status: 422 },
     );
@@ -167,16 +196,23 @@ export async function POST(req: NextRequest, { params }: Params) {
     )
     .limit(1);
 
-  const monthlySpend = txRows.reduce(
-    (sum, tx) => sum + Number(tx.amount),
-    0,
-  );
+  if (period?.status === 'closed') {
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'This petty cash month is already closed.',
+      },
+      { status: 409 },
+    );
+  }
 
-  const openingBalance = Number(
-    period?.openingBalance ?? PETTY_CASH_MAX_BALANCE,
-  );
+  const approvedSpend = txRows
+    .filter((tx) => tx.status === 'ops_approved')
+    .reduce((sum, tx) => sum + Number(tx.amount), 0);
 
-  const balanceBefore = Math.max(0, openingBalance - monthlySpend);
+  const fallbackBalance = Math.max(0, PETTY_CASH_MAX_BALANCE - approvedSpend);
+
+  const balanceBefore = Number(period?.currentBalance ?? fallbackBalance);
 
   const refillAmount = Math.max(
     0,
@@ -185,17 +221,6 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   const balanceAfter = PETTY_CASH_MAX_BALANCE;
 
-  /**
-   * Neon HTTP does not support db.transaction().
-   *
-   * This uses one SQL statement with CTEs:
-   * 1. Close/create the selected month period.
-   * 2. Insert refill record.
-   * 3. Create next month period.
-   * 4. Update legacy stores.petty_cash_balance for compatibility.
-   *
-   * Because this is one Postgres statement, it is atomic without db.transaction().
-   */
   const result = await db.execute(sql`
     WITH closed_period AS (
       INSERT INTO petty_cash_periods (
@@ -211,9 +236,9 @@ export async function POST(req: NextRequest, { params }: Params) {
       VALUES (
         ${storeId},
         ${yearMonth},
-        ${String(openingBalance)},
-        ${String(balanceBefore)},
-        ${String(balanceBefore)},
+        ${String(PETTY_CASH_MAX_BALANCE)}::numeric,
+        ${String(balanceBefore)}::numeric,
+        ${String(balanceBefore)}::numeric,
         'closed',
         ${scope.userId},
         NOW()
@@ -244,9 +269,9 @@ export async function POST(req: NextRequest, { params }: Params) {
         ${storeId},
         ${yearMonth},
         ${nextYearMonth},
-        ${String(refillAmount)},
-        ${String(balanceBefore)},
-        ${String(balanceAfter)},
+        ${String(refillAmount)}::numeric,
+        ${String(balanceBefore)}::numeric,
+        ${String(balanceAfter)}::numeric,
         ${scope.userId},
         ${notes}
       FROM closed_period
@@ -266,8 +291,8 @@ export async function POST(req: NextRequest, { params }: Params) {
       SELECT
         ${storeId},
         ${nextYearMonth},
-        ${String(PETTY_CASH_MAX_BALANCE)},
-        ${String(PETTY_CASH_MAX_BALANCE)},
+        ${String(PETTY_CASH_MAX_BALANCE)}::numeric,
+        ${String(PETTY_CASH_MAX_BALANCE)}::numeric,
         'open'
       FROM inserted_refill
       ON CONFLICT (store_id, year_month)
@@ -277,7 +302,7 @@ export async function POST(req: NextRequest, { params }: Params) {
 
     legacy_store_update AS (
       UPDATE stores
-      SET petty_cash_balance = ${String(PETTY_CASH_MAX_BALANCE)}
+      SET petty_cash_balance = ${String(PETTY_CASH_MAX_BALANCE)}::numeric
       WHERE id = ${storeId}
         AND EXISTS (SELECT 1 FROM inserted_refill)
       RETURNING id

@@ -176,7 +176,7 @@ function TxRow({
             <ShieldCheck className="h-3.5 w-3.5" />
             Verified
           </span>
-        ) : (
+        ) : tx.canVerify ? (
           <button
             onClick={() => onVerify(tx.id)}
             disabled={verifying}
@@ -185,6 +185,10 @@ function TxRow({
             {verifying ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCheck className="h-3 w-3" />}
             Verify
           </button>
+        ) : (
+          <span className="text-[10px] font-bold text-slate-400">
+            Not ready
+          </span>
         )}
       </div>
     </div>

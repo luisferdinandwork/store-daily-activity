@@ -9,8 +9,8 @@ import { areas, stores, users } from '@/lib/db/schema/core';
 import {
   PETTY_CASH_MAX_BALANCE,
   pettyCashPeriods,
-  pettyCashTransactions,
   pettyCashRefills,
+  pettyCashTransactions,
 } from '@/lib/db/schema/petty-cash';
 
 function getJakartaMonth() {
@@ -34,11 +34,16 @@ export type PettyCashTxRow = {
   id: number;
   amount: string;
   description: string;
+  status: string;
   imageUrl: string | null;
   submittedBy: string;
   submittedById: string;
+  approvedAt: string | null;
+  rejectedAt: string | null;
+  rejectionReason: string | null;
   verifiedAt: string | null;
   verifiedBy: string | null;
+  canVerify: boolean;
   createdAt: string;
 };
 
@@ -54,7 +59,11 @@ export type PettyCashStoreRow = {
   periodStatus: 'open' | 'closed';
 
   monthlySpend: string;
+
+  pendingOpsCount: number;
+  missingReceiptCount: number;
   unverifiedCount: number;
+  rejectedCount: number;
 
   refillIssued: boolean;
   refillAmount: string | null;
@@ -80,7 +89,6 @@ export async function GET(
   }
 
   const currentMonth = getJakartaMonth();
-
   const month = req.nextUrl.searchParams.get('month') ?? currentMonth;
 
   if (!isValidMonth(month)) {
@@ -105,15 +113,14 @@ export async function GET(
     return NextResponse.json({ success: true, month, data: [] });
   }
 
-  const storeIds = storeRows.map((s) => s.id);
+  const storeIds = storeRows.map((store) => store.id);
 
-  // For the active month, make sure every store has a monthly ledger row.
   if (month === currentMonth) {
     await db
       .insert(pettyCashPeriods)
       .values(
-        storeRows.map((s) => ({
-          storeId: s.id,
+        storeRows.map((store) => ({
+          storeId: store.id,
           yearMonth: month,
           openingBalance: String(PETTY_CASH_MAX_BALANCE),
           currentBalance: String(PETTY_CASH_MAX_BALANCE),
@@ -142,7 +149,7 @@ export async function GET(
       ),
     );
 
-  const periodByStore = new Map(periodRows.map((p) => [p.storeId, p]));
+  const periodByStore = new Map(periodRows.map((period) => [period.storeId, period]));
 
   const txRows = await db
     .select({
@@ -150,7 +157,11 @@ export async function GET(
       storeId: pettyCashTransactions.storeId,
       amount: pettyCashTransactions.amount,
       description: pettyCashTransactions.description,
+      status: pettyCashTransactions.status,
       imageUrl: pettyCashTransactions.imageUrl,
+      approvedAt: pettyCashTransactions.approvedAt,
+      rejectedAt: pettyCashTransactions.rejectedAt,
+      rejectionReason: pettyCashTransactions.rejectionReason,
       verifiedAt: pettyCashTransactions.verifiedAt,
       createdAt: pettyCashTransactions.createdAt,
       submittedById: pettyCashTransactions.userId,
@@ -175,9 +186,7 @@ export async function GET(
     .from(pettyCashRefills)
     .where(eq(pettyCashRefills.yearMonth, month));
 
-  const refillByStore = new Map(
-    refillRows.map((r) => [r.storeId, r]),
-  );
+  const refillByStore = new Map(refillRows.map((refill) => [refill.storeId, refill]));
 
   const txByStore = new Map<number, typeof txRows>();
 
@@ -194,14 +203,28 @@ export async function GET(
     const refill = refillByStore.get(store.id) ?? null;
     const txList = txByStore.get(store.id) ?? [];
 
-    const monthlySpend = txList.reduce(
+    const approvedTx = txList.filter((tx) => tx.status === 'ops_approved');
+
+    const monthlySpend = approvedTx.reduce(
       (sum, tx) => sum + Number(tx.amount),
       0,
     );
 
+    const pendingOpsCount = txList.filter((tx) => tx.status === 'pending_ops').length;
+
+    const missingReceiptCount = txList.filter(
+      (tx) => tx.status === 'ops_approved' && !tx.imageUrl,
+    ).length;
+
+    const financeUnverifiedCount = txList.filter(
+      (tx) => tx.status === 'ops_approved' && tx.imageUrl && !tx.verifiedAt,
+    ).length;
+
+    const rejectedCount = txList.filter((tx) => tx.status === 'ops_rejected').length;
+
     const openingBalance = period?.openingBalance ?? String(PETTY_CASH_MAX_BALANCE);
 
-    const calculatedBalance = Math.max(
+    const fallbackBalance = Math.max(
       0,
       Number(openingBalance) - monthlySpend,
     );
@@ -209,9 +232,7 @@ export async function GET(
     const balance =
       period?.closingBalance ??
       period?.currentBalance ??
-      String(calculatedBalance);
-
-    const unverifiedCount = txList.filter((tx) => !tx.verifiedAt).length;
+      String(fallbackBalance);
 
     return {
       storeId: store.id,
@@ -225,7 +246,11 @@ export async function GET(
       periodStatus: period?.status === 'closed' ? 'closed' : 'open',
 
       monthlySpend: String(monthlySpend),
-      unverifiedCount,
+
+      pendingOpsCount,
+      missingReceiptCount,
+      unverifiedCount: pendingOpsCount + missingReceiptCount + financeUnverifiedCount,
+      rejectedCount,
 
       refillIssued: Boolean(refill),
       refillAmount: refill?.refillAmount ?? null,
@@ -235,11 +260,16 @@ export async function GET(
         id: tx.id,
         amount: tx.amount,
         description: tx.description,
+        status: tx.status,
         imageUrl: tx.imageUrl,
         submittedBy: tx.submitterName,
         submittedById: tx.submittedById,
+        approvedAt: tx.approvedAt ? new Date(tx.approvedAt).toISOString() : null,
+        rejectedAt: tx.rejectedAt ? new Date(tx.rejectedAt).toISOString() : null,
+        rejectionReason: tx.rejectionReason,
         verifiedAt: tx.verifiedAt ? new Date(tx.verifiedAt).toISOString() : null,
         verifiedBy: tx.verifierName ?? null,
+        canVerify: tx.status === 'ops_approved' && Boolean(tx.imageUrl) && !tx.verifiedAt,
         createdAt: new Date(tx.createdAt).toISOString(),
       })),
     };
@@ -254,5 +284,9 @@ export async function GET(
     return a.storeName.localeCompare(b.storeName);
   });
 
-  return NextResponse.json({ success: true, month, data });
+  return NextResponse.json({
+    success: true,
+    month,
+    data,
+  });
 }
