@@ -29,51 +29,47 @@ export const areas = pgTable('areas', {
 // ─── Store ────────────────────────────────────────────────────────────────────
 
 export const stores = pgTable('stores', {
-  id:               serial('id').primaryKey(),
-  name:             text('name').notNull(),
-  address:          text('address').notNull(),
-  latitude:         decimal('latitude',  { precision: 10, scale: 7 }),
-  longitude:        decimal('longitude', { precision: 10, scale: 7 }),
-  geofenceRadiusM:  decimal('geofence_radius_m', { precision: 8, scale: 2 }).default('100'),
+  id: serial('id').primaryKey(),
+
+  /**
+   * Business Central / POS store code.
+   * This must match ppQueryTransSalesEntries.storeNo, e.g. FF001, FS033.
+   * Keep this separate from `name` so the display name can change without
+   * breaking performance matching.
+   */
+  storeNo: text('store_no').notNull(),
+
+  name:    text('name').notNull(),
+  address: text('address').notNull(),
+
+  latitude:        decimal('latitude',         { precision: 10, scale: 7 }),
+  longitude:       decimal('longitude',        { precision: 10, scale: 7 }),
+  geofenceRadiusM: decimal('geofence_radius_m',{ precision:  8, scale: 2 }).default('100'),
+
   areaId:           integer('area_id').references(() => areas.id).notNull(),
   pettyCashBalance: decimal('petty_cash_balance', { precision: 12, scale: 2 }).default('1000000'),
-  createdAt:        timestamp('created_at').defaultNow().notNull(),
-  updatedAt:        timestamp('updated_at').defaultNow().notNull(),
-});
+
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => ({
+  storeNoUnique: unique('stores_store_no_unique').on(t.storeNo),
+  areaIdx:       index('stores_area_idx').on(t.areaId),
+}));
 
 // ─── User ─────────────────────────────────────────────────────────────────────
-//
-// Login identity is now NIK, not email.
-//
-// Important:
-// - users.id remains the internal generated app ID.
-// - users.nik is the unique office/employee identity.
-// - All FK references still point to users.id, so historical task,
-//   schedule, attendance, report, and verification records stay stable.
-// - NIK can be used later for sync to office API / sales API.
 
 export const users = pgTable('users', {
   id: text('id')
     .primaryKey()
     .$defaultFn(() => crypto.randomUUID()),
 
-  nik: text('nik').notNull().unique(),
-
+  nik:      text('nik').notNull().unique(),
   name:     text('name').notNull(),
   password: text('password').notNull(),
 
-  /**
-   * roleId / employeeTypeId are FKs into lookup tables in lookups.ts.
-   * Admins should soft-disable roles/types via isActive instead of deleting.
-   */
   roleId:         integer('role_id').references(() => userRoles.id).notNull(),
   employeeTypeId: integer('employee_type_id').references(() => employeeTypes.id),
 
-  /**
-   * Current/default assignment.
-   * This is safe to update when a user moves store.
-   * Old schedule/task rows keep their own storeId snapshots.
-   */
   homeStoreId: integer('home_store_id').references(() => stores.id),
   areaId:      integer('area_id').references(() => areas.id),
 
@@ -82,47 +78,47 @@ export const users = pgTable('users', {
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
-  nikIdx: index('users_nik_idx').on(t.nik),
+  nikIdx:       index('users_nik_idx').on(t.nik),
   homeStoreIdx: index('users_home_store_idx').on(t.homeStoreId),
-  areaIdx: index('users_area_idx').on(t.areaId),
+  areaIdx:      index('users_area_idx').on(t.areaId),
+}));
+
+// ─── Business Central API Settings ───────────────────────────────────────────
+
+export const businessCentralSettings = pgTable('business_central_settings', {
+  id: serial('id').primaryKey(),
+
+  code: text('code').notNull().default('sales_entries'),
+  name: text('name').notNull().default('Business Central Sales Entries'),
+
+  apiUrl:      text('api_url').notNull(),
+  username:    text('username'),
+  password:    text('password'),
+  bearerToken: text('bearer_token'),
+  authType:    text('auth_type').default('basic').notNull(),
+
+  isActive: boolean('is_active').default(true).notNull(),
+
+  createdBy: text('created_by').references(() => users.id),
+  updatedBy: text('updated_by').references(() => users.id),
+
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => ({
+  codeUnique: unique('business_central_settings_code_unique').on(t.code),
+  activeIdx:  index('business_central_settings_active_idx').on(t.isActive),
 }));
 
 // ─── User Store / Role Assignment History ─────────────────────────────────────
-//
-// This table keeps movement history when an employee moves from one store
-// to another or changes role/type.
-//
-// New fields:
-//   isTemporary        - if true, this is a time-bound transfer that will
-//                        auto-revert on `effectiveTo`.
-//   previousStoreId    - snapshot of where the user was before this transfer.
-//                        Used by auto-revert.
-//   previousRoleId
-//   previousEmployeeTypeId
-//   previousAreaId
-//   revertedAt         - set when a temp assignment has actually been
-//                        auto-reverted (so we don't process it twice).
 
 export const userStoreAssignments = pgTable('user_store_assignments', {
   id: serial('id').primaryKey(),
 
-  userId: text('user_id')
-    .references(() => users.id, { onDelete: 'cascade' })
-    .notNull(),
-
-  storeId: integer('store_id')
-    .references(() => stores.id)
-    .notNull(),
-
-  areaId: integer('area_id')
-    .references(() => areas.id),
-
-  roleId: integer('role_id')
-    .references(() => userRoles.id)
-    .notNull(),
-
-  employeeTypeId: integer('employee_type_id')
-    .references(() => employeeTypes.id),
+  userId:  text('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  storeId: integer('store_id').references(() => stores.id).notNull(),
+  areaId:  integer('area_id').references(() => areas.id),
+  roleId:  integer('role_id').references(() => userRoles.id).notNull(),
+  employeeTypeId: integer('employee_type_id').references(() => employeeTypes.id),
 
   effectiveFrom: timestamp('effective_from').defaultNow().notNull(),
   effectiveTo:   timestamp('effective_to'),
@@ -130,24 +126,21 @@ export const userStoreAssignments = pgTable('user_store_assignments', {
   isActive:    boolean('is_active').default(true).notNull(),
   isTemporary: boolean('is_temporary').default(false).notNull(),
 
-  // Snapshot of where this user was BEFORE this assignment took effect.
-  // Used by the auto-revert job for temporary transfers.
   previousStoreId:        integer('previous_store_id').references(() => stores.id),
   previousAreaId:         integer('previous_area_id').references(() => areas.id),
   previousRoleId:         integer('previous_role_id').references(() => userRoles.id),
   previousEmployeeTypeId: integer('previous_employee_type_id').references(() => employeeTypes.id),
 
   revertedAt: timestamp('reverted_at'),
-
   assignedBy: text('assigned_by').references(() => users.id),
   notes:      text('notes'),
 
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
-  userActiveIdx:    index('user_store_assignments_user_active_idx').on(t.userId, t.isActive),
-  storeActiveIdx:   index('user_store_assignments_store_active_idx').on(t.storeId, t.isActive),
-  tempExpiryIdx:    index('user_store_assignments_temp_expiry_idx').on(t.isTemporary, t.isActive, t.effectiveTo),
+  userActiveIdx:  index('user_store_assignments_user_active_idx').on(t.userId, t.isActive),
+  storeActiveIdx: index('user_store_assignments_store_active_idx').on(t.storeId, t.isActive),
+  tempExpiryIdx:  index('user_store_assignments_temp_expiry_idx').on(t.isTemporary, t.isActive, t.effectiveTo),
 }));
 
 // ─── Monthly Schedule ─────────────────────────────────────────────────────────
@@ -155,7 +148,7 @@ export const userStoreAssignments = pgTable('user_store_assignments', {
 export const monthlySchedules = pgTable('monthly_schedules', {
   id:         serial('id').primaryKey(),
   storeId:    integer('store_id').references(() => stores.id).notNull(),
-  yearMonth:  text('year_month').notNull(),   // "YYYY-MM"
+  yearMonth:  text('year_month').notNull(),
   importedBy: text('imported_by').references(() => users.id),
   note:       text('note'),
   createdAt:  timestamp('created_at').defaultNow().notNull(),
@@ -220,64 +213,31 @@ export const breakSessions = pgTable('break_sessions', {
   breakType:    breakTypeEnum('break_type').notNull(),
   breakOutTime: timestamp('break_out_time').notNull(),
   returnTime:   timestamp('return_time'),
-
-  cashOut: decimal('cash_out', { precision: 12, scale: 2 }).notNull(),
-  cashIn:  decimal('cash_in',  { precision: 12, scale: 2 }),
-
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  cashOut:      decimal('cash_out', { precision: 12, scale: 2 }).notNull(),
+  cashIn:       decimal('cash_in',  { precision: 12, scale: 2 }),
+  createdAt:    timestamp('created_at').defaultNow().notNull(),
+  updatedAt:    timestamp('updated_at').defaultNow().notNull(),
 });
 
-// ─── Petty Cash & Reports ─────────────────────────────────────────────────────
-
-export const pettyCashTransactions = pgTable('petty_cash_transactions', {
-  id:          serial('id').primaryKey(),
-  amount:      decimal('amount', { precision: 12, scale: 2 }).notNull(),
-  description: text('description').notNull(),
-  userId:      text('user_id').references(() => users.id).notNull(),
-  storeId:     integer('store_id').references(() => stores.id).notNull(),
-  approvedBy:  text('approved_by').references(() => users.id),
-  approvedAt:  timestamp('approved_at'),
-  createdAt:   timestamp('created_at').defaultNow().notNull(),
-  updatedAt:   timestamp('updated_at').defaultNow().notNull(),
-});
-
-// ─── Issues ─────────────────────────────────────────────────────────────────
-//
-// When an employee reports an issue they now choose WHO it should go to. That
-// target is a *role* (Operations, Finance, IT, …) rather than a single named
-// person, so the routing keeps working as people join/leave and so new
-// departments can be added purely from the admin lookup table — no schema
-// change required.
-//
-//   assignedToRoleId → userRoles.id
-//     Only roles with userRoles.canReceiveIssues = true are offered in the UI.
-//     Whoever holds that role and is in scope (e.g. Ops for the store's area,
-//     or Ops HO globally) is responsible for following the issue up.
-//
-// `attachmentUrls` is still stored as a JSON-encoded string[] for backwards
-// compatibility with the existing upload flow.
+// ─── Issues ──────────────────────────────────────────────────────────────────
 
 export const issues = pgTable('issues', {
-  id:             serial('id').primaryKey(),
-  title:          text('title').notNull(),
-  description:    text('description').notNull(),
+  id:          serial('id').primaryKey(),
+  title:       text('title').notNull(),
+  description: text('description').notNull(),
 
-  userId:         text('user_id').references(() => users.id).notNull(),   // reporter
-  storeId:        integer('store_id').references(() => stores.id).notNull(),
-
-  // Primary routing target kept for backward compatibility.
-  // New multi-role routing is stored in issueRoleAssignments below.
+  userId:           text('user_id').references(() => users.id).notNull(),
+  storeId:          integer('store_id').references(() => stores.id).notNull(),
   assignedToRoleId: integer('assigned_to_role_id').references(() => userRoles.id).notNull(),
 
   status:         issueStatusEnum('status').default('reported').notNull(),
-  attachmentUrls: text('attachment_urls'),                       // JSON string[]
+  attachmentUrls: text('attachment_urls'),
 
-  reviewedBy:     text('reviewed_by').references(() => users.id),
-  reviewedAt:     timestamp('reviewed_at'),
+  reviewedBy: text('reviewed_by').references(() => users.id),
+  reviewedAt: timestamp('reviewed_at'),
 
-  createdAt:      timestamp('created_at').defaultNow().notNull(),
-  updatedAt:      timestamp('updated_at').defaultNow().notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
   reporterIdx:     index('issues_reporter_idx').on(t.userId),
   storeIdx:        index('issues_store_idx').on(t.storeId),
@@ -285,20 +245,11 @@ export const issues = pgTable('issues', {
   statusIdx:       index('issues_status_idx').on(t.status),
 }));
 
-// Multi-role routing for issues.
-// One issue can be sent to Ops + Finance + IT, etc.
-// For Operations visibility, app/API logic scopes Ops Area users to the issue
-// store's area and lets Ops HO see all operation-routed issues.
 export const issueRoleAssignments = pgTable('issue_role_assignments', {
   id: serial('id').primaryKey(),
 
-  issueId: integer('issue_id')
-    .references(() => issues.id, { onDelete: 'cascade' })
-    .notNull(),
-
-  roleId: integer('role_id')
-    .references(() => userRoles.id, { onDelete: 'cascade' })
-    .notNull(),
+  issueId: integer('issue_id').references(() => issues.id, { onDelete: 'cascade' }).notNull(),
+  roleId:  integer('role_id').references(() => userRoles.id, { onDelete: 'cascade' }).notNull(),
 
   createdAt: timestamp('created_at').defaultNow().notNull(),
 }, (t) => ({
@@ -323,7 +274,10 @@ export const dailyReports = pgTable('daily_reports', {
   updatedAt:     timestamp('updated_at').defaultNow().notNull(),
 });
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ─── Types ───────────────────────────────────────────────────────────────────
+//
+// NOTE: PettyCashTransaction types are now in petty-cash.ts.
+// pettyCashTransactions was removed from this file.
 
 export type Area                    = typeof areas.$inferSelect;
 export type Store                   = typeof stores.$inferSelect;
@@ -342,4 +296,6 @@ export type Issue                   = typeof issues.$inferSelect;
 export type NewIssue                = typeof issues.$inferInsert;
 export type IssueRoleAssignment     = typeof issueRoleAssignments.$inferSelect;
 export type NewIssueRoleAssignment  = typeof issueRoleAssignments.$inferInsert;
+export type BusinessCentralSetting    = typeof businessCentralSettings.$inferSelect;
+export type NewBusinessCentralSetting = typeof businessCentralSettings.$inferInsert;
 export type DailyReport             = typeof dailyReports.$inferSelect;

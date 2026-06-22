@@ -1,5 +1,5 @@
 {
-  "id": "0e247138-e988-464a-bdff-248bef94d3cb",
+  "id": "d2da84ac-e464-4c34-b2a5-36725433848b",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -341,6 +341,154 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.business_central_settings": {
+      "name": "business_central_settings",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "code": {
+          "name": "code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'sales_entries'"
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'Business Central Sales Entries'"
+        },
+        "api_url": {
+          "name": "api_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "username": {
+          "name": "username",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "password": {
+          "name": "password",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "bearer_token": {
+          "name": "bearer_token",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "auth_type": {
+          "name": "auth_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'basic'"
+        },
+        "is_active": {
+          "name": "is_active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "updated_by": {
+          "name": "updated_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "business_central_settings_active_idx": {
+          "name": "business_central_settings_active_idx",
+          "columns": [
+            {
+              "expression": "is_active",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "business_central_settings_created_by_users_id_fk": {
+          "name": "business_central_settings_created_by_users_id_fk",
+          "tableFrom": "business_central_settings",
+          "tableTo": "users",
+          "columnsFrom": [
+            "created_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "business_central_settings_updated_by_users_id_fk": {
+          "name": "business_central_settings_updated_by_users_id_fk",
+          "tableFrom": "business_central_settings",
+          "tableTo": "users",
+          "columnsFrom": [
+            "updated_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "business_central_settings_code_unique": {
+          "name": "business_central_settings_code_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "code"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.daily_reports": {
       "name": "daily_reports",
       "schema": "",
@@ -484,6 +632,111 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.issue_role_assignments": {
+      "name": "issue_role_assignments",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "issue_id": {
+          "name": "issue_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "role_id": {
+          "name": "role_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "issue_role_assignments_issue_idx": {
+          "name": "issue_role_assignments_issue_idx",
+          "columns": [
+            {
+              "expression": "issue_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "issue_role_assignments_role_idx": {
+          "name": "issue_role_assignments_role_idx",
+          "columns": [
+            {
+              "expression": "role_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "issue_role_assignments_issue_id_issues_id_fk": {
+          "name": "issue_role_assignments_issue_id_issues_id_fk",
+          "tableFrom": "issue_role_assignments",
+          "tableTo": "issues",
+          "columnsFrom": [
+            "issue_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "issue_role_assignments_role_id_user_roles_id_fk": {
+          "name": "issue_role_assignments_role_id_user_roles_id_fk",
+          "tableFrom": "issue_role_assignments",
+          "tableTo": "user_roles",
+          "columnsFrom": [
+            "role_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "issue_role_assignments_issue_role_unique": {
+          "name": "issue_role_assignments_issue_role_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "issue_id",
+            "role_id"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -1166,6 +1419,12 @@
           "primaryKey": true,
           "notNull": true
         },
+        "store_no": {
+          "name": "store_no",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
         "name": {
           "name": "name",
           "type": "text",
@@ -1225,7 +1484,23 @@
           "default": "now()"
         }
       },
-      "indexes": {},
+      "indexes": {
+        "stores_area_idx": {
+          "name": "stores_area_idx",
+          "columns": [
+            {
+              "expression": "area_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {
         "stores_area_id_areas_id_fk": {
           "name": "stores_area_id_areas_id_fk",
@@ -1242,7 +1517,15 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "stores_store_no_unique": {
+          "name": "stores_store_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "store_no"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -4993,6 +5276,24 @@
           "primaryKey": false,
           "notNull": false
         },
+        "eod_edc_settlement_photo": {
+          "name": "eod_edc_settlement_photo",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "eod_edc_settlement_photo_by": {
+          "name": "eod_edc_settlement_photo_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "eod_edc_settlement_photo_at": {
+          "name": "eod_edc_settlement_photo_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
         "edc_settlement_done": {
           "name": "edc_settlement_done",
           "type": "boolean",
@@ -5039,24 +5340,6 @@
         },
         "edc_summary_at": {
           "name": "edc_summary_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "eod_edc_settlement_photo": {
-          "name": "eod_edc_settlement_photo",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "eod_edc_settlement_photo_by": {
-          "name": "eod_edc_settlement_photo_by",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "eod_edc_settlement_photo_at": {
-          "name": "eod_edc_settlement_photo_at",
           "type": "timestamp",
           "primaryKey": false,
           "notNull": false
@@ -5312,6 +5595,19 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
+        "store_closing_tasks_eod_edc_settlement_photo_by_users_id_fk": {
+          "name": "store_closing_tasks_eod_edc_settlement_photo_by_users_id_fk",
+          "tableFrom": "store_closing_tasks",
+          "tableTo": "users",
+          "columnsFrom": [
+            "eod_edc_settlement_photo_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
         "store_closing_tasks_edc_settlement_by_users_id_fk": {
           "name": "store_closing_tasks_edc_settlement_by_users_id_fk",
           "tableFrom": "store_closing_tasks",
@@ -5331,19 +5627,6 @@
           "tableTo": "users",
           "columnsFrom": [
             "edc_summary_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "store_closing_tasks_eod_edc_settlement_photo_by_users_id_fk": {
-          "name": "store_closing_tasks_eod_edc_settlement_photo_by_users_id_fk",
-          "tableFrom": "store_closing_tasks",
-          "tableTo": "users",
-          "columnsFrom": [
-            "eod_edc_settlement_photo_by"
           ],
           "columnsTo": [
             "id"
@@ -6807,6 +7090,488 @@
           "nullsNotDistinct": false,
           "columns": [
             "code"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.employee_monthly_targets": {
+      "name": "employee_monthly_targets",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "store_monthly_target_id": {
+          "name": "store_monthly_target_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "store_id": {
+          "name": "store_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "year_month": {
+          "name": "year_month",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target_role_code": {
+          "name": "target_role_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'SA'"
+        },
+        "target_weight_pct": {
+          "name": "target_weight_pct",
+          "type": "numeric(7, 2)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'100.00'"
+        },
+        "monthly_sales_target": {
+          "name": "monthly_sales_target",
+          "type": "numeric(14, 2)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
+        },
+        "monthly_transaction_target": {
+          "name": "monthly_transaction_target",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "monthly_atv_target": {
+          "name": "monthly_atv_target",
+          "type": "numeric(12, 2)",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'0'"
+        },
+        "notes": {
+          "name": "notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "is_active": {
+          "name": "is_active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "updated_by": {
+          "name": "updated_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "employee_monthly_targets_user_store_month_idx": {
+          "name": "employee_monthly_targets_user_store_month_idx",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "store_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "year_month",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "employee_monthly_targets_store_month_idx": {
+          "name": "employee_monthly_targets_store_month_idx",
+          "columns": [
+            {
+              "expression": "store_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "year_month",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "employee_monthly_targets_plan_idx": {
+          "name": "employee_monthly_targets_plan_idx",
+          "columns": [
+            {
+              "expression": "store_monthly_target_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "employee_monthly_targets_role_idx": {
+          "name": "employee_monthly_targets_role_idx",
+          "columns": [
+            {
+              "expression": "target_role_code",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "employee_monthly_targets_active_idx": {
+          "name": "employee_monthly_targets_active_idx",
+          "columns": [
+            {
+              "expression": "is_active",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "employee_monthly_targets_store_monthly_target_id_store_monthly_targets_id_fk": {
+          "name": "employee_monthly_targets_store_monthly_target_id_store_monthly_targets_id_fk",
+          "tableFrom": "employee_monthly_targets",
+          "tableTo": "store_monthly_targets",
+          "columnsFrom": [
+            "store_monthly_target_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "employee_monthly_targets_user_id_users_id_fk": {
+          "name": "employee_monthly_targets_user_id_users_id_fk",
+          "tableFrom": "employee_monthly_targets",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "employee_monthly_targets_store_id_stores_id_fk": {
+          "name": "employee_monthly_targets_store_id_stores_id_fk",
+          "tableFrom": "employee_monthly_targets",
+          "tableTo": "stores",
+          "columnsFrom": [
+            "store_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "employee_monthly_targets_created_by_users_id_fk": {
+          "name": "employee_monthly_targets_created_by_users_id_fk",
+          "tableFrom": "employee_monthly_targets",
+          "tableTo": "users",
+          "columnsFrom": [
+            "created_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "employee_monthly_targets_updated_by_users_id_fk": {
+          "name": "employee_monthly_targets_updated_by_users_id_fk",
+          "tableFrom": "employee_monthly_targets",
+          "tableTo": "users",
+          "columnsFrom": [
+            "updated_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "employee_monthly_targets_user_store_month_unique": {
+          "name": "employee_monthly_targets_user_store_month_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "user_id",
+            "store_id",
+            "year_month"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.store_monthly_targets": {
+      "name": "store_monthly_targets",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "store_id": {
+          "name": "store_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "year_month": {
+          "name": "year_month",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target_source": {
+          "name": "target_source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'employee_rollup'"
+        },
+        "is_locked": {
+          "name": "is_locked",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "locked_at": {
+          "name": "locked_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "locked_by": {
+          "name": "locked_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "notes": {
+          "name": "notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "is_active": {
+          "name": "is_active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "updated_by": {
+          "name": "updated_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "store_monthly_targets_store_month_idx": {
+          "name": "store_monthly_targets_store_month_idx",
+          "columns": [
+            {
+              "expression": "store_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "year_month",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "store_monthly_targets_active_idx": {
+          "name": "store_monthly_targets_active_idx",
+          "columns": [
+            {
+              "expression": "is_active",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "store_monthly_targets_store_id_stores_id_fk": {
+          "name": "store_monthly_targets_store_id_stores_id_fk",
+          "tableFrom": "store_monthly_targets",
+          "tableTo": "stores",
+          "columnsFrom": [
+            "store_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "store_monthly_targets_locked_by_users_id_fk": {
+          "name": "store_monthly_targets_locked_by_users_id_fk",
+          "tableFrom": "store_monthly_targets",
+          "tableTo": "users",
+          "columnsFrom": [
+            "locked_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "store_monthly_targets_created_by_users_id_fk": {
+          "name": "store_monthly_targets_created_by_users_id_fk",
+          "tableFrom": "store_monthly_targets",
+          "tableTo": "users",
+          "columnsFrom": [
+            "created_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "store_monthly_targets_updated_by_users_id_fk": {
+          "name": "store_monthly_targets_updated_by_users_id_fk",
+          "tableFrom": "store_monthly_targets",
+          "tableTo": "users",
+          "columnsFrom": [
+            "updated_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "store_monthly_targets_store_month_unique": {
+          "name": "store_monthly_targets_store_month_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "store_id",
+            "year_month"
           ]
         }
       },

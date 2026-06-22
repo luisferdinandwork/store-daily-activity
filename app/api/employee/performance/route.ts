@@ -16,10 +16,6 @@ export async function GET(req: NextRequest) {
 
     const url = new URL(req.url);
 
-    /**
-     * Optional:
-     * /api/employee/performance?date=2026-05-24
-     */
     const dateParam = url.searchParams.get('date');
     const date = dateParam ? new Date(`${dateParam}T00:00:00`) : new Date();
 

@@ -11,6 +11,7 @@ import {
   HelpCircle,
   Settings,
   ChevronRight,
+  DollarSign,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -24,7 +25,7 @@ interface MenuItem {
 }
 
 const MORE_MENU_ITEMS: MenuItem[] = [
-  { label: 'Issues & Reports', href: '/employee/issues', icon: MessageSquare, color: 'text-blue-500' },
+  { label: 'Petty Cash', href: '/employee/pettycash', icon: DollarSign, color: 'text-blue-500' },
   { label: 'Help & FAQ',       href: '/employee/help',    icon: HelpCircle,    color: 'text-emerald-500' },
   { label: 'Settings',         href: '/employee/settings', icon: Settings,      color: 'text-muted-foreground' },
 ];

@@ -29,30 +29,53 @@ interface AttSlot {
 
 interface PerformanceData {
   success: boolean;
+
+  employeeId: string;
+  employeeNik: string;
   employeeName: string;
-  storeName:    string;
-  date:      string;
+  salesStaffCode: string;
+
+  storeId: number | null;
+  storeNo: string | null;
+  storeName: string;
+
+  date: string;
   yearMonth: string;
-  salesAmount:       number;
-  salesTarget:       number;
-  salesPct:          number;
-  transactionCount:  number;
+
+  scheduledDaysInMonth: number;
+  targetSource?: 'employee' | 'store_split' | 'none';
+
+  salesAmount: number;
+  salesTarget: number;
+  salesPct: number;
+
+  transactionCount: number;
   transactionTarget: number;
-  transactionPct:    number;
-  monthlySalesAmount:        number;
-  monthlySalesTarget?:       number;
-  monthlySalesPct?:          number;
-  monthlyTransactionCount:   number;
-  monthlyTransactionTarget?: number;
-  monthlyTransactionPct?:    number;
-  monthlyAtv:                number;
-  storeMonthlySalesAmount:        number;
-  storeMonthlyTransactionCount:   number;
-  storeMonthlySalesTarget?:       number;
-  storeMonthlySalesPct?:          number;
-  storeMonthlyTransactionTarget?: number;
-  storeMonthlyTransactionPct?:    number;
+  transactionPct: number;
+
+  monthlySalesAmount: number;
+  monthlySalesTarget: number;
+  monthlySalesPct: number;
+
+  monthlyTransactionCount: number;
+  monthlyTransactionTarget: number;
+  monthlyTransactionPct: number;
+
+  monthlyAtv: number;
+  monthlyAtvTarget?: number;
+
+  storeMonthlySalesAmount: number;
+  storeMonthlySalesTarget: number;
+  storeMonthlySalesPct: number;
+
+  storeMonthlyTransactionCount: number;
+  storeMonthlyTransactionTarget: number;
+  storeMonthlyTransactionPct: number;
+
+  storeMonthlyAtvTarget?: number;
+
   employeeStoreContributionPct: number;
+
   warning?: string;
 }
 
@@ -162,7 +185,7 @@ export default function EmployeeDashboard() {
   const isOnBreak    = primaryAtt?.onBreak ?? false;
   const attCfg       = primaryAtt ? ATT_CFG[primaryAtt.status] : null;
 
-  const hasPerf      = perf && perf.success && !perf.warning;
+  const hasPerf      = !!perf?.success;
   const monthLabel   = monthLabelFromYm(perf?.yearMonth);
 
   return (
@@ -230,7 +253,11 @@ export default function EmployeeDashboard() {
           ) : (
             <div className="rounded-2xl border border-dashed px-5 py-8 text-center">
               <p className="text-xs font-medium text-slate-400">
-                {perf?.warning ?? 'Data performa tidak tersedia'}
+                {perf?.warning && (
+                  <div className="mb-3 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
+                    {perf.warning}
+                  </div>
+                )}
               </p>
             </div>
           )}

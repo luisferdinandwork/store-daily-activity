@@ -2,23 +2,30 @@
   "name": "sports-retail-management",
   "version": "0.1.0",
   "private": true,
-  "scripts": {
+  "scripts": 
+  {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+
     "db:generate": "tsx scripts/generate.ts",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:clear": "tsx scripts/clear.ts",
     "db:studio": "drizzle-kit studio",
     "db:reset": "tsx scripts/reset.ts",
+
     "seed:setup": "dotenv -e .env.local -- tsx scripts/seed-setup.ts",
     "seed:schedules": "dotenv -e .env.local -- tsx scripts/seed-current-month.ts",
     "seed:attendance": "dotenv -e .env.local -- tsx scripts/seed-attendance.ts",
     "seed:tasks": "dotenv -e .env.local -- tsx scripts/seed-tasks.ts",
     "seed:shift-tasks": "dotenv -e .env.local -- tsx scripts/seed-shift-tasks.ts",
-    "seed:all": "npm run seed:setup && npm run seed:shift-tasks && npm run seed:schedules && npm run seed:tasks && npm run seed:attendance"
-    },
+    "seed:bc-settings": "dotenv -e .env.local -- tsx scripts/seed-business-central-settings.ts",
+    "seed:performance-targets": "dotenv -e .env.local -- tsx scripts/seed-performance-targets.ts",
+    "seed:petty-cash": "dotenv -e .env.local -- tsx scripts/seed-petty-cash.ts",
+
+    "seed:all": "npm run seed:setup && npm run seed:bc-settings && npm run seed:performance-targets && npm run seed:shift-tasks && npm run seed:schedules && npm run seed:tasks && npm run seed:attendance && npm run seed:petty-cash"
+  },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.11.1",
     "@neondatabase/serverless": "^1.0.2",

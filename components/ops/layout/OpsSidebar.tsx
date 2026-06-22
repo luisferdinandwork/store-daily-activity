@@ -1,12 +1,5 @@
 'use client';
 // components/ops/layout/OpsSidebar.tsx
-//
-// Changes from original:
-// - Accepts `collapsed` + `onToggle` props from OpsNavbar (or can self-manage).
-// - When collapsed: renders icon-only rail (w-16) with Tooltip on each item.
-// - When expanded: full w-64 layout (unchanged look from original).
-// - Tooltip uses shadcn Tooltip primitives.
-// - Added "Shift & Tasks" config link directly below the Task Management accordion.
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
@@ -21,6 +14,7 @@ import {
   ClipboardCheck,
   DoorClosed,
   FileText,
+  KeyRound,
   Layers,
   LayoutDashboard,
   ListChecks,
@@ -29,8 +23,10 @@ import {
   MonitorCheck,
   PackageCheck,
   ReceiptText,
+  Settings,
   Shirt,
   Store,
+  Target,
   UserCheck,
   UsersRound,
   Wallet,
@@ -59,6 +55,23 @@ const SHIFT_TASKS_ITEM = {
   label: 'Shift & Tasks',
   icon: Layers,
   key: 'shift-tasks',
+};
+
+// New: employee performance target management. HO Ops sees all areas/stores,
+// Area Ops is scoped to their assigned area (resolved server-side).
+const PERFORMANCE_TARGETS_ITEM = {
+  href: '/ops/performance-targets',
+  label: 'Performance Targets',
+  icon: Target,
+  key: 'performance-targets',
+};
+
+// New: Business Central API credentials management (Settings group).
+const BC_CREDENTIALS_ITEM = {
+  href: '/ops/settings/bc-credentials',
+  label: 'BC Credentials',
+  icon: KeyRound,
+  key: 'bc-credentials',
 };
 
 const TASK_ITEMS = [
@@ -95,8 +108,15 @@ const NAV = [
   {
     section: 'Operations',
     items: [
-      { href: '/ops/issues',     label: 'Issues',     icon: AlertTriangle },
-      { href: '/ops/petty-cash', label: 'Petty Cash', icon: Wallet },
+      { href: '/ops/issues',               label: 'Issues',               icon: AlertTriangle },
+      { href: '/ops/petty-cash',           label: 'Petty Cash',           icon: Wallet },
+      { href: PERFORMANCE_TARGETS_ITEM.href, label: PERFORMANCE_TARGETS_ITEM.label, icon: PERFORMANCE_TARGETS_ITEM.icon },
+    ],
+  },
+  {
+    section: 'Settings',
+    items: [
+      { href: BC_CREDENTIALS_ITEM.href, label: BC_CREDENTIALS_ITEM.label, icon: BC_CREDENTIALS_ITEM.icon },
     ],
   },
 ];
@@ -324,7 +344,7 @@ export default function OpsSidebar({ storeName = 'Store Manager', collapsed = fa
               </ul>
             )}
 
-            {/* ── NEW: Shift & Tasks config — sits below Task Management ── */}
+            {/* Shift & Tasks config — sits below Task Management */}
             <div className="mt-1">
               {collapsed ? (
                 <NavTooltip label={SHIFT_TASKS_ITEM.label}>
@@ -358,7 +378,7 @@ export default function OpsSidebar({ storeName = 'Store Manager', collapsed = fa
             </div>
           </div>
 
-          {/* People + Operations sections */}
+          {/* People + Operations + Settings sections */}
           {NAV.slice(1).map(({ section, items }) => (
             <div key={section}>
               {!collapsed && (
