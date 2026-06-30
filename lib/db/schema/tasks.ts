@@ -433,6 +433,124 @@ export const itemDroppingEntries = pgTable('item_dropping_entries', {
   updatedAt:      timestamp('updated_at').defaultNow().notNull(),
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Item Return Task (morning, shared)
+ *
+ * Similar to Item Dropping, but this records return documents/items that need
+ * to be processed by the store. The available return list can come from BC via
+ * the employee API, then employees confirm each return with photos and time.
+ */
+export const itemReturnTasks = pgTable('item_return_tasks', {
+  id:         serial('id').primaryKey(),
+  scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
+  userId:     text('user_id').references(() => users.id).notNull(),
+  storeId:    integer('store_id').references(() => stores.id).notNull(),
+  shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
+  date:       timestamp('date').notNull(),
+
+  hasReturn: boolean('has_return').default(false).notNull(),
+
+  submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
+  submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
+
+  status:      taskStatusEnum('status').default('pending').notNull(),
+  notes:       text('notes'),
+  completedAt: timestamp('completed_at'),
+  verifiedBy:  text('verified_by').references(() => users.id),
+  verifiedAt:  timestamp('verified_at'),
+  createdAt:   timestamp('created_at').defaultNow().notNull(),
+  updatedAt:   timestamp('updated_at').defaultNow().notNull(),
+}, (table) => ({
+  uniqueStoreDateShift: unique('item_return_tasks_store_date_shift_unique')
+    .on(table.storeId, table.date, table.shiftId),
+  storeDateIdx: index('item_return_tasks_store_date_idx')
+    .on(table.storeId, table.date),
+}));
+
+export const itemReturnEntries = pgTable('item_return_entries', {
+  id:           serial('id').primaryKey(),
+  taskId:       integer('task_id').references(() => itemReturnTasks.id, { onDelete: 'cascade' }).notNull(),
+  userId:       text('user_id').references(() => users.id).notNull(),
+  storeId:      integer('store_id').references(() => stores.id).notNull(),
+
+  returnNumber: text('return_number').notNull(),
+  description:  text('description'),
+  expectedAt:   timestamp('expected_at'),
+  quantity:     integer('quantity').default(0).notNull(),
+  returnTime:   timestamp('return_time').notNull(),
+  returnPhotos: text('return_photos'),
+  notes:        text('notes'),
+
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (table) => ({
+  taskIdx: index('item_return_entries_task_idx').on(table.taskId),
+  returnNumberIdx: index('item_return_entries_return_number_idx').on(table.returnNumber),
+}));
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Cek Uang Muka Task (morning, shared)
+ *
+ * This stores the ready cashier float/opening cash by denomination. Amount is
+ * calculated server-side from denominationValue × quantity, so client-side
+ * totals cannot corrupt the task.
+ */
+export const cekUangMukaTasks = pgTable('cek_uang_muka_tasks', {
+  id:         serial('id').primaryKey(),
+  scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
+  userId:     text('user_id').references(() => users.id).notNull(),
+  storeId:    integer('store_id').references(() => stores.id).notNull(),
+  shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
+  date:       timestamp('date').notNull(),
+
+  /** Total cash counted from all denomination rows. */
+  totalAmount: decimal('total_amount', { precision: 12, scale: 2 }).default('0').notNull(),
+
+  /** Daily cashier float cap. Stored for future OPS reports even if the cap changes later. */
+  maxAmount: decimal('max_amount', { precision: 12, scale: 2 }).default('500000').notNull(),
+
+  /** maxAmount - totalAmount. Useful for OPS daily/monthly reporting. */
+  remainingAmount: decimal('remaining_amount', { precision: 12, scale: 2 }).default('500000').notNull(),
+
+  submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
+  submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
+
+  status:      taskStatusEnum('status').default('pending').notNull(),
+  notes:       text('notes'),
+  completedAt: timestamp('completed_at'),
+  verifiedBy:  text('verified_by').references(() => users.id),
+  verifiedAt:  timestamp('verified_at'),
+  createdAt:   timestamp('created_at').defaultNow().notNull(),
+  updatedAt:   timestamp('updated_at').defaultNow().notNull(),
+}, (table) => ({
+  uniqueStoreDateShift: unique('cek_uang_muka_tasks_store_date_shift_unique')
+    .on(table.storeId, table.date, table.shiftId),
+  storeDateIdx: index('cek_uang_muka_tasks_store_date_idx')
+    .on(table.storeId, table.date),
+  statusIdx: index('cek_uang_muka_tasks_status_idx').on(table.status),
+}));
+
+export const cekUangMukaDenominations = pgTable('cek_uang_muka_denominations', {
+  id:                serial('id').primaryKey(),
+  taskId:            integer('task_id').references(() => cekUangMukaTasks.id, { onDelete: 'cascade' }).notNull(),
+  userId:            text('user_id').references(() => users.id).notNull(),
+  storeId:           integer('store_id').references(() => stores.id).notNull(),
+  denominationValue: integer('denomination_value').notNull(),
+  quantity:          integer('quantity').default(0).notNull(),
+  amount:            decimal('amount', { precision: 12, scale: 2 }).default('0').notNull(),
+  notes:             text('notes'),
+  createdAt:         timestamp('created_at').defaultNow().notNull(),
+  updatedAt:         timestamp('updated_at').defaultNow().notNull(),
+}, (table) => ({
+  uniqueTaskDenomination: unique('cek_uang_muka_task_denomination_unique')
+    .on(table.taskId, table.denominationValue),
+  taskIdx: index('cek_uang_muka_denominations_task_idx').on(table.taskId),
+}));
+
 /**
  * Marketing Check Task  (morning)
  */
@@ -765,6 +883,16 @@ export type ItemDroppingTask      = typeof itemDroppingTasks.$inferSelect;
 export type NewItemDroppingTask   = typeof itemDroppingTasks.$inferInsert;
 export type ItemDroppingEntry     = typeof itemDroppingEntries.$inferSelect;
 export type NewItemDroppingEntry  = typeof itemDroppingEntries.$inferInsert;
+
+export type ItemReturnTask        = typeof itemReturnTasks.$inferSelect;
+export type NewItemReturnTask     = typeof itemReturnTasks.$inferInsert;
+export type ItemReturnEntry       = typeof itemReturnEntries.$inferSelect;
+export type NewItemReturnEntry    = typeof itemReturnEntries.$inferInsert;
+
+export type CekUangMukaTask       = typeof cekUangMukaTasks.$inferSelect;
+export type NewCekUangMukaTask    = typeof cekUangMukaTasks.$inferInsert;
+export type CekUangMukaDenomination    = typeof cekUangMukaDenominations.$inferSelect;
+export type NewCekUangMukaDenomination = typeof cekUangMukaDenominations.$inferInsert;
 
 export type BriefingTask          = typeof briefingTasks.$inferSelect;
 export type NewBriefingTask       = typeof briefingTasks.$inferInsert;

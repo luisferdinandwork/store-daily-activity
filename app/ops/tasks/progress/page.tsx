@@ -80,6 +80,8 @@ type RangeSummaryRow = {
   inProgress: number;
   completed: number;
   discrepancy: number;
+  verified?: number;
+  rejected?: number;
   total: number;
 };
 
@@ -1038,6 +1040,8 @@ export default function OpsTaskProgressPage() {
       existing.inProgress  += row.inProgress;
       existing.completed   += row.completed;
       existing.discrepancy += row.discrepancy;
+      existing.verified    += row.verified ?? 0;
+      existing.rejected    += row.rejected ?? 0;
       existing.total       += row.total;
       map.set(row.storeId, existing);
     }
@@ -1057,6 +1061,8 @@ export default function OpsTaskProgressPage() {
       const inProgress  = row?.inProgress  ?? 0;
       const pending     = row?.pending     ?? 0;
       const discrepancy = row?.discrepancy ?? 0;
+      const verified    = row?.verified    ?? 0;
+      const rejected    = row?.rejected    ?? 0;
       return {
         date: dateKey,
         weekdayLabel: ID_WEEKDAY_SHORT[d.getDay()],
@@ -1064,7 +1070,7 @@ export default function OpsTaskProgressPage() {
         isToday: isSameDay(d, today),
         aggregate: {
           completed, total, inProgress, pending, discrepancy,
-          verified: 0, rejected: 0,
+          verified, rejected,
           completionRate: total > 0 ? Math.round((completed / total) * 100) : 0,
         },
       };

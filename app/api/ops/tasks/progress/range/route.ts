@@ -92,6 +92,8 @@ export async function GET(req: NextRequest) {
       inProgress:  s.inProgress,
       completed:   s.completed,
       discrepancy: s.discrepancy,
+      verified:    'verified' in s ? Number((s as { verified?: number }).verified ?? 0) : 0,
+      rejected:    'rejected' in s ? Number((s as { rejected?: number }).rejected ?? 0) : 0,
       total:       s.total,
     })),
   });

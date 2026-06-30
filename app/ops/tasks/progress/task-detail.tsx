@@ -1,28 +1,9 @@
 'use client';
 // app/ops/tasks/progress/task-detail.tsx
-// ─────────────────────────────────────────────────────────────────────────────
-// Per-task detail components + image galleries, plus a full right-panel
-// `TaskDetailView` that opens when an OPS user selects a single task.
-//
-// Actor-name resolution
-// ──────────────────────
-// The server (lib/db/utils/tasks.ts) now resolves user IDs into display names:
-//   • On the task itself:   completedByName, verifiedByName, verifiedAt.
-//   • Inside `extra`:        for every actor key `xxxBy`, a sibling `xxxByName`.
-// So a checklist field that records `loginPosBy` also carries `loginPosByName`.
-// Use `actorName(extra, 'loginPos')` to prefer the readable name and fall back
-// to the raw id only when no name was resolved.
-//
-// Store Closing
-// ─────────────
-// `store_closing` replaces the old edc_reconciliation / eod_z_report /
-// open_statement tasks. Its detail body reads everything from `extra`
-// (eodZReportDone, edcSummaryDone, edcSettlementDone, the side-by-side evidence
-// photo, and the open-statement decision / hold state).
-// ─────────────────────────────────────────────────────────────────────────────
 
 import { useCallback, useEffect, useState } from 'react';
 import {
+  Banknote,
   Box,
   Camera,
   CheckCircle2,
@@ -34,6 +15,7 @@ import {
   PauseCircle,
   ShieldCheck,
   Store,
+  Truck,
   User,
   Users,
   Wallet,
@@ -84,6 +66,8 @@ export const TASK_LABELS: Record<string, string> = {
   vm_checklist: 'VM Checklist',
   marketing_check: 'Marketing Check',
   item_dropping: 'Item Dropping',
+  item_return: 'Item Return',
+  cek_uang_muka: 'Cek Uang Muka',
   briefing: 'Briefing',
   serah_terima: 'Serah Terima',
   store_closing: 'Store Closing',
@@ -98,6 +82,8 @@ export const TASK_ICONS: Record<string, React.ElementType> = {
   vm_checklist: ClipboardList,
   marketing_check: ClipboardList,
   item_dropping: Box,
+  item_return: Truck,
+  cek_uang_muka: Banknote,
   briefing: Users,
   serah_terima: ClipboardList,
   store_closing: CreditCard,
@@ -114,6 +100,12 @@ export function fmtTime(iso: string | null | undefined): string {
 export function fmtAmount(val: unknown): string {
   const n = Number(val);
   if (!val || isNaN(n)) return '—';
+  return `Rp ${n.toLocaleString('id-ID')}`;
+}
+
+function fmtRupiah(val: unknown): string {
+  const n = Number(val ?? 0);
+  if (!Number.isFinite(n)) return 'Rp 0';
   return `Rp ${n.toLocaleString('id-ID')}`;
 }
 
@@ -613,6 +605,107 @@ function ItemDroppingDetail({ task }: { task: FlatTask }) {
   );
 }
 
+function ItemReturnDetail({ task }: { task: FlatTask }) {
+  const e = task.extra;
+  const entries = Array.isArray(e.entries) ? (e.entries as Record<string, unknown>[]) : [];
+
+  if (!e.hasReturn) {
+    return <p className="py-2 text-xs text-slate-400">Tidak ada item return hari ini.</p>;
+  }
+
+  return (
+    <div>
+      {entries.length === 0 ? (
+        <p className="py-2 text-xs text-amber-600">Return ada, belum ada entri.</p>
+      ) : (
+        entries.map((entry, index) => (
+          <div key={String(entry.id ?? index)} className="border-t border-slate-100 py-2 first:border-0">
+            <div className="flex items-center justify-between gap-3">
+              <span className="truncate text-xs font-bold text-slate-700">
+                Retur #{String(entry.returnNumber ?? '-')}
+              </span>
+              <span className="shrink-0 text-[10px] text-slate-400">
+                {fmtTime(entry.returnTime as string | null)}
+              </span>
+            </div>
+            {entry.description ? (
+              <p className="mt-0.5 truncate text-[11px] text-slate-500">{String(entry.description)}</p>
+            ) : null}
+            <div className="mt-1 space-y-1 divide-y divide-slate-100">
+              <InfoRow label="Qty Return" value={String(entry.quantity ?? 0)} />
+              {entry.expectedAt ? <InfoRow label="Estimasi" value={fmtTime(entry.expectedAt as string)} /> : null}
+            </div>
+            <PhotoGrid label="Foto Return" photos={entry.returnPhotos} columns={3} />
+            {entry.notes ? <p className="mt-1 text-[11px] text-slate-500">{String(entry.notes)}</p> : null}
+          </div>
+        ))
+      )}
+      <ActorFooter task={task} />
+      <NotesBlock notes={task.notes} />
+    </div>
+  );
+}
+
+function CekUangMukaDetail({ task }: { task: FlatTask }) {
+  const e = task.extra;
+  const denominations = Array.isArray(e.denominations)
+    ? (e.denominations as Record<string, unknown>[])
+    : [];
+
+  const totalAmount = Number(e.totalAmount ?? 0);
+  const maxAmount = Number(e.maxAmount ?? 500000);
+  const remainingAmount = Number(
+    e.remainingAmount ?? Math.max(0, maxAmount - totalAmount),
+  );
+  const filledCount = denominations.filter((row) => Number(row.quantity ?? 0) > 0).length;
+
+  return (
+    <div>
+      <div className="space-y-1 divide-y divide-slate-100">
+        <InfoRow label="Total Uang Muka" value={<span className="font-bold text-slate-800">{fmtRupiah(totalAmount)}</span>} />
+        <InfoRow label="Batas Harian" value={fmtRupiah(maxAmount)} />
+        <InfoRow
+          label="Sisa Limit"
+          value={
+            <span className={remainingAmount >= 0 ? 'text-emerald-600' : 'text-red-600'}>
+              {fmtRupiah(remainingAmount)}
+            </span>
+          }
+        />
+      </div>
+
+      <p className="mb-1 mt-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+        Pecahan terisi {filledCount}/{denominations.length}
+      </p>
+
+      {denominations.length === 0 ? (
+        <p className="py-2 text-xs text-amber-600">Belum ada data pecahan uang muka.</p>
+      ) : (
+        <div className="divide-y divide-slate-100 rounded-lg bg-slate-50 px-3 py-1">
+          {denominations.map((row, index) => {
+            const denominationValue = Number(row.denominationValue ?? 0);
+            const quantity = Number(row.quantity ?? 0);
+            const amount = Number(row.amount ?? denominationValue * quantity);
+
+            return (
+              <div key={String(row.id ?? denominationValue ?? index)} className="flex items-center justify-between gap-3 py-2">
+                <div>
+                  <p className="text-xs font-bold text-slate-700">{fmtRupiah(denominationValue)}</p>
+                  <p className="text-[10px] text-slate-400">Qty: {quantity.toLocaleString('id-ID')}</p>
+                </div>
+                <span className="text-xs font-bold text-slate-700">{fmtRupiah(amount)}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <ActorFooter task={task} />
+      <NotesBlock notes={task.notes} />
+    </div>
+  );
+}
+
 function BriefingDetail({ task }: { task: FlatTask }) {
   const e = task.extra;
   const done = task.status === 'completed' || Boolean(e.done);
@@ -827,6 +920,8 @@ export function TaskDetailBody({ task }: { task: FlatTask }) {
     case 'vm_checklist':    return <VmChecklistDetail task={task} />;
     case 'marketing_check': return <MarketingCheckDetail task={task} />;
     case 'item_dropping':   return <ItemDroppingDetail task={task} />;
+    case 'item_return':     return <ItemReturnDetail task={task} />;
+    case 'cek_uang_muka':   return <CekUangMukaDetail task={task} />;
     case 'briefing':        return <BriefingDetail task={task} />;
     case 'serah_terima':    return <SerahTerimaDetail task={task} />;
     case 'store_closing':   return <StoreClosingDetail task={task} />;

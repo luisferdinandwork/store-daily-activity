@@ -141,6 +141,25 @@ function serializeUnknown(value: unknown): SerializableValue {
   return String(value);
 }
 
+function normalizeNestedIds(
+  value: SerializableValue,
+  keys: readonly string[],
+): SerializableValue {
+  if (!Array.isArray(value)) return value;
+
+  return value.map((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
+
+    const out: Record<string, SerializableValue> = { ...item };
+
+    for (const key of keys) {
+      if (key in out) out[key] = stringifyId(out[key]) ?? '';
+    }
+
+    return out;
+  });
+}
+
 function serializeExtra(extra: Record<string, unknown> | null | undefined) {
   const safeExtra = (extra ?? {}) as Record<string, unknown>;
   const serialized = serializeUnknown(safeExtra) as Record<string, SerializableValue>;
@@ -150,17 +169,32 @@ function serializeExtra(extra: Record<string, unknown> | null | undefined) {
    * OPS progress page can safely render them without number/string mismatch.
    */
   if (Array.isArray(serialized.items)) {
-    serialized.items = serialized.items.map((item) => {
-      if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
+    serialized.items = normalizeNestedIds(serialized.items, [
+      'id',
+      'taskId',
+      'senderTaskId',
+      'receiverTaskId',
+    ]) as SerializableValue[];
+  }
 
-      return {
-        ...item,
-        id: stringifyId(item.id) ?? '',
-        taskId: stringifyId(item.taskId),
-        senderTaskId: stringifyId(item.senderTaskId),
-        receiverTaskId: stringifyId(item.receiverTaskId),
-      };
-    });
+  /**
+   * Item Return / Cek Uang Muka use nested rows too. Keep their IDs serialized
+   * the same way as top-level task IDs for safer frontend rendering.
+   */
+  if (Array.isArray(serialized.entries)) {
+    serialized.entries = normalizeNestedIds(serialized.entries, [
+      'id',
+      'taskId',
+      'storeId',
+    ]) as SerializableValue[];
+  }
+
+  if (Array.isArray(serialized.denominations)) {
+    serialized.denominations = normalizeNestedIds(serialized.denominations, [
+      'id',
+      'taskId',
+      'storeId',
+    ]) as SerializableValue[];
   }
 
   return serialized;

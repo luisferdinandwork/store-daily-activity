@@ -23,6 +23,10 @@ import {
   groomingTasks,
   itemDroppingTasks,
   itemDroppingEntries,
+  itemReturnTasks,
+  itemReturnEntries,
+  cekUangMukaTasks,
+  cekUangMukaDenominations,
 } from "@/lib/db/schema";
 import { eq, and, gte, lte, desc, inArray, asc } from "drizzle-orm";
 import { getOrCreateSetoranForSchedule } from "@/lib/db/utils/setoran";
@@ -35,6 +39,8 @@ import { getOrCreateCekBinForSchedule } from "@/lib/db/utils/cek-bin";
 import { getOrCreateVmChecklistForSchedule } from "@/lib/db/utils/vm-checklist";
 import { getOrCreateMarketingCheckForSchedule } from "@/lib/db/utils/marketing-check";
 import { getOrCreateItemDroppingForSchedule } from "@/lib/db/utils/item-dropping";
+import { getOrCreateItemReturnForSchedule } from "@/lib/db/utils/item-return";
+import { getOrCreateCekUangMukaForSchedule } from "@/lib/db/utils/cek-uang-muka";
 import { getOrCreateGroomingForSchedule } from "@/lib/db/utils/grooming";
 import { getOrCreateBriefingForSchedule } from "@/lib/db/utils/briefing";
 import { getOrCreateSerahTerimaForSchedule } from "@/lib/db/utils/serah-terima";
@@ -54,6 +60,8 @@ const SUPPORTED_TASK_TYPES = [
   "vm_checklist",
   "marketing_check",
   "item_dropping",
+  "item_return",
+  "cek_uang_muka",
   "briefing",
   "serah_terima",
   "store_closing",
@@ -338,6 +346,10 @@ export async function GET(request: NextRequest) {
       marketingCheckRows,
       itemDroppingRows,
       itemDroppingEntryRows,
+      itemReturnRows,
+      itemReturnEntryRows,
+      cekUangMukaRows,
+      cekUangMukaDenominationRows,
       storeClosingRows,
       briefingRows,
       serahTerimaRows,
@@ -559,6 +571,118 @@ export async function GET(request: NextRequest) {
           })()
         : Promise.resolve([]),
 
+      shouldLoadTask("item_return")
+        ? (async () => {
+            await Promise.all(
+              todaySchedules.map((s) =>
+                getOrCreateItemReturnForSchedule(
+                  s.id,
+                  userId,
+                  s.storeId,
+                  s.shiftId,
+                  targetDate,
+                ),
+              ),
+            );
+
+            return db
+              .select()
+              .from(itemReturnTasks)
+              .where(
+                and(
+                  inArray(itemReturnTasks.storeId, storeIds),
+                  gte(itemReturnTasks.date, dayStart),
+                  lte(itemReturnTasks.date, dayEnd),
+                ),
+              )
+              .orderBy(desc(itemReturnTasks.date));
+          })()
+        : Promise.resolve([]),
+
+      shouldLoadTask("item_return")
+        ? (async () => {
+            const taskIds = await db
+              .select({ id: itemReturnTasks.id })
+              .from(itemReturnTasks)
+              .where(
+                and(
+                  inArray(itemReturnTasks.storeId, storeIds),
+                  gte(itemReturnTasks.date, dayStart),
+                  lte(itemReturnTasks.date, dayEnd),
+                ),
+              );
+
+            if (!taskIds.length) return [];
+
+            return db
+              .select()
+              .from(itemReturnEntries)
+              .where(
+                inArray(
+                  itemReturnEntries.taskId,
+                  taskIds.map((r) => r.id),
+                ),
+              )
+              .orderBy(itemReturnEntries.returnTime);
+          })()
+        : Promise.resolve([]),
+
+      shouldLoadTask("cek_uang_muka")
+        ? (async () => {
+            await Promise.all(
+              todaySchedules.map((s) =>
+                getOrCreateCekUangMukaForSchedule(
+                  s.id,
+                  userId,
+                  s.storeId,
+                  s.shiftId,
+                  targetDate,
+                ),
+              ),
+            );
+
+            return db
+              .select()
+              .from(cekUangMukaTasks)
+              .where(
+                and(
+                  inArray(cekUangMukaTasks.storeId, storeIds),
+                  gte(cekUangMukaTasks.date, dayStart),
+                  lte(cekUangMukaTasks.date, dayEnd),
+                ),
+              )
+              .orderBy(desc(cekUangMukaTasks.date));
+          })()
+        : Promise.resolve([]),
+
+      shouldLoadTask("cek_uang_muka")
+        ? (async () => {
+            const taskIds = await db
+              .select({ id: cekUangMukaTasks.id })
+              .from(cekUangMukaTasks)
+              .where(
+                and(
+                  inArray(cekUangMukaTasks.storeId, storeIds),
+                  gte(cekUangMukaTasks.date, dayStart),
+                  lte(cekUangMukaTasks.date, dayEnd),
+                ),
+              );
+
+            if (!taskIds.length) return [];
+
+            return db
+              .select()
+              .from(cekUangMukaDenominations)
+              .where(
+                inArray(
+                  cekUangMukaDenominations.taskId,
+                  taskIds.map((r) => r.id),
+                ),
+              )
+              .orderBy(cekUangMukaDenominations.denominationValue);
+          })()
+        : Promise.resolve([]),
+
       shouldLoadTask("store_closing")
         ? (async () => {
             const closingSchedules = todaySchedules.filter((s) => {
@@ -744,6 +868,20 @@ export async function GET(request: NextRequest) {
       const bucket = entriesByTaskId.get(entry.taskId) ?? [];
       bucket.push(entry);
       entriesByTaskId.set(entry.taskId, bucket);
+    }
+
+    const returnEntriesByTaskId = new Map<number, typeof itemReturnEntryRows>();
+    for (const entry of itemReturnEntryRows) {
+      const bucket = returnEntriesByTaskId.get(entry.taskId) ?? [];
+      bucket.push(entry);
+      returnEntriesByTaskId.set(entry.taskId, bucket);
+    }
+
+    const uangMukaDenominationsByTaskId = new Map<number, typeof cekUangMukaDenominationRows>();
+    for (const row of cekUangMukaDenominationRows) {
+      const bucket = uangMukaDenominationsByTaskId.get(row.taskId) ?? [];
+      bucket.push(row);
+      uangMukaDenominationsByTaskId.set(row.taskId, bucket);
     }
 
     const serahItemsByTaskId = new Map<number, typeof serahTerimaItemRows>();
@@ -1130,6 +1268,91 @@ export async function GET(request: NextRequest) {
           };
         }),
 
+      ...itemReturnRows
+        .filter((r) => inStore(r.storeId))
+        .map((t) => {
+          const shift = (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode;
+
+          const entries = (returnEntriesByTaskId.get(t.id) ?? []).map((e) => ({
+            id: String(e.id),
+            taskId: String(e.taskId),
+            userId: e.userId,
+            storeId: String(e.storeId),
+            returnNumber: e.returnNumber,
+            description: e.description,
+            expectedAt: toIso(e.expectedAt),
+            quantity: e.quantity ?? 0,
+            returnTime: toIso(e.returnTime),
+            returnPhotos: parsePhotos(e.returnPhotos),
+            notes: e.notes,
+            createdAt: toIso(e.createdAt),
+          }));
+
+          return {
+            type: "item_return" as const,
+            shift,
+            data: {
+              id: String(t.id),
+              scheduleId: String(t.scheduleId),
+              userId: t.userId,
+              storeId: String(t.storeId),
+              shift,
+              date: t.date.toISOString(),
+
+              hasReturn: t.hasReturn,
+              entries,
+
+              status: t.status,
+              notes: t.notes,
+              completedAt: toIso(t.completedAt),
+              verifiedBy: t.verifiedBy,
+              verifiedAt: toIso(t.verifiedAt),
+            },
+          };
+        }),
+
+      ...cekUangMukaRows
+        .filter((r) => inStore(r.storeId))
+        .map((t) => {
+          const shift = (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode;
+
+          const denominations = (uangMukaDenominationsByTaskId.get(t.id) ?? []).map((d) => ({
+            id: String(d.id),
+            taskId: String(d.taskId),
+            userId: d.userId,
+            storeId: String(d.storeId),
+            denominationValue: d.denominationValue,
+            quantity: d.quantity ?? 0,
+            amount: d.amount,
+            notes: d.notes,
+            createdAt: toIso(d.createdAt),
+          }));
+
+          return {
+            type: "cek_uang_muka" as const,
+            shift,
+            data: {
+              id: String(t.id),
+              scheduleId: String(t.scheduleId),
+              userId: t.userId,
+              storeId: String(t.storeId),
+              shift,
+              date: t.date.toISOString(),
+
+              totalAmount: t.totalAmount,
+              maxAmount: t.maxAmount,
+              remainingAmount: t.remainingAmount,
+              denominations,
+
+              status: t.status,
+              notes: t.notes,
+              completedAt: toIso(t.completedAt),
+              verifiedBy: t.verifiedBy,
+              verifiedAt: toIso(t.verifiedAt),
+            },
+          };
+        }),
+
       ...briefingRows
         .filter((r) => inStore(r.storeId))
         .map((t) => ({
@@ -1503,6 +1726,42 @@ export async function PATCH(request: NextRequest) {
             .update(itemDroppingTasks)
             .set({ status: "in_progress", updatedAt: new Date() })
             .where(eq(itemDroppingTasks.id, id))
+            .then(() => {}),
+      },
+
+      item_return: {
+        getRow: async (id) =>
+          (
+            await db
+              .select({ status: itemReturnTasks.status })
+              .from(itemReturnTasks)
+              .where(eq(itemReturnTasks.id, id))
+              .limit(1)
+          )[0],
+
+        update: (id) =>
+          db
+            .update(itemReturnTasks)
+            .set({ status: "in_progress", updatedAt: new Date() })
+            .where(eq(itemReturnTasks.id, id))
+            .then(() => {}),
+      },
+
+      cek_uang_muka: {
+        getRow: async (id) =>
+          (
+            await db
+              .select({ status: cekUangMukaTasks.status })
+              .from(cekUangMukaTasks)
+              .where(eq(cekUangMukaTasks.id, id))
+              .limit(1)
+          )[0],
+
+        update: (id) =>
+          db
+            .update(cekUangMukaTasks)
+            .set({ status: "in_progress", updatedAt: new Date() })
+            .where(eq(cekUangMukaTasks.id, id))
             .then(() => {}),
       },
 

@@ -44,6 +44,8 @@ export type TaskType =
   | "vm_checklist"
   | "marketing_check"
   | "item_dropping"
+  | "item_return"
+  | "cek_uang_muka"
   | "briefing"
   | "serah_terima"
   | "store_closing"
@@ -203,6 +205,39 @@ export interface ItemDroppingData extends TaskBase {
     createdAt: string | null;
   }>;
 }
+
+export interface ItemReturnData extends TaskBase {
+  hasReturn: boolean;
+  entries: Array<{
+    id: string;
+    taskId: string;
+    userId: string;
+    storeId: string;
+    returnNumber: string;
+    description: string | null;
+    expectedAt: string | null;
+    quantity: number;
+    returnTime: string | null;
+    returnPhotos: string[];
+    notes: string | null;
+    createdAt: string | null;
+  }>;
+}
+
+export interface CekUangMukaData extends TaskBase {
+  totalAmount: string | null;
+  denominations: Array<{
+    id: string;
+    taskId: string;
+    userId: string;
+    storeId: string;
+    denominationValue: number;
+    quantity: number;
+    amount: string | null;
+    notes: string | null;
+    createdAt: string | null;
+  }>;
+}
 export interface BriefingData extends TaskBase {
   done: boolean;
   isBalanced: boolean | null;
@@ -279,6 +314,8 @@ export type TaskItem =
   | { type: "vm_checklist"; shift: ShiftCode; data: VmChecklistData }
   | { type: "marketing_check"; shift: ShiftCode; data: MarketingCheckData }
   | { type: "item_dropping"; shift: ShiftCode; data: ItemDroppingData }
+  | { type: "item_return"; shift: ShiftCode; data: ItemReturnData }
+  | { type: "cek_uang_muka"; shift: ShiftCode; data: CekUangMukaData }
   | { type: "briefing"; shift: ShiftCode; data: BriefingData }
   | { type: "store_closing"; shift: ShiftCode; data: StoreClosingData }
   | { type: "grooming"; shift: ShiftCode; data: GroomingData }
@@ -384,6 +421,18 @@ const TASK_META: Record<
     Icon: Truck,
     hasPhoto: true,
   },
+  item_return: {
+    title: "Item Return",
+    description: "Konfirmasi item return dari BC / external app.",
+    Icon: Truck,
+    hasPhoto: true,
+  },
+  cek_uang_muka: {
+    title: "Cek Uang Muka",
+    description: "Input pecahan dan jumlah uang muka kasir toko.",
+    Icon: Wallet,
+    hasPhoto: false,
+  },
   briefing: {
     title: "Briefing",
     description: "Selesaikan briefing shift pagi atau malam.",
@@ -424,6 +473,8 @@ const TASK_ROUTES: Record<TaskType, string> = {
   cek_bin: "cek-bin",
   vm_checklist: "vm-checklist",
   item_dropping: "item-dropping",
+  item_return: "item-return",
+  cek_uang_muka: "cek-uang-muka",
   briefing: "briefing",
   store_closing: "store-closing",
   grooming: "grooming",
@@ -440,12 +491,15 @@ const DEFAULT_SHIFT_TASK_MAP: ShiftTaskMap = {
     "vm_checklist",
     "marketing_check",
     "item_dropping",
+    "item_return",
+    "cek_uang_muka",
     "briefing",
     "serah_terima",
     "grooming",
   ],
   evening: [
     "item_dropping",
+    "item_return",
     "briefing",
     "serah_terima",
     "store_closing",
@@ -459,6 +513,8 @@ const DEFAULT_SHIFT_TASK_MAP: ShiftTaskMap = {
     "vm_checklist",
     "marketing_check",
     "item_dropping",
+    "item_return",
+    "cek_uang_muka",
     "briefing",
     "serah_terima",
     "store_closing",
@@ -543,6 +599,7 @@ const FILTERS: { key: Filter; label: string }[] = [
 const SHIFT_SCOPED_SHARED_TASK_TYPES = new Set<TaskType>([
   "briefing",
   "item_dropping",
+  "item_return",
   "serah_terima",
 ]);
 
@@ -1360,10 +1417,13 @@ function TaskCard({
   const showCarryForward =
     isDiscrepancy &&
     (item.type === "item_dropping" ||
+      item.type === "item_return" ||
       item.type === "store_closing" ||
       item.type === "serah_terima");
 
   const carryForwardDescription: Partial<Record<TaskType, string>> = {
+    item_return:
+      "Ada item return yang belum diselesaikan — tap untuk lanjutkan konfirmasi.",
     store_closing:
       "Store Closing tertahan karena Open Statement On Hold — tap untuk lanjutkan setelah issue resolved.",
     serah_terima:
@@ -1391,6 +1451,40 @@ function TaskCard({
           ? `${hours}j ${minutes}m lalu`
           : `${minutes}m lalu`;
     return `Belum diterima · Drop ${elapsed}`;
+  })();
+
+  const itemReturnLabel = (() => {
+    if (item.type !== "item_return") return null;
+    const d = item.data as ItemReturnData;
+    if (isDiscrepancy) {
+      const firstEntry = d.entries?.[0];
+      if (!d.hasReturn || !firstEntry?.returnTime) {
+        return "Item return belum dikonfirmasi — tap untuk lanjutkan.";
+      }
+      return `Belum selesai · Return ${firstEntry.returnNumber}`;
+    }
+
+    if (d.status === "completed" || d.status === "verified") {
+      return d.hasReturn
+        ? `${d.entries.length} dokumen return sudah dicatat.`
+        : "Tidak ada item return hari ini.";
+    }
+
+    return d.hasReturn
+      ? `${d.entries.length} return sedang dicatat.`
+      : "Pilih ada/tidak item return dari BC hari ini.";
+  })();
+
+  const cekUangMukaLabel = (() => {
+    if (item.type !== "cek_uang_muka") return null;
+    const d = item.data as CekUangMukaData;
+    const total = Number(d.totalAmount ?? 0);
+
+    if (total > 0) {
+      return `Total uang muka: Rp ${total.toLocaleString("id-ID")}`;
+    }
+
+    return "Isi jumlah lembar/koin untuk setiap pecahan rupiah.";
   })();
 
   const setoranDeficitLabel = (() => {
@@ -1426,13 +1520,17 @@ function TaskCard({
 
   const description = itemDroppingLabel
     ? itemDroppingLabel
-    : setoranDeficitLabel
-      ? setoranDeficitLabel
-      : storeClosingHoldLabel
-        ? storeClosingHoldLabel
-        : showCarryForward
-          ? (carryForwardDescription[item.type] ?? meta.description)
-          : meta.description;
+    : itemReturnLabel
+      ? itemReturnLabel
+      : cekUangMukaLabel
+        ? cekUangMukaLabel
+        : setoranDeficitLabel
+          ? setoranDeficitLabel
+          : storeClosingHoldLabel
+            ? storeClosingHoldLabel
+            : showCarryForward
+              ? (carryForwardDescription[item.type] ?? meta.description)
+              : meta.description;
 
   return (
     <Card
