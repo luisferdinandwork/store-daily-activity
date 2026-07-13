@@ -13,8 +13,12 @@
 import {
   getBusinessCentralSalesEntries,
   type BusinessCentralSalesEntry,
-} from '@/lib/performance/business-central-sales';
-import { getMonthRange, toDateOnly } from '@/lib/performance/target-utils';
+} from "@/lib/performance/business-central-sales";
+import {
+  getMonthRange,
+  listDateKeysInMonth,
+  toDateOnly,
+} from "@/lib/performance/target-utils";
 
 export type EmployeeActual = {
   /** users.nik, matched against BC row.salesStaff */
@@ -30,13 +34,15 @@ export type StoreActualsResult = {
   storeActualTransactionCount: number;
 };
 
-function normalizeSalesAmount(entry: BusinessCentralSalesEntry & { total?: number }) {
+function normalizeSalesAmount(
+  entry: BusinessCentralSalesEntry & { total?: number },
+) {
   const amount = entry.totalRoundedAmt ?? entry.total ?? 0;
   return Math.abs(Number(amount || 0));
 }
 
 function normalizeEntryDate(date: number | string): string {
-  if (typeof date === 'number') {
+  if (typeof date === "number") {
     // Excel serial date fallback (kept for parity with employee-performance.ts).
     const excelEpoch = new Date(Date.UTC(1899, 11, 30));
     excelEpoch.setUTCDate(excelEpoch.getUTCDate() + date);
@@ -45,8 +51,22 @@ function normalizeEntryDate(date: number | string): string {
   return date.slice(0, 10);
 }
 
-function aggregateByEmployee(entries: BusinessCentralSalesEntry[]): StoreActualsResult {
-  const byEmployee = new Map<string, { sales: number; receipts: Set<string> }>();
+function getTransactionKey(entry: BusinessCentralSalesEntry) {
+  const date = normalizeEntryDate(entry.date);
+  const terminal = entry.posTerminalNo ?? "";
+  const transaction = entry.transactionNo ?? "";
+  const receipt = entry.receiptNo ?? "";
+
+  return `${date}|${terminal}|${transaction}|${receipt}`;
+}
+
+function aggregateByEmployee(
+  entries: BusinessCentralSalesEntry[],
+): StoreActualsResult {
+  const byEmployee = new Map<
+    string,
+    { sales: number; receipts: Set<string> }
+  >();
   const storeReceipts = new Set<string>();
   let storeActualSales = 0;
 
@@ -55,12 +75,17 @@ function aggregateByEmployee(entries: BusinessCentralSalesEntry[]): StoreActuals
     if (!staff) continue;
 
     const amount = normalizeSalesAmount(entry);
-    storeActualSales += amount;
-    if (entry.receiptNo) storeReceipts.add(entry.receiptNo);
+    const transactionKey = getTransactionKey(entry);
 
-    const existing = byEmployee.get(staff) ?? { sales: 0, receipts: new Set<string>() };
+    storeActualSales += amount;
+    if (entry.receiptNo) storeReceipts.add(transactionKey);
+
+    const existing = byEmployee.get(staff) ?? {
+      sales: 0,
+      receipts: new Set<string>(),
+    };
     existing.sales += amount;
-    if (entry.receiptNo) existing.receipts.add(entry.receiptNo);
+    if (entry.receiptNo) existing.receipts.add(transactionKey);
     byEmployee.set(staff, existing);
   }
 
@@ -82,24 +107,34 @@ function aggregateByEmployee(entries: BusinessCentralSalesEntry[]): StoreActuals
 
 /**
  * Fetch + aggregate actuals for a single calendar day.
+ *
+ * IMPORTANT: this deliberately does NOT ask Business Central for just a
+ * single day's window. A tight `date ge X and date lt X+1` $filter is
+ * unreliable against this BC OData endpoint — some requests silently return
+ * zero rows for a day that has real data (a timezone/off-by-one issue on
+ * BC's side, not something we control), while the exact same day's rows
+ * come back fine as part of a month-wide fetch. So instead we fetch the
+ * whole month (same range the monthly view already uses successfully, and
+ * the same approach employee-performance.ts uses for "today") and filter
+ * down to the exact day locally, which is unaffected by BC's date-filter
+ * quirk.
  */
 export async function getStoreActualsForDay(params: {
   storeNo: string;
   date: string; // YYYY-MM-DD
 }): Promise<StoreActualsResult> {
-  const start = params.date;
-  const endDate = new Date(`${params.date}T00:00:00`);
-  endDate.setDate(endDate.getDate() + 1);
-  const end = toDateOnly(endDate);
+  const yearMonth = params.date.slice(0, 7);
+  const { start, end } = getMonthRange(yearMonth);
 
   const entries = await getBusinessCentralSalesEntries({
     storeNo: params.storeNo,
-    startDate: start,
-    endDate: end,
+    startDate: toDateOnly(start),
+    endDate: toDateOnly(end),
   });
 
-  // Defensive filter in case the BC endpoint ignores $filter on date.
-  const filtered = entries.filter((entry) => normalizeEntryDate(entry.date) === params.date);
+  const filtered = entries.filter(
+    (entry) => normalizeEntryDate(entry.date) === params.date,
+  );
 
   return aggregateByEmployee(filtered);
 }
@@ -129,21 +164,28 @@ export async function getStoreActualsForMonth(params: {
  */
 export async function getStoreActuals(params: {
   storeNo: string;
-  period: 'daily' | 'monthly';
+  period: "daily" | "monthly";
   /** Required when period === 'daily'. YYYY-MM-DD. */
   date?: string;
   /** Required when period === 'monthly'. YYYY-MM. */
   yearMonth?: string;
 }): Promise<StoreActualsResult & { available: boolean; error?: string }> {
   try {
-    if (params.period === 'daily') {
-      if (!params.date) throw new Error('date is required for daily period.');
-      const result = await getStoreActualsForDay({ storeNo: params.storeNo, date: params.date });
+    if (params.period === "daily") {
+      if (!params.date) throw new Error("date is required for daily period.");
+      const result = await getStoreActualsForDay({
+        storeNo: params.storeNo,
+        date: params.date,
+      });
       return { ...result, available: true };
     }
 
-    if (!params.yearMonth) throw new Error('yearMonth is required for monthly period.');
-    const result = await getStoreActualsForMonth({ storeNo: params.storeNo, yearMonth: params.yearMonth });
+    if (!params.yearMonth)
+      throw new Error("yearMonth is required for monthly period.");
+    const result = await getStoreActualsForMonth({
+      storeNo: params.storeNo,
+      yearMonth: params.yearMonth,
+    });
     return { ...result, available: true };
   } catch (error) {
     return {
@@ -151,7 +193,10 @@ export async function getStoreActuals(params: {
       storeActualSales: 0,
       storeActualTransactionCount: 0,
       available: false,
-      error: error instanceof Error ? error.message : 'Failed to fetch Business Central actuals.',
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to fetch Business Central actuals.",
     };
   }
 }
@@ -194,17 +239,14 @@ export async function getEmployeeDailyActualsForMonth(params: {
 
     const byDate = new Map<string, { sales: number; receipts: Set<string> }>();
 
-    // Pre-fill every day of the month with zero so the calendar can render
-    // a full grid even for days with no sales.
-    const daysInMonth = new Date(end.getTime() - 1).getDate();
-    for (let day = 1; day <= daysInMonth; day++) {
-      const d = new Date(start);
-      d.setDate(day);
-      byDate.set(toDateOnly(d), { sales: 0, receipts: new Set<string>() });
+    // Pre-fill every date key directly. This avoids server-timezone shifts
+    // when the calendar is rendered around midnight.
+    for (const date of listDateKeysInMonth(params.yearMonth)) {
+      byDate.set(date, { sales: 0, receipts: new Set<string>() });
     }
 
     let totalSales = 0;
-    let totalTransactionCount = 0;
+    const totalReceipts = new Set<string>();
 
     for (const entry of entries) {
       if (entry.salesStaff !== params.nik) continue;
@@ -212,28 +254,46 @@ export async function getEmployeeDailyActualsForMonth(params: {
       const date = normalizeEntryDate(entry.date);
       const amount = normalizeSalesAmount(entry);
 
-      const existing = byDate.get(date) ?? { sales: 0, receipts: new Set<string>() };
+      const transactionKey = getTransactionKey(entry);
+      const existing = byDate.get(date) ?? {
+        sales: 0,
+        receipts: new Set<string>(),
+      };
       existing.sales += amount;
-      if (entry.receiptNo) existing.receipts.add(entry.receiptNo);
+      if (entry.receiptNo) {
+        existing.receipts.add(transactionKey);
+        totalReceipts.add(transactionKey);
+      }
       byDate.set(date, existing);
 
       totalSales += amount;
-      if (entry.receiptNo) totalTransactionCount += 1;
     }
 
     const result = new Map<string, EmployeeDailyActual>();
     for (const [date, { sales, receipts }] of byDate) {
-      result.set(date, { date, actualSales: sales, actualTransactionCount: receipts.size });
+      result.set(date, {
+        date,
+        actualSales: sales,
+        actualTransactionCount: receipts.size,
+      });
     }
 
-    return { byDate: result, totalSales, totalTransactionCount, available: true };
+    return {
+      byDate: result,
+      totalSales,
+      totalTransactionCount: totalReceipts.size,
+      available: true,
+    };
   } catch (error) {
     return {
       byDate: new Map(),
       totalSales: 0,
       totalTransactionCount: 0,
       available: false,
-      error: error instanceof Error ? error.message : 'Failed to fetch Business Central actuals.',
+      error:
+        error instanceof Error
+          ? error.message
+          : "Failed to fetch Business Central actuals.",
     };
   }
 }

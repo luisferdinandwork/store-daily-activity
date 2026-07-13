@@ -10,9 +10,9 @@ import {
   employeeMonthlyTargets,
   storeMonthlyTargets,
   stores,
+  targetAllocationTemplates,
   users,
 } from '@/lib/db/schema';
-import { calculateAtvTarget } from '@/lib/performance/target-utils';
 
 const TARGET_YEAR_MONTH =
   process.env.SEED_TARGET_YEAR_MONTH ?? new Date().toISOString().slice(0, 7);
@@ -20,25 +20,16 @@ const TARGET_YEAR_MONTH =
 type StoreCode = 'FF001' | 'FS033' | 'FF012' | 'FS020';
 
 type StoreTotalDef = {
-  /** Store-wide monthly sales target (the 100% total to be split by weight). */
+  /** Store-wide monthly sales target — set directly on store_monthly_targets now. */
   totalSalesTarget: number;
-  /** Store-wide monthly transaction target (the 100% total to be split by weight). */
+  /** Store-wide monthly transaction target — set directly on store_monthly_targets now. */
   totalTransactionTarget: number;
 };
 
 /**
- * Store target is employee-rollup only:
- *
- *   store_monthly_target = SUM(employee_monthly_targets.monthlySalesTarget)
- *
- * These `totalSalesTarget` / `totalTransactionTarget` values represent the
- * STORE'S WHOLE monthly target (the 100% figure). Each employee then gets a
- * `targetWeightPct` share of this total:
- *
- *   employee.monthlySalesTarget = totalSalesTarget * weightPct / 100
- *
- * All active employees' weightPct for a store + month should sum to 100,
- * so the rollup equals the store total exactly.
+ * Ops sets these numbers directly now (no more "sum of employee rows").
+ * Daily target = totalSalesTarget / days-in-month, then split across
+ * whoever is scheduled that day via target_allocation_templates below.
  */
 const storeTotalTargetDefs: Record<StoreCode, StoreTotalDef> = {
   FF001: { totalSalesTarget: 100_000_000, totalTransactionTarget: 400 },
@@ -47,74 +38,98 @@ const storeTotalTargetDefs: Record<StoreCode, StoreTotalDef> = {
   FS020: { totalSalesTarget: 75_000_000, totalTransactionTarget: 300 },
 };
 
-type TargetRole = {
-  code: 'PIC1' | 'PIC2' | 'SA';
-  weightPct: number;
-};
+// ─────────────────────────────────────────────────────────────────────────────
+// Default daily allocation % template — transcribed from the printed
+// PIC1/PIC2/SA1-5 × Man-Power grid. Headcounts not listed here (1, 2, 8+)
+// fall back to an equal split across everyone scheduled that day; add rows
+// here (or edit target_allocation_templates directly) if you want an exact
+// split for those too.
+// ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Weight distribution rule (must sum to exactly 100 across all active
- * employees in the store + month):
- *
- * - PIC1 and PIC2 each get a fixed 10% (if present).
- * - The remaining percentage (100 - 10*numPics) is split EQUALLY among the
- *   remaining SA employees.
- *
- * Examples:
- *   1 employee (no PIC)        → SA 100%
- *   2 employees (1 PIC, 1 SA)  → PIC1 10%, SA 90%
- *   3 employees (1 PIC, 2 SA)  → PIC1 10%, SA 45%, SA 45%
- *   4 employees (2 PIC, 2 SA)  → PIC1 10%, PIC2 10%, SA 40%, SA 40%
- *   5 employees (2 PIC, 3 SA)  → PIC1 10%, PIC2 10%, SA ~26.67% each
- *
- * If there are PIC slots but zero SA employees, the PIC weights are
- * rescaled so they still sum to 100% (edge case, e.g. a store with only
- * PIC1 + PIC2).
- */
-function buildTargetRoles(totalEmployees: number): TargetRole[] {
-  if (totalEmployees <= 0) return [];
+const ALLOCATION_TEMPLATE: Array<{ headcount: number; slotCode: string; percentage: number }> = [
+  // 7 orang
+  { headcount: 7, slotCode: 'PIC1', percentage: 7.3 },
+  { headcount: 7, slotCode: 'PIC2', percentage: 7.3 },
+  { headcount: 7, slotCode: 'SA1', percentage: 17.0 },
+  { headcount: 7, slotCode: 'SA2', percentage: 17.1 },
+  { headcount: 7, slotCode: 'SA3', percentage: 17.1 },
+  { headcount: 7, slotCode: 'SA4', percentage: 17.1 },
+  { headcount: 7, slotCode: 'SA5', percentage: 17.1 },
 
-  if (totalEmployees === 1) {
-    return [{ code: 'SA', weightPct: 100 }];
+  // 6 orang
+  { headcount: 6, slotCode: 'PIC1', percentage: 7.3 },
+  { headcount: 6, slotCode: 'PIC2', percentage: 7.3 },
+  { headcount: 6, slotCode: 'SA1', percentage: 21.3 },
+  { headcount: 6, slotCode: 'SA2', percentage: 21.4 },
+  { headcount: 6, slotCode: 'SA3', percentage: 21.4 },
+  { headcount: 6, slotCode: 'SA4', percentage: 21.4 },
+
+  // 5 orang
+  { headcount: 5, slotCode: 'PIC1', percentage: 7.3 },
+  { headcount: 5, slotCode: 'PIC2', percentage: 7.3 },
+  { headcount: 5, slotCode: 'SA1', percentage: 28.4 },
+  { headcount: 5, slotCode: 'SA2', percentage: 28.5 },
+  { headcount: 5, slotCode: 'SA3', percentage: 28.5 },
+
+  // 4 orang
+  { headcount: 4, slotCode: 'PIC1', percentage: 10.0 },
+  { headcount: 4, slotCode: 'PIC2', percentage: 10.0 },
+  { headcount: 4, slotCode: 'SA1', percentage: 40.0 },
+  { headcount: 4, slotCode: 'SA2', percentage: 40.0 },
+
+  // 3 orang
+  { headcount: 3, slotCode: 'PIC1', percentage: 20.0 },
+  { headcount: 3, slotCode: 'PIC2', percentage: 40.0 },
+  { headcount: 3, slotCode: 'SA1', percentage: 40.0 },
+];
+
+async function seedAllocationTemplate() {
+  console.log('🎯 Seeding target_allocation_templates...');
+
+  for (const row of ALLOCATION_TEMPLATE) {
+    await db
+      .insert(targetAllocationTemplates)
+      .values({
+        headcount: row.headcount,
+        slotCode: row.slotCode,
+        percentage: row.percentage.toFixed(2),
+        isActive: true,
+      })
+      .onConflictDoUpdate({
+        target: [targetAllocationTemplates.headcount, targetAllocationTemplates.slotCode],
+        set: { percentage: row.percentage.toFixed(2), isActive: true, updatedAt: new Date() },
+      });
   }
 
-  const picCount = Math.min(2, totalEmployees - 1);
+  console.log(`✓ ${ALLOCATION_TEMPLATE.length} allocation template rows seeded (headcount 3-7).`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Roster roles: same "PIC1/PIC2 fixed, rest are SA" shape as before, but we
+// only assign a ROLE + sortOrder now — no weight%, no amounts. sortOrder
+// ranks the SAs into SA1, SA2, ... on days everyone is present; if someone
+// is off, the remaining SAs just shift up (see assignDailySlots in
+// target-utils.ts).
+// ─────────────────────────────────────────────────────────────────────────────
+
+type RosterRole = { code: 'PIC1' | 'PIC2' | 'SA'; sortOrder: number };
+
+function buildRosterRoles(totalEmployees: number): RosterRole[] {
+  if (totalEmployees <= 0) return [];
+
+  // 1 employee → just SA (no PIC split); 2+ employees → up to 2 PICs, rest SA.
+  const picCount = totalEmployees === 1 ? 0 : Math.min(2, totalEmployees - 1);
+
+  const roles: RosterRole[] = [];
+  if (picCount >= 1) roles.push({ code: 'PIC1', sortOrder: 0 });
+  if (picCount >= 2) roles.push({ code: 'PIC2', sortOrder: 0 });
+
   const saCount = totalEmployees - picCount;
-
-  const picWeightEach = 10;
-  const picTotalWeight = picWeightEach * picCount;
-  const saTotalWeight = 100 - picTotalWeight;
-
-  const roles: TargetRole[] = [];
-
-  if (picCount >= 1) roles.push({ code: 'PIC1', weightPct: picWeightEach });
-  if (picCount >= 2) roles.push({ code: 'PIC2', weightPct: picWeightEach });
-
-  if (saCount > 0) {
-    // Split remaining weight equally among SA employees. To keep the total
-    // exactly 100, give any rounding remainder to the last SA.
-    const rawShare = saTotalWeight / saCount;
-    let assigned = 0;
-
-    for (let i = 0; i < saCount; i++) {
-      const isLast = i === saCount - 1;
-      const weight = isLast
-        ? Math.round((saTotalWeight - assigned) * 100) / 100
-        : Math.round(rawShare * 100) / 100;
-
-      roles.push({ code: 'SA', weightPct: weight });
-      assigned += weight;
-    }
-  } else {
-    // No SA employees — rescale PIC weights to sum to 100%.
-    return roles.map((role) => ({ ...role, weightPct: 100 / roles.length }));
+  for (let i = 0; i < saCount; i++) {
+    roles.push({ code: 'SA', sortOrder: i + 1 });
   }
 
   return roles;
-}
-
-function applyWeight(total: number, weightPct: number) {
-  return Math.round((total * weightPct) / 100);
 }
 
 function money(value: number) {
@@ -123,11 +138,7 @@ function money(value: number) {
 
 async function getStoreByNo(storeNo: StoreCode) {
   const [store] = await db
-    .select({
-      id: stores.id,
-      storeNo: stores.storeNo,
-      name: stores.name,
-    })
+    .select({ id: stores.id, storeNo: stores.storeNo, name: stores.name })
     .from(stores)
     .where(eq(stores.storeNo, storeNo))
     .limit(1);
@@ -135,16 +146,10 @@ async function getStoreByNo(storeNo: StoreCode) {
   return store ?? null;
 }
 
-async function deleteExistingTargetsForStore(params: {
-  storeId: number;
-  yearMonth: string;
-}) {
+async function deleteExistingTargetsForStore(params: { storeId: number; yearMonth: string }) {
   const { storeId, yearMonth } = params;
 
-  /**
-   * Delete child rows first because employee_monthly_targets can reference
-   * store_monthly_targets.
-   */
+  // Delete child rows first (employee_monthly_targets references store_monthly_targets).
   await db
     .delete(employeeMonthlyTargets)
     .where(
@@ -166,145 +171,85 @@ async function deleteExistingTargetsForStore(params: {
 
 async function getActiveUsersForStore(storeId: number) {
   return db
-    .select({
-      id: users.id,
-      nik: users.nik,
-      name: users.name,
-    })
+    .select({ id: users.id, nik: users.nik, name: users.name })
     .from(users)
     .where(and(eq(users.homeStoreId, storeId), eq(users.isActive, true)))
     .orderBy(asc(users.name));
 }
 
-async function seedStoreTargets(params: {
-  storeNo: StoreCode;
-  total: StoreTotalDef;
-}) {
+async function seedStoreTargets(params: { storeNo: StoreCode; total: StoreTotalDef }) {
   const { storeNo, total } = params;
 
   const store = await getStoreByNo(storeNo);
-
   if (!store) {
     console.warn(`⚠️ Store ${storeNo} not found. Skipping.`);
     return;
   }
 
-  await deleteExistingTargetsForStore({
-    storeId: store.id,
-    yearMonth: TARGET_YEAR_MONTH,
-  });
+  await deleteExistingTargetsForStore({ storeId: store.id, yearMonth: TARGET_YEAR_MONTH });
 
-  /**
-   * This row is only the monthly plan/header.
-   * It does NOT store target amount anymore.
-   */
+  // Ops sets the monthly target directly — no more "header/plan only" row.
   const [storePlan] = await db
     .insert(storeMonthlyTargets)
     .values({
       storeId: store.id,
       yearMonth: TARGET_YEAR_MONTH,
-      targetSource: 'employee_rollup',
+      monthlySalesTarget: String(total.totalSalesTarget),
+      monthlyTransactionTarget: total.totalTransactionTarget,
+      targetSource: 'manual',
       notes:
-        'Seeded target plan. Store target is calculated from employee target rollup ' +
-        `(store total: Rp ${money(total.totalSalesTarget)} / ${total.totalTransactionTarget} trx).`,
+        `Seeded target: Rp ${money(total.totalSalesTarget)} / ${total.totalTransactionTarget} trx per month. ` +
+        'Daily target = monthly target / days in month, split across the roster below by target_allocation_templates.',
       isActive: true,
     })
-    .returning({
-      id: storeMonthlyTargets.id,
-    });
+    .returning({ id: storeMonthlyTargets.id });
 
   const storeUsers = await getActiveUsersForStore(store.id);
-
   if (storeUsers.length === 0) {
     console.warn(`⚠️ ${store.storeNo} ${store.name}: no active users found.`);
     return;
   }
 
-  const roles = buildTargetRoles(storeUsers.length);
+  const roles = buildRosterRoles(storeUsers.length);
 
-  const employeeRows = storeUsers.map((user, index) => {
+  const rosterRows = storeUsers.map((user, index) => {
     const role = roles[index];
-
-    const monthlySalesTarget = applyWeight(total.totalSalesTarget, role.weightPct);
-    const monthlyTransactionTarget = applyWeight(total.totalTransactionTarget, role.weightPct);
-
-    // ATV target is always derived: sales target / transaction target.
-    const monthlyAtvTarget = calculateAtvTarget(
-      monthlySalesTarget,
-      monthlyTransactionTarget,
-    );
-
     return {
       storeMonthlyTargetId: storePlan.id,
-
       userId: user.id,
       storeId: store.id,
       yearMonth: TARGET_YEAR_MONTH,
-
       targetRoleCode: role.code,
-      targetWeightPct: role.weightPct.toFixed(2),
-
-      monthlySalesTarget: String(monthlySalesTarget),
-      monthlyTransactionTarget,
-      monthlyAtvTarget: String(monthlyAtvTarget),
-
-      notes:
-        role.code === 'SA'
-          ? `Seeded SA target at ${role.weightPct.toFixed(2)}% of store total.`
-          : `Seeded ${role.code} target at ${role.weightPct.toFixed(2)}% of store total.`,
-
+      sortOrder: role.sortOrder,
+      notes: `Seeded as ${role.code}${role.code === 'SA' ? ` (sortOrder ${role.sortOrder})` : ''}.`,
       isActive: true,
     };
   });
 
-  await db.insert(employeeMonthlyTargets).values(employeeRows);
+  await db.insert(employeeMonthlyTargets).values(rosterRows);
 
-  /**
-   * This is the actual store target.
-   * It is calculated from employee rows, not inserted into store_monthly_targets.
-   * With weights summing to 100%, this should equal `total` (modulo rounding).
-   */
-  const storeSalesTarget = employeeRows.reduce(
-    (sum, row) => sum + Number(row.monthlySalesTarget),
-    0,
-  );
-
-  const storeTransactionTarget = employeeRows.reduce(
-    (sum, row) => sum + Number(row.monthlyTransactionTarget),
-    0,
-  );
-
-  const weightTotal = roles.reduce((sum, role) => sum + role.weightPct, 0);
-
-  const storeAtvTarget = calculateAtvTarget(
-    storeSalesTarget,
-    storeTransactionTarget,
-  );
+  const picCount = roles.filter((r) => r.code !== 'SA').length;
+  const saCount = roles.length - picCount;
 
   console.log(
     [
       `✓ ${store.storeNo} ${store.name}`,
-      `${employeeRows.length} employees`,
-      `weights sum ${weightTotal.toFixed(2)}%`,
-      `rollup Rp ${money(storeSalesTarget)} (target Rp ${money(total.totalSalesTarget)})`,
-      `${storeTransactionTarget} trx (target ${total.totalTransactionTarget})`,
-      `ATV Rp ${money(storeAtvTarget)}`,
+      `${rosterRows.length} roster rows (${picCount} PIC, ${saCount} SA)`,
+      `monthly target Rp ${money(total.totalSalesTarget)} / ${total.totalTransactionTarget} trx`,
     ].join(' · '),
   );
 }
 
 async function main() {
-  console.log(
-    `🎯 Seeding employee-rollup performance targets for ${TARGET_YEAR_MONTH}...`,
-  );
+  console.log(`🎯 Seeding daily-allocation performance targets for ${TARGET_YEAR_MONTH}...`);
 
-  for (const [storeNo, total] of Object.entries(storeTotalTargetDefs) as Array<
-    [StoreCode, StoreTotalDef]
-  >) {
+  await seedAllocationTemplate();
+
+  for (const [storeNo, total] of Object.entries(storeTotalTargetDefs) as Array<[StoreCode, StoreTotalDef]>) {
     await seedStoreTargets({ storeNo, total });
   }
 
-  console.log('✅ Employee-rollup performance targets seeded.');
+  console.log('✅ Performance targets + allocation template seeded.');
 }
 
 main()

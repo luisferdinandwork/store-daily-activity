@@ -1,24 +1,25 @@
 'use client';
 // app/ops/performance-targets/page.tsx
 //
-// Employee Performance Target management.
+// Employee Performance Target management — daily-allocation model.
+//
+//   - Ops sets ONE monthly sales + transaction target per store.
+//   - That monthly target is divided by days-in-month into a daily store
+//     target.
+//   - Each day, whoever is actually scheduled to work is split into slots
+//     (PIC1, PIC2, SA1, SA2, ...) and the daily target is shared out using
+//     a % template keyed by headcount ("Man Power").
+//   - Ops can override one employee's % for one specific day; everyone else
+//     scheduled that day automatically rebalances around it.
 //
 //   - OPS HO sees all areas/stores (grouped by area, switchable).
 //   - OPS Area sees only stores within their assigned area.
 //
-// Layout:
-//   - OpsPageHeader's RangeNavigator is reused for date selection
-//     (periodProps without onPeriodChange, so only the date picker renders —
-//     the Daily/Monthly toggle below is page-owned since OpsPageHeader's
-//     built-in tabs include "Weekly", which doesn't apply here).
-//   - Left: a sticky list of stores grouped by area (HO) or a flat list
-//     (Area Ops), card-style — same shape as the progress page's store list.
-//   - Right: sticky detail panel for the selected store's monthly target
-//     plan, with per-employee targets rendered as a TABLE comparing target
-//     vs actual (from Business Central) with a percentage progress bar to
-//     100%. ATV is always derived (sales / transactions), never stored.
-//     Sourced from lib/performance/target-utils.ts +
-//     lib/performance/employee-actuals.ts.
+// Design pass: same data/handlers as before, presentation reworked for a
+// first-time user — plain-language explainer, a monthly editor that shows
+// its own math, and employee rows as single-column cards instead of a
+// horizontally-scrolling table (which was rough on tablets/phones, and the
+// primary retail-ops surface here).
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -27,25 +28,33 @@ import {
   AlertTriangle,
   Calendar,
   CalendarDays,
+  CalendarOff,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  HelpCircle,
+  Info,
   LayoutGrid,
   Lock,
   LockOpen,
   Pencil,
   Plus,
+  Receipt,
+  RotateCcw,
   Search,
+  ShoppingBag,
+  Sparkles,
   Store,
   Target,
   Trash2,
   Users,
+  Wallet,
   X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ─── Types (unchanged) ─────────────────────────────────────────────────────────
 
 type ViewPeriod = 'daily' | 'monthly';
 
@@ -56,7 +65,7 @@ type StoreRollup = {
   storeMonthlySalesTarget: number;
   storeMonthlyTransactionTarget: number;
   storeMonthlyAtvTarget: number;
-  employeeTargetCount: number;
+  rosterCount: number;
 };
 
 type StoreRow = {
@@ -79,7 +88,7 @@ type OverviewResponse = {
   summary: {
     storeMonthlySalesTarget: number;
     storeMonthlyTransactionTarget: number;
-    employeeTargetCount: number;
+    rosterCount: number;
     storeCount: number;
     plannedStoreCount: number;
   };
@@ -90,6 +99,8 @@ type PlanRow = {
   id: number;
   storeId: number;
   yearMonth: string;
+  monthlySalesTarget: number;
+  monthlyTransactionTarget: number;
   isLocked: boolean;
   notes: string | null;
 };
@@ -99,24 +110,16 @@ type EmployeeTargetRow = {
   userId: string;
   nik: string;
   name: string;
-  storeId: number;
-  storeNo: string;
-  storeName: string;
-  yearMonth: string;
-  targetRoleCode: string;
-  targetWeightPct: number;
-  monthlySalesTarget: number;
-  monthlyTransactionTarget: number;
-  /** Always derived: monthlySalesTarget / monthlyTransactionTarget. */
-  monthlyAtvTarget: number;
-  isActive: boolean;
-
-  // ── Added by the detail API for the selected period ──
-  actualSales: number;
-  actualTransactionCount: number;
-  /** Target for the selected period (= monthly target, or monthly/scheduledDays for daily). */
+  targetRoleCode: string;          // PIC1 | PIC2 | SA
+  slotCode: string | null;          // PIC1 | PIC2 | SA1... — daily view only
+  defaultPct: number | null;
+  effectivePct: number | null;
+  isOverridden: boolean;
+  isScheduledToday: boolean;
   displaySalesTarget: number;
   displayTransactionTarget: number;
+  actualSales: number;
+  actualTransactionCount: number;
 };
 
 type DetailResponse = {
@@ -128,7 +131,16 @@ type DetailResponse = {
   scope: 'area' | 'all_areas';
   store: { id: number; storeNo: string; name: string; address: string; areaId: number | null; areaName: string | null };
   plan: PlanRow | null;
-  rollup: StoreRollup;
+  rollup: {
+    storeMonthlyTargetId: number | null;
+    storeId: number;
+    yearMonth: string;
+    storeMonthlySalesTarget: number;
+    storeMonthlyTransactionTarget: number;
+    storeMonthlyAtvTarget: number;
+    rosterCount: number;
+  };
+  dailyMeta: { headcount: number; usedFallbackEqualSplit: boolean } | null;
   employeeTargets: EmployeeTargetRow[];
   actuals: {
     available: boolean;
@@ -147,7 +159,7 @@ type EligibleEmployee = {
   hasTarget: boolean;
 };
 
-// ─── Date helpers ─────────────────────────────────────────────────────────────
+// ─── Date helpers (unchanged) ──────────────────────────────────────────────────
 
 function todayDateKey(): string {
   const now = new Date();
@@ -169,7 +181,12 @@ function fmtMonthLabel(yearMonth: string): string {
   return new Date(year, month - 1, 1).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
 }
 
-// ─── Format helpers ───────────────────────────────────────────────────────────
+function daysInMonth(yearMonth: string): number {
+  const [year, month] = yearMonth.split('-').map(Number);
+  return new Date(year, month, 0).getDate();
+}
+
+// ─── Format helpers (unchanged) ────────────────────────────────────────────────
 
 function fmtCurrency(value: number): string {
   return `Rp ${Math.round(value).toLocaleString('id-ID')}`;
@@ -187,10 +204,11 @@ function pctOf(actual: number, target: number): number {
   return Math.round((actual / target) * 100);
 }
 
-const ROLE_OPTIONS = ['PIC1', 'PIC2', 'SA', 'CASHIER', 'SPV'];
+const ROLE_OPTIONS = ['PIC1', 'PIC2', 'SA'];
 
-// ─── Shared atoms (palette mirrors /ops/tasks/progress) ────────────────────────
+// ─── Shared atoms ───────────────────────────────────────────────────────────
 
+/** Plain text stat — used for compact, secondary numbers. */
 function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
@@ -201,12 +219,33 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
   );
 }
 
-/** Plan status pill — same color language as task status badges in the progress page. */
+/** Icon-led headline stat — used for the top summary strip, where a beginner lands first. */
+function IconStat({ icon: Icon, iconClass, label, value, sub }: {
+  icon: React.ElementType;
+  iconClass: string;
+  label: string;
+  value: string;
+  sub?: string;
+}) {
+  return (
+    <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-3.5 shadow-sm">
+      <div className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-xl', iconClass)}>
+        <Icon className="h-5 w-5" />
+      </div>
+      <div className="min-w-0">
+        <p className="truncate text-[11px] font-semibold text-slate-400">{label}</p>
+        <p className="truncate text-lg font-black text-slate-900">{value}</p>
+        {sub && <p className="truncate text-[11px] text-slate-400">{sub}</p>}
+      </div>
+    </div>
+  );
+}
+
 function PlanStatusPill({ hasPlan, isLocked }: { hasPlan: boolean; isLocked: boolean }) {
   if (!hasPlan) {
     return (
       <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-600">
-        Belum ada plan
+        Belum ada target
       </span>
     );
   }
@@ -224,8 +263,7 @@ function PlanStatusPill({ hasPlan, isLocked }: { hasPlan: boolean; isLocked: boo
   );
 }
 
-/** Progress bar to 100% — colors mirror /ops/tasks/progress's progressBarClass. */
-function PctProgressBar({ pct }: { pct: number }) {
+function PctProgressBar({ pct, size = 'sm' }: { pct: number; size?: 'sm' | 'md' }) {
   const clamped = Math.min(100, Math.max(0, pct));
   const barClass =
     pct === 0 ? 'bg-amber-300' :
@@ -238,15 +276,13 @@ function PctProgressBar({ pct }: { pct: number }) {
 
   return (
     <div className="flex items-center gap-2">
-      <div className="h-1.5 w-16 overflow-hidden rounded-full bg-slate-100">
+      <div className={cn('overflow-hidden rounded-full bg-slate-100', size === 'md' ? 'h-2 w-full' : 'h-1.5 w-16')}>
         <div className={cn('h-full rounded-full transition-all duration-500', barClass)} style={{ width: `${clamped}%` }} />
       </div>
-      <span className={cn('text-[11px] font-black tabular-nums', textClass)}>{pct}%</span>
+      <span className={cn('shrink-0 text-[11px] font-black tabular-nums', textClass)}>{pct}%</span>
     </div>
   );
 }
-
-// ─── Daily/Monthly toggle ───────────────────────────────────────────────────────
 
 function ViewPeriodTabs({ value, onChange }: { value: ViewPeriod; onChange: (period: ViewPeriod) => void }) {
   const tabs: { id: ViewPeriod; label: string; icon: typeof CalendarDays }[] = [
@@ -278,20 +314,67 @@ function ViewPeriodTabs({ value, onChange }: { value: ViewPeriod; onChange: (per
   );
 }
 
+// ─── HowThisWorksCallout ────────────────────────────────────────────────────────
+//
+// Collapsed by default so it doesn't clutter the view for people who already
+// know the model — but it's the very first thing a beginner sees when they
+// open it, in plain steps instead of jargon.
+
+function HowThisWorksCallout() {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="overflow-hidden rounded-2xl border border-indigo-100 bg-indigo-50/60">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2.5 px-4 py-3 text-left"
+      >
+        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-indigo-100 text-indigo-600">
+          <Sparkles className="h-3.5 w-3.5" />
+        </div>
+        <span className="flex-1 text-sm font-bold text-indigo-900">Baru di sini? Lihat cara kerja target ini</span>
+        <ChevronDown className={cn('h-4 w-4 shrink-0 text-indigo-400 transition-transform', open && 'rotate-180')} />
+      </button>
+
+      {open && (
+        <ol className="space-y-2.5 border-t border-indigo-100 bg-white px-4 py-4">
+          {[
+            'Isi target sales & transaksi untuk SATU BULAN di toko yang dipilih.',
+            'Sistem membaginya rata ke setiap hari dalam bulan itu — jadi ada "target harian" toko.',
+            'Setiap hari, target harian itu dibagi ke karyawan yang jadwal kerja hari itu. Porsinya tergantung berapa orang yang masuk & posisi mereka (PIC1, PIC2, SA1, SA2, ...).',
+            'Butuh kasih porsi lebih ke satu orang di hari tertentu? Ubah persennya — porsi karyawan lain di hari itu otomatis menyesuaikan supaya totalnya tetap 100%.',
+          ].map((step, i) => (
+            <li key={i} className="flex gap-3 text-xs text-slate-600">
+              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-[10px] font-bold text-white">
+                {i + 1}
+              </span>
+              <span className="leading-relaxed">{step}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
 // ─── StoreListItem ────────────────────────────────────────────────────────────
 
 function StoreListItem({ store, active, onOpen }: { store: StoreRow; active: boolean; onOpen: () => void }) {
   const hasPlan = store.rollup.storeMonthlyTargetId != null;
-  const hasIssue = store.rollup.employeeTargetCount === 0;
+  const hasIssue = store.rollup.rosterCount === 0;
 
   return (
     <button
       type="button"
       onClick={onOpen}
-      className={cn('flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-slate-50', active && 'bg-indigo-50')}
+      className={cn(
+        'flex w-full items-center gap-3 border-l-[3px] px-4 py-3.5 text-left transition hover:bg-slate-50',
+        active ? 'border-l-indigo-600 bg-indigo-50/70' : 'border-l-transparent',
+      )}
     >
       <div className={cn(
-        'flex h-9 w-9 shrink-0 items-center justify-center rounded-xl',
+        'flex h-10 w-10 shrink-0 items-center justify-center rounded-xl',
         active ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500',
       )}>
         <Store className="h-4 w-4" />
@@ -300,16 +383,16 @@ function StoreListItem({ store, active, onOpen }: { store: StoreRow; active: boo
         <div className="flex items-center justify-between gap-2">
           <p className={cn('truncate text-sm font-bold', active ? 'text-indigo-900' : 'text-slate-900')}>{store.name}</p>
           {hasIssue && (
-            <span title="Belum ada target karyawan">
+            <span title="Belum ada karyawan di roster">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" />
             </span>
           )}
         </div>
         <p className="mt-0.5 truncate text-[11px] text-slate-400">
-          {store.rollup.employeeTargetCount} karyawan ·{' '}
+          {store.rollup.rosterCount} karyawan ·{' '}
           <span className="font-semibold text-slate-500">{fmtCurrencyCompact(store.rollup.storeMonthlySalesTarget)}</span>
         </p>
-        <div className="mt-1">
+        <div className="mt-1.5">
           <PlanStatusPill hasPlan={hasPlan} isLocked={store.isLocked} />
         </div>
       </div>
@@ -332,7 +415,7 @@ function AreaStoreGroup({ areaName, stores, selectedStoreId, initiallyOpen, onSe
   const totals = useMemo(
     () => stores.reduce((acc, s) => ({
       sales: acc.sales + s.rollup.storeMonthlySalesTarget,
-      employees: acc.employees + s.rollup.employeeTargetCount,
+      employees: acc.employees + s.rollup.rosterCount,
     }), { sales: 0, employees: 0 }),
     [stores],
   );
@@ -361,18 +444,148 @@ function AreaStoreGroup({ areaName, stores, selectedStoreId, initiallyOpen, onSe
   );
 }
 
-// ─── AddEmployeeTargetForm ─────────────────────────────────────────────────────
+// ─── MonthlyTargetEditor ──────────────────────────────────────────────────────
 //
-// New employees are given a weight% share of the store's monthly total.
-// Sales/transaction targets are derived automatically from
-// storeMonthlySalesTarget * weightPct / 100 (and likewise for transactions),
-// matching the seeder's "store total split by weight" logic.
+// The ONE number everything else divides down from — so this gets the most
+// prominent, most explained treatment on the page. While editing, it shows
+// its own math live ("= Rp X / hari") so the connection to the daily/employee
+// numbers below is never a mystery.
 
-function AddEmployeeTargetForm({ storeId, yearMonth, eligible, storeRollup, onCreated, onCancel }: {
+function MonthlyTargetEditor({ storeId, yearMonth, salesTarget, transactionTarget, isLocked, onSaved }: {
+  storeId: number;
+  yearMonth: string;
+  salesTarget: number;
+  transactionTarget: number;
+  isLocked: boolean;
+  onSaved: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [salesInput, setSalesInput] = useState(String(salesTarget));
+  const [txInput, setTxInput] = useState(String(transactionTarget));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!editing) {
+      setSalesInput(String(salesTarget));
+      setTxInput(String(transactionTarget));
+    }
+  }, [salesTarget, transactionTarget, editing]);
+
+  const days = daysInMonth(yearMonth);
+  const atv = Number(txInput) > 0 ? Math.round(Number(salesInput) / Number(txInput)) : 0;
+  const dailySales = days > 0 ? Math.round((Number(salesInput) || 0) / days) : 0;
+  const dailyTx = days > 0 ? Math.round((Number(txInput) || 0) / days) : 0;
+
+  const handleSave = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/ops/performance-targets/${storeId}/plan`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          yearMonth,
+          monthlySalesTarget: Math.max(0, Math.round(Number(salesInput) || 0)),
+          monthlyTransactionTarget: Math.max(0, Math.round(Number(txInput) || 0)),
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error ?? 'Gagal menyimpan target bulanan.');
+      setEditing(false);
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Gagal menyimpan target bulanan.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!editing) {
+    return (
+      <div className="rounded-2xl border border-slate-200 bg-gradient-to-br from-indigo-50/70 to-white p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-indigo-500">Target Bulanan Toko</p>
+            <p className="mt-1 text-2xl font-black text-slate-900">{fmtCurrency(salesTarget)}</p>
+            <p className="mt-0.5 text-xs text-slate-500">
+              {transactionTarget.toLocaleString('id-ID')} transaksi · ATV {fmtCurrency(atv)}
+            </p>
+          </div>
+          {!isLocked && (
+            <button type="button" onClick={() => setEditing(true)}
+              className="flex shrink-0 items-center gap-1.5 rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-bold text-indigo-600 hover:bg-indigo-50">
+              <Pencil className="h-3.5 w-3.5" /> Ubah
+            </button>
+          )}
+        </div>
+        <div className="mt-3 flex items-center gap-1.5 border-t border-indigo-100 pt-3 text-[11px] text-slate-500">
+          <Info className="h-3.5 w-3.5 shrink-0 text-indigo-400" />
+          <span>
+            Ini dibagi otomatis jadi <span className="font-semibold text-slate-700">{fmtCurrency(salesTarget / Math.max(days, 1))} / hari</span> ({days} hari), lalu dibagi lagi ke karyawan yang jadwal kerja hari itu.
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-2xl border-2 border-indigo-200 bg-indigo-50/50 p-4">
+      <p className="text-sm font-bold text-slate-900">Ubah Target Bulanan</p>
+      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <label className="text-xs font-semibold text-slate-600">
+          Target Sales / Bulan
+          <div className="relative mt-1">
+            <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-slate-400">Rp</span>
+            <input type="number" value={salesInput} onChange={(e) => setSalesInput(e.target.value)}
+              className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm tabular-nums focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100" />
+          </div>
+        </label>
+        <label className="text-xs font-semibold text-slate-600">
+          Target Transaksi / Bulan
+          <input type="number" value={txInput} onChange={(e) => setTxInput(e.target.value)}
+            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm tabular-nums focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100" />
+        </label>
+      </div>
+
+      {/* Live math — the whole point is making this connection obvious. */}
+      <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl bg-white p-3">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">≈ Sales / hari</p>
+          <p className="mt-0.5 text-sm font-bold tabular-nums text-indigo-600">{fmtCurrency(dailySales)}</p>
+        </div>
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">≈ Transaksi / hari</p>
+          <p className="mt-0.5 text-sm font-bold tabular-nums text-indigo-600">{dailyTx}</p>
+        </div>
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">ATV</p>
+          <p className="mt-0.5 text-sm font-bold tabular-nums text-slate-700">{fmtCurrency(atv)}</p>
+        </div>
+      </div>
+      <p className="mt-2 text-[11px] text-slate-500">÷ {days} hari dalam bulan ini. Angka harian ini yang nanti dibagi ke karyawan.</p>
+
+      {error && <p className="mt-2 text-xs font-semibold text-red-500">{error}</p>}
+      <div className="mt-3 flex justify-end gap-2">
+        <button type="button" onClick={() => setEditing(false)} disabled={saving}
+          className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50">
+          Batal
+        </button>
+        <button type="button" onClick={handleSave} disabled={saving}
+          className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-indigo-500 disabled:opacity-60">
+          {saving ? 'Menyimpan…' : 'Simpan Target Bulanan'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── AddEmployeeTargetForm ─────────────────────────────────────────────────────
+
+function AddEmployeeTargetForm({ storeId, yearMonth, eligible, onCreated, onCancel }: {
   storeId: number;
   yearMonth: string;
   eligible: EligibleEmployee[];
-  storeRollup: StoreRollup;
   onCreated: () => void;
   onCancel: () => void;
 }) {
@@ -380,18 +593,9 @@ function AddEmployeeTargetForm({ storeId, yearMonth, eligible, storeRollup, onCr
 
   const [userId, setUserId] = useState(available[0]?.id ?? '');
   const [targetRoleCode, setTargetRoleCode] = useState('SA');
-  const [targetWeightPct, setTargetWeightPct] = useState('10');
+  const [sortOrder, setSortOrder] = useState('1');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // Store total target = current rollup. The new employee's sales/transaction
-  // target is store total × weight%, matching the seeder's "store total
-  // split by weight" logic. The server recalculates from the submitted
-  // weight on save, so this preview is informational only.
-  const weightPctNum = Number(targetWeightPct) || 0;
-  const previewSales = Math.round((storeRollup.storeMonthlySalesTarget * weightPctNum) / 100);
-  const previewTx = Math.round((storeRollup.storeMonthlyTransactionTarget * weightPctNum) / 100);
-  const previewAtv = previewTx > 0 ? Math.round(previewSales / previewTx) : 0;
 
   const handleSubmit = async () => {
     if (!userId) {
@@ -408,36 +612,34 @@ function AddEmployeeTargetForm({ storeId, yearMonth, eligible, storeRollup, onCr
           userId,
           yearMonth,
           targetRoleCode,
-          targetWeightPct: weightPctNum,
-          monthlySalesTarget: previewSales,
-          monthlyTransactionTarget: previewTx,
+          sortOrder: targetRoleCode === 'SA' ? Number(sortOrder) || 0 : 0,
         }),
       });
       const json = await res.json();
-      if (!res.ok || !json.success) throw new Error(json.error ?? 'Gagal menambah target.');
+      if (!res.ok || !json.success) throw new Error(json.error ?? 'Gagal menambah karyawan ke roster.');
       onCreated();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Gagal menambah target.');
+      setError(err instanceof Error ? err.message : 'Gagal menambah karyawan ke roster.');
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-4">
+    <div className="rounded-2xl border border-indigo-100 bg-indigo-50/50 p-4">
       <div className="flex items-center justify-between">
-        <p className="text-sm font-bold text-slate-900">Tambah Target Karyawan</p>
+        <p className="text-sm font-bold text-slate-900">Tambah Karyawan ke Roster</p>
         <button type="button" onClick={onCancel} className="rounded-md p-1 text-slate-400 hover:bg-white hover:text-slate-600">
           <X className="h-4 w-4" />
         </button>
       </div>
 
       {available.length === 0 ? (
-        <p className="mt-3 text-xs text-slate-500">Semua karyawan di toko ini sudah memiliki target bulan ini.</p>
+        <p className="mt-3 text-xs text-slate-500">Semua karyawan di toko ini sudah ada di roster bulan ini.</p>
       ) : (
         <>
-          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <label className="text-xs font-semibold text-slate-600">
+          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <label className="text-xs font-semibold text-slate-600 sm:col-span-2">
               Karyawan
               <select value={userId} onChange={(e) => setUserId(e.target.value)}
                 className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100">
@@ -448,37 +650,26 @@ function AddEmployeeTargetForm({ storeId, yearMonth, eligible, storeRollup, onCr
             </label>
 
             <label className="text-xs font-semibold text-slate-600">
-              Role
+              Posisi
               <select value={targetRoleCode} onChange={(e) => setTargetRoleCode(e.target.value)}
                 className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100">
                 {ROLE_OPTIONS.map((role) => <option key={role} value={role}>{role}</option>)}
               </select>
             </label>
 
-            <label className="text-xs font-semibold text-slate-600 sm:col-span-2">
-              Weight (% dari total target toko)
-              <input type="number" value={targetWeightPct} onChange={(e) => setTargetWeightPct(e.target.value)}
-                className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100" />
-              <span className="mt-1 block text-[11px] font-normal text-slate-400">
-                Target dihitung otomatis: total target toko × weight%.
-              </span>
-            </label>
+            {targetRoleCode === 'SA' && (
+              <label className="text-xs font-semibold text-slate-600 sm:col-span-3">
+                Urutan SA — dipakai saat beberapa SA masuk di hari yang sama (jadi SA1, SA2, ...)
+                <input type="number" min={1} value={sortOrder} onChange={(e) => setSortOrder(e.target.value)}
+                  className="mt-1 w-32 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100" />
+              </label>
+            )}
           </div>
 
-          <div className="mt-3 grid grid-cols-3 gap-2">
-            <div className="rounded-lg bg-white px-2 py-1.5 text-center">
-              <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Sales Target</p>
-              <p className="text-xs font-bold text-slate-700">{fmtCurrency(previewSales)}</p>
-            </div>
-            <div className="rounded-lg bg-white px-2 py-1.5 text-center">
-              <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Transaksi Target</p>
-              <p className="text-xs font-bold text-slate-700">{previewTx}</p>
-            </div>
-            <div className="rounded-lg bg-white px-2 py-1.5 text-center">
-              <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">ATV Target</p>
-              <p className="text-xs font-bold text-slate-700">{fmtCurrency(previewAtv)}</p>
-            </div>
-          </div>
+          <p className="mt-3 flex items-start gap-1.5 text-[11px] text-slate-500">
+            <Info className="mt-0.5 h-3 w-3 shrink-0 text-slate-400" />
+            Target sales/transaksi tidak diisi manual di sini — dihitung otomatis tiap hari dari target toko, dibagi sesuai jumlah karyawan yang jadwal hari itu.
+          </p>
         </>
       )}
 
@@ -500,14 +691,12 @@ function AddEmployeeTargetForm({ storeId, yearMonth, eligible, storeRollup, onCr
   );
 }
 
-// ─── Role badge ───────────────────────────────────────────────────────────────
+// ─── Role / Slot badges + legend ───────────────────────────────────────────────
 
 const ROLE_BADGE_CLASSES: Record<string, string> = {
   PIC1: 'bg-violet-50 text-violet-600 border-violet-100',
   PIC2: 'bg-fuchsia-50 text-fuchsia-600 border-fuchsia-100',
   SA: 'bg-indigo-50 text-indigo-600 border-indigo-100',
-  CASHIER: 'bg-sky-50 text-sky-600 border-sky-100',
-  SPV: 'bg-amber-50 text-amber-600 border-amber-100',
 };
 
 function RoleBadge({ role }: { role: string }) {
@@ -515,10 +704,45 @@ function RoleBadge({ role }: { role: string }) {
   return <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-bold', cls)}>{role}</span>;
 }
 
-// ─── EmployeeCalendarModal ──────────────────────────────────────────────────────
-//
-// Shows one employee's daily sales actuals for the selected month in a
-// calendar grid. Fetched from the calendar API on open.
+function SlotBadge({ slotCode }: { slotCode: string | null }) {
+  if (!slotCode) {
+    return (
+      <span className="flex items-center gap-1 rounded-full border border-slate-100 bg-slate-50 px-2 py-0.5 text-[10px] font-bold text-slate-400">
+        <CalendarOff className="h-2.5 w-2.5" /> Libur hari ini
+      </span>
+    );
+  }
+  const base = slotCode.startsWith('PIC') ? ROLE_BADGE_CLASSES[slotCode] : ROLE_BADGE_CLASSES.SA;
+  return <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-bold', base)}>Slot {slotCode}</span>;
+}
+
+/** Click-to-toggle legend explaining PIC1/PIC2/SA1.. — a tooltip would be invisible on touch devices, so this is a small disclosure instead. */
+function SlotLegend() {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="relative inline-block">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+        title="Apa itu PIC1 / SA1?"
+      >
+        <HelpCircle className="h-3.5 w-3.5" />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 top-6 z-20 w-64 rounded-xl border border-slate-200 bg-white p-3 text-left text-[11px] normal-case tracking-normal text-slate-600 shadow-lg">
+            <p><span className="font-bold text-violet-600">PIC1 / PIC2</span> — penanggung jawab toko, porsinya tetap.</p>
+            <p className="mt-1.5"><span className="font-bold text-indigo-600">SA1, SA2, ...</span> — staf penjualan, urutan otomatis dari yang jadwal hari itu. Kalau salah satu libur, yang lain naik urutan.</p>
+          </div>
+        </>
+      )}
+    </span>
+  );
+}
+
+// ─── EmployeeCalendarModal (unchanged) ────────────────────────────────────────
 
 type CalendarDay = { date: string; actualSales: number; actualTransactionCount: number };
 
@@ -569,12 +793,10 @@ function EmployeeCalendarModal({ storeId, targetId, employeeName, yearMonth, onC
     setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
   };
 
-  // Build a 7-column grid, padding the first week so day 1 lands on the
-  // correct weekday (Mon-first).
   const grid = useMemo(() => {
     if (days.length === 0) return [];
     const firstDate = new Date(`${days[0].date}T00:00:00`);
-    const firstWeekday = (firstDate.getDay() + 6) % 7; // 0=Mon..6=Sun
+    const firstWeekday = (firstDate.getDay() + 6) % 7;
     const cells: (CalendarDay | null)[] = Array.from({ length: firstWeekday }, () => null);
     cells.push(...days);
     while (cells.length % 7 !== 0) cells.push(null);
@@ -665,279 +887,234 @@ function EmployeeCalendarModal({ storeId, targetId, employeeName, yearMonth, onC
     </div>
   );
 
-  // Render via portal so this floating dialog isn't nested inside table
-  // elements (a <div> directly inside <tbody>/<tr> is invalid HTML and
-  // triggers hydration errors).
   if (typeof document === 'undefined') return null;
   return createPortal(content, document.body);
 }
 
-// ─── EmployeeTargetTableRow ─────────────────────────────────────────────────────
-//
-// One row in the employee target table. Click "Edit" to enter edit mode,
-// where the admin can choose to edit EITHER the monthly sales/transaction
-// target amounts OR the weight%:
-//
-//   - Amount mode: editing the sales/transaction amounts directly increases
-//     or decreases the store total by the delta; every employee's weight%
-//     (including this row, PIC1, PIC2) is recomputed as
-//     amount / newStoreTotal * 100.
-//
-//   - Weight mode: editing the weight% keeps the store total FIXED. Other
-//     PIC1/PIC2 rows keep their weight; the SA pool is redistributed
-//     proportionally across the other SA rows. All rows' amounts are
-//     re-derived from the new weights.
-//
-// Both modes are sent to the same PATCH endpoint via `editMode`, which
-// rebalances every active sibling row in the store + month. ATV is always
-// derived (sales / transactions) — never directly editable.
+// ─── MiniMetric — one "target vs actual" block inside an employee card ────────
 
-function EmployeeTargetTableRow({ row, storeId, period, yearMonth, locked, zebra, onUpdated, onDeleted }: {
+function MiniMetric({ icon: Icon, label, target, actual, formatValue, pct }: {
+  icon: React.ElementType;
+  label: string;
+  target: number;
+  actual: number;
+  formatValue: (n: number) => string;
+  pct: number;
+}) {
+  return (
+    <div className="rounded-xl bg-slate-50 p-3">
+      <div className="flex items-center gap-1.5 text-slate-400">
+        <Icon className="h-3 w-3" />
+        <p className="text-[10px] font-bold uppercase tracking-wide">{label}</p>
+      </div>
+      <p className="mt-1.5 text-sm font-bold tabular-nums text-slate-900">{formatValue(target)}</p>
+      <p className="text-[11px] tabular-nums text-slate-400">Aktual {formatValue(actual)}</p>
+      <div className="mt-1.5"><PctProgressBar pct={pct} /></div>
+    </div>
+  );
+}
+
+// ─── EmployeeTargetCard ─────────────────────────────────────────────────────────
+//
+// Replaces the old table row. A single-column card list scans top-to-bottom
+// on any screen size (no horizontal scroll needed on a tablet/phone), and
+// groups "who/what slot" — "target vs actual" — "today's %" — "actions"
+// into clearly separated zones instead of one dense row of tiny cells.
+
+function EmployeeTargetCard({ row, storeId, period, yearMonth, date, locked, onDailyChange, onDeleted }: {
   row: EmployeeTargetRow;
   storeId: number;
   period: ViewPeriod;
   yearMonth: string;
+  date: string;
   locked: boolean;
-  zebra: boolean;
-  onUpdated: () => void;
+  onDailyChange: () => void;
   onDeleted: () => void;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [editMode, setEditMode] = useState<'amount' | 'weight'>('amount');
-  const [roleCode, setRoleCode] = useState(row.targetRoleCode);
-  const [salesInput, setSalesInput] = useState(String(row.monthlySalesTarget));
-  const [txInput, setTxInput] = useState(String(row.monthlyTransactionTarget));
-  const [weightInput, setWeightInput] = useState(String(row.targetWeightPct));
+  const [editingPct, setEditingPct] = useState(false);
+  const [pctInput, setPctInput] = useState(String(row.effectivePct ?? 0));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showCalendar, setShowCalendar] = useState(false);
 
   const startEdit = () => {
-    setRoleCode(row.targetRoleCode);
-    setSalesInput(String(row.monthlySalesTarget));
-    setTxInput(String(row.monthlyTransactionTarget));
-    setWeightInput(String(row.targetWeightPct));
-    setEditMode('amount');
-    setEditing(true);
+    setPctInput(String(row.effectivePct ?? 0));
+    setEditingPct(true);
     setError(null);
   };
 
-  const handleSave = async () => {
+  const handleSavePct = async () => {
     setSaving(true);
     setError(null);
     try {
-      const body: Record<string, unknown> = {
-        targetRoleCode: roleCode,
-        editMode,
-      };
-
-      if (editMode === 'amount') {
-        body.monthlySalesTarget = Math.round(Number(salesInput) || 0);
-        body.monthlyTransactionTarget = Math.round(Number(txInput) || 0);
-      } else {
-        body.targetWeightPct = Number(weightInput) || 0;
-      }
-
-      const res = await fetch(`/api/ops/performance-targets/${storeId}/employees/${row.id}`, {
+      const res = await fetch(`/api/ops/performance-targets/${storeId}/daily-overrides`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ date, yearMonth, userId: row.userId, percentage: Number(pctInput) || 0 }),
       });
       const json = await res.json();
-      if (!res.ok || !json.success) throw new Error(json.error ?? 'Gagal memperbarui target.');
-      setEditing(false);
-      onUpdated();
+      if (!res.ok || !json.success) throw new Error(json.error ?? 'Gagal menyimpan persentase.');
+      setEditingPct(false);
+      onDailyChange();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Gagal memperbarui target.');
+      setError(err instanceof Error ? err.message : 'Gagal menyimpan persentase.');
     } finally {
       setSaving(false);
     }
   };
 
-  const handleDelete = async () => {
-    if (!confirm(`Hapus target untuk ${row.name}?`)) return;
+  const handleResetPct = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/ops/performance-targets/${storeId}/daily-overrides`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date, yearMonth, userId: row.userId }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error ?? 'Gagal mereset persentase.');
+      onDailyChange();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Gagal mereset persentase.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteFromRoster = async () => {
+    if (!confirm(`Hapus ${row.name} dari roster target?`)) return;
     setSaving(true);
     try {
       const res = await fetch(`/api/ops/performance-targets/${storeId}/employees/${row.id}`, { method: 'DELETE' });
       const json = await res.json();
-      if (!res.ok || !json.success) throw new Error(json.error ?? 'Gagal menghapus target.');
+      if (!res.ok || !json.success) throw new Error(json.error ?? 'Gagal menghapus dari roster.');
       onDeleted();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Gagal menghapus target.');
+      setError(err instanceof Error ? err.message : 'Gagal menghapus dari roster.');
       setSaving(false);
     }
   };
 
   const salesPct = pctOf(row.actualSales, row.displaySalesTarget);
   const txPct = pctOf(row.actualTransactionCount, row.displayTransactionTarget);
+  const atv = row.displayTransactionTarget > 0 ? Math.round(row.displaySalesTarget / row.displayTransactionTarget) : 0;
+  const canEditPct = period === 'daily' && !locked && row.isScheduledToday;
+  const notWorkingToday = period === 'daily' && !row.isScheduledToday;
 
   return (
-    <>
-      <tr className={cn(
-        'border-b border-slate-100 transition-colors last:border-b-0 hover:bg-indigo-50/30',
-        zebra && !editing && 'bg-slate-50/60',
-        !row.isActive && 'opacity-50',
-        editing && 'bg-indigo-50/40',
-      )}>
-        <td className="px-3 py-3">
-          <p className="text-sm font-bold text-slate-900">{row.name}</p>
+    <div className={cn(
+      'rounded-2xl border border-slate-200 bg-white p-4 transition',
+      notWorkingToday && 'opacity-60',
+    )}>
+      {/* Who + role/slot */}
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-bold text-slate-900">{row.name}</p>
           <p className="text-[11px] text-slate-400">NIK {row.nik}</p>
-        </td>
+        </div>
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <RoleBadge role={row.targetRoleCode} />
+          {period === 'daily' && <SlotBadge slotCode={row.slotCode} />}
+        </div>
+      </div>
 
-        <td className="px-3 py-3">
-          {editing ? (
-            <select value={roleCode} onChange={(e) => setRoleCode(e.target.value)}
-              className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs focus:border-indigo-400 focus:outline-none">
-              {ROLE_OPTIONS.map((r) => <option key={r} value={r}>{r}</option>)}
-            </select>
-          ) : (
-            <RoleBadge role={row.targetRoleCode} />
-          )}
-        </td>
+      {/* Target vs actual */}
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <MiniMetric
+          icon={ShoppingBag}
+          label={`Sales${period === 'daily' ? ' (Harian)' : ' (Bulanan)'}`}
+          target={row.displaySalesTarget}
+          actual={row.actualSales}
+          formatValue={fmtCurrency}
+          pct={salesPct}
+        />
+        <MiniMetric
+          icon={Receipt}
+          label={`Transaksi${period === 'daily' ? ' (Harian)' : ' (Bulanan)'}`}
+          target={row.displayTransactionTarget}
+          actual={row.actualTransactionCount}
+          formatValue={(n) => String(n)}
+          pct={txPct}
+        />
+      </div>
 
-        <td className="px-3 py-3 text-right">
-          {editing ? (
-            <input
-              type="number"
-              value={weightInput}
-              disabled={editMode !== 'weight'}
-              onChange={(e) => setWeightInput(e.target.value)}
-              className={cn(
-                'w-20 rounded-lg border px-2 py-1 text-right text-xs focus:outline-none',
-                editMode === 'weight'
-                  ? 'border-indigo-300 bg-white focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100'
-                  : 'border-slate-100 bg-slate-50 text-slate-400',
-              )}
-            />
-          ) : (
-            <span className="text-xs font-bold tabular-nums text-slate-600">{row.targetWeightPct.toFixed(2)}%</span>
-          )}
-        </td>
+      {/* ATV + today's % */}
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-slate-50 px-3 py-2.5">
+        <div className="flex items-center gap-1.5 text-slate-500">
+          <Wallet className="h-3.5 w-3.5" />
+          <span className="text-xs font-semibold">ATV {fmtCurrency(atv)}</span>
+        </div>
 
-        {/* Sales: target / actual / progress */}
-        <td className="px-3 py-3 text-right">
-          {editing ? (
-            <input
-              type="number"
-              value={salesInput}
-              disabled={editMode !== 'amount'}
-              onChange={(e) => setSalesInput(e.target.value)}
-              className={cn(
-                'w-28 rounded-lg border px-2 py-1 text-right text-xs tabular-nums focus:outline-none',
-                editMode === 'amount'
-                  ? 'border-indigo-300 bg-white focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100'
-                  : 'border-slate-100 bg-slate-50 text-slate-400',
-              )}
-            />
-          ) : (
-            <>
-              <p className="text-xs font-bold tabular-nums text-slate-700">{fmtCurrency(row.displaySalesTarget)}</p>
-              <p className="mt-0.5 text-[11px] tabular-nums text-slate-400">Aktual {fmtCurrency(row.actualSales)}</p>
-              <div className="mt-1 flex justify-end"><PctProgressBar pct={salesPct} /></div>
-            </>
-          )}
-        </td>
-
-        {/* Transactions: target / actual / progress */}
-        <td className="px-3 py-3 text-right">
-          {editing ? (
-            <input
-              type="number"
-              value={txInput}
-              disabled={editMode !== 'amount'}
-              onChange={(e) => setTxInput(e.target.value)}
-              className={cn(
-                'w-20 rounded-lg border px-2 py-1 text-right text-xs tabular-nums focus:outline-none',
-                editMode === 'amount'
-                  ? 'border-indigo-300 bg-white focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100'
-                  : 'border-slate-100 bg-slate-50 text-slate-400',
-              )}
-            />
-          ) : (
-            <>
-              <p className="text-xs font-bold tabular-nums text-slate-700">{row.displayTransactionTarget}</p>
-              <p className="mt-0.5 text-[11px] tabular-nums text-slate-400">Aktual {row.actualTransactionCount}</p>
-              <div className="mt-1 flex justify-end"><PctProgressBar pct={txPct} /></div>
-            </>
-          )}
-        </td>
-
-        {/* ATV — always derived */}
-        <td className="px-3 py-3 text-right">
-          <span className="text-xs font-bold tabular-nums text-slate-700">
-            {fmtCurrency(row.monthlyAtvTarget)}
-          </span>
-        </td>
-
-        <td className="px-3 py-3 text-right">
-          {locked ? (
-            <span className="text-[10px] font-semibold text-slate-300">—</span>
-          ) : editing ? (
-            <div className="flex justify-end gap-1.5">
-              <button type="button" onClick={() => { setEditing(false); }} disabled={saving}
-                className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-bold text-slate-600 hover:bg-slate-50">
+        {period === 'daily' && (
+          editingPct ? (
+            <div className="flex items-center gap-1.5">
+              <input
+                type="number"
+                value={pctInput}
+                onChange={(e) => setPctInput(e.target.value)}
+                autoFocus
+                className="w-20 rounded-lg border border-indigo-300 bg-white px-2 py-1 text-right text-xs tabular-nums focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+              />
+              <span className="text-xs font-semibold text-slate-400">%</span>
+              <button type="button" onClick={() => setEditingPct(false)} disabled={saving}
+                className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-bold text-slate-500 hover:bg-slate-50">
                 Batal
               </button>
-              <button type="button" onClick={handleSave} disabled={saving}
-                className="rounded-lg bg-indigo-600 px-2 py-1 text-[11px] font-bold text-white hover:bg-indigo-500 disabled:opacity-60">
+              <button type="button" onClick={handleSavePct} disabled={saving}
+                className="rounded-md bg-indigo-600 px-2 py-1 text-[10px] font-bold text-white hover:bg-indigo-500 disabled:opacity-60">
                 {saving ? '…' : 'Simpan'}
               </button>
             </div>
           ) : (
-            <div className="flex justify-end gap-1.5">
-              <button type="button" onClick={() => setShowCalendar(true)}
-                title="Lihat kalender sales bulanan"
-                className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-bold text-slate-600 hover:bg-slate-50">
-                <Calendar className="h-3 w-3" />
-              </button>
-              <button type="button" onClick={startEdit}
-                className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-bold text-slate-600 hover:bg-slate-50">
-                <Pencil className="h-3 w-3" /> Edit
-              </button>
-              <button type="button" onClick={handleDelete} disabled={saving}
-                className="flex items-center gap-1 rounded-lg border border-red-100 bg-white px-2 py-1 text-[11px] font-bold text-red-500 hover:bg-red-50 disabled:opacity-60">
-                <Trash2 className="h-3 w-3" />
-              </button>
+            <div className="flex items-center gap-1.5">
+              {row.isOverridden && (
+                <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700">
+                  Diubah manual
+                </span>
+              )}
+              <span className="text-xs font-bold tabular-nums text-slate-700">
+                {row.isScheduledToday ? `Porsi ${(row.effectivePct ?? 0).toFixed(1)}%` : 'Tidak jadwal'}
+              </span>
+              {canEditPct && (
+                <button type="button" onClick={startEdit}
+                  className="rounded-md p-1 text-slate-400 hover:bg-white hover:text-indigo-600" title="Ubah porsi hari ini">
+                  <Pencil className="h-3 w-3" />
+                </button>
+              )}
+              {canEditPct && row.isOverridden && (
+                <button type="button" onClick={handleResetPct} disabled={saving}
+                  className="rounded-md p-1 text-slate-400 hover:bg-white hover:text-indigo-600" title="Kembalikan ke default">
+                  <RotateCcw className="h-3 w-3" />
+                </button>
+              )}
             </div>
-          )}
-        </td>
-      </tr>
-      {editing && (
-        <tr className="border-b border-slate-100 bg-indigo-50/30 last:border-b-0">
-          <td colSpan={7} className="px-3 py-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Edit berdasarkan:</span>
-              <button type="button" onClick={() => setEditMode('amount')}
-                className={cn(
-                  'rounded-full px-2.5 py-1 text-[11px] font-bold transition',
-                  editMode === 'amount' ? 'bg-indigo-600 text-white' : 'border border-slate-200 bg-white text-slate-500 hover:bg-slate-50',
-                )}>
-                Target Sales / Transaksi
-              </button>
-              <button type="button" onClick={() => setEditMode('weight')}
-                className={cn(
-                  'rounded-full px-2.5 py-1 text-[11px] font-bold transition',
-                  editMode === 'weight' ? 'bg-indigo-600 text-white' : 'border border-slate-200 bg-white text-slate-500 hover:bg-slate-50',
-                )}>
-                Weight %
-              </button>
-            </div>
-            <p className="mt-1.5 text-[11px] text-slate-500">
-              {editMode === 'amount'
-                ? 'Mengubah target sales/transaksi akan mengubah total target toko, dan weight% seluruh karyawan dihitung ulang dari total baru.'
-                : 'Mengubah weight% menjaga total target toko tetap sama. PIC1/PIC2 lain tidak berubah; sisa weight SA dibagi ulang secara proporsional, lalu target sales/transaksi dihitung ulang dari weight baru.'}
-              {period === 'daily' && ' Target yang diedit adalah target bulanan (tampilan harian dihitung dari target bulanan ÷ hari terjadwal).'}
-            </p>
-          </td>
-        </tr>
+          )
+        )}
+      </div>
+
+      {editingPct && (
+        <p className="mt-1.5 text-[10px] text-slate-400">
+          Sisa persennya otomatis dibagi ke karyawan lain yang jadwal hari ini.
+        </p>
       )}
-      {error && (
-        <tr>
-          <td colSpan={7} className="px-3 pb-2">
-            <p className="text-xs font-semibold text-red-500">{error}</p>
-          </td>
-        </tr>
+
+      {error && <p className="mt-2 text-xs font-semibold text-red-500">{error}</p>}
+
+      {/* Actions */}
+      {!locked && (
+        <div className="mt-3 flex justify-end gap-1.5">
+          <button type="button" onClick={() => setShowCalendar(true)}
+            className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-bold text-slate-600 hover:bg-slate-50">
+            <Calendar className="h-3 w-3" /> Kalender
+          </button>
+          <button type="button" onClick={handleDeleteFromRoster} disabled={saving}
+            className="flex items-center gap-1.5 rounded-lg border border-red-100 bg-white px-2.5 py-1.5 text-[11px] font-bold text-red-500 hover:bg-red-50 disabled:opacity-60">
+            <Trash2 className="h-3 w-3" /> Hapus
+          </button>
+        </div>
       )}
+
       {showCalendar && (
         <EmployeeCalendarModal
           storeId={storeId}
@@ -947,18 +1124,19 @@ function EmployeeTargetTableRow({ row, storeId, period, yearMonth, locked, zebra
           onClose={() => setShowCalendar(false)}
         />
       )}
-    </>
+    </div>
   );
 }
 
 // ─── StoreDetailPanel ─────────────────────────────────────────────────────────
 
-function StoreDetailPanel({ detail, loading, eligible, yearMonth, period, onRefresh }: {
+function StoreDetailPanel({ detail, loading, eligible, yearMonth, period, dateKey, onRefresh }: {
   detail: DetailResponse | null;
   loading: boolean;
   eligible: EligibleEmployee[];
   yearMonth: string;
   period: ViewPeriod;
+  dateKey: string;
   onRefresh: () => void;
 }) {
   const [showAddForm, setShowAddForm] = useState(false);
@@ -985,11 +1163,13 @@ function StoreDetailPanel({ detail, loading, eligible, yearMonth, period, onRefr
     return (
       <div className="flex min-h-[320px] items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-white p-8 text-center">
         <div>
-          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-400">
-            <Target className="h-5 w-5" />
+          <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-500">
+            <Target className="h-6 w-6" />
           </div>
-          <p className="font-semibold text-slate-700">Pilih toko untuk kelola target</p>
-          <p className="mt-1 text-xs text-slate-400">Klik salah satu toko di kiri untuk melihat dan mengatur target karyawan.</p>
+          <p className="font-bold text-slate-700">Pilih toko untuk mulai atur target</p>
+          <p className="mx-auto mt-1 max-w-xs text-xs text-slate-400">
+            Klik salah satu toko di daftar kiri. Dari sini kamu bisa isi target bulanan, atur roster karyawan, dan lihat pencapaian.
+          </p>
         </div>
       </div>
     );
@@ -1033,14 +1213,12 @@ function StoreDetailPanel({ detail, loading, eligible, yearMonth, period, onRefr
   };
 
   const sorted = [...detail.employeeTargets].sort((a, b) => {
-    const order = ['PIC1', 'PIC2', 'SA', 'CASHIER', 'SPV'];
+    const order = ['PIC1', 'PIC2', 'SA'];
     const ai = order.indexOf(a.targetRoleCode);
     const bi = order.indexOf(b.targetRoleCode);
     if (ai !== bi) return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
     return a.name.localeCompare(b.name);
   });
-
-  const weightSum = detail.employeeTargets.reduce((sum, row) => sum + row.targetWeightPct, 0);
 
   const storeSalesPct = pctOf(detail.actuals.storeActualSales, detail.storeDisplaySalesTarget);
   const storeTxPct = pctOf(detail.actuals.storeActualTransactionCount, detail.storeDisplayTransactionTarget);
@@ -1049,169 +1227,155 @@ function StoreDetailPanel({ detail, loading, eligible, yearMonth, period, onRefr
     : 0;
 
   return (
-    <article className="flex max-h-[calc(100vh-9rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="shrink-0 border-b border-slate-100 p-4 sm:p-5">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-500">
-              {detail.store.areaName ?? 'Toko'}
-            </p>
-            <h2 className="mt-0.5 truncate text-lg font-bold text-slate-900">{detail.store.name}</h2>
-            <p className="mt-0.5 text-xs text-slate-500">{detail.store.address}</p>
-          </div>
-          <button type="button" onClick={toggleLock} disabled={lockSaving}
-            className={cn(
-              'flex shrink-0 items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-bold transition disabled:opacity-60',
-              isLocked
-                ? 'border-indigo-200 bg-indigo-50 text-indigo-600 hover:bg-indigo-100'
-                : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50',
-            )}
-          >
-            {isLocked ? <Lock className="h-3.5 w-3.5" /> : <LockOpen className="h-3.5 w-3.5" />}
-            {isLocked ? 'Terkunci' : 'Terbuka'}
-          </button>
-        </div>
+    <div className="space-y-4">
+      <HowThisWorksCallout />
 
-        {!detail.actuals.available && (
-          <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-700">
-            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <p className="text-[11px] font-semibold">
-              Data aktual dari Business Central tidak tersedia{detail.actuals.error ? `: ${detail.actuals.error}` : '.'}
-            </p>
-          </div>
-        )}
-
-        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
-            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Sales</p>
-            <p className="mt-0.5 text-sm font-black text-slate-900">{fmtCurrency(detail.storeDisplaySalesTarget)}</p>
-            <p className="text-[11px] text-slate-400">Aktual {fmtCurrency(detail.actuals.storeActualSales)}</p>
-            <div className="mt-1"><PctProgressBar pct={storeSalesPct} /></div>
-          </div>
-          <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
-            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Transaksi</p>
-            <p className="mt-0.5 text-sm font-black text-slate-900">{detail.storeDisplayTransactionTarget}</p>
-            <p className="text-[11px] text-slate-400">Aktual {detail.actuals.storeActualTransactionCount}</p>
-            <div className="mt-1"><PctProgressBar pct={storeTxPct} /></div>
-          </div>
-          <StatCard label="ATV Target" value={fmtCurrency(detail.rollup.storeMonthlyAtvTarget)} sub={`Aktual ${fmtCurrency(storeAtvActual)}`} />
-          <StatCard label="Karyawan" value={String(detail.rollup.employeeTargetCount)} sub="dengan target aktif" />
-        </div>
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-4">
-        <div className="mb-4">
-          <label className="text-[11px] font-bold uppercase tracking-widest text-slate-400">Catatan Plan Bulanan</label>
-          <textarea
-            value={notes}
-            onChange={(e) => { setNotes(e.target.value); setNotesDirty(true); }}
-            rows={2}
-            disabled={isLocked}
-            placeholder="Catatan untuk plan bulan ini…"
-            className="mt-1 w-full resize-none rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs focus:border-indigo-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-100 disabled:opacity-60"
-          />
-          {notesDirty && (
-            <div className="mt-1.5 flex justify-end">
-              <button type="button" onClick={saveNotes} disabled={notesSaving}
-                className="rounded-lg bg-indigo-600 px-3 py-1 text-[11px] font-bold text-white hover:bg-indigo-500 disabled:opacity-60">
-                {notesSaving ? 'Menyimpan…' : 'Simpan Catatan'}
-              </button>
+      <article className="flex max-h-[calc(100vh-9rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="shrink-0 space-y-4 border-b border-slate-100 p-4 sm:p-5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-500">
+                {detail.store.areaName ?? 'Toko'}
+              </p>
+              <h2 className="mt-0.5 truncate text-lg font-bold text-slate-900">{detail.store.name}</h2>
+              <p className="mt-0.5 text-xs text-slate-500">{detail.store.address}</p>
             </div>
-          )}
-        </div>
-
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-widest text-slate-400">
-            <Users className="h-3.5 w-3.5" /> Target vs Aktual Karyawan
-          </h3>
-          {!isLocked && (
-            <button type="button" onClick={() => setShowAddForm((v) => !v)}
-              className="flex items-center gap-1 rounded-lg bg-indigo-600 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-indigo-500">
-              <Plus className="h-3 w-3" /> Tambah
+            <button type="button" onClick={toggleLock} disabled={lockSaving}
+              className={cn(
+                'flex shrink-0 items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-bold transition disabled:opacity-60',
+                isLocked
+                  ? 'border-indigo-200 bg-indigo-50 text-indigo-600 hover:bg-indigo-100'
+                  : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50',
+              )}
+            >
+              {isLocked ? <Lock className="h-3.5 w-3.5" /> : <LockOpen className="h-3.5 w-3.5" />}
+              {isLocked ? 'Terkunci' : 'Terbuka'}
             </button>
-          )}
-        </div>
-
-        {showAddForm && !isLocked && (
-          <div className="mb-3">
-            <AddEmployeeTargetForm
-              storeId={detail.store.id}
-              yearMonth={yearMonth}
-              eligible={eligible}
-              storeRollup={detail.rollup}
-              onCreated={() => { setShowAddForm(false); onRefresh(); }}
-              onCancel={() => setShowAddForm(false)}
-            />
           </div>
-        )}
 
-        {sorted.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-slate-200 p-6 text-center text-xs text-slate-400">
-            Belum ada target karyawan untuk bulan ini.
-          </div>
-        ) : (
-          <>
-            <div className="mb-2 flex items-center justify-between">
-              <p className="text-[11px] text-slate-400">
-                Total weight saat ini: <span className="font-bold text-slate-600">{weightSum.toFixed(2)}%</span>
-                {Math.abs(weightSum - 100) > 0.5 && (
-                  <span className="ml-1.5 inline-flex items-center gap-1 rounded-full bg-amber-50 px-1.5 py-0.5 font-bold text-amber-600">
-                    <AlertTriangle className="h-2.5 w-2.5" /> tidak 100%
-                  </span>
-                )}
+          {!detail.actuals.available && (
+            <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-700">
+              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <p className="text-[11px] font-semibold">
+                Data aktual dari Business Central tidak tersedia{detail.actuals.error ? `: ${detail.actuals.error}` : '.'}
               </p>
             </div>
+          )}
 
-            <div className="overflow-x-auto rounded-xl border border-slate-200">
-              <table className="w-full min-w-[760px] border-collapse text-left">
-                <thead className="sticky top-0 z-10">
-                  <tr className="border-b border-slate-200 bg-slate-100 text-[10px] font-bold uppercase tracking-widest text-slate-500">
-                    <th className="px-3 py-2.5">Karyawan</th>
-                    <th className="px-3 py-2.5">Role</th>
-                    <th className="px-3 py-2.5 text-right">Weight</th>
-                    <th className="px-3 py-2.5 text-right">Sales {period === 'daily' ? '(Harian)' : '(Bulanan)'}</th>
-                    <th className="px-3 py-2.5 text-right">Transaksi {period === 'daily' ? '(Harian)' : '(Bulanan)'}</th>
-                    <th className="px-3 py-2.5 text-right">ATV</th>
-                    <th className="px-3 py-2.5 text-right">Aksi</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sorted.map((row, idx) => (
-                    <EmployeeTargetTableRow
-                      key={row.id}
-                      row={row}
-                      storeId={detail.store.id}
-                      period={period}
-                      yearMonth={yearMonth}
-                      locked={isLocked}
-                      zebra={idx % 2 === 1}
-                      onUpdated={onRefresh}
-                      onDeleted={onRefresh}
-                    />
-                  ))}
-                </tbody>
-                <tfoot>
-                  <tr className="border-t-2 border-slate-200 bg-slate-100 text-xs font-bold text-slate-700">
-                    <td className="px-3 py-2.5" colSpan={2}>Total</td>
-                    <td className="px-3 py-2.5 text-right tabular-nums">{weightSum.toFixed(2)}%</td>
-                    <td className="px-3 py-2.5 text-right">
-                      <p className="tabular-nums">{fmtCurrency(detail.storeDisplaySalesTarget)}</p>
-                      <p className="mt-0.5 text-[11px] font-normal tabular-nums text-slate-400">Aktual {fmtCurrency(detail.actuals.storeActualSales)}</p>
-                    </td>
-                    <td className="px-3 py-2.5 text-right">
-                      <p className="tabular-nums">{detail.storeDisplayTransactionTarget}</p>
-                      <p className="mt-0.5 text-[11px] font-normal tabular-nums text-slate-400">Aktual {detail.actuals.storeActualTransactionCount}</p>
-                    </td>
-                    <td className="px-3 py-2.5 text-right tabular-nums">{fmtCurrency(detail.rollup.storeMonthlyAtvTarget)}</td>
-                    <td className="px-3 py-2.5" />
-                  </tr>
-                </tfoot>
-              </table>
+          {period === 'daily' && detail.dailyMeta?.usedFallbackEqualSplit && detail.dailyMeta.headcount > 0 && (
+            <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-700">
+              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <p className="text-[11px] font-semibold">
+                Belum ada pola pembagian untuk {detail.dailyMeta.headcount} orang — sementara dibagi rata. Minta admin tambahkan pola ini supaya sesuai grid PIC1/PIC2/SA.
+              </p>
             </div>
-          </>
-        )}
-      </div>
-    </article>
+          )}
+
+          <MonthlyTargetEditor
+            storeId={detail.store.id}
+            yearMonth={yearMonth}
+            salesTarget={detail.rollup.storeMonthlySalesTarget}
+            transactionTarget={detail.rollup.storeMonthlyTransactionTarget}
+            isLocked={isLocked}
+            onSaved={onRefresh}
+          />
+
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                Sales {period === 'daily' ? '(Hari Ini)' : '(Bulan Ini)'}
+              </p>
+              <p className="mt-0.5 text-sm font-black text-slate-900">{fmtCurrency(detail.storeDisplaySalesTarget)}</p>
+              <p className="text-[11px] text-slate-400">Aktual {fmtCurrency(detail.actuals.storeActualSales)}</p>
+              <div className="mt-1"><PctProgressBar pct={storeSalesPct} /></div>
+            </div>
+            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                Transaksi {period === 'daily' ? '(Hari Ini)' : '(Bulan Ini)'}
+              </p>
+              <p className="mt-0.5 text-sm font-black text-slate-900">{detail.storeDisplayTransactionTarget}</p>
+              <p className="text-[11px] text-slate-400">Aktual {detail.actuals.storeActualTransactionCount}</p>
+              <div className="mt-1"><PctProgressBar pct={storeTxPct} /></div>
+            </div>
+            <StatCard label="ATV Aktual" value={fmtCurrency(storeAtvActual)} sub={period === 'daily' ? 'hari ini' : 'bulan ini'} />
+            <StatCard
+              label={period === 'daily' ? 'Jadwal Hari Ini' : 'Karyawan di Roster'}
+              value={period === 'daily' ? String(detail.dailyMeta?.headcount ?? 0) : String(detail.rollup.rosterCount)}
+              sub={period === 'daily' ? 'orang bekerja' : 'total roster'}
+            />
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4">
+          <div className="mb-4">
+            <label className="text-[11px] font-bold uppercase tracking-widest text-slate-400">Catatan Plan Bulanan</label>
+            <textarea
+              value={notes}
+              onChange={(e) => { setNotes(e.target.value); setNotesDirty(true); }}
+              rows={2}
+              disabled={isLocked}
+              placeholder="Catatan untuk plan bulan ini…"
+              className="mt-1 w-full resize-none rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs focus:border-indigo-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-100 disabled:opacity-60"
+            />
+            {notesDirty && (
+              <div className="mt-1.5 flex justify-end">
+                <button type="button" onClick={saveNotes} disabled={notesSaving}
+                  className="rounded-lg bg-indigo-600 px-3 py-1 text-[11px] font-bold text-white hover:bg-indigo-500 disabled:opacity-60">
+                  {notesSaving ? 'Menyimpan…' : 'Simpan Catatan'}
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="flex items-center text-xs font-bold uppercase tracking-widest text-slate-400">
+              <Users className="mr-1.5 h-3.5 w-3.5" /> Target vs Aktual Karyawan
+              {period === 'daily' && <SlotLegend />}
+            </h3>
+            {!isLocked && (
+              <button type="button" onClick={() => setShowAddForm((v) => !v)}
+                className="flex items-center gap-1 rounded-lg bg-indigo-600 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-indigo-500">
+                <Plus className="h-3 w-3" /> Tambah
+              </button>
+            )}
+          </div>
+
+          {showAddForm && !isLocked && (
+            <div className="mb-3">
+              <AddEmployeeTargetForm
+                storeId={detail.store.id}
+                yearMonth={yearMonth}
+                eligible={eligible}
+                onCreated={() => { setShowAddForm(false); onRefresh(); }}
+                onCancel={() => setShowAddForm(false)}
+              />
+            </div>
+          )}
+
+          {sorted.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-center text-xs text-slate-400">
+              Belum ada karyawan di roster target bulan ini. Klik &quot;Tambah&quot; untuk mulai.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {sorted.map((row) => (
+                <EmployeeTargetCard
+                  key={row.id}
+                  row={row}
+                  storeId={detail.store.id}
+                  period={period}
+                  yearMonth={yearMonth}
+                  date={dateKey}
+                  locked={isLocked}
+                  onDailyChange={onRefresh}
+                  onDeleted={onRefresh}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </article>
+    </div>
   );
 }
 
@@ -1279,8 +1443,6 @@ export default function PerformanceTargetsPage() {
     else setDetail(null);
   }, [selectedStoreId, loadDetail]);
 
-  // Clear selection whenever the month changes — the previously selected
-  // store's target row set may not exist for the new month.
   useEffect(() => { setSelectedStoreId(null); }, [yearMonth]);
 
   const handleSelectStore = (storeId: number) => {
@@ -1319,6 +1481,7 @@ export default function PerformanceTargetsPage() {
 
   return (
     <div className="min-h-full bg-slate-50">
+      {/* Header — unchanged, as requested. */}
       <OpsPageHeader
         scope="OPS · Operations"
         title="Performance Targets"
@@ -1343,22 +1506,22 @@ export default function PerformanceTargetsPage() {
           </div>
         )}
 
-        {/* Summary strip */}
         {overview && (
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <StatCard label="Total Toko" value={String(overview.summary.storeCount)} />
-            <StatCard
-              label="Plan Terisi"
+            <IconStat icon={Store} iconClass="bg-slate-100 text-slate-500" label="Total Toko" value={String(overview.summary.storeCount)} />
+            <IconStat
+              icon={Target}
+              iconClass="bg-emerald-50 text-emerald-600"
+              label="Sudah Isi Target"
               value={`${overview.summary.plannedStoreCount}/${overview.summary.storeCount}`}
-              sub="toko dengan plan bulanan"
+              sub="toko dengan target bulanan"
             />
-            <StatCard label="Total Target Sales" value={fmtCurrencyCompact(overview.summary.storeMonthlySalesTarget)} sub="bulanan" />
-            <StatCard label="Total Target Transaksi" value={String(overview.summary.storeMonthlyTransactionTarget)} sub="bulanan" />
+            <IconStat icon={ShoppingBag} iconClass="bg-indigo-50 text-indigo-600" label="Total Target Sales" value={fmtCurrencyCompact(overview.summary.storeMonthlySalesTarget)} sub="bulanan, semua toko" />
+            <IconStat icon={Receipt} iconClass="bg-blue-50 text-blue-600" label="Total Target Transaksi" value={String(overview.summary.storeMonthlyTransactionTarget)} sub="bulanan, semua toko" />
           </div>
         )}
 
         <div className="grid items-start gap-5 lg:grid-cols-[380px_1fr]">
-          {/* ── Store list ── */}
           <aside className="flex max-h-[calc(100vh-9rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm lg:sticky lg:top-[6.5rem]">
             <div className="shrink-0 border-b border-slate-100 p-3">
               <label className="relative block">
@@ -1409,7 +1572,6 @@ export default function PerformanceTargetsPage() {
             </div>
           </aside>
 
-          {/* ── Detail panel ── */}
           <div className="lg:sticky lg:top-[6.5rem]">
             <StoreDetailPanel
               detail={detail}
@@ -1417,6 +1579,7 @@ export default function PerformanceTargetsPage() {
               eligible={eligible}
               yearMonth={yearMonth}
               period={viewPeriod}
+              dateKey={dateKey}
               onRefresh={handleRefresh}
             />
           </div>

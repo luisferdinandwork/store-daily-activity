@@ -4,20 +4,20 @@
 //
 // Updates (or creates, via ensureStoreMonthlyTargetPlan) the
 // store_monthly_targets "header" row for a store + month:
+//   - monthlySalesTarget / monthlyTransactionTarget  ← NEW: Ops sets these
+//     DIRECTLY now. This is the single number that gets divided by days-in-
+//     month and then split across the roster every day (see target-utils.ts).
 //   - isLocked
 //   - notes
-//
-// Store target *numbers* are never written here — they remain derived from
-// employee_monthly_targets (see target-utils.ts).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { NextRequest, NextResponse } from 'next/server';
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
-import { areas, stores, storeMonthlyTargets } from '@/lib/db/schema';
+import { stores, storeMonthlyTargets } from '@/lib/db/schema';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
-import { ensureStoreMonthlyTargetPlan } from '@/lib/performance/target-utils';
+import { ensureStoreMonthlyTargetPlan, safeNumber } from '@/lib/performance/target-utils';
 
 type Params = { params: Promise<{ storeId: string }> };
 
@@ -67,10 +67,34 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     createdBy: scope.userId,
   });
 
+  // Locked plans can't have their target numbers changed — only unlocked
+  // first. isLocked itself can always be toggled (that's how you unlock).
+  const [currentPlan] = await db
+    .select({ isLocked: storeMonthlyTargets.isLocked })
+    .from(storeMonthlyTargets)
+    .where(eq(storeMonthlyTargets.id, planId))
+    .limit(1);
+
+  const changingAmounts = body?.monthlySalesTarget != null || body?.monthlyTransactionTarget != null;
+  if (changingAmounts && currentPlan?.isLocked && body?.isLocked !== false) {
+    return NextResponse.json(
+      { success: false, error: 'Plan is locked. Unlock it before changing the monthly target.' },
+      { status: 409 },
+    );
+  }
+
   const updates: Partial<typeof storeMonthlyTargets.$inferInsert> = {
     updatedBy: scope.userId,
     updatedAt: new Date(),
   };
+
+  if (body?.monthlySalesTarget != null) {
+    updates.monthlySalesTarget = String(Math.max(0, safeNumber(body.monthlySalesTarget)));
+  }
+
+  if (body?.monthlyTransactionTarget != null) {
+    updates.monthlyTransactionTarget = Math.max(0, Math.round(safeNumber(body.monthlyTransactionTarget)));
+  }
 
   if (typeof body?.isLocked === 'boolean') {
     updates.isLocked = body.isLocked;

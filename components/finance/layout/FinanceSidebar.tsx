@@ -64,7 +64,6 @@ const NAV: NavSection[] = [
     section: 'Cash & Reports',
     items: [
       { href: '/finance/petty-cash',    label: 'Petty Cash',     icon: Wallet },
-      { href: '/finance/daily-report', label: 'Daily Report',  icon: FileText },
       { href: '/finance/setoran',       label: 'Setoran Review', icon: WalletCards },
       { href: '/finance/uang-modal',       label: 'Uang Modal Harian', icon: PocketKnife },
     ],

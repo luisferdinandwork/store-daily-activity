@@ -15,20 +15,19 @@ import { stores, users } from './core';
 
 // ─── Store Monthly Target Plan ───────────────────────────────────────────────
 //
-// Important design rule:
-// Store target numbers are NOT manually stored here anymore.
+// CHANGED (see target-allocation.ts for the new daily-split pieces):
 //
-// The store monthly target is automatically calculated from the sum of active
-// employee_monthly_targets rows for the same store + month.
+// Store target numbers are now set DIRECTLY by Ops on this table. The old
+// "employee rollup" model (store total = SUM of employee_monthly_targets) is
+// retired — employee_monthly_targets no longer stores amounts at all.
 //
-// This table is only the monthly "header/plan" used by Ops later for:
-//   - opening/locking a target month for a store
-//   - notes/status/audit
-//   - grouping employee targets under one store-month plan
+// Daily store target = monthlySalesTarget / days-in-month. That daily
+// figure is then split across whichever roster employees are actually
+// scheduled to work each day, using target_allocation_templates (default
+// split, keyed by headcount) with optional per-day, per-employee overrides
+// in daily_target_overrides.
 //
-// Store monthly sales target = SUM(employee_monthly_targets.monthlySalesTarget)
-// Store monthly transaction target = SUM(employee_monthly_targets.monthlyTransactionTarget)
-// Store monthly ATV target = sales target / transaction target
+// See lib/performance/target-utils.ts for all the derivation logic.
 
 export const storeMonthlyTargets = pgTable('store_monthly_targets', {
   id: serial('id').primaryKey(),
@@ -40,10 +39,19 @@ export const storeMonthlyTargets = pgTable('store_monthly_targets', {
   /** YYYY-MM, e.g. 2026-06 */
   yearMonth: text('year_month').notNull(),
 
-  /** Always employee_rollup for the new model. Kept as text for future modes if needed. */
-  targetSource: text('target_source').default('employee_rollup').notNull(),
+  /** The store's whole monthly target — set directly by Ops now. */
+  monthlySalesTarget: decimal('monthly_sales_target', {
+    precision: 14,
+    scale: 2,
+  }).default('0').notNull(),
 
-  /** Optional workflow fields for the future Ops management page. */
+  monthlyTransactionTarget: integer('monthly_transaction_target')
+    .default(0)
+    .notNull(),
+
+  /** 'manual' is the only mode now; kept as text in case other modes return later. */
+  targetSource: text('target_source').default('manual').notNull(),
+
   isLocked: boolean('is_locked').default(false).notNull(),
   lockedAt: timestamp('locked_at'),
   lockedBy: text('locked_by').references(() => users.id),
@@ -68,19 +76,24 @@ export const storeMonthlyTargets = pgTable('store_monthly_targets', {
   activeIdx: index('store_monthly_targets_active_idx').on(t.isActive),
 }));
 
-// ─── Employee Monthly Target ────────────────────────────────────────────────
+// ─── Employee Monthly Roster ─────────────────────────────────────────────────
 //
-// Source of truth for performance targets.
+// CHANGED: this table used to be the source of truth for each employee's
+// nominal sales/transaction targets (monthlySalesTarget, targetWeightPct,
+// etc). It no longer stores any amount — it only says "this employee is on
+// this store's target roster for this month, in this slot."
 //
-// One row per employee + store + month.
-// This is what makes targets different for each employee in each store.
-// Example:
-//   PIC1 / PIC2: targetRoleCode = PIC1/PIC2, targetWeightPct = 10.00
-//   SA:          targetRoleCode = SA,        targetWeightPct = 100.00
+//   targetRoleCode — fixed identity: 'PIC1' | 'PIC2' | 'SA'
+//   sortOrder      — tie-breaker used to rank SA employees into SA1, SA2, ...
+//                    on days when several SAs are scheduled together (lower
+//                    sortOrder = ranked first). Ignored for PIC1 / PIC2,
+//                    which always keep their own column.
 //
-// Store target is automatically calculated by summing these employee rows.
-// Daily target is NOT stored here. It is calculated dynamically:
-//   employee monthly target / count of days employee is scheduled in that store.
+// Nominal daily/monthly amounts are always computed on the fly from the
+// store's daily target × that day's allocation percentage — see
+// computeDailyAllocations() / computeEmployeeMonthlyTargetFromDailyAllocations()
+// in target-utils.ts. Nothing here is edited directly to "give someone more
+// money" — that happens per-day, per-employee, in daily_target_overrides.
 
 export const employeeMonthlyTargets = pgTable('employee_monthly_targets', {
   id: serial('id').primaryKey(),
@@ -99,37 +112,11 @@ export const employeeMonthlyTargets = pgTable('employee_monthly_targets', {
   /** YYYY-MM, e.g. 2026-06 */
   yearMonth: text('year_month').notNull(),
 
-  /**
-   * For Ops display/filtering later.
-   * Examples: PIC1, PIC2, SA, CASHIER, SPV.
-   */
+  /** PIC1 | PIC2 | SA — matches the LEVEL rows in target_allocation_templates. */
   targetRoleCode: text('target_role_code').default('SA').notNull(),
 
-  /**
-   * Optional allocation weight used by seeders / Ops helpers.
-   * Example: PIC1/PIC2 can be 10.00 while SA is 100.00.
-   * The actual target is still monthlySalesTarget/monthlyTransactionTarget.
-   */
-  targetWeightPct: decimal('target_weight_pct', {
-    precision: 7,
-    scale: 2,
-  }).default('100.00').notNull(),
-
-  monthlySalesTarget: decimal('monthly_sales_target', {
-    precision: 14,
-    scale: 2,
-  })
-    .default('0')
-    .notNull(),
-
-  monthlyTransactionTarget: integer('monthly_transaction_target')
-    .default(0)
-    .notNull(),
-
-  monthlyAtvTarget: decimal('monthly_atv_target', {
-    precision: 12,
-    scale: 2,
-  }).default('0'),
+  /** Ranks SA employees into SA1 / SA2 / ... when several work the same day. */
+  sortOrder: integer('sort_order').default(0).notNull(),
 
   notes: text('notes'),
   isActive: boolean('is_active').default(true).notNull(),

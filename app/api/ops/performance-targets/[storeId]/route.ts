@@ -4,22 +4,16 @@
 //
 // Returns:
 //   - the store + area info
-//   - the store_monthly_targets "plan" row (if any)
-//   - the store rollup (sum of active employee_monthly_targets; ATV always
-//     derived from sales/transaction totals)
-//   - the list of employee_monthly_targets rows for this store + month,
-//     joined with users so the UI can show name/NIK
-//   - per-employee + store-level ACTUALS from Business Central for the
-//     selected period (daily = a single date, monthly = the whole
-//     yearMonth), plus the daily target equivalent (monthly target /
-//     scheduled days) when period === 'daily'
-//
-// Query params:
-//   - yearMonth   (required) — which monthly target plan to read targets from.
-//   - period      ('daily' | 'monthly', default 'monthly') — which actuals
-//                  window to compare against.
-//   - date        (YYYY-MM-DD, required when period === 'daily') — the day to
-//                  fetch actuals for. Must fall within yearMonth.
+//   - the store_monthly_targets "plan" row (monthly sales/transaction target,
+//     set directly by Ops; lock state; notes)
+//   - the roster (employee_monthly_targets, no amounts) joined with users
+//   - for period=daily: each present roster employee's slotCode, default %,
+//     effective % (after any override), and the resulting daily
+//     sales/transaction target — from computeDailyAllocations()
+//   - for period=monthly: each roster employee's month-to-date target,
+//     summed from their daily allocations across every day they're
+//     scheduled — from computeMonthlyAllocationSummary()
+//   - matching ACTUALS from Business Central for the selected period
 //
 // Access:
 //   - OPS HO   → any store
@@ -35,10 +29,10 @@ import { storeMonthlyTargets } from '@/lib/db/schema';
 import { getStoreActuals } from '@/lib/performance/employee-actuals';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
 import {
-  calculateDailyTarget,
-  getScheduledDaysForEmployeeInStore,
-  getStoreMonthlyTargetRollup,
-  listStoreEmployeeTargets,
+  computeDailyAllocations,
+  computeMonthlyAllocationSummary,
+  getStoreMonthlyTarget,
+  listStoreRoster,
   toYearMonth,
 } from '@/lib/performance/target-utils';
 
@@ -125,67 +119,86 @@ export async function GET(req: NextRequest, { params }: Params) {
     )
     .limit(1);
 
-  const [rollup, employeeTargets, actuals] = await Promise.all([
-    getStoreMonthlyTargetRollup({ storeId, yearMonth }),
-    listStoreEmployeeTargets({ storeId, yearMonth }),
-    getStoreActuals({
-      storeNo: store.storeNo,
-      period,
-      date,
-      yearMonth,
-    }),
+  const [storeMonthly, roster, actuals] = await Promise.all([
+    getStoreMonthlyTarget({ storeId, yearMonth }),
+    listStoreRoster({ storeId, yearMonth }),
+    getStoreActuals({ storeNo: store.storeNo, period, date, yearMonth }),
   ]);
 
-  // For daily view, also compute each employee's daily target (monthly
-  // target / scheduled days in month) so the comparison is apples-to-apples.
-  const scheduledDaysByUser = new Map<string, number>();
+  let employeeTargets: Array<{
+    id: number;
+    userId: string;
+    nik: string;
+    name: string;
+    targetRoleCode: string;
+    slotCode: string | null;
+    defaultPct: number | null;
+    effectivePct: number | null;
+    isOverridden: boolean;
+    isScheduledToday: boolean;
+    displaySalesTarget: number;
+    displayTransactionTarget: number;
+    actualSales: number;
+    actualTransactionCount: number;
+  }>;
 
-  if (period === 'daily') {
-    await Promise.all(
-      employeeTargets.map(async (row) => {
-        const days = await getScheduledDaysForEmployeeInStore({
-          userId: row.userId,
-          storeId,
-          yearMonth,
-        });
-        scheduledDaysByUser.set(row.userId, days);
-      }),
-    );
+  let dailyMeta: { headcount: number; usedFallbackEqualSplit: boolean } | null = null;
+
+  if (period === 'daily' && date) {
+    const daily = await computeDailyAllocations({ storeId, date, yearMonth });
+    dailyMeta = { headcount: daily.headcount, usedFallbackEqualSplit: daily.usedFallbackEqualSplit };
+
+    const rowsByUserId = new Map(daily.rows.map((r) => [r.userId, r]));
+
+    employeeTargets = roster.map((member) => {
+      const allocation = rowsByUserId.get(member.userId);
+      const actual = actuals.byEmployee.get(member.nik);
+
+      return {
+        id: member.id,
+        userId: member.userId,
+        nik: member.nik,
+        name: member.name,
+        targetRoleCode: member.targetRoleCode,
+        slotCode: allocation?.slotCode ?? null,
+        defaultPct: allocation?.defaultPct ?? null,
+        effectivePct: allocation?.effectivePct ?? null,
+        isOverridden: allocation?.isOverridden ?? false,
+        isScheduledToday: Boolean(allocation),
+        displaySalesTarget: allocation?.dailySalesTarget ?? 0,
+        displayTransactionTarget: allocation?.dailyTransactionTarget ?? 0,
+        actualSales: actual?.actualSales ?? 0,
+        actualTransactionCount: actual?.actualTransactionCount ?? 0,
+      };
+    });
+  } else {
+    const monthly = await computeMonthlyAllocationSummary({ storeId, yearMonth });
+
+    employeeTargets = roster.map((member) => {
+      const rollup = monthly.byUserId.get(member.userId);
+      const actual = actuals.byEmployee.get(member.nik);
+
+      return {
+        id: member.id,
+        userId: member.userId,
+        nik: member.nik,
+        name: member.name,
+        targetRoleCode: member.targetRoleCode,
+        slotCode: null,
+        defaultPct: null,
+        effectivePct: null,
+        isOverridden: false,
+        isScheduledToday: (rollup?.scheduledDays ?? 0) > 0,
+        displaySalesTarget: rollup?.monthlySalesTarget ?? 0,
+        displayTransactionTarget: rollup?.monthlyTransactionTarget ?? 0,
+        actualSales: actual?.actualSales ?? 0,
+        actualTransactionCount: actual?.actualTransactionCount ?? 0,
+      };
+    });
   }
 
-  const employeeTargetsWithActuals = employeeTargets.map((row) => {
-    const actual = actuals.byEmployee.get(row.nik);
-    const actualSales = actual?.actualSales ?? 0;
-    const actualTransactionCount = actual?.actualTransactionCount ?? 0;
-
-    let displaySalesTarget = row.monthlySalesTarget;
-    let displayTransactionTarget = row.monthlyTransactionTarget;
-
-    if (period === 'daily') {
-      const days = scheduledDaysByUser.get(row.userId) ?? 0;
-      displaySalesTarget = calculateDailyTarget(row.monthlySalesTarget, days);
-      displayTransactionTarget = calculateDailyTarget(row.monthlyTransactionTarget, days);
-    }
-
-    return {
-      ...row,
-      actualSales,
-      actualTransactionCount,
-      displaySalesTarget,
-      displayTransactionTarget,
-    };
-  });
-
-  // Store-level display targets follow the same daily/monthly logic, summed
-  // across employees so the footer total stays consistent with the rows.
-  const storeDisplaySalesTarget = employeeTargetsWithActuals.reduce(
-    (sum, row) => sum + row.displaySalesTarget,
-    0,
-  );
-  const storeDisplayTransactionTarget = employeeTargetsWithActuals.reduce(
-    (sum, row) => sum + row.displayTransactionTarget,
-    0,
-  );
+  const storeDisplaySalesTarget = employeeTargets.reduce((sum, row) => sum + row.displaySalesTarget, 0);
+  const storeDisplayTransactionTarget = employeeTargets.reduce((sum, row) => sum + row.displayTransactionTarget, 0);
 
   return NextResponse.json({
     success: true,
@@ -195,8 +208,17 @@ export async function GET(req: NextRequest, { params }: Params) {
     scope: scope.scope,
     store,
     plan: plan ?? null,
-    rollup,
-    employeeTargets: employeeTargetsWithActuals,
+    rollup: {
+      storeMonthlyTargetId: storeMonthly.storeMonthlyTargetId,
+      storeId,
+      yearMonth,
+      storeMonthlySalesTarget: storeMonthly.monthlySalesTarget,
+      storeMonthlyTransactionTarget: storeMonthly.monthlyTransactionTarget,
+      storeMonthlyAtvTarget: storeMonthly.monthlyAtvTarget,
+      rosterCount: roster.length,
+    },
+    dailyMeta,
+    employeeTargets,
     actuals: {
       available: actuals.available,
       error: actuals.error,

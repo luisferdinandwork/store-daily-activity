@@ -1,72 +1,82 @@
 // lib/performance/target-utils.ts
-import { and, asc, eq, gte, lt } from 'drizzle-orm';
+// ─────────────────────────────────────────────────────────────────────────────
+// New target model (replaces the old "employee rollup" model):
+//
+//   1. Ops sets ONE number per store + month: monthlySalesTarget /
+//      monthlyTransactionTarget, directly on store_monthly_targets.
+//
+//   2. That monthly figure is split evenly across every calendar day:
+//        storeDailyTarget = storeMonthlyTarget / daysInMonth
+//
+//   3. Each day, the store's roster (employee_monthly_targets) is filtered
+//      down to whoever is actually scheduled to work that day (`schedules`
+//      table). Headcount = how many roster employees are present.
+//
+//   4. The daily target is split across those present employees using
+//      target_allocation_templates — a % table keyed by (headcount,
+//      slotCode), matching the printed PIC1/PIC2/SA1../SA5 grid. PIC1/PIC2
+//      keep a fixed identity; SA employees are ranked into SA1, SA2, ... by
+//      sortOrder among whoever is present that day (so if someone is off,
+//      everyone else just shifts up a slot).
+//
+//   5. Ops can override one employee's % for one specific day
+//      (daily_target_overrides). Every other employee scheduled that same
+//      day is automatically rebalanced, proportional to the default
+//      template, so the day always sums to 100%.
+//
+// Nothing about an employee's nominal target is stored directly anymore —
+// it's always derived from steps 2-5, computed on read.
+// ─────────────────────────────────────────────────────────────────────────────
 
-import { db } from '@/lib/db';
+import { and, asc, eq, gte, lt } from "drizzle-orm";
+
+import { db } from "@/lib/db";
 import {
+  dailyTargetOverrides,
   employeeMonthlyTargets,
   schedules,
   storeMonthlyTargets,
-  stores,
+  targetAllocationTemplates,
   users,
-} from '@/lib/db/schema';
+} from "@/lib/db/schema";
 
-export type TargetSource = 'employee' | 'store_rollup_only' | 'none';
+// ─── Basic date / number helpers ─────────────────────────────────────────────
 
-export type StoreMonthlyTargetRollup = {
-  storeMonthlyTargetId: number | null;
-  storeId: number;
-  yearMonth: string;
-  storeMonthlySalesTarget: number;
-  storeMonthlyTransactionTarget: number;
-  storeMonthlyAtvTarget: number;
-  employeeTargetCount: number;
-};
+const APP_TIME_ZONE = "Asia/Jakarta";
 
-export type PerformanceTargetResult = StoreMonthlyTargetRollup & {
-  employeeMonthlyTargetId: number | null;
-  employeeMonthlySalesTarget: number;
-  employeeMonthlyTransactionTarget: number;
-  employeeMonthlyAtvTarget: number;
-  employeeTargetRoleCode: string | null;
-  employeeTargetWeightPct: number;
+function getDatePartsInAppTimeZone(date: Date) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: APP_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
 
-  scheduledDaysInMonth: number;
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
 
-  dailySalesTarget: number;
-  dailyTransactionTarget: number;
+  if (!year || !month || !day) {
+    throw new Error("Failed to resolve date in Asia/Jakarta.");
+  }
 
-  /** employee = employee has a target, store_rollup_only = store has other employee targets, none = no targets. */
-  source: TargetSource;
-};
-
-export type StoreEmployeeTargetRow = {
-  id: number;
-  userId: string;
-  nik: string;
-  name: string;
-  storeId: number;
-  storeNo: string;
-  storeName: string;
-  yearMonth: string;
-  targetRoleCode: string;
-  targetWeightPct: number;
-  monthlySalesTarget: number;
-  monthlyTransactionTarget: number;
-  /** Always derived as monthlySalesTarget / monthlyTransactionTarget — never read from storage. */
-  monthlyAtvTarget: number;
-  isActive: boolean;
-};
-
-export function toDateOnly(date: Date) {
-  return date.toISOString().slice(0, 10);
+  return { year, month, day };
 }
 
+/** Calendar date in the application's Asia/Jakarta business timezone. */
+export function toDateOnly(date: Date) {
+  const { year, month, day } = getDatePartsInAppTimeZone(date);
+  return `${year}-${month}-${day}`;
+}
+
+/** Calendar month in the application's Asia/Jakarta business timezone. */
 export function toYearMonth(date: Date) {
-  return date.toISOString().slice(0, 7);
+  const { year, month } = getDatePartsInAppTimeZone(date);
+  return `${year}-${month}`;
 }
 
 export function getMonthRange(yearMonth: string) {
-  const [year, month] = yearMonth.split('-').map(Number);
+  const [year, month] = yearMonth.split("-").map(Number);
 
   const start = new Date(year, month - 1, 1);
   const end = new Date(year, month, 1);
@@ -76,8 +86,17 @@ export function getMonthRange(yearMonth: string) {
 
 /** Number of calendar days in a YYYY-MM month. */
 export function getDaysInMonth(yearMonth: string) {
-  const [year, month] = yearMonth.split('-').map(Number);
+  const [year, month] = yearMonth.split("-").map(Number);
   return new Date(year, month, 0).getDate();
+}
+
+/** Every YYYY-MM-DD date key in a YYYY-MM month. */
+export function listDateKeysInMonth(yearMonth: string): string[] {
+  const days = getDaysInMonth(yearMonth);
+  return Array.from({ length: days }, (_, i) => {
+    const d = String(i + 1).padStart(2, "0");
+    return `${yearMonth}-${d}`;
+  });
 }
 
 export function safeNumber(value: unknown) {
@@ -109,212 +128,184 @@ export function safeContribution(part: number, total: number) {
  * read from a stored column. This keeps ATV consistent if sales or
  * transaction targets are edited independently.
  */
-export function calculateAtvTarget(salesTarget: number, transactionTarget: number) {
+export function calculateAtvTarget(
+  salesTarget: number,
+  transactionTarget: number,
+) {
   if (!transactionTarget || transactionTarget <= 0) return 0;
   return Math.round(salesTarget / transactionTarget);
 }
 
-export function calculateDailyTarget(monthlyTarget: number, scheduledDays: number) {
-  if (!scheduledDays || scheduledDays <= 0) return 0;
-  return Math.round(monthlyTarget / scheduledDays);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Rebalancing helpers
-//
-// These implement the two edit modes for employee_monthly_targets rows:
-//
-//   - "amount" mode: the edited employee's monthlySalesTarget /
-//     monthlyTransactionTarget changes directly. The store total shifts by
-//     the same delta; every employee's weightPct (including the edited one
-//     and PIC1/PIC2) is recomputed as `amount / newStoreTotal * 100` so the
-//     weights still describe each employee's share of the new total.
-//
-//   - "weight" mode: the edited employee's targetWeightPct changes directly.
-//     The store total stays FIXED. PIC1/PIC2 weights for OTHER employees are
-//     left untouched; the remaining "SA pool" (100 - sumOfOtherPicWeights -
-//     newWeightOfEditedEmployeeIfItIsAPic) is redistributed across the other
-//     SA employees proportionally to their current weights. All employees'
-//     monthlySalesTarget / monthlyTransactionTarget are then re-derived as
-//     `storeTotal * weightPct / 100`.
-//
-// Both helpers operate on a plain array of rows and return a new array with
-// updated `targetWeightPct`, `monthlySalesTarget`, `monthlyTransactionTarget`
-// for every row (the caller persists each row's changes).
-// ─────────────────────────────────────────────────────────────────────────────
-
-export type RebalanceRow = {
-  id: number;
-  targetRoleCode: string;
-  targetWeightPct: number;
+/** Store's whole-month target, expressed as its unrounded daily average. */
+export function getStoreDailyTarget(params: {
   monthlySalesTarget: number;
   monthlyTransactionTarget: number;
-};
+  yearMonth: string;
+}) {
+  const daysInMonth = getDaysInMonth(params.yearMonth);
+  if (!daysInMonth) {
+    return { dailySalesTarget: 0, dailyTransactionTarget: 0, daysInMonth: 0 };
+  }
 
-const PIC_ROLE_CODES = new Set(['PIC1', 'PIC2']);
-
-/**
- * Amount-edit mode: one employee's sales and/or transaction target amount
- * changed directly. The store total (sum of all amounts) shifts by the
- * delta, and every row's weightPct is recomputed as its (possibly
- * unchanged) amount divided by the new store total.
- */
-export function rebalanceAfterAmountEdit(params: {
-  rows: RebalanceRow[];
-  editedId: number;
-  newMonthlySalesTarget: number;
-  newMonthlyTransactionTarget: number;
-}): RebalanceRow[] {
-  const { rows, editedId, newMonthlySalesTarget, newMonthlyTransactionTarget } = params;
-
-  const updatedAmounts = rows.map((row) =>
-    row.id === editedId
-      ? {
-          ...row,
-          monthlySalesTarget: newMonthlySalesTarget,
-          monthlyTransactionTarget: newMonthlyTransactionTarget,
-        }
-      : row,
-  );
-
-  const storeTotalSales = updatedAmounts.reduce((sum, row) => sum + row.monthlySalesTarget, 0);
-
-  return updatedAmounts.map((row) => ({
-    ...row,
-    targetWeightPct: safeContribution(row.monthlySalesTarget, storeTotalSales),
-  }));
+  return {
+    dailySalesTarget: params.monthlySalesTarget / daysInMonth,
+    dailyTransactionTarget: params.monthlyTransactionTarget / daysInMonth,
+    daysInMonth,
+  };
 }
 
 /**
- * Weight-edit mode: one employee's weightPct changed directly. The store
- * total (sales + transactions) stays fixed.
+ * Returns the exact whole-number store target for one date.
  *
- * - If the edited row is PIC1/PIC2: its new weight is applied as-is. Other
- *   PIC rows are untouched. The SA pool = 100 - sum(all PIC weights
- *   including the edited one) is redistributed across SA rows
- *   proportionally to their current weights.
- *
- * - If the edited row is an SA (or any non-PIC role): PIC rows are
- *   untouched. The SA pool = 100 - sum(PIC weights). The edited SA gets its
- *   new weight (clamped to the SA pool); the remaining SA pool is
- *   distributed across the OTHER SA rows proportionally to their current
- *   weights. If there are no other SA rows, the edited row simply takes the
- *   full SA pool.
- *
- * All rows' monthlySalesTarget / monthlyTransactionTarget are then
- * re-derived as `storeTotal * weightPct / 100`, rounded to whole numbers,
- * with any rounding remainder assigned to the edited row so totals still
- * reconcile to the (fixed) store total.
+ * The old implementation rounded the same monthly/day average independently
+ * on every date. Over a full month that could add up to more or less than the
+ * monthly target. This uses a deterministic cumulative distribution instead,
+ * spreading any remainder across the month while guaranteeing that all dates
+ * add back to the exact Ops-set store monthly target.
  */
-export function rebalanceAfterWeightEdit(params: {
-  rows: RebalanceRow[];
-  editedId: number;
-  newWeightPct: number;
-}): RebalanceRow[] {
-  const { rows, editedId, newWeightPct } = params;
+function distributeMonthlyTargetToDate(params: {
+  monthlyTarget: number;
+  yearMonth: string;
+  date: string;
+}) {
+  const daysInMonth = getDaysInMonth(params.yearMonth);
+  const monthlyTarget = Math.max(
+    0,
+    Math.round(safeNumber(params.monthlyTarget)),
+  );
 
-  const storeTotalSales = rows.reduce((sum, row) => sum + row.monthlySalesTarget, 0);
-  const storeTotalTransactions = rows.reduce((sum, row) => sum + row.monthlyTransactionTarget, 0);
+  if (daysInMonth <= 0 || monthlyTarget <= 0) return 0;
 
-  const editedRow = rows.find((row) => row.id === editedId);
-  if (!editedRow) return rows;
-
-  const editedIsPic = PIC_ROLE_CODES.has(editedRow.targetRoleCode);
-
-  const weights = new Map<number, number>();
-
-  if (editedIsPic) {
-    // Other PIC rows keep their weight; edited PIC gets the new weight.
-    const otherPicTotal = rows
-      .filter((row) => PIC_ROLE_CODES.has(row.targetRoleCode) && row.id !== editedId)
-      .reduce((sum, row) => sum + row.targetWeightPct, 0);
-
-    const clampedNewWeight = Math.max(0, Math.min(100 - otherPicTotal, newWeightPct));
-    weights.set(editedId, clampedNewWeight);
-
-    const saPool = 100 - otherPicTotal - clampedNewWeight;
-    const saRows = rows.filter((row) => !PIC_ROLE_CODES.has(row.targetRoleCode));
-    const saCurrentTotal = saRows.reduce((sum, row) => sum + row.targetWeightPct, 0);
-
-    for (const row of saRows) {
-      const share = saCurrentTotal > 0 ? row.targetWeightPct / saCurrentTotal : 1 / Math.max(saRows.length, 1);
-      weights.set(row.id, saPool * share);
-    }
-  } else {
-    // Non-PIC (SA) row edited. PIC rows keep their weight.
-    const picTotal = rows
-      .filter((row) => PIC_ROLE_CODES.has(row.targetRoleCode))
-      .reduce((sum, row) => sum + row.targetWeightPct, 0);
-
-    const saPool = 100 - picTotal;
-    const clampedNewWeight = Math.max(0, Math.min(saPool, newWeightPct));
-    weights.set(editedId, clampedNewWeight);
-
-    const otherSaRows = rows.filter(
-      (row) => !PIC_ROLE_CODES.has(row.targetRoleCode) && row.id !== editedId,
+  const day = Number(params.date.slice(8, 10));
+  if (!Number.isInteger(day) || day < 1 || day > daysInMonth) {
+    throw new Error(
+      `Invalid date ${params.date} for month ${params.yearMonth}.`,
     );
-    const remainingPool = saPool - clampedNewWeight;
-    const otherSaCurrentTotal = otherSaRows.reduce((sum, row) => sum + row.targetWeightPct, 0);
-
-    for (const row of otherSaRows) {
-      const share = otherSaCurrentTotal > 0
-        ? row.targetWeightPct / otherSaCurrentTotal
-        : 1 / Math.max(otherSaRows.length, 1);
-      weights.set(row.id, remainingPool * share);
-    }
-
-    // PIC rows keep their weight as-is.
-    for (const row of rows) {
-      if (PIC_ROLE_CODES.has(row.targetRoleCode)) weights.set(row.id, row.targetWeightPct);
-    }
   }
 
-  // Derive amounts from the new weights, fixing store totals exactly by
-  // giving any rounding remainder to the edited row.
-  const result: RebalanceRow[] = rows.map((row) => {
-    const weightPct = weights.get(row.id) ?? row.targetWeightPct;
+  const allocatedBeforeToday = Math.floor(
+    (monthlyTarget * (day - 1)) / daysInMonth,
+  );
+  const allocatedThroughToday = Math.floor((monthlyTarget * day) / daysInMonth);
+
+  return allocatedThroughToday - allocatedBeforeToday;
+}
+
+export function getStoreDailyTargetForDate(params: {
+  monthlySalesTarget: number;
+  monthlyTransactionTarget: number;
+  yearMonth: string;
+  date: string;
+}) {
+  return {
+    dailySalesTarget: distributeMonthlyTargetToDate({
+      monthlyTarget: params.monthlySalesTarget,
+      yearMonth: params.yearMonth,
+      date: params.date,
+    }),
+    dailyTransactionTarget: distributeMonthlyTargetToDate({
+      monthlyTarget: params.monthlyTransactionTarget,
+      yearMonth: params.yearMonth,
+      date: params.date,
+    }),
+    daysInMonth: getDaysInMonth(params.yearMonth),
+  };
+}
+
+/**
+ * Largest-remainder allocation for a whole-number target. Every employee gets
+ * their percentage share, while the final rounded rows still sum exactly to
+ * the store target for that date.
+ */
+function allocateRoundedTarget<
+  T extends { userId: string; effectivePct: number },
+>(total: number, rows: T[]): Map<string, number> {
+  const roundedTotal = Math.max(0, Math.round(safeNumber(total)));
+  if (rows.length === 0) return new Map();
+
+  const weightTotal = rows.reduce(
+    (sum, row) => sum + Math.max(0, safeNumber(row.effectivePct)),
+    0,
+  );
+
+  const weighted = rows.map((row, index) => {
+    const weight =
+      weightTotal > 0
+        ? Math.max(0, safeNumber(row.effectivePct)) / weightTotal
+        : 1 / rows.length;
+    const raw = roundedTotal * weight;
+    const floor = Math.floor(raw);
+
     return {
-      ...row,
-      targetWeightPct: Math.round(weightPct * 100) / 100,
-      monthlySalesTarget: Math.round((storeTotalSales * weightPct) / 100),
-      monthlyTransactionTarget: Math.round((storeTotalTransactions * weightPct) / 100),
+      userId: row.userId,
+      index,
+      floor,
+      fraction: raw - floor,
     };
   });
 
-  const salesDelta = storeTotalSales - result.reduce((sum, row) => sum + row.monthlySalesTarget, 0);
-  const txDelta = storeTotalTransactions - result.reduce((sum, row) => sum + row.monthlyTransactionTarget, 0);
+  let remainder =
+    roundedTotal - weighted.reduce((sum, row) => sum + row.floor, 0);
 
-  return result.map((row) =>
-    row.id === editedId
-      ? {
-          ...row,
-          monthlySalesTarget: row.monthlySalesTarget + salesDelta,
-          monthlyTransactionTarget: row.monthlyTransactionTarget + txDelta,
-        }
-      : row,
+  const priority = [...weighted].sort(
+    (a, b) => b.fraction - a.fraction || a.index - b.index,
   );
+
+  const result = new Map(weighted.map((row) => [row.userId, row.floor]));
+
+  for (let index = 0; index < priority.length && remainder > 0; index += 1) {
+    const row = priority[index];
+    result.set(row.userId, (result.get(row.userId) ?? 0) + 1);
+    remainder -= 1;
+  }
+
+  return result;
 }
 
-export async function getScheduledDaysForEmployeeInStore(params: {
-  userId: string;
+// ─── Store monthly target (source of truth, set directly by Ops) ────────────
+
+export type StoreMonthlyTargetInfo = {
+  storeMonthlyTargetId: number | null;
   storeId: number;
   yearMonth: string;
-}) {
-  const { start, end } = getMonthRange(params.yearMonth);
+  monthlySalesTarget: number;
+  monthlyTransactionTarget: number;
+  monthlyAtvTarget: number;
+  isLocked: boolean;
+  notes: string | null;
+};
 
-  const rows = await db
-    .select({ date: schedules.date })
-    .from(schedules)
+export async function getStoreMonthlyTarget(params: {
+  storeId: number;
+  yearMonth: string;
+}): Promise<StoreMonthlyTargetInfo> {
+  const [row] = await db
+    .select()
+    .from(storeMonthlyTargets)
     .where(
       and(
-        eq(schedules.userId, params.userId),
-        eq(schedules.storeId, params.storeId),
-        gte(schedules.date, start),
-        lt(schedules.date, end),
+        eq(storeMonthlyTargets.storeId, params.storeId),
+        eq(storeMonthlyTargets.yearMonth, params.yearMonth),
       ),
-    );
+    )
+    .limit(1);
 
-  return new Set(rows.map((row) => toDateOnly(row.date))).size;
+  const monthlySalesTarget = safeNumber(row?.monthlySalesTarget);
+  const monthlyTransactionTarget = safeNumber(row?.monthlyTransactionTarget);
+
+  return {
+    storeMonthlyTargetId: row?.id ?? null,
+    storeId: params.storeId,
+    yearMonth: params.yearMonth,
+    monthlySalesTarget,
+    monthlyTransactionTarget,
+    monthlyAtvTarget: calculateAtvTarget(
+      monthlySalesTarget,
+      monthlyTransactionTarget,
+    ),
+    isLocked: row?.isLocked ?? false,
+    notes: row?.notes ?? null,
+  };
 }
 
 export async function ensureStoreMonthlyTargetPlan(params: {
@@ -341,8 +332,8 @@ export async function ensureStoreMonthlyTargetPlan(params: {
     .values({
       storeId: params.storeId,
       yearMonth: params.yearMonth,
-      targetSource: 'employee_rollup',
-      notes: params.notes ?? 'Store target is automatically calculated from employee targets.',
+      targetSource: "manual",
+      notes: params.notes ?? null,
       createdBy: params.createdBy ?? undefined,
       updatedBy: params.createdBy ?? undefined,
       isActive: true,
@@ -352,191 +343,746 @@ export async function ensureStoreMonthlyTargetPlan(params: {
   return created.id;
 }
 
-/**
- * Store target source of truth:
- * Sum all active employee targets for this store + month.
- *
- * storeMonthlyAtvTarget is derived from the summed sales/transaction
- * totals (not averaged from individual employee ATV values).
- */
-export async function getStoreMonthlyTargetRollup(params: {
+// ─── Roster (employee_monthly_targets, no amounts anymore) ──────────────────
+
+export type RosterRow = {
+  id: number;
+  userId: string;
+  nik: string;
+  name: string;
+  targetRoleCode: string; // PIC1 | PIC2 | SA
+  sortOrder: number;
+  isActive: boolean;
+};
+
+export async function listStoreRoster(params: {
   storeId: number;
   yearMonth: string;
-}): Promise<StoreMonthlyTargetRollup> {
-  const [plan] = await db
-    .select({ id: storeMonthlyTargets.id })
-    .from(storeMonthlyTargets)
-    .where(
-      and(
-        eq(storeMonthlyTargets.storeId, params.storeId),
-        eq(storeMonthlyTargets.yearMonth, params.yearMonth),
-        eq(storeMonthlyTargets.isActive, true),
-      ),
-    )
-    .limit(1);
-
-  const employeeTargets = await db
-    .select({
-      monthlySalesTarget: employeeMonthlyTargets.monthlySalesTarget,
-      monthlyTransactionTarget: employeeMonthlyTargets.monthlyTransactionTarget,
-    })
-    .from(employeeMonthlyTargets)
-    .where(
-      and(
-        eq(employeeMonthlyTargets.storeId, params.storeId),
-        eq(employeeMonthlyTargets.yearMonth, params.yearMonth),
-        eq(employeeMonthlyTargets.isActive, true),
-      ),
-    );
-
-  const storeMonthlySalesTarget = employeeTargets.reduce(
-    (sum, row) => sum + safeNumber(row.monthlySalesTarget),
-    0,
-  );
-
-  const storeMonthlyTransactionTarget = employeeTargets.reduce(
-    (sum, row) => sum + safeNumber(row.monthlyTransactionTarget),
-    0,
-  );
-
-  return {
-    storeMonthlyTargetId: plan?.id ?? null,
-    storeId: params.storeId,
-    yearMonth: params.yearMonth,
-    storeMonthlySalesTarget,
-    storeMonthlyTransactionTarget,
-    storeMonthlyAtvTarget: calculateAtvTarget(
-      storeMonthlySalesTarget,
-      storeMonthlyTransactionTarget,
-    ),
-    employeeTargetCount: employeeTargets.length,
-  };
-}
-
-/**
- * Per-employee target rows for a store + month.
- *
- * monthlyAtvTarget is ALWAYS derived from monthlySalesTarget /
- * monthlyTransactionTarget — the stored employee_monthly_targets.monthlyAtvTarget
- * column is ignored here so edits to sales/transaction targets are
- * immediately reflected without a separate ATV update.
- */
-export async function listStoreEmployeeTargets(params: {
-  storeId: number;
-  yearMonth: string;
-}): Promise<StoreEmployeeTargetRow[]> {
+}): Promise<RosterRow[]> {
   const rows = await db
     .select({
       id: employeeMonthlyTargets.id,
       userId: users.id,
       nik: users.nik,
       name: users.name,
-      storeId: stores.id,
-      storeNo: stores.storeNo,
-      storeName: stores.name,
-      yearMonth: employeeMonthlyTargets.yearMonth,
       targetRoleCode: employeeMonthlyTargets.targetRoleCode,
-      targetWeightPct: employeeMonthlyTargets.targetWeightPct,
-      monthlySalesTarget: employeeMonthlyTargets.monthlySalesTarget,
-      monthlyTransactionTarget: employeeMonthlyTargets.monthlyTransactionTarget,
+      sortOrder: employeeMonthlyTargets.sortOrder,
       isActive: employeeMonthlyTargets.isActive,
     })
     .from(employeeMonthlyTargets)
     .innerJoin(users, eq(users.id, employeeMonthlyTargets.userId))
-    .innerJoin(stores, eq(stores.id, employeeMonthlyTargets.storeId))
     .where(
       and(
-        eq(employeeMonthlyTargets.storeId, params.storeId),
-        eq(employeeMonthlyTargets.yearMonth, params.yearMonth),
-      ),
-    )
-    .orderBy(asc(employeeMonthlyTargets.targetRoleCode), asc(users.name));
-
-  return rows.map((row) => {
-    const monthlySalesTarget = safeNumber(row.monthlySalesTarget);
-    const monthlyTransactionTarget = safeNumber(row.monthlyTransactionTarget);
-
-    return {
-      ...row,
-      targetWeightPct: safeNumber(row.targetWeightPct),
-      monthlySalesTarget,
-      monthlyTransactionTarget,
-      monthlyAtvTarget: calculateAtvTarget(monthlySalesTarget, monthlyTransactionTarget),
-    };
-  });
-}
-
-export async function resolvePerformanceTargets(params: {
-  userId: string;
-  storeId: number;
-  yearMonth: string;
-}): Promise<PerformanceTargetResult> {
-  const [employeeTarget] = await db
-    .select()
-    .from(employeeMonthlyTargets)
-    .where(
-      and(
-        eq(employeeMonthlyTargets.userId, params.userId),
         eq(employeeMonthlyTargets.storeId, params.storeId),
         eq(employeeMonthlyTargets.yearMonth, params.yearMonth),
         eq(employeeMonthlyTargets.isActive, true),
       ),
     )
-    .limit(1);
+    .orderBy(
+      asc(employeeMonthlyTargets.targetRoleCode),
+      asc(employeeMonthlyTargets.sortOrder),
+      asc(users.name),
+    );
 
-  const [rollup, scheduledDaysInMonth] = await Promise.all([
-    getStoreMonthlyTargetRollup({
+  return rows;
+}
+
+// ─── Who's actually working a given store + day ──────────────────────────────
+
+export async function getScheduledUserIdsForStoreDate(params: {
+  storeId: number;
+  date: string; // YYYY-MM-DD
+}): Promise<Set<string>> {
+  const dayStart = new Date(`${params.date}T00:00:00`);
+  const dayEnd = new Date(dayStart);
+  dayEnd.setDate(dayEnd.getDate() + 1);
+
+  const rows = await db
+    .selectDistinct({ userId: schedules.userId })
+    .from(schedules)
+    .where(
+      and(
+        eq(schedules.storeId, params.storeId),
+        gte(schedules.date, dayStart),
+        lt(schedules.date, dayEnd),
+      ),
+    );
+
+  return new Set(rows.map((row) => row.userId));
+}
+
+/** Whole month at once — used by the batched monthly rollup below. */
+async function getScheduledUserIdsByDateForMonth(params: {
+  storeId: number;
+  yearMonth: string;
+}): Promise<Map<string, Set<string>>> {
+  const { start, end } = getMonthRange(params.yearMonth);
+
+  const rows = await db
+    .select({ userId: schedules.userId, date: schedules.date })
+    .from(schedules)
+    .where(
+      and(
+        eq(schedules.storeId, params.storeId),
+        gte(schedules.date, start),
+        lt(schedules.date, end),
+      ),
+    );
+
+  const byDate = new Map<string, Set<string>>();
+  for (const row of rows) {
+    const key = toDateOnly(row.date);
+    const set = byDate.get(key) ?? new Set<string>();
+    set.add(row.userId);
+    byDate.set(key, set);
+  }
+  return byDate;
+}
+
+// ─── Slot assignment (pure — no DB access) ───────────────────────────────────
+
+const PIC_SLOT_CODES = new Set(["PIC1", "PIC2"]);
+
+export type SlotAssignment = RosterRow & {
+  employeeMonthlyTargetId: number;
+  slotCode: string; // PIC1 | PIC2 | SA1 | SA2 | ...
+};
+
+/**
+ * Filters the monthly roster down to whoever is scheduled on a given day,
+ * then assigns each present employee a slotCode: PIC1/PIC2 keep their fixed
+ * identity, SA employees are re-ranked into SA1, SA2, ... by sortOrder among
+ * only those present (so someone being off just shifts everyone else up).
+ */
+export function assignDailySlots(
+  roster: RosterRow[],
+  scheduledUserIds: Set<string>,
+): SlotAssignment[] {
+  const present = roster.filter((r) => scheduledUserIds.has(r.userId));
+
+  const pics = present
+    .filter((r) => PIC_SLOT_CODES.has(r.targetRoleCode))
+    .sort((a, b) => a.targetRoleCode.localeCompare(b.targetRoleCode));
+
+  const sas = present
+    .filter((r) => !PIC_SLOT_CODES.has(r.targetRoleCode))
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
+
+  const assignments: SlotAssignment[] = [];
+
+  for (const pic of pics) {
+    assignments.push({
+      ...pic,
+      employeeMonthlyTargetId: pic.id,
+      slotCode: pic.targetRoleCode,
+    });
+  }
+
+  sas.forEach((sa, index) => {
+    assignments.push({
+      ...sa,
+      employeeMonthlyTargetId: sa.id,
+      slotCode: `SA${index + 1}`,
+    });
+  });
+
+  return assignments;
+}
+
+// ─── Default % template lookup ───────────────────────────────────────────────
+
+/** slotCode -> percentage, for one specific headcount. Empty map = no template row found. */
+export async function getAllocationTemplateForHeadcount(
+  headcount: number,
+): Promise<Map<string, number>> {
+  if (headcount <= 0) return new Map();
+
+  const rows = await db
+    .select({
+      slotCode: targetAllocationTemplates.slotCode,
+      percentage: targetAllocationTemplates.percentage,
+    })
+    .from(targetAllocationTemplates)
+    .where(
+      and(
+        eq(targetAllocationTemplates.headcount, headcount),
+        eq(targetAllocationTemplates.isActive, true),
+      ),
+    );
+
+  return new Map(rows.map((r) => [r.slotCode, safeNumber(r.percentage)]));
+}
+
+/** The WHOLE template table at once, grouped by headcount. Used for batched monthly rollups. */
+async function getFullAllocationTemplate(): Promise<
+  Map<number, Map<string, number>>
+> {
+  const rows = await db
+    .select({
+      headcount: targetAllocationTemplates.headcount,
+      slotCode: targetAllocationTemplates.slotCode,
+      percentage: targetAllocationTemplates.percentage,
+    })
+    .from(targetAllocationTemplates)
+    .where(eq(targetAllocationTemplates.isActive, true));
+
+  const byHeadcount = new Map<number, Map<string, number>>();
+  for (const row of rows) {
+    const inner = byHeadcount.get(row.headcount) ?? new Map<string, number>();
+    inner.set(row.slotCode, safeNumber(row.percentage));
+    byHeadcount.set(row.headcount, inner);
+  }
+  return byHeadcount;
+}
+
+// ─── Rebalancing: locked (overridden) rows keep their %, the rest share the remainder ──
+
+export type RebalanceInput = {
+  id: string;
+  defaultPct: number;
+  /** null = not overridden, follows the default. A number = locked at that %. */
+  lockedPct: number | null;
+};
+
+/**
+ * Generalized "one person's % changed, everyone else auto-adjusts" helper.
+ * Any number of rows can be locked (via daily_target_overrides). Locked rows
+ * keep their set percentage (scaled down proportionally only in the edge
+ * case where locked percentages alone would exceed 100%). The remaining pool
+ * (100 - sum of locked %) is distributed across the unlocked rows,
+ * proportional to their default template share.
+ */
+export function rebalanceDailyPercentages(
+  slots: RebalanceInput[],
+): { id: string; pct: number }[] {
+  const locked = slots.filter((s) => s.lockedPct != null);
+  const unlocked = slots.filter((s) => s.lockedPct == null);
+
+  const lockedTotalRaw = locked.reduce(
+    (sum, row) => sum + (row.lockedPct as number),
+    0,
+  );
+  const lockedScale =
+    lockedTotalRaw > 100 && lockedTotalRaw > 0 ? 100 / lockedTotalRaw : 1;
+
+  const result = new Map<string, number>();
+  for (const row of locked) {
+    result.set(row.id, (row.lockedPct as number) * lockedScale);
+  }
+
+  const lockedTotal = lockedTotalRaw * lockedScale;
+  const pool = Math.max(0, 100 - lockedTotal);
+  const unlockedDefaultTotal = unlocked.reduce(
+    (sum, row) => sum + row.defaultPct,
+    0,
+  );
+
+  for (const row of unlocked) {
+    const share =
+      unlockedDefaultTotal > 0
+        ? row.defaultPct / unlockedDefaultTotal
+        : 1 / Math.max(unlocked.length, 1);
+    result.set(row.id, pool * share);
+  }
+
+  return slots.map((s) => ({ id: s.id, pct: result.get(s.id) ?? 0 }));
+}
+
+/**
+ * Pure combinator: given the day's present roster (already slot-assigned),
+ * a template map (or null/empty => equal split), and any overrides, produce
+ * each employee's default % and effective (post-rebalance) %.
+ */
+function resolveEffectivePercentages(
+  assignments: SlotAssignment[],
+  templateForHeadcount: Map<string, number> | undefined,
+  overrideMap: Map<string, number>,
+) {
+  const headcount = assignments.length;
+  if (headcount === 0)
+    return {
+      usedFallbackEqualSplit: false,
+      rows: [] as (SlotAssignment & {
+        defaultPct: number;
+        effectivePct: number;
+        isOverridden: boolean;
+      })[],
+    };
+
+  const usedFallbackEqualSplit =
+    !templateForHeadcount || templateForHeadcount.size === 0;
+  const equalShare = 100 / headcount;
+
+  const withDefaults = assignments.map((a) => ({
+    ...a,
+    defaultPct: usedFallbackEqualSplit
+      ? equalShare
+      : (templateForHeadcount!.get(a.slotCode) ?? equalShare),
+  }));
+
+  // Normalize so the defaults always sum to exactly 100, even if the source
+  // template rows don't add up perfectly (rounding in the printed grid).
+  const defaultSum =
+    withDefaults.reduce((sum, r) => sum + r.defaultPct, 0) || 1;
+  const normalized = withDefaults.map((r) => ({
+    ...r,
+    defaultPct: (r.defaultPct / defaultSum) * 100,
+  }));
+
+  const rebalanced = rebalanceDailyPercentages(
+    normalized.map((r) => ({
+      id: r.userId,
+      defaultPct: r.defaultPct,
+      lockedPct: overrideMap.has(r.userId)
+        ? Math.max(0, Math.min(100, overrideMap.get(r.userId)!))
+        : null,
+    })),
+  );
+
+  const effectiveMap = new Map(rebalanced.map((r) => [r.id, r.pct]));
+
+  return {
+    usedFallbackEqualSplit,
+    rows: normalized.map((r) => ({
+      ...r,
+      effectivePct: effectiveMap.get(r.userId) ?? r.defaultPct,
+      isOverridden: overrideMap.has(r.userId),
+    })),
+  };
+}
+
+// ─── Single-day allocation (used by the "Harian" view + override editing) ───
+
+export type DailyAllocationRow = {
+  employeeMonthlyTargetId: number;
+  userId: string;
+  nik: string;
+  name: string;
+  targetRoleCode: string;
+  slotCode: string;
+  defaultPct: number;
+  effectivePct: number;
+  isOverridden: boolean;
+  dailySalesTarget: number;
+  dailyTransactionTarget: number;
+};
+
+export type DailyAllocationResult = {
+  date: string;
+  headcount: number;
+  usedFallbackEqualSplit: boolean;
+  storeDailySalesTarget: number;
+  storeDailyTransactionTarget: number;
+  rows: DailyAllocationRow[];
+};
+
+export async function computeDailyAllocations(params: {
+  storeId: number;
+  date: string; // YYYY-MM-DD
+  yearMonth: string;
+}): Promise<DailyAllocationResult> {
+  const [storeMonthly, roster, scheduledUserIds] = await Promise.all([
+    getStoreMonthlyTarget({
       storeId: params.storeId,
       yearMonth: params.yearMonth,
     }),
-    getScheduledDaysForEmployeeInStore({
-      userId: params.userId,
+    listStoreRoster({ storeId: params.storeId, yearMonth: params.yearMonth }),
+    getScheduledUserIdsForStoreDate({
       storeId: params.storeId,
+      date: params.date,
+    }),
+  ]);
+
+  const { dailySalesTarget, dailyTransactionTarget } =
+    getStoreDailyTargetForDate({
+      monthlySalesTarget: storeMonthly.monthlySalesTarget,
+      monthlyTransactionTarget: storeMonthly.monthlyTransactionTarget,
+      yearMonth: params.yearMonth,
+      date: params.date,
+    });
+
+  const assignments = assignDailySlots(roster, scheduledUserIds);
+  const headcount = assignments.length;
+
+  const base: DailyAllocationResult = {
+    date: params.date,
+    headcount,
+    usedFallbackEqualSplit: false,
+    storeDailySalesTarget: dailySalesTarget,
+    storeDailyTransactionTarget: dailyTransactionTarget,
+    rows: [],
+  };
+
+  if (headcount === 0) return base;
+
+  const [template, overrides] = await Promise.all([
+    getAllocationTemplateForHeadcount(headcount),
+    db
+      .select({
+        userId: dailyTargetOverrides.userId,
+        percentage: dailyTargetOverrides.percentage,
+      })
+      .from(dailyTargetOverrides)
+      .where(
+        and(
+          eq(dailyTargetOverrides.storeId, params.storeId),
+          eq(dailyTargetOverrides.date, params.date),
+        ),
+      ),
+  ]);
+
+  const overrideMap = new Map<string, number>(
+    overrides.map((override) => [
+      override.userId,
+      safeNumber(override.percentage),
+    ]),
+  );
+  const { usedFallbackEqualSplit, rows } = resolveEffectivePercentages(
+    assignments,
+    template,
+    overrideMap,
+  );
+
+  const salesTargets = allocateRoundedTarget(dailySalesTarget, rows);
+  const transactionTargets = allocateRoundedTarget(
+    dailyTransactionTarget,
+    rows,
+  );
+
+  return {
+    ...base,
+    usedFallbackEqualSplit,
+    rows: rows.map((row) => ({
+      employeeMonthlyTargetId: row.employeeMonthlyTargetId,
+      userId: row.userId,
+      nik: row.nik,
+      name: row.name,
+      targetRoleCode: row.targetRoleCode,
+      slotCode: row.slotCode,
+      defaultPct: Math.round(row.defaultPct * 100) / 100,
+      effectivePct: Math.round(row.effectivePct * 100) / 100,
+      isOverridden: row.isOverridden,
+      dailySalesTarget: salesTargets.get(row.userId) ?? 0,
+      dailyTransactionTarget: transactionTargets.get(row.userId) ?? 0,
+    })),
+  };
+}
+
+// ─── Batched monthly rollup (used by the "Bulanan" view — one pass, no N+1) ──
+
+export type MonthlyAllocationSummary = {
+  storeMonthlySalesTarget: number;
+  storeMonthlyTransactionTarget: number;
+  byUserId: Map<
+    string,
+    {
+      userId: string;
+      monthlySalesTarget: number;
+      monthlyTransactionTarget: number;
+      scheduledDays: number;
+    }
+  >;
+};
+
+/**
+ * Walks every day of the month IN MEMORY (schedules, overrides, and the
+ * template are each fetched once) and sums each roster employee's daily
+ * allocation. Used for the "Bulanan" (monthly) view and for an employee's
+ * own monthly total in employee-performance.ts.
+ */
+export async function computeMonthlyAllocationSummary(params: {
+  storeId: number;
+  yearMonth: string;
+}): Promise<MonthlyAllocationSummary> {
+  const [storeMonthly, roster, scheduledByDate, fullTemplate] =
+    await Promise.all([
+      getStoreMonthlyTarget({
+        storeId: params.storeId,
+        yearMonth: params.yearMonth,
+      }),
+      listStoreRoster({ storeId: params.storeId, yearMonth: params.yearMonth }),
+      getScheduledUserIdsByDateForMonth({
+        storeId: params.storeId,
+        yearMonth: params.yearMonth,
+      }),
+      getFullAllocationTemplate(),
+    ]);
+
+  // `date` is stored as YYYY-MM-DD text, so lexicographic bounds double as a
+  // date range — no need to parse into a real Date for this comparison.
+  const monthStartKey = `${params.yearMonth}-01`;
+  const monthEndKey = `${params.yearMonth}-32`; // exclusive upper bound, covers day 31
+
+  const overrideRows = await db
+    .select({
+      date: dailyTargetOverrides.date,
+      userId: dailyTargetOverrides.userId,
+      percentage: dailyTargetOverrides.percentage,
+    })
+    .from(dailyTargetOverrides)
+    .where(
+      and(
+        eq(dailyTargetOverrides.storeId, params.storeId),
+        gte(dailyTargetOverrides.date, monthStartKey),
+        lt(dailyTargetOverrides.date, monthEndKey),
+      ),
+    );
+
+  const overridesByDate = new Map<string, Map<string, number>>();
+  for (const row of overrideRows) {
+    const inner = overridesByDate.get(row.date) ?? new Map<string, number>();
+    inner.set(row.userId, safeNumber(row.percentage));
+    overridesByDate.set(row.date, inner);
+  }
+
+  const byUserId = new Map<
+    string,
+    {
+      userId: string;
+      monthlySalesTarget: number;
+      monthlyTransactionTarget: number;
+      scheduledDays: number;
+    }
+  >();
+
+  for (const [date, scheduledUserIds] of scheduledByDate.entries()) {
+    const assignments = assignDailySlots(roster, scheduledUserIds);
+    if (assignments.length === 0) continue;
+
+    const templateForHeadcount = fullTemplate.get(assignments.length);
+    const overrideMap = overridesByDate.get(date) ?? new Map<string, number>();
+    const { rows } = resolveEffectivePercentages(
+      assignments,
+      templateForHeadcount,
+      overrideMap,
+    );
+
+    const { dailySalesTarget, dailyTransactionTarget } =
+      getStoreDailyTargetForDate({
+        monthlySalesTarget: storeMonthly.monthlySalesTarget,
+        monthlyTransactionTarget: storeMonthly.monthlyTransactionTarget,
+        yearMonth: params.yearMonth,
+        date,
+      });
+
+    const salesTargets = allocateRoundedTarget(dailySalesTarget, rows);
+    const transactionTargets = allocateRoundedTarget(
+      dailyTransactionTarget,
+      rows,
+    );
+
+    for (const row of rows) {
+      const entry = byUserId.get(row.userId) ?? {
+        userId: row.userId,
+        monthlySalesTarget: 0,
+        monthlyTransactionTarget: 0,
+        scheduledDays: 0,
+      };
+      entry.monthlySalesTarget += salesTargets.get(row.userId) ?? 0;
+      entry.monthlyTransactionTarget += transactionTargets.get(row.userId) ?? 0;
+      entry.scheduledDays += 1;
+      byUserId.set(row.userId, entry);
+    }
+  }
+
+  return {
+    storeMonthlySalesTarget: storeMonthly.monthlySalesTarget,
+    storeMonthlyTransactionTarget: storeMonthly.monthlyTransactionTarget,
+    byUserId,
+  };
+}
+
+/** Convenience wrapper for a single employee (e.g. their own dashboard). */
+export async function computeEmployeeMonthlyTargetFromDailyAllocations(params: {
+  storeId: number;
+  userId: string;
+  yearMonth: string;
+}) {
+  const summary = await computeMonthlyAllocationSummary({
+    storeId: params.storeId,
+    yearMonth: params.yearMonth,
+  });
+  return (
+    summary.byUserId.get(params.userId) ?? {
+      userId: params.userId,
+      monthlySalesTarget: 0,
+      monthlyTransactionTarget: 0,
+      scheduledDays: 0,
+    }
+  );
+}
+
+// ─── Daily override CRUD ─────────────────────────────────────────────────────
+
+export async function setDailyTargetOverride(params: {
+  storeId: number;
+  date: string; // YYYY-MM-DD
+  userId: string;
+  percentage: number;
+  updatedBy?: string | null;
+}) {
+  const clamped = Math.max(0, Math.min(100, safeNumber(params.percentage)));
+
+  const [existing] = await db
+    .select({ id: dailyTargetOverrides.id })
+    .from(dailyTargetOverrides)
+    .where(
+      and(
+        eq(dailyTargetOverrides.storeId, params.storeId),
+        eq(dailyTargetOverrides.date, params.date),
+        eq(dailyTargetOverrides.userId, params.userId),
+      ),
+    )
+    .limit(1);
+
+  if (existing) {
+    await db
+      .update(dailyTargetOverrides)
+      .set({
+        percentage: clamped.toFixed(2),
+        updatedBy: params.updatedBy ?? undefined,
+      })
+      .where(eq(dailyTargetOverrides.id, existing.id));
+    return existing.id;
+  }
+
+  const [created] = await db
+    .insert(dailyTargetOverrides)
+    .values({
+      storeId: params.storeId,
+      date: params.date,
+      userId: params.userId,
+      percentage: clamped.toFixed(2),
+      createdBy: params.updatedBy ?? undefined,
+      updatedBy: params.updatedBy ?? undefined,
+    })
+    .returning({ id: dailyTargetOverrides.id });
+
+  return created.id;
+}
+
+export async function clearDailyTargetOverride(params: {
+  storeId: number;
+  date: string;
+  userId: string;
+}) {
+  await db
+    .delete(dailyTargetOverrides)
+    .where(
+      and(
+        eq(dailyTargetOverrides.storeId, params.storeId),
+        eq(dailyTargetOverrides.date, params.date),
+        eq(dailyTargetOverrides.userId, params.userId),
+      ),
+    );
+}
+
+// ─── Employee-facing resolver (used by employee-performance.ts) ─────────────
+
+export type PerformanceTargetResult = {
+  storeMonthlyTargetId: number | null;
+  storeId: number;
+  yearMonth: string;
+  storeMonthlySalesTarget: number;
+  storeMonthlyTransactionTarget: number;
+  storeMonthlyAtvTarget: number;
+
+  employeeMonthlyTargetId: number | null;
+  employeeTargetRoleCode: string | null;
+  /** Today's slot (e.g. "SA2") — null if the employee isn't scheduled today. */
+  employeeSlotCode: string | null;
+
+  employeeMonthlySalesTarget: number;
+  employeeMonthlyTransactionTarget: number;
+  employeeMonthlyAtvTarget: number;
+  scheduledDaysInMonth: number;
+
+  /** Employee target for the selected day. */
+  dailySalesTarget: number;
+  dailyTransactionTarget: number;
+  /** Employee's target share of the store daily target. */
+  dailyAllocationPct: number;
+  /** Employee's target share of the store monthly target. */
+  monthlyAllocationPct: number;
+  isScheduledToday: boolean;
+
+  /** The STORE's whole daily target (monthly ÷ days-in-month) — not the employee's own slice. */
+  storeDailySalesTarget: number;
+  storeDailyTransactionTarget: number;
+
+  /** roster = on the store's target roster this month; not_on_roster = employee has no roster row; no_store_target = Ops hasn't set a monthly target yet. */
+  source: "roster" | "not_on_roster" | "no_store_target";
+};
+
+export async function resolvePerformanceTargets(params: {
+  userId: string;
+  storeId: number;
+  yearMonth: string;
+  /** The day used for the "today" figures — defaults to today if omitted. */
+  date?: string;
+}): Promise<PerformanceTargetResult> {
+  const date = params.date ?? toDateOnly(new Date());
+
+  const [storeMonthly, roster, todayAllocations, monthly] = await Promise.all([
+    getStoreMonthlyTarget({
+      storeId: params.storeId,
+      yearMonth: params.yearMonth,
+    }),
+    listStoreRoster({ storeId: params.storeId, yearMonth: params.yearMonth }),
+    computeDailyAllocations({
+      storeId: params.storeId,
+      date,
+      yearMonth: params.yearMonth,
+    }),
+    computeEmployeeMonthlyTargetFromDailyAllocations({
+      storeId: params.storeId,
+      userId: params.userId,
       yearMonth: params.yearMonth,
     }),
   ]);
 
-  const employeeMonthlySalesTarget = safeNumber(employeeTarget?.monthlySalesTarget);
-  const employeeMonthlyTransactionTarget = safeNumber(
-    employeeTarget?.monthlyTransactionTarget,
-  );
+  const rosterRow = roster.find((r) => r.userId === params.userId) ?? null;
+  const todayRow =
+    todayAllocations.rows.find((r) => r.userId === params.userId) ?? null;
 
-  // ATV target is always derived — never read from the stored column.
-  const employeeMonthlyAtvTarget = calculateAtvTarget(
-    employeeMonthlySalesTarget,
-    employeeMonthlyTransactionTarget,
-  );
-
-  const dailySalesTarget = calculateDailyTarget(
-    employeeMonthlySalesTarget,
-    scheduledDaysInMonth,
-  );
-
-  const dailyTransactionTarget = calculateDailyTarget(
-    employeeMonthlyTransactionTarget,
-    scheduledDaysInMonth,
-  );
-
-  const source: TargetSource = employeeTarget
-    ? 'employee'
-    : rollup.employeeTargetCount > 0
-      ? 'store_rollup_only'
-      : 'none';
+  const source: PerformanceTargetResult["source"] =
+    !storeMonthly.storeMonthlyTargetId
+      ? "no_store_target"
+      : rosterRow
+        ? "roster"
+        : "not_on_roster";
 
   return {
-    ...rollup,
+    storeMonthlyTargetId: storeMonthly.storeMonthlyTargetId,
+    storeId: params.storeId,
+    yearMonth: params.yearMonth,
+    storeMonthlySalesTarget: storeMonthly.monthlySalesTarget,
+    storeMonthlyTransactionTarget: storeMonthly.monthlyTransactionTarget,
+    storeMonthlyAtvTarget: storeMonthly.monthlyAtvTarget,
 
-    employeeMonthlyTargetId: employeeTarget?.id ?? null,
-    employeeMonthlySalesTarget,
-    employeeMonthlyTransactionTarget,
-    employeeMonthlyAtvTarget,
-    employeeTargetRoleCode: employeeTarget?.targetRoleCode ?? null,
-    employeeTargetWeightPct: safeNumber(employeeTarget?.targetWeightPct),
+    employeeMonthlyTargetId: rosterRow?.id ?? null,
+    employeeTargetRoleCode: rosterRow?.targetRoleCode ?? null,
+    employeeSlotCode: todayRow?.slotCode ?? null,
 
-    scheduledDaysInMonth,
+    employeeMonthlySalesTarget: monthly.monthlySalesTarget,
+    employeeMonthlyTransactionTarget: monthly.monthlyTransactionTarget,
+    employeeMonthlyAtvTarget: calculateAtvTarget(
+      monthly.monthlySalesTarget,
+      monthly.monthlyTransactionTarget,
+    ),
+    scheduledDaysInMonth: monthly.scheduledDays,
 
-    dailySalesTarget,
-    dailyTransactionTarget,
+    dailySalesTarget: todayRow?.dailySalesTarget ?? 0,
+    dailyTransactionTarget: todayRow?.dailyTransactionTarget ?? 0,
+    dailyAllocationPct: todayRow?.effectivePct ?? 0,
+    monthlyAllocationPct: safeContribution(
+      monthly.monthlySalesTarget,
+      storeMonthly.monthlySalesTarget,
+    ),
+    isScheduledToday: Boolean(todayRow),
+
+    storeDailySalesTarget: todayAllocations.storeDailySalesTarget,
+    storeDailyTransactionTarget: todayAllocations.storeDailyTransactionTarget,
 
     source,
   };

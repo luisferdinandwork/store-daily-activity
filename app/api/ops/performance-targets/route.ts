@@ -2,27 +2,27 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/ops/performance-targets?yearMonth=YYYY-MM
 //
-// Returns the store list (scoped to the OPS user's area, or all areas for
-// OPS HO) together with each store's monthly target rollup, calculated from
-// employee_monthly_targets via getStoreMonthlyTargetRollup().
+// Store list for the left-hand rail of /ops/performance-targets, grouped by
+// area for OPS HO or flat for OPS Area. Each store's rollup now reads
+// directly from store_monthly_targets (Ops-set monthly target) instead of
+// summing employee rows.
 //
-// Used by the /ops/performance-targets overview page (left list + summary).
+// NOTE: this file wasn't part of the files you shared, so it's a best-effort
+// rewrite inferred from how app/ops/performance-targets/page.tsx consumes
+// `OverviewResponse` / `StoreRow` / `StoreRollup`. Double check it against
+// whatever this route currently does in your repo before replacing it.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { NextRequest, NextResponse } from 'next/server';
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
-import { areas, stores, storeMonthlyTargets } from '@/lib/db/schema';
+import { areas, storeMonthlyTargets, stores } from '@/lib/db/schema';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
-import {
-  getStoreMonthlyTargetRollup,
-  toYearMonth,
-} from '@/lib/performance/target-utils';
+import { listStoreRoster, toYearMonth } from '@/lib/performance/target-utils';
 
 export async function GET(req: NextRequest) {
   const scope = await resolveOpsScope();
-
   if (!scope.ok) {
     return NextResponse.json({ success: false, error: scope.error }, { status: scope.status });
   }
@@ -37,91 +37,74 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  // ── Resolve store list based on scope ──────────────────────────────────────
-  const storeRows = scope.scope === 'all_areas'
-    ? await db
-        .select({
-          id: stores.id,
-          storeNo: stores.storeNo,
-          name: stores.name,
-          address: stores.address,
-          areaId: stores.areaId,
-          areaName: areas.name,
-        })
-        .from(stores)
-        .leftJoin(areas, eq(areas.id, stores.areaId))
-        .orderBy(asc(areas.name), asc(stores.name))
-    : await db
-        .select({
-          id: stores.id,
-          storeNo: stores.storeNo,
-          name: stores.name,
-          address: stores.address,
-          areaId: stores.areaId,
-          areaName: areas.name,
-        })
-        .from(stores)
-        .leftJoin(areas, eq(areas.id, stores.areaId))
-        .where(eq(stores.areaId, scope.areaId))
-        .orderBy(asc(stores.name));
+  const storeRows = await db
+    .select({
+      id: stores.id,
+      storeNo: stores.storeNo,
+      name: stores.name,
+      address: stores.address,
+      areaId: stores.areaId,
+      areaName: areas.name,
+    })
+    .from(stores)
+    .leftJoin(areas, eq(areas.id, stores.areaId))
+    .where(scope.scope === 'area' ? eq(stores.areaId, scope.areaId) : undefined);
 
-  // ── Rollup per store for the requested month ────────────────────────────────
-  const rollups = await Promise.all(
-    storeRows.map((store) =>
-      getStoreMonthlyTargetRollup({ storeId: store.id, yearMonth }),
-    ),
+  const plans = await db
+    .select()
+    .from(storeMonthlyTargets)
+    .where(eq(storeMonthlyTargets.yearMonth, yearMonth));
+
+  const planByStoreId = new Map(plans.map((p) => [p.storeId, p]));
+
+  const stores_ = await Promise.all(
+    storeRows.map(async (store) => {
+      const plan = planByStoreId.get(store.id) ?? null;
+      const roster = await listStoreRoster({ storeId: store.id, yearMonth });
+
+      const monthlySalesTarget = Number(plan?.monthlySalesTarget ?? 0);
+      const monthlyTransactionTarget = Number(plan?.monthlyTransactionTarget ?? 0);
+
+      return {
+        id: store.id,
+        storeNo: store.storeNo,
+        name: store.name,
+        address: store.address,
+        areaId: store.areaId,
+        areaName: store.areaName,
+        rollup: {
+          storeMonthlyTargetId: plan?.id ?? null,
+          storeId: store.id,
+          yearMonth,
+          storeMonthlySalesTarget: monthlySalesTarget,
+          storeMonthlyTransactionTarget: monthlyTransactionTarget,
+          storeMonthlyAtvTarget: monthlyTransactionTarget > 0
+            ? Math.round(monthlySalesTarget / monthlyTransactionTarget)
+            : 0,
+          rosterCount: roster.length,
+        },
+        isLocked: plan?.isLocked ?? false,
+      };
+    }),
   );
 
-  // ── Lock status per store for the requested month (bulk fetch) ─────────────
-  const storeIds = storeRows.map((s) => s.id);
-  const planRows = storeIds.length > 0
-    ? await db
-        .select({
-          storeId: storeMonthlyTargets.storeId,
-          isLocked: storeMonthlyTargets.isLocked,
-        })
-        .from(storeMonthlyTargets)
-        .where(
-          and(
-            inArray(storeMonthlyTargets.storeId, storeIds),
-            eq(storeMonthlyTargets.yearMonth, yearMonth),
-          ),
-        )
-    : [];
-
-  const lockByStoreId = new Map(planRows.map((p) => [p.storeId, p.isLocked]));
-
-  const storesWithRollup = storeRows.map((store, i) => ({
-    ...store,
-    rollup: rollups[i],
-    isLocked: lockByStoreId.get(store.id) ?? false,
-  }));
-
-  // ── Aggregate summary across visible stores ────────────────────────────────
-  const summary = storesWithRollup.reduce(
-    (acc, s) => {
-      acc.storeMonthlySalesTarget += s.rollup.storeMonthlySalesTarget;
-      acc.storeMonthlyTransactionTarget += s.rollup.storeMonthlyTransactionTarget;
-      acc.employeeTargetCount += s.rollup.employeeTargetCount;
-      acc.storeCount += 1;
-      if (s.rollup.storeMonthlyTargetId != null) acc.plannedStoreCount += 1;
-      return acc;
-    },
-    {
-      storeMonthlySalesTarget: 0,
-      storeMonthlyTransactionTarget: 0,
-      employeeTargetCount: 0,
-      storeCount: 0,
-      plannedStoreCount: 0,
-    },
+  const summary = stores_.reduce(
+    (acc, store) => ({
+      storeMonthlySalesTarget: acc.storeMonthlySalesTarget + store.rollup.storeMonthlySalesTarget,
+      storeMonthlyTransactionTarget: acc.storeMonthlyTransactionTarget + store.rollup.storeMonthlyTransactionTarget,
+      rosterCount: acc.rosterCount + store.rollup.rosterCount,
+      storeCount: acc.storeCount + 1,
+      plannedStoreCount: acc.plannedStoreCount + (store.rollup.storeMonthlyTargetId != null ? 1 : 0),
+    }),
+    { storeMonthlySalesTarget: 0, storeMonthlyTransactionTarget: 0, rosterCount: 0, storeCount: 0, plannedStoreCount: 0 },
   );
 
   return NextResponse.json({
     success: true,
     yearMonth,
     scope: scope.scope,
-    areaId: scope.areaId,
+    areaId: scope.scope === 'area' ? scope.areaId : null,
     summary,
-    stores: storesWithRollup,
+    stores: stores_,
   });
 }

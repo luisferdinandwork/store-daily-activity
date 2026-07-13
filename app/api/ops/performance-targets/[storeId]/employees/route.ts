@@ -1,14 +1,14 @@
 // app/api/ops/performance-targets/[storeId]/employees/route.ts
 // ─────────────────────────────────────────────────────────────────────────────
 // GET  /api/ops/performance-targets/:storeId/employees?yearMonth=YYYY-MM
-//   → employees assigned (homeStoreId) to this store, with their existing
-//     employee_monthly_targets row for the month (if any). Used to populate
-//     the "add target" picker with employees who don't yet have a target.
+//   → employees whose home store is this store, flagged with whether they
+//     already have a roster row (employee_monthly_targets) for the month.
+//     Used to populate the "add to roster" picker.
 //
 // POST /api/ops/performance-targets/:storeId/employees
-//   → create a new employee_monthly_targets row for this store + month.
-//   Body: { userId, yearMonth, targetRoleCode, targetWeightPct,
-//           monthlySalesTarget, monthlyTransactionTarget, monthlyAtvTarget?, notes? }
+//   → add an employee to the store's target roster for the month.
+//   Body: { userId, yearMonth, targetRoleCode: 'PIC1'|'PIC2'|'SA', sortOrder? }
+//   No amounts are set here — nominal targets are always derived per-day.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -21,14 +21,11 @@ import {
   users,
 } from '@/lib/db/schema';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
-import {
-  calculateAtvTarget,
-  ensureStoreMonthlyTargetPlan,
-  safeNumber,
-  toYearMonth,
-} from '@/lib/performance/target-utils';
+import { ensureStoreMonthlyTargetPlan, toYearMonth } from '@/lib/performance/target-utils';
 
 type Params = { params: Promise<{ storeId: string }> };
+
+const VALID_ROLES = new Set(['PIC1', 'PIC2', 'SA']);
 
 async function loadStoreInScope(storeId: number, scope: Awaited<ReturnType<typeof resolveOpsScope>>) {
   if (!scope.ok) return null;
@@ -73,35 +70,27 @@ export async function GET(req: NextRequest, { params }: Params) {
     );
   }
 
-  // Employees whose current home store is this store.
   const employees = await db
-    .select({
-      id: users.id,
-      nik: users.nik,
-      name: users.name,
-    })
+    .select({ id: users.id, nik: users.nik, name: users.name })
     .from(users)
     .where(and(eq(users.homeStoreId, storeId), eq(users.isActive, true)));
 
-  // Existing targets for this store + month, by userId.
   const existing = await db
-    .select({
-      userId: employeeMonthlyTargets.userId,
-      id: employeeMonthlyTargets.id,
-    })
+    .select({ userId: employeeMonthlyTargets.userId, id: employeeMonthlyTargets.id })
     .from(employeeMonthlyTargets)
     .where(
       and(
         eq(employeeMonthlyTargets.storeId, storeId),
         eq(employeeMonthlyTargets.yearMonth, yearMonth),
+        eq(employeeMonthlyTargets.isActive, true),
       ),
     );
 
-  const targetedUserIds = new Set(existing.map((row) => row.userId));
+  const rosteredUserIds = new Set(existing.map((row) => row.userId));
 
   const result = employees.map((employee) => ({
     ...employee,
-    hasTarget: targetedUserIds.has(employee.id),
+    hasTarget: rosteredUserIds.has(employee.id),
   }));
 
   return NextResponse.json({ success: true, employees: result });
@@ -141,6 +130,14 @@ export async function POST(req: NextRequest, { params }: Params) {
     );
   }
 
+  const targetRoleCode = (body?.targetRoleCode as string | undefined)?.trim().toUpperCase() || 'SA';
+  if (!VALID_ROLES.has(targetRoleCode)) {
+    return NextResponse.json(
+      { success: false, error: 'targetRoleCode must be one of PIC1, PIC2, SA.' },
+      { status: 400 },
+    );
+  }
+
   // Confirm the user belongs to this store.
   const [user] = await db
     .select({ id: users.id, homeStoreId: users.homeStoreId })
@@ -155,11 +152,30 @@ export async function POST(req: NextRequest, { params }: Params) {
     );
   }
 
-  const targetRoleCode = (body?.targetRoleCode as string | undefined)?.trim() || 'SA';
-  const targetWeightPct = safeNumber(body?.targetWeightPct ?? 100);
-  const monthlySalesTarget = safeNumber(body?.monthlySalesTarget);
-  const monthlyTransactionTarget = Math.round(safeNumber(body?.monthlyTransactionTarget));
-  const monthlyAtvTarget = calculateAtvTarget(monthlySalesTarget, monthlyTransactionTarget);
+  // Only one PIC1 and one PIC2 per store + month.
+  if (targetRoleCode === 'PIC1' || targetRoleCode === 'PIC2') {
+    const [clash] = await db
+      .select({ id: employeeMonthlyTargets.id })
+      .from(employeeMonthlyTargets)
+      .where(
+        and(
+          eq(employeeMonthlyTargets.storeId, storeId),
+          eq(employeeMonthlyTargets.yearMonth, yearMonth),
+          eq(employeeMonthlyTargets.targetRoleCode, targetRoleCode),
+          eq(employeeMonthlyTargets.isActive, true),
+        ),
+      )
+      .limit(1);
+
+    if (clash) {
+      return NextResponse.json(
+        { success: false, error: `${targetRoleCode} is already assigned for this store and month.` },
+        { status: 409 },
+      );
+    }
+  }
+
+  const sortOrder = Number.isFinite(Number(body?.sortOrder)) ? Math.round(Number(body.sortOrder)) : 0;
 
   const planId = await ensureStoreMonthlyTargetPlan({
     storeId,
@@ -176,10 +192,7 @@ export async function POST(req: NextRequest, { params }: Params) {
         storeId,
         yearMonth,
         targetRoleCode,
-        targetWeightPct: targetWeightPct.toFixed(2),
-        monthlySalesTarget: String(monthlySalesTarget),
-        monthlyTransactionTarget,
-        monthlyAtvTarget: String(monthlyAtvTarget),
+        sortOrder,
         notes: typeof body?.notes === 'string' ? body.notes : null,
         isActive: true,
         createdBy: scope.userId,
@@ -189,9 +202,8 @@ export async function POST(req: NextRequest, { params }: Params) {
 
     return NextResponse.json({ success: true, target: created });
   } catch (err) {
-    // Likely the unique (userId, storeId, yearMonth) constraint.
     return NextResponse.json(
-      { success: false, error: 'This employee already has a target for this store and month.' },
+      { success: false, error: 'This employee already has a roster row for this store and month.' },
       { status: 409 },
     );
   }
