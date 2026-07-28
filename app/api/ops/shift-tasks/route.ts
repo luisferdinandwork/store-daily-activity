@@ -15,18 +15,10 @@ import {
 
 export const dynamic = 'force-dynamic';
 
-/** Shift & Task config is global → OPS Area, OPS HO, ops role, or admin. */
-function isOps(session: Awaited<ReturnType<typeof auth>>): boolean {
-  const user = session?.user as any;
-  const role = user?.role as string | undefined;
-  const employeeType = (user?.employeeType ?? user?.employeeTypeCode) as string | undefined;
-
-  return (
-    role === 'ops' ||
-    role === 'admin' ||
-    employeeType === 'ops_area' ||
-    employeeType === 'ops_ho'
-  );
+/** Shift & Task config is IT-only. */
+function isIt(session: Awaited<ReturnType<typeof auth>>): boolean {
+  const role = (session?.user as any)?.role as string | undefined;
+  return role === 'it';
 }
 
 function safeBreaks(input: unknown) {
@@ -37,7 +29,7 @@ function safeBreaks(input: unknown) {
 export async function GET() {
   const session = await auth();
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-  if (!isOps(session)) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
+  if (!isIt(session)) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
 
   try {
     const [shiftRows, assignmentRows, catalogRows] = await Promise.all([
@@ -52,6 +44,7 @@ export async function GET() {
           shiftId:          shiftTasks.shiftId,
           taskDefinitionId: shiftTasks.taskDefinitionId,
           isRequired:       shiftTasks.isRequired,
+          isSequenced:      shiftTasks.isSequenced,
           isActive:         shiftTasks.isActive,
           sortOrder:        shiftTasks.sortOrder,
           code:             taskDefinitions.code,
@@ -84,6 +77,7 @@ export async function GET() {
         accent:           r.accent,
         isPersonal:       r.isPersonal,
         isRequired:       r.isRequired,
+        isSequenced:      r.isSequenced,
         isActive:         r.isActive,
         sortOrder:        r.sortOrder,
       });
@@ -115,6 +109,7 @@ export async function GET() {
       isPersonal:  c.isPersonal,
       isActive:    c.isActive,
       sortOrder:   c.sortOrder,
+      requiresLocation: c.requiresLocation,
     }));
 
     const payload: ShiftTasksPayload = { success: true, shifts: shiftsOut, catalog };

@@ -182,7 +182,7 @@ export async function getOrCreateStoreFrontForSchedule(
         storeId,
         shiftId,
         date: dayStart,
-        status: 'pending',
+        status: 'not_started',
       })
       .returning();
 
@@ -226,7 +226,7 @@ export async function claimStoreFrontTask(input: {
         scheduleId: input.scheduleId,
         claimedBy: input.userId,
         claimedAt: existing.claimedAt ?? new Date(),
-        status: existing.status === 'pending' ? 'in_progress' : existing.status,
+        status: existing.status === 'not_started' ? 'in_progress' : existing.status,
         updatedAt: new Date(),
       } as Partial<typeof storeFrontTasks.$inferInsert>)
       .where(eq(storeFrontTasks.id, input.taskId))
@@ -274,7 +274,7 @@ export async function autoSaveStoreFront(
       .limit(1);
 
     if (!existing) return { success: false, error: 'Store Front task tidak ditemukan.' };
-    if (existing.status === 'pending') cleanPatch.status = 'in_progress';
+    if (existing.status === 'not_started') cleanPatch.status = 'in_progress';
 
     const [row] = await db
       .update(storeFrontTasks)

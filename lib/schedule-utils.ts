@@ -129,6 +129,42 @@ export function endOfDay(d: Date): Date {
   return r;
 }
 
+/**
+ * "Today" as a naive local Date — matching how schedule/attendance dates are
+ * stored (materialiseSchedulesForMonth writes `startOfDay(entry.date)`, built
+ * from a plain Y-M-D string with no timezone attached).
+ *
+ * Deriving "today" from `new Date()` directly is wrong on any server not
+ * running in the store's timezone — Vercel serverless functions default to
+ * UTC. From Jakarta midnight to 06:59, the server's own clock is still on
+ * "yesterday" (Jakarta is UTC+7), so a schedule lookup keyed off a naive
+ * `new Date()` misses that day's row entirely — e.g. an employee who checks
+ * in for the morning shift at 6am WIB gets recorded fine (check-in and the
+ * lookup happen at the same moment, so they agree with each other), but once
+ * the server's UTC clock rolls over at 7am WIB, every later read of "today"
+ * shifts forward a day and no longer matches that same schedule/attendance
+ * row — which is exactly why re-opening a task shortly after checking in can
+ * wrongly report "not checked in".
+ *
+ * Use this wherever "today" is the anchor for querying schedules/attendance/
+ * task rows; keep using bare `new Date()` for genuine timestamps (e.g.
+ * `checkInTime`) that should record the real instant, not a day bucket.
+ */
+export function todayInStoreTimezone(): Date {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Jakarta",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+
+  const year = Number(parts.find((p) => p.type === "year")?.value);
+  const month = Number(parts.find((p) => p.type === "month")?.value);
+  const day = Number(parts.find((p) => p.type === "day")?.value);
+
+  return new Date(year, month - 1, day);
+}
+
 export function yearMonthToDate(ym: string): Date {
   const [y, m] = ym.split("-").map(Number);
   return new Date(y, m - 1, 1, 0, 0, 0, 0);
@@ -365,7 +401,7 @@ export async function canManageSchedule(
     empTypeCode = type?.code ?? null;
   }
 
-  const isAdmin = roleCode === "admin";
+  const isAdmin = roleCode === "it";
   const isOpsHo = roleCode === "ops" || empTypeCode === "ops_ho";
   const isOpsArea = empTypeCode === "ops_area";
 
@@ -423,18 +459,18 @@ export async function canManageSchedule(
     return { allowed: true };
   }
 
-  if (empTypeCode === "pic_1") {
+  if (empTypeCode === "pic_1" || empTypeCode === "pic_2") {
     if (Number(actor.homeStoreId) !== Number(storeId)) {
       return {
         allowed: false,
-        reason: "PIC 1 can only manage schedules for their home store.",
+        reason: "PIC can only manage schedules for their home store.",
       };
     }
 
     if (targetEntryStoreId && targetEntryStoreId !== storeId) {
       return {
         allowed: false,
-        reason: "PIC 1 can only assign employees to their home store.",
+        reason: "PIC can only assign employees to their home store.",
       };
     }
 
@@ -443,7 +479,7 @@ export async function canManageSchedule(
 
   return {
     allowed: false,
-    reason: "Only OPS, OPS Area, OPS HO, Admin, or PIC 1 can manage schedules.",
+    reason: "Only OPS, OPS Area, OPS HO, Admin, or PIC can manage schedules.",
   };
 }
 
@@ -1136,8 +1172,9 @@ export async function employeeCheckIn(
 }> {
   try {
     const now = new Date();
-    const dayStart = startOfDay(now);
-    const dayEnd = endOfDay(now);
+    const today = todayInStoreTimezone();
+    const dayStart = startOfDay(today);
+    const dayEnd = endOfDay(today);
 
     const shiftData = await getShiftByCode(shift, true);
     if (!shiftData)
@@ -1182,6 +1219,10 @@ export async function employeeCheckIn(
 
       const attStatus = now > shiftStart ? "late" : "present";
 
+      // Two rapid check-in requests can both reach here after seeing no
+      // `existing` row (no transaction, Neon HTTP driver). Rely on the
+      // unique constraint on `scheduleId` + onConflictDoNothing instead of
+      // letting the second insert throw a raw unique-violation error.
       const [att] = await db
         .insert(attendance)
         .values({
@@ -1195,14 +1236,38 @@ export async function employeeCheckIn(
           onBreak: false,
           recordedBy: userId,
         })
+        .onConflictDoNothing({ target: attendance.scheduleId })
         .returning({ id: attendance.id });
+
+      if (att) {
+        return {
+          success: true,
+          action: "checked_in",
+          attendanceId: att.id,
+          scheduleId: sched.id,
+          status: attStatus,
+        };
+      }
+
+      // Lost the race — another concurrent request already inserted the row.
+      // Fall through by re-reading it below instead of erroring out.
+      const [raceWinner] = await db
+        .select()
+        .from(attendance)
+        .where(eq(attendance.scheduleId, sched.id))
+        .limit(1);
+
+      if (!raceWinner)
+        return { success: false, error: "Check-in failed: could not read attendance after conflict." };
+
+      if (raceWinner.onBreak) return endBreak(userId, storeId, raceWinner.id);
 
       return {
         success: true,
         action: "checked_in",
-        attendanceId: att.id,
+        attendanceId: raceWinner.id,
         scheduleId: sched.id,
-        status: attStatus,
+        status: raceWinner.status,
       };
     }
 
@@ -1227,6 +1292,7 @@ export async function employeeCheckOut(
 ): Promise<{ success: boolean; error?: string }> {
   try {
     const now = new Date();
+    const today = todayInStoreTimezone();
 
     const shiftData = await getShiftByCode(shift, true);
     if (!shiftData)
@@ -1241,8 +1307,8 @@ export async function employeeCheckOut(
           eq(schedules.storeId, storeId),
           eq(schedules.shiftId, shiftData.id),
           eq(schedules.isHoliday, false),
-          gte(schedules.date, startOfDay(now)),
-          lte(schedules.date, endOfDay(now)),
+          gte(schedules.date, startOfDay(today)),
+          lte(schedules.date, endOfDay(today)),
         ),
       )
       .limit(1);
@@ -1303,6 +1369,7 @@ export async function startBreak(
     }
 
     const now = new Date();
+    const today = todayInStoreTimezone();
     const shiftData = await getShiftByCode(shift, true);
     if (!shiftData)
       return { success: false, error: `Unknown or inactive shift "${shift}".` };
@@ -1324,8 +1391,8 @@ export async function startBreak(
           eq(schedules.storeId, storeId),
           eq(schedules.shiftId, shiftData.id),
           eq(schedules.isHoliday, false),
-          gte(schedules.date, startOfDay(now)),
-          lte(schedules.date, endOfDay(now)),
+          gte(schedules.date, startOfDay(today)),
+          lte(schedules.date, endOfDay(today)),
         ),
       )
       .limit(1);
@@ -1457,7 +1524,7 @@ export async function endBreak(
 }
 
 export async function getTodayAttendance(userId: string, storeId: number) {
-  const now = new Date();
+  const today = todayInStoreTimezone();
   const rows = await db
     .select({ att: attendance, schedule: schedules })
     .from(attendance)
@@ -1466,8 +1533,8 @@ export async function getTodayAttendance(userId: string, storeId: number) {
       and(
         eq(attendance.userId, userId),
         eq(attendance.storeId, storeId),
-        gte(attendance.date, startOfDay(now)),
-        lte(attendance.date, endOfDay(now)),
+        gte(attendance.date, startOfDay(today)),
+        lte(attendance.date, endOfDay(today)),
       ),
     )
     .limit(1);

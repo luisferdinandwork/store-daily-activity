@@ -22,7 +22,7 @@ async function resolveOpsActor(userId: string) {
     .where(eq(users.id, userId))
     .limit(1);
   if (!row) return null;
-  if (row.roleCode !== 'ops') return null;
+  if (row.roleCode !== 'ops' && row.roleCode !== 'it') return null;
   return { areaId: row.areaId };
 }
 

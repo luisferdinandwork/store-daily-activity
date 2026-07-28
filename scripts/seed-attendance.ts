@@ -542,7 +542,7 @@ async function main() {
     const ids: number[] = [];
     for (const { sched } of sourceSchedules) {
       const task = map.get(sched.id);
-      if (!task || task.status !== "pending") continue;
+      if (!task || task.status !== "not_started") continue;
       if (!chance(probability)) continue;
       ids.push(task.id);
     }
@@ -593,7 +593,7 @@ async function main() {
   const setoranStorageRows: Array<typeof setoranMoneyStorage.$inferInsert> = [];
   for (const { sched } of morningSchedules) {
     const task = setoranMap.get(sched.id);
-    if (!task || task.status !== "pending" || !chance(0.8)) continue;
+    if (!task || task.status !== "not_started" || !chance(0.8)) continue;
 
     const actualReceivedAmount = rand(850_000, 2_500_000);
     const previousUnpaidAmount = parseNum(task.carriedDeficit);
@@ -667,7 +667,7 @@ async function main() {
   const cekBinTaskBinsRows: Array<typeof cekBinTaskBins.$inferInsert> = [];
   for (const { sched } of morningSchedules) {
     const task = cekBinMap.get(sched.id);
-    if (!task || task.status !== "pending" || !chance(0.8)) continue;
+    if (!task || task.status !== "not_started" || !chance(0.8)) continue;
     const bins = binsByStoreId.get(sched.storeId) ?? [];
     const minToCheck = Math.max(1, Math.ceil(bins.length * 0.3));
     const checkedBins = bins.slice(0, minToCheck);

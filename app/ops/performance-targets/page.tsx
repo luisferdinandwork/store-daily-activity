@@ -1,16 +1,18 @@
 'use client';
 // app/ops/performance-targets/page.tsx
 //
-// Employee Performance Target management — daily-allocation model.
+// Employee Performance Target management — monthly-fixed-percentage model.
 //
 //   - Ops sets ONE monthly sales + transaction target per store.
-//   - That monthly target is divided by days-in-month into a daily store
-//     target.
-//   - Each day, whoever is actually scheduled to work is split into slots
-//     (PIC1, PIC2, SA1, SA2, ...) and the daily target is shared out using
-//     a % template keyed by headcount ("Man Power").
-//   - Ops can override one employee's % for one specific day; everyone else
-//     scheduled that day automatically rebalances around it.
+//   - The store's roster is assigned slots (PIC1, PIC2, SA1, SA2, ...) based
+//     on the whole month's headcount ("Man Power"), and each slot defaults
+//     to the IT-managed PIC1/PIC2/SA1-5 % grid (see /it/target-allocation).
+//   - Ops can override one employee's % here — everyone else on the roster
+//     automatically rebalances around it so the roster still sums to 100%.
+//   - An employee's daily target is a FLAT number: their monthly target
+//     (percentage% × store monthly target) divided by how many days
+//     they're scheduled to work that month — the same figure every
+//     scheduled day.
 //
 //   - OPS HO sees all areas/stores (grouped by area, switchable).
 //   - OPS Area sees only stores within their assigned area.
@@ -48,7 +50,6 @@ import {
   Target,
   Trash2,
   Users,
-  Wallet,
   X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -111,10 +112,14 @@ type EmployeeTargetRow = {
   nik: string;
   name: string;
   targetRoleCode: string;          // PIC1 | PIC2 | SA
-  slotCode: string | null;          // PIC1 | PIC2 | SA1... — daily view only
-  defaultPct: number | null;
-  effectivePct: number | null;
-  isOverridden: boolean;
+  slotCode: string;                 // PIC1 | PIC2 | SA1... — fixed for the whole month
+  percentage: number;               // fixed monthly % share of the store's monthly target
+  isPercentageOverridden: boolean;
+  scheduledDays: number;
+  monthlySalesTarget: number;
+  monthlyTransactionTarget: number;
+  dailySalesTarget: number;         // flat: monthlySalesTarget / scheduledDays
+  dailyTransactionTarget: number;
   isScheduledToday: boolean;
   displaySalesTarget: number;
   displayTransactionTarget: number;
@@ -140,7 +145,7 @@ type DetailResponse = {
     storeMonthlyAtvTarget: number;
     rosterCount: number;
   };
-  dailyMeta: { headcount: number; usedFallbackEqualSplit: boolean } | null;
+  rosterMeta: { headcount: number; usedFallbackEqualSplit: boolean } | null;
   employeeTargets: EmployeeTargetRow[];
   actuals: {
     available: boolean;
@@ -341,9 +346,9 @@ function HowThisWorksCallout() {
         <ol className="space-y-2.5 border-t border-indigo-100 bg-white px-4 py-4">
           {[
             'Isi target sales & transaksi untuk SATU BULAN di toko yang dipilih.',
-            'Sistem membaginya rata ke setiap hari dalam bulan itu — jadi ada "target harian" toko.',
-            'Setiap hari, target harian itu dibagi ke karyawan yang jadwal kerja hari itu. Porsinya tergantung berapa orang yang masuk & posisi mereka (PIC1, PIC2, SA1, SA2, ...).',
-            'Butuh kasih porsi lebih ke satu orang di hari tertentu? Ubah persennya — porsi karyawan lain di hari itu otomatis menyesuaikan supaya totalnya tetap 100%.',
+            'Setiap karyawan di roster dapat persentase TETAP untuk sebulan penuh — besarnya default mengikuti grid PIC1/PIC2/SA berdasarkan jumlah orang di roster ("Man Power").',
+            'Target bulanan karyawan = persentase × target bulanan toko. Target harian = target bulanan itu dibagi jumlah hari dia dijadwalkan kerja bulan ini — angkanya sama setiap hari dia masuk.',
+            'Butuh kasih porsi lebih ke satu orang? Ubah persennya di baris karyawan — porsi karyawan lain di roster otomatis menyesuaikan supaya totalnya tetap 100%.',
           ].map((step, i) => (
             <li key={i} className="flex gap-3 text-xs text-slate-600">
               <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-[10px] font-bold text-white">
@@ -522,7 +527,7 @@ function MonthlyTargetEditor({ storeId, yearMonth, salesTarget, transactionTarge
         <div className="mt-3 flex items-center gap-1.5 border-t border-indigo-100 pt-3 text-[11px] text-slate-500">
           <Info className="h-3.5 w-3.5 shrink-0 text-indigo-400" />
           <span>
-            Ini dibagi otomatis jadi <span className="font-semibold text-slate-700">{fmtCurrency(salesTarget / Math.max(days, 1))} / hari</span> ({days} hari), lalu dibagi lagi ke karyawan yang jadwal kerja hari itu.
+            Setiap karyawan di roster dapat persentase tetap dari angka ini (lihat tabel di bawah) — target hariannya adalah bagian bulanan itu dibagi jumlah hari dia dijadwalkan kerja bulan ini.
           </span>
         </div>
       </div>
@@ -668,7 +673,7 @@ function AddEmployeeTargetForm({ storeId, yearMonth, eligible, onCreated, onCanc
 
           <p className="mt-3 flex items-start gap-1.5 text-[11px] text-slate-500">
             <Info className="mt-0.5 h-3 w-3 shrink-0 text-slate-400" />
-            Target sales/transaksi tidak diisi manual di sini — dihitung otomatis tiap hari dari target toko, dibagi sesuai jumlah karyawan yang jadwal hari itu.
+            Persentase tidak diisi manual di sini — setelah disimpan, seluruh roster (termasuk karyawan ini) otomatis mendapat persentase default sesuai jumlah orang di roster. Bisa diubah per orang di tabel roster.
           </p>
         </>
       )}
@@ -704,16 +709,17 @@ function RoleBadge({ role }: { role: string }) {
   return <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-bold', cls)}>{role}</span>;
 }
 
-function SlotBadge({ slotCode }: { slotCode: string | null }) {
-  if (!slotCode) {
-    return (
-      <span className="flex items-center gap-1 rounded-full border border-slate-100 bg-slate-50 px-2 py-0.5 text-[10px] font-bold text-slate-400">
-        <CalendarOff className="h-2.5 w-2.5" /> Libur hari ini
-      </span>
-    );
-  }
+function SlotBadge({ slotCode }: { slotCode: string }) {
   const base = slotCode.startsWith('PIC') ? ROLE_BADGE_CLASSES[slotCode] : ROLE_BADGE_CLASSES.SA;
   return <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-bold', base)}>Slot {slotCode}</span>;
+}
+
+function NotScheduledTodayBadge() {
+  return (
+    <span className="flex items-center gap-1 rounded-full border border-slate-100 bg-slate-50 px-2 py-0.5 text-[10px] font-bold text-slate-400">
+      <CalendarOff className="h-2.5 w-2.5" /> Libur hari ini
+    </span>
+  );
 }
 
 /** Click-to-toggle legend explaining PIC1/PIC2/SA1.. — a tooltip would be invisible on touch devices, so this is a small disclosure instead. */
@@ -733,8 +739,8 @@ function SlotLegend() {
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
           <div className="absolute left-0 top-6 z-20 w-64 rounded-xl border border-slate-200 bg-white p-3 text-left text-[11px] normal-case tracking-normal text-slate-600 shadow-lg">
-            <p><span className="font-bold text-violet-600">PIC1 / PIC2</span> — penanggung jawab toko, porsinya tetap.</p>
-            <p className="mt-1.5"><span className="font-bold text-indigo-600">SA1, SA2, ...</span> — staf penjualan, urutan otomatis dari yang jadwal hari itu. Kalau salah satu libur, yang lain naik urutan.</p>
+            <p><span className="font-bold text-violet-600">PIC1 / PIC2</span> — penanggung jawab toko, slot tetap.</p>
+            <p className="mt-1.5"><span className="font-bold text-indigo-600">SA1, SA2, ...</span> — staf penjualan, urutan tetap untuk sebulan penuh berdasarkan urutan di roster (bukan siapa yang masuk hari itu).</p>
           </div>
         </>
       )}
@@ -891,54 +897,30 @@ function EmployeeCalendarModal({ storeId, targetId, employeeName, yearMonth, onC
   return createPortal(content, document.body);
 }
 
-// ─── MiniMetric — one "target vs actual" block inside an employee card ────────
-
-function MiniMetric({ icon: Icon, label, target, actual, formatValue, pct }: {
-  icon: React.ElementType;
-  label: string;
-  target: number;
-  actual: number;
-  formatValue: (n: number) => string;
-  pct: number;
-}) {
-  return (
-    <div className="rounded-xl bg-slate-50 p-3">
-      <div className="flex items-center gap-1.5 text-slate-400">
-        <Icon className="h-3 w-3" />
-        <p className="text-[10px] font-bold uppercase tracking-wide">{label}</p>
-      </div>
-      <p className="mt-1.5 text-sm font-bold tabular-nums text-slate-900">{formatValue(target)}</p>
-      <p className="text-[11px] tabular-nums text-slate-400">Aktual {formatValue(actual)}</p>
-      <div className="mt-1.5"><PctProgressBar pct={pct} /></div>
-    </div>
-  );
-}
-
-// ─── EmployeeTargetCard ─────────────────────────────────────────────────────────
+// ─── EmployeeTargetTableRow ───────────────────────────────────────────────────
 //
-// Replaces the old table row. A single-column card list scans top-to-bottom
-// on any screen size (no horizontal scroll needed on a tablet/phone), and
-// groups "who/what slot" — "target vs actual" — "today's %" — "actions"
-// into clearly separated zones instead of one dense row of tiny cells.
+// Table row — condensed to the numbers that matter (target vs actual for
+// sales/transactions, today's % share, actions). Reinstated in place of the
+// one-per-employee card list, which scaled poorly once a store's roster grew
+// past a handful of people.
 
-function EmployeeTargetCard({ row, storeId, period, yearMonth, date, locked, onDailyChange, onDeleted }: {
+function EmployeeTargetTableRow({ row, storeId, period, yearMonth, locked, onChanged, onDeleted }: {
   row: EmployeeTargetRow;
   storeId: number;
   period: ViewPeriod;
   yearMonth: string;
-  date: string;
   locked: boolean;
-  onDailyChange: () => void;
+  onChanged: () => void;
   onDeleted: () => void;
 }) {
   const [editingPct, setEditingPct] = useState(false);
-  const [pctInput, setPctInput] = useState(String(row.effectivePct ?? 0));
+  const [pctInput, setPctInput] = useState(String(row.percentage));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showCalendar, setShowCalendar] = useState(false);
 
   const startEdit = () => {
-    setPctInput(String(row.effectivePct ?? 0));
+    setPctInput(String(row.percentage));
     setEditingPct(true);
     setError(null);
   };
@@ -947,15 +929,15 @@ function EmployeeTargetCard({ row, storeId, period, yearMonth, date, locked, onD
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(`/api/ops/performance-targets/${storeId}/daily-overrides`, {
+      const res = await fetch(`/api/ops/performance-targets/${storeId}/employees/${row.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date, yearMonth, userId: row.userId, percentage: Number(pctInput) || 0 }),
+        body: JSON.stringify({ percentage: Number(pctInput) || 0 }),
       });
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error ?? 'Gagal menyimpan persentase.');
       setEditingPct(false);
-      onDailyChange();
+      onChanged();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Gagal menyimpan persentase.');
     } finally {
@@ -967,14 +949,14 @@ function EmployeeTargetCard({ row, storeId, period, yearMonth, date, locked, onD
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(`/api/ops/performance-targets/${storeId}/daily-overrides`, {
-        method: 'DELETE',
+      const res = await fetch(`/api/ops/performance-targets/${storeId}/employees/${row.id}`, {
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ date, yearMonth, userId: row.userId }),
+        body: JSON.stringify({ resetPercentage: true }),
       });
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error ?? 'Gagal mereset persentase.');
-      onDailyChange();
+      onChanged();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Gagal mereset persentase.');
     } finally {
@@ -998,122 +980,104 @@ function EmployeeTargetCard({ row, storeId, period, yearMonth, date, locked, onD
 
   const salesPct = pctOf(row.actualSales, row.displaySalesTarget);
   const txPct = pctOf(row.actualTransactionCount, row.displayTransactionTarget);
-  const atv = row.displayTransactionTarget > 0 ? Math.round(row.displaySalesTarget / row.displayTransactionTarget) : 0;
-  const canEditPct = period === 'daily' && !locked && row.isScheduledToday;
+  const canEditPct = !locked;
   const notWorkingToday = period === 'daily' && !row.isScheduledToday;
 
   return (
-    <div className={cn(
-      'rounded-2xl border border-slate-200 bg-white p-4 transition',
-      notWorkingToday && 'opacity-60',
-    )}>
-      {/* Who + role/slot */}
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-bold text-slate-900">{row.name}</p>
-          <p className="text-[11px] text-slate-400">NIK {row.nik}</p>
-        </div>
-        <div className="flex shrink-0 flex-col items-end gap-1">
-          <RoleBadge role={row.targetRoleCode} />
-          {period === 'daily' && <SlotBadge slotCode={row.slotCode} />}
-        </div>
-      </div>
+    <>
+      <tr className={cn('border-b border-slate-100 last:border-0 hover:bg-slate-50/60', notWorkingToday && 'opacity-50')}>
+        {/* Employee */}
+        <td className="min-w-[160px] px-3 py-2.5">
+          <p className="truncate text-xs font-bold text-slate-900">{row.name}</p>
+          <p className="text-[10px] text-slate-400">NIK {row.nik}</p>
+        </td>
 
-      {/* Target vs actual */}
-      <div className="mt-3 grid grid-cols-2 gap-2">
-        <MiniMetric
-          icon={ShoppingBag}
-          label={`Sales${period === 'daily' ? ' (Harian)' : ' (Bulanan)'}`}
-          target={row.displaySalesTarget}
-          actual={row.actualSales}
-          formatValue={fmtCurrency}
-          pct={salesPct}
-        />
-        <MiniMetric
-          icon={Receipt}
-          label={`Transaksi${period === 'daily' ? ' (Harian)' : ' (Bulanan)'}`}
-          target={row.displayTransactionTarget}
-          actual={row.actualTransactionCount}
-          formatValue={(n) => String(n)}
-          pct={txPct}
-        />
-      </div>
+        {/* Role / slot */}
+        <td className="px-3 py-2.5">
+          <div className="flex flex-col items-start gap-1">
+            <RoleBadge role={row.targetRoleCode} />
+            <SlotBadge slotCode={row.slotCode} />
+            {notWorkingToday && <NotScheduledTodayBadge />}
+          </div>
+        </td>
 
-      {/* ATV + today's % */}
-      <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-slate-50 px-3 py-2.5">
-        <div className="flex items-center gap-1.5 text-slate-500">
-          <Wallet className="h-3.5 w-3.5" />
-          <span className="text-xs font-semibold">ATV {fmtCurrency(atv)}</span>
-        </div>
+        {/* Sales */}
+        <td className="min-w-[130px] px-3 py-2.5">
+          <p className="text-xs font-bold tabular-nums text-slate-900">{fmtCurrencyCompact(row.displaySalesTarget)}</p>
+          <p className="text-[10px] tabular-nums text-slate-400">Aktual {fmtCurrencyCompact(row.actualSales)}</p>
+          <div className="mt-1"><PctProgressBar pct={salesPct} /></div>
+        </td>
 
-        {period === 'daily' && (
-          editingPct ? (
+        {/* Transactions */}
+        <td className="min-w-[110px] px-3 py-2.5">
+          <p className="text-xs font-bold tabular-nums text-slate-900">{row.displayTransactionTarget}</p>
+          <p className="text-[10px] tabular-nums text-slate-400">Aktual {row.actualTransactionCount}</p>
+          <div className="mt-1"><PctProgressBar pct={txPct} /></div>
+        </td>
+
+        {/* Fixed monthly % share */}
+        <td className="min-w-[150px] px-3 py-2.5">
+          {editingPct ? (
             <div className="flex items-center gap-1.5">
               <input
                 type="number"
                 value={pctInput}
                 onChange={(e) => setPctInput(e.target.value)}
                 autoFocus
-                className="w-20 rounded-lg border border-indigo-300 bg-white px-2 py-1 text-right text-xs tabular-nums focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                className="w-16 rounded-lg border border-indigo-300 bg-white px-2 py-1 text-right text-xs tabular-nums focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
               />
               <span className="text-xs font-semibold text-slate-400">%</span>
               <button type="button" onClick={() => setEditingPct(false)} disabled={saving}
-                className="rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-bold text-slate-500 hover:bg-slate-50">
+                className="rounded-md border border-slate-200 bg-white px-1.5 py-1 text-[10px] font-bold text-slate-500 hover:bg-slate-50">
                 Batal
               </button>
               <button type="button" onClick={handleSavePct} disabled={saving}
-                className="rounded-md bg-indigo-600 px-2 py-1 text-[10px] font-bold text-white hover:bg-indigo-500 disabled:opacity-60">
-                {saving ? '…' : 'Simpan'}
+                className="rounded-md bg-indigo-600 px-1.5 py-1 text-[10px] font-bold text-white hover:bg-indigo-500 disabled:opacity-60">
+                {saving ? '…' : 'OK'}
               </button>
             </div>
           ) : (
-            <div className="flex items-center gap-1.5">
-              {row.isOverridden && (
-                <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700">
-                  Diubah manual
+            <div className="flex items-center gap-1">
+              <span className="text-xs font-bold tabular-nums text-slate-700">{row.percentage.toFixed(1)}%</span>
+              <span className="text-[10px] text-slate-400">· {row.scheduledDays} hari/bln</span>
+              {row.isPercentageOverridden && (
+                <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700" title="Diubah manual">
+                  M
                 </span>
               )}
-              <span className="text-xs font-bold tabular-nums text-slate-700">
-                {row.isScheduledToday ? `Porsi ${(row.effectivePct ?? 0).toFixed(1)}%` : 'Tidak jadwal'}
-              </span>
               {canEditPct && (
                 <button type="button" onClick={startEdit}
-                  className="rounded-md p-1 text-slate-400 hover:bg-white hover:text-indigo-600" title="Ubah porsi hari ini">
+                  className="rounded-md p-1 text-slate-400 hover:bg-white hover:text-indigo-600" title="Ubah persentase bulanan">
                   <Pencil className="h-3 w-3" />
                 </button>
               )}
-              {canEditPct && row.isOverridden && (
+              {canEditPct && row.isPercentageOverridden && (
                 <button type="button" onClick={handleResetPct} disabled={saving}
                   className="rounded-md p-1 text-slate-400 hover:bg-white hover:text-indigo-600" title="Kembalikan ke default">
                   <RotateCcw className="h-3 w-3" />
                 </button>
               )}
             </div>
-          )
-        )}
-      </div>
+          )}
+          {error && <p className="mt-1 text-[10px] font-semibold text-red-500">{error}</p>}
+        </td>
 
-      {editingPct && (
-        <p className="mt-1.5 text-[10px] text-slate-400">
-          Sisa persennya otomatis dibagi ke karyawan lain yang jadwal hari ini.
-        </p>
-      )}
-
-      {error && <p className="mt-2 text-xs font-semibold text-red-500">{error}</p>}
-
-      {/* Actions */}
-      {!locked && (
-        <div className="mt-3 flex justify-end gap-1.5">
-          <button type="button" onClick={() => setShowCalendar(true)}
-            className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-bold text-slate-600 hover:bg-slate-50">
-            <Calendar className="h-3 w-3" /> Kalender
-          </button>
-          <button type="button" onClick={handleDeleteFromRoster} disabled={saving}
-            className="flex items-center gap-1.5 rounded-lg border border-red-100 bg-white px-2.5 py-1.5 text-[11px] font-bold text-red-500 hover:bg-red-50 disabled:opacity-60">
-            <Trash2 className="h-3 w-3" /> Hapus
-          </button>
-        </div>
-      )}
+        {/* Actions */}
+        <td className="px-3 py-2.5">
+          {!locked && (
+            <div className="flex justify-end gap-1">
+              <button type="button" onClick={() => setShowCalendar(true)} title="Kalender"
+                className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50">
+                <Calendar className="h-3.5 w-3.5" />
+              </button>
+              <button type="button" onClick={handleDeleteFromRoster} disabled={saving} title="Hapus dari roster"
+                className="flex h-7 w-7 items-center justify-center rounded-lg border border-red-100 bg-white text-red-500 hover:bg-red-50 disabled:opacity-60">
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+        </td>
+      </tr>
 
       {showCalendar && (
         <EmployeeCalendarModal
@@ -1124,7 +1088,7 @@ function EmployeeTargetCard({ row, storeId, period, yearMonth, date, locked, onD
           onClose={() => setShowCalendar(false)}
         />
       )}
-    </div>
+    </>
   );
 }
 
@@ -1262,11 +1226,11 @@ function StoreDetailPanel({ detail, loading, eligible, yearMonth, period, dateKe
             </div>
           )}
 
-          {period === 'daily' && detail.dailyMeta?.usedFallbackEqualSplit && detail.dailyMeta.headcount > 0 && (
+          {detail.rosterMeta?.usedFallbackEqualSplit && detail.rosterMeta.headcount > 0 && (
             <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-700">
               <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <p className="text-[11px] font-semibold">
-                Belum ada pola pembagian untuk {detail.dailyMeta.headcount} orang — sementara dibagi rata. Minta admin tambahkan pola ini supaya sesuai grid PIC1/PIC2/SA.
+                Belum ada pola pembagian untuk {detail.rosterMeta.headcount} orang — sementara dibagi rata. Minta IT tambahkan pola ini di menu Performance Target Defaults supaya sesuai grid PIC1/PIC2/SA.
               </p>
             </div>
           )}
@@ -1299,9 +1263,9 @@ function StoreDetailPanel({ detail, loading, eligible, yearMonth, period, dateKe
             </div>
             <StatCard label="ATV Aktual" value={fmtCurrency(storeAtvActual)} sub={period === 'daily' ? 'hari ini' : 'bulan ini'} />
             <StatCard
-              label={period === 'daily' ? 'Jadwal Hari Ini' : 'Karyawan di Roster'}
-              value={period === 'daily' ? String(detail.dailyMeta?.headcount ?? 0) : String(detail.rollup.rosterCount)}
-              sub={period === 'daily' ? 'orang bekerja' : 'total roster'}
+              label="Karyawan di Roster"
+              value={String(detail.rollup.rosterCount)}
+              sub="Man Power bulan ini"
             />
           </div>
         </div>
@@ -1330,7 +1294,7 @@ function StoreDetailPanel({ detail, loading, eligible, yearMonth, period, dateKe
           <div className="mb-3 flex items-center justify-between">
             <h3 className="flex items-center text-xs font-bold uppercase tracking-widest text-slate-400">
               <Users className="mr-1.5 h-3.5 w-3.5" /> Target vs Aktual Karyawan
-              {period === 'daily' && <SlotLegend />}
+              <SlotLegend />
             </h3>
             {!isLocked && (
               <button type="button" onClick={() => setShowAddForm((v) => !v)}
@@ -1357,20 +1321,35 @@ function StoreDetailPanel({ detail, loading, eligible, yearMonth, period, dateKe
               Belum ada karyawan di roster target bulan ini. Klik &quot;Tambah&quot; untuk mulai.
             </div>
           ) : (
-            <div className="space-y-3">
-              {sorted.map((row) => (
-                <EmployeeTargetCard
-                  key={row.id}
-                  row={row}
-                  storeId={detail.store.id}
-                  period={period}
-                  yearMonth={yearMonth}
-                  date={dateKey}
-                  locked={isLocked}
-                  onDailyChange={onRefresh}
-                  onDeleted={onRefresh}
-                />
-              ))}
+            <div className="overflow-hidden rounded-2xl border border-slate-200">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-100 bg-slate-50 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                      <th className="px-3 py-2.5 text-left">Karyawan</th>
+                      <th className="px-3 py-2.5 text-left">Role</th>
+                      <th className="px-3 py-2.5 text-left">Sales</th>
+                      <th className="px-3 py-2.5 text-left">Transaksi</th>
+                      <th className="px-3 py-2.5 text-left">Porsi Bulanan</th>
+                      <th className="px-3 py-2.5 text-right">Aksi</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sorted.map((row) => (
+                      <EmployeeTargetTableRow
+                        key={row.id}
+                        row={row}
+                        storeId={detail.store.id}
+                        period={period}
+                        yearMonth={yearMonth}
+                        locked={isLocked}
+                        onChanged={onRefresh}
+                        onDeleted={onRefresh}
+                      />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </div>

@@ -12,7 +12,7 @@
 // On Hold behavior:
 //   • Submit with openStatementDecision = 'on_hold' creates an Issue in Bahasa.
 //   • The generated Issue starts with status = 'draft'.
-//   • The Store Closing row stays with status = 'discrepancy' and isOnHold=true.
+//   • The Store Closing row stays with status = 'pending' and isOnHold=true.
 //   • Future days still generate their own Store Closing rows.
 //   • When the linked issue is resolved, syncResolvedStoreClosingHoldsForStores()
 //     reopens only that held task so the current employee can finish it.
@@ -362,7 +362,7 @@ export async function getOrCreateStoreClosingForSchedule(
         storeId,
         shiftId,
         date: dayStart,
-        status: 'pending',
+        status: 'not_started',
         updatedAt: new Date(),
       })
       .returning();
@@ -508,7 +508,7 @@ export async function autoSaveStoreClosing(
       update.notes = input.patch.notes ?? null;
     }
 
-    if (existing.status === 'pending') {
+    if (existing.status === 'not_started') {
       update.status = 'in_progress';
     }
 
@@ -663,7 +663,7 @@ export async function submitStoreClosing(
         .update(storeClosingTasks)
         .set({
           ...baseValues,
-          status: 'discrepancy',
+          status: 'pending',
           isOnHold: true,
           holdIssueId: existing.holdIssueId ?? issue?.id ?? null,
           heldBy: input.userId,
@@ -716,9 +716,9 @@ export async function syncResolvedStoreClosingHoldsForStores(
         and(
           inArray(storeClosingTasks.storeId, storeIds),
           eq(storeClosingTasks.isOnHold, true),
-          eq(storeClosingTasks.status, 'discrepancy'),
+          eq(storeClosingTasks.status, 'pending'),
           isNotNull(storeClosingTasks.holdIssueId),
-          eq(issues.status, 'resolved'),
+          eq(issues.status, 'completed'),
         ),
       );
 
@@ -755,7 +755,7 @@ export async function reopenStoreClosingHoldForIssue(
       .where(eq(issues.id, issueId))
       .limit(1);
 
-    if (!issue || issue.status !== 'resolved') {
+    if (!issue || issue.status !== 'completed') {
       return { success: true, data: { reopened: [] } };
     }
 
@@ -766,7 +766,7 @@ export async function reopenStoreClosingHoldForIssue(
         and(
           eq(storeClosingTasks.holdIssueId, issueId),
           eq(storeClosingTasks.isOnHold, true),
-          eq(storeClosingTasks.status, 'discrepancy'),
+          eq(storeClosingTasks.status, 'pending'),
         ),
       );
 

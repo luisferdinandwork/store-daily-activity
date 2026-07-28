@@ -163,7 +163,7 @@ export async function getPriorUnpaidForStore(
 }
 
 async function refreshPendingCarryForward(task: SetoranTask): Promise<SetoranTask> {
-  if (task.status !== 'pending' && task.status !== 'in_progress') return task;
+  if (task.status !== 'not_started' && task.status !== 'in_progress') return task;
 
   const carriedDeficit = await getPriorUnpaidForStore(task.storeId, task.date);
 
@@ -244,7 +244,7 @@ export async function getOrCreateSetoranForSchedule(
         carriedDeficit,
         carriedDeficitFetchedAt: now,
         unpaidAmount: '0.00',
-        status: 'pending',
+        status: 'not_started',
         createdAt: now,
         updatedAt: now,
       })
@@ -521,7 +521,7 @@ export async function autoSaveSetoran(
     if ('atmCardSelfiePhoto' in patch) update.atmCardSelfiePhoto = patch.atmCardSelfiePhoto ?? null;
     if ('notes' in patch) update.notes = patch.notes;
 
-    if (existing.status === 'pending') update.status = 'in_progress';
+    if (existing.status === 'not_started') update.status = 'in_progress';
 
     await db
       .update(setoranTasks)

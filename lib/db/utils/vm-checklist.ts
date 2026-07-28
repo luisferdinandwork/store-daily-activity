@@ -164,7 +164,7 @@ export async function getOrCreateVmChecklistForSchedule(
         storeId,
         shiftId,
         date: dayStart,
-        status: 'pending',
+        status: 'not_started',
       })
       .returning();
 

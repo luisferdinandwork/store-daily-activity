@@ -3,10 +3,11 @@
 // Resolves the current OPS session into a scope used by performance-targets
 // and settings APIs:
 //
-//   - OPS HO   (employeeTypes.code === 'ops_ho')   → scope: 'all_areas'
-//   - OPS Area (employeeTypes.code === 'ops_area') → scope: 'area', limited to
-//                                                     users.areaId
-//   - everyone else                                → not authorized
+//   - IT        (userRoles.code === 'it')          → scope: 'all_areas'
+//   - OPS HO    (employeeTypes.code === 'ops_ho')   → scope: 'all_areas'
+//   - OPS Area  (employeeTypes.code === 'ops_area') → scope: 'area', limited to
+//                                                      users.areaId
+//   - everyone else                                 → not authorized
 //
 // Mirrors the area/all_areas scoping already used by
 // /api/ops/tasks/progress.
@@ -17,7 +18,7 @@ import { getServerSession } from 'next-auth';
 
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
-import { employeeTypes, users } from '@/lib/db/schema';
+import { employeeTypes, userRoles, users } from '@/lib/db/schema';
 
 export type OpsScope =
   | { ok: true; scope: 'all_areas'; userId: string; areaId: null }
@@ -36,8 +37,10 @@ export async function resolveOpsScope(): Promise<OpsScope> {
     .select({
       areaId: users.areaId,
       employeeTypeCode: employeeTypes.code,
+      roleCode: userRoles.code,
     })
     .from(users)
+    .innerJoin(userRoles, eq(userRoles.id, users.roleId))
     .leftJoin(employeeTypes, eq(employeeTypes.id, users.employeeTypeId))
     .where(eq(users.id, userId))
     .limit(1);
@@ -46,7 +49,7 @@ export async function resolveOpsScope(): Promise<OpsScope> {
     return { ok: false, status: 401, error: 'Unauthorized' };
   }
 
-  if (row.employeeTypeCode === 'ops_ho') {
+  if (row.roleCode === 'it' || row.employeeTypeCode === 'ops_ho') {
     return { ok: true, scope: 'all_areas', userId, areaId: null };
   }
 

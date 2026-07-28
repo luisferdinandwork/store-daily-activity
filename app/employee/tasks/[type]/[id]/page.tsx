@@ -1,16 +1,19 @@
 'use client';
 // app/employee/tasks/[type]/[id]/page.tsx
 
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter }  from 'next/navigation';
 import {
-  ArrowLeft, CheckCircle2, Camera, X, Loader2,
+  ArrowLeft, CheckCircle2, X, Loader2,
   MapPin, AlertCircle, Check, Cloud, CloudOff, Save,
   LogIn, Navigation, NavigationOff, RefreshCw,
 } from 'lucide-react';
 import { cn }          from '@/lib/utils';
 import { toast }       from 'sonner';
 import { useAutoSave } from '@/lib/hooks/useAutoSave';
+import { useTaskLocationSetting } from '@/lib/hooks/useTaskLocationSetting';
+import PhotoUploadGrid from '@/components/shared/PhotoUploadGrid';
+import { uploadTaskPhoto } from '@/lib/tasks-upload';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -21,7 +24,7 @@ type TaskType =
   | 'eod_z_report'  | 'open_statement'
   | 'grooming';
 
-type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'verified' | 'rejected';
+type TaskStatus = 'not_started' | 'in_progress' | 'completed' | 'verified' | 'rejected';
 
 /**
  * Mirrors TaskAccessStatus from lib/db/utils/tasks.ts.
@@ -87,12 +90,18 @@ interface FormProps {
 
 // ─── Geo hook ─────────────────────────────────────────────────────────────────
 
-function useGeo() {
+function useGeo(required: boolean) {
   const [geo,      setGeo]      = useState<{ lat: number; lng: number } | null>(null);
   const [geoError, setGeoError] = useState<string | null>(null);
   const [geoReady, setGeoReady] = useState(false);
 
   const refresh = useCallback(() => {
+    if (!required) {
+      setGeo(null);
+      setGeoError(null);
+      setGeoReady(true);
+      return;
+    }
     setGeoReady(false);
     setGeoError(null);
     if (!navigator.geolocation) {
@@ -105,7 +114,7 @@ function useGeo() {
       ()  => { setGeoError('Lokasi tidak dapat diperoleh.'); setGeoReady(true); },
       { timeout: 10_000, maximumAge: 0 },  // maximumAge 0 forces a fresh fix on refresh
     );
-  }, []);
+  }, [required]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
@@ -294,56 +303,15 @@ function PhotoUploader({ label, photoType, photos, onChange, max = 3, disabled }
   label: string; photoType: string; photos: string[];
   onChange: (urls: string[]) => void; max?: number; disabled?: boolean;
 }) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [uploading, setUploading] = useState(false);
-
-  async function handleFiles(files: FileList | null) {
-    if (!files?.length) return;
-    if (photos.length >= max) { toast.error(`Maksimal ${max} foto`); return; }
-    setUploading(true);
-    try {
-      const toUpload = Array.from(files).slice(0, max - photos.length);
-      const urls: string[] = [];
-      for (const file of toUpload) {
-        const form = new FormData();
-        form.append('file', file); form.append('photoType', photoType);
-        const res  = await fetch('/api/employee/tasks/upload', { method: 'POST', body: form });
-        const data = await res.json();
-        if (!res.ok || !data.url) throw new Error(data.error ?? 'Upload gagal');
-        urls.push(data.url);
-      }
-      onChange([...photos, ...urls]);
-    } catch (e) { toast.error(e instanceof Error ? e.message : 'Upload gagal'); }
-    finally { setUploading(false); }
-  }
-
   return (
-    <div className="space-y-2">
-      <p className="text-xs font-semibold text-foreground">{label}</p>
-      <div className="flex flex-wrap gap-2">
-        {photos.map((url, i) => (
-          <div key={i} className="relative h-20 w-20 overflow-hidden rounded-xl border border-border">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={url} alt="" className="h-full w-full object-cover" />
-            {!disabled && (
-              <button onClick={() => onChange(photos.filter((_, j) => j !== i))}
-                className="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-white">
-                <X className="h-3 w-3" />
-              </button>
-            )}
-          </div>
-        ))}
-        {!disabled && photos.length < max && (
-          <button onClick={() => inputRef.current?.click()} disabled={uploading}
-            className="flex h-20 w-20 flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-border bg-secondary text-muted-foreground hover:border-primary/40 hover:text-primary disabled:opacity-50">
-            {uploading ? <Loader2 className="h-5 w-5 animate-spin" /> : <><Camera className="h-5 w-5" /><span className="text-[9px] font-semibold">Tambah</span></>}
-          </button>
-        )}
-      </div>
-      <input ref={inputRef} type="file" accept="image/*" capture="environment"
-        multiple={max > 1} className="hidden" onChange={e => handleFiles(e.target.files)} />
-      <p className="text-[10px] text-muted-foreground">{photos.length}/{max} foto</p>
-    </div>
+    <PhotoUploadGrid
+      label={label}
+      photos={photos}
+      onChange={onChange}
+      max={max}
+      disabled={disabled}
+      upload={file => uploadTaskPhoto(file, photoType)}
+    />
   );
 }
 
@@ -678,7 +646,8 @@ export default function TaskDetailPage() {
   const taskType = params.type as TaskType;
   const taskId   = params.id   as string;
 
-  const { geo, geoError, geoReady, refresh: refreshGeo } = useGeo();
+  const { requiresLocation } = useTaskLocationSetting(taskType);
+  const { geo, geoError, geoReady, refresh: refreshGeo } = useGeo(requiresLocation);
 
   const [taskData,    setTaskData]    = useState<AnyTaskData | null>(null);
   const [loading,     setLoading]     = useState(true);

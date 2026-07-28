@@ -70,6 +70,14 @@ export const users = pgTable('users', {
   roleId:         integer('role_id').references(() => userRoles.id).notNull(),
   employeeTypeId: integer('employee_type_id').references(() => employeeTypes.id),
 
+  /**
+   * Set only for an IT user who has temporarily switched their own account
+   * into another role to preview it — holds their real IT role/employeeType
+   * so they can switch back. Null under normal operation.
+   */
+  switchedFromRoleId:         integer('switched_from_role_id').references(() => userRoles.id),
+  switchedFromEmployeeTypeId: integer('switched_from_employee_type_id').references(() => employeeTypes.id),
+
   homeStoreId: integer('home_store_id').references(() => stores.id),
   areaId:      integer('area_id').references(() => areas.id),
 
@@ -232,6 +240,16 @@ export const issues = pgTable('issues', {
 
   status:         issueStatusEnum('status').default('reported').notNull(),
   attachmentUrls: text('attachment_urls'),
+
+  // Berita Acara — one-time evidence upload the reporter can attach at ANY
+  // status, including draft (even after completed/solved).
+  baAttachmentUrls: text('ba_attachment_urls'),
+  baUploadedBy:     text('ba_uploaded_by').references(() => users.id),
+  baUploadedAt:     timestamp('ba_uploaded_at'),
+
+  // OPS marks "completed" first; the reporter then gives final sign-off with "solved".
+  solvedBy: text('solved_by').references(() => users.id),
+  solvedAt: timestamp('solved_at'),
 
   reviewedBy: text('reviewed_by').references(() => users.id),
   reviewedAt: timestamp('reviewed_at'),

@@ -4,15 +4,15 @@
 // Finance · Setoran Monitor
 //
 // Status / color logic:
-//   • 'not_submitted' (red)   — morning shift exists but task is still pending/in_progress
+//   • 'not_submitted' (red)   — morning shift exists but task is still not_started/in_progress
 //                               by end of the window. Staff haven't stored anything yet.
-//   • 'discrepancy'  (red)    — task.status === 'discrepancy'
+//   • 'pending'      (red)    — task.status === 'pending' (unresolved discrepancy)
 //   • 'short'        (amber)  — completed but storedAmount < requiredStoreAmount by more
 //                               than a configurable rounding threshold (default Rp 100.000).
 //                               This is a genuine gap beyond normal rounding.
 //   • 'completed'    (green)  — stored, and any remainder is within the rounding threshold.
 //   • 'in_progress'  (blue)   — draft in progress, not yet submitted.
-//   • 'pending'      (slate)  — task created but untouched.
+//   • 'not_started'  (slate)  — task created but untouched.
 //   • 'no_data'      (slate)  — no schedule / no task row at all.
 //
 // The unpaidAmount carry-forward (e.g. Rp 67.700 from Rp 4.567.700 → Rp 4.500.000)
@@ -102,12 +102,12 @@ function fmtTs(iso: string | null | undefined) {
 // ─── Status derivation ────────────────────────────────────────────────────────
 
 type UiStatus =
-  | 'not_submitted'   // red   — pending/in_progress (staff never stored)
-  | 'discrepancy'     // red   — task.status === discrepancy
+  | 'not_submitted'   // red   — not_started/in_progress (staff never stored)
+  | 'pending'         // red   — task.status === pending (unresolved discrepancy)
   | 'short'           // amber — stored but gap > ROUNDING_THRESHOLD
   | 'completed'       // green — stored, gap within normal rounding
   | 'in_progress'     // blue  — draft, not yet submitted
-  | 'pending'         // slate — task exists but untouched
+  | 'not_started'     // slate — task exists but untouched
   | 'no_data';        // slate — no schedule / no task
 
 interface StatusMeta {
@@ -119,8 +119,8 @@ interface StatusMeta {
 
 function deriveUiStatus(row: SetoranStoreRow): UiStatus {
   if (row.status === 'no_data')       return 'no_data';
-  if (row.status === 'discrepancy')   return 'discrepancy';
   if (row.status === 'pending')       return 'pending';
+  if (row.status === 'not_started')   return 'not_started';
   if (row.status === 'in_progress')   return 'in_progress';
 
   // completed — check whether the gap is just normal rounding or a real shortfall
@@ -136,10 +136,10 @@ function deriveUiStatus(row: SetoranStoreRow): UiStatus {
 
 const STATUS_META: Record<UiStatus, StatusMeta> = {
   not_submitted: { dot: 'bg-rose-500',    badge: 'bg-rose-50 text-rose-700 ring-rose-200',         label: 'Belum setor',     priority: 0 },
-  discrepancy:   { dot: 'bg-rose-500',    badge: 'bg-rose-50 text-rose-700 ring-rose-200',         label: 'Discrepancy',     priority: 1 },
+  pending:       { dot: 'bg-rose-500',    badge: 'bg-rose-50 text-rose-700 ring-rose-200',         label: 'Pending',         priority: 1 },
   short:         { dot: 'bg-amber-400',   badge: 'bg-amber-50 text-amber-700 ring-amber-200',       label: 'Kurang setor',    priority: 2 },
   in_progress:   { dot: 'bg-blue-400',    badge: 'bg-blue-50 text-blue-700 ring-blue-200',          label: 'In progress',     priority: 3 },
-  pending:       { dot: 'bg-slate-300',   badge: 'bg-slate-100 text-slate-500 ring-slate-200',      label: 'Pending',         priority: 4 },
+  not_started:   { dot: 'bg-slate-300',   badge: 'bg-slate-100 text-slate-500 ring-slate-200',      label: 'Not Started',     priority: 4 },
   completed:     { dot: 'bg-emerald-500', badge: 'bg-emerald-50 text-emerald-700 ring-emerald-200', label: 'Selesai',         priority: 5 },
   no_data:       { dot: 'bg-slate-200',   badge: 'bg-slate-50 text-slate-400 ring-slate-200',       label: 'Tidak ada data',  priority: 6 },
 };
@@ -620,7 +620,7 @@ function SummaryStrip({ rows }: { rows: SetoranStoreRow[] }) {
   const pills = [
     { label: 'Selesai',        value: countStatus('completed'),     dot: 'bg-emerald-500' },
     { label: 'In progress',    value: countStatus('in_progress'),   dot: 'bg-blue-400' },
-    { label: 'Pending',        value: countStatus('pending') + countStatus('no_data'), dot: 'bg-slate-300' },
+    { label: 'Pending',        value: countStatus('not_started') + countStatus('no_data'), dot: 'bg-slate-300' },
   ] as const;
 
   return (
@@ -668,7 +668,7 @@ export default function FinanceSetoranPage() {
           (r: SetoranStoreRow) =>
             deriveUiStatus(r) === 'not_submitted' ||
             deriveUiStatus(r) === 'short' ||
-            deriveUiStatus(r) === 'discrepancy',
+            deriveUiStatus(r) === 'pending',
         );
         setExpandedIds(firstProblem ? new Set([firstProblem.storeId]) : new Set());
       } else {
@@ -790,9 +790,9 @@ export default function FinanceSetoranPage() {
             <option value="">Semua status</option>
             <option value="not_submitted">Belum setor</option>
             <option value="short">Kurang setor</option>
-            <option value="discrepancy">Discrepancy</option>
-            <option value="in_progress">In progress</option>
             <option value="pending">Pending</option>
+            <option value="in_progress">In progress</option>
+            <option value="not_started">Not Started</option>
             <option value="completed">Selesai</option>
             <option value="no_data">Tidak ada data</option>
           </select>

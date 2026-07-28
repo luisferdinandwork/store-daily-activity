@@ -17,6 +17,7 @@ import {
   employeeCheckOut,
   startBreak,
   endBreak,
+  todayInStoreTimezone,
 } from '@/lib/schedule-utils';
 
 import type { Shift, BreakType } from '@/lib/schedule-utils';
@@ -160,9 +161,9 @@ async function getTodayScheduleForShift(params: {
   storeId: number;
   shiftCode: string;
 }) {
-  const now = new Date();
-  const dayStart = startOfDay(now);
-  const dayEnd = endOfDay(now);
+  const today = todayInStoreTimezone();
+  const dayStart = startOfDay(today);
+  const dayEnd = endOfDay(today);
 
   const [row] = await db
     .select({
@@ -209,9 +210,9 @@ export async function GET(_req: NextRequest) {
       return NextResponse.json({ success: true, shifts: [] });
     }
 
-    const now = new Date();
-    const dayStart = startOfDay(now);
-    const dayEnd = endOfDay(now);
+    const today = todayInStoreTimezone();
+    const dayStart = startOfDay(today);
+    const dayEnd = endOfDay(today);
 
     const rows = await db
       .select({
@@ -560,9 +561,9 @@ export async function POST(req: NextRequest) {
 
         const cashIn = Number(rawCashIn);
 
-        const now = new Date();
-        const dayStart = startOfDay(now);
-        const dayEnd = endOfDay(now);
+        const today = todayInStoreTimezone();
+        const dayStart = startOfDay(today);
+        const dayEnd = endOfDay(today);
 
         const [existing] = await db
           .select({

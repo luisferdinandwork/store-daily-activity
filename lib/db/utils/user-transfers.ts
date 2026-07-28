@@ -3,7 +3,7 @@
 // Employee transfer logic.
 //
 // Authorization model:
-//   • role = 'admin'                  → can transfer any employee anywhere
+//   • role = 'it'                     → can transfer any employee anywhere
 //   • role = 'ops', employeeType = 'ops_ho'   → can transfer any employee anywhere
 //   • role = 'ops', employeeType = 'ops_area' → can only transfer employees
 //     who are currently inside their area, and only to stores inside their area
@@ -127,7 +127,7 @@ export async function getActorAccess(actorId: string) {
   if (!actor) return { allowed: false as const, error: 'Actor not found.' };
   if (!actor.roleActive) return { allowed: false as const, error: 'Your role is inactive.' };
 
-  const isAdmin = actor.roleCode === 'admin';
+  const isAdmin = actor.roleCode === 'it';
   const isOps = actor.roleCode === 'ops';
   if (!isAdmin && !isOps) {
     return { allowed: false as const, error: 'Only OPS/Admin can use this.' };

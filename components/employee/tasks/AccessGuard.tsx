@@ -32,6 +32,7 @@ import {
 import { cn } from '@/lib/utils';
 import { useGeo, type GeoPoint } from '@/lib/hooks/useGeo';
 import { useAccessStatus, type AccessStatus } from '@/lib/hooks/useAccessStatus';
+import { useTaskLocationSetting } from '@/lib/hooks/useTaskLocationSetting';
 
 export interface AccessGuardSlots {
   geo:            GeoPoint | null;
@@ -54,8 +55,16 @@ interface AccessGuardProps {
   /** When set to completed/verified/rejected, all location checks are skipped. */
   taskStatus: string | undefined;
   /**
-   * When true (default), the page enforces geolocation + geofence.
-   * Set to false for tasks like Setoran where check-in alone is enough.
+   * OPS-managed task code (e.g. 'setoran', 'briefing') — when given, whether
+   * this task enforces geolocation + geofence is read live from OPS's Task
+   * Management settings (/api/employee/task-settings), defaulting to
+   * "required" until that setting loads. Takes priority over `requireGeo`.
+   */
+  taskType?: string;
+  /**
+   * Static fallback / override. When true (default), the page enforces
+   * geolocation + geofence. Set to false for tasks where check-in alone is
+   * enough. Ignored once `taskType`'s setting has loaded.
    */
   requireGeo?: boolean;
   children: (slots: AccessGuardSlots) => ReactNode;
@@ -63,12 +72,22 @@ interface AccessGuardProps {
 
 export default function AccessGuard({
   scheduleId, storeId, taskStatus,
+  taskType,
   requireGeo = true,
   children,
 }: AccessGuardProps) {
-  // Two internal variants so the rules of hooks stay happy if requireGeo
-  // flips, and so the geolocation prompt genuinely never fires in no-geo mode.
-  return requireGeo
+  // Always call the hook (rules of hooks) — it's a no-op fetch skip when
+  // taskType is omitted, since the cache/ready state is shared anyway.
+  // While the setting is still loading, fall back to the caller's static
+  // `requireGeo` (today's known-correct default) instead of a hardcoded
+  // guess, so there's no flash of the wrong behavior before it resolves.
+  const { requiresLocation, ready } = useTaskLocationSetting(taskType ?? '');
+  const effectiveRequireGeo = taskType ? (ready ? requiresLocation : requireGeo) : requireGeo;
+
+  // Two internal variants so the rules of hooks stay happy if the effective
+  // value flips, and so the geolocation prompt genuinely never fires in
+  // no-geo mode.
+  return effectiveRequireGeo
     ? <AccessGuardWithGeo scheduleId={scheduleId} storeId={storeId} taskStatus={taskStatus}>{children}</AccessGuardWithGeo>
     : <AccessGuardNoGeo   scheduleId={scheduleId} storeId={storeId} taskStatus={taskStatus}>{children}</AccessGuardNoGeo>;
 }

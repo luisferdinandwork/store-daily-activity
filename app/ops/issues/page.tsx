@@ -13,7 +13,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   AlertTriangle, Store as StoreIcon, MapPin, Clock, User, ChevronDown,
   CheckCircle2, Eye, Loader2, X, ArrowRight, Globe2,
-  AlertCircle, Shield,
+  AlertCircle, Shield, FileText,
 } from 'lucide-react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
@@ -22,7 +22,7 @@ import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type IssueStatus = 'reported' | 'in_review' | 'resolved';
+type IssueStatus = 'reported' | 'in_review' | 'completed' | 'solved';
 
 interface AssignedIssueRole {
   id: number;
@@ -36,6 +36,9 @@ interface OpsIssue {
   description: string;
   status: IssueStatus;
   attachmentUrls: string[];
+  baAttachmentUrls: string[];
+  baUploadedAt: string | null;
+  solvedAt: string | null;
   createdAt: string;
   updatedAt: string;
   reviewedAt: string | null;
@@ -51,12 +54,13 @@ const STATUS_CFG: Record<IssueStatus, {
   label: string; accent: string; Icon: typeof AlertCircle;
   next: IssueStatus | null; action: string;
 }> = {
-  reported:  { label: 'Reported',  accent: '#f59e0b', Icon: AlertCircle,  next: 'in_review', action: 'Start Review'  },
-  in_review: { label: 'In Review', accent: '#3b82f6', Icon: Eye,          next: 'resolved',  action: 'Mark Resolved' },
-  resolved:  { label: 'Resolved',  accent: '#10b981', Icon: CheckCircle2, next: null,        action: ''              },
+  reported:  { label: 'Reported',  accent: '#f59e0b', Icon: AlertCircle,  next: 'in_review', action: 'Start Review'   },
+  in_review: { label: 'In Review', accent: '#3b82f6', Icon: Eye,          next: null,        action: ''               },
+  solved:    { label: 'Solved',    accent: '#8b5cf6', Icon: CheckCircle2, next: 'completed', action: 'Mark Complete'  },
+  completed: { label: 'Completed', accent: '#10b981', Icon: CheckCircle2, next: null,        action: ''               },
 };
 
-const STEPS: IssueStatus[] = ['reported', 'in_review', 'resolved'];
+const STEPS: IssueStatus[] = ['reported', 'in_review', 'solved', 'completed'];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -198,6 +202,45 @@ function IssueDrawer({ issue, onClose, onAdvance, updating }: {
             </div>
           )}
 
+          {/* Berita Acara — read-only for Ops, uploaded by the reporter */}
+          {issue.baAttachmentUrls.length > 0 && (
+            <div>
+              <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                Berita Acara ({issue.baAttachmentUrls.length})
+              </p>
+              <div className="grid grid-cols-3 gap-2">
+                {issue.baAttachmentUrls.map((url, i) => {
+                  const isImage = /\.(jpe?g|png|gif|webp|heic|heif)$/i.test(url);
+                  const ext = url.split('.').pop()?.toUpperCase() ?? 'FILE';
+                  return (
+                    <a key={i} href={url} target="_blank" rel="noopener noreferrer"
+                      className="group relative block aspect-square overflow-hidden rounded-xl border border-violet-200 bg-slate-100 transition-all hover:border-violet-300 hover:shadow-sm">
+                      {isImage ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={url} alt={`Berita Acara ${i + 1}`} className="h-full w-full object-cover transition-transform group-hover:scale-105" />
+                      ) : (
+                        <div className="flex h-full w-full flex-col items-center justify-center gap-1 bg-violet-50 px-1 text-center">
+                          <FileText className="h-6 w-6 text-violet-500" />
+                          <span className="text-[10px] font-bold text-violet-600">{ext}</span>
+                        </div>
+                      )}
+                    </a>
+                  );
+                })}
+              </div>
+              {issue.baUploadedAt && (
+                <p className="mt-1.5 text-[11px] text-slate-400">Uploaded {relativeTime(issue.baUploadedAt)}</p>
+              )}
+            </div>
+          )}
+
+          {issue.solvedAt && (
+            <div className="flex items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-4 py-3">
+              <CheckCircle2 className="h-4 w-4 shrink-0 text-violet-500" />
+              <p className="text-xs text-violet-700">Marked solved {relativeTime(issue.solvedAt)}</p>
+            </div>
+          )}
+
           {issue.reviewedAt && (
             <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
               <Eye className="h-4 w-4 shrink-0 text-emerald-500" />
@@ -255,7 +298,7 @@ export default function OpsIssuesPage() {
   const { data: session, status: authStatus } = useSession();
   const router = useRouter();
   const role = (session?.user as any)?.role as string | undefined;
-  const isOps = role === 'ops' || role === 'admin';
+  const isOps = role === 'ops' || role === 'it';
 
   const [issuesList, setIssuesList] = useState<OpsIssue[]>([]);
   const [isHO,        setIsHO]       = useState(false);
@@ -311,7 +354,8 @@ export default function OpsIssuesPage() {
     all:       storeScoped.length,
     reported:  storeScoped.filter(i => i.status === 'reported').length,
     in_review: storeScoped.filter(i => i.status === 'in_review').length,
-    resolved:  storeScoped.filter(i => i.status === 'resolved').length,
+    completed: storeScoped.filter(i => i.status === 'completed').length,
+    solved:    storeScoped.filter(i => i.status === 'solved').length,
   }), [storeScoped]);
 
   const visible = useMemo(
@@ -348,7 +392,8 @@ export default function OpsIssuesPage() {
     { key: 'all'      as const, label: 'Total',     value: meta.all,       color: '#6366f1', Icon: AlertTriangle },
     { key: 'reported' as const, label: 'Reported',  value: meta.reported,  color: '#f59e0b', Icon: AlertCircle   },
     { key: 'in_review'as const, label: 'In Review', value: meta.in_review, color: '#3b82f6', Icon: Eye           },
-    { key: 'resolved' as const, label: 'Resolved',  value: meta.resolved,  color: '#10b981', Icon: CheckCircle2  },
+    { key: 'solved'   as const, label: 'Solved',    value: meta.solved,    color: '#8b5cf6', Icon: CheckCircle2  },
+    { key: 'completed'as const, label: 'Completed', value: meta.completed, color: '#10b981', Icon: CheckCircle2  },
   ];
 
   if (authStatus === 'loading' || !session) return (
@@ -424,7 +469,7 @@ export default function OpsIssuesPage() {
         </div>
 
         {/* Stat cards (clickable status filters) */}
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="grid grid-cols-3 gap-3 sm:grid-cols-5">
           {statCards.map(({ key, label, value, color, Icon }) => {
             const active = filter === key;
             return (

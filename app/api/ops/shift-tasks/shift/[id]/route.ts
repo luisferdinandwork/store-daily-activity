@@ -9,12 +9,9 @@ import { isPaletteKey, normalizeShiftBreaks } from '@/lib/shift-tasks';
 
 export const dynamic = 'force-dynamic';
 
-function isOps(session: Awaited<ReturnType<typeof auth>>): boolean {
-  const user = session?.user as any;
-  const role = user?.role as string | undefined;
-  const employeeType = (user?.employeeType ?? user?.employeeTypeCode) as string | undefined;
-
-  return role === 'ops' || role === 'admin' || employeeType === 'ops_area' || employeeType === 'ops_ho';
+function isIt(session: Awaited<ReturnType<typeof auth>>): boolean {
+  const role = (session?.user as any)?.role as string | undefined;
+  return role === 'it';
 }
 
 async function resolveId(ctx: { params: { id: string } | Promise<{ id: string }> }) {
@@ -37,7 +34,7 @@ interface PatchBody {
 export async function PATCH(req: Request, ctx: { params: { id: string } | Promise<{ id: string }> }) {
   const session = await auth();
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-  if (!isOps(session)) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
+  if (!isIt(session)) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
 
   const id = await resolveId(ctx);
   if (!Number.isInteger(id)) {
@@ -91,7 +88,7 @@ export async function PATCH(req: Request, ctx: { params: { id: string } | Promis
 export async function DELETE(_req: Request, ctx: { params: { id: string } | Promise<{ id: string }> }) {
   const session = await auth();
   if (!session) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-  if (!isOps(session)) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
+  if (!isIt(session)) return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
 
   const id = await resolveId(ctx);
   if (!Number.isInteger(id)) {

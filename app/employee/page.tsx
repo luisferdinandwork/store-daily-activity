@@ -19,14 +19,12 @@ import {
   XCircle,
   AlertCircle,
   Zap,
-  ShoppingBag,
-  Receipt,
-  Wallet,
   CalendarOff,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 import { StoreContributionChart } from "@/components/employee/StoreContributionChart";
+import EmployeeLogoMark from "@/components/employee/EmployeeLogoMark";
 
 interface AttSlot {
   schedule: { shift: "morning" | "evening" | "full_day" };
@@ -120,7 +118,20 @@ interface PerformanceData {
   /** Employee's % of the store's ACTUAL sales this month. */
   employeeStoreContributionPct: number;
 
+  /** Whole-roster contribution-to-target breakdown, each employee capped at
+   *  their own target-allocation share. Powers the multi-employee ring. */
+  dailyEmployeeContributions?: EmployeeContribution[];
+  monthlyEmployeeContributions?: EmployeeContribution[];
+
   warning?: string;
+}
+
+interface EmployeeContribution {
+  userId: string;
+  nik: string;
+  name: string;
+  isCurrentUser: boolean;
+  contributionPct: number;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -162,13 +173,6 @@ function fmtTime(iso: string | null) {
   });
 }
 
-function fmtCompact(n: number): string {
-  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}M`;
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}jt`;
-  if (n >= 1_000) return `${Math.round(n / 1_000)}rb`;
-  return String(n);
-}
-
 function calculatePct(
   actual: number | null | undefined,
   target: number | null | undefined,
@@ -185,17 +189,6 @@ function calculatePct(
   }
 
   return Math.round((safeActual / safeTarget) * 1000) / 10;
-}
-
-function getMonthlyTargetSharePct(perf: PerformanceData | null): number | null {
-  if (!perf) return null;
-  if (typeof perf.monthlyTargetSharePct === "number")
-    return perf.monthlyTargetSharePct;
-  if (!perf.storeMonthlySalesTarget || perf.storeMonthlySalesTarget <= 0)
-    return null;
-  if (!perf.monthlySalesTarget || perf.monthlySalesTarget <= 0) return null;
-
-  return (perf.monthlySalesTarget / perf.storeMonthlySalesTarget) * 100;
 }
 
 const ATT_CFG = {
@@ -311,28 +304,23 @@ export default function EmployeeDashboard() {
   // totals are unaffected by whether this employee has a shift today.
   const notScheduledToday = isDaily && perf?.isScheduledToday === false;
 
-  // Keep three concepts separate:
-  // 1) contribution = employee actual / store actual
-  // 2) target share = employee target / store target
-  // 3) target achievement = employee actual / employee target
+  // Keep concepts separate:
+  // 1) ring contribution = whole roster's actual-vs-store-target breakdown,
+  //    each employee capped at their own target-allocation share (computed
+  //    server-side — see dailyEmployeeContributions/monthlyEmployeeContributions)
+  // 2) target achievement = employee actual / employee target (personal card)
   const chartEmployeeSales = isDaily
     ? perf?.salesAmount
     : perf?.monthlySalesAmount;
   const chartEmployeeTargetSales = isDaily
     ? (perf?.employeeDailySalesTarget ?? perf?.salesTarget)
     : (perf?.employeeMonthlySalesTarget ?? perf?.monthlySalesTarget);
-  const chartStoreSales = isDaily
-    ? perf?.storeDailySalesAmount
-    : perf?.storeMonthlySalesAmount;
   const chartStoreTargetSales = isDaily
     ? perf?.storeDailySalesTarget
     : perf?.storeMonthlySalesTarget;
-  const chartContributionPct = isDaily
-    ? perf?.employeeDailyContributionPct
-    : perf?.employeeStoreContributionPct;
-  const chartTargetPct = isDaily
-    ? (perf?.dailyTargetSharePct ?? perf?.dailyAllocationPct)
-    : getMonthlyTargetSharePct(perf);
+  const chartEmployeeContributions = isDaily
+    ? perf?.dailyEmployeeContributions
+    : perf?.monthlyEmployeeContributions;
   const chartAchievementPct = isDaily
     ? (perf?.dailySalesAchievementPct ??
       calculatePct(perf?.salesAmount, chartEmployeeTargetSales))
@@ -349,60 +337,69 @@ export default function EmployeeDashboard() {
         <div className="pointer-events-none absolute -left-10 top-32 h-40 w-40 rounded-full bg-amber-300/5 blur-3xl" />
 
         <div className="relative space-y-4">
-          {/* Greeting */}
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-widest text-primary-foreground/60">
-              {greeting()}
-            </p>
-            <h1 className="mt-0.5 text-2xl font-bold text-primary-foreground">
-              {firstName} 👋
-            </h1>
-            <p className="mt-1 text-xs text-primary-foreground/50">
-              {todayLabel()}
-            </p>
-
-            <div className="mt-3 flex flex-wrap gap-2">
-              {/* Shift pill */}
-              <div className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-xs font-medium text-primary-foreground/80">
-                {primaryShift === "morning" && <Sun className="h-3 w-3" />}
-                {primaryShift === "evening" && <Moon className="h-3 w-3" />}
-                {primaryShift === "full_day" && <Zap className="h-3 w-3" />}
-                {primaryShift === "morning"
-                  ? "Morning shift"
-                  : primaryShift === "evening"
-                    ? "Evening shift"
-                    : "Full Day shift"}
-              </div>
-
-              {/* Attendance pill */}
-              {primaryAtt && attCfg ? (
-                <div
-                  className={cn(
-                    "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium",
-                    isOnBreak
-                      ? "bg-amber-500/20 text-amber-200"
-                      : `${attCfg.bg} ${attCfg.textClass}`,
-                  )}
-                >
-                  {isOnBreak ? (
-                    <Clock className="h-3 w-3" />
-                  ) : (
-                    <attCfg.Icon className="h-3 w-3" />
-                  )}
-                  {isOnBreak ? "On Break" : attCfg.label}
-                  {primaryAtt.checkInTime && !isOnBreak && (
-                    <span className="opacity-70">
-                      · In {fmtTime(primaryAtt.checkInTime)}
-                    </span>
-                  )}
-                </div>
-              ) : !loading && attSlots.length > 0 ? (
-                <div className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-xs font-medium text-primary-foreground/60">
-                  <LogIn className="h-3 w-3" />
-                  Not checked in
-                </div>
-              ) : null}
+          {/* Greeting + period toggle */}
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <EmployeeLogoMark variant="white" className="mb-4 w-28" />
+              <p className="text-xs font-semibold uppercase tracking-widest text-primary-foreground/60">
+                {greeting()}
+              </p>
+              <h1 className="mt-0.5 text-2xl font-bold text-primary-foreground">
+                {firstName} 👋
+              </h1>
+              <p className="mt-1 text-xs text-primary-foreground/50">
+                {todayLabel()}
+              </p>
             </div>
+
+            {hasPerf && (
+              <div className="w-[200px] shrink-0">
+                <PeriodToggle value={period} onChange={setPeriod} />
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {/* Shift pill */}
+            <div className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-xs font-medium text-primary-foreground/80">
+              {primaryShift === "morning" && <Sun className="h-3 w-3" />}
+              {primaryShift === "evening" && <Moon className="h-3 w-3" />}
+              {primaryShift === "full_day" && <Zap className="h-3 w-3" />}
+              {primaryShift === "morning"
+                ? "Morning shift"
+                : primaryShift === "evening"
+                  ? "Evening shift"
+                  : "Full Day shift"}
+            </div>
+
+            {/* Attendance pill */}
+            {primaryAtt && attCfg ? (
+              <div
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium",
+                  isOnBreak
+                    ? "bg-amber-500/20 text-amber-200"
+                    : `${attCfg.bg} ${attCfg.textClass}`,
+                )}
+              >
+                {isOnBreak ? (
+                  <Clock className="h-3 w-3" />
+                ) : (
+                  <attCfg.Icon className="h-3 w-3" />
+                )}
+                {isOnBreak ? "On Break" : attCfg.label}
+                {primaryAtt.checkInTime && !isOnBreak && (
+                  <span className="opacity-70">
+                    · In {fmtTime(primaryAtt.checkInTime)}
+                  </span>
+                )}
+              </div>
+            ) : !loading && attSlots.length > 0 ? (
+              <div className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-xs font-medium text-primary-foreground/60">
+                <LogIn className="h-3 w-3" />
+                Not checked in
+              </div>
+            ) : null}
           </div>
 
           {/* Warning banner — always shown when the API sends one (roster/
@@ -418,7 +415,7 @@ export default function EmployeeDashboard() {
             </div>
           )}
 
-          {/* Store contribution chart — daily/monthly, matching the toggle below */}
+          {/* Store contribution chart — daily/monthly, matching the toggle above */}
           {loading ? (
             <div className="h-56 animate-pulse rounded-2xl border " />
           ) : notScheduledToday ? (
@@ -439,14 +436,11 @@ export default function EmployeeDashboard() {
           ) : hasPerf ? (
             <div className="rounded-2xl">
               <StoreContributionChart
-                employeeName={perf!.employeeName}
                 employeeMonthlySales={chartEmployeeSales}
-                storeMonthlySales={chartStoreSales}
                 storeTargetSales={chartStoreTargetSales}
                 employeeTargetSales={chartEmployeeTargetSales}
-                contributionPct={chartContributionPct}
                 targetAchievementPct={chartAchievementPct}
-                targetContributionPct={chartTargetPct}
+                employeeContributions={chartEmployeeContributions}
                 periodLabel={chartPeriodLabel}
               />
             </div>
@@ -458,147 +452,6 @@ export default function EmployeeDashboard() {
             </div>
           )}
         </div>
-      </div>
-
-      {/* ── Performance section — white background ──────────────────────── */}
-      <div className="bg-white px-4 pt-5 pb-4">
-        {/* Section header */}
-        <div className="mb-3 flex items-center justify-between">
-          <p className="text-[11px] font-bold uppercase tracking-widest text-slate-400">
-            Performa
-          </p>
-          {hasPerf && (
-            <p className="text-[10px] font-medium text-slate-400 truncate max-w-[55%] text-right">
-              {perf!.storeName}
-            </p>
-          )}
-        </div>
-
-        {/* Period toggle + metric cards */}
-        {hasPerf && (
-          <div className="mt-4 space-y-3">
-            {/* Period label + toggle */}
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
-                {period === "daily" ? "Hari ini" : monthLabel}
-              </p>
-            </div>
-
-            <PeriodToggle value={period} onChange={setPeriod} />
-
-            {/* Metric cards */}
-            <div
-              key={period}
-              className="space-y-3 animate-in fade-in duration-300"
-            >
-              {notScheduledToday ? (
-                // No shift today → target is Rp 0 by design, not a bug.
-                // Say so plainly instead of showing confusing 0/0 cards.
-                <div className="flex items-center gap-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-5">
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-100">
-                    <CalendarOff className="h-4 w-4 text-slate-400" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs font-bold text-slate-600">
-                      Tidak ada jadwal hari ini
-                    </p>
-                    <p className="mt-0.5 text-[11px] text-slate-400">
-                      Target harian dibagi ke karyawan yang jadwal kerja — cek
-                      performa bulanan di tab sebelah.
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <div className="flex gap-3">
-                    {period === "daily" ? (
-                      <>
-                        <MetricCardLight
-                          icon={ShoppingBag}
-                          iconBg="bg-violet-100"
-                          iconColor="text-violet-600"
-                          label="Sales"
-                          value={`Rp ${fmtCompact(perf!.salesAmount)}`}
-                          sub={`target Rp ${fmtCompact(perf!.salesTarget)}`}
-                          pct={perf!.salesPct}
-                          pctColor="bg-violet-500"
-                        />
-                        <MetricCardLight
-                          icon={Receipt}
-                          iconBg="bg-blue-100"
-                          iconColor="text-blue-600"
-                          label="Transaksi"
-                          value={String(perf!.transactionCount)}
-                          sub={`target ${perf!.transactionTarget}`}
-                          pct={perf!.transactionPct}
-                          pctColor="bg-blue-500"
-                        />
-                      </>
-                    ) : (
-                      <>
-                        <MetricCardLight
-                          icon={ShoppingBag}
-                          iconBg="bg-violet-100"
-                          iconColor="text-violet-600"
-                          label="Sales"
-                          value={`Rp ${fmtCompact(perf!.monthlySalesAmount)}`}
-                          sub={
-                            perf!.monthlySalesTarget
-                              ? `target Rp ${fmtCompact(perf!.monthlySalesTarget)}`
-                              : undefined
-                          }
-                          pct={perf!.monthlySalesPct ?? 0}
-                          pctColor="bg-violet-500"
-                        />
-                        <MetricCardLight
-                          icon={Receipt}
-                          iconBg="bg-blue-100"
-                          iconColor="text-blue-600"
-                          label="Transaksi"
-                          value={String(perf!.monthlyTransactionCount)}
-                          sub={
-                            perf!.monthlyTransactionTarget
-                              ? `target ${perf!.monthlyTransactionTarget}`
-                              : undefined
-                          }
-                          pct={perf!.monthlyTransactionPct ?? 0}
-                          pctColor="bg-blue-500"
-                        />
-                      </>
-                    )}
-                  </div>
-
-                  {/* Slot + allocation % — explains WHERE today's target
-                      number comes from, since it now depends on daily
-                      headcount instead of a fixed monthly figure. */}
-                  {period === "daily" && perf!.employeeSlotCode && (
-                    <p className="text-[10px] font-medium text-slate-400">
-                      Slot hari ini{" "}
-                      <span className="font-bold text-slate-600">
-                        {perf!.employeeSlotCode}
-                      </span>
-                      {typeof perf!.dailyAllocationPct === "number" &&
-                        Number.isFinite(perf!.dailyAllocationPct) && (
-                          <>
-                            {" "}
-                            · {perf!.dailyAllocationPct.toFixed(1)}% dari target
-                            toko hari ini
-                          </>
-                        )}
-                    </p>
-                  )}
-                </>
-              )}
-
-              {period === "monthly" && (
-                <AtvCard
-                  atv={perf!.monthlyAtv}
-                  atvTarget={perf!.monthlyAtvTarget}
-                />
-              )}
-            </div>
-          </div>
-        )}
       </div>
 
       {/* ── Quick actions ─────────────────────────────────────────────────── */}
@@ -695,84 +548,3 @@ export default function EmployeeDashboard() {
   );
 }
 
-// ─── Light MetricCard (for white bg section) ──────────────────────────────────
-
-function MetricCardLight({
-  icon: Icon,
-  iconBg,
-  iconColor,
-  label,
-  value,
-  sub,
-  pct,
-  pctColor,
-}: {
-  icon: React.ElementType;
-  iconBg: string;
-  iconColor: string;
-  label: string;
-  value: string;
-  sub?: string;
-  pct: number;
-  pctColor: string;
-}) {
-  const clamped = Math.min(100, Math.max(0, pct));
-  return (
-    <div className="flex-1 rounded-2xl border border-slate-100 bg-white p-3.5 shadow-sm">
-      <div className="flex items-start justify-between gap-2">
-        <div
-          className={cn(
-            "flex h-8 w-8 shrink-0 items-center justify-center rounded-xl",
-            iconBg,
-          )}
-        >
-          <Icon className={cn("h-4 w-4", iconColor)} strokeWidth={2.2} />
-        </div>
-        <span className="text-[10px] font-bold tabular-nums text-slate-500">
-          {Math.round(clamped)}%
-        </span>
-      </div>
-      <p className="mt-2.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-        {label}
-      </p>
-      <p className="mt-0.5 text-lg font-bold tabular-nums text-slate-900">
-        {value}
-      </p>
-      {sub && <p className="mt-0.5 text-[10px] text-slate-400">{sub}</p>}
-      {/* Progress bar */}
-      <div className="mt-2.5 h-1 w-full overflow-hidden rounded-full bg-slate-100">
-        <div
-          className={cn("h-full rounded-full transition-all", pctColor)}
-          style={{ width: `${clamped}%` }}
-        />
-      </div>
-    </div>
-  );
-}
-
-// ─── ATV card (monthly only) ──────────────────────────────────────────────────
-
-function AtvCard({ atv, atvTarget }: { atv: number; atvTarget?: number }) {
-  return (
-    <div className="flex items-center gap-3 rounded-2xl border border-slate-100 bg-white p-3.5 shadow-sm">
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-100">
-        <Wallet className="h-4 w-4 text-emerald-600" strokeWidth={2.2} />
-      </div>
-      <div className="min-w-0 flex-1">
-        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-          ATV · Rata-rata transaksi
-        </p>
-        <p className="mt-0.5 text-lg font-bold text-slate-900 tabular-nums">
-          Rp {fmtCompact(atv)}
-        </p>
-      </div>
-      <p className="text-[10px] text-slate-400 max-w-[35%] text-right leading-tight">
-        {atvTarget ? (
-          <>target Rp {fmtCompact(atvTarget)}</>
-        ) : (
-          <>Sales ÷ transaksi</>
-        )}
-      </p>
-    </div>
-  );
-}

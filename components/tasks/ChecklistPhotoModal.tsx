@@ -21,6 +21,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Camera, X, Loader2, Check, Trash2 } from 'lucide-react';
 import { cn }    from '@/lib/utils';
 import { toast } from 'sonner';
+import CameraCapture from '@/components/shared/CameraCapture';
+import { uploadTaskPhoto } from '@/lib/tasks-upload';
 
 // ─── Bucket type (multi-mode) ────────────────────────────────────────────────
 
@@ -131,8 +133,8 @@ export default function ChecklistPhotoModal(props: ChecklistPhotoModalProps) {
 
   if (!open) return null;
 
-  async function handleFiles(bucket: PhotoBucket, files: FileList | null) {
-    if (!files?.length || disabled) return;
+  async function handleCapture(bucket: PhotoBucket, file: File) {
+    if (disabled) return;
     const current = drafts[bucket.key] ?? [];
     if (current.length >= bucket.max) {
       toast.error(`Maksimal ${bucket.max} foto`);
@@ -140,19 +142,9 @@ export default function ChecklistPhotoModal(props: ChecklistPhotoModalProps) {
     }
     setUploadingKey(bucket.key);
     try {
-      const toUpload = Array.from(files).slice(0, bucket.max - current.length);
-      const urls: string[] = [];
-      for (const file of toUpload) {
-        const form = new FormData();
-        form.append('file', file);
-        form.append('photoType', bucket.photoType);
-        const res  = await fetch('/api/employee/tasks/upload', { method: 'POST', body: form });
-        const data = await res.json();
-        if (!res.ok || !data.url) throw new Error(data.error ?? 'Upload gagal');
-        urls.push(data.url);
-      }
+      const url = await uploadTaskPhoto(file, bucket.photoType);
       userMutatedRef.current = true;
-      setDrafts(d => ({ ...d, [bucket.key]: [...(d[bucket.key] ?? []), ...urls] }));
+      setDrafts(d => ({ ...d, [bucket.key]: [...(d[bucket.key] ?? []), url] }));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Upload gagal');
     } finally {
@@ -278,7 +270,7 @@ export default function ChecklistPhotoModal(props: ChecklistPhotoModalProps) {
                 uploading={uploading}
                 disabled={disabled}
                 showLabel={!isSingle}
-                onFiles={files => handleFiles(bucket, files)}
+                onCapture={file => handleCapture(bucket, file)}
                 onRemove={i => removeAt(bucket.key, i)}
               />
             );
@@ -332,7 +324,7 @@ export default function ChecklistPhotoModal(props: ChecklistPhotoModalProps) {
 
 function BucketSection({
   bucket, current, needed, satisfied, uploading, disabled, showLabel,
-  onFiles, onRemove,
+  onCapture, onRemove,
 }: {
   bucket:    PhotoBucket;
   current:   string[];
@@ -341,10 +333,10 @@ function BucketSection({
   uploading: boolean;
   disabled?: boolean;
   showLabel: boolean;
-  onFiles:   (files: FileList | null) => void;
+  onCapture: (file: File) => void;
   onRemove:  (idx: number) => void;
 }) {
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
 
   const countBadge = needed > 0 ? (
     <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700 flex-shrink-0">
@@ -410,7 +402,7 @@ function BucketSection({
         {!disabled && current.length < bucket.max && (
           <button
             type="button"
-            onClick={() => inputRef.current?.click()}
+            onClick={() => setCameraOpen(true)}
             disabled={uploading}
             className={cn(
               'flex aspect-square flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed transition-colors',
@@ -439,18 +431,11 @@ function BucketSection({
         </p>
       )}
 
-      <input
-        ref={inputRef}
-        type="file"
-        accept="image/*"
-        capture="environment"
-        multiple={bucket.max > 1}
-        className="hidden"
-        onChange={e => {
-          onFiles(e.target.files);
-          // Reset input so the same file can be re-selected after removal
-          e.target.value = '';
-        }}
+      <CameraCapture
+        open={cameraOpen}
+        onClose={() => setCameraOpen(false)}
+        onCapture={file => { setCameraOpen(false); onCapture(file); }}
+        title={bucket.label || undefined}
       />
     </div>
   );

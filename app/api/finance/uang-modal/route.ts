@@ -2,7 +2,7 @@
 //
 // GET /api/finance/uang-modal?month=YYYY-MM&storeId=optional
 //
-// Returns a calendar-month summary of Cek Uang Muka (cashier opening float)
+// Returns a calendar-month summary of Cek Uang Modal (cashier opening float)
 // submissions across all stores, for the "Daily Uang Modal" finance page.
 //
 //   • One row per calendar day in the requested month
@@ -15,14 +15,14 @@ import { and, eq, gte, lt, inArray } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import {
-  cekUangMukaTasks,
-  cekUangMukaDenominations,
+  cekUangModalTasks,
+  cekUangModalDenominations,
   stores,
   areas,
   users,
-  type CekUangMukaTask,
+  type CekUangModalTask,
 } from '@/lib/db/schema';
-import { CEK_UANG_MUKA_MAX_TOTAL } from '@/lib/db/utils/cek-uang-muka';
+import { CEK_UANG_MODAL_MAX_TOTAL } from '@/lib/db/utils/cek-uang-modal';
 import { resolveFinanceScope } from '@/lib/finance/scope';
 
 // ─── Response types ───────────────────────────────────────────────────────────
@@ -40,7 +40,7 @@ export interface UangModalStoreEntry {
   storeNo: string;
   areaName: string;
 
-  status: 'pending' | 'in_progress' | 'completed' | 'discrepancy';
+  status: 'not_started' | 'in_progress' | 'completed' | 'pending';
 
   totalAmount: number;
   maxAmount: number;
@@ -62,7 +62,7 @@ export interface UangModalDayCell {
   totalAmount: number;
   /** Stores that submitted (status completed) */
   submittedCount: number;
-  /** Stores with a task created but not completed (pending/in_progress) */
+  /** Stores with a task created but not completed (not_started/in_progress) */
   pendingCount: number;
   /** Total stores expected to report (all stores with a task row that day) */
   totalStoreCount: number;
@@ -136,15 +136,15 @@ export async function GET(
     const { start, end } = getMonthRange(month);
     const daysInMonth = getDaysInMonth(month);
 
-    // ── 1. Fetch all cek_uang_muka tasks in this month ────────────────────────
+    // ── 1. Fetch all cek_uang_modal tasks in this month ────────────────────────
     const taskRows = await db
       .select()
-      .from(cekUangMukaTasks)
+      .from(cekUangModalTasks)
       .where(
         and(
-          gte(cekUangMukaTasks.date, start),
-          lt(cekUangMukaTasks.date, end),
-          storeIdParam ? eq(cekUangMukaTasks.storeId, Number(storeIdParam)) : undefined,
+          gte(cekUangModalTasks.date, start),
+          lt(cekUangModalTasks.date, end),
+          storeIdParam ? eq(cekUangModalTasks.storeId, Number(storeIdParam)) : undefined,
         ),
       );
 
@@ -188,8 +188,8 @@ export async function GET(
     const denomRows = taskIds.length > 0
       ? await db
           .select()
-          .from(cekUangMukaDenominations)
-          .where(inArray(cekUangMukaDenominations.taskId, taskIds))
+          .from(cekUangModalDenominations)
+          .where(inArray(cekUangModalDenominations.taskId, taskIds))
       : [];
 
     const denomByTask = new Map<number, UangModalDenominationRow[]>();
@@ -207,7 +207,7 @@ export async function GET(
     }
 
     // ── 5. Group tasks by date string ──────────────────────────────────────────
-    const tasksByDate = new Map<string, CekUangMukaTask[]>();
+    const tasksByDate = new Map<string, CekUangModalTask[]>();
     for (const t of taskRows) {
       const dateStr = toDateStr(t.date);
       if (!tasksByDate.has(dateStr)) tasksByDate.set(dateStr, []);
@@ -224,7 +224,7 @@ export async function GET(
       const dayTasks = tasksByDate.get(dateStr) ?? [];
 
       const completedTasks = dayTasks.filter((t) => t.status === 'completed');
-      const pendingTasks   = dayTasks.filter((t) => t.status === 'pending' || t.status === 'in_progress');
+      const pendingTasks   = dayTasks.filter((t) => t.status === 'not_started' || t.status === 'in_progress');
 
       const totalAmount = completedTasks.reduce((sum, t) => sum + Number(t.totalAmount), 0);
 
@@ -271,7 +271,7 @@ export async function GET(
     return NextResponse.json({
       success:           true,
       month,
-      maxAmountPerStore: CEK_UANG_MUKA_MAX_TOTAL,
+      maxAmountPerStore: CEK_UANG_MODAL_MAX_TOTAL,
       days,
       detail,
     });

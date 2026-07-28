@@ -507,7 +507,7 @@ export async function autoSaveItemDroppingById(
       update.notes = patch.notes;
     }
 
-    if (existing.status === 'pending') {
+    if (existing.status === 'not_started') {
       update.status = 'in_progress';
     }
 
@@ -582,7 +582,7 @@ export async function materialiseItemDroppingTask(
     shiftId: morningShiftId,
     date: dayStart,
     hasDropping: false,
-    status: 'pending',
+    status: 'not_started',
   });
 
   return 'created';
@@ -611,7 +611,7 @@ export async function getOrCreateItemDroppingForSchedule(
       shiftId: morningShiftId,
       date: dayStart,
       hasDropping: false,
-      status: 'pending',
+      status: 'not_started',
     })
     .onConflictDoNothing()
     .returning();

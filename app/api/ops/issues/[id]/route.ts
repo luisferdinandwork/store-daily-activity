@@ -1,7 +1,11 @@
 // app/api/ops/issues/[id]/route.ts
 //
 // PATCH — advance an Ops-assigned issue's status:
-// reported → in_review → resolved.
+//   in_review — Ops starts working it (optional; can be set any time from
+//               "reported").
+//   completed — Ops gives final closure, but ONLY once the reporter has
+//               already marked the issue "solved" (employee-only, see
+//               /api/employee/issues/[id]) — never the other way around.
 //
 // Important:
 // - Next.js 15/16 dynamic params are Promise-based.
@@ -25,12 +29,13 @@ import {
 } from '@/lib/db/schema';
 import {
   loadIssueAssignedRoles,
+  notifyIssueEvent,
   serializeIssue,
   type IssueStatus,
 } from '@/lib/db/utils/issues';
 import { reopenStoreClosingHoldForIssue } from '@/lib/db/utils/store-closing';
 
-const VALID_STATUSES: IssueStatus[] = ['reported', 'in_review', 'resolved'];
+const VALID_STATUSES: IssueStatus[] = ['in_review', 'completed'];
 
 function isValidOpsStatus(value: string): value is IssueStatus {
   return VALID_STATUSES.includes(value as IssueStatus);
@@ -58,7 +63,7 @@ export async function PATCH(
 
     if (!isValidOpsStatus(requestedStatus)) {
       return NextResponse.json(
-        { error: 'Invalid status. OPS can only use reported, in_review, or resolved.' },
+        { error: 'Invalid status. OPS can only use in_review or completed.' },
         { status: 400 },
       );
     }
@@ -78,11 +83,11 @@ export async function PATCH(
       .where(eq(users.id, userId))
       .limit(1);
 
-    if (!actor || (actor.roleCode !== 'ops' && actor.roleCode !== 'admin')) {
+    if (!actor || (actor.roleCode !== 'ops' && actor.roleCode !== 'it')) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
-    const isHO = actor.empType === 'ops_ho' || actor.roleCode === 'admin';
+    const isHO = actor.empType === 'ops_ho' || actor.roleCode === 'it';
 
     const [opsRole] = await db
       .select({ id: userRoles.id })
@@ -97,6 +102,7 @@ export async function PATCH(
     const [target] = await db
       .select({
         id: issues.id,
+        storeId: issues.storeId,
         status: issues.status,
         assignedToRoleId: issues.assignedToRoleId,
         reviewedAt: issues.reviewedAt,
@@ -115,6 +121,13 @@ export async function PATCH(
       return NextResponse.json(
         { error: 'This issue is still a draft and has not been sent to OPS yet.' },
         { status: 403 },
+      );
+    }
+
+    if (requestedStatus === 'completed' && target.status !== 'solved') {
+      return NextResponse.json(
+        { error: 'This issue must be resolved by the reporter before it can be marked complete.' },
+        { status: 409 },
       );
     }
 
@@ -145,12 +158,9 @@ export async function PATCH(
     const patch: Record<string, unknown> = {
       status: requestedStatus,
       updatedAt: new Date(),
+      reviewedBy: actor.id,
+      reviewedAt: target.reviewedAt ?? new Date(),
     };
-
-    if (requestedStatus !== 'reported') {
-      patch.reviewedBy = actor.id;
-      patch.reviewedAt = target.reviewedAt ?? new Date();
-    }
 
     const [updated] = await db
       .update(issues)
@@ -158,11 +168,21 @@ export async function PATCH(
       .where(eq(issues.id, issueId))
       .returning();
 
-    if (requestedStatus === 'resolved') {
-      await reopenStoreClosingHoldForIssue(issueId);
-    }
-
     const assignedRoles = (await loadIssueAssignedRoles([issueId])).get(issueId) ?? [];
+
+    if (requestedStatus === 'completed') {
+      await reopenStoreClosingHoldForIssue(issueId);
+
+      await notifyIssueEvent({
+        issueId,
+        storeId: target.storeId,
+        assignedRoles,
+        type: 'issue_completed',
+        title: `Issue completed: ${updated.title}`,
+        body: 'Ops confirmed the resolution. Issue closed.',
+        excludeUserId: actor.id,
+      });
+    }
 
     return NextResponse.json({
       success: true,

@@ -4,10 +4,10 @@
 // each with its current state for that task:
 //   pendingState:
 //     'no_row'       → schedule exists but the task row hasn't been created yet
-//     'pending'      → row exists with status='pending'
+//     'not_started'  → row exists with status='not_started'
 //     'in_progress'  → row exists with status='in_progress'
 //     'rejected'     → row exists with status='rejected'
-//     'discrepancy'  → row exists with status='discrepancy'
+//     'pending'      → row exists with status='pending' (unresolved discrepancy)
 
 import { NextRequest, NextResponse } from 'next/server';
 import { sql } from 'drizzle-orm';
@@ -141,7 +141,7 @@ export async function GET(req: NextRequest) {
       const pendingState =
         row.task_id == null
           ? ('no_row' as const)
-          : (row.task_status as 'pending' | 'in_progress' | 'rejected' | 'discrepancy');
+          : (row.task_status as 'not_started' | 'in_progress' | 'rejected' | 'pending');
 
       return {
         storeId:      row.store_id,

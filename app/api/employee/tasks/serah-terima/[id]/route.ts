@@ -12,6 +12,7 @@ import {
   submitSerahTerima,
   type GeoPoint,
 } from '@/lib/db/utils/serah-terima';
+import { resolveActorScheduleId } from '@/lib/db/utils/shift-lookup';
 
 function parseId(raw: string): number | null {
   const n = Number(raw);
@@ -46,11 +47,18 @@ function serializeItem(item: {
   };
 }
 
-function serializePayload(payload: NonNullable<Awaited<ReturnType<typeof getSerahTerimaById>>>) {
+function serializePayload(
+  payload: NonNullable<Awaited<ReturnType<typeof getSerahTerimaById>>>,
+  actorScheduleId: number,
+) {
   return {
     task: {
       id: String(payload.task.id),
-      scheduleId: String(payload.task.scheduleId),
+      // Serah Terima is shared per store/shift/day — send the logged-in
+      // employee's OWN schedule so AccessGuard checks their own attendance,
+      // not whoever happened to create this row first.
+      scheduleId: String(actorScheduleId),
+      originalScheduleId: String(payload.task.scheduleId),
       userId: payload.task.userId,
       storeId: String(payload.task.storeId),
       shiftId: String(payload.task.shiftId),
@@ -90,7 +98,11 @@ export async function GET(
     return NextResponse.json({ success: false, error: 'Serah terima task not found.' }, { status: 404 });
   }
 
-  return NextResponse.json({ success: true, ...serializePayload(payload) });
+  const actorScheduleId =
+    (await resolveActorScheduleId(session.user.id, payload.task.storeId, payload.task.shiftId, payload.task.date))
+    ?? payload.task.scheduleId;
+
+  return NextResponse.json({ success: true, ...serializePayload(payload, actorScheduleId) });
 }
 
 export async function POST(
@@ -134,9 +146,12 @@ export async function POST(
     );
   }
 
+  const actorScheduleId =
+    (await resolveActorScheduleId(session.user.id, task.storeId, task.shiftId, task.date)) ?? task.scheduleId;
+
   const result = await submitSerahTerima({
     taskId: id,
-    scheduleId: task.scheduleId,
+    scheduleId: actorScheduleId,
     userId: session.user.id,
     storeId: task.storeId,
     shiftId: task.shiftId,
@@ -156,7 +171,7 @@ export async function POST(
     return NextResponse.json({ success: false, error: 'Serah terima task not found.' }, { status: 404 });
   }
 
-  return NextResponse.json({ success: true, ...serializePayload(payload) });
+  return NextResponse.json({ success: true, ...serializePayload(payload, actorScheduleId) });
 }
 
 export async function PATCH(
@@ -204,5 +219,9 @@ export async function PATCH(
     return NextResponse.json({ success: false, error: 'Serah terima task not found.' }, { status: 404 });
   }
 
-  return NextResponse.json({ success: true, ...serializePayload(payload) });
+  const actorScheduleId =
+    (await resolveActorScheduleId(session.user.id, payload.task.storeId, payload.task.shiftId, payload.task.date))
+    ?? payload.task.scheduleId;
+
+  return NextResponse.json({ success: true, ...serializePayload(payload, actorScheduleId) });
 }

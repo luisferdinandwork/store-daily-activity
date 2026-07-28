@@ -169,7 +169,7 @@ function makeBase(sched: any, shiftId: number, date: Date) {
     storeId: sched.storeId,
     shiftId,
     date,
-    status: "pending" as const,
+    status: "not_started" as const,
   };
 }
 
@@ -521,7 +521,7 @@ async function seedTasks() {
         storeId: sched.storeId,
         shiftId: sched.shiftId,
         date,
-        status: "pending" as const,
+        status: "not_started" as const,
       } as any);
       bump(counts, "grooming", "created");
     }

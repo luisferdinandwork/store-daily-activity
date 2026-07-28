@@ -2,7 +2,7 @@
 import type { DefaultSession } from 'next-auth';
 import type { DefaultJWT } from 'next-auth/jwt';
 
-type AppRole = 'employee' | 'ops' | 'finance' | 'admin' | string;
+type AppRole = 'employee' | 'ops' | 'finance' | 'it' | 'audit' | string;
 type AppEmployeeType =
   | 'pic_1'
   | 'pic_2'
@@ -30,6 +30,12 @@ declare module 'next-auth' {
     canViewAllStores: boolean;
     isOpsHo: boolean;
     isOpsArea: boolean;
+
+    // Set only while an IT user is previewing another role — holds their
+    // real IT role/label so they can switch back.
+    switchedFromRoleId: number | null;
+    switchedFromRoleCode: string | null;
+    switchedFromRoleLabel: string | null;
   }
 
   interface Session {
@@ -49,6 +55,10 @@ declare module 'next-auth' {
       canViewAllStores: boolean;
       isOpsHo: boolean;
       isOpsArea: boolean;
+
+      switchedFromRoleId: number | null;
+      switchedFromRoleCode: string | null;
+      switchedFromRoleLabel: string | null;
     } & DefaultSession['user'];
   }
 }
@@ -70,5 +80,9 @@ declare module 'next-auth/jwt' {
     canViewAllStores: boolean;
     isOpsHo: boolean;
     isOpsArea: boolean;
+
+    switchedFromRoleId: number | null;
+    switchedFromRoleCode: string | null;
+    switchedFromRoleLabel: string | null;
   }
 }

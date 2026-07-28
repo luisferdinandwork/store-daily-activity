@@ -279,7 +279,7 @@ export async function autoSaveGrooming(
     if ('notes'        in patch) update.notes        = patch.notes;
     if ('selfiePhotos' in patch) update.selfiePhotos = jsonPhotos(patch.selfiePhotos);
 
-    if (existing.status === 'pending') update.status = 'in_progress';
+    if (existing.status === 'not_started') update.status = 'in_progress';
 
     await db
       .update(groomingTasks)

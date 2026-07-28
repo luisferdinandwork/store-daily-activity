@@ -2,18 +2,21 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
+import { useSession } from 'next-auth/react';
 import Link from 'next/link';
 import {
   Menu,
   X,
   MessageSquare,
-  HelpCircle,
+  BookOpen,
   Settings,
   ChevronRight,
   DollarSign,
+  LayoutDashboard,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { EMPLOYEE_VIEW_COOKIE } from '@/lib/pic-view';
 
 // ─── Menu Configuration (Easy to add more later) ──────────────────────────────
 
@@ -26,7 +29,7 @@ interface MenuItem {
 
 const MORE_MENU_ITEMS: MenuItem[] = [
   { label: 'Petty Cash', href: '/employee/pettycash', icon: DollarSign, color: 'text-blue-500' },
-  { label: 'Help & FAQ',       href: '/employee/help',    icon: HelpCircle,    color: 'text-emerald-500' },
+  { label: 'Knowledge Manual', href: '/employee/knowledge', icon: BookOpen,    color: 'text-indigo-500' },
   { label: 'Settings',         href: '/employee/settings', icon: Settings,      color: 'text-muted-foreground' },
 ];
 
@@ -34,8 +37,21 @@ const MORE_MENU_ITEMS: MenuItem[] = [
 
 export default function FloatingMenu() {
   const pathname = usePathname();
+  const router = useRouter();
+  const { data: session } = useSession();
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  const employeeType = (session?.user as any)?.employeeType as string | undefined;
+  const isPic = employeeType === 'pic_1' || employeeType === 'pic_2';
+
+  function switchToDashboard() {
+    // Clear any lingering "forced employee view" so /pic isn't immediately
+    // bounced back here — see lib/pic-view.ts.
+    document.cookie = `${EMPLOYEE_VIEW_COOKIE}=; path=/; max-age=0`;
+    setIsOpen(false);
+    router.push('/pic');
+  }
 
   // Close menu automatically when navigating to a new page
   useEffect(() => {
@@ -97,6 +113,19 @@ export default function FloatingMenu() {
 
               {/* Menu Links */}
               <div className="p-2">
+                {isPic && (
+                  <button
+                    type="button"
+                    onClick={switchToDashboard}
+                    className="flex w-full items-center gap-3 rounded-xl px-4 py-3.5 text-left text-foreground transition-colors hover:bg-secondary active:scale-[0.98]"
+                  >
+                    <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-secondary">
+                      <LayoutDashboard className="h-4.5 w-4.5 text-indigo-500" />
+                    </div>
+                    <span className="flex-1 text-sm font-medium">PIC Dashboard</span>
+                    <ChevronRight className="h-4 w-4 text-muted-foreground/50" />
+                  </button>
+                )}
                 {MORE_MENU_ITEMS.map((item) => {
                   const Icon = item.icon;
                   return (

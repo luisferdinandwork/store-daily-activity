@@ -14,13 +14,15 @@ import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
 import { issues, users } from '@/lib/db/schema';
 import {
+  computeIssuePermissionFlags,
   createIssueWithRoles,
   loadIssueAssignedRoles,
+  notifyIssueEvent,
   serializeIssue,
   type IssueStatus,
 } from '@/lib/db/utils/issues';
 
-const ISSUE_STATUSES = new Set<IssueStatus>(['draft', 'reported', 'in_review', 'resolved']);
+const ISSUE_STATUSES = new Set<IssueStatus>(['draft', 'reported', 'in_review', 'completed', 'solved']);
 const EMPLOYEE_CREATABLE_STATUSES = new Set<IssueStatus>(['draft', 'reported']);
 
 function cleanRoleIds(value: unknown, fallback?: unknown): number[] {
@@ -79,18 +81,10 @@ export async function GET(req: Request) {
 
   const roleMap = await loadIssueAssignedRoles(rows.map((row) => row.id));
 
-  const out = rows.map((row) => {
-    const isOwner = row.userId === userId;
-    const isDraft = row.status === 'draft';
-
-    return {
-      ...serializeIssue(row, roleMap.get(row.id) ?? []),
-      isOwner,
-      canEdit: isOwner && isDraft,
-      canDelete: isOwner && isDraft,
-      canSendToOps: isOwner && isDraft,
-    };
-  });
+  const out = rows.map((row) => ({
+    ...serializeIssue(row, roleMap.get(row.id) ?? []),
+    ...computeIssuePermissionFlags(row, userId),
+  }));
 
   return NextResponse.json({ success: true, issues: out });
 }
@@ -162,6 +156,18 @@ export async function POST(req: Request) {
       status: requestedStatus,
       attachmentUrls,
     });
+
+    if (issue.status === 'reported') {
+      await notifyIssueEvent({
+        issueId: Number(issue.id),
+        storeId: me.homeStoreId,
+        assignedRoles: issue.assignedToRoles,
+        type: 'issue_reported',
+        title: `New issue: ${issue.title}`,
+        body: `An issue was reported and routed to your team.`,
+        excludeUserId: me.id,
+      });
+    }
 
     return NextResponse.json({ success: true, issue });
   } catch (err) {

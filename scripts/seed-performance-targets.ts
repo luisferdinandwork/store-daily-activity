@@ -13,6 +13,7 @@ import {
   targetAllocationTemplates,
   users,
 } from '@/lib/db/schema';
+import { syncRosterPercentages } from '@/lib/performance/target-utils';
 
 const TARGET_YEAR_MONTH =
   process.env.SEED_TARGET_YEAR_MONTH ?? new Date().toISOString().slice(0, 7);
@@ -39,14 +40,39 @@ const storeTotalTargetDefs: Record<StoreCode, StoreTotalDef> = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Default daily allocation % template — transcribed from the printed
-// PIC1/PIC2/SA1-5 × Man-Power grid. Headcounts not listed here (1, 2, 8+)
-// fall back to an equal split across everyone scheduled that day; add rows
-// here (or edit target_allocation_templates directly) if you want an exact
-// split for those too.
+// Default monthly allocation % template — transcribed from the printed
+// PIC1/PIC2/SA1-5(+) × Man-Power grid (headcount 3-13). Headcounts not
+// listed here fall back to an equal split across the whole roster; add rows
+// here (or use the IT-only /it/target-allocation admin page) if you want an
+// exact split for those too.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Headcount 8-13: PIC1/PIC2 fixed at 7.3% each, remaining SA slots split the
+// rest evenly (one decimal, matching the printed grid).
+const UNIFORM_SA_TEMPLATES: Array<{ headcount: number; saPercentage: number }> = [
+  { headcount: 8, saPercentage: 14.3 },
+  { headcount: 9, saPercentage: 12.2 },
+  { headcount: 10, saPercentage: 10.7 },
+  { headcount: 11, saPercentage: 9.5 },
+  { headcount: 12, saPercentage: 8.6 },
+  { headcount: 13, saPercentage: 7.8 },
+];
+
+function buildUniformSaRows() {
+  const rows: Array<{ headcount: number; slotCode: string; percentage: number }> = [];
+  for (const { headcount, saPercentage } of UNIFORM_SA_TEMPLATES) {
+    rows.push({ headcount, slotCode: 'PIC1', percentage: 7.3 });
+    rows.push({ headcount, slotCode: 'PIC2', percentage: 7.3 });
+    for (let i = 1; i <= headcount - 2; i++) {
+      rows.push({ headcount, slotCode: `SA${i}`, percentage: saPercentage });
+    }
+  }
+  return rows;
+}
+
 const ALLOCATION_TEMPLATE: Array<{ headcount: number; slotCode: string; percentage: number }> = [
+  ...buildUniformSaRows(),
+
   // 7 orang
   { headcount: 7, slotCode: 'PIC1', percentage: 7.3 },
   { headcount: 7, slotCode: 'PIC2', percentage: 7.3 },
@@ -83,7 +109,7 @@ const ALLOCATION_TEMPLATE: Array<{ headcount: number; slotCode: string; percenta
   { headcount: 3, slotCode: 'SA1', percentage: 40.0 },
 ];
 
-async function seedAllocationTemplate() {
+export async function seedAllocationTemplate() {
   console.log('🎯 Seeding target_allocation_templates...');
 
   for (const row of ALLOCATION_TEMPLATE) {
@@ -101,15 +127,15 @@ async function seedAllocationTemplate() {
       });
   }
 
-  console.log(`✓ ${ALLOCATION_TEMPLATE.length} allocation template rows seeded (headcount 3-7).`);
+  console.log(`✓ ${ALLOCATION_TEMPLATE.length} allocation template rows seeded (headcount 3-13).`);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Roster roles: same "PIC1/PIC2 fixed, rest are SA" shape as before, but we
-// only assign a ROLE + sortOrder now — no weight%, no amounts. sortOrder
-// ranks the SAs into SA1, SA2, ... on days everyone is present; if someone
-// is off, the remaining SAs just shift up (see assignDailySlots in
-// target-utils.ts).
+// Roster roles: "PIC1/PIC2 fixed, rest are SA". Only ROLE + sortOrder are
+// assigned here — the fixed monthly `percentage` is filled in afterwards by
+// syncRosterPercentages() from target_allocation_templates, keyed by the
+// roster's total headcount. sortOrder ranks the SAs into SA1, SA2, ... for
+// the whole month (see assignMonthlySlots in target-utils.ts).
 // ─────────────────────────────────────────────────────────────────────────────
 
 type RosterRole = { code: 'PIC1' | 'PIC2' | 'SA'; sortOrder: number };
@@ -199,7 +225,7 @@ async function seedStoreTargets(params: { storeNo: StoreCode; total: StoreTotalD
       targetSource: 'manual',
       notes:
         `Seeded target: Rp ${money(total.totalSalesTarget)} / ${total.totalTransactionTarget} trx per month. ` +
-        'Daily target = monthly target / days in month, split across the roster below by target_allocation_templates.',
+        'Split across the roster below by a fixed monthly percentage from target_allocation_templates.',
       isActive: true,
     })
     .returning({ id: storeMonthlyTargets.id });
@@ -227,6 +253,7 @@ async function seedStoreTargets(params: { storeNo: StoreCode; total: StoreTotalD
   });
 
   await db.insert(employeeMonthlyTargets).values(rosterRows);
+  await syncRosterPercentages({ storeId: store.id, yearMonth: TARGET_YEAR_MONTH });
 
   const picCount = roles.filter((r) => r.code !== 'SA').length;
   const saCount = roles.length - picCount;
@@ -241,7 +268,7 @@ async function seedStoreTargets(params: { storeNo: StoreCode; total: StoreTotalD
 }
 
 async function main() {
-  console.log(`🎯 Seeding daily-allocation performance targets for ${TARGET_YEAR_MONTH}...`);
+  console.log(`🎯 Seeding monthly-fixed-percentage performance targets for ${TARGET_YEAR_MONTH}...`);
 
   await seedAllocationTemplate();
 

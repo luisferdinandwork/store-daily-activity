@@ -3,10 +3,74 @@ import { NextAuthOptions } from 'next-auth';
 import CredentialsProvider from 'next-auth/providers/credentials';
 import { getServerSession } from 'next-auth/next';
 import { eq } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import bcrypt from 'bcryptjs';
 
 import { db } from '@/lib/db';
 import { users, userRoles, employeeTypes } from '@/lib/db/schema';
+
+const switchedFromRole = alias(userRoles, 'switched_from_role');
+
+/** Re-reads a user's current role/employeeType/switch state from the DB. */
+async function loadUserAuthFields(userId: string) {
+  const [row] = await db
+    .select({
+      id: users.id,
+      nik: users.nik,
+      name: users.name,
+
+      homeStoreId: users.homeStoreId,
+      areaId: users.areaId,
+
+      roleId: users.roleId,
+      roleCode: userRoles.code,
+      roleLabel: userRoles.label,
+      roleActive: userRoles.isActive,
+
+      employeeTypeId: users.employeeTypeId,
+      employeeTypeCode: employeeTypes.code,
+      employeeTypeLabel: employeeTypes.label,
+      employeeTypeActive: employeeTypes.isActive,
+
+      switchedFromRoleId: users.switchedFromRoleId,
+      switchedFromRoleCode: switchedFromRole.code,
+      switchedFromRoleLabel: switchedFromRole.label,
+    })
+    .from(users)
+    .innerJoin(userRoles, eq(userRoles.id, users.roleId))
+    .leftJoin(employeeTypes, eq(employeeTypes.id, users.employeeTypeId))
+    .leftJoin(switchedFromRole, eq(switchedFromRole.id, users.switchedFromRoleId))
+    .where(eq(users.id, userId))
+    .limit(1);
+
+  if (!row) return null;
+
+  const role = row.roleCode;
+  const employeeType = row.employeeTypeCode ?? null;
+
+  return {
+    id: row.id,
+    nik: row.nik,
+    name: row.name,
+
+    role,
+    roleLabel: row.roleLabel,
+
+    employeeType,
+    employeeTypeLabel: row.employeeTypeLabel ?? null,
+
+    homeStoreId: row.homeStoreId ?? null,
+    areaId: row.areaId ?? null,
+
+    canViewAllStores: hasAllStoreAccess(role, employeeType),
+    isOpsHo: employeeType === 'ops_ho',
+    isOpsArea: employeeType === 'ops_area',
+
+    switchedFromRoleId: row.switchedFromRoleId ?? null,
+    switchedFromRoleCode: row.switchedFromRoleCode ?? null,
+    switchedFromRoleLabel: row.switchedFromRoleLabel ?? null,
+  };
+}
 
 const isDev = process.env.NODE_ENV === 'development';
 
@@ -19,7 +83,7 @@ function normalizeNik(value: string): string {
 }
 
 function hasAllStoreAccess(role: string | null | undefined, employeeType: string | null | undefined) {
-  return role === 'admin' || employeeType === 'ops_ho';
+  return role === 'it' || employeeType === 'ops_ho';
 }
 
 function isOpsArea(role: string | null | undefined, employeeType: string | null | undefined) {
@@ -65,10 +129,15 @@ export const authOptions: NextAuthOptions = {
               employeeTypeCode: employeeTypes.code,
               employeeTypeLabel: employeeTypes.label,
               employeeTypeActive: employeeTypes.isActive,
+
+              switchedFromRoleId: users.switchedFromRoleId,
+              switchedFromRoleCode: switchedFromRole.code,
+              switchedFromRoleLabel: switchedFromRole.label,
             })
             .from(users)
             .innerJoin(userRoles, eq(userRoles.id, users.roleId))
             .leftJoin(employeeTypes, eq(employeeTypes.id, users.employeeTypeId))
+            .leftJoin(switchedFromRole, eq(switchedFromRole.id, users.switchedFromRoleId))
             .where(eq(users.nik, nik))
             .limit(1);
 
@@ -134,6 +203,10 @@ export const authOptions: NextAuthOptions = {
             canViewAllStores,
             isOpsHo: employeeType === 'ops_ho',
             isOpsArea: employeeType === 'ops_area',
+
+            switchedFromRoleId: u.switchedFromRoleId ?? null,
+            switchedFromRoleCode: u.switchedFromRoleCode ?? null,
+            switchedFromRoleLabel: u.switchedFromRoleLabel ?? null,
           };
         } catch (error) {
           console.error('💥 Authorization error:', error);
@@ -149,7 +222,7 @@ export const authOptions: NextAuthOptions = {
   },
 
   callbacks: {
-    async jwt({ token, user }) {
+    async jwt({ token, user, trigger }) {
       if (user) {
         token.id = user.id;
         token.nik = user.nik;
@@ -165,6 +238,35 @@ export const authOptions: NextAuthOptions = {
         token.canViewAllStores = user.canViewAllStores;
         token.isOpsHo = user.isOpsHo;
         token.isOpsArea = user.isOpsArea;
+
+        token.switchedFromRoleId = user.switchedFromRoleId;
+        token.switchedFromRoleCode = user.switchedFromRoleCode;
+        token.switchedFromRoleLabel = user.switchedFromRoleLabel;
+      }
+
+      // Triggered by the client calling useSession().update() — used by the
+      // IT role-switch feature to reflect a DB-side role change into the
+      // live session immediately, without a full logout/login.
+      if (trigger === 'update' && token.id) {
+        const fresh = await loadUserAuthFields(token.id as string);
+        if (fresh) {
+          token.role = fresh.role;
+          token.roleLabel = fresh.roleLabel;
+
+          token.employeeType = fresh.employeeType;
+          token.employeeTypeLabel = fresh.employeeTypeLabel;
+
+          token.homeStoreId = fresh.homeStoreId;
+          token.areaId = fresh.areaId;
+
+          token.canViewAllStores = fresh.canViewAllStores;
+          token.isOpsHo = fresh.isOpsHo;
+          token.isOpsArea = fresh.isOpsArea;
+
+          token.switchedFromRoleId = fresh.switchedFromRoleId;
+          token.switchedFromRoleCode = fresh.switchedFromRoleCode;
+          token.switchedFromRoleLabel = fresh.switchedFromRoleLabel;
+        }
       }
 
       return token;
@@ -186,6 +288,10 @@ export const authOptions: NextAuthOptions = {
         session.user.canViewAllStores = token.canViewAllStores;
         session.user.isOpsHo = token.isOpsHo;
         session.user.isOpsArea = token.isOpsArea;
+
+        session.user.switchedFromRoleId = token.switchedFromRoleId;
+        session.user.switchedFromRoleCode = token.switchedFromRoleCode;
+        session.user.switchedFromRoleLabel = token.switchedFromRoleLabel;
       }
 
       return session;

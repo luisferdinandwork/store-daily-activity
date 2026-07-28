@@ -12,12 +12,13 @@ import {
 import { cn }    from '@/lib/utils';
 import { toast } from 'sonner';
 import { useAutoSave } from '@/lib/hooks/useAutoSave';
+import { useTaskLocationSetting } from '@/lib/hooks/useTaskLocationSetting';
 import { TaskHeader, TaskSubmitBar, SaveIndicator } from '@/components/employee/tasks';
 import ChecklistPhotoModal from '@/components/tasks/ChecklistPhotoModal';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'verified' | 'rejected';
+type TaskStatus = 'not_started' | 'in_progress' | 'completed' | 'verified' | 'rejected';
 
 type AccessStatus =
   | { status: 'ok' }
@@ -42,11 +43,12 @@ const PHOTO_RULES = {
 
 // ─── Geo hook ─────────────────────────────────────────────────────────────────
 
-function useGeo() {
+function useGeo(required: boolean) {
   const [geo, setGeo] = useState<{ lat: number; lng: number } | null>(null);
   const [geoError, setGeoError] = useState<string | null>(null);
   const [geoReady, setGeoReady] = useState(false);
   const refresh = useCallback(() => {
+    if (!required) { setGeo(null); setGeoError(null); setGeoReady(true); return; }
     setGeoReady(false); setGeoError(null);
     if (!navigator.geolocation) { setGeoError('Geolocation tidak didukung.'); setGeoReady(true); return; }
     navigator.geolocation.getCurrentPosition(
@@ -54,7 +56,7 @@ function useGeo() {
       ()  => { setGeoError('Lokasi tidak dapat diperoleh.'); setGeoReady(true); },
       { timeout: 10_000, maximumAge: 0 },
     );
-  }, []);
+  }, [required]);
   useEffect(() => { refresh(); }, [refresh]);
   return { geo, geoError, geoReady, refresh };
 }
@@ -382,7 +384,8 @@ export default function StoreFrontDetailPage() {
   const params = useParams();
   const router = useRouter();
   const taskId = params.id as string;
-  const { geo, geoError, geoReady, refresh: refreshGeo } = useGeo();
+  const { requiresLocation } = useTaskLocationSetting('store_front');
+  const { geo, geoError, geoReady, refresh: refreshGeo } = useGeo(requiresLocation);
 
   const [taskData,          setTaskData]          = useState<StoreFrontData | null>(null);
   const [loading,           setLoading]           = useState(true);

@@ -11,11 +11,12 @@ import {
 import { cn }    from '@/lib/utils';
 import { toast } from 'sonner';
 import { useAutoSave } from '@/lib/hooks/useAutoSave';
+import { useTaskLocationSetting } from '@/lib/hooks/useTaskLocationSetting';
 import { TaskHeader, TaskSubmitBar, SaveIndicator } from '@/components/employee/tasks';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'verified' | 'rejected' | 'discrepancy';
+type TaskStatus = 'not_started' | 'in_progress' | 'completed' | 'verified' | 'rejected' | 'pending';
 
 type AccessStatus =
   | { status: 'ok' }
@@ -48,11 +49,12 @@ interface CekBinData {
 
 // ─── Geo hook ─────────────────────────────────────────────────────────────────
 
-function useGeo() {
+function useGeo(required: boolean) {
   const [geo, setGeo] = useState<{ lat: number; lng: number } | null>(null);
   const [geoError, setGeoError] = useState<string | null>(null);
   const [geoReady, setGeoReady] = useState(false);
   const refresh = useCallback(() => {
+    if (!required) { setGeo(null); setGeoError(null); setGeoReady(true); return; }
     setGeoReady(false); setGeoError(null);
     if (!navigator.geolocation) { setGeoError('Geolocation tidak didukung.'); setGeoReady(true); return; }
     navigator.geolocation.getCurrentPosition(
@@ -60,7 +62,7 @@ function useGeo() {
       ()  => { setGeoError('Lokasi tidak dapat diperoleh.'); setGeoReady(true); },
       { timeout: 10_000, maximumAge: 0 },
     );
-  }, []);
+  }, [required]);
   useEffect(() => { refresh(); }, [refresh]);
   return { geo, geoError, geoReady, refresh };
 }
@@ -286,7 +288,8 @@ export default function CekBinDetailPage() {
   const router = useRouter();
   const taskId = params.id as string;
 
-  const { geo, geoError, geoReady, refresh: refreshGeo } = useGeo();
+  const { requiresLocation } = useTaskLocationSetting('cek_bin');
+  const { geo, geoError, geoReady, refresh: refreshGeo } = useGeo(requiresLocation);
 
   const [taskData,     setTaskData]     = useState<CekBinData | null>(null);
   const [loading,      setLoading]      = useState(true);

@@ -20,7 +20,12 @@ config({ path: '.env.local' });
 import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { shifts, shiftTasks, taskDefinitions } from '@/lib/db/schema';
-import { TASK_CATALOG, SHIFT_TASK_MAP, REMOVED_TASK_TYPES } from '@/lib/shift-tasks';
+import {
+  TASK_CATALOG,
+  SHIFT_TASK_MAP,
+  REMOVED_TASK_TYPES,
+  DEFAULT_SEQUENCED_TASK_TYPES,
+} from '@/lib/shift-tasks';
 
 // ── 1. Catalog ────────────────────────────────────────────────────────────────
 
@@ -51,6 +56,9 @@ export async function seedTaskDefinitions() {
         .where(eq(taskDefinitions.id, existing[0].id));
       updated += 1;
     } else {
+      // requiresLocation seeds the initial default only — once a row exists,
+      // OPS owns that field via /api/ops/task-definitions, so re-running this
+      // seed must not clobber an OPS override (see the update() branch above).
       await db.insert(taskDefinitions).values({
         code:        entry.code,
         label:       entry.label,
@@ -59,6 +67,7 @@ export async function seedTaskDefinitions() {
         accent:      entry.accent,
         isPersonal:  entry.isPersonal,
         sortOrder:   entry.sortOrder,
+        requiresLocation: entry.requiresLocation,
       });
       inserted += 1;
     }
@@ -134,10 +143,14 @@ export async function seedShiftTaskAssignments() {
         .limit(1);
 
       if (existing.length) {
-        // Make sure a default pairing is active (it may have been disabled).
+        // Re-sync the default ordering + make sure the pairing is active (it
+        // may have been disabled). `isRequired` and `isSequenced` are
+        // intentionally left alone — both are IT-owned via OPS → Shift &
+        // Tasks ("Manage tasks" / "Fixed Order") and must not be clobbered
+        // by re-running this seed.
         await db
           .update(shiftTasks)
-          .set({ isActive: true, updatedAt: new Date() })
+          .set({ sortOrder: order, isActive: true, updatedAt: new Date() })
           .where(eq(shiftTasks.id, existing[0].id));
         skipped += 1;
         reactivated += 1;
@@ -148,6 +161,7 @@ export async function seedShiftTaskAssignments() {
         shiftId,
         taskDefinitionId: defId,
         isRequired: true,
+        isSequenced: DEFAULT_SEQUENCED_TASK_TYPES.includes(code),
         sortOrder: order,
       });
       inserted += 1;

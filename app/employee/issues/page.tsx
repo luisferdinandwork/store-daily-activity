@@ -2,18 +2,26 @@
 
 // app/employee/issues/page.tsx — mobile-first issue reporting for store staff.
 //
-// Styling intentionally follows the previous page. Logic updates:
-// - draft status is supported
-// - draft issues can be edited by the reporter
+// Header follows the same hero convention as the other primary employee pages
+// (bg-primary hero + decorative blurs + logo mark, see EmployeeLogoMark).
+//
+// Status lifecycle: draft -> reported -> in_review -> solved -> completed.
+// - draft issues are private and fully editable by the reporter
 // - draft issues can be sent to OPS by changing status draft -> reported
+// - the reporter resolves the issue by marking it "solved" (from reported
+//   or in_review) — this happens BEFORE Ops gives final closure
+// - OPS gives final confirmation by marking it "completed" — only once the
+//   reporter has already marked it solved
+// - the reporter can attach a one-time Berita Acara (BA) at ANY status,
+//   including draft, independent of the status flow above
 // - destinations support multiple roles/departments
 
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   AlertTriangle,
   Plus,
   X,
-  ImagePlus,
+  Camera,
   Loader2,
   ChevronRight,
   Clock,
@@ -28,10 +36,18 @@ import {
   Pencil,
   Trash2,
   Save,
+  ShieldCheck,
+  ClipboardCheck,
+  UploadCloud,
+  FileText,
+  Paperclip,
+  Image as ImageIcon,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import CameraCapture from '@/components/shared/CameraCapture';
+import EmployeeLogoMark from '@/components/employee/EmployeeLogoMark';
 import {
   type Issue,
   type IssueStatus,
@@ -43,8 +59,10 @@ import {
   createIssue,
   updateIssue,
   sendDraftIssue,
+  markIssueSolved,
   deleteIssue,
   uploadIssueImages,
+  uploadBaFiles,
   formatRelativeTime,
 } from '@/lib/issues';
 
@@ -61,6 +79,7 @@ const ROLE_ICON: Record<string, LucideIcon> = {
   operations: Users,
   finance: Wallet,
   it: Monitor,
+  audit: ShieldCheck,
 };
 
 const roleIcon = (code: string): LucideIcon => ROLE_ICON[code] ?? Building2;
@@ -183,6 +202,84 @@ function ExistingImagePreview({ url, onRemove }: { url: string; onRemove: () => 
   );
 }
 
+/** True for any file the browser reports as a rasterizable image — everything else (PDF, Word, Excel, …) gets a document icon instead of a thumbnail. */
+function isImageFile(file: File): boolean {
+  return file.type.startsWith('image/');
+}
+
+function docLabel(file: File): string {
+  const ext = file.name.split('.').pop()?.toUpperCase();
+  return ext && ext.length <= 5 ? ext : 'FILE';
+}
+
+/** BA attachment preview for a locally-picked File — renders a thumbnail for images, a document chip for anything else (PDF, Word, Excel). */
+function BaFilePreview({ file, onRemove }: { file: File; onRemove: () => void }) {
+  const [src, setSrc] = useState<string | null>(null);
+  const isImage = isImageFile(file);
+
+  useEffect(() => {
+    if (!isImage) return;
+    const url = URL.createObjectURL(file);
+    setSrc(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file, isImage]);
+
+  return (
+    <div className="relative h-20 w-20 shrink-0 overflow-hidden rounded-xl border border-border bg-muted">
+      {isImage ? (
+        src ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={src} alt={file.name} className="h-full w-full object-cover" />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center">
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+          </div>
+        )
+      ) : (
+        <div className="flex h-full w-full flex-col items-center justify-center gap-1 px-1.5 text-center">
+          <FileText className="h-6 w-6 text-violet-500" />
+          <span className="line-clamp-2 text-[9px] font-semibold leading-tight text-muted-foreground">
+            {docLabel(file)}
+          </span>
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={onRemove}
+        className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-black/70 text-white transition-opacity hover:bg-black"
+      >
+        <X className="h-3 w-3" />
+      </button>
+    </div>
+  );
+}
+
+/** Read-only BA attachment view (already uploaded) — image opens the file directly; documents show as a labeled link since a PDF/doc can't be thumbnailed without extra work. */
+function BaAttachmentLink({ url }: { url: string }) {
+  const isImage = /\.(jpe?g|png|gif|webp|heic|heif)$/i.test(url);
+  const ext = url.split('.').pop()?.toUpperCase() ?? 'FILE';
+
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="block h-24 w-24 shrink-0 overflow-hidden rounded-xl border border-violet-500/20 bg-muted transition-opacity hover:opacity-80"
+    >
+      {isImage ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={url} alt="Berita Acara attachment" className="h-full w-full object-cover" />
+      ) : (
+        <div className="flex h-full w-full flex-col items-center justify-center gap-1 bg-violet-500/5 px-1.5 text-center">
+          <FileText className="h-6 w-6 text-violet-500" />
+          <span className="text-[10px] font-bold text-violet-600 dark:text-violet-400">{ext}</span>
+        </div>
+      )}
+    </a>
+  );
+}
+
 function RolePicker({
   roles,
   rolesLoading,
@@ -268,7 +365,8 @@ function IssueForm({
   const [rolesLoading, setRolesLoading] = useState(true);
   const [selectedRoleIds, setSelectedRoleIds] = useState<number[]>(issue ? roleIdsFromIssue(issue) : []);
 
-  const fileRef = useRef<HTMLInputElement>(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let alive = true;
@@ -295,13 +393,18 @@ function IssueForm({
     };
   }, [issue]);
 
-  const addImages = useCallback((files: FileList | null) => {
-    if (!files) return;
-
-    const valid = Array.from(files).filter((file) => file.type.startsWith('image/'));
+  const addImage = useCallback((file: File) => {
     const remainingSlots = Math.max(0, 5 - existingUrls.length);
 
-    setImages((prev) => [...prev, ...valid].slice(0, remainingSlots));
+    setImages((prev) => [...prev, file].slice(0, remainingSlots));
+  }, [existingUrls.length]);
+
+  const addImagesFromGallery = useCallback((fileList: FileList | null) => {
+    if (!fileList?.length) return;
+    const remainingSlots = Math.max(0, 5 - existingUrls.length);
+
+    setImages((prev) => [...prev, ...Array.from(fileList)].slice(0, remainingSlots));
+    if (galleryInputRef.current) galleryInputRef.current.value = '';
   }, [existingUrls.length]);
 
   const toggleRole = (roleId: number) => {
@@ -454,23 +557,42 @@ function IssueForm({
             ))}
 
             {totalImages < 5 && (
-              <button
-                type="button"
-                onClick={() => fileRef.current?.click()}
-                className="flex h-20 w-20 shrink-0 flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-border text-muted-foreground/60 transition-colors hover:border-primary/40 hover:text-primary/60"
-              >
-                <ImagePlus className="h-5 w-5" />
-                <span className="text-[10px]">Add</span>
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => setCameraOpen(true)}
+                  className="flex h-20 w-20 shrink-0 flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-border text-muted-foreground/60 transition-colors hover:border-primary/40 hover:text-primary/60"
+                >
+                  <Camera className="h-5 w-5" />
+                  <span className="text-[10px]">Camera</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => galleryInputRef.current?.click()}
+                  className="flex h-20 w-20 shrink-0 flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-border text-muted-foreground/60 transition-colors hover:border-primary/40 hover:text-primary/60"
+                >
+                  <ImageIcon className="h-5 w-5" />
+                  <span className="text-[10px]">Gallery</span>
+                </button>
+              </>
             )}
           </div>
+
           <input
-            ref={fileRef}
+            ref={galleryInputRef}
             type="file"
-            accept="image/*"
             multiple
+            accept="image/*"
             className="hidden"
-            onChange={(event) => addImages(event.target.files)}
+            onChange={(e) => addImagesFromGallery(e.target.files)}
+          />
+
+          <CameraCapture
+            open={cameraOpen}
+            onClose={() => setCameraOpen(false)}
+            onCapture={(file) => { setCameraOpen(false); addImage(file); }}
+            title="Issue Photo"
           />
         </div>
 
@@ -518,12 +640,18 @@ function IssueDetail({
   const [editing, setEditing] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [baCameraOpen, setBaCameraOpen] = useState(false);
+  const [baFiles, setBaFiles] = useState<File[]>([]);
+  const [baUploading, setBaUploading] = useState(false);
+  const baFileInputRef = useRef<HTMLInputElement>(null);
 
-  const steps: IssueStatus[] = ['draft', 'reported', 'in_review', 'resolved'];
+  const steps: IssueStatus[] = ['draft', 'reported', 'in_review', 'solved', 'completed'];
   const currentIdx = steps.indexOf(issue.status);
   const canEditDraft = issue.canEdit ?? (issue.status === 'draft' && issue.isOwner !== false);
   const canDeleteDraft = issue.canDelete ?? canEditDraft;
   const canSendDraft = issue.canSendToOps ?? canEditDraft;
+  const canMarkSolved = issue.canMarkSolved ?? false;
+  const canUploadBa = issue.canUploadBa ?? false;
 
   const handleSendDraft = async () => {
     setActionError(null);
@@ -537,6 +665,43 @@ function IssueDetail({
     } finally {
       setActionLoading(false);
     }
+  };
+
+  const handleMarkSolved = async () => {
+    setActionError(null);
+    setActionLoading(true);
+
+    try {
+      const updated = await markIssueSolved(issue.id);
+      onIssueUpdated(updated);
+    } catch (err: any) {
+      setActionError(err?.message ?? 'Failed to mark issue solved.');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleUploadBa = async () => {
+    if (!baFiles.length) return;
+    setActionError(null);
+    setBaUploading(true);
+
+    try {
+      const urls = await uploadBaFiles(baFiles, `${issue.title} - BA`);
+      const updated = await updateIssue(issue.id, { baAttachmentUrls: urls });
+      setBaFiles([]);
+      onIssueUpdated(updated);
+    } catch (err: any) {
+      setActionError(err?.message ?? 'Failed to upload Berita Acara.');
+    } finally {
+      setBaUploading(false);
+    }
+  };
+
+  const handleBaFilesPicked = (fileList: FileList | null) => {
+    if (!fileList?.length) return;
+    setBaFiles((prev) => [...prev, ...Array.from(fileList)].slice(0, 5));
+    if (baFileInputRef.current) baFileInputRef.current.value = '';
   };
 
   const handleDelete = async () => {
@@ -676,11 +841,123 @@ function IssueDetail({
           </div>
         )}
 
+        {/* Berita Acara — uploadable at any status, including draft */}
+        <div className="rounded-2xl border border-violet-500/20 bg-violet-500/5 p-4">
+            <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-widest text-violet-600 dark:text-violet-400">
+              <ClipboardCheck className="h-3.5 w-3.5" />
+              Berita Acara
+            </p>
+
+            {issue.baAttachmentUrls.length > 0 ? (
+              <>
+                <div className="flex flex-wrap gap-2">
+                  {issue.baAttachmentUrls.map((url) => (
+                    <BaAttachmentLink key={url} url={url} />
+                  ))}
+                </div>
+                {issue.baUploadedAt && (
+                  <p className="mt-2 text-[11px] text-muted-foreground">
+                    Uploaded {formatRelativeTime(issue.baUploadedAt)}
+                  </p>
+                )}
+              </>
+            ) : canUploadBa ? (
+              <>
+                <p className="mb-2 text-[11px] text-muted-foreground">
+                  Photos, PDF, Word, or Excel — one-time upload, up to 5 files. Can't be changed once submitted.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {baFiles.map((file, index) => (
+                    <BaFilePreview
+                      key={`${file.name}-${index}`}
+                      file={file}
+                      onRemove={() => setBaFiles((prev) => prev.filter((_, i) => i !== index))}
+                    />
+                  ))}
+
+                  {baFiles.length < 5 && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setBaCameraOpen(true)}
+                        className="flex h-20 w-20 shrink-0 flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-violet-500/30 text-violet-500/60 transition-colors hover:border-violet-500/50 hover:text-violet-500"
+                      >
+                        <Camera className="h-5 w-5" />
+                        <span className="text-[10px]">Camera</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => baFileInputRef.current?.click()}
+                        className="flex h-20 w-20 shrink-0 flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-violet-500/30 text-violet-500/60 transition-colors hover:border-violet-500/50 hover:text-violet-500"
+                      >
+                        <Paperclip className="h-5 w-5" />
+                        <span className="text-[10px]">Gallery/File</span>
+                      </button>
+                    </>
+                  )}
+                </div>
+
+                <input
+                  ref={baFileInputRef}
+                  type="file"
+                  multiple
+                  accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx"
+                  className="hidden"
+                  onChange={(e) => handleBaFilesPicked(e.target.files)}
+                />
+
+                <CameraCapture
+                  open={baCameraOpen}
+                  onClose={() => setBaCameraOpen(false)}
+                  onCapture={(file) => {
+                    setBaCameraOpen(false);
+                    setBaFiles((prev) => [...prev, file].slice(0, 5));
+                  }}
+                  title="Berita Acara Photo"
+                />
+
+                {baFiles.length > 0 && (
+                  <button
+                    type="button"
+                    disabled={baUploading}
+                    onClick={handleUploadBa}
+                    className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-violet-600 py-2.5 text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-60"
+                  >
+                    {baUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
+                    Upload Berita Acara
+                  </button>
+                )}
+              </>
+            ) : (
+              <p className="text-xs text-muted-foreground">Not uploaded yet.</p>
+            )}
+          </div>
+
+        {issue.solvedAt && (
+          <div className="flex items-center gap-2 rounded-xl border border-violet-500/20 bg-violet-500/5 px-4 py-3">
+            <ShieldCheck className="h-4 w-4 shrink-0 text-violet-500" />
+            <p className="text-xs text-violet-600 dark:text-violet-400">Marked solved {formatRelativeTime(issue.solvedAt)}</p>
+          </div>
+        )}
+
         {issue.reviewedAt && (
           <div className="flex items-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
             <Eye className="h-4 w-4 shrink-0 text-emerald-500" />
             <p className="text-xs text-emerald-600 dark:text-emerald-400">Reviewed {formatRelativeTime(issue.reviewedAt)}</p>
           </div>
+        )}
+
+        {canMarkSolved && (
+          <button
+            type="button"
+            disabled={actionLoading}
+            onClick={handleMarkSolved}
+            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-violet-600 py-3.5 font-semibold text-white transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-60"
+          >
+            {actionLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
+            Mark as Solved
+          </button>
         )}
 
         {(canEditDraft || canSendDraft || canDeleteDraft) && (
@@ -738,17 +1015,29 @@ export default function IssuesPage() {
     setLoading(true);
 
     try {
-      setIssuesList(await fetchIssues(filter === 'all' ? undefined : filter));
+      setIssuesList(await fetchIssues());
     } catch {
       // silent — empty state shows
     } finally {
       setLoading(false);
     }
-  }, [filter]);
+  }, []);
 
   useEffect(() => {
     loadIssues();
   }, [loadIssues]);
+
+  const visibleIssues = useMemo(
+    () => (filter === 'all' ? issuesList : issuesList.filter((issue) => issue.status === filter)),
+    [issuesList, filter],
+  );
+
+  const stats = useMemo(() => ({
+    reported:  issuesList.filter((issue) => issue.status === 'reported').length,
+    inReview:  issuesList.filter((issue) => issue.status === 'in_review').length,
+    solved:    issuesList.filter((issue) => issue.status === 'solved').length,
+    completed: issuesList.filter((issue) => issue.status === 'completed').length,
+  }), [issuesList]);
 
   const flashSuccess = (message: string) => {
     setSuccessText(message);
@@ -774,7 +1063,11 @@ export default function IssuesPage() {
 
   const handleUpdated = (issue: Issue) => {
     upsertIssue(issue);
-    flashSuccess(issue.status === 'reported' ? 'Issue sent to OPS.' : 'Issue updated.');
+    flashSuccess(
+      issue.status === 'reported' ? 'Issue sent to OPS.' :
+      issue.status === 'solved'   ? 'Marked as solved. Ops will confirm completion.' :
+      'Issue updated.',
+    );
   };
 
   const handleDeleted = (issueId: string) => {
@@ -789,7 +1082,8 @@ export default function IssuesPage() {
     { value: 'draft', label: 'Draft' },
     { value: 'reported', label: 'Reported' },
     { value: 'in_review', label: 'In Review' },
-    { value: 'resolved', label: 'Resolved' },
+    { value: 'solved', label: 'Solved' },
+    { value: 'completed', label: 'Completed' },
   ];
 
   if (view === 'new') {
@@ -816,20 +1110,54 @@ export default function IssuesPage() {
   return (
     <div className="flex h-full flex-col bg-background pb-16">
       {/* Header */}
-      <div className="px-4 pb-3 pt-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-bold text-foreground">Issue Reports</h1>
-            <p className="mt-0.5 text-xs text-muted-foreground">Drafts are private. Sent issues are visible to your store.</p>
+      <div className="relative overflow-hidden bg-primary px-6 pb-6 pt-12 mb-2">
+        <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-white/5" />
+        <div className="pointer-events-none absolute -right-4 bottom-0 h-24 w-24 rounded-full bg-white/5" />
+
+        <div className="relative flex items-start justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <EmployeeLogoMark variant="white" className="mb-4 w-28" />
+            <p className="text-xs font-semibold uppercase tracking-widest text-primary-foreground/60">
+              Store Issues
+            </p>
+            <h1 className="mt-0.5 text-2xl font-bold text-primary-foreground">
+              Issue Reports
+            </h1>
+            <p className="mt-1 text-xs text-primary-foreground/50">
+              Drafts are private. Sent issues are visible to your store.
+            </p>
           </div>
+
           <button
             onClick={() => setView('new')}
-            className="flex items-center gap-1.5 rounded-xl bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground shadow-sm transition-all hover:opacity-90 active:scale-95"
+            className="flex shrink-0 items-center gap-1.5 rounded-xl bg-white/15 px-3 py-2 text-xs font-semibold text-primary-foreground shadow-sm transition-all hover:bg-white/25 active:scale-95"
           >
             <Plus className="h-3.5 w-3.5" />
             New Report
           </button>
         </div>
+
+        {!loading && issuesList.length > 0 && (
+          <div className="relative mt-3 flex flex-wrap gap-2">
+            {[
+              { label: 'Reported', value: stats.reported, color: 'bg-amber-400/25 text-amber-200' },
+              { label: 'In Review', value: stats.inReview, color: 'bg-white/20 text-white' },
+              { label: 'Solved', value: stats.solved, color: 'bg-violet-400/25 text-violet-200' },
+              { label: 'Completed', value: stats.completed, color: 'bg-green-400/25 text-green-200' },
+            ].map(({ label, value, color }) => (
+              <span
+                key={label}
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold',
+                  color,
+                )}
+              >
+                <span className="text-sm font-bold">{value}</span>
+                {label}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       {showSuccess && (
@@ -863,7 +1191,7 @@ export default function IssuesPage() {
           <div className="flex flex-1 items-center justify-center py-16">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
           </div>
-        ) : issuesList.length === 0 ? (
+        ) : visibleIssues.length === 0 ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 py-16 text-center">
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-muted">
               <AlertTriangle className="h-6 w-6 text-muted-foreground/50" />
@@ -878,7 +1206,7 @@ export default function IssuesPage() {
             </div>
           </div>
         ) : (
-          issuesList.map((issue) => (
+          visibleIssues.map((issue) => (
             <IssueCard
               key={issue.id}
               issue={issue}

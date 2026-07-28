@@ -142,6 +142,8 @@ export const TASK_TYPES = [
   'vm_checklist',
   'marketing_check',
   'item_dropping',
+  'item_return',
+  'cek_uang_modal',
   'briefing',
   'serah_terima',
   'store_closing',
@@ -161,8 +163,14 @@ export interface TaskCatalogEntry {
   accent: PaletteKey;
   isPersonal: boolean;
   sortOrder: number;
+  /** Whether employees must grant/verify location to work on this task. OPS-configurable. */
+  requiresLocation: boolean;
 }
 
+// Default order (also mirrored by SHIFT_TASK_MAP below):
+//   Store Front → Setoran → Store Opening → Cek Uang Modal → Cek Bin → the rest.
+// IT can re-order and toggle required/optional per shift from
+// OPS → Shift & Tasks → Manage tasks; this is only the seeded starting point.
 export const TASK_CATALOG: TaskCatalogEntry[] = [
   {
     code: 'store_front',
@@ -172,24 +180,7 @@ export const TASK_CATALOG: TaskCatalogEntry[] = [
     accent: 'sky',
     isPersonal: false,
     sortOrder: 10,
-  },
-  {
-    code: 'store_opening',
-    label: 'Store Opening',
-    description: 'Checklist pembukaan toko pagi.',
-    icon: 'Sunrise',
-    accent: 'amber',
-    isPersonal: false,
-    sortOrder: 20,
-  },
-  {
-    code: 'grooming',
-    label: 'Grooming',
-    description: 'Checklist grooming per employee.',
-    icon: 'UserCheck',
-    accent: 'emerald',
-    isPersonal: true,
-    sortOrder: 30,
+    requiresLocation: true,
   },
   {
     code: 'setoran',
@@ -198,7 +189,28 @@ export const TASK_CATALOG: TaskCatalogEntry[] = [
     icon: 'Wallet',
     accent: 'emerald',
     isPersonal: false,
+    sortOrder: 20,
+    requiresLocation: false,
+  },
+  {
+    code: 'store_opening',
+    label: 'Store Opening',
+    description: 'Checklist pembukaan toko pagi.',
+    icon: 'Sunrise',
+    accent: 'amber',
+    isPersonal: false,
+    sortOrder: 30,
+    requiresLocation: true,
+  },
+  {
+    code: 'cek_uang_modal',
+    label: 'Cek Uang Modal',
+    description: 'Input pecahan dan jumlah uang modal (cashier opening float).',
+    icon: 'Banknote',
+    accent: 'amber',
+    isPersonal: false,
     sortOrder: 40,
+    requiresLocation: true,
   },
   {
     code: 'cek_bin',
@@ -208,6 +220,17 @@ export const TASK_CATALOG: TaskCatalogEntry[] = [
     accent: 'slate',
     isPersonal: false,
     sortOrder: 50,
+    requiresLocation: true,
+  },
+  {
+    code: 'grooming',
+    label: 'Grooming',
+    description: 'Checklist grooming per employee.',
+    icon: 'UserCheck',
+    accent: 'emerald',
+    isPersonal: true,
+    sortOrder: 60,
+    requiresLocation: true,
   },
   {
     code: 'vm_checklist',
@@ -216,7 +239,8 @@ export const TASK_CATALOG: TaskCatalogEntry[] = [
     icon: 'ClipboardCheck',
     accent: 'violet',
     isPersonal: false,
-    sortOrder: 60,
+    sortOrder: 70,
+    requiresLocation: true,
   },
   {
     code: 'marketing_check',
@@ -225,7 +249,8 @@ export const TASK_CATALOG: TaskCatalogEntry[] = [
     icon: 'Megaphone',
     accent: 'rose',
     isPersonal: false,
-    sortOrder: 70,
+    sortOrder: 80,
+    requiresLocation: true,
   },
   {
     code: 'item_dropping',
@@ -234,7 +259,18 @@ export const TASK_CATALOG: TaskCatalogEntry[] = [
     icon: 'PackageOpen',
     accent: 'sky',
     isPersonal: false,
-    sortOrder: 80,
+    sortOrder: 90,
+    requiresLocation: true,
+  },
+  {
+    code: 'item_return',
+    label: 'Item Return',
+    description: 'Pencatatan retur atau pengembalian barang toko.',
+    icon: 'Undo2',
+    accent: 'rose',
+    isPersonal: false,
+    sortOrder: 100,
+    requiresLocation: true,
   },
   {
     code: 'briefing',
@@ -243,7 +279,8 @@ export const TASK_CATALOG: TaskCatalogEntry[] = [
     icon: 'MessagesSquare',
     accent: 'amber',
     isPersonal: false,
-    sortOrder: 90,
+    sortOrder: 110,
+    requiresLocation: true,
   },
   {
     code: 'serah_terima',
@@ -252,7 +289,8 @@ export const TASK_CATALOG: TaskCatalogEntry[] = [
     icon: 'Repeat',
     accent: 'slate',
     isPersonal: false,
-    sortOrder: 100,
+    sortOrder: 120,
+    requiresLocation: true,
   },
   {
     code: 'store_closing',
@@ -261,7 +299,8 @@ export const TASK_CATALOG: TaskCatalogEntry[] = [
     icon: 'MoonStar',
     accent: 'violet',
     isPersonal: false,
-    sortOrder: 110,
+    sortOrder: 130,
+    requiresLocation: true,
   },
 ];
 
@@ -313,6 +352,22 @@ export function taskIconOf(code: string | null | undefined): string {
   return code && isTaskType(code) ? TASK_ICONS[code] : 'Circle';
 }
 
+// ─── Default fixed-order bootstrap ───────────────────────────────────────────
+// Seed-only default for shift_tasks.isSequenced (see lib/db/schema/shift-tasks.ts
+// and the 0003 migration's one-time data bootstrap). This is just the initial
+// state — IT fully owns the actual fixed order per shift from
+// OPS → Shift & Tasks → Fixed Order (add/remove/reorder), independent of this
+// list. Do not treat this as authoritative at runtime; read shift_tasks.isSequenced
+// instead.
+export const DEFAULT_SEQUENCED_TASK_TYPES: TaskType[] = [
+  'store_front',
+  'setoran',
+  'store_opening',
+  'cek_uang_modal',
+  'cek_bin',
+  'grooming',
+];
+
 export function normalizeTaskCodes(
   input: unknown,
 ): { ok: true; taskTypes: TaskType[] } | { ok: false; error: string } {
@@ -348,15 +403,20 @@ export function normalizeTaskCodes(
 // This map is only the default source for scripts/seed-shift-tasks.ts.
 
 export const SHIFT_TASK_MAP: Record<ShiftCode, TaskType[]> = {
+  // Default sequence: Store Front → Setoran → Store Opening → Cek Uang Modal
+  // → Cek Bin, then the rest. IT can re-order this per shift from
+  // OPS → Shift & Tasks.
   morning: [
     'store_front',
-    'store_opening',
-    'grooming',
     'setoran',
+    'store_opening',
+    'cek_uang_modal',
     'cek_bin',
+    'grooming',
     'vm_checklist',
     'marketing_check',
     'item_dropping',
+    'item_return',
     'briefing',
     'serah_terima',
   ],
@@ -364,6 +424,7 @@ export const SHIFT_TASK_MAP: Record<ShiftCode, TaskType[]> = {
   evening: [
     'grooming',
     'item_dropping',
+    'item_return',
     'briefing',
     'serah_terima',
     'store_closing',
@@ -371,13 +432,15 @@ export const SHIFT_TASK_MAP: Record<ShiftCode, TaskType[]> = {
 
   full_day: [
     'store_front',
-    'store_opening',
-    'grooming',
     'setoran',
+    'store_opening',
+    'cek_uang_modal',
     'cek_bin',
+    'grooming',
     'vm_checklist',
     'marketing_check',
     'item_dropping',
+    'item_return',
     'briefing',
     'serah_terima',
     'store_closing',
@@ -431,6 +494,7 @@ export interface TaskDefinitionDTO {
   isPersonal:  boolean;
   isActive:    boolean;
   sortOrder:   number;
+  requiresLocation: boolean;
 }
 
 export interface ShiftTaskAssignment {
@@ -441,7 +505,12 @@ export interface ShiftTaskAssignment {
   icon:             string | null;
   accent:           string | null;
   isPersonal:       boolean;
+  // Whether this assignment is mandatory for the shift. Independent from
+  // isSequenced — managed from the "Manage tasks" tab.
   isRequired:       boolean;
+  // Whether this task is part of the shift's fixed, gated order. Managed
+  // from the "Fixed Order" tab — see OPS → Shift & Tasks.
+  isSequenced:      boolean;
   isActive:         boolean;
   sortOrder:        number;
 }

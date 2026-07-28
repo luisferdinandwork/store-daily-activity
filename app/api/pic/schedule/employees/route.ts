@@ -27,7 +27,7 @@ export async function GET(_req: NextRequest) {
 
     if (!user?.id || !user?.homeStoreId) {
       return NextResponse.json(
-        { success: false, error: 'Only OPS or PIC 1 can access this resource.' },
+        { success: false, error: 'Only OPS or PIC can access this resource.' },
         { status: 403 },
       );
     }
@@ -36,7 +36,7 @@ export async function GET(_req: NextRequest) {
 
     if (!canManageSchedule(role, empType)) {
       return NextResponse.json(
-        { success: false, error: 'Only OPS or PIC 1 can access this resource.' },
+        { success: false, error: 'Only OPS or PIC can access this resource.' },
         { status: 403 },
       );
     }

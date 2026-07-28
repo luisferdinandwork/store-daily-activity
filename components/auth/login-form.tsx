@@ -108,7 +108,7 @@ export function LoginForm() {
           <div className="flex items-center gap-3">
             <div className="flex h-12 w-24 items-center justify-center rounded-xl">
               <Image
-                src="/logo/LogoPri-white.png"
+                src="/logo/LogoPRI-white.png"
                 alt="Daily Store"
                 width={200}
                 height={200}
@@ -177,7 +177,7 @@ export function LoginForm() {
         <div className="mb-8 flex flex-col items-center gap-2.5 lg:hidden">
           <div className="flex h-12 w-28 items-center justify-center">
             <Image
-              src="/logo/LogoPri.png"
+              src="/logo/LogoPRI.png"
               alt="Daily Store"
               width={200}
               height={200}

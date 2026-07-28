@@ -9,11 +9,12 @@
 //   ops_ho   → all areas
 //   ops_area → their assigned areaId only
 
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { and, eq, gte, inArray, lt, sql } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
+import { resolveItScope } from '@/lib/auth/it-scope';
 import {
   areas,
   attendance,
@@ -46,13 +47,16 @@ export type StoreRow = {
   name: string;
   address: string;
   areaId: number;
+  latitude: string | null;
+  longitude: string | null;
+  geofenceRadiusM: string | null;
   pettyCashBalance: string;
   taskStats: {
     total: number;
     completed: number;
-    pending: number;
+    notStarted: number;
     inProgress: number;
-    discrepancy: number;
+    pending: number;
     completionRate: number;
     colorStatus: TaskColorStatus;
   };
@@ -95,7 +99,7 @@ function toColorStatus(rate: number, total: number): TaskColorStatus {
 // All task tables share the same shape for the columns we need:
 //   storeId  integer  → stores.id
 //   date     timestamp
-//   status   taskStatusEnum  (pending | in_progress | completed | discrepancy | …)
+//   status   taskStatusEnum  (not_started | in_progress | completed | pending | …)
 //
 // We UNION-ALL all 11 task tables using Drizzle's sql`` template literal so
 // parameters are bound correctly by the Neon HTTP driver.
@@ -106,7 +110,7 @@ type TaskStatRow = {
   total: number;
   completed: number;
   inProgress: number;
-  discrepancy: number;
+  pending: number;
 };
 
 async function fetchTaskStats(
@@ -125,7 +129,7 @@ async function fetchTaskStats(
     total: number;
     completed: number;
     in_progress: number;
-    discrepancy: number;
+    pending: number;
   }>(sql`
     WITH all_tasks AS (
       SELECT store_id, status FROM store_opening_tasks  WHERE date >= ${start} AND date < ${end} AND store_id IN (${idList})
@@ -155,14 +159,14 @@ async function fetchTaskStats(
       COUNT(*)::int                                             AS total,
       COUNT(*) FILTER (WHERE status = 'completed')::int        AS completed,
       COUNT(*) FILTER (WHERE status = 'in_progress')::int      AS in_progress,
-      COUNT(*) FILTER (WHERE status = 'discrepancy')::int      AS discrepancy
+      COUNT(*) FILTER (WHERE status = 'pending')::int          AS pending
     FROM all_tasks
     GROUP BY store_id
   `);
 
   // Neon's HTTP driver returns { rows: [...] }; websocket driver is directly
   // iterable. Access .rows when present, fall back to the result itself.
-  const rows: { store_id: number; total: number; completed: number; in_progress: number; discrepancy: number }[] =
+  const rows: { store_id: number; total: number; completed: number; in_progress: number; pending: number }[] =
     Array.isArray((result as { rows?: unknown[] }).rows)
       ? (result as { rows: typeof rows }).rows
       : (result as unknown as typeof rows);
@@ -170,11 +174,11 @@ async function fetchTaskStats(
   const map = new Map<number, TaskStatRow>();
   for (const row of rows) {
     map.set(Number(row.store_id), {
-      storeId:     Number(row.store_id),
-      total:       Number(row.total),
-      completed:   Number(row.completed),
-      inProgress:  Number(row.in_progress),
-      discrepancy: Number(row.discrepancy),
+      storeId:    Number(row.store_id),
+      total:      Number(row.total),
+      completed:  Number(row.completed),
+      inProgress: Number(row.in_progress),
+      pending:    Number(row.pending),
     });
   }
   return map;
@@ -219,7 +223,10 @@ export async function GET(): Promise<NextResponse<StoresApiResponse>> {
     .orderBy(stores.name);
 
   if (storeRows.length === 0) {
-    return NextResponse.json({ success: true, data: [] });
+    // Still return the visible areas (even with no stores yet) so the
+    // management UI can offer "add a store" for an empty area.
+    const emptyAreas: AreaGroup[] = visibleAreas.map((a) => ({ id: a.id, name: a.name, stores: [] }));
+    return NextResponse.json({ success: true, data: emptyAreas });
   }
 
   const storeIds = storeRows.map((s) => s.id);
@@ -348,9 +355,9 @@ export async function GET(): Promise<NextResponse<StoresApiResponse>> {
       total: 0,
       completed: 0,
       inProgress: 0,
-      discrepancy: 0,
+      pending: 0,
     };
-    const pending = ts.total - ts.completed - ts.inProgress - ts.discrepancy;
+    const notStarted = ts.total - ts.completed - ts.inProgress - ts.pending;
     const rate = ts.total > 0 ? Math.round((ts.completed / ts.total) * 100) : 0;
 
     const storeRow: StoreRow = {
@@ -359,13 +366,16 @@ export async function GET(): Promise<NextResponse<StoresApiResponse>> {
       name: store.name,
       address: store.address,
       areaId: store.areaId,
+      latitude: store.latitude,
+      longitude: store.longitude,
+      geofenceRadiusM: store.geofenceRadiusM,
       pettyCashBalance: store.pettyCashBalance ?? '0',
       taskStats: {
         total: ts.total,
         completed: ts.completed,
-        pending: Math.max(0, pending),
+        notStarted: Math.max(0, notStarted),
         inProgress: ts.inProgress,
-        discrepancy: ts.discrepancy,
+        pending: ts.pending,
         completionRate: rate,
         colorStatus: toColorStatus(rate, ts.total),
       },
@@ -379,6 +389,103 @@ export async function GET(): Promise<NextResponse<StoresApiResponse>> {
     areaMap.get(store.areaId)?.stores.push(storeRow);
   }
 
-  const result = Array.from(areaMap.values()).filter((a) => a.stores.length > 0);
+  // Keep areas with zero stores visible too — management UI needs them to
+  // offer "add a store" for an empty area.
+  const result = Array.from(areaMap.values());
   return NextResponse.json({ success: true, data: result });
+}
+
+// ─── Create ───────────────────────────────────────────────────────────────────
+//
+// POST /api/ops/stores
+//   → create a new store. OPS HO may create in any visible area; OPS Area is
+//     locked to their own assigned area regardless of what areaId is sent.
+
+const LAT_MIN = -90;
+const LAT_MAX = 90;
+const LNG_MIN = -180;
+const LNG_MAX = 180;
+
+function parseCoordinate(raw: unknown, min: number, max: number): { ok: true; value: string | null } | { ok: false } {
+  if (raw === undefined || raw === null || raw === '') return { ok: true, value: null };
+  const n = typeof raw === 'number' ? raw : Number(raw);
+  if (!Number.isFinite(n) || n < min || n > max) return { ok: false };
+  return { ok: true, value: n.toFixed(7) };
+}
+
+export async function POST(request: NextRequest) {
+  const scope = await resolveOpsScope();
+  if (!scope.ok) {
+    return NextResponse.json({ success: false, error: scope.error }, { status: scope.status });
+  }
+
+  const body = await request.json().catch(() => null);
+
+  const storeNo = typeof body?.storeNo === 'string' ? body.storeNo.trim() : '';
+  const name = typeof body?.name === 'string' ? body.name.trim() : '';
+  const address = typeof body?.address === 'string' ? body.address.trim() : '';
+
+  if (!storeNo || !name || !address) {
+    return NextResponse.json(
+      { success: false, error: 'storeNo, name, and address are required.' },
+      { status: 400 },
+    );
+  }
+
+  // OPS Area can only create stores in their own area, regardless of the
+  // areaId the client sent.
+  const requestedAreaId = Number(body?.areaId);
+  const areaId = scope.scope === 'area' ? scope.areaId : requestedAreaId;
+
+  if (!Number.isFinite(areaId)) {
+    return NextResponse.json({ success: false, error: 'A valid areaId is required.' }, { status: 400 });
+  }
+
+  const [areaRow] = await db.select({ id: areas.id }).from(areas).where(eq(areas.id, areaId)).limit(1);
+  if (!areaRow || (scope.scope === 'area' && areaId !== scope.areaId)) {
+    return NextResponse.json({ success: false, error: 'Invalid area.' }, { status: 400 });
+  }
+
+  const wantsLocation =
+    body?.latitude !== undefined || body?.longitude !== undefined || body?.geofenceRadiusM !== undefined;
+
+  if (wantsLocation) {
+    const itScope = await resolveItScope();
+    if (!itScope.ok) {
+      return NextResponse.json(
+        { success: false, error: "Forbidden: only IT can set a store's location." },
+        { status: 403 },
+      );
+    }
+  }
+
+  const lat = parseCoordinate(body?.latitude, LAT_MIN, LAT_MAX);
+  const lng = parseCoordinate(body?.longitude, LNG_MIN, LNG_MAX);
+  if (!lat.ok) return NextResponse.json({ success: false, error: 'Latitude must be between -90 and 90.' }, { status: 400 });
+  if (!lng.ok) return NextResponse.json({ success: false, error: 'Longitude must be between -180 and 180.' }, { status: 400 });
+
+  const radius = parseCoordinate(body?.geofenceRadiusM, 1, 100_000);
+  if (!radius.ok) {
+    return NextResponse.json({ success: false, error: 'Geofence radius must be a positive number.' }, { status: 400 });
+  }
+
+  const [existing] = await db.select({ id: stores.id }).from(stores).where(eq(stores.storeNo, storeNo)).limit(1);
+  if (existing) {
+    return NextResponse.json({ success: false, error: `A store with code "${storeNo}" already exists.` }, { status: 409 });
+  }
+
+  const [created] = await db
+    .insert(stores)
+    .values({
+      storeNo,
+      name,
+      address,
+      areaId,
+      latitude: lat.value,
+      longitude: lng.value,
+      ...(radius.value ? { geofenceRadiusM: radius.value } : {}),
+    })
+    .returning();
+
+  return NextResponse.json({ success: true, store: created });
 }

@@ -8,17 +8,9 @@ import { shifts, shiftTasks, taskDefinitions } from '@/lib/db/schema';
 
 export const dynamic = 'force-dynamic';
 
-function isOps(session: Awaited<ReturnType<typeof auth>>): boolean {
-  const user = session?.user as any;
-  const role = user?.role as string | undefined;
-  const employeeType = (user?.employeeType ?? user?.employeeTypeCode) as string | undefined;
-
-  return (
-    role === 'ops' ||
-    role === 'admin' ||
-    employeeType === 'ops_area' ||
-    employeeType === 'ops_ho'
-  );
+function isIt(session: Awaited<ReturnType<typeof auth>>): boolean {
+  const role = (session?.user as any)?.role as string | undefined;
+  return role === 'it';
 }
 
 async function resolveId(ctx: { params: { id: string } | Promise<{ id: string }> }) {
@@ -30,6 +22,12 @@ interface PutBody {
   tasks?: Array<{
     taskDefinitionId: number;
     isRequired?: boolean;
+    // Whether this task is part of the shift's fixed, gated order (see
+    // OPS → Shift & Tasks → Fixed Order). This route replaces the shift's
+    // whole task set, so every caller must echo back the current isSequenced
+    // value for tasks it isn't editing — otherwise it silently resets to
+    // false (not sequenced).
+    isSequenced?: boolean;
     sortOrder?: number;
   }>;
 }
@@ -47,7 +45,7 @@ export async function PUT(
     );
   }
 
-  if (!isOps(session)) {
+  if (!isIt(session)) {
     return NextResponse.json(
       { success: false, error: 'Forbidden' },
       { status: 403 },
@@ -81,7 +79,12 @@ export async function PUT(
   // De-dupe by taskDefinitionId. Last value wins.
   const deduped = new Map<
     number,
-    { taskDefinitionId: number; isRequired?: boolean; sortOrder?: number }
+    {
+      taskDefinitionId: number;
+      isRequired?: boolean;
+      isSequenced?: boolean;
+      sortOrder?: number;
+    }
   >();
 
   for (const task of incoming) {
@@ -143,6 +146,7 @@ export async function PUT(
           shiftId,
           taskDefinitionId: task.taskDefinitionId,
           isRequired: task.isRequired ?? true,
+          isSequenced: task.isSequenced ?? false,
           isActive: true,
           sortOrder: Number.isInteger(task.sortOrder)
             ? task.sortOrder!

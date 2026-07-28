@@ -732,7 +732,7 @@ export async function autoSaveStoreOpening(
     if (userId) applyActorForPatch(update, patch, existing, userId, now);
     if (userId) update.userId = userId;
     if (scheduleId) update.scheduleId = scheduleId;
-    if (existing.status === "pending") update.status = "in_progress";
+    if (existing.status === "not_started") update.status = "in_progress";
 
     await db
       .update(storeOpeningTasks)
@@ -791,7 +791,7 @@ export async function getOrCreateStoreOpeningForSchedule(
       storeId,
       shiftId: morningShiftId,
       date: startOfDay(date),
-      status: "pending",
+      status: "not_started",
       updatedAt: new Date(),
     })
     .onConflictDoNothing()

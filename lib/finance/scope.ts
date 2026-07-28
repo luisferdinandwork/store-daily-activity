@@ -3,7 +3,7 @@
 // Resolves the current session into a Finance scope used by all Finance APIs.
 //
 //   - role.code === 'finance'  → ok: true
-//   - role.code === 'admin'    → ok: true  (admins can access everything)
+//   - role.code === 'it'       → ok: true  (IT can access everything)
 //   - everyone else            → 401 / 403
 //
 // Finance users see all stores / all data (no area scoping needed for now).
@@ -40,7 +40,7 @@ export async function resolveFinanceScope(): Promise<FinanceScope> {
     return { ok: false, status: 401, error: 'Unauthorized' };
   }
 
-  if (row.roleCode === 'finance' || row.roleCode === 'admin') {
+  if (row.roleCode === 'finance' || row.roleCode === 'it') {
     return { ok: true, userId };
   }
 

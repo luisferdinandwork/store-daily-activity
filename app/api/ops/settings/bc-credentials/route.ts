@@ -8,7 +8,7 @@
 //   → create a new settings row.
 //   Body: { code?, name?, apiUrl, authType, username?, password?, bearerToken?, isActive? }
 //
-// Access: OPS HO only — BC credentials affect every store's sales data.
+// Access: IT only — BC credentials affect every store's sales data.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -16,7 +16,7 @@ import { desc } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import { businessCentralSettings } from '@/lib/db/schema';
-import { resolveOpsScope } from '@/lib/performance/ops-scope';
+import { resolveItScope } from '@/lib/auth/it-scope';
 
 function maskSecret(value: string | null): string | null {
   if (!value) return value;
@@ -45,16 +45,9 @@ function serialize(row: typeof businessCentralSettings.$inferSelect) {
 }
 
 export async function GET() {
-  const scope = await resolveOpsScope();
+  const scope = await resolveItScope();
   if (!scope.ok) {
     return NextResponse.json({ success: false, error: scope.error }, { status: scope.status });
-  }
-
-  if (scope.scope !== 'all_areas') {
-    return NextResponse.json(
-      { success: false, error: 'Forbidden: only OPS HO can manage Business Central credentials.' },
-      { status: 403 },
-    );
   }
 
   const rows = await db
@@ -66,16 +59,9 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const scope = await resolveOpsScope();
+  const scope = await resolveItScope();
   if (!scope.ok) {
     return NextResponse.json({ success: false, error: scope.error }, { status: scope.status });
-  }
-
-  if (scope.scope !== 'all_areas') {
-    return NextResponse.json(
-      { success: false, error: 'Forbidden: only OPS HO can manage Business Central credentials.' },
-      { status: 403 },
-    );
   }
 
   const body = await req.json().catch(() => null);

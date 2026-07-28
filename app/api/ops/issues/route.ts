@@ -60,11 +60,11 @@ export async function GET() {
       .where(eq(users.id, userId))
       .limit(1);
 
-    if (!actor || (actor.roleCode !== 'ops' && actor.roleCode !== 'admin')) {
+    if (!actor || (actor.roleCode !== 'ops' && actor.roleCode !== 'it')) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
-    const isHO = actor.empType === 'ops_ho' || actor.roleCode === 'admin';
+    const isHO = actor.empType === 'ops_ho' || actor.roleCode === 'it';
 
     const [opsRole] = await db
       .select({ id: userRoles.id })
@@ -115,6 +115,9 @@ export async function GET() {
         description: issues.description,
         status: issues.status,
         attachmentUrls: issues.attachmentUrls,
+        baAttachmentUrls: issues.baAttachmentUrls,
+        baUploadedAt: issues.baUploadedAt,
+        solvedAt: issues.solvedAt,
         reviewedAt: issues.reviewedAt,
         reviewedBy: issues.reviewedBy,
         createdAt: issues.createdAt,
@@ -144,6 +147,9 @@ export async function GET() {
       description: row.description,
       status: row.status,
       attachmentUrls: parseUrls(row.attachmentUrls),
+      baAttachmentUrls: parseUrls(row.baAttachmentUrls),
+      baUploadedAt: row.baUploadedAt,
+      solvedAt: row.solvedAt,
       reviewedAt: row.reviewedAt,
       reviewedBy: row.reviewedBy,
       createdAt: row.createdAt,

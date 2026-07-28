@@ -25,10 +25,11 @@ import {
   itemDroppingEntries,
   itemReturnTasks,
   itemReturnEntries,
-  cekUangMukaTasks,
-  cekUangMukaDenominations,
+  cekUangModalTasks,
+  cekUangModalDenominations,
 } from "@/lib/db/schema";
 import { eq, and, gte, lte, desc, inArray, asc } from "drizzle-orm";
+import { todayInStoreTimezone } from "@/lib/schedule-utils";
 import { getOrCreateSetoranForSchedule } from "@/lib/db/utils/setoran";
 import { getOrCreateStoreOpeningForSchedule } from "@/lib/db/utils/store-opening";
 import {
@@ -40,7 +41,7 @@ import { getOrCreateVmChecklistForSchedule } from "@/lib/db/utils/vm-checklist";
 import { getOrCreateMarketingCheckForSchedule } from "@/lib/db/utils/marketing-check";
 import { getOrCreateItemDroppingForSchedule } from "@/lib/db/utils/item-dropping";
 import { getOrCreateItemReturnForSchedule } from "@/lib/db/utils/item-return";
-import { getOrCreateCekUangMukaForSchedule } from "@/lib/db/utils/cek-uang-muka";
+import { getOrCreateCekUangModalForSchedule } from "@/lib/db/utils/cek-uang-modal";
 import { getOrCreateGroomingForSchedule } from "@/lib/db/utils/grooming";
 import { getOrCreateBriefingForSchedule } from "@/lib/db/utils/briefing";
 import { getOrCreateSerahTerimaForSchedule } from "@/lib/db/utils/serah-terima";
@@ -61,7 +62,7 @@ const SUPPORTED_TASK_TYPES = [
   "marketing_check",
   "item_dropping",
   "item_return",
-  "cek_uang_muka",
+  "cek_uang_modal",
   "briefing",
   "serah_terima",
   "store_closing",
@@ -130,7 +131,17 @@ async function getShiftCodeMap(): Promise<Record<number, string>> {
 
 type ShiftTaskConfig = {
   assignedTaskTypes: Set<TaskType>;
+  // Task types per shift, in the IT-configured order (shift_tasks.sortOrder).
+  // The employee task list sorts tasks using this array's index.
   shiftTaskMap: Record<string, TaskType[]>;
+  // Whether each task type is required (mandatory for the shift) per
+  // shift_tasks.isRequired. Independent from shiftTaskSequenced below.
+  shiftTaskRequired: Record<string, Partial<Record<TaskType, boolean>>>;
+  // Whether each task type is part of the shift's fixed, gated order per
+  // shift_tasks.isSequenced (managed from OPS → Shift & Tasks → Fixed
+  // Order). Sequenced tasks are locked until every earlier sequenced task
+  // is completed/verified; everything else can be done anytime.
+  shiftTaskSequenced: Record<string, Partial<Record<TaskType, boolean>>>;
   unsupportedTaskDefinitions: Array<{
     shiftId: number;
     shiftCode: string;
@@ -147,6 +158,8 @@ async function getAssignedTaskTypesFromDb(
     return {
       assignedTaskTypes: new Set<TaskType>(),
       shiftTaskMap: {},
+      shiftTaskRequired: {},
+      shiftTaskSequenced: {},
       unsupportedTaskDefinitions: [],
     };
   }
@@ -158,6 +171,8 @@ async function getAssignedTaskTypesFromDb(
       taskLabel: taskDefinitions.label,
       taskSortOrder: taskDefinitions.sortOrder,
       assignmentSortOrder: shiftTasks.sortOrder,
+      isRequired: shiftTasks.isRequired,
+      isSequenced: shiftTasks.isSequenced,
     })
     .from(shiftTasks)
     .innerJoin(
@@ -179,6 +194,10 @@ async function getAssignedTaskTypesFromDb(
 
   const assignedTaskTypes = new Set<TaskType>();
   const shiftTaskMap: Record<string, TaskType[]> = {};
+  const shiftTaskRequired: Record<string, Partial<Record<TaskType, boolean>>> =
+    {};
+  const shiftTaskSequenced: Record<string, Partial<Record<TaskType, boolean>>> =
+    {};
   const unsupportedTaskDefinitions: ShiftTaskConfig["unsupportedTaskDefinitions"] =
     [];
 
@@ -187,6 +206,12 @@ async function getAssignedTaskTypesFromDb(
 
     if (!shiftTaskMap[shiftCode]) {
       shiftTaskMap[shiftCode] = [];
+    }
+    if (!shiftTaskRequired[shiftCode]) {
+      shiftTaskRequired[shiftCode] = {};
+    }
+    if (!shiftTaskSequenced[shiftCode]) {
+      shiftTaskSequenced[shiftCode] = {};
     }
 
     if (!isSupportedTaskType(row.taskCode)) {
@@ -204,9 +229,17 @@ async function getAssignedTaskTypesFromDb(
     if (!shiftTaskMap[shiftCode].includes(row.taskCode)) {
       shiftTaskMap[shiftCode].push(row.taskCode);
     }
+    shiftTaskRequired[shiftCode][row.taskCode] = row.isRequired;
+    shiftTaskSequenced[shiftCode][row.taskCode] = row.isSequenced;
   }
 
-  return { assignedTaskTypes, shiftTaskMap, unsupportedTaskDefinitions };
+  return {
+    assignedTaskTypes,
+    shiftTaskMap,
+    shiftTaskRequired,
+    shiftTaskSequenced,
+    unsupportedTaskDefinitions,
+  };
 }
 
 function taskAllowedForEmployeeShift(
@@ -249,7 +282,7 @@ export async function GET(request: NextRequest) {
 
     const targetDate = dateParam
       ? new Date(`${dateParam}T00:00:00`)
-      : new Date();
+      : todayInStoreTimezone();
     const dayStart = startOfDay(targetDate);
     const dayEnd = endOfDay(targetDate);
 
@@ -290,6 +323,8 @@ export async function GET(request: NextRequest) {
     const {
       assignedTaskTypes: allowedTaskTypes,
       shiftTaskMap,
+      shiftTaskRequired,
+      shiftTaskSequenced,
       unsupportedTaskDefinitions,
     } = await getAssignedTaskTypesFromDb(shiftIds, shiftCodeMap);
 
@@ -348,8 +383,8 @@ export async function GET(request: NextRequest) {
       itemDroppingEntryRows,
       itemReturnRows,
       itemReturnEntryRows,
-      cekUangMukaRows,
-      cekUangMukaDenominationRows,
+      cekUangModalRows,
+      cekUangModalDenominationRows,
       storeClosingRows,
       briefingRows,
       serahTerimaRows,
@@ -627,11 +662,11 @@ export async function GET(request: NextRequest) {
           })()
         : Promise.resolve([]),
 
-      shouldLoadTask("cek_uang_muka")
+      shouldLoadTask("cek_uang_modal")
         ? (async () => {
             await Promise.all(
               todaySchedules.map((s) =>
-                getOrCreateCekUangMukaForSchedule(
+                getOrCreateCekUangModalForSchedule(
                   s.id,
                   userId,
                   s.storeId,
@@ -643,28 +678,28 @@ export async function GET(request: NextRequest) {
 
             return db
               .select()
-              .from(cekUangMukaTasks)
+              .from(cekUangModalTasks)
               .where(
                 and(
-                  inArray(cekUangMukaTasks.storeId, storeIds),
-                  gte(cekUangMukaTasks.date, dayStart),
-                  lte(cekUangMukaTasks.date, dayEnd),
+                  inArray(cekUangModalTasks.storeId, storeIds),
+                  gte(cekUangModalTasks.date, dayStart),
+                  lte(cekUangModalTasks.date, dayEnd),
                 ),
               )
-              .orderBy(desc(cekUangMukaTasks.date));
+              .orderBy(desc(cekUangModalTasks.date));
           })()
         : Promise.resolve([]),
 
-      shouldLoadTask("cek_uang_muka")
+      shouldLoadTask("cek_uang_modal")
         ? (async () => {
             const taskIds = await db
-              .select({ id: cekUangMukaTasks.id })
-              .from(cekUangMukaTasks)
+              .select({ id: cekUangModalTasks.id })
+              .from(cekUangModalTasks)
               .where(
                 and(
-                  inArray(cekUangMukaTasks.storeId, storeIds),
-                  gte(cekUangMukaTasks.date, dayStart),
-                  lte(cekUangMukaTasks.date, dayEnd),
+                  inArray(cekUangModalTasks.storeId, storeIds),
+                  gte(cekUangModalTasks.date, dayStart),
+                  lte(cekUangModalTasks.date, dayEnd),
                 ),
               );
 
@@ -672,14 +707,14 @@ export async function GET(request: NextRequest) {
 
             return db
               .select()
-              .from(cekUangMukaDenominations)
+              .from(cekUangModalDenominations)
               .where(
                 inArray(
-                  cekUangMukaDenominations.taskId,
+                  cekUangModalDenominations.taskId,
                   taskIds.map((r) => r.id),
                 ),
               )
-              .orderBy(cekUangMukaDenominations.denominationValue);
+              .orderBy(cekUangModalDenominations.denominationValue);
           })()
         : Promise.resolve([]),
 
@@ -877,11 +912,11 @@ export async function GET(request: NextRequest) {
       returnEntriesByTaskId.set(entry.taskId, bucket);
     }
 
-    const uangMukaDenominationsByTaskId = new Map<number, typeof cekUangMukaDenominationRows>();
-    for (const row of cekUangMukaDenominationRows) {
-      const bucket = uangMukaDenominationsByTaskId.get(row.taskId) ?? [];
+    const uangModalDenominationsByTaskId = new Map<number, typeof cekUangModalDenominationRows>();
+    for (const row of cekUangModalDenominationRows) {
+      const bucket = uangModalDenominationsByTaskId.get(row.taskId) ?? [];
       bucket.push(row);
-      uangMukaDenominationsByTaskId.set(row.taskId, bucket);
+      uangModalDenominationsByTaskId.set(row.taskId, bucket);
     }
 
     const serahItemsByTaskId = new Map<number, typeof serahTerimaItemRows>();
@@ -1311,12 +1346,12 @@ export async function GET(request: NextRequest) {
           };
         }),
 
-      ...cekUangMukaRows
+      ...cekUangModalRows
         .filter((r) => inStore(r.storeId))
         .map((t) => {
           const shift = (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode;
 
-          const denominations = (uangMukaDenominationsByTaskId.get(t.id) ?? []).map((d) => ({
+          const denominations = (uangModalDenominationsByTaskId.get(t.id) ?? []).map((d) => ({
             id: String(d.id),
             taskId: String(d.taskId),
             userId: d.userId,
@@ -1329,7 +1364,7 @@ export async function GET(request: NextRequest) {
           }));
 
           return {
-            type: "cek_uang_muka" as const,
+            type: "cek_uang_modal" as const,
             shift,
             data: {
               id: String(t.id),
@@ -1355,28 +1390,46 @@ export async function GET(request: NextRequest) {
 
       ...briefingRows
         .filter((r) => inStore(r.storeId))
-        .map((t) => ({
-          type: "briefing" as const,
-          shift: (shiftCodeMap[t.shiftId] ?? "evening") as ShiftCode,
-          data: {
-            id: String(t.id),
-            scheduleId: String(t.scheduleId),
-            userId: t.userId,
-            storeId: String(t.storeId),
-            shift: (shiftCodeMap[t.shiftId] ?? "evening") as ShiftCode,
-            date: t.date.toISOString(),
+        .map((t) => {
+          // Briefing is now a genuinely shift-scoped row (morning row / evening
+          // row), so label + actor resolution follow the ROW's own shift, not
+          // a forced "morning" default.
+          const rowShiftCode = shiftCodeMap[t.shiftId] ?? "morning";
+          const preferredMap =
+            rowShiftCode === "evening" ? closingScheduleByStoreId : morningScheduleByStoreId;
+          const actorSchedule = preferredMap.get(t.storeId);
+          const actorScheduleId = actorSchedule?.id ?? t.scheduleId;
+          const shift = rowShiftCode as ShiftCode;
 
-            done: t.done,
-            isBalanced: t.isBalanced,
-            parentTaskId: t.parentTaskId,
+          return {
+            type: "briefing" as const,
+            shift,
+            data: {
+              id: String(t.id),
+              // Briefing is shared per store/shift/day. The row may have been
+              // created by another employee on the same shift, but AccessGuard
+              // checks attendance by scheduleId — send the logged-in
+              // employee's own scheduleId here.
+              scheduleId: String(actorScheduleId),
+              originalScheduleId: String(t.scheduleId),
+              userId,
+              assignedUserId: t.userId,
+              storeId: String(t.storeId),
+              shift,
+              date: t.date.toISOString(),
 
-            status: t.status,
-            notes: t.notes,
-            completedAt: toIso(t.completedAt),
-            verifiedBy: t.verifiedBy,
-            verifiedAt: toIso(t.verifiedAt),
-          },
-        })),
+              done: t.done,
+              isBalanced: t.isBalanced,
+              parentTaskId: t.parentTaskId,
+
+              status: t.status,
+              notes: t.notes,
+              completedAt: toIso(t.completedAt),
+              verifiedBy: t.verifiedBy,
+              verifiedAt: toIso(t.verifiedAt),
+            },
+          };
+        }),
 
       ...serahTerimaRows
         .filter((r) => inStore(r.storeId))
@@ -1394,15 +1447,31 @@ export async function GET(request: NextRequest) {
             createdAt: toIso(item.createdAt),
           }));
 
+          // Serah Terima is now a genuinely shift-scoped row (morning row /
+          // evening row), so label + actor resolution follow the ROW's own
+          // shift, not a forced "morning" default.
+          const rowShiftCode = shiftCodeMap[t.shiftId] ?? "morning";
+          const preferredMap =
+            rowShiftCode === "evening" ? closingScheduleByStoreId : morningScheduleByStoreId;
+          const actorSchedule = preferredMap.get(t.storeId);
+          const actorScheduleId = actorSchedule?.id ?? t.scheduleId;
+          const shift = rowShiftCode as ShiftCode;
+
           return {
             type: "serah_terima" as const,
-            shift: (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode,
+            shift,
             data: {
               id: String(t.id),
-              scheduleId: String(t.scheduleId),
-              userId: t.userId,
+              // Serah Terima is shared per store/shift/day. The row may have
+              // been created by another employee on the same shift, but
+              // AccessGuard checks attendance by scheduleId — send the
+              // logged-in employee's own scheduleId here.
+              scheduleId: String(actorScheduleId),
+              originalScheduleId: String(t.scheduleId),
+              userId,
+              assignedUserId: t.userId,
               storeId: String(t.storeId),
-              shift: (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode,
+              shift,
               date: t.date.toISOString(),
 
               handoverText: t.handoverText ?? "",
@@ -1540,9 +1609,9 @@ export async function GET(request: NextRequest) {
     });
 
     const STATUS_ORDER: Record<string, number> = {
-      pending: 0,
+      not_started: 0,
       in_progress: 1,
-      discrepancy: 2,
+      pending: 2,
       completed: 3,
       verified: 4,
       rejected: 5,
@@ -1570,6 +1639,8 @@ export async function GET(request: NextRequest) {
       shifts: shiftCodesRaw,
       scheduleIds,
       shiftTaskMap,
+      shiftTaskRequired,
+      shiftTaskSequenced,
       assignedTaskTypes: [...allowedTaskTypes],
       unsupportedTaskDefinitions,
     });
@@ -1747,21 +1818,21 @@ export async function PATCH(request: NextRequest) {
             .then(() => {}),
       },
 
-      cek_uang_muka: {
+      cek_uang_modal: {
         getRow: async (id) =>
           (
             await db
-              .select({ status: cekUangMukaTasks.status })
-              .from(cekUangMukaTasks)
-              .where(eq(cekUangMukaTasks.id, id))
+              .select({ status: cekUangModalTasks.status })
+              .from(cekUangModalTasks)
+              .where(eq(cekUangModalTasks.id, id))
               .limit(1)
           )[0],
 
         update: (id) =>
           db
-            .update(cekUangMukaTasks)
+            .update(cekUangModalTasks)
             .set({ status: "in_progress", updatedAt: new Date() })
-            .where(eq(cekUangMukaTasks.id, id))
+            .where(eq(cekUangModalTasks.id, id))
             .then(() => {}),
       },
 
@@ -1836,7 +1907,7 @@ export async function PATCH(request: NextRequest) {
         return NextResponse.json({ error: "Task not found" }, { status: 404 });
       }
 
-      if (task.status !== "pending" && task.status !== "in_progress") {
+      if (task.status !== "not_started" && task.status !== "in_progress") {
         return NextResponse.json({ success: true });
       }
 
@@ -1889,7 +1960,7 @@ export async function PATCH(request: NextRequest) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 });
       }
 
-      if (row.status !== "pending") {
+      if (row.status !== "not_started") {
         return NextResponse.json({ success: true });
       }
 
@@ -1916,7 +1987,7 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: "Task not found" }, { status: 404 });
     }
 
-    if (row.status !== "pending") {
+    if (row.status !== "not_started") {
       return NextResponse.json({ success: true });
     }
 

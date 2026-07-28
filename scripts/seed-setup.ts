@@ -321,11 +321,18 @@ async function seedSetup() {
       sortOrder: 30,
     }),
     getOrCreateRole({
-      code: 'admin',
-      label: 'Admin',
-      description: 'System administrator',
+      code: 'it',
+      label: 'IT',
+      description: 'System administrator — full access, can preview other roles',
       canReceiveIssues: true,
       sortOrder: 40,
+    }),
+    getOrCreateRole({
+      code: 'audit',
+      label: 'Audit',
+      description: 'Audit team',
+      canReceiveIssues: true,
+      sortOrder: 35,
     }),
   ]);
 
@@ -853,28 +860,12 @@ async function seedSetup() {
 
   for (const employee of employeeRows) {
     const store = storeByCode[employee.storeCode];
-    const baseTarget = storeBaseTargetDefs[employee.storeCode];
     const user = insertedUsers.find((row) => row.nik === employee.nik);
     const plan = storeTargetPlans.get(employee.storeCode);
 
     if (!user || !plan) continue;
 
     const role = targetRoleFromStatus(employee.status);
-
-    const monthlySalesTarget = applyTargetWeight(
-      baseTarget.saSalesTarget,
-      role.weightPct,
-    );
-
-    const monthlyTransactionTarget = applyTargetWeight(
-      baseTarget.saTransactionTarget,
-      role.weightPct,
-    );
-
-    const monthlyAtvTarget = calculateAtvTarget(
-      monthlySalesTarget,
-      monthlyTransactionTarget,
-    );
 
     await createEmployeeTargetIfMissing({
       storeMonthlyTargetId: plan.id,
@@ -883,11 +874,6 @@ async function seedSetup() {
       yearMonth: TARGET_YEAR_MONTH,
 
       targetRoleCode: role.roleCode,
-      targetWeightPct: role.weightPct.toFixed(2),
-
-      monthlySalesTarget: String(monthlySalesTarget),
-      monthlyTransactionTarget,
-      monthlyAtvTarget: String(monthlyAtvTarget),
 
       notes:
         role.roleCode === 'SA'

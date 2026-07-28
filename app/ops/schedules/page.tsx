@@ -956,7 +956,7 @@ export default function OpsSchedulesPage() {
   const user  = session?.user as any;
   const role  = user?.role as string | undefined;
   const empType = (user?.employeeType ?? user?.employeeTypeCode) as string | undefined;
-  const isOps = role === 'ops' || role === 'admin' || empType === 'ops_area' || empType === 'ops_ho';
+  const isOps = role === 'ops' || role === 'it' || empType === 'ops_area' || empType === 'ops_ho';
 
   // ── Data state ──────────────────────────────────────────────────────────────
   const [isHO,          setIsHO]          = useState(false);
@@ -973,6 +973,7 @@ export default function OpsSchedulesPage() {
   const [creating,      setCreating]      = useState(false);
   const [deleting,      setDeleting]      = useState(false);
   const [exporting,     setExporting]     = useState(false);
+  const [templating,    setTemplating]    = useState(false);
 
   // ── Panel state ─────────────────────────────────────────────────────────────
   const [panelDate,      setPanelDate]      = useState<Date | null>(null);
@@ -1135,6 +1136,25 @@ export default function OpsSchedulesPage() {
     finally { setExporting(false); }
   }
 
+  async function handleDownloadTemplate() {
+    if (!selectedStore) return;
+    setTemplating(true);
+    try {
+      const url = `/api/pic/schedule/template?storeId=${selectedStore}&yearMonth=${selectedMonth}`;
+      const res = await fetch(url);
+      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(parseApiError(j, `HTTP ${res.status}`)); }
+      const blob    = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const filename = res.headers.get('content-disposition')?.match(/filename="(.+)"/)?.[1] ?? `schedule_template_${selectedMonth}.xlsx`;
+      a.href = blobUrl; a.download = filename;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+      toast.success(`Downloaded ${filename}`);
+    } catch (e) { toast.error(e instanceof Error ? e.message : 'Template download failed'); }
+    finally { setTemplating(false); }
+  }
+
   async function handleSaveNewEntry(payload: { userId: string; shift: string | null; isOff: boolean; isLeave: boolean }) {
     if (!panelDate || !selectedStore) return;
     setPanelSaving(true);
@@ -1206,6 +1226,15 @@ export default function OpsSchedulesPage() {
         actions={
           selectedStore ? (
             <>
+              <button
+                type="button"
+                onClick={handleDownloadTemplate}
+                disabled={templating}
+                className="flex h-10 items-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-4 text-sm font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-50"
+              >
+                {templating ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileSpreadsheet className="h-4 w-4" />}
+                Template
+              </button>
               {!schedule && (
                 <button
                   type="button"

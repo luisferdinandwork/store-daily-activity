@@ -1,5 +1,5 @@
 {
-  "id": "6c4ab021-33de-4555-85ed-37515899fcac",
+  "id": "23d2214f-837b-43fa-9436-fb0320732b36",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -795,6 +795,36 @@
           "primaryKey": false,
           "notNull": false
         },
+        "ba_attachment_urls": {
+          "name": "ba_attachment_urls",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "ba_uploaded_by": {
+          "name": "ba_uploaded_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "ba_uploaded_at": {
+          "name": "ba_uploaded_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "solved_by": {
+          "name": "solved_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "solved_at": {
+          "name": "solved_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
         "reviewed_by": {
           "name": "reviewed_by",
           "type": "text",
@@ -917,6 +947,32 @@
           "tableTo": "user_roles",
           "columnsFrom": [
             "assigned_to_role_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "issues_ba_uploaded_by_users_id_fk": {
+          "name": "issues_ba_uploaded_by_users_id_fk",
+          "tableFrom": "issues",
+          "tableTo": "users",
+          "columnsFrom": [
+            "ba_uploaded_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "issues_solved_by_users_id_fk": {
+          "name": "issues_solved_by_users_id_fk",
+          "tableFrom": "issues",
+          "tableTo": "users",
+          "columnsFrom": [
+            "solved_by"
           ],
           "columnsTo": [
             "id"
@@ -1943,6 +1999,220 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.impact_visits": {
+      "name": "impact_visits",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "store_id": {
+          "name": "store_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "visited_by": {
+          "name": "visited_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "visit_date": {
+          "name": "visit_date",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "target_bulan_berjalan": {
+          "name": "target_bulan_berjalan",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "periode_tanggal": {
+          "name": "periode_tanggal",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "pencapaian_pct": {
+          "name": "pencapaian_pct",
+          "type": "numeric(5, 2)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "checklist_responses": {
+          "name": "checklist_responses",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "checklist_score": {
+          "name": "checklist_score",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "checklist_max_score": {
+          "name": "checklist_max_score",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 100
+        },
+        "checklist_grade": {
+          "name": "checklist_grade",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "cash_money_data": {
+          "name": "cash_money_data",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "vm_checklist_responses": {
+          "name": "vm_checklist_responses",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "vm_checklist_score": {
+          "name": "vm_checklist_score",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "vm_checklist_max_score": {
+          "name": "vm_checklist_max_score",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 70
+        },
+        "vm_checklist_grade": {
+          "name": "vm_checklist_grade",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "notes": {
+          "name": "notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "impact_visit_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'draft'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "impact_visits_store_idx": {
+          "name": "impact_visits_store_idx",
+          "columns": [
+            {
+              "expression": "store_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "impact_visits_visited_by_idx": {
+          "name": "impact_visits_visited_by_idx",
+          "columns": [
+            {
+              "expression": "visited_by",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "impact_visits_status_idx": {
+          "name": "impact_visits_status_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "impact_visits_store_id_stores_id_fk": {
+          "name": "impact_visits_store_id_stores_id_fk",
+          "tableFrom": "impact_visits",
+          "tableTo": "stores",
+          "columnsFrom": [
+            "store_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "impact_visits_visited_by_users_id_fk": {
+          "name": "impact_visits_visited_by_users_id_fk",
+          "tableFrom": "impact_visits",
+          "tableTo": "users",
+          "columnsFrom": [
+            "visited_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.employee_types": {
       "name": "employee_types",
       "schema": "",
@@ -2351,6 +2621,208 @@
           ]
         }
       },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.petty_cash_refill_requests": {
+      "name": "petty_cash_refill_requests",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "store_id": {
+          "name": "store_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "year_month": {
+          "name": "year_month",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "requested_by": {
+          "name": "requested_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "requested_at": {
+          "name": "requested_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "notes": {
+          "name": "notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "balance_before": {
+          "name": "balance_before",
+          "type": "numeric(12, 2)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "balance_after": {
+          "name": "balance_after",
+          "type": "numeric(12, 2)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "approved_by": {
+          "name": "approved_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "approved_at": {
+          "name": "approved_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "rejected_by": {
+          "name": "rejected_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "rejected_at": {
+          "name": "rejected_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "rejection_reason": {
+          "name": "rejection_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {
+        "pcrr_store_month_idx": {
+          "name": "pcrr_store_month_idx",
+          "columns": [
+            {
+              "expression": "store_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "year_month",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "pcrr_status_idx": {
+          "name": "pcrr_status_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "petty_cash_refill_requests_store_id_stores_id_fk": {
+          "name": "petty_cash_refill_requests_store_id_stores_id_fk",
+          "tableFrom": "petty_cash_refill_requests",
+          "tableTo": "stores",
+          "columnsFrom": [
+            "store_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "petty_cash_refill_requests_requested_by_users_id_fk": {
+          "name": "petty_cash_refill_requests_requested_by_users_id_fk",
+          "tableFrom": "petty_cash_refill_requests",
+          "tableTo": "users",
+          "columnsFrom": [
+            "requested_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "petty_cash_refill_requests_approved_by_users_id_fk": {
+          "name": "petty_cash_refill_requests_approved_by_users_id_fk",
+          "tableFrom": "petty_cash_refill_requests",
+          "tableTo": "users",
+          "columnsFrom": [
+            "approved_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "petty_cash_refill_requests_rejected_by_users_id_fk": {
+          "name": "petty_cash_refill_requests_rejected_by_users_id_fk",
+          "tableFrom": "petty_cash_refill_requests",
+          "tableTo": "users",
+          "columnsFrom": [
+            "rejected_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -2875,7 +3347,7 @@
           "typeSchema": "public",
           "primaryKey": false,
           "notNull": true,
-          "default": "'pending'"
+          "default": "'not_started'"
         },
         "notes": {
           "name": "notes",
@@ -3215,7 +3687,7 @@
           "typeSchema": "public",
           "primaryKey": false,
           "notNull": true,
-          "default": "'pending'"
+          "default": "'not_started'"
         },
         "notes": {
           "name": "notes",
@@ -3361,8 +3833,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.cek_uang_muka_denominations": {
-      "name": "cek_uang_muka_denominations",
+    "public.cek_uang_modal_denominations": {
+      "name": "cek_uang_modal_denominations",
       "schema": "",
       "columns": {
         "id": {
@@ -3431,8 +3903,8 @@
         }
       },
       "indexes": {
-        "cek_uang_muka_denominations_task_idx": {
-          "name": "cek_uang_muka_denominations_task_idx",
+        "cek_uang_modal_denominations_task_idx": {
+          "name": "cek_uang_modal_denominations_task_idx",
           "columns": [
             {
               "expression": "task_id",
@@ -3448,10 +3920,10 @@
         }
       },
       "foreignKeys": {
-        "cek_uang_muka_denominations_task_id_cek_uang_muka_tasks_id_fk": {
-          "name": "cek_uang_muka_denominations_task_id_cek_uang_muka_tasks_id_fk",
-          "tableFrom": "cek_uang_muka_denominations",
-          "tableTo": "cek_uang_muka_tasks",
+        "cek_uang_modal_denominations_task_id_cek_uang_modal_tasks_id_fk": {
+          "name": "cek_uang_modal_denominations_task_id_cek_uang_modal_tasks_id_fk",
+          "tableFrom": "cek_uang_modal_denominations",
+          "tableTo": "cek_uang_modal_tasks",
           "columnsFrom": [
             "task_id"
           ],
@@ -3461,9 +3933,9 @@
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
-        "cek_uang_muka_denominations_user_id_users_id_fk": {
-          "name": "cek_uang_muka_denominations_user_id_users_id_fk",
-          "tableFrom": "cek_uang_muka_denominations",
+        "cek_uang_modal_denominations_user_id_users_id_fk": {
+          "name": "cek_uang_modal_denominations_user_id_users_id_fk",
+          "tableFrom": "cek_uang_modal_denominations",
           "tableTo": "users",
           "columnsFrom": [
             "user_id"
@@ -3474,9 +3946,9 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "cek_uang_muka_denominations_store_id_stores_id_fk": {
-          "name": "cek_uang_muka_denominations_store_id_stores_id_fk",
-          "tableFrom": "cek_uang_muka_denominations",
+        "cek_uang_modal_denominations_store_id_stores_id_fk": {
+          "name": "cek_uang_modal_denominations_store_id_stores_id_fk",
+          "tableFrom": "cek_uang_modal_denominations",
           "tableTo": "stores",
           "columnsFrom": [
             "store_id"
@@ -3490,8 +3962,8 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
-        "cek_uang_muka_task_denomination_unique": {
-          "name": "cek_uang_muka_task_denomination_unique",
+        "cek_uang_modal_task_denomination_unique": {
+          "name": "cek_uang_modal_task_denomination_unique",
           "nullsNotDistinct": false,
           "columns": [
             "task_id",
@@ -3503,8 +3975,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.cek_uang_muka_tasks": {
-      "name": "cek_uang_muka_tasks",
+    "public.cek_uang_modal_tasks": {
+      "name": "cek_uang_modal_tasks",
       "schema": "",
       "columns": {
         "id": {
@@ -3582,7 +4054,7 @@
           "typeSchema": "public",
           "primaryKey": false,
           "notNull": true,
-          "default": "'pending'"
+          "default": "'not_started'"
         },
         "notes": {
           "name": "notes",
@@ -3624,8 +4096,8 @@
         }
       },
       "indexes": {
-        "cek_uang_muka_tasks_store_date_idx": {
-          "name": "cek_uang_muka_tasks_store_date_idx",
+        "cek_uang_modal_tasks_store_date_idx": {
+          "name": "cek_uang_modal_tasks_store_date_idx",
           "columns": [
             {
               "expression": "store_id",
@@ -3645,8 +4117,8 @@
           "method": "btree",
           "with": {}
         },
-        "cek_uang_muka_tasks_status_idx": {
-          "name": "cek_uang_muka_tasks_status_idx",
+        "cek_uang_modal_tasks_status_idx": {
+          "name": "cek_uang_modal_tasks_status_idx",
           "columns": [
             {
               "expression": "status",
@@ -3662,9 +4134,9 @@
         }
       },
       "foreignKeys": {
-        "cek_uang_muka_tasks_schedule_id_schedules_id_fk": {
-          "name": "cek_uang_muka_tasks_schedule_id_schedules_id_fk",
-          "tableFrom": "cek_uang_muka_tasks",
+        "cek_uang_modal_tasks_schedule_id_schedules_id_fk": {
+          "name": "cek_uang_modal_tasks_schedule_id_schedules_id_fk",
+          "tableFrom": "cek_uang_modal_tasks",
           "tableTo": "schedules",
           "columnsFrom": [
             "schedule_id"
@@ -3675,9 +4147,9 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "cek_uang_muka_tasks_user_id_users_id_fk": {
-          "name": "cek_uang_muka_tasks_user_id_users_id_fk",
-          "tableFrom": "cek_uang_muka_tasks",
+        "cek_uang_modal_tasks_user_id_users_id_fk": {
+          "name": "cek_uang_modal_tasks_user_id_users_id_fk",
+          "tableFrom": "cek_uang_modal_tasks",
           "tableTo": "users",
           "columnsFrom": [
             "user_id"
@@ -3688,9 +4160,9 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "cek_uang_muka_tasks_store_id_stores_id_fk": {
-          "name": "cek_uang_muka_tasks_store_id_stores_id_fk",
-          "tableFrom": "cek_uang_muka_tasks",
+        "cek_uang_modal_tasks_store_id_stores_id_fk": {
+          "name": "cek_uang_modal_tasks_store_id_stores_id_fk",
+          "tableFrom": "cek_uang_modal_tasks",
           "tableTo": "stores",
           "columnsFrom": [
             "store_id"
@@ -3701,9 +4173,9 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "cek_uang_muka_tasks_shift_id_shifts_id_fk": {
-          "name": "cek_uang_muka_tasks_shift_id_shifts_id_fk",
-          "tableFrom": "cek_uang_muka_tasks",
+        "cek_uang_modal_tasks_shift_id_shifts_id_fk": {
+          "name": "cek_uang_modal_tasks_shift_id_shifts_id_fk",
+          "tableFrom": "cek_uang_modal_tasks",
           "tableTo": "shifts",
           "columnsFrom": [
             "shift_id"
@@ -3714,9 +4186,9 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "cek_uang_muka_tasks_verified_by_users_id_fk": {
-          "name": "cek_uang_muka_tasks_verified_by_users_id_fk",
-          "tableFrom": "cek_uang_muka_tasks",
+        "cek_uang_modal_tasks_verified_by_users_id_fk": {
+          "name": "cek_uang_modal_tasks_verified_by_users_id_fk",
+          "tableFrom": "cek_uang_modal_tasks",
           "tableTo": "users",
           "columnsFrom": [
             "verified_by"
@@ -3730,8 +4202,8 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
-        "cek_uang_muka_tasks_store_date_shift_unique": {
-          "name": "cek_uang_muka_tasks_store_date_shift_unique",
+        "cek_uang_modal_tasks_store_date_shift_unique": {
+          "name": "cek_uang_modal_tasks_store_date_shift_unique",
           "nullsNotDistinct": false,
           "columns": [
             "store_id",
@@ -3886,7 +4358,7 @@
           "typeSchema": "public",
           "primaryKey": false,
           "notNull": true,
-          "default": "'pending'"
+          "default": "'not_started'"
         },
         "notes": {
           "name": "notes",
@@ -4196,7 +4668,7 @@
           "typeSchema": "public",
           "primaryKey": false,
           "notNull": true,
-          "default": "'pending'"
+          "default": "'not_started'"
         },
         "notes": {
           "name": "notes",
@@ -4551,7 +5023,7 @@
           "typeSchema": "public",
           "primaryKey": false,
           "notNull": true,
-          "default": "'pending'"
+          "default": "'not_started'"
         },
         "notes": {
           "name": "notes",
@@ -4894,7 +5366,7 @@
           "typeSchema": "public",
           "primaryKey": false,
           "notNull": true,
-          "default": "'pending'"
+          "default": "'not_started'"
         },
         "notes": {
           "name": "notes",
@@ -5413,7 +5885,7 @@
           "typeSchema": "public",
           "primaryKey": false,
           "notNull": true,
-          "default": "'pending'"
+          "default": "'not_started'"
         },
         "notes": {
           "name": "notes",
@@ -6134,7 +6606,7 @@
           "typeSchema": "public",
           "primaryKey": false,
           "notNull": true,
-          "default": "'pending'"
+          "default": "'not_started'"
         },
         "notes": {
           "name": "notes",
@@ -6685,7 +7157,7 @@
           "typeSchema": "public",
           "primaryKey": false,
           "notNull": true,
-          "default": "'pending'"
+          "default": "'not_started'"
         },
         "notes": {
           "name": "notes",
@@ -7072,7 +7544,7 @@
           "typeSchema": "public",
           "primaryKey": false,
           "notNull": true,
-          "default": "'pending'"
+          "default": "'not_started'"
         },
         "notes": {
           "name": "notes",
@@ -7557,7 +8029,7 @@
           "typeSchema": "public",
           "primaryKey": false,
           "notNull": true,
-          "default": "'pending'"
+          "default": "'not_started'"
         },
         "notes": {
           "name": "notes",
@@ -7963,7 +8435,7 @@
           "typeSchema": "public",
           "primaryKey": false,
           "notNull": true,
-          "default": "'pending'"
+          "default": "'not_started'"
         },
         "notes": {
           "name": "notes",
@@ -8285,6 +8757,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": false
+        },
+        "requires_location": {
+          "name": "requires_location",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
         },
         "is_active": {
           "name": "is_active",
@@ -9057,6 +9536,217 @@
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
+    },
+    "public.notifications": {
+      "name": "notifications",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "type": {
+          "name": "type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "body": {
+          "name": "body",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "link": {
+          "name": "link",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "is_read": {
+          "name": "is_read",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "read_at": {
+          "name": "read_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "notifications_user_idx": {
+          "name": "notifications_user_idx",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "notifications_user_unread_idx": {
+          "name": "notifications_user_unread_idx",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "is_read",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "notifications_user_id_users_id_fk": {
+          "name": "notifications_user_id_users_id_fk",
+          "tableFrom": "notifications",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.manuals": {
+      "name": "manuals",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "file_url": {
+          "name": "file_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "file_type": {
+          "name": "file_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "uploaded_by": {
+          "name": "uploaded_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "is_active": {
+          "name": "is_active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "sort_order": {
+          "name": "sort_order",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "manuals_uploaded_by_users_id_fk": {
+          "name": "manuals_uploaded_by_users_id_fk",
+          "tableFrom": "manuals",
+          "tableTo": "users",
+          "columnsFrom": [
+            "uploaded_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
     }
   },
   "enums": {
@@ -9087,7 +9777,8 @@
         "draft",
         "reported",
         "in_review",
-        "resolved"
+        "solved",
+        "completed"
       ]
     },
     "public.report_status": {
@@ -9102,10 +9793,10 @@
       "name": "task_status",
       "schema": "public",
       "values": [
-        "pending",
+        "not_started",
         "in_progress",
         "completed",
-        "discrepancy"
+        "pending"
       ]
     },
     "public.tx_type": {
@@ -9117,6 +9808,14 @@
         "qris",
         "ewallet",
         "cash"
+      ]
+    },
+    "public.impact_visit_status": {
+      "name": "impact_visit_status",
+      "schema": "public",
+      "values": [
+        "draft",
+        "submitted"
       ]
     }
   },

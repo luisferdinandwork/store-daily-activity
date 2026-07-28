@@ -78,22 +78,24 @@ export const storeMonthlyTargets = pgTable('store_monthly_targets', {
 
 // ─── Employee Monthly Roster ─────────────────────────────────────────────────
 //
-// CHANGED: this table used to be the source of truth for each employee's
-// nominal sales/transaction targets (monthlySalesTarget, targetWeightPct,
-// etc). It no longer stores any amount — it only says "this employee is on
-// this store's target roster for this month, in this slot."
+// CHANGED (again): an employee's target-share percentage is now fixed for
+// the WHOLE MONTH, not recomputed daily from who happens to be scheduled
+// that day. `percentage` is this employee's monthly % share of the store's
+// monthly target (storeMonthlyTargets.monthlySalesTarget). It defaults from
+// target_allocation_templates based on the store's total roster headcount
+// for the month (see assignMonthlySlots()/syncRosterPercentages() in
+// target-utils.ts), but Ops can override it per employee — isPercentageOverridden
+// marks that, so roster changes elsewhere don't silently clobber a manual edit.
 //
 //   targetRoleCode — fixed identity: 'PIC1' | 'PIC2' | 'SA'
 //   sortOrder      — tie-breaker used to rank SA employees into SA1, SA2, ...
-//                    on days when several SAs are scheduled together (lower
-//                    sortOrder = ranked first). Ignored for PIC1 / PIC2,
-//                    which always keep their own column.
+//                    among the month's roster (lower sortOrder = ranked
+//                    first). Ignored for PIC1 / PIC2, which always keep
+//                    their own column.
 //
-// Nominal daily/monthly amounts are always computed on the fly from the
-// store's daily target × that day's allocation percentage — see
-// computeDailyAllocations() / computeEmployeeMonthlyTargetFromDailyAllocations()
-// in target-utils.ts. Nothing here is edited directly to "give someone more
-// money" — that happens per-day, per-employee, in daily_target_overrides.
+// Nominal daily target = percentage% × store monthly target ÷ the employee's
+// total scheduled days that month (a flat number, same every scheduled
+// day) — see computeMonthlyRosterAllocations() in target-utils.ts.
 
 export const employeeMonthlyTargets = pgTable('employee_monthly_targets', {
   id: serial('id').primaryKey(),
@@ -115,8 +117,14 @@ export const employeeMonthlyTargets = pgTable('employee_monthly_targets', {
   /** PIC1 | PIC2 | SA — matches the LEVEL rows in target_allocation_templates. */
   targetRoleCode: text('target_role_code').default('SA').notNull(),
 
-  /** Ranks SA employees into SA1 / SA2 / ... when several work the same day. */
+  /** Ranks SA employees into SA1 / SA2 / ... among the month's roster. */
   sortOrder: integer('sort_order').default(0).notNull(),
+
+  /** Fixed monthly % share of the store's monthly target. */
+  percentage: decimal('percentage', { precision: 5, scale: 2 }).default('0').notNull(),
+
+  /** True once Ops manually sets `percentage` — skips auto-recalculation when the roster changes. */
+  isPercentageOverridden: boolean('is_percentage_overridden').default(false).notNull(),
 
   notes: text('notes'),
   isActive: boolean('is_active').default(true).notNull(),

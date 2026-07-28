@@ -2,7 +2,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // Dedicated endpoint for the Grooming task.
 //   POST  → final submit (runs check-in + geofence + checklist/photo validation)
-//   PATCH → auto-save partial patch (status: pending → in_progress)
+//   PATCH → auto-save partial patch (status: not_started → in_progress)
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { NextRequest, NextResponse } from 'next/server';

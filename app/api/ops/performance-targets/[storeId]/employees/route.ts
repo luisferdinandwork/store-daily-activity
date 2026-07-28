@@ -8,7 +8,9 @@
 // POST /api/ops/performance-targets/:storeId/employees
 //   → add an employee to the store's target roster for the month.
 //   Body: { userId, yearMonth, targetRoleCode: 'PIC1'|'PIC2'|'SA', sortOrder? }
-//   No amounts are set here — nominal targets are always derived per-day.
+//   No percentage is set here directly — after insert, syncRosterPercentages()
+//   recomputes the whole roster's default % for the new headcount (any
+//   Ops-overridden rows keep their set %).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -21,7 +23,11 @@ import {
   users,
 } from '@/lib/db/schema';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
-import { ensureStoreMonthlyTargetPlan, toYearMonth } from '@/lib/performance/target-utils';
+import {
+  ensureStoreMonthlyTargetPlan,
+  syncRosterPercentages,
+  toYearMonth,
+} from '@/lib/performance/target-utils';
 
 type Params = { params: Promise<{ storeId: string }> };
 
@@ -200,7 +206,15 @@ export async function POST(req: NextRequest, { params }: Params) {
       })
       .returning();
 
-    return NextResponse.json({ success: true, target: created });
+    await syncRosterPercentages({ storeId, yearMonth, updatedBy: scope.userId });
+
+    const [refreshed] = await db
+      .select()
+      .from(employeeMonthlyTargets)
+      .where(eq(employeeMonthlyTargets.id, created.id))
+      .limit(1);
+
+    return NextResponse.json({ success: true, target: refreshed ?? created });
   } catch (err) {
     return NextResponse.json(
       { success: false, error: 'This employee already has a roster row for this store and month.' },

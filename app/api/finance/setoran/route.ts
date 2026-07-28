@@ -4,7 +4,7 @@
 //
 // Returns one SetoranStoreRow per store that has a morning/full_day schedule
 // on the requested day, enriched with:
-//   • the setoran task (pending/in_progress/completed) if it exists
+//   • the setoran task (not_started/in_progress/completed) if it exists
 //   • the money-storage ledger entry if the task was submitted
 //   • the prior-day unpaid carry-forward even when no task exists yet
 //   • resolved display names for all actor user IDs
@@ -56,10 +56,10 @@ export interface SetoranStoreRow {
 
   /**
    * 'no_data' is a UI-only concept — the task table uses taskStatusEnum
-   * ('pending' | 'in_progress' | 'completed' | 'discrepancy').
+   * ('not_started' | 'in_progress' | 'completed' | 'pending').
    * We add 'no_data' here for stores that have a schedule but no task row yet.
    */
-  status: 'pending' | 'in_progress' | 'completed' | 'discrepancy' | 'no_data';
+  status: 'not_started' | 'in_progress' | 'completed' | 'pending' | 'no_data';
 
   // ── Money fields — all null when task/storage doesn't exist yet ──────────
   /** From setoranMoneyStorage.actualReceivedAmount, falls back to task.expectedAmount */
@@ -76,7 +76,7 @@ export interface SetoranStoreRow {
   /**
    * Carry-forward fetched directly via getPriorUnpaidForStore.
    * Always present — '0.00' when there is no prior unpaid balance.
-   * For pending/in_progress tasks this may differ from task.carriedDeficit
+   * For not_started/in_progress tasks this may differ from task.carriedDeficit
    * if another store paid something yesterday.
    */
   priorCarryForward: string;
@@ -325,7 +325,7 @@ export async function GET(
 
       // Map task status to our extended status type
       const status: SetoranStoreRow['status'] = task
-        ? (task.status as 'pending' | 'in_progress' | 'completed' | 'discrepancy')
+        ? (task.status as 'not_started' | 'in_progress' | 'completed' | 'pending')
         : 'no_data';
 
       // Money fields: prefer the ledger (storage) over the task draft columns
@@ -389,12 +389,12 @@ export async function GET(
       };
     });
 
-    // Sort priority: discrepancy → unpaid-completed → in_progress → pending → completed → no_data
+    // Sort priority: pending (unresolved discrepancy) → unpaid-completed → in_progress → not_started → completed → no_data
     const SORT_ORDER: Record<SetoranStoreRow['status'], number> = {
-      discrepancy: 0,
+      pending:     0,
       completed:   1, // within completed, unpaid goes first (secondary sort below)
       in_progress: 2,
-      pending:     3,
+      not_started: 3,
       no_data:     4,
     };
 

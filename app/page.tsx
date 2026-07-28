@@ -17,6 +17,10 @@ export default async function Home() {
       redirect('/ops');
     case 'finance':
       redirect('/finance');
+    case 'it':
+      redirect('/it');
+    case 'audit':
+      redirect('/audit');
     default:
       redirect('/login');
   }

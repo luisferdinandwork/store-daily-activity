@@ -1,5 +1,16 @@
 // lib/db/utils/serah-terima.ts
-import { and, eq, gte, isNull, lte, asc } from 'drizzle-orm';
+//
+// Serah Terima is a per-SHIFT handover: each shift at a store/day has its
+// own row where that shift's employees write outgoing notes for the NEXT
+// shift. The chain is:
+//
+//   morning (day D)  →  evening (day D)  →  morning (day D+1)  →  ...
+//
+// A row's "incoming" items are simply the previous row's outgoing items.
+// A full_day employee works both halves of the day, so they get (and can
+// submit) BOTH the morning row and the evening row for their store/day —
+// same treatment as briefing.
+import { and, asc, eq, gte, isNull, lte } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import {
@@ -10,7 +21,14 @@ import {
   stores,
   type SerahTerimaTask,
 } from '@/lib/db/schema';
-import { getMorningShiftId } from '@/lib/db/utils/shared-daily-morning-task';
+import {
+  getMorningShiftId,
+  getEveningShiftId,
+  getFullDayShiftId,
+  startOfDay,
+  endOfDay,
+  addDays,
+} from '@/lib/db/utils/shift-lookup';
 
 export type TaskResult<T = void> =
   | { success: true; data: T }
@@ -39,18 +57,6 @@ export interface CompleteSerahTerimaItemInput {
 }
 
 const DEFAULT_GEOFENCE_RADIUS_M = 100;
-
-function startOfDay(d: Date): Date {
-  const r = new Date(d);
-  r.setHours(0, 0, 0, 0);
-  return r;
-}
-
-function endOfDay(d: Date): Date {
-  const r = new Date(d);
-  r.setHours(23, 59, 59, 999);
-  return r;
-}
 
 function haversineMetres(a: GeoPoint, b: GeoPoint): number {
   const R = 6_371_000;
@@ -129,103 +135,173 @@ async function assertCanProgressTask(
 function splitHandoverText(raw: string): string[] {
   return raw
     .split(/\r?\n|;/)
-    .map((line) =>
-      line
-        .replace(/^[-*•\d.)\s]+/, '')
-        .trim(),
-    )
+    .map((line) => line.replace(/^[-*•\d.)\s]+/, '').trim())
     .filter(Boolean);
 }
 
-/**
- * Links unassigned incoming items to a morning task.
- *
- * The evening shift submits on date D (e.g. May 28 at 22:00).
- * The morning task opens on date D+1 (e.g. May 29 at 08:00).
- *
- * Because items are created on D but the morning task date is D+1, a simple
- * same-day window would never match them. We therefore look back 36 hours from
- * the end of the morning task's day, which reliably captures any items written
- * the previous evening without picking up items from two days ago.
- *
- * The query intentionally excludes items that are already linked
- * (receiverTaskId IS NULL) to avoid double-assigning.
- */
-async function linkPendingIncomingItems(
-  taskId: number,
-  storeId: number,
+// ─── Shift chain helpers ────────────────────────────────────────────────────
+// morning(D) → evening(D) → morning(D+1) → evening(D+1) → ...
+
+async function nextInChain(
   shiftId: number,
   date: Date,
-): Promise<void> {
-  // Look back 36 h from the end of the morning task's calendar day.
-  // This window captures evening submissions from the night before (D−1 18:00
-  // through D 23:59) without ever reaching two days back.
-  const windowEnd   = endOfDay(date);
-  const windowStart = new Date(windowEnd.getTime() - 36 * 60 * 60 * 1000);
+): Promise<{ shiftId: number; date: Date } | null> {
+  const morningShiftId = await getMorningShiftId();
+  const eveningShiftId = await getEveningShiftId();
+
+  if (shiftId === morningShiftId) return { shiftId: eveningShiftId, date };
+  if (shiftId === eveningShiftId) return { shiftId: morningShiftId, date: addDays(date, 1) };
+  return null; // unknown/custom shift code — no chain concept
+}
+
+async function prevInChain(
+  shiftId: number,
+  date: Date,
+): Promise<{ shiftId: number; date: Date } | null> {
+  const morningShiftId = await getMorningShiftId();
+  const eveningShiftId = await getEveningShiftId();
+
+  if (shiftId === morningShiftId) return { shiftId: eveningShiftId, date: addDays(date, -1) };
+  if (shiftId === eveningShiftId) return { shiftId: morningShiftId, date };
+  return null;
+}
+
+async function findRow(
+  storeId: number,
+  targetShiftId: number,
+  date: Date,
+): Promise<SerahTerimaTask | undefined> {
+  const dayStart = startOfDay(date);
+  const dayEnd   = endOfDay(date);
+
+  const [row] = await db
+    .select()
+    .from(serahTerimaTasks)
+    .where(
+      and(
+        eq(serahTerimaTasks.storeId, storeId),
+        eq(serahTerimaTasks.shiftId, targetShiftId),
+        gte(serahTerimaTasks.date, dayStart),
+        lte(serahTerimaTasks.date, dayEnd),
+      ),
+    )
+    .limit(1);
+
+  return row;
+}
+
+/** Links a predecessor row's outgoing items to `row` as its incoming items. */
+async function linkFromPredecessor(row: SerahTerimaTask): Promise<void> {
+  const predecessor = await prevInChain(row.shiftId, row.date);
+  if (!predecessor) return;
+
+  const predRow = await findRow(row.storeId, predecessor.shiftId, predecessor.date);
+  if (!predRow) return;
 
   await db
     .update(serahTerimaItems)
-    .set({ receiverTaskId: taskId, updatedAt: new Date() })
+    .set({ receiverTaskId: row.id, updatedAt: new Date() })
     .where(
       and(
-        eq(serahTerimaItems.storeId, storeId),
-        eq(serahTerimaItems.targetShiftId, shiftId),
-        // Only link items that have not yet been assigned to a receiver task.
-        // Without this guard a re-create / refresh would steal items that
-        // already belong to a different morning task.
+        eq(serahTerimaItems.taskId, predRow.id),
+        eq(serahTerimaItems.storeId, row.storeId),
         isNull(serahTerimaItems.receiverTaskId),
-        gte(serahTerimaItems.createdAt, windowStart),
-        lte(serahTerimaItems.createdAt, windowEnd),
       ),
     );
 }
 
+async function getOrCreateSingleSerahTerimaRow(
+  scheduleId: number,
+  userId: string,
+  storeId: number,
+  targetShiftId: number,
+  dayStart: Date,
+  dayEnd: Date,
+): Promise<SerahTerimaTask> {
+  const [existing] = await db
+    .select()
+    .from(serahTerimaTasks)
+    .where(
+      and(
+        eq(serahTerimaTasks.storeId, storeId),
+        eq(serahTerimaTasks.shiftId, targetShiftId),
+        gte(serahTerimaTasks.date, dayStart),
+        lte(serahTerimaTasks.date, dayEnd),
+      ),
+    )
+    .limit(1);
+
+  if (existing) return existing;
+
+  const [created] = await db
+    .insert(serahTerimaTasks)
+    .values({
+      scheduleId,
+      userId,
+      storeId,
+      shiftId: targetShiftId,
+      date: dayStart,
+      handoverText: '',
+      status: 'not_started',
+    })
+    .onConflictDoNothing({
+      target: [serahTerimaTasks.storeId, serahTerimaTasks.date, serahTerimaTasks.shiftId],
+    })
+    .returning();
+
+  if (created) return created;
+
+  // Lost the race to a concurrent request — read back what it created.
+  const [row] = await db
+    .select()
+    .from(serahTerimaTasks)
+    .where(
+      and(
+        eq(serahTerimaTasks.storeId, storeId),
+        eq(serahTerimaTasks.shiftId, targetShiftId),
+        gte(serahTerimaTasks.date, dayStart),
+        lte(serahTerimaTasks.date, dayEnd),
+      ),
+    )
+    .limit(1);
+
+  if (!row) throw new Error('Failed to create or find serah terima row after conflict.');
+  return row;
+}
+
+/**
+ * Ensures the serah terima row(s) for this schedule's shift exist, and pulls
+ * in any outgoing items already left by the predecessor shift as incoming.
+ * A full_day schedule gets BOTH the morning and evening rows.
+ */
 export async function getOrCreateSerahTerimaForSchedule(
   scheduleId: number,
   userId: string,
   storeId: number,
-  _shiftId: number,
+  shiftId: number,
   date: Date,
-): Promise<TaskResult<SerahTerimaTask>> {
+): Promise<TaskResult<SerahTerimaTask[]>> {
   try {
     const dayStart = startOfDay(date);
     const dayEnd   = endOfDay(date);
+
     const morningShiftId = await getMorningShiftId();
+    const eveningShiftId = await getEveningShiftId();
+    const fullDayShiftId = await getFullDayShiftId();
 
-    const [existing] = await db
-      .select()
-      .from(serahTerimaTasks)
-      .where(
-        and(
-          eq(serahTerimaTasks.storeId, storeId),
-          eq(serahTerimaTasks.shiftId, morningShiftId),
-          gte(serahTerimaTasks.date, dayStart),
-          lte(serahTerimaTasks.date, dayEnd),
-        ),
-      )
-      .limit(1);
+    const targetShiftIds =
+      shiftId === fullDayShiftId ? [morningShiftId, eveningShiftId] : [shiftId];
 
-    if (existing) {
-      await linkPendingIncomingItems(existing.id, storeId, morningShiftId, date);
-      return { success: true, data: existing };
+    const rows: SerahTerimaTask[] = [];
+    for (const targetShiftId of targetShiftIds) {
+      const row = await getOrCreateSingleSerahTerimaRow(
+        scheduleId, userId, storeId, targetShiftId, dayStart, dayEnd,
+      );
+      await linkFromPredecessor(row);
+      rows.push(row);
     }
 
-    const [created] = await db
-      .insert(serahTerimaTasks)
-      .values({
-        scheduleId,
-        userId,
-        storeId,
-        shiftId: morningShiftId,
-        date: dayStart,
-        handoverText: '',
-        status: 'pending',
-      })
-      .returning();
-
-    await linkPendingIncomingItems(created.id, storeId, morningShiftId, date);
-
-    return { success: true, data: created };
+    return { success: true, data: rows };
   } catch (err) {
     return { success: false, error: `getOrCreateSerahTerimaForSchedule: ${err}` };
   }
@@ -301,7 +377,7 @@ export async function submitSerahTerima(
       );
 
       if (!result.success) return result;
-      task = result.data;
+      task = result.data[0];
     }
 
     if (!task) {
@@ -312,29 +388,7 @@ export async function submitSerahTerima(
       return { success: false, error: 'Task sudah completed dan tidak bisa diubah.' };
     }
 
-    // ── Determine targetShiftId and targetDate for the items ───────────────
-    //
-    // The items written by the EVENING shift must appear in the NEXT DAY's
-    // morning task, not today's.  We resolve this by:
-    //
-    //   1. Always targeting the morning shift id.
-    //   2. Setting `createdAt` on the items to the start of TOMORROW (D+1
-    //      00:00:00 local-server time).  This means `linkPendingIncomingItems`
-    //      run by the next morning's task will find them inside its 36-hour
-    //      lookback window, while the CURRENT morning task (whose window ends
-    //      at today 23:59:59) will NOT pick them up if it re-links.
-    //
-    // If the evening shift submits after midnight (edge case), "tomorrow" is
-    // actually the same calendar day — that is fine because the morning task
-    // for that calendar day has not been created yet.
-    const morningShiftId = await getMorningShiftId();
-
-    const now      = new Date();
-    const tomorrow = new Date(now);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    // Set to 00:00:00.000 of the next calendar day so the items sit cleanly
-    // at the boundary and are unambiguously "for tomorrow".
-    tomorrow.setHours(0, 0, 0, 0);
+    const now = new Date();
 
     // ── Persist ────────────────────────────────────────────────────────────
     const [updated] = await db
@@ -342,7 +396,6 @@ export async function submitSerahTerima(
       .set({
         userId:       input.userId,
         handoverText: input.handoverText,
-        shiftId:      morningShiftId,
         submittedLat: input.skipGeo ? null : String(input.geo.lat),
         submittedLng: input.skipGeo ? null : String(input.geo.lng),
         notes:        input.notes,
@@ -359,18 +412,25 @@ export async function submitSerahTerima(
       .where(eq(serahTerimaItems.taskId, task.id));
 
     if (messages.length > 0) {
+      // Find the successor row in the chain (if it already exists) so items
+      // are linked as its incoming items immediately. If the successor
+      // shift hasn't opened its task yet, they'll be linked later by
+      // linkFromPredecessor() when that row is created.
+      const successor = await nextInChain(updated.shiftId, updated.date);
+      const successorRow = successor
+        ? await findRow(updated.storeId, successor.shiftId, successor.date)
+        : undefined;
+
       await db.insert(serahTerimaItems).values(
         messages.map((message) => ({
           taskId:         task!.id,
+          receiverTaskId: successorRow?.id ?? null,
           storeId:        input.storeId,
           sourceUserId:   input.userId,
-          targetShiftId:  morningShiftId,
+          targetShiftId:  successor?.shiftId ?? updated.shiftId,
           message,
           isCompleted:    false,
-          // createdAt = tomorrow 00:00 so the morning task on D+1 finds these
-          // items inside its 36-hour lookback window, but today's morning task
-          // (window end = today 23:59:59) does NOT accidentally link them.
-          createdAt:  tomorrow,
+          createdAt:  now,
           updatedAt:  now,
         })),
       );

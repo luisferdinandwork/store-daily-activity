@@ -14,16 +14,9 @@ import {
 
 export const dynamic = 'force-dynamic';
 
-function isOps(session: Awaited<ReturnType<typeof auth>>): boolean {
+function isIt(session: Awaited<ReturnType<typeof auth>>): boolean {
   const role = (session?.user as any)?.role as string | undefined;
-  const employeeType = (session?.user as any)?.employeeType as string | undefined;
-
-  return (
-    role === 'admin' ||
-    role === 'ops' ||
-    employeeType === 'ops_area' ||
-    employeeType === 'ops_ho'
-  );
+  return role === 'it';
 }
 
 interface CreateBody {
@@ -49,7 +42,7 @@ export async function POST(req: Request) {
     );
   }
 
-  if (!isOps(session)) {
+  if (!isIt(session)) {
     return NextResponse.json(
       { success: false, error: 'Forbidden' },
       { status: 403 },

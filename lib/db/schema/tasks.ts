@@ -112,7 +112,7 @@ export const storeOpeningTasks = pgTable('store_opening_tasks', {
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
 
-  status:      taskStatusEnum('status').default('pending').notNull(),
+  status:      taskStatusEnum('status').default('not_started').notNull(),
   notes:       text('notes'),
   completedAt: timestamp('completed_at'),
   verifiedBy:  text('verified_by').references(() => users.id),
@@ -149,7 +149,7 @@ export const storeFrontTasks = pgTable('store_front_tasks', {
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
  
-  status:      taskStatusEnum('status').default('pending').notNull(),
+  status:      taskStatusEnum('status').default('not_started').notNull(),
   notes:       text('notes'),
   completedAt: timestamp('completed_at'),
   verifiedBy:  text('verified_by').references(() => users.id),
@@ -197,7 +197,7 @@ export const setoranTasks = pgTable('setoran_tasks', {
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
 
-  status:      taskStatusEnum('status').default('pending').notNull(),
+  status:      taskStatusEnum('status').default('not_started').notNull(),
   notes:       text('notes'),
   completedAt: timestamp('completed_at'),
   verifiedBy:  text('verified_by').references(() => users.id),
@@ -283,7 +283,7 @@ export const cekBinTasks = pgTable('cek_bin_tasks', {
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
 
-  status:      taskStatusEnum('status').default('pending').notNull(),
+  status:      taskStatusEnum('status').default('not_started').notNull(),
   notes:       text('notes'),
   completedAt: timestamp('completed_at', { mode: 'date' }),
   verifiedBy:  text('verified_by').references(() => users.id),
@@ -379,7 +379,7 @@ export const vmChecklistTasks = pgTable('vm_checklist_tasks', {
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
 
-  status:      taskStatusEnum('status').default('pending').notNull(),
+  status:      taskStatusEnum('status').default('not_started').notNull(),
   notes:       text('notes'),
   completedAt: timestamp('completed_at'),
   verifiedBy:  text('verified_by').references(() => users.id),
@@ -407,7 +407,7 @@ export const itemDroppingTasks = pgTable('item_dropping_tasks', {
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
 
-  status:      taskStatusEnum('status').default('pending').notNull(),
+  status:      taskStatusEnum('status').default('not_started').notNull(),
   notes:       text('notes'),
   completedAt: timestamp('completed_at'),
   verifiedBy:  text('verified_by').references(() => users.id),
@@ -455,7 +455,7 @@ export const itemReturnTasks = pgTable('item_return_tasks', {
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
 
-  status:      taskStatusEnum('status').default('pending').notNull(),
+  status:      taskStatusEnum('status').default('not_started').notNull(),
   notes:       text('notes'),
   completedAt: timestamp('completed_at'),
   verifiedBy:  text('verified_by').references(() => users.id),
@@ -493,13 +493,13 @@ export const itemReturnEntries = pgTable('item_return_entries', {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Cek Uang Muka Task (morning, shared)
+ * Cek Uang Modal Task (morning, shared)
  *
  * This stores the ready cashier float/opening cash by denomination. Amount is
  * calculated server-side from denominationValue × quantity, so client-side
  * totals cannot corrupt the task.
  */
-export const cekUangMukaTasks = pgTable('cek_uang_muka_tasks', {
+export const cekUangModalTasks = pgTable('cek_uang_modal_tasks', {
   id:         serial('id').primaryKey(),
   scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
   userId:     text('user_id').references(() => users.id).notNull(),
@@ -519,7 +519,7 @@ export const cekUangMukaTasks = pgTable('cek_uang_muka_tasks', {
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
 
-  status:      taskStatusEnum('status').default('pending').notNull(),
+  status:      taskStatusEnum('status').default('not_started').notNull(),
   notes:       text('notes'),
   completedAt: timestamp('completed_at'),
   verifiedBy:  text('verified_by').references(() => users.id),
@@ -527,16 +527,16 @@ export const cekUangMukaTasks = pgTable('cek_uang_muka_tasks', {
   createdAt:   timestamp('created_at').defaultNow().notNull(),
   updatedAt:   timestamp('updated_at').defaultNow().notNull(),
 }, (table) => ({
-  uniqueStoreDateShift: unique('cek_uang_muka_tasks_store_date_shift_unique')
+  uniqueStoreDateShift: unique('cek_uang_modal_tasks_store_date_shift_unique')
     .on(table.storeId, table.date, table.shiftId),
-  storeDateIdx: index('cek_uang_muka_tasks_store_date_idx')
+  storeDateIdx: index('cek_uang_modal_tasks_store_date_idx')
     .on(table.storeId, table.date),
-  statusIdx: index('cek_uang_muka_tasks_status_idx').on(table.status),
+  statusIdx: index('cek_uang_modal_tasks_status_idx').on(table.status),
 }));
 
-export const cekUangMukaDenominations = pgTable('cek_uang_muka_denominations', {
+export const cekUangModalDenominations = pgTable('cek_uang_modal_denominations', {
   id:                serial('id').primaryKey(),
-  taskId:            integer('task_id').references(() => cekUangMukaTasks.id, { onDelete: 'cascade' }).notNull(),
+  taskId:            integer('task_id').references(() => cekUangModalTasks.id, { onDelete: 'cascade' }).notNull(),
   userId:            text('user_id').references(() => users.id).notNull(),
   storeId:           integer('store_id').references(() => stores.id).notNull(),
   denominationValue: integer('denomination_value').notNull(),
@@ -546,9 +546,9 @@ export const cekUangMukaDenominations = pgTable('cek_uang_muka_denominations', {
   createdAt:         timestamp('created_at').defaultNow().notNull(),
   updatedAt:         timestamp('updated_at').defaultNow().notNull(),
 }, (table) => ({
-  uniqueTaskDenomination: unique('cek_uang_muka_task_denomination_unique')
+  uniqueTaskDenomination: unique('cek_uang_modal_task_denomination_unique')
     .on(table.taskId, table.denominationValue),
-  taskIdx: index('cek_uang_muka_denominations_task_idx').on(table.taskId),
+  taskIdx: index('cek_uang_modal_denominations_task_idx').on(table.taskId),
 }));
 
 /**
@@ -609,7 +609,7 @@ export const marketingCheckTasks = pgTable('marketing_check_tasks', {
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
 
-  status: taskStatusEnum('status').default('pending').notNull(),
+  status: taskStatusEnum('status').default('not_started').notNull(),
 
   notes: text('notes'),
 
@@ -648,7 +648,7 @@ export const briefingTasks = pgTable('briefing_tasks', {
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
 
-  status:      taskStatusEnum('status').default('pending').notNull(),
+  status:      taskStatusEnum('status').default('not_started').notNull(),
   notes:       text('notes'),
   completedAt: timestamp('completed_at'),
   verifiedBy:  text('verified_by').references(() => users.id),
@@ -680,7 +680,7 @@ export const serahTerimaTasks = pgTable('serah_terima_tasks', {
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
 
-  status:      taskStatusEnum('status').default('pending').notNull(),
+  status:      taskStatusEnum('status').default('not_started').notNull(),
   notes:       text('notes'),
   completedAt: timestamp('completed_at'),
   verifiedBy:  text('verified_by').references(() => users.id),
@@ -744,7 +744,7 @@ export const serahTerimaItems = pgTable('serah_terima_items', {
  *   4. Open Statement decision: post statement / on hold
  *
  * On Hold:
- *   • status stays "discrepancy"
+ *   • status stays "pending"
  *   • isOnHold = true
  *   • holdIssueId links to the issue generated automatically
  *   • future store_closing_tasks still generate per day
@@ -802,7 +802,7 @@ export const storeClosingTasks = pgTable('store_closing_tasks', {
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
 
-  status:      taskStatusEnum('status').default('pending').notNull(),
+  status:      taskStatusEnum('status').default('not_started').notNull(),
   notes:       text('notes'),
   completedAt: timestamp('completed_at'),
   verifiedBy:  text('verified_by').references(() => users.id),
@@ -847,7 +847,7 @@ export const groomingTasks = pgTable('grooming_tasks', {
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
 
-  status:      taskStatusEnum('status').default('pending').notNull(),
+  status:      taskStatusEnum('status').default('not_started').notNull(),
   notes:       text('notes'),
   completedAt: timestamp('completed_at'),
   verifiedBy:  text('verified_by').references(() => users.id),
@@ -889,10 +889,10 @@ export type NewItemReturnTask     = typeof itemReturnTasks.$inferInsert;
 export type ItemReturnEntry       = typeof itemReturnEntries.$inferSelect;
 export type NewItemReturnEntry    = typeof itemReturnEntries.$inferInsert;
 
-export type CekUangMukaTask       = typeof cekUangMukaTasks.$inferSelect;
-export type NewCekUangMukaTask    = typeof cekUangMukaTasks.$inferInsert;
-export type CekUangMukaDenomination    = typeof cekUangMukaDenominations.$inferSelect;
-export type NewCekUangMukaDenomination = typeof cekUangMukaDenominations.$inferInsert;
+export type CekUangModalTask       = typeof cekUangModalTasks.$inferSelect;
+export type NewCekUangModalTask    = typeof cekUangModalTasks.$inferInsert;
+export type CekUangModalDenomination    = typeof cekUangModalDenominations.$inferSelect;
+export type NewCekUangModalDenomination = typeof cekUangModalDenominations.$inferInsert;
 
 export type BriefingTask          = typeof briefingTasks.$inferSelect;
 export type NewBriefingTask       = typeof briefingTasks.$inferInsert;

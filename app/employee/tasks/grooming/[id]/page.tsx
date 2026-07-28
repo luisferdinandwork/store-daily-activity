@@ -14,21 +14,24 @@
 //   • selfiePhotos → inline PhotoUploader section (min 1)
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
-  ArrowLeft, CheckCircle2, Camera, X, Loader2,
+  ArrowLeft, CheckCircle2, X, Loader2,
   AlertCircle, Check, Cloud, CloudOff, Save,
   LogIn, Navigation, NavigationOff, RefreshCw,
 } from 'lucide-react';
 import { cn }    from '@/lib/utils';
 import { toast } from 'sonner';
 import { useAutoSave } from '@/lib/hooks/useAutoSave';
+import { useTaskLocationSetting } from '@/lib/hooks/useTaskLocationSetting';
 import { TaskHeader, TaskSubmitBar, SaveIndicator } from '@/components/employee/tasks';
+import PhotoUploadGrid from '@/components/shared/PhotoUploadGrid';
+import { uploadTaskPhoto } from '@/lib/tasks-upload';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'verified' | 'rejected';
+type TaskStatus = 'not_started' | 'in_progress' | 'completed' | 'verified' | 'rejected';
 
 type AccessStatus =
   | { status: 'ok' }
@@ -74,12 +77,18 @@ const PHOTO_RULES = {
 
 // ─── Geo hook ─────────────────────────────────────────────────────────────────
 
-function useGeo() {
+function useGeo(required: boolean) {
   const [geo,      setGeo]      = useState<{ lat: number; lng: number } | null>(null);
   const [geoError, setGeoError] = useState<string | null>(null);
   const [geoReady, setGeoReady] = useState(false);
 
   const refresh = useCallback(() => {
+    if (!required) {
+      setGeo(null);
+      setGeoError(null);
+      setGeoReady(true);
+      return;
+    }
     setGeoReady(false);
     setGeoError(null);
     if (!navigator.geolocation) {
@@ -92,7 +101,7 @@ function useGeo() {
       ()  => { setGeoError('Lokasi tidak dapat diperoleh.'); setGeoReady(true); },
       { timeout: 10_000, maximumAge: 0 },
     );
-  }, []);
+  }, [required]);
 
   useEffect(() => { refresh(); }, [refresh]);
   return { geo, geoError, geoReady, refresh };
@@ -231,148 +240,46 @@ function PhotoUploader({
   disabled?:  boolean;
   hint?:      string;
 }) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [uploading, setUploading] = useState(false);
-  const needed = min ? Math.max(0, min - photos.length) : 0;
-
-  async function handleFiles(files: FileList | null) {
-    if (!files?.length) return;
-    if (photos.length >= max) { toast.error(`Maksimal ${max} foto`); return; }
-    setUploading(true);
-    try {
-      const toUpload = Array.from(files).slice(0, max - photos.length);
-      const urls: string[] = [];
-      for (const file of toUpload) {
-        const form = new FormData();
-        form.append('file', file);
-        form.append('photoType', photoType);
-        const res  = await fetch('/api/employee/tasks/upload', { method: 'POST', body: form });
-        const data = await res.json();
-        if (!res.ok || !data.url) throw new Error(data.error ?? 'Upload gagal');
-        urls.push(data.url);
-      }
-      onChange([...photos, ...urls]);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Upload gagal');
-    } finally {
-      setUploading(false);
-    }
-  }
-
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between">
-        <p className="text-xs font-semibold text-foreground">{label}</p>
-        {needed > 0 && (
-          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">
-            Butuh {needed} lagi
-          </span>
-        )}
-      </div>
-      {hint && <p className="text-[10px] text-muted-foreground">{hint}</p>}
-      <div className="flex flex-wrap gap-2">
-        {photos.map((url, i) => (
-          <div key={i} className="relative h-24 w-24 overflow-hidden rounded-xl border border-border">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={url} alt="" className="h-full w-full object-cover" />
-            {!disabled && (
-              <button
-                onClick={() => onChange(photos.filter((_, j) => j !== i))}
-                className="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-white"
-                aria-label={`Hapus foto ${i + 1}`}
-              >
-                <X className="h-3 w-3" />
-              </button>
-            )}
-          </div>
-        ))}
-        {!disabled && photos.length < max && (
-          <button
-            onClick={() => inputRef.current?.click()}
-            disabled={uploading}
-            className="flex h-24 w-24 flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-border bg-secondary text-muted-foreground hover:border-primary/40 hover:text-primary disabled:opacity-50"
-          >
-            {uploading
-              ? <Loader2 className="h-5 w-5 animate-spin" />
-              : <><Camera className="h-5 w-5" /><span className="text-[9px] font-semibold">Tambah</span></>}
-          </button>
-        )}
-      </div>
-      <input
-        ref={inputRef}
-        type="file"
-        accept="image/*"
-        capture="environment"
-        multiple={max > 1}
-        className="hidden"
-        onChange={e => handleFiles(e.target.files)}
-      />
-      <p className="text-[10px] text-muted-foreground">
-        {photos.length}/{max} foto{min ? ` · minimal ${min}` : ''}
-      </p>
-    </div>
+    <PhotoUploadGrid
+      label={label}
+      hint={hint}
+      photos={photos}
+      onChange={onChange}
+      min={min}
+      max={max}
+      disabled={disabled}
+      tileSize="lg"
+      facingMode="user"
+      upload={file => uploadTaskPhoto(file, photoType)}
+    />
   );
 }
 
-// ─── Conditional Check Item (Toggle + Compliance Check) ──────────────────────
+// ─── Simple checklist item (matches other task pages) ─────────────────────────
 
-function ConditionalCheckItem({
-  label, active, onActiveChange, compliant, onCompliantChange, disabled,
+function SimpleCheckItem({
+  label, checked, onChange, disabled,
 }: {
-  label: string;
-  active: boolean;
-  onActiveChange: (v: boolean) => void;
-  compliant: boolean;
-  onCompliantChange: (v: boolean) => void;
-  disabled?: boolean;
+  label: string; checked: boolean; onChange: (v: boolean) => void; disabled?: boolean;
 }) {
   return (
-    <div className={cn(
-      'flex items-center gap-3 rounded-xl border-2 px-4 py-3.5 transition-all',
-      active ? 'border-primary/30 bg-primary/5' : 'border-border bg-card',
-      disabled && 'cursor-default opacity-60',
-    )}>
-      {/* Active Toggle */}
-      <button type="button" onClick={() => !disabled && onActiveChange(!active)} className="flex-shrink-0">
-        <div className={cn(
-          'relative h-6 w-11 rounded-full transition-colors',
-          active ? 'bg-primary' : 'bg-border',
-        )}>
-          <div className={cn(
-            'absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform',
-            active && 'translate-x-5',
-          )} />
-        </div>
-      </button>
-
-      {/* Label */}
-      <span className={cn('flex-1 text-sm font-medium', active ? 'text-foreground' : 'text-muted-foreground')}>
+    <button type="button" onClick={() => !disabled && onChange(!checked)}
+      className={cn(
+        'flex w-full items-center gap-3 rounded-xl border-2 px-4 py-3.5 text-left transition-all',
+        checked ? 'border-primary/30 bg-primary/5' : 'border-border bg-card hover:border-primary/20',
+        disabled && 'cursor-default opacity-60',
+      )}>
+      <div className={cn(
+        'flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border-2 transition-colors',
+        checked ? 'border-primary bg-primary' : 'border-border',
+      )}>
+        {checked && <Check className="h-3 w-3 text-primary-foreground" strokeWidth={3} />}
+      </div>
+      <span className={cn('text-sm font-medium', checked ? 'text-foreground' : 'text-muted-foreground')}>
         {label}
       </span>
-
-      {/* Compliance Checkbox (only visible if active) */}
-      {active && (
-        <button 
-          type="button" 
-          onClick={() => !disabled && onCompliantChange(!compliant)} 
-          className="flex-shrink-0 flex items-center gap-1.5"
-          aria-label="Tandai sesuai"
-        >
-          <div className={cn(
-            'flex h-5 w-5 items-center justify-center rounded-full border-2 transition-colors',
-            compliant ? 'border-green-600 bg-green-600' : 'border-border',
-          )}>
-            {compliant && <Check className="h-3 w-3 text-white" strokeWidth={3} />}
-          </div>
-          <span className={cn(
-            'text-[10px] font-semibold',
-            compliant ? 'text-green-700' : 'text-muted-foreground'
-          )}>
-            Sesuai
-          </span>
-        </button>
-      )}
-    </div>
+    </button>
   );
 }
 
@@ -409,21 +316,15 @@ export default function GroomingDetailPage() {
   const router = useRouter();
   const taskId = params.id as string;
 
-  const { geo, geoError, geoReady, refresh: refreshGeo } = useGeo();
+  const { requiresLocation } = useTaskLocationSetting('grooming');
+  const { geo, geoError, geoReady, refresh: refreshGeo } = useGeo(requiresLocation);
 
   const [taskData,    setTaskData]    = useState<GroomingData | null>(null);
   const [loading,     setLoading]     = useState(true);
   const [submitting,  setSubmitting]  = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  // Form state - Active Toggles
-  const [uniformActive, setUniformActive] = useState(true);
-  const [hairActive, setHairActive] = useState(true);
-  const [smellActive, setSmellActive] = useState(true);
-  const [makeUpActive, setMakeUpActive] = useState(true);
-  const [shoeActive, setShoeActive] = useState(true);
-  const [nameTagActive, setNameTagActive] = useState(true);
-
+  // Form state - Checklist
   const [uniformChecked, setUniformChecked] = useState(false);
   const [hairChecked, setHairChecked] = useState(false);
   const [smellChecked, setSmellChecked] = useState(false);
@@ -446,13 +347,6 @@ export default function GroomingDetailPage() {
       if (found) {
         const d = found.data;
         setTaskData(d);
-        setUniformActive(d.uniformActive);
-        setHairActive(d.hairActive);
-        setSmellActive(d.smellActive);
-        setMakeUpActive(d.makeUpActive);
-        setShoeActive(d.shoeActive);
-        setNameTagActive(d.nameTagActive);
-
         setUniformChecked(d.uniformChecked === true);
         setHairChecked(d.hairChecked === true);
         setSmellChecked(d.smellChecked === true);
@@ -500,36 +394,19 @@ export default function GroomingDetailPage() {
     (accessStatus.status === 'not_checked_in' || accessStatus.status === 'outside_geofence');
   const dis = readonly || locked;
 
-  // ── Handlers for Active Toggle + Compliance ──────────────────────────────
-  // Turning OFF an active toggle automatically clears its compliance state
-  function handleToggleActive(
-    activeField: string, 
-    setActive: (v: boolean) => void, 
-    compField: string, 
-    setComp: (v: boolean) => void, 
-    currentComp: boolean
-  ) {
-    return (v: boolean) => {
-      setActive(v);
-      if (!v) setComp(false);
-      autoSave({ [activeField]: v, [compField]: v ? currentComp : false });
-    };
-  }
-
-  function handleSetCompliance(compField: string, setComp: (v: boolean) => void) {
-    return (v: boolean) => {
-      setComp(v); 
-      autoSave({ [compField]: v });
-    };
-  }
+  // ── Checklist handler ────────────────────────────────────────────────────
+  const setChk = (field: string, setter: (v: boolean) => void) => (v: boolean) => {
+    setter(v);
+    autoSave({ [field]: v });
+  };
 
   // ── Submit gate ───────────────────────────────────────────────────────────
-  const isUniformValid = !uniformActive || uniformChecked;
-  const isHairValid    = !hairActive || hairChecked;
-  const isSmellValid   = !smellActive || smellChecked;
-  const isMakeUpValid  = !makeUpActive || makeUpChecked;
-  const isShoeValid    = !shoeActive || shoeChecked;
-  const isNameTagValid = !nameTagActive || nameTagChecked;
+  const isUniformValid = uniformChecked;
+  const isHairValid    = hairChecked;
+  const isSmellValid   = smellChecked;
+  const isMakeUpValid  = makeUpChecked;
+  const isShoeValid    = shoeChecked;
+  const isNameTagValid = nameTagChecked;
 
   const allChecklistValid =
     isUniformValid &&
@@ -560,13 +437,6 @@ export default function GroomingDetailPage() {
           storeId,
           geo: geo ?? null,
           skipGeo: geo === null,
-
-          uniformActive,
-          hairActive,
-          smellActive,
-          makeUpActive,
-          shoeActive,
-          nameTagActive,
 
           uniformChecked,
           hairChecked,
@@ -606,12 +476,12 @@ export default function GroomingDetailPage() {
   // Reason text below submit button when disabled
   const submitHint = (() => {
     if (locked) return '';
-    if (!isUniformValid) return 'Lengkapi "Uniform" atau nonaktifkan itemnya.';
-    if (!isHairValid) return 'Lengkapi "Hair" atau nonaktifkan itemnya.';
-    if (!isSmellValid) return 'Lengkapi "Smell" atau nonaktifkan itemnya.';
-    if (!isMakeUpValid) return 'Lengkapi "Make up" atau nonaktifkan itemnya.';
-    if (!isShoeValid) return 'Lengkapi "Shoes" atau nonaktifkan itemnya.';
-    if (!isNameTagValid) return 'Lengkapi "Name Tag" atau nonaktifkan itemnya.';
+    if (!isUniformValid) return 'Centang "Uniform".';
+    if (!isHairValid) return 'Centang "Hair".';
+    if (!isSmellValid) return 'Centang "Smell".';
+    if (!isMakeUpValid) return 'Centang "Make up".';
+    if (!isShoeValid) return 'Centang "Shoes".';
+    if (!isNameTagValid) return 'Centang "Name Tag".';
     if (!selfieValid) return `Upload min ${PHOTO_RULES.selfie.min} foto selfie.`;
     return '';
   })();
@@ -701,57 +571,45 @@ export default function GroomingDetailPage() {
             <div className="space-y-6">
               <Section title="Penampilan Diri">
                 <div className="space-y-2">
-                  <ConditionalCheckItem
+                  <SimpleCheckItem
                     label="Uniform"
-                    active={uniformActive}
-                    onActiveChange={handleToggleActive('uniformActive', setUniformActive, 'uniformChecked', setUniformChecked, uniformChecked)}
-                    compliant={uniformChecked}
-                    onCompliantChange={handleSetCompliance('uniformChecked', setUniformChecked)}
+                    checked={uniformChecked}
+                    onChange={setChk('uniformChecked', setUniformChecked)}
                     disabled={dis}
                   />
 
-                  <ConditionalCheckItem
+                  <SimpleCheckItem
                     label="Hair"
-                    active={hairActive}
-                    onActiveChange={handleToggleActive('hairActive', setHairActive, 'hairChecked', setHairChecked, hairChecked)}
-                    compliant={hairChecked}
-                    onCompliantChange={handleSetCompliance('hairChecked', setHairChecked)}
+                    checked={hairChecked}
+                    onChange={setChk('hairChecked', setHairChecked)}
                     disabled={dis}
                   />
 
-                  <ConditionalCheckItem
+                  <SimpleCheckItem
                     label="Smell"
-                    active={smellActive}
-                    onActiveChange={handleToggleActive('smellActive', setSmellActive, 'smellChecked', setSmellChecked, smellChecked)}
-                    compliant={smellChecked}
-                    onCompliantChange={handleSetCompliance('smellChecked', setSmellChecked)}
+                    checked={smellChecked}
+                    onChange={setChk('smellChecked', setSmellChecked)}
                     disabled={dis}
                   />
 
-                  <ConditionalCheckItem
+                  <SimpleCheckItem
                     label="Make up"
-                    active={makeUpActive}
-                    onActiveChange={handleToggleActive('makeUpActive', setMakeUpActive, 'makeUpChecked', setMakeUpChecked, makeUpChecked)}
-                    compliant={makeUpChecked}
-                    onCompliantChange={handleSetCompliance('makeUpChecked', setMakeUpChecked)}
+                    checked={makeUpChecked}
+                    onChange={setChk('makeUpChecked', setMakeUpChecked)}
                     disabled={dis}
                   />
 
-                  <ConditionalCheckItem
+                  <SimpleCheckItem
                     label="Shoes"
-                    active={shoeActive}
-                    onActiveChange={handleToggleActive('shoeActive', setShoeActive, 'shoeChecked', setShoeChecked, shoeChecked)}
-                    compliant={shoeChecked}
-                    onCompliantChange={handleSetCompliance('shoeChecked', setShoeChecked)}
+                    checked={shoeChecked}
+                    onChange={setChk('shoeChecked', setShoeChecked)}
                     disabled={dis}
                   />
 
-                  <ConditionalCheckItem
+                  <SimpleCheckItem
                     label="Name Tag"
-                    active={nameTagActive}
-                    onActiveChange={handleToggleActive('nameTagActive', setNameTagActive, 'nameTagChecked', setNameTagChecked, nameTagChecked)}
-                    compliant={nameTagChecked}
-                    onCompliantChange={handleSetCompliance('nameTagChecked', setNameTagChecked)}
+                    checked={nameTagChecked}
+                    onChange={setChk('nameTagChecked', setNameTagChecked)}
                     disabled={dis}
                   />
                 </div>

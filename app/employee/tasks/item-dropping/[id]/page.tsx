@@ -1,10 +1,10 @@
 'use client';
 // app/employee/tasks/item-dropping/[id]/page.tsx
 
-import { useEffect, useRef, useState, useCallback } from 'react';
-import { useParams, useRouter }                      from 'next/navigation';
+import { useEffect, useState, useCallback } from 'react';
+import { useParams, useRouter }              from 'next/navigation';
 import {
-  ArrowLeft, CheckCircle2, Camera, X, Loader2,
+  ArrowLeft, CheckCircle2, X, Loader2,
   AlertCircle, Check, Cloud, CloudOff, Save,
   LogIn, Navigation, NavigationOff, RefreshCw,
   PackageOpen, PackageCheck, Clock, Hash,
@@ -13,14 +13,17 @@ import {
 import { cn }    from '@/lib/utils';
 import { toast } from 'sonner';
 import { useAutoSave } from '@/lib/hooks/useAutoSave';
+import { useTaskLocationSetting } from '@/lib/hooks/useTaskLocationSetting';
 import { TaskHeader, TaskSubmitBar, SaveIndicator } from '@/components/employee/tasks';
+import PhotoUploadGrid from '@/components/shared/PhotoUploadGrid';
+import { uploadTaskPhoto } from '@/lib/tasks-upload';
 import type { AvailableTo } from '@/app/api/employee/tasks/item-dropping/available-tos/route';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type TaskStatus =
-  | 'pending' | 'in_progress' | 'completed'
-  | 'discrepancy' | 'verified' | 'rejected';
+  | 'not_started' | 'in_progress' | 'completed'
+  | 'pending' | 'verified' | 'rejected';
 
 type AccessStatus =
   | { status: 'ok' }
@@ -83,12 +86,18 @@ function makeDraft(to: AvailableTo): DraftEntry {
 
 // ─── Geo hook ─────────────────────────────────────────────────────────────────
 
-function useGeo() {
+function useGeo(required: boolean) {
   const [geo,      setGeo]      = useState<{ lat: number; lng: number } | null>(null);
   const [geoError, setGeoError] = useState<string | null>(null);
   const [geoReady, setGeoReady] = useState(false);
 
   const refresh = useCallback(() => {
+    if (!required) {
+      setGeo(null);
+      setGeoError(null);
+      setGeoReady(true);
+      return;
+    }
     setGeoReady(false);
     setGeoError(null);
     if (!navigator.geolocation) {
@@ -101,7 +110,7 @@ function useGeo() {
       ()  => { setGeoError('Lokasi tidak dapat diperoleh.'); setGeoReady(true); },
       { timeout: 10_000, maximumAge: 0 },
     );
-  }, []);
+  }, [required]);
 
   useEffect(() => { refresh(); }, [refresh]);
   return { geo, geoError, geoReady, refresh };
@@ -225,78 +234,17 @@ function PhotoUploader({
   onChange: (urls: string[]) => void;
   min?: number; max: number; disabled?: boolean; hint?: string;
 }) {
-  const inputRef          = useRef<HTMLInputElement>(null);
-  const [uploading, setUploading] = useState(false);
-  const needed = min ? Math.max(0, min - photos.length) : 0;
-
-  async function handleFiles(files: FileList | null) {
-    if (!files?.length) return;
-    if (photos.length >= max) { toast.error(`Maksimal ${max} foto`); return; }
-    setUploading(true);
-    try {
-      const toUpload = Array.from(files).slice(0, max - photos.length);
-      const urls: string[] = [];
-      for (const file of toUpload) {
-        const form = new FormData();
-        form.append('file', file);
-        form.append('photoType', photoType);
-        const res  = await fetch('/api/employee/tasks/upload', { method: 'POST', body: form });
-        const data = await res.json();
-        if (!res.ok || !data.url) throw new Error(data.error ?? 'Upload gagal');
-        urls.push(data.url);
-      }
-      onChange([...photos, ...urls]);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Upload gagal');
-    } finally {
-      setUploading(false);
-    }
-  }
-
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between">
-        <p className="text-xs font-semibold text-foreground">{label}</p>
-        {needed > 0 && (
-          <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">Butuh {needed} lagi</span>
-        )}
-        {needed === 0 && photos.length > 0 && (
-          <span className="flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-bold text-green-700">
-            <Check className="h-3 w-3" strokeWidth={3} />Cukup
-          </span>
-        )}
-      </div>
-      {hint && <p className="text-[10px] text-muted-foreground">{hint}</p>}
-      <div className="flex flex-wrap gap-2">
-        {photos.map((url, i) => (
-          <div key={i} className="relative h-20 w-20 overflow-hidden rounded-xl border border-border">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={url} alt="" className="h-full w-full object-cover" />
-            {!disabled && (
-              <button onClick={() => onChange(photos.filter((_, j) => j !== i))}
-                className="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-white"
-                aria-label={`Hapus foto ${i + 1}`}>
-                <X className="h-3 w-3" />
-              </button>
-            )}
-            <div className="absolute bottom-0.5 left-0.5 rounded-full bg-black/60 px-1 py-0 text-[9px] font-bold text-white">{i + 1}</div>
-          </div>
-        ))}
-        {!disabled && photos.length < max && (
-          <button onClick={() => inputRef.current?.click()} disabled={uploading}
-            className="flex h-20 w-20 flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-border bg-secondary text-muted-foreground hover:border-primary/40 hover:text-primary disabled:opacity-50">
-            {uploading
-              ? <Loader2 className="h-5 w-5 animate-spin" />
-              : <><Camera className="h-5 w-5" /><span className="text-[9px] font-semibold">Tambah</span></>}
-          </button>
-        )}
-      </div>
-      <input ref={inputRef} type="file" accept="image/*" capture="environment"
-        multiple={max > 1} className="hidden" onChange={e => handleFiles(e.target.files)} />
-      <p className="text-[10px] text-muted-foreground">
-        {photos.length}/{max} foto{min ? ` · minimal ${min}` : ''}
-      </p>
-    </div>
+    <PhotoUploadGrid
+      label={label}
+      hint={hint}
+      photos={photos}
+      onChange={onChange}
+      min={min}
+      max={max}
+      disabled={disabled}
+      upload={file => uploadTaskPhoto(file, photoType)}
+    />
   );
 }
 
@@ -662,7 +610,8 @@ export default function ItemDroppingDetailPage() {
   const router = useRouter();
   const taskId = params.id as string;
 
-  const { geo, geoError, geoReady, refresh: refreshGeo } = useGeo();
+  const { requiresLocation } = useTaskLocationSetting('item_dropping');
+  const { geo, geoError, geoReady, refresh: refreshGeo } = useGeo(requiresLocation);
 
   const [taskData,    setTaskData]    = useState<ItemDroppingData | null>(null);
   const [loading,     setLoading]     = useState(true);
@@ -861,8 +810,8 @@ export default function ItemDroppingDetailPage() {
   }
 
   const statusLabel: Record<TaskStatus, string> = {
-    pending: 'Menunggu', in_progress: 'Sedang Diisi', completed: 'Selesai',
-    discrepancy: 'Perlu Ditindaklanjuti', verified: 'Terverifikasi', rejected: 'Ditolak',
+    not_started: 'Menunggu', in_progress: 'Sedang Diisi', completed: 'Selesai',
+    pending: 'Perlu Ditindaklanjuti', verified: 'Terverifikasi', rejected: 'Ditolak',
   };
 
   return (

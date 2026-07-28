@@ -30,7 +30,7 @@ export async function PATCH(
 
   if (!canManageSchedule(role, empType)) {
     return NextResponse.json(
-      { success: false, error: 'Only OPS or PIC 1 can edit schedule entries.' },
+      { success: false, error: 'Only OPS or PIC can edit schedule entries.' },
       { status: 403 },
     );
   }

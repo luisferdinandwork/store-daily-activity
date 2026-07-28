@@ -6,12 +6,12 @@ import { useRouter } from 'next/navigation';
 import { ArrowLeft, AlertCircle, CheckCircle2 } from 'lucide-react';
 
 export type EmployeeTaskStatus =
-  | 'pending'
+  | 'not_started'
   | 'in_progress'
   | 'completed'
   | 'verified'
   | 'rejected'
-  | 'discrepancy';
+  | 'pending';
 
 interface TaskHeaderProps {
   title: string;
@@ -73,10 +73,10 @@ export default function TaskHeader({
         </span>
       )}
 
-      {status === 'discrepancy' && (
+      {status === 'pending' && (
         <span className="flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-bold text-amber-700">
           <AlertCircle className="h-3 w-3" />
-          Discrepancy
+          Pending
         </span>
       )}
     </div>

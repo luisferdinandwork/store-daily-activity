@@ -1,38 +1,35 @@
 // lib/performance/target-utils.ts
 // ─────────────────────────────────────────────────────────────────────────────
-// New target model (replaces the old "employee rollup" model):
+// Target model: percentages are fixed for the WHOLE MONTH.
 //
 //   1. Ops sets ONE number per store + month: monthlySalesTarget /
 //      monthlyTransactionTarget, directly on store_monthly_targets.
 //
-//   2. That monthly figure is split evenly across every calendar day:
-//        storeDailyTarget = storeMonthlyTarget / daysInMonth
+//   2. The store's roster for that month (employee_monthly_targets) is
+//      assigned slots — PIC1/PIC2 keep a fixed identity, SA employees are
+//      ranked into SA1, SA2, ... by sortOrder among the WHOLE monthly
+//      roster (not daily attendance). The roster size is the "Man Power"
+//      used to look up defaults.
 //
-//   3. Each day, the store's roster (employee_monthly_targets) is filtered
-//      down to whoever is actually scheduled to work that day (`schedules`
-//      table). Headcount = how many roster employees are present.
+//   3. Each roster row's `percentage` — its fixed monthly % share of the
+//      store's monthly target — defaults from target_allocation_templates
+//      (a % table keyed by (headcount, slotCode), matching the printed
+//      PIC1/PIC2/SA1../SA5 grid), unless Ops has overridden it
+//      (isPercentageOverridden). Overridden rows keep their set %; the
+//      remaining rows share the rest of the pool, proportional to their
+//      default template share, so the roster always sums to 100%.
+//      See syncRosterPercentages() — called whenever the roster changes.
 //
-//   4. The daily target is split across those present employees using
-//      target_allocation_templates — a % table keyed by (headcount,
-//      slotCode), matching the printed PIC1/PIC2/SA1../SA5 grid. PIC1/PIC2
-//      keep a fixed identity; SA employees are ranked into SA1, SA2, ... by
-//      sortOrder among whoever is present that day (so if someone is off,
-//      everyone else just shifts up a slot).
-//
-//   5. Ops can override one employee's % for one specific day
-//      (daily_target_overrides). Every other employee scheduled that same
-//      day is automatically rebalanced, proportional to the default
-//      template, so the day always sums to 100%.
-//
-// Nothing about an employee's nominal target is stored directly anymore —
-// it's always derived from steps 2-5, computed on read.
+//   4. Employee monthly target = percentage% × store monthly target.
+//      Employee daily target = employee monthly target ÷ the employee's
+//      total scheduled days that month — a FLAT number, the same every
+//      scheduled day (0 on days they're not scheduled).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { and, asc, eq, gte, lt } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import {
-  dailyTargetOverrides,
   employeeMonthlyTargets,
   schedules,
   storeMonthlyTargets,
@@ -136,32 +133,11 @@ export function calculateAtvTarget(
   return Math.round(salesTarget / transactionTarget);
 }
 
-/** Store's whole-month target, expressed as its unrounded daily average. */
-export function getStoreDailyTarget(params: {
-  monthlySalesTarget: number;
-  monthlyTransactionTarget: number;
-  yearMonth: string;
-}) {
-  const daysInMonth = getDaysInMonth(params.yearMonth);
-  if (!daysInMonth) {
-    return { dailySalesTarget: 0, dailyTransactionTarget: 0, daysInMonth: 0 };
-  }
-
-  return {
-    dailySalesTarget: params.monthlySalesTarget / daysInMonth,
-    dailyTransactionTarget: params.monthlyTransactionTarget / daysInMonth,
-    daysInMonth,
-  };
-}
-
 /**
- * Returns the exact whole-number store target for one date.
- *
- * The old implementation rounded the same monthly/day average independently
- * on every date. Over a full month that could add up to more or less than the
- * monthly target. This uses a deterministic cumulative distribution instead,
- * spreading any remainder across the month while guaranteeing that all dates
- * add back to the exact Ops-set store monthly target.
+ * Returns the exact whole-number STORE target for one date (remainder-safe
+ * cumulative distribution, so all dates add back to the exact monthly
+ * total). Store-wide concern only — employee targets are a flat monthly
+ * figure divided by scheduled days, see computeMonthlyRosterAllocations.
  */
 function distributeMonthlyTargetToDate(params: {
   monthlyTarget: number;
@@ -210,56 +186,6 @@ export function getStoreDailyTargetForDate(params: {
     }),
     daysInMonth: getDaysInMonth(params.yearMonth),
   };
-}
-
-/**
- * Largest-remainder allocation for a whole-number target. Every employee gets
- * their percentage share, while the final rounded rows still sum exactly to
- * the store target for that date.
- */
-function allocateRoundedTarget<
-  T extends { userId: string; effectivePct: number },
->(total: number, rows: T[]): Map<string, number> {
-  const roundedTotal = Math.max(0, Math.round(safeNumber(total)));
-  if (rows.length === 0) return new Map();
-
-  const weightTotal = rows.reduce(
-    (sum, row) => sum + Math.max(0, safeNumber(row.effectivePct)),
-    0,
-  );
-
-  const weighted = rows.map((row, index) => {
-    const weight =
-      weightTotal > 0
-        ? Math.max(0, safeNumber(row.effectivePct)) / weightTotal
-        : 1 / rows.length;
-    const raw = roundedTotal * weight;
-    const floor = Math.floor(raw);
-
-    return {
-      userId: row.userId,
-      index,
-      floor,
-      fraction: raw - floor,
-    };
-  });
-
-  let remainder =
-    roundedTotal - weighted.reduce((sum, row) => sum + row.floor, 0);
-
-  const priority = [...weighted].sort(
-    (a, b) => b.fraction - a.fraction || a.index - b.index,
-  );
-
-  const result = new Map(weighted.map((row) => [row.userId, row.floor]));
-
-  for (let index = 0; index < priority.length && remainder > 0; index += 1) {
-    const row = priority[index];
-    result.set(row.userId, (result.get(row.userId) ?? 0) + 1);
-    remainder -= 1;
-  }
-
-  return result;
 }
 
 // ─── Store monthly target (source of truth, set directly by Ops) ────────────
@@ -343,7 +269,7 @@ export async function ensureStoreMonthlyTargetPlan(params: {
   return created.id;
 }
 
-// ─── Roster (employee_monthly_targets, no amounts anymore) ──────────────────
+// ─── Roster (employee_monthly_targets) ───────────────────────────────────────
 
 export type RosterRow = {
   id: number;
@@ -352,6 +278,8 @@ export type RosterRow = {
   name: string;
   targetRoleCode: string; // PIC1 | PIC2 | SA
   sortOrder: number;
+  percentage: number;
+  isPercentageOverridden: boolean;
   isActive: boolean;
 };
 
@@ -367,6 +295,8 @@ export async function listStoreRoster(params: {
       name: users.name,
       targetRoleCode: employeeMonthlyTargets.targetRoleCode,
       sortOrder: employeeMonthlyTargets.sortOrder,
+      percentage: employeeMonthlyTargets.percentage,
+      isPercentageOverridden: employeeMonthlyTargets.isPercentageOverridden,
       isActive: employeeMonthlyTargets.isActive,
     })
     .from(employeeMonthlyTargets)
@@ -384,10 +314,10 @@ export async function listStoreRoster(params: {
       asc(users.name),
     );
 
-  return rows;
+  return rows.map((row) => ({ ...row, percentage: safeNumber(row.percentage) }));
 }
 
-// ─── Who's actually working a given store + day ──────────────────────────────
+// ─── Who's scheduled a given store + day (still used for "is scheduled today") ──
 
 export async function getScheduledUserIdsForStoreDate(params: {
   storeId: number;
@@ -411,15 +341,15 @@ export async function getScheduledUserIdsForStoreDate(params: {
   return new Set(rows.map((row) => row.userId));
 }
 
-/** Whole month at once — used by the batched monthly rollup below. */
-async function getScheduledUserIdsByDateForMonth(params: {
+/** Distinct scheduled dates per user, for one store + month — the "scheduled days" divisor. */
+async function getScheduledDaysByUserForMonth(params: {
   storeId: number;
   yearMonth: string;
-}): Promise<Map<string, Set<string>>> {
+}): Promise<Map<string, number>> {
   const { start, end } = getMonthRange(params.yearMonth);
 
   const rows = await db
-    .select({ userId: schedules.userId, date: schedules.date })
+    .selectDistinct({ userId: schedules.userId, date: schedules.date })
     .from(schedules)
     .where(
       and(
@@ -429,14 +359,27 @@ async function getScheduledUserIdsByDateForMonth(params: {
       ),
     );
 
-  const byDate = new Map<string, Set<string>>();
+  const byUser = new Map<string, Set<string>>();
   for (const row of rows) {
     const key = toDateOnly(row.date);
-    const set = byDate.get(key) ?? new Set<string>();
-    set.add(row.userId);
-    byDate.set(key, set);
+    const set = byUser.get(row.userId) ?? new Set<string>();
+    set.add(key);
+    byUser.set(row.userId, set);
   }
-  return byDate;
+
+  return new Map([...byUser.entries()].map(([userId, dates]) => [userId, dates.size]));
+}
+
+export async function getEmployeeScheduledDaysInMonth(params: {
+  userId: string;
+  storeId: number;
+  yearMonth: string;
+}): Promise<number> {
+  const byUser = await getScheduledDaysByUserForMonth({
+    storeId: params.storeId,
+    yearMonth: params.yearMonth,
+  });
+  return byUser.get(params.userId) ?? 0;
 }
 
 // ─── Slot assignment (pure — no DB access) ───────────────────────────────────
@@ -449,22 +392,17 @@ export type SlotAssignment = RosterRow & {
 };
 
 /**
- * Filters the monthly roster down to whoever is scheduled on a given day,
- * then assigns each present employee a slotCode: PIC1/PIC2 keep their fixed
- * identity, SA employees are re-ranked into SA1, SA2, ... by sortOrder among
- * only those present (so someone being off just shifts everyone else up).
+ * Assigns each roster member a slotCode for the whole month: PIC1/PIC2 keep
+ * their fixed identity, SA employees are ranked into SA1, SA2, ... by
+ * sortOrder among the WHOLE monthly roster (not daily attendance). The
+ * roster's length is the "Man Power" headcount used to look up defaults.
  */
-export function assignDailySlots(
-  roster: RosterRow[],
-  scheduledUserIds: Set<string>,
-): SlotAssignment[] {
-  const present = roster.filter((r) => scheduledUserIds.has(r.userId));
-
-  const pics = present
+export function assignMonthlySlots(roster: RosterRow[]): SlotAssignment[] {
+  const pics = roster
     .filter((r) => PIC_SLOT_CODES.has(r.targetRoleCode))
     .sort((a, b) => a.targetRoleCode.localeCompare(b.targetRoleCode));
 
-  const sas = present
+  const sas = roster
     .filter((r) => !PIC_SLOT_CODES.has(r.targetRoleCode))
     .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
 
@@ -513,29 +451,7 @@ export async function getAllocationTemplateForHeadcount(
   return new Map(rows.map((r) => [r.slotCode, safeNumber(r.percentage)]));
 }
 
-/** The WHOLE template table at once, grouped by headcount. Used for batched monthly rollups. */
-async function getFullAllocationTemplate(): Promise<
-  Map<number, Map<string, number>>
-> {
-  const rows = await db
-    .select({
-      headcount: targetAllocationTemplates.headcount,
-      slotCode: targetAllocationTemplates.slotCode,
-      percentage: targetAllocationTemplates.percentage,
-    })
-    .from(targetAllocationTemplates)
-    .where(eq(targetAllocationTemplates.isActive, true));
-
-  const byHeadcount = new Map<number, Map<string, number>>();
-  for (const row of rows) {
-    const inner = byHeadcount.get(row.headcount) ?? new Map<string, number>();
-    inner.set(row.slotCode, safeNumber(row.percentage));
-    byHeadcount.set(row.headcount, inner);
-  }
-  return byHeadcount;
-}
-
-// ─── Rebalancing: locked (overridden) rows keep their %, the rest share the remainder ──
+// ─── Rebalancing: overridden rows keep their %, the rest share the remainder ─
 
 export type RebalanceInput = {
   id: string;
@@ -545,14 +461,13 @@ export type RebalanceInput = {
 };
 
 /**
- * Generalized "one person's % changed, everyone else auto-adjusts" helper.
- * Any number of rows can be locked (via daily_target_overrides). Locked rows
- * keep their set percentage (scaled down proportionally only in the edge
- * case where locked percentages alone would exceed 100%). The remaining pool
- * (100 - sum of locked %) is distributed across the unlocked rows,
- * proportional to their default template share.
+ * "One or more people's % is locked (Ops-overridden), everyone else
+ * auto-adjusts" helper. Locked rows keep their set percentage (scaled down
+ * proportionally only in the edge case where locked percentages alone would
+ * exceed 100%). The remaining pool (100 - sum of locked %) is distributed
+ * across the unlocked rows, proportional to their default template share.
  */
-export function rebalanceDailyPercentages(
+export function rebalancePercentages(
   slots: RebalanceInput[],
 ): { id: string; pct: number }[] {
   const locked = slots.filter((s) => s.lockedPct != null);
@@ -589,32 +504,25 @@ export function rebalanceDailyPercentages(
 }
 
 /**
- * Pure combinator: given the day's present roster (already slot-assigned),
- * a template map (or null/empty => equal split), and any overrides, produce
- * each employee's default % and effective (post-rebalance) %.
+ * Pure combinator: given the month's roster (already slot-assigned) and a
+ * template map (or null/empty => equal split), produce each employee's
+ * default % (normalized to sum to exactly 100).
  */
-function resolveEffectivePercentages(
+export function computeDefaultMonthlyPercentages(
   assignments: SlotAssignment[],
   templateForHeadcount: Map<string, number> | undefined,
-  overrideMap: Map<string, number>,
-) {
+): { usedFallbackEqualSplit: boolean; defaultPctByUserId: Map<string, number> } {
   const headcount = assignments.length;
-  if (headcount === 0)
-    return {
-      usedFallbackEqualSplit: false,
-      rows: [] as (SlotAssignment & {
-        defaultPct: number;
-        effectivePct: number;
-        isOverridden: boolean;
-      })[],
-    };
+  if (headcount === 0) {
+    return { usedFallbackEqualSplit: false, defaultPctByUserId: new Map() };
+  }
 
   const usedFallbackEqualSplit =
     !templateForHeadcount || templateForHeadcount.size === 0;
   const equalShare = 100 / headcount;
 
   const withDefaults = assignments.map((a) => ({
-    ...a,
+    userId: a.userId,
     defaultPct: usedFallbackEqualSplit
       ? equalShare
       : (templateForHeadcount!.get(a.slotCode) ?? equalShare),
@@ -622,359 +530,223 @@ function resolveEffectivePercentages(
 
   // Normalize so the defaults always sum to exactly 100, even if the source
   // template rows don't add up perfectly (rounding in the printed grid).
-  const defaultSum =
-    withDefaults.reduce((sum, r) => sum + r.defaultPct, 0) || 1;
-  const normalized = withDefaults.map((r) => ({
-    ...r,
-    defaultPct: (r.defaultPct / defaultSum) * 100,
-  }));
-
-  const rebalanced = rebalanceDailyPercentages(
-    normalized.map((r) => ({
-      id: r.userId,
-      defaultPct: r.defaultPct,
-      lockedPct: overrideMap.has(r.userId)
-        ? Math.max(0, Math.min(100, overrideMap.get(r.userId)!))
-        : null,
-    })),
-  );
-
-  const effectiveMap = new Map(rebalanced.map((r) => [r.id, r.pct]));
+  const defaultSum = withDefaults.reduce((sum, r) => sum + r.defaultPct, 0) || 1;
 
   return {
     usedFallbackEqualSplit,
-    rows: normalized.map((r) => ({
-      ...r,
-      effectivePct: effectiveMap.get(r.userId) ?? r.defaultPct,
-      isOverridden: overrideMap.has(r.userId),
-    })),
+    defaultPctByUserId: new Map(
+      withDefaults.map((r) => [r.userId, (r.defaultPct / defaultSum) * 100]),
+    ),
   };
 }
 
-// ─── Single-day allocation (used by the "Harian" view + override editing) ───
+// ─── Persisting roster percentages ───────────────────────────────────────────
 
-export type DailyAllocationRow = {
+export type RosterMeta = { headcount: number; usedFallbackEqualSplit: boolean };
+
+/**
+ * Recomputes and persists `percentage` for every active roster row of a
+ * store + month. Rows with isPercentageOverridden=true keep their set %;
+ * every other row is recalculated from the default template for the
+ * roster's current headcount, then the whole set is rebalanced so it sums
+ * to exactly 100%. Call this whenever the roster composition changes (add,
+ * remove, role/sortOrder edit) or a percentage is manually set/reset.
+ */
+export async function syncRosterPercentages(params: {
+  storeId: number;
+  yearMonth: string;
+  updatedBy?: string | null;
+}): Promise<RosterMeta> {
+  const roster = await listStoreRoster({
+    storeId: params.storeId,
+    yearMonth: params.yearMonth,
+  });
+
+  const assignments = assignMonthlySlots(roster);
+  const headcount = assignments.length;
+
+  if (headcount === 0) {
+    return { headcount: 0, usedFallbackEqualSplit: false };
+  }
+
+  const template = await getAllocationTemplateForHeadcount(headcount);
+  const { usedFallbackEqualSplit, defaultPctByUserId } =
+    computeDefaultMonthlyPercentages(assignments, template);
+
+  const rebalanced = rebalancePercentages(
+    roster.map((r) => ({
+      id: r.userId,
+      defaultPct: defaultPctByUserId.get(r.userId) ?? 0,
+      lockedPct: r.isPercentageOverridden ? r.percentage : null,
+    })),
+  );
+  const pctByUserId = new Map(rebalanced.map((r) => [r.id, r.pct]));
+
+  await Promise.all(
+    roster.map((r) =>
+      db
+        .update(employeeMonthlyTargets)
+        .set({
+          percentage: (pctByUserId.get(r.userId) ?? 0).toFixed(2),
+          updatedBy: params.updatedBy ?? undefined,
+          updatedAt: new Date(),
+        })
+        .where(eq(employeeMonthlyTargets.id, r.id)),
+    ),
+  );
+
+  return { headcount, usedFallbackEqualSplit };
+}
+
+export async function setEmployeeMonthlyPercentage(params: {
+  employeeMonthlyTargetId: number;
+  percentage: number;
+  updatedBy?: string | null;
+}): Promise<RosterMeta> {
+  const clamped = Math.max(0, Math.min(100, safeNumber(params.percentage)));
+
+  const [row] = await db
+    .select({ storeId: employeeMonthlyTargets.storeId, yearMonth: employeeMonthlyTargets.yearMonth })
+    .from(employeeMonthlyTargets)
+    .where(eq(employeeMonthlyTargets.id, params.employeeMonthlyTargetId))
+    .limit(1);
+
+  if (!row) {
+    throw new Error("Roster row not found.");
+  }
+
+  await db
+    .update(employeeMonthlyTargets)
+    .set({
+      percentage: clamped.toFixed(2),
+      isPercentageOverridden: true,
+      updatedBy: params.updatedBy ?? undefined,
+      updatedAt: new Date(),
+    })
+    .where(eq(employeeMonthlyTargets.id, params.employeeMonthlyTargetId));
+
+  return syncRosterPercentages({
+    storeId: row.storeId,
+    yearMonth: row.yearMonth,
+    updatedBy: params.updatedBy,
+  });
+}
+
+export async function resetEmployeeMonthlyPercentageToDefault(params: {
+  employeeMonthlyTargetId: number;
+  updatedBy?: string | null;
+}): Promise<RosterMeta> {
+  const [row] = await db
+    .select({ storeId: employeeMonthlyTargets.storeId, yearMonth: employeeMonthlyTargets.yearMonth })
+    .from(employeeMonthlyTargets)
+    .where(eq(employeeMonthlyTargets.id, params.employeeMonthlyTargetId))
+    .limit(1);
+
+  if (!row) {
+    throw new Error("Roster row not found.");
+  }
+
+  await db
+    .update(employeeMonthlyTargets)
+    .set({
+      isPercentageOverridden: false,
+      updatedBy: params.updatedBy ?? undefined,
+      updatedAt: new Date(),
+    })
+    .where(eq(employeeMonthlyTargets.id, params.employeeMonthlyTargetId));
+
+  return syncRosterPercentages({
+    storeId: row.storeId,
+    yearMonth: row.yearMonth,
+    updatedBy: params.updatedBy,
+  });
+}
+
+// ─── Monthly roster allocation (the read path — Ops table + employee dashboard) ──
+
+export type MonthlyRosterAllocationRow = {
   employeeMonthlyTargetId: number;
   userId: string;
   nik: string;
   name: string;
   targetRoleCode: string;
   slotCode: string;
-  defaultPct: number;
-  effectivePct: number;
-  isOverridden: boolean;
+  percentage: number;
+  isPercentageOverridden: boolean;
+  scheduledDays: number;
+  monthlySalesTarget: number;
+  monthlyTransactionTarget: number;
   dailySalesTarget: number;
   dailyTransactionTarget: number;
 };
 
-export type DailyAllocationResult = {
-  date: string;
-  headcount: number;
-  usedFallbackEqualSplit: boolean;
-  storeDailySalesTarget: number;
-  storeDailyTransactionTarget: number;
-  rows: DailyAllocationRow[];
-};
-
-export async function computeDailyAllocations(params: {
-  storeId: number;
-  date: string; // YYYY-MM-DD
-  yearMonth: string;
-}): Promise<DailyAllocationResult> {
-  const [storeMonthly, roster, scheduledUserIds] = await Promise.all([
-    getStoreMonthlyTarget({
-      storeId: params.storeId,
-      yearMonth: params.yearMonth,
-    }),
-    listStoreRoster({ storeId: params.storeId, yearMonth: params.yearMonth }),
-    getScheduledUserIdsForStoreDate({
-      storeId: params.storeId,
-      date: params.date,
-    }),
-  ]);
-
-  const { dailySalesTarget, dailyTransactionTarget } =
-    getStoreDailyTargetForDate({
-      monthlySalesTarget: storeMonthly.monthlySalesTarget,
-      monthlyTransactionTarget: storeMonthly.monthlyTransactionTarget,
-      yearMonth: params.yearMonth,
-      date: params.date,
-    });
-
-  const assignments = assignDailySlots(roster, scheduledUserIds);
-  const headcount = assignments.length;
-
-  const base: DailyAllocationResult = {
-    date: params.date,
-    headcount,
-    usedFallbackEqualSplit: false,
-    storeDailySalesTarget: dailySalesTarget,
-    storeDailyTransactionTarget: dailyTransactionTarget,
-    rows: [],
-  };
-
-  if (headcount === 0) return base;
-
-  const [template, overrides] = await Promise.all([
-    getAllocationTemplateForHeadcount(headcount),
-    db
-      .select({
-        userId: dailyTargetOverrides.userId,
-        percentage: dailyTargetOverrides.percentage,
-      })
-      .from(dailyTargetOverrides)
-      .where(
-        and(
-          eq(dailyTargetOverrides.storeId, params.storeId),
-          eq(dailyTargetOverrides.date, params.date),
-        ),
-      ),
-  ]);
-
-  const overrideMap = new Map<string, number>(
-    overrides.map((override) => [
-      override.userId,
-      safeNumber(override.percentage),
-    ]),
-  );
-  const { usedFallbackEqualSplit, rows } = resolveEffectivePercentages(
-    assignments,
-    template,
-    overrideMap,
-  );
-
-  const salesTargets = allocateRoundedTarget(dailySalesTarget, rows);
-  const transactionTargets = allocateRoundedTarget(
-    dailyTransactionTarget,
-    rows,
-  );
-
-  return {
-    ...base,
-    usedFallbackEqualSplit,
-    rows: rows.map((row) => ({
-      employeeMonthlyTargetId: row.employeeMonthlyTargetId,
-      userId: row.userId,
-      nik: row.nik,
-      name: row.name,
-      targetRoleCode: row.targetRoleCode,
-      slotCode: row.slotCode,
-      defaultPct: Math.round(row.defaultPct * 100) / 100,
-      effectivePct: Math.round(row.effectivePct * 100) / 100,
-      isOverridden: row.isOverridden,
-      dailySalesTarget: salesTargets.get(row.userId) ?? 0,
-      dailyTransactionTarget: transactionTargets.get(row.userId) ?? 0,
-    })),
-  };
-}
-
-// ─── Batched monthly rollup (used by the "Bulanan" view — one pass, no N+1) ──
-
-export type MonthlyAllocationSummary = {
+export type MonthlyRosterAllocationResult = {
   storeMonthlySalesTarget: number;
   storeMonthlyTransactionTarget: number;
-  byUserId: Map<
-    string,
-    {
-      userId: string;
-      monthlySalesTarget: number;
-      monthlyTransactionTarget: number;
-      scheduledDays: number;
-    }
-  >;
+  headcount: number;
+  usedFallbackEqualSplit: boolean;
+  rows: MonthlyRosterAllocationRow[];
+  byUserId: Map<string, MonthlyRosterAllocationRow>;
 };
 
 /**
- * Walks every day of the month IN MEMORY (schedules, overrides, and the
- * template are each fetched once) and sums each roster employee's daily
- * allocation. Used for the "Bulanan" (monthly) view and for an employee's
- * own monthly total in employee-performance.ts.
+ * Batched read: the store's roster for the month, each member's fixed %
+ * (persisted on employee_monthly_targets — NOT recomputed here, see
+ * syncRosterPercentages for that), their scheduled-day count, and the
+ * resulting monthly/flat-daily Rp + transaction targets.
  */
-export async function computeMonthlyAllocationSummary(params: {
+export async function computeMonthlyRosterAllocations(params: {
   storeId: number;
   yearMonth: string;
-}): Promise<MonthlyAllocationSummary> {
-  const [storeMonthly, roster, scheduledByDate, fullTemplate] =
-    await Promise.all([
-      getStoreMonthlyTarget({
-        storeId: params.storeId,
-        yearMonth: params.yearMonth,
-      }),
-      listStoreRoster({ storeId: params.storeId, yearMonth: params.yearMonth }),
-      getScheduledUserIdsByDateForMonth({
-        storeId: params.storeId,
-        yearMonth: params.yearMonth,
-      }),
-      getFullAllocationTemplate(),
-    ]);
+}): Promise<MonthlyRosterAllocationResult> {
+  const [storeMonthly, roster, scheduledDaysByUser] = await Promise.all([
+    getStoreMonthlyTarget({ storeId: params.storeId, yearMonth: params.yearMonth }),
+    listStoreRoster({ storeId: params.storeId, yearMonth: params.yearMonth }),
+    getScheduledDaysByUserForMonth({ storeId: params.storeId, yearMonth: params.yearMonth }),
+  ]);
 
-  // `date` is stored as YYYY-MM-DD text, so lexicographic bounds double as a
-  // date range — no need to parse into a real Date for this comparison.
-  const monthStartKey = `${params.yearMonth}-01`;
-  const monthEndKey = `${params.yearMonth}-32`; // exclusive upper bound, covers day 31
+  const assignments = assignMonthlySlots(roster);
+  const slotCodeByUserId = new Map(assignments.map((a) => [a.userId, a.slotCode]));
 
-  const overrideRows = await db
-    .select({
-      date: dailyTargetOverrides.date,
-      userId: dailyTargetOverrides.userId,
-      percentage: dailyTargetOverrides.percentage,
-    })
-    .from(dailyTargetOverrides)
-    .where(
-      and(
-        eq(dailyTargetOverrides.storeId, params.storeId),
-        gte(dailyTargetOverrides.date, monthStartKey),
-        lt(dailyTargetOverrides.date, monthEndKey),
-      ),
-    );
+  const template =
+    assignments.length > 0
+      ? await getAllocationTemplateForHeadcount(assignments.length)
+      : new Map<string, number>();
+  const usedFallbackEqualSplit = assignments.length > 0 && template.size === 0;
 
-  const overridesByDate = new Map<string, Map<string, number>>();
-  for (const row of overrideRows) {
-    const inner = overridesByDate.get(row.date) ?? new Map<string, number>();
-    inner.set(row.userId, safeNumber(row.percentage));
-    overridesByDate.set(row.date, inner);
-  }
+  const rows: MonthlyRosterAllocationRow[] = roster.map((member) => {
+    const scheduledDays = scheduledDaysByUser.get(member.userId) ?? 0;
+    const monthlySalesTarget =
+      (storeMonthly.monthlySalesTarget * member.percentage) / 100;
+    const monthlyTransactionTarget =
+      (storeMonthly.monthlyTransactionTarget * member.percentage) / 100;
 
-  const byUserId = new Map<
-    string,
-    {
-      userId: string;
-      monthlySalesTarget: number;
-      monthlyTransactionTarget: number;
-      scheduledDays: number;
-    }
-  >();
-
-  for (const [date, scheduledUserIds] of scheduledByDate.entries()) {
-    const assignments = assignDailySlots(roster, scheduledUserIds);
-    if (assignments.length === 0) continue;
-
-    const templateForHeadcount = fullTemplate.get(assignments.length);
-    const overrideMap = overridesByDate.get(date) ?? new Map<string, number>();
-    const { rows } = resolveEffectivePercentages(
-      assignments,
-      templateForHeadcount,
-      overrideMap,
-    );
-
-    const { dailySalesTarget, dailyTransactionTarget } =
-      getStoreDailyTargetForDate({
-        monthlySalesTarget: storeMonthly.monthlySalesTarget,
-        monthlyTransactionTarget: storeMonthly.monthlyTransactionTarget,
-        yearMonth: params.yearMonth,
-        date,
-      });
-
-    const salesTargets = allocateRoundedTarget(dailySalesTarget, rows);
-    const transactionTargets = allocateRoundedTarget(
-      dailyTransactionTarget,
-      rows,
-    );
-
-    for (const row of rows) {
-      const entry = byUserId.get(row.userId) ?? {
-        userId: row.userId,
-        monthlySalesTarget: 0,
-        monthlyTransactionTarget: 0,
-        scheduledDays: 0,
-      };
-      entry.monthlySalesTarget += salesTargets.get(row.userId) ?? 0;
-      entry.monthlyTransactionTarget += transactionTargets.get(row.userId) ?? 0;
-      entry.scheduledDays += 1;
-      byUserId.set(row.userId, entry);
-    }
-  }
+    return {
+      employeeMonthlyTargetId: member.id,
+      userId: member.userId,
+      nik: member.nik,
+      name: member.name,
+      targetRoleCode: member.targetRoleCode,
+      slotCode: slotCodeByUserId.get(member.userId) ?? member.targetRoleCode,
+      percentage: member.percentage,
+      isPercentageOverridden: member.isPercentageOverridden,
+      scheduledDays,
+      monthlySalesTarget,
+      monthlyTransactionTarget,
+      dailySalesTarget: scheduledDays > 0 ? monthlySalesTarget / scheduledDays : 0,
+      dailyTransactionTarget:
+        scheduledDays > 0 ? monthlyTransactionTarget / scheduledDays : 0,
+    };
+  });
 
   return {
     storeMonthlySalesTarget: storeMonthly.monthlySalesTarget,
     storeMonthlyTransactionTarget: storeMonthly.monthlyTransactionTarget,
-    byUserId,
+    headcount: assignments.length,
+    usedFallbackEqualSplit,
+    rows,
+    byUserId: new Map(rows.map((r) => [r.userId, r])),
   };
-}
-
-/** Convenience wrapper for a single employee (e.g. their own dashboard). */
-export async function computeEmployeeMonthlyTargetFromDailyAllocations(params: {
-  storeId: number;
-  userId: string;
-  yearMonth: string;
-}) {
-  const summary = await computeMonthlyAllocationSummary({
-    storeId: params.storeId,
-    yearMonth: params.yearMonth,
-  });
-  return (
-    summary.byUserId.get(params.userId) ?? {
-      userId: params.userId,
-      monthlySalesTarget: 0,
-      monthlyTransactionTarget: 0,
-      scheduledDays: 0,
-    }
-  );
-}
-
-// ─── Daily override CRUD ─────────────────────────────────────────────────────
-
-export async function setDailyTargetOverride(params: {
-  storeId: number;
-  date: string; // YYYY-MM-DD
-  userId: string;
-  percentage: number;
-  updatedBy?: string | null;
-}) {
-  const clamped = Math.max(0, Math.min(100, safeNumber(params.percentage)));
-
-  const [existing] = await db
-    .select({ id: dailyTargetOverrides.id })
-    .from(dailyTargetOverrides)
-    .where(
-      and(
-        eq(dailyTargetOverrides.storeId, params.storeId),
-        eq(dailyTargetOverrides.date, params.date),
-        eq(dailyTargetOverrides.userId, params.userId),
-      ),
-    )
-    .limit(1);
-
-  if (existing) {
-    await db
-      .update(dailyTargetOverrides)
-      .set({
-        percentage: clamped.toFixed(2),
-        updatedBy: params.updatedBy ?? undefined,
-      })
-      .where(eq(dailyTargetOverrides.id, existing.id));
-    return existing.id;
-  }
-
-  const [created] = await db
-    .insert(dailyTargetOverrides)
-    .values({
-      storeId: params.storeId,
-      date: params.date,
-      userId: params.userId,
-      percentage: clamped.toFixed(2),
-      createdBy: params.updatedBy ?? undefined,
-      updatedBy: params.updatedBy ?? undefined,
-    })
-    .returning({ id: dailyTargetOverrides.id });
-
-  return created.id;
-}
-
-export async function clearDailyTargetOverride(params: {
-  storeId: number;
-  date: string;
-  userId: string;
-}) {
-  await db
-    .delete(dailyTargetOverrides)
-    .where(
-      and(
-        eq(dailyTargetOverrides.storeId, params.storeId),
-        eq(dailyTargetOverrides.date, params.date),
-        eq(dailyTargetOverrides.userId, params.userId),
-      ),
-    );
 }
 
 // ─── Employee-facing resolver (used by employee-performance.ts) ─────────────
@@ -989,7 +761,7 @@ export type PerformanceTargetResult = {
 
   employeeMonthlyTargetId: number | null;
   employeeTargetRoleCode: string | null;
-  /** Today's slot (e.g. "SA2") — null if the employee isn't scheduled today. */
+  /** This month's fixed slot (e.g. "SA2") — null if not on the roster. */
   employeeSlotCode: string | null;
 
   employeeMonthlySalesTarget: number;
@@ -997,12 +769,11 @@ export type PerformanceTargetResult = {
   employeeMonthlyAtvTarget: number;
   scheduledDaysInMonth: number;
 
-  /** Employee target for the selected day. */
+  /** Flat daily target — 0 on days the employee isn't scheduled. */
   dailySalesTarget: number;
   dailyTransactionTarget: number;
-  /** Employee's target share of the store daily target. */
+  /** Employee's fixed monthly % share (same value daily and monthly now). */
   dailyAllocationPct: number;
-  /** Employee's target share of the store monthly target. */
   monthlyAllocationPct: number;
   isScheduledToday: boolean;
 
@@ -1023,27 +794,14 @@ export async function resolvePerformanceTargets(params: {
 }): Promise<PerformanceTargetResult> {
   const date = params.date ?? toDateOnly(new Date());
 
-  const [storeMonthly, roster, todayAllocations, monthly] = await Promise.all([
-    getStoreMonthlyTarget({
-      storeId: params.storeId,
-      yearMonth: params.yearMonth,
-    }),
-    listStoreRoster({ storeId: params.storeId, yearMonth: params.yearMonth }),
-    computeDailyAllocations({
-      storeId: params.storeId,
-      date,
-      yearMonth: params.yearMonth,
-    }),
-    computeEmployeeMonthlyTargetFromDailyAllocations({
-      storeId: params.storeId,
-      userId: params.userId,
-      yearMonth: params.yearMonth,
-    }),
+  const [storeMonthly, monthly, scheduledTodayUserIds] = await Promise.all([
+    getStoreMonthlyTarget({ storeId: params.storeId, yearMonth: params.yearMonth }),
+    computeMonthlyRosterAllocations({ storeId: params.storeId, yearMonth: params.yearMonth }),
+    getScheduledUserIdsForStoreDate({ storeId: params.storeId, date }),
   ]);
 
-  const rosterRow = roster.find((r) => r.userId === params.userId) ?? null;
-  const todayRow =
-    todayAllocations.rows.find((r) => r.userId === params.userId) ?? null;
+  const rosterRow = monthly.byUserId.get(params.userId) ?? null;
+  const isScheduledToday = scheduledTodayUserIds.has(params.userId);
 
   const source: PerformanceTargetResult["source"] =
     !storeMonthly.storeMonthlyTargetId
@@ -1051,6 +809,14 @@ export async function resolvePerformanceTargets(params: {
       : rosterRow
         ? "roster"
         : "not_on_roster";
+
+  const { dailySalesTarget: storeDailySalesTarget, dailyTransactionTarget: storeDailyTransactionTarget } =
+    getStoreDailyTargetForDate({
+      monthlySalesTarget: storeMonthly.monthlySalesTarget,
+      monthlyTransactionTarget: storeMonthly.monthlyTransactionTarget,
+      yearMonth: params.yearMonth,
+      date,
+    });
 
   return {
     storeMonthlyTargetId: storeMonthly.storeMonthlyTargetId,
@@ -1060,29 +826,28 @@ export async function resolvePerformanceTargets(params: {
     storeMonthlyTransactionTarget: storeMonthly.monthlyTransactionTarget,
     storeMonthlyAtvTarget: storeMonthly.monthlyAtvTarget,
 
-    employeeMonthlyTargetId: rosterRow?.id ?? null,
+    employeeMonthlyTargetId: rosterRow?.employeeMonthlyTargetId ?? null,
     employeeTargetRoleCode: rosterRow?.targetRoleCode ?? null,
-    employeeSlotCode: todayRow?.slotCode ?? null,
+    employeeSlotCode: rosterRow?.slotCode ?? null,
 
-    employeeMonthlySalesTarget: monthly.monthlySalesTarget,
-    employeeMonthlyTransactionTarget: monthly.monthlyTransactionTarget,
+    employeeMonthlySalesTarget: rosterRow?.monthlySalesTarget ?? 0,
+    employeeMonthlyTransactionTarget: rosterRow?.monthlyTransactionTarget ?? 0,
     employeeMonthlyAtvTarget: calculateAtvTarget(
-      monthly.monthlySalesTarget,
-      monthly.monthlyTransactionTarget,
+      rosterRow?.monthlySalesTarget ?? 0,
+      rosterRow?.monthlyTransactionTarget ?? 0,
     ),
-    scheduledDaysInMonth: monthly.scheduledDays,
+    scheduledDaysInMonth: rosterRow?.scheduledDays ?? 0,
 
-    dailySalesTarget: todayRow?.dailySalesTarget ?? 0,
-    dailyTransactionTarget: todayRow?.dailyTransactionTarget ?? 0,
-    dailyAllocationPct: todayRow?.effectivePct ?? 0,
-    monthlyAllocationPct: safeContribution(
-      monthly.monthlySalesTarget,
-      storeMonthly.monthlySalesTarget,
-    ),
-    isScheduledToday: Boolean(todayRow),
+    dailySalesTarget: isScheduledToday ? rosterRow?.dailySalesTarget ?? 0 : 0,
+    dailyTransactionTarget: isScheduledToday
+      ? rosterRow?.dailyTransactionTarget ?? 0
+      : 0,
+    dailyAllocationPct: rosterRow?.percentage ?? 0,
+    monthlyAllocationPct: rosterRow?.percentage ?? 0,
+    isScheduledToday,
 
-    storeDailySalesTarget: todayAllocations.storeDailySalesTarget,
-    storeDailyTransactionTarget: todayAllocations.storeDailyTransactionTarget,
+    storeDailySalesTarget,
+    storeDailyTransactionTarget,
 
     source,
   };

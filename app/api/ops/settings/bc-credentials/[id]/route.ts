@@ -8,7 +8,7 @@
 // DELETE /api/ops/settings/bc-credentials/:id
 //   → remove the settings row.
 //
-// Access: OPS HO only.
+// Access: IT only.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -16,7 +16,7 @@ import { eq } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import { businessCentralSettings } from '@/lib/db/schema';
-import { resolveOpsScope } from '@/lib/performance/ops-scope';
+import { resolveItScope } from '@/lib/auth/it-scope';
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -47,16 +47,9 @@ function serialize(row: typeof businessCentralSettings.$inferSelect) {
 }
 
 export async function PATCH(req: NextRequest, { params }: Params) {
-  const scope = await resolveOpsScope();
+  const scope = await resolveItScope();
   if (!scope.ok) {
     return NextResponse.json({ success: false, error: scope.error }, { status: scope.status });
-  }
-
-  if (scope.scope !== 'all_areas') {
-    return NextResponse.json(
-      { success: false, error: 'Forbidden: only OPS HO can manage Business Central credentials.' },
-      { status: 403 },
-    );
   }
 
   const { id: idRaw } = await params;
@@ -125,16 +118,9 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 }
 
 export async function DELETE(_req: NextRequest, { params }: Params) {
-  const scope = await resolveOpsScope();
+  const scope = await resolveItScope();
   if (!scope.ok) {
     return NextResponse.json({ success: false, error: scope.error }, { status: scope.status });
-  }
-
-  if (scope.scope !== 'all_areas') {
-    return NextResponse.json(
-      { success: false, error: 'Forbidden: only OPS HO can manage Business Central credentials.' },
-      { status: 403 },
-    );
   }
 
   const { id: idRaw } = await params;

@@ -25,9 +25,10 @@ export async function resolveActorCodes(
 
 export function canManageSchedule(role: string | null, empType: string | null) {
   return (
-    role === 'admin' ||
+    role === 'it' ||
     role === 'ops' ||
     empType === 'pic_1' ||
+    empType === 'pic_2' ||
     empType === 'ops_area' ||
     empType === 'ops_ho'
   );

@@ -17,7 +17,7 @@ export default function OpsManagePage() {
 
   const user = session?.user as any;
   const role = user?.role as string | undefined;
-  const isOps = role === 'ops' || role === 'admin';
+  const isOps = role === 'ops' || role === 'it';
 
   const [data, setData] = useState<WorkspaceData | null>(null);
   const [loading, setLoading] = useState(true);

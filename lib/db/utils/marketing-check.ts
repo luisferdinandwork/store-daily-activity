@@ -294,7 +294,7 @@ export async function getOrCreateMarketingCheckForSchedule(
         storeId,
         shiftId,
         date: startOfDay(date),
-        status: 'pending',
+        status: 'not_started',
         updatedAt: new Date(),
       })
       .onConflictDoNothing()
@@ -347,7 +347,7 @@ export async function autoSaveMarketingCheck(
     };
 
     if (input.userId) update.userId = input.userId;
-    if (existing.status === 'pending') update.status = 'in_progress';
+    if (existing.status === 'not_started') update.status = 'in_progress';
 
     Object.assign(update, buildChecklistUpdate(input, input.userId, now));
 

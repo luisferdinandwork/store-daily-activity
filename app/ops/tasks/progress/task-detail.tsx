@@ -26,10 +26,10 @@ import { cn } from '@/lib/utils';
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type TaskStatus =
-  | 'pending'
+  | 'not_started'
   | 'in_progress'
   | 'completed'
-  | 'discrepancy'
+  | 'pending'
   | 'verified'
   | 'rejected';
 
@@ -67,7 +67,7 @@ export const TASK_LABELS: Record<string, string> = {
   marketing_check: 'Marketing Check',
   item_dropping: 'Item Dropping',
   item_return: 'Item Return',
-  cek_uang_muka: 'Cek Uang Muka',
+  cek_uang_modal: 'Cek Uang Modal',
   briefing: 'Briefing',
   serah_terima: 'Serah Terima',
   store_closing: 'Store Closing',
@@ -83,7 +83,7 @@ export const TASK_ICONS: Record<string, React.ElementType> = {
   marketing_check: ClipboardList,
   item_dropping: Box,
   item_return: Truck,
-  cek_uang_muka: Banknote,
+  cek_uang_modal: Banknote,
   briefing: Users,
   serah_terima: ClipboardList,
   store_closing: CreditCard,
@@ -115,8 +115,8 @@ export function statusLabel(status: string | null | undefined): string {
     case 'verified':    return 'Terverifikasi';
     case 'rejected':    return 'Ditolak';
     case 'in_progress': return 'Aktif';
-    case 'discrepancy': return 'Discrepancy';
-    default:            return 'Pending';
+    case 'pending':     return 'Pending';
+    default:            return 'Not Started';
   }
 }
 
@@ -126,7 +126,7 @@ export function statusBadgeClass(status: string | null | undefined): string {
     case 'verified':    return 'bg-teal-50 text-teal-700 border-teal-200';
     case 'rejected':    return 'bg-red-50 text-red-700 border-red-200';
     case 'in_progress': return 'bg-indigo-50 text-indigo-700 border-indigo-200';
-    case 'discrepancy': return 'bg-amber-50 text-amber-700 border-amber-300';
+    case 'pending':     return 'bg-amber-50 text-amber-700 border-amber-300';
     default:            return 'bg-amber-50 text-amber-600 border-amber-200';
   }
 }
@@ -646,7 +646,7 @@ function ItemReturnDetail({ task }: { task: FlatTask }) {
   );
 }
 
-function CekUangMukaDetail({ task }: { task: FlatTask }) {
+function CekUangModalDetail({ task }: { task: FlatTask }) {
   const e = task.extra;
   const denominations = Array.isArray(e.denominations)
     ? (e.denominations as Record<string, unknown>[])
@@ -662,7 +662,7 @@ function CekUangMukaDetail({ task }: { task: FlatTask }) {
   return (
     <div>
       <div className="space-y-1 divide-y divide-slate-100">
-        <InfoRow label="Total Uang Muka" value={<span className="font-bold text-slate-800">{fmtRupiah(totalAmount)}</span>} />
+        <InfoRow label="Total Uang Modal" value={<span className="font-bold text-slate-800">{fmtRupiah(totalAmount)}</span>} />
         <InfoRow label="Batas Harian" value={fmtRupiah(maxAmount)} />
         <InfoRow
           label="Sisa Limit"
@@ -679,7 +679,7 @@ function CekUangMukaDetail({ task }: { task: FlatTask }) {
       </p>
 
       {denominations.length === 0 ? (
-        <p className="py-2 text-xs text-amber-600">Belum ada data pecahan uang muka.</p>
+        <p className="py-2 text-xs text-amber-600">Belum ada data pecahan uang modal.</p>
       ) : (
         <div className="divide-y divide-slate-100 rounded-lg bg-slate-50 px-3 py-1">
           {denominations.map((row, index) => {
@@ -921,7 +921,7 @@ export function TaskDetailBody({ task }: { task: FlatTask }) {
     case 'marketing_check': return <MarketingCheckDetail task={task} />;
     case 'item_dropping':   return <ItemDroppingDetail task={task} />;
     case 'item_return':     return <ItemReturnDetail task={task} />;
-    case 'cek_uang_muka':   return <CekUangMukaDetail task={task} />;
+    case 'cek_uang_modal':   return <CekUangModalDetail task={task} />;
     case 'briefing':        return <BriefingDetail task={task} />;
     case 'serah_terima':    return <SerahTerimaDetail task={task} />;
     case 'store_closing':   return <StoreClosingDetail task={task} />;
@@ -944,13 +944,13 @@ export function TaskDetailView({
 }) {
   const label = TASK_LABELS[task.type] ?? task.type.replaceAll('_', ' ');
   const TaskIcon = TASK_ICONS[task.type] ?? ClipboardList;
-  const status = task.status ?? 'pending';
+  const status = task.status ?? 'not_started';
 
   const iconBg =
     status === 'completed'   ? 'bg-emerald-50 text-emerald-600' :
     status === 'verified'    ? 'bg-teal-50 text-teal-600' :
     status === 'in_progress' ? 'bg-indigo-50 text-indigo-600' :
-    status === 'discrepancy' ? 'bg-amber-50 text-amber-600' :
+    status === 'pending'     ? 'bg-amber-50 text-amber-600' :
     'bg-amber-50 text-amber-500';
 
   return (

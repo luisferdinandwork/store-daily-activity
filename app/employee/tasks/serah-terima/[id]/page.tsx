@@ -36,7 +36,7 @@ type SerahTask = {
   shiftId: string;
   date: string | null;
   handoverText: string;
-  status: 'pending' | 'in_progress' | 'completed' | 'discrepancy';
+  status: 'not_started' | 'in_progress' | 'completed' | 'pending';
   notes: string | null;
   completedAt: string | null;
 };
@@ -218,7 +218,7 @@ export default function SerahTerimaTaskPage() {
       scheduleId={task.scheduleId}
       storeId={task.storeId}
       taskStatus={task.status}
-      requireGeo
+      taskType="serah_terima"
     >
       {({ banner, lockedOverlay, dis, geo, readonly, locked }) => {
         const canSubmit =

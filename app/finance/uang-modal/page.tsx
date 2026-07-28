@@ -1,9 +1,9 @@
 'use client';
 // app/finance/uang-modal/page.tsx
 //
-// Finance · Daily Uang Modal (Cek Uang Muka monitor)
+// Finance · Daily Uang Modal (Cek Uang Modal monitor)
 //
-// A month-calendar of cashier opening-float (uang muka) submissions.
+// A month-calendar of cashier opening-float (uang modal) submissions.
 // Clicking a day opens a right-side slide-over panel (matches the OPS
 // Schedule Manager panel pattern) listing every store's denomination
 // breakdown for that date.
@@ -99,8 +99,8 @@ const DENOMINATION_LABELS: Record<number, string> = {
 const STATUS_META: Record<UangModalStoreEntry['status'], { dot: string; badge: string; label: string }> = {
   completed:   { dot: 'bg-emerald-500', badge: 'bg-emerald-50 text-emerald-700 ring-emerald-200', label: 'Selesai' },
   in_progress: { dot: 'bg-blue-400',    badge: 'bg-blue-50 text-blue-700 ring-blue-200',          label: 'Sedang dihitung' },
-  pending:     { dot: 'bg-slate-300',   badge: 'bg-slate-100 text-slate-500 ring-slate-200',      label: 'Belum mulai' },
-  discrepancy: { dot: 'bg-rose-500',    badge: 'bg-rose-50 text-rose-700 ring-rose-200',          label: 'Discrepancy' },
+  not_started: { dot: 'bg-slate-300',   badge: 'bg-slate-100 text-slate-500 ring-slate-200',      label: 'Belum mulai' },
+  pending:     { dot: 'bg-rose-500',    badge: 'bg-rose-50 text-rose-700 ring-rose-200',          label: 'Pending' },
 };
 
 // ─── Day cell ─────────────────────────────────────────────────────────────────

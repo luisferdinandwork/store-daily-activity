@@ -5,7 +5,8 @@ export const issueStatusEnum = pgEnum('issue_status', [
   'draft',
   'reported',
   'in_review',
-  'resolved',
+  'solved',
+  'completed',
 ]);
 
 export const reportStatusEnum = pgEnum('report_status', [
@@ -21,10 +22,10 @@ export const attendanceStatusEnum = pgEnum('attendance_status', [
 ]);
 
 export const taskStatusEnum = pgEnum('task_status', [
-  'pending',
+  'not_started',
   'in_progress',
   'completed',
-  'discrepancy',
+  'pending',
 ]);
 
 export const txTypeEnum = pgEnum('tx_type', [

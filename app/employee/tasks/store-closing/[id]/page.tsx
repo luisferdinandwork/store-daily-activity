@@ -17,7 +17,7 @@ import AccessGuard from '@/components/employee/tasks/AccessGuard';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'verified' | 'rejected' | 'discrepancy';
+type TaskStatus = 'not_started' | 'in_progress' | 'completed' | 'verified' | 'rejected' | 'pending';
 type OpenStatementDecision = 'post_statement' | 'on_hold';
 
 interface StoreClosingData {
@@ -503,7 +503,7 @@ export default function StoreClosingDetailPage() {
       scheduleId={taskData?.scheduleId ?? ''}
       storeId={taskData?.storeId ?? ''}
       taskStatus={taskData?.status}
-      requireGeo
+      taskType="store_closing"
     >
       {({ geo, banner, lockedOverlay, dis: guardDis, readonly, locked }) => {
         // On-hold tasks are readable but fully non-interactive.

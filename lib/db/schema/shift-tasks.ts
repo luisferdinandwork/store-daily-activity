@@ -48,6 +48,10 @@ export const taskDefinitions = pgTable('task_definitions', {
   // grooming-style tasks are tracked per-employee rather than per-store.
   isPersonal:  boolean('is_personal').default(false).notNull(),
 
+  // Whether employees must grant/verify location to work on this task type.
+  // OPS-configurable — see app/ops/tasks/settings and /api/ops/task-definitions.
+  requiresLocation: boolean('requires_location').default(true).notNull(),
+
   isActive:    boolean('is_active').default(true).notNull(),
   sortOrder:   integer('sort_order').default(0).notNull(),
   createdAt:   timestamp('created_at').defaultNow().notNull(),
@@ -69,8 +73,18 @@ export const shiftTasks = pgTable('shift_tasks', {
     .references(() => taskDefinitions.id, { onDelete: 'cascade' })
     .notNull(),
 
-  // Required vs optional within the shift.
+  // Required vs optional within the shift — whether this task assignment is
+  // mandatory for the shift at all. Independent from isSequenced below.
   isRequired: boolean('is_required').default(true).notNull(),
+
+  // Whether this task is part of the shift's FIXED, GATED order: sequenced
+  // tasks must be done one after another (sortOrder decides the sequence,
+  // managed from OPS → Shift & Tasks → Fixed Order) and each one is locked
+  // for employees until the previous sequenced task is completed/verified.
+  // Tasks with isSequenced = false are "Anytime" tasks: never locked, and
+  // always shown below the sequenced ones (still using sortOrder to order
+  // themselves relative to each other).
+  isSequenced: boolean('is_sequenced').default(false).notNull(),
 
   isActive:   boolean('is_active').default(true).notNull(),
   sortOrder:  integer('sort_order').default(0).notNull(),

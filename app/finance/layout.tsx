@@ -9,6 +9,7 @@ import { ReactNode, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import FinanceSidebar from '@/components/finance/layout/FinanceSidebar';
 import FinanceNavbar  from '@/components/finance/layout/FinanceNavbar';
+import RoleSwitchBanner from '@/components/shared/RoleSwitchBanner';
 
 export default function FinanceLayout({ children }: { children: ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -21,6 +22,7 @@ export default function FinanceLayout({ children }: { children: ReactNode }) {
         userName={(session?.user?.name) ?? 'Finance'}
       />
       <div className="flex flex-1 flex-col overflow-hidden">
+        <RoleSwitchBanner />
         <FinanceNavbar
           collapsed={collapsed}
           onToggle={() => setCollapsed((v) => !v)}

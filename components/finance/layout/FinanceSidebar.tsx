@@ -38,6 +38,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
+import EmployeeLogoMark from '@/components/employee/EmployeeLogoMark';
 
 // ─── Nav definition ───────────────────────────────────────────────────────────
 
@@ -117,10 +118,14 @@ export default function FinanceSidebar({ collapsed = false, userName = 'Finance'
         )}
       >
         {/* ── Brand ── */}
-        <div className="flex items-center gap-2 px-3 py-4 min-w-0">
-          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-emerald-600">
-            <span className="text-xs font-bold text-white">FN</span>
-          </div>
+        <div className="flex items-center gap-2 px-3 py-5 min-w-0">
+          {collapsed ? (
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-emerald-600">
+              <span className="text-xs font-bold text-white">FN</span>
+            </div>
+          ) : (
+            <EmployeeLogoMark variant="color" className="w-32 shrink-0" />
+          )}
           {!collapsed && (
             <div className="min-w-0 overflow-hidden">
               <p className="truncate text-xs font-semibold text-foreground">Finance Panel</p>

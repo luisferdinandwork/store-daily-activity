@@ -1,44 +1,45 @@
 // components/employee/StoreContributionChart.tsx
 "use client";
 
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type MouseEvent } from "react";
 import {
   TrendingUp,
   Trophy,
   Target,
   Flame,
-  Users,
   Crosshair,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-interface Props {
-  employeeName: string;
-  employeeMonthlySales: number | null | undefined;
-  storeMonthlySales: number | null | undefined;
+export interface EmployeeContribution {
+  userId: string;
+  name: string;
+  isCurrentUser: boolean;
+  /** Actual sales ÷ store target, already capped at this employee's own target-share %. */
+  contributionPct: number;
   /**
-   * The store's TARGET for whatever period is being shown (daily or
-   * monthly — the parent decides which numbers to pass in). Optional: when
-   * omitted, the coach line just shows the store's actual, same as before.
+   * This employee's assigned target ÷ store target — the FULL slice size
+   * (their goal), independent of how much they've actually achieved.
+   * Falls back to `contributionPct` when omitted, in which case the ring
+   * shows only the achieved portion for that employee (no low-opacity
+   * "remaining" wedge).
    */
-  storeTargetSales?: number | null;
+  targetSharePct?: number | null;
+}
+
+interface Props {
+  /** This employee's own actual sales for the selected period. */
+  employeeMonthlySales: number | null | undefined;
+  /** The store's TARGET for the selected period — the "100%" the ring measures against. */
+  storeTargetSales: number | null | undefined;
   /** Employee's own sales target for the selected period. */
   employeeTargetSales?: number | null;
-  /** Employee's ACTUAL share of the store's actual sales this period, 0–100. */
-  contributionPct: number | null | undefined;
   /** Employee actual ÷ employee target, uncapped (e.g. 118 means 118%). */
   targetAchievementPct?: number | null;
-  /**
-   * Employee's TARGET share of the store's target this period, 0–100 — e.g.
-   * an SA assigned a 40% daily allocation. For the monthly view this is
-   * derived from (employee sales target / store sales target) × 100; for
-   * the daily view it's simply today's allocation %. Omit/null when there's
-   * no target yet — the target-related UI (marker + reach bar) just doesn't
-   * render.
-   */
-  targetContributionPct?: number | null;
+  /** Whole roster's contribution-to-target breakdown — one entry per employee, each already capped at their own target share. Powers the multi-color ring. */
+  employeeContributions: EmployeeContribution[] | null | undefined;
   /** e.g. "Juli 2026" or "Hari ini" — whatever period the numbers above represent. */
   periodLabel: string;
 }
@@ -81,8 +82,42 @@ const DONUT_RADIUS = (DONUT_SIZE - DONUT_STROKE) / 2;
 const DONUT_CIRCUMFERENCE = 2 * Math.PI * DONUT_RADIUS;
 const DONUT_CENTER = DONUT_SIZE / 2;
 
-const ARC_TRANSITION = "stroke-dashoffset 1.1s cubic-bezier(0.22, 1, 0.36, 1)";
-const BAR_TRANSITION = "width 1.1s cubic-bezier(0.22, 1, 0.36, 1)";
+const SEGMENT_TRANSITION =
+  "stroke-dasharray 1.1s cubic-bezier(0.22, 1, 0.36, 1), stroke-dashoffset 1.1s cubic-bezier(0.22, 1, 0.36, 1), filter 0.4s ease";
+
+/** Visual breathing room (in circumference px) between adjacent employees' slices, only used once there's more than one employee. Flat (butt) caps mean this gap is the full visible separation, no cap rounding to fill it in. There's no gap between an employee's own achieved/remaining pair — those stay visually contiguous. */
+const SEGMENT_GAP = 5;
+
+/** Opacity of the "remaining target" wedge relative to its achieved counterpart's full color. */
+const REMAINING_OPACITY = 0.25;
+
+/** One-time keyframes for the "you" segment's glow and the reveal sweep — injected inline so this component stays self-contained. */
+const DONUT_STYLE_TAG = `
+@keyframes scc-you-glow {
+  0%, 100% { filter: drop-shadow(0 0 2px rgba(251,191,36,0.55)); }
+  50% { filter: drop-shadow(0 0 7px rgba(251,191,36,0.9)); }
+}
+@keyframes scc-achieved-ring {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(52,211,153,0.35); }
+  50% { box-shadow: 0 0 0 8px rgba(52,211,153,0); }
+}
+`;
+
+/** "You" is always gold; teammates cycle through the rest of this palette by roster order. */
+const CURRENT_USER_COLOR = "#fbbf24";
+const TEAMMATE_PALETTE = [
+  "#34d399", // emerald
+  "#60a5fa", // sky
+  "#f472b6", // pink
+  "#a78bfa", // violet
+  "#fb923c", // orange
+  "#22d3ee", // cyan
+  "#facc15", // yellow
+  "#f87171", // red
+  "#4ade80", // green
+  "#818cf8", // indigo
+  "#e879f9", // fuchsia
+];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -111,19 +146,8 @@ function fmtPct1(value: number): string {
   return (Math.round(safe * 10) / 10).toLocaleString("id-ID");
 }
 
-/**
- * Point on the donut ring for a given 0–100 percentage. The <svg> itself is
- * rotated -90deg via CSS (so the progress arc starts at 12 o'clock and
- * sweeps clockwise) — computing the marker in this same UNROTATED
- * coordinate space means the CSS rotation lines it up automatically, no
- * extra transform math needed here.
- */
-function pointOnRing(pct: number, radius: number) {
-  const theta = (clampPct(pct) / 100) * 2 * Math.PI;
-  return {
-    x: DONUT_CENTER + radius * Math.cos(theta),
-    y: DONUT_CENTER + radius * Math.sin(theta),
-  };
+function firstName(name: string): string {
+  return name.trim().split(/\s+/)[0] ?? name;
 }
 
 /**
@@ -217,44 +241,38 @@ function getMotivation(
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export function StoreContributionChart({
-  employeeName,
   employeeMonthlySales,
-  storeMonthlySales,
   storeTargetSales,
   employeeTargetSales,
-  contributionPct,
   targetAchievementPct,
-  targetContributionPct,
+  employeeContributions,
   periodLabel,
 }: Props) {
-  const gradientId = useId();
-
   const safeEmployeeSales = useMemo(
     () => Math.max(0, toSafeNumber(employeeMonthlySales)),
     [employeeMonthlySales],
   );
 
-  const safeStoreSales = useMemo(
-    () => Math.max(0, toSafeNumber(storeMonthlySales)),
-    [storeMonthlySales],
-  );
-
-  const safeContributionPct = useMemo(
-    () => clampPct(contributionPct),
-    [contributionPct],
-  );
-
   const safeStoreTarget = Math.max(0, toSafeNumber(storeTargetSales));
-  const hasStoreTarget = safeStoreTarget > 0;
+
+  // Current user first (their slice always starts at 12 o'clock), then
+  // teammates ordered by size so the biggest slices read clearly.
+  const orderedContributions = useMemo(() => {
+    const list = (employeeContributions ?? []).filter(
+      (c) => c.contributionPct > 0 || (c.targetSharePct ?? 0) > 0 || c.isCurrentUser,
+    );
+    return [...list].sort((a, b) => {
+      if (a.isCurrentUser !== b.isCurrentUser) return a.isCurrentUser ? -1 : 1;
+      return b.contributionPct - a.contributionPct;
+    });
+  }, [employeeContributions]);
+
+  const myContributionPct = clampPct(
+    orderedContributions.find((c) => c.isCurrentUser)?.contributionPct,
+  );
 
   const safeEmployeeTarget = Math.max(0, toSafeNumber(employeeTargetSales));
   const hasEmployeeTarget = safeEmployeeTarget > 0;
-
-  const hasTargetShare =
-    typeof targetContributionPct === "number" && targetContributionPct > 0;
-  const safeTargetSharePct = hasTargetShare
-    ? clampPct(targetContributionPct)
-    : 0;
 
   /**
    * Target achievement must use the employee's own currency target:
@@ -265,100 +283,168 @@ export function StoreContributionChart({
   const safeAchievementPct = Math.max(0, toSafeNumber(targetAchievementPct));
   const reachPct = hasEmployeeTarget ? safeAchievementPct : null;
   const reachAchieved = reachPct != null && reachPct >= 100;
+  /** Rp still needed to hit the personal target — the actionable number, instead of a % of what's already earned. */
+  const remainingToFill = Math.max(0, safeEmployeeTarget - safeEmployeeSales);
+  /** Rp earned beyond target, once achieved. */
+  const surplusOverTarget = Math.max(0, safeEmployeeSales - safeEmployeeTarget);
 
-  const [animatedPct, setAnimatedPct] = useState(0);
+  const [progress, setProgress] = useState(0);
 
   useEffect(() => {
-    setAnimatedPct(0);
+    setProgress(0);
 
     const t = setTimeout(() => {
-      setAnimatedPct(safeContributionPct);
+      setProgress(1);
     }, 80);
 
     return () => clearTimeout(t);
-  }, [safeContributionPct]);
+  }, [orderedContributions]);
+
+  // ── Hover state — which employee's slice is active, and where to float the tooltip.
+  // `hoveredId` drives dimming everywhere (ring + legend); the floating tooltip only
+  // shows while hovering the ring itself, since it's positioned off the cursor.
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [tooltipVisible, setTooltipVisible] = useState(false);
+  const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  const hoveredContribution = orderedContributions.find((c) => c.userId === hoveredId) ?? null;
+
+  const handleRingMouseMove = (e: MouseEvent<SVGSVGElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    setTooltipPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+  };
 
   const motivation = getMotivation(
-    safeContributionPct,
+    myContributionPct,
     safeAchievementPct,
     safeEmployeeSales,
     hasEmployeeTarget,
   );
   const tone = TONE_STYLES[motivation.tone];
 
-  const employeeFilled =
-    DONUT_CIRCUMFERENCE * (Math.min(100, animatedPct) / 100);
+  const hasMultipleSlices = orderedContributions.length > 1;
 
-  const storeShareOthers = Math.max(0, safeStoreSales - safeEmployeeSales);
-  const animatedOthersPct = Math.max(0, 100 - animatedPct);
+  // Each employee's slice size is their real target share of the store
+  // target (e.g. 10%) — the filled (full-color) portion of that slice is
+  // exactly how much of it they've actually achieved (e.g. 60% of that 10%
+  // = 6%), and the low-opacity remainder is the gap left to hit their own
+  // target (4%). These are the real percentages, not stretched or rescaled —
+  // if every employee's target share happens to add up to the full store
+  // target, the ring closes on its own; if not, the leftover arc stays as
+  // plain background, which honestly reflects unassigned store target.
+  const sliceStats = useMemo(() => {
+    return orderedContributions.map((c, i) => {
+      const achievedPct = clampPct(c.contributionPct);
+      // A slice can never be smaller than what's already achieved.
+      const fullPct = Math.max(achievedPct, clampPct(c.targetSharePct ?? c.contributionPct));
+      return {
+        userId: c.userId,
+        name: c.name,
+        isCurrentUser: c.isCurrentUser,
+        color: c.isCurrentUser
+          ? CURRENT_USER_COLOR
+          : TEAMMATE_PALETTE[i % TEAMMATE_PALETTE.length],
+        achievedRaw: achievedPct,
+        fullRaw: fullPct,
+        achievedPct,
+        fullPct,
+      };
+    });
+  }, [orderedContributions]);
 
-  // Target marker geometry — a short tick radiating across the ring at the
-  // angle corresponding to the target %, so "where you are" (the filled
-  // arc) and "where you're aiming" (this tick) sit on the same gauge.
-  const markerInnerR = DONUT_RADIUS - DONUT_STROKE / 2 - 4;
-  const markerOuterR = DONUT_RADIUS + DONUT_STROKE / 2 + 4;
-  const markerInner = hasTargetShare
-    ? pointOnRing(safeTargetSharePct, markerInnerR)
-    : null;
-  const markerOuter = hasTargetShare
-    ? pointOnRing(safeTargetSharePct, markerOuterR)
-    : null;
+  // Build stacked ring arcs — each employee contributes two adjacent arcs
+  // (achieved in full color, remaining target in low opacity), animated in
+  // together via `progress`. An immutable fold (not a mutated outer
+  // accumulator) so each step's running length is just that step's return
+  // value.
+  const segments = sliceStats.reduce<{
+    list: {
+      key: string;
+      part: "achieved" | "remaining";
+      name: string;
+      color: string;
+      isCurrentUser: boolean;
+      dasharray: string;
+      dashoffset: number;
+    }[];
+    cumulativeLength: number;
+  }>(
+    (state, s) => {
+      const rawFullLength = DONUT_CIRCUMFERENCE * (s.fullPct / 100) * progress;
+      const gap = hasMultipleSlices ? SEGMENT_GAP : 0;
+      const fullLength = Math.max(0, rawFullLength - gap);
+      const achievedLength =
+        s.fullPct > 0 ? fullLength * (s.achievedPct / s.fullPct) : 0;
+      const remainingLength = Math.max(0, fullLength - achievedLength);
+
+      const achievedSeg = {
+        key: s.userId,
+        part: "achieved" as const,
+        name: s.name,
+        color: s.color,
+        isCurrentUser: s.isCurrentUser,
+        dasharray: `${achievedLength} ${DONUT_CIRCUMFERENCE - achievedLength}`,
+        dashoffset: -state.cumulativeLength,
+      };
+      const remainingSeg = {
+        key: s.userId,
+        part: "remaining" as const,
+        name: s.name,
+        color: s.color,
+        isCurrentUser: s.isCurrentUser,
+        dasharray: `${remainingLength} ${DONUT_CIRCUMFERENCE - remainingLength}`,
+        dashoffset: -(state.cumulativeLength + achievedLength),
+      };
+
+      return {
+        list: [...state.list, achievedSeg, remainingSeg],
+        cumulativeLength: state.cumulativeLength + rawFullLength,
+      };
+    },
+    { list: [], cumulativeLength: 0 },
+  ).list;
 
   return (
-    <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br from-white/[0.10] via-white/[0.06] to-transparent p-5">
+    <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br from-white/[0.10] via-white/[0.06] to-transparent p-4 sm:p-5">
+      <style>{DONUT_STYLE_TAG}</style>
+
       {/* Soft glow */}
       <div className="pointer-events-none absolute left-1/2 top-1/2 h-44 w-44 -translate-x-1/2 -translate-y-1/2 rounded-full bg-amber-400/10 blur-2xl" />
 
-      {/* Header */}
-      <div className="relative mb-4 flex items-start justify-between gap-3">
-        <div>
-          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-primary-foreground/45">
-            Kontribusi · {periodLabel}
-          </p>
-          <p className="mt-0.5 text-sm font-semibold text-primary-foreground">
-            {employeeName ? `${employeeName} di toko` : "Penjualanmu di toko"}
-          </p>
-        </div>
+      {/* Header — one line, icon-only mood indicator (no headline text) */}
+      <div className="relative mb-4 flex items-center justify-between gap-3">
+        <p className="min-w-0 truncate text-[10px] font-bold uppercase tracking-[0.18em] text-primary-foreground/45">
+          Kontribusi · {periodLabel}
+        </p>
 
         <div
           className={cn(
-            "flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1",
+            "flex h-6 w-6 shrink-0 items-center justify-center rounded-full",
             tone.bg,
           )}
+          title={motivation.headline}
         >
-          <motivation.Icon
-            className={cn("h-3 w-3", tone.text)}
-            strokeWidth={2.5}
-          />
-          <span
-            className={cn(
-              "text-[10px] font-bold uppercase tracking-wider",
-              tone.text,
-            )}
-          >
-            {motivation.headline}
-          </span>
+          <motivation.Icon className={cn("h-3 w-3", tone.text)} strokeWidth={2.5} />
         </div>
       </div>
 
-      {/* Donut */}
+      {/* Donut — one achieved + remaining arc pair per employee, stacked
+          around the ring at their real target-share size. Sized as a
+          fluid aspect-square capped at DONUT_SIZE so it scales down
+          gracefully on narrow phones instead of clipping the card. */}
       <div
-        className="relative mx-auto flex items-center justify-center"
-        style={{ width: DONUT_SIZE, height: DONUT_SIZE }}
+        className={cn(
+          "relative mx-auto aspect-square w-full transition-shadow duration-700",
+          reachAchieved && "rounded-full [animation:scc-achieved-ring_2.6s_ease-out_1]",
+        )}
+        style={{ maxWidth: DONUT_SIZE }}
       >
         <svg
-          width={DONUT_SIZE}
-          height={DONUT_SIZE}
           viewBox={`0 0 ${DONUT_SIZE} ${DONUT_SIZE}`}
-          className="-rotate-90"
+          className="h-full w-full -rotate-90"
+          onMouseMove={handleRingMouseMove}
+          onMouseLeave={() => { setHoveredId(null); setTooltipVisible(false); }}
         >
-          <defs>
-            <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stopColor="#fbbf24" />
-              <stop offset="100%" stopColor="#f59e0b" />
-            </linearGradient>
-          </defs>
-
           <circle
             cx={DONUT_CENTER}
             cy={DONUT_CENTER}
@@ -368,98 +454,143 @@ export function StoreContributionChart({
             strokeWidth={DONUT_STROKE}
           />
 
-          <circle
-            cx={DONUT_CENTER}
-            cy={DONUT_CENTER}
-            r={DONUT_RADIUS}
-            fill="none"
-            stroke={`url(#${gradientId})`}
-            strokeWidth={DONUT_STROKE}
-            strokeLinecap="round"
-            strokeDasharray={DONUT_CIRCUMFERENCE}
-            strokeDashoffset={DONUT_CIRCUMFERENCE - employeeFilled}
-            style={{ transition: ARC_TRANSITION }}
-          />
+          {segments.map((s) => {
+            const isHovered = hoveredId === s.key;
+            const isDimmed = hoveredId !== null && !isHovered;
+            const baseOpacity = s.part === "achieved" ? 1 : REMAINING_OPACITY;
+            const opacity = isDimmed ? baseOpacity * 0.5 : baseOpacity;
 
-          {/* Target marker — "where you're aiming" on the same ring. */}
-          {markerInner && markerOuter && (
-            <line
-              x1={markerInner.x}
-              y1={markerInner.y}
-              x2={markerOuter.x}
-              y2={markerOuter.y}
-              stroke="white"
-              strokeWidth={3}
-              strokeLinecap="round"
-            />
-          )}
+            return (
+              <circle
+                key={`${s.key}-${s.part}`}
+                cx={DONUT_CENTER}
+                cy={DONUT_CENTER}
+                r={DONUT_RADIUS}
+                fill="none"
+                stroke={s.color}
+                strokeWidth={
+                  (s.isCurrentUser ? DONUT_STROKE + 1.5 : DONUT_STROKE) + (isHovered ? 3 : 0)
+                }
+                strokeLinecap="butt"
+                strokeDasharray={s.dasharray}
+                strokeDashoffset={s.dashoffset}
+                onMouseEnter={() => { setHoveredId(s.key); setTooltipVisible(true); }}
+                className="cursor-pointer"
+                style={{
+                  pointerEvents: "stroke",
+                  opacity,
+                  transition: `${SEGMENT_TRANSITION}, opacity 0.25s ease, stroke-width 0.25s ease`,
+                  animation:
+                    s.part === "achieved" && s.isCurrentUser && progress === 1 && !hoveredId
+                      ? "scc-you-glow 2.6s ease-in-out infinite"
+                      : undefined,
+                }}
+              />
+            );
+          })}
         </svg>
 
-        <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-          <p className="text-[9px] font-bold uppercase tracking-[0.2em] text-primary-foreground/35">
-            Kontribusi
-          </p>
-          <p className="mt-1 text-5xl font-bold leading-none text-primary-foreground tabular-nums">
-            {fmtPct1(animatedPct)}
-            <span className="text-2xl text-primary-foreground/70">%</span>
+        <div
+          className={cn(
+            "absolute inset-0 flex flex-col items-center justify-center text-center px-2 transition-opacity duration-200",
+            hoveredId && "opacity-0",
+          )}
+        >
+          <p className="leading-none text-primary-foreground tabular-nums">
+            <span className="text-[2.5rem] font-bold sm:text-5xl">
+              {fmtPct1(myContributionPct * progress)}%
+            </span>
+            <span className="ml-1 text-base font-semibold text-primary-foreground/40 sm:text-lg">
+              /100%
+            </span>
           </p>
           <p className="mt-2 text-[11px] font-semibold text-amber-200 tabular-nums">
             Rp {fmtCompact(safeEmployeeSales)}
+            <span className="text-primary-foreground/35"> / {fmtCompact(safeStoreTarget)}</span>
           </p>
-          {hasTargetShare && (
-            <p className="mt-1 flex items-center gap-1 text-[9px] font-semibold text-primary-foreground/40">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-white" />
-              porsi target {fmtPct1(safeTargetSharePct)}%
-            </p>
-          )}
         </div>
-      </div>
 
-      {/* Stacked bar — same target marker, linear scale */}
-      <div className="relative mt-5">
-        <div className="relative flex h-2.5 w-full overflow-hidden rounded-full bg-white/[0.08]">
-          <div
-            className="h-full bg-gradient-to-r from-amber-300 to-amber-500"
-            style={{
-              width: `${Math.min(100, animatedPct)}%`,
-              transition: BAR_TRANSITION,
-            }}
-          />
-        </div>
-        {hasTargetShare && (
-          <div
-            className="pointer-events-none absolute top-0 h-2.5 w-0.5 -translate-x-1/2 rounded-full bg-white"
-            style={{ left: `${safeTargetSharePct}%` }}
-            title={`Porsi target ${fmtPct1(safeTargetSharePct)}%`}
-          />
-        )}
-
-        <div className="mt-1 flex justify-between text-[9px] font-medium text-primary-foreground/30 tabular-nums">
-          <span>0%</span>
-          <span>100% · seluruh toko</span>
-        </div>
-      </div>
-
-      {/* Employee target achievement — actual employee sales vs employee target */}
-      {hasEmployeeTarget && reachPct != null && (
-        <div className="relative mt-3 rounded-2xl border border-white/10 bg-white/[0.04] p-3.5">
-          <div className="flex items-center justify-between gap-2">
-            <p className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-primary-foreground/45">
-              <Crosshair className="h-3 w-3" /> Pencapaian Target Karyawan
-            </p>
-            <span
-              className={cn(
-                "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold tabular-nums",
-                reachAchieved
-                  ? "bg-emerald-500/20 text-emerald-300"
-                  : "bg-amber-500/15 text-amber-200",
-              )}
+        {/* Hover tooltip — employee name + achieved vs. target share, floats near the cursor */}
+        {tooltipVisible && hoveredContribution && (() => {
+          const stat = sliceStats.find((s) => s.userId === hoveredContribution.userId);
+          return (
+            <div
+              className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-[calc(100%+10px)] whitespace-nowrap rounded-lg border border-white/10 bg-slate-900/95 px-2.5 py-1.5 text-center shadow-lg backdrop-blur-sm"
+              style={{ left: tooltipPos.x, top: tooltipPos.y }}
             >
-              {fmtPct1(reachPct)}%
+              <p className="text-[11px] font-bold text-white">
+                {hoveredContribution.isCurrentUser ? "Kamu" : hoveredContribution.name}
+              </p>
+              <p className="text-[10px] font-semibold tabular-nums" style={{ color: stat?.color }}>
+                {fmtPct1(stat?.achievedRaw ?? 0)}% / {fmtPct1(stat?.fullRaw ?? 0)}% target
+              </p>
+              <div className="absolute left-1/2 top-full h-2 w-2 -translate-x-1/2 -translate-y-1/2 rotate-45 border-b border-r border-white/10 bg-slate-900/95" />
+            </div>
+          );
+        })()}
+      </div>
+
+      {/* Legend — dots for every employee on the ring; % only for "Kamu",
+          since teammates' share is already legible from arc size. */}
+      {orderedContributions.length > 0 && (
+        <div className="relative mt-4 -mx-4 px-4 sm:mx-0 sm:px-0">
+          <div
+            className="flex items-center gap-x-3 gap-y-1 overflow-x-auto pb-0.5 [scrollbar-width:none] [-ms-overflow-style:none] sm:flex-wrap sm:justify-center sm:overflow-visible [&::-webkit-scrollbar]:hidden"
+          >
+            {orderedContributions.map((c, i) => {
+              const color = c.isCurrentUser
+                ? CURRENT_USER_COLOR
+                : TEAMMATE_PALETTE[i % TEAMMATE_PALETTE.length];
+              const isDimmed = hoveredId !== null && hoveredId !== c.userId;
+              return (
+                <button
+                  key={c.userId}
+                  type="button"
+                  onMouseEnter={() => setHoveredId(c.userId)}
+                  onMouseLeave={() => setHoveredId(null)}
+                  className={cn(
+                    "flex shrink-0 items-center gap-1 rounded-full px-0.5 transition-opacity duration-200",
+                    isDimmed && "opacity-40",
+                  )}
+                >
+                  <span
+                    className="h-1.5 w-1.5 shrink-0 rounded-full"
+                    style={{ background: color }}
+                  />
+                  <span
+                    className={cn(
+                      "whitespace-nowrap text-[10px] tabular-nums",
+                      c.isCurrentUser
+                        ? "font-bold text-primary-foreground"
+                        : "font-medium text-primary-foreground/45",
+                    )}
+                  >
+                    {c.isCurrentUser ? `Kamu ${fmtPct1(c.contributionPct)}%` : firstName(c.name)}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Personal target — one compact row + bar. Shows the Rp amount still
+          needed to hit target (not a % of what's already been earned), so
+          it reads as an actionable number rather than a scoreboard. */}
+      {hasEmployeeTarget && reachPct != null && (
+        <div className="relative mt-3 rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+          <div className="flex items-center justify-between gap-2 text-[10px] font-semibold text-primary-foreground/50">
+            <span className="flex items-center gap-1">
+              <Crosshair className="h-3 w-3" /> Target kamu
+            </span>
+            <span className={cn("tabular-nums", reachAchieved ? "text-emerald-300" : "text-amber-200")}>
+              {reachAchieved
+                ? `Tercapai · +Rp ${fmtCompact(surplusOverTarget)}`
+                : `Rp ${fmtCompact(remainingToFill)} lagi`}
             </span>
           </div>
 
-          <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-white/10">
+          <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-white/10">
             <div
               className={cn(
                 "h-full rounded-full transition-all duration-700",
@@ -470,82 +601,9 @@ export function StoreContributionChart({
               style={{ width: `${Math.min(100, reachPct)}%` }}
             />
           </div>
-
-          <div className="mt-1.5 flex items-center justify-between text-[10px] font-medium text-primary-foreground/40 tabular-nums">
-            <span>Aktual Rp {fmtCompact(safeEmployeeSales)}</span>
-            <span>Target Rp {fmtCompact(safeEmployeeTarget)}</span>
-          </div>
         </div>
       )}
 
-      {/* Hero stat block + teammates */}
-      <div className="relative mt-3 grid grid-cols-5 gap-2">
-        <div className="col-span-3 rounded-2xl border border-amber-400/30 bg-gradient-to-br from-amber-400/15 to-amber-500/5 px-3.5 py-2.5">
-          <div className="flex items-center gap-1.5">
-            <span className="h-2 w-2 rounded-full bg-gradient-to-br from-amber-300 to-amber-500" />
-            <p className="text-[10px] font-bold uppercase tracking-wider text-amber-200/80">
-              Kamu
-            </p>
-          </div>
-
-          <p className="mt-1 truncate text-base font-bold text-amber-50 tabular-nums">
-            Rp {fmtCompact(safeEmployeeSales)}
-          </p>
-
-          <p className="text-[10px] text-amber-200/50 tabular-nums">
-            {fmtPct1(animatedPct)}% dari total toko
-          </p>
-        </div>
-
-        <div className="col-span-2 rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-2.5">
-          <div className="flex items-center gap-1.5">
-            <Users className="h-2.5 w-2.5 text-primary-foreground/40" />
-            <p className="text-[10px] font-bold uppercase tracking-wider text-primary-foreground/45">
-              Rekan
-            </p>
-          </div>
-
-          <p className="mt-1 truncate text-sm font-semibold text-primary-foreground/75 tabular-nums">
-            Rp {fmtCompact(storeShareOthers)}
-          </p>
-
-          <p className="text-[10px] text-primary-foreground/35 tabular-nums">
-            {Math.round(animatedOthersPct)}%
-          </p>
-        </div>
-      </div>
-
-      {/* Coach line */}
-      <div
-        className={cn(
-          "relative mt-3 flex items-start gap-2.5 rounded-2xl px-3.5 py-2.5",
-          tone.bg,
-        )}
-      >
-        <div
-          className={cn(
-            "flex h-7 w-7 shrink-0 items-center justify-center rounded-xl",
-            tone.iconBg,
-          )}
-        >
-          <motivation.Icon
-            className={cn("h-3.5 w-3.5", tone.text)}
-            strokeWidth={2.5}
-          />
-        </div>
-
-        <div className="min-w-0 flex-1">
-          <p className={cn("text-[11px] leading-snug font-medium", tone.text)}>
-            {motivation.detail}
-          </p>
-          <p className="mt-0.5 text-[10px] font-medium text-primary-foreground/30 tabular-nums">
-            Total toko Rp {fmtCompact(safeStoreSales)}
-            {hasStoreTarget && (
-              <> dari target Rp {fmtCompact(safeStoreTarget)}</>
-            )}
-          </p>
-        </div>
-      </div>
     </div>
   );
 }

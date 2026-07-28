@@ -37,8 +37,8 @@ async function resolveOpsActor(userId: string): Promise<{ areaId: number | null;
     .limit(1);
 
   if (!row) return { areaId: null, error: 'User not found.' };
-  if (row.roleCode !== 'ops') return { areaId: null, error: 'Only OPS users can access this resource.' };
-  if (!row.areaId) return { areaId: null, error: 'OPS user has no area assigned.' };
+  if (row.roleCode !== 'ops' && row.roleCode !== 'it') return { areaId: null, error: 'Only OPS users can access this resource.' };
+  if (row.roleCode !== 'it' && !row.areaId) return { areaId: null, error: 'OPS user has no area assigned.' };
   return { areaId: row.areaId };
 }
 
@@ -195,7 +195,7 @@ export async function GET(req: NextRequest) {
     // Summary counts
     const summary = {
       total:      tasks.length,
-      pending:    tasks.filter(t => t.status === 'pending').length,
+      notStarted: tasks.filter(t => t.status === 'not_started').length,
       inProgress: tasks.filter(t => t.status === 'in_progress').length,
       completed:  tasks.filter(t => t.status === 'completed').length,
       verified:   tasks.filter(t => t.status === 'verified').length,

@@ -20,9 +20,9 @@ export async function POST(req: NextRequest) {
   const employeeType   = user.employeeType as string | null;
   const rawActorStoreId = user.homeStoreId as string | number | null | undefined;
 
-  if (role !== 'ops' && employeeType !== 'pic_1') {
+  if (role !== 'ops' && role !== 'it' && employeeType !== 'pic_1' && employeeType !== 'pic_2') {
     return NextResponse.json(
-      { success: false, error: 'Only OPS or PIC 1 can import schedules.' },
+      { success: false, error: 'Only OPS or PIC can import schedules.' },
       { status: 403 },
     );
   }

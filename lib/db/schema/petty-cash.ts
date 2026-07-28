@@ -166,6 +166,58 @@ export const pettyCashRefills = pgTable(
   }),
 );
 
+// ─── Refill REQUESTS (PIC-initiated, distinct from Finance's own month-end
+// close-and-reset `pettyCashRefills` above) ────────────────────────────────
+//
+// PIC asks for a mid-month top-up back to PETTY_CASH_MAX_BALANCE when the
+// store runs low before month-end. Finance approves/rejects; approval bumps
+// the CURRENT (still-open) period's balance directly — it does not close
+// the period or roll to next month, unlike pettyCashRefills.
+//
+// "One request per store per month" is enforced in application code
+// (lib/db/utils/petty-cash-refill.ts), not a DB constraint: a rejected
+// request must free up the slot so PIC can fix and resubmit, which a plain
+// unique(storeId, yearMonth) can't express without a partial index.
+
+export const pettyCashRefillRequests = pgTable(
+  'petty_cash_refill_requests',
+  {
+    id: serial('id').primaryKey(),
+
+    storeId: integer('store_id')
+      .references(() => stores.id, { onDelete: 'cascade' })
+      .notNull(),
+
+    // YYYY-MM
+    yearMonth: text('year_month').notNull(),
+
+    requestedBy: text('requested_by').references(() => users.id).notNull(),
+    requestedAt: timestamp('requested_at').defaultNow().notNull(),
+    notes: text('notes'),
+
+    // pending | approved | rejected
+    status: text('status').default('pending').notNull(),
+
+    // Snapshot of petty_cash_periods.current_balance right before/after approval.
+    balanceBefore: decimal('balance_before', { precision: 12, scale: 2 }),
+    balanceAfter: decimal('balance_after', { precision: 12, scale: 2 }),
+
+    approvedBy: text('approved_by').references(() => users.id),
+    approvedAt: timestamp('approved_at'),
+
+    rejectedBy: text('rejected_by').references(() => users.id),
+    rejectedAt: timestamp('rejected_at'),
+    rejectionReason: text('rejection_reason'),
+
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').$onUpdate(() => new Date()).notNull(),
+  },
+  (t) => ({
+    storeMonthIdx: index('pcrr_store_month_idx').on(t.storeId, t.yearMonth),
+    statusIdx: index('pcrr_status_idx').on(t.status),
+  }),
+);
+
 export type PettyCashPeriod = typeof pettyCashPeriods.$inferSelect;
 export type NewPettyCashPeriod = typeof pettyCashPeriods.$inferInsert;
 
@@ -174,3 +226,6 @@ export type NewPettyCashTransaction = typeof pettyCashTransactions.$inferInsert;
 
 export type PettyCashRefill = typeof pettyCashRefills.$inferSelect;
 export type NewPettyCashRefill = typeof pettyCashRefills.$inferInsert;
+
+export type PettyCashRefillRequest = typeof pettyCashRefillRequests.$inferSelect;
+export type NewPettyCashRefillRequest = typeof pettyCashRefillRequests.$inferInsert;

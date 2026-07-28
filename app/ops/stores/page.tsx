@@ -24,6 +24,8 @@ import {
   ClipboardList,
   Loader2,
   MapPin,
+  Pencil,
+  Plus,
   Store,
   Users,
   Wallet,
@@ -31,8 +33,14 @@ import {
 
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import StoreEditSheet from '@/components/ops/stores/StoreEditSheet';
 import { cn } from '@/lib/utils';
 import type { AreaGroup, EmployeeRow, StoreRow, TaskColorStatus } from '@/app/api/ops/stores/route';
+
+type EditState =
+  | { mode: 'create'; fixedAreaId?: number }
+  | { mode: 'edit'; store: StoreRow };
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
 
@@ -135,7 +143,7 @@ function EmployeeRoster({ employees, storeNo }: { employees: EmployeeRow[]; stor
   if (employees.length === 0) {
     return (
       <tr>
-        <td colSpan={6} className="bg-slate-50 px-6 py-6 text-center text-xs italic text-slate-400">
+        <td colSpan={7} className="bg-slate-50 px-6 py-6 text-center text-xs italic text-slate-400">
           No employees assigned to {storeNo}.
         </td>
       </tr>
@@ -144,7 +152,7 @@ function EmployeeRoster({ employees, storeNo }: { employees: EmployeeRow[]; stor
 
   return (
     <tr>
-      <td colSpan={6} className="p-0">
+      <td colSpan={7} className="p-0">
         <div className="border-t border-slate-100 bg-slate-50/70">
           {/* Roster sub-header */}
           <div className="grid grid-cols-[1fr_6rem_8rem_7rem_6rem] gap-x-4 border-b border-slate-100 px-14 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">
@@ -196,10 +204,12 @@ function StoreRow({
   store,
   expanded,
   onToggle,
+  onEdit,
 }: {
   store: StoreRow;
   expanded: boolean;
   onToggle: () => void;
+  onEdit: () => void;
 }) {
   const c = COLOR[store.taskStats.colorStatus];
 
@@ -249,10 +259,10 @@ function StoreRow({
           <ProgressBar rate={store.taskStats.completionRate} status={store.taskStats.colorStatus} />
           <p className="mt-1 text-[10px] text-slate-400">
             {store.taskStats.completed}/{store.taskStats.total} done
-            {store.taskStats.discrepancy > 0 && (
+            {store.taskStats.pending > 0 && (
               <span className="ml-1.5 inline-flex items-center gap-0.5 text-amber-500">
                 <AlertTriangle className="h-2.5 w-2.5" />
-                {store.taskStats.discrepancy} discrepancy
+                {store.taskStats.pending} pending
               </span>
             )}
           </p>
@@ -280,13 +290,25 @@ function StoreRow({
         </td>
 
         {/* Petty cash */}
-        <td className="px-4 py-3.5 pr-5">
+        <td className="px-4 py-3.5">
           <div className="flex items-center gap-1.5">
             <Wallet className="h-3.5 w-3.5 shrink-0 text-slate-400" />
             <span className="text-sm font-semibold tabular-nums text-slate-700">
               Rp {cash(store.pettyCashBalance)}
             </span>
           </div>
+        </td>
+
+        {/* Actions */}
+        <td className="px-4 py-3.5 pr-5">
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onEdit(); }}
+            aria-label={`Edit ${store.name}`}
+            className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
         </td>
       </tr>
 
@@ -299,7 +321,15 @@ function StoreRow({
 
 // ─── Area section ─────────────────────────────────────────────────────────────
 
-function AreaSection({ area }: { area: AreaGroup }) {
+function AreaSection({
+  area,
+  onEditStore,
+  onAddStore,
+}: {
+  area: AreaGroup;
+  onEditStore: (store: StoreRow) => void;
+  onAddStore: (areaId: number) => void;
+}) {
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
 
   const toggle = (id: number) =>
@@ -330,36 +360,56 @@ function AreaSection({ area }: { area: AreaGroup }) {
             {area.stores.length} store{area.stores.length !== 1 ? 's' : ''}
           </Badge>
         </div>
-        <span className={cn('text-xs font-bold tabular-nums', COLOR[areaStatus].text)}>
-          {areaRate}% avg completion
-        </span>
+        <div className="flex items-center gap-3">
+          <span className={cn('text-xs font-bold tabular-nums', COLOR[areaStatus].text)}>
+            {areaRate}% avg completion
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => onAddStore(area.id)}
+            className="h-7 gap-1.5 rounded-lg text-xs"
+          >
+            <Plus className="h-3 w-3" />
+            Add Store
+          </Button>
+        </div>
       </div>
 
       {/* Stores table */}
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[700px] text-sm">
-          <thead>
-            <tr className="border-b border-slate-100 text-[10px] font-bold uppercase tracking-widest text-slate-400">
-              <th className="w-10" />
-              <th className="py-2.5 pl-2 pr-4 text-left">Store</th>
-              <th className="px-4 py-2.5 text-left">Task Progress</th>
-              <th className="px-4 py-2.5 text-left">Status</th>
-              <th className="px-4 py-2.5 text-left">Attendance</th>
-              <th className="px-4 py-2.5 pr-5 text-left">Petty Cash</th>
-            </tr>
-          </thead>
-          <tbody>
-            {area.stores.map((store) => (
-              <StoreRow
-                key={store.id}
-                store={store}
-                expanded={expandedIds.has(store.id)}
-                onToggle={() => toggle(store.id)}
-              />
-            ))}
-          </tbody>
-        </table>
-      </div>
+      {area.stores.length === 0 ? (
+        <div className="px-6 py-10 text-center">
+          <p className="text-sm font-medium text-slate-500">No stores in this area yet.</p>
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[760px] text-sm">
+            <thead>
+              <tr className="border-b border-slate-100 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                <th className="w-10" />
+                <th className="py-2.5 pl-2 pr-4 text-left">Store</th>
+                <th className="px-4 py-2.5 text-left">Task Progress</th>
+                <th className="px-4 py-2.5 text-left">Status</th>
+                <th className="px-4 py-2.5 text-left">Attendance</th>
+                <th className="px-4 py-2.5 text-left">Petty Cash</th>
+                <th className="px-4 py-2.5 pr-5 text-left">Manage</th>
+              </tr>
+            </thead>
+            <tbody>
+              {area.stores.map((store) => (
+                <StoreRow
+                  key={store.id}
+                  store={store}
+                  expanded={expandedIds.has(store.id)}
+                  onToggle={() => toggle(store.id)}
+                  onEdit={() => onEditStore(store)}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </section>
   );
 }
@@ -416,6 +466,7 @@ export default function OpsStoresPage() {
   const [areas, setAreas] = useState<AreaGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [editing, setEditing] = useState<EditState | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -460,6 +511,17 @@ export default function OpsStoresPage() {
         onRefresh={loadData}
         refreshing={loading}
         contentClassName="w-full"
+        actions={
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => setEditing({ mode: 'create' })}
+            className="h-10 gap-2 rounded-xl px-4 text-sm font-semibold"
+          >
+            <Plus className="h-4 w-4" />
+            Add Store
+          </Button>
+        }
       />
 
       <div className="mx-auto max-w-7xl space-y-6 p-6 lg:p-8">
@@ -509,11 +571,27 @@ export default function OpsStoresPage() {
         ) : (
           <div className="space-y-5">
             {areas.map((area) => (
-              <AreaSection key={area.id} area={area} />
+              <AreaSection
+                key={area.id}
+                area={area}
+                onEditStore={(store) => setEditing({ mode: 'edit', store })}
+                onAddStore={(areaId) => setEditing({ mode: 'create', fixedAreaId: areaId })}
+              />
             ))}
           </div>
         )}
       </div>
+
+      {editing && (
+        <StoreEditSheet
+          mode={editing.mode}
+          store={editing.mode === 'edit' ? editing.store : undefined}
+          areas={areas.map((a) => ({ id: a.id, name: a.name }))}
+          fixedAreaId={editing.mode === 'create' ? editing.fixedAreaId : undefined}
+          onClose={() => setEditing(null)}
+          onSaved={loadData}
+        />
+      )}
     </div>
   );
 }

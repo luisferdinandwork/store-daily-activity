@@ -1,4 +1,9 @@
 // lib/db/utils/briefing.ts
+//
+// Briefing is a per-SHIFT, shared task: every employee working the same
+// shift at the same store/day sees and completes the SAME row. A full_day
+// employee works both halves of the day, so they get (and can complete)
+// BOTH the morning row and the evening row.
 import { and, eq, gte, lte } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
@@ -9,7 +14,13 @@ import {
   stores,
   type BriefingTask,
 } from '@/lib/db/schema';
-import { getMorningShiftId } from '@/lib/db/utils/shared-daily-morning-task';
+import {
+  getMorningShiftId,
+  getEveningShiftId,
+  getFullDayShiftId,
+  startOfDay,
+  endOfDay,
+} from '@/lib/db/utils/shift-lookup';
 
 export type TaskResult<T = void> =
   | { success: true; data: T }
@@ -32,18 +43,6 @@ export interface SubmitBriefingInput {
 }
 
 const DEFAULT_GEOFENCE_RADIUS_M = 100;
-
-function startOfDay(d: Date): Date {
-  const r = new Date(d);
-  r.setHours(0, 0, 0, 0);
-  return r;
-}
-
-function endOfDay(d: Date): Date {
-  const r = new Date(d);
-  r.setHours(23, 59, 59, 999);
-  return r;
-}
 
 function haversineMetres(a: GeoPoint, b: GeoPoint): number {
   const R = 6_371_000;
@@ -122,56 +121,105 @@ async function assertCanProgressTask(
   return null;
 }
 
+async function getOrCreateSingleBriefingRow(
+  scheduleId: number,
+  userId: string,
+  storeId: number,
+  targetShiftId: number,
+  dayStart: Date,
+  dayEnd: Date,
+): Promise<BriefingTask> {
+  const [existing] = await db
+    .select()
+    .from(briefingTasks)
+    .where(
+      and(
+        eq(briefingTasks.storeId, storeId),
+        eq(briefingTasks.shiftId, targetShiftId),
+        gte(briefingTasks.date, dayStart),
+        lte(briefingTasks.date, dayEnd),
+      ),
+    )
+    .limit(1);
 
+  if (existing) return existing;
+
+  const [created] = await db
+    .insert(briefingTasks)
+    .values({
+      scheduleId,
+      userId,
+      storeId,
+      shiftId: targetShiftId,
+      date: dayStart,
+      done: false,
+      isBalanced: null,
+      status: 'not_started',
+    })
+    .onConflictDoNothing({
+      target: [briefingTasks.storeId, briefingTasks.date, briefingTasks.shiftId],
+    })
+    .returning();
+
+  if (created) return created;
+
+  // Lost the race to a concurrent request — read back what it created.
+  const [row] = await db
+    .select()
+    .from(briefingTasks)
+    .where(
+      and(
+        eq(briefingTasks.storeId, storeId),
+        eq(briefingTasks.shiftId, targetShiftId),
+        gte(briefingTasks.date, dayStart),
+        lte(briefingTasks.date, dayEnd),
+      ),
+    )
+    .limit(1);
+
+  if (!row) throw new Error('Failed to create or find briefing row after conflict.');
+  return row;
+}
+
+/**
+ * Ensures the briefing row(s) for this schedule's shift exist.
+ * A full_day schedule gets BOTH the morning and evening rows (they work
+ * both halves of the day); a morning/evening schedule gets its own single
+ * row, shared with every other employee on that same shift/store/day.
+ */
 export async function getOrCreateBriefingForSchedule(
   scheduleId: number,
   userId: string,
   storeId: number,
-  _shiftId: number,
+  shiftId: number,
   date: Date,
-): Promise<TaskResult<BriefingTask>> {
+): Promise<TaskResult<BriefingTask[]>> {
   try {
     const dayStart = startOfDay(date);
-    const dayEnd = endOfDay(date);
+    const dayEnd   = endOfDay(date);
+
     const morningShiftId = await getMorningShiftId();
+    const eveningShiftId = await getEveningShiftId();
+    const fullDayShiftId = await getFullDayShiftId();
 
-    const [existing] = await db
-      .select()
-      .from(briefingTasks)
-      .where(
-        and(
-          eq(briefingTasks.storeId, storeId),
-          eq(briefingTasks.shiftId, morningShiftId),
-          gte(briefingTasks.date, dayStart),
-          lte(briefingTasks.date, dayEnd),
-        ),
-      )
-      .limit(1);
+    const targetShiftIds =
+      shiftId === fullDayShiftId ? [morningShiftId, eveningShiftId] : [shiftId];
 
-    if (existing) return { success: true, data: existing };
+    const rows: BriefingTask[] = [];
+    for (const targetShiftId of targetShiftIds) {
+      rows.push(
+        await getOrCreateSingleBriefingRow(scheduleId, userId, storeId, targetShiftId, dayStart, dayEnd),
+      );
+    }
 
-    const [created] = await db
-      .insert(briefingTasks)
-      .values({
-        scheduleId,
-        userId,
-        storeId,
-        shiftId: morningShiftId,
-        date: dayStart,
-        done: false,
-        isBalanced: null,
-        status: 'pending',
-      })
-      .returning();
-
-    return { success: true, data: created };
+    return { success: true, data: rows };
   } catch (err) {
     return { success: false, error: `getOrCreateBriefingForSchedule: ${err}` };
   }
 }
 
 /**
- * Briefing is now intentionally simple:
+ * Briefing is intentionally simple:
  * - no balanced/discrepancy flow
  * - no carry-forward
  * - completion means the shift briefing was done
@@ -190,7 +238,6 @@ export async function submitBriefing(
     if (gateErr) return { success: false, error: gateErr };
 
     const now = new Date();
-    const morningShiftId = await getMorningShiftId();
 
     let existing: BriefingTask | undefined;
 
@@ -204,21 +251,30 @@ export async function submitBriefing(
 
     if (!existing) {
       const [schedule] = await db
-        .select({ date: schedules.date })
+        .select({ date: schedules.date, shiftId: schedules.shiftId })
         .from(schedules)
         .where(eq(schedules.id, input.scheduleId))
         .limit(1);
+
+      const shiftId = input.shiftId ?? schedule?.shiftId;
+      if (!shiftId) {
+        return { success: false, error: 'Shift tidak ditemukan untuk schedule ini.' };
+      }
 
       const result = await getOrCreateBriefingForSchedule(
         input.scheduleId,
         input.userId,
         input.storeId,
-        morningShiftId,
+        shiftId,
         schedule?.date ?? now,
       );
 
       if (!result.success) return result;
-      existing = result.data;
+      existing = result.data[0];
+    }
+
+    if (!existing) {
+      return { success: false, error: 'Task briefing tidak ditemukan.' };
     }
 
     if (existing.status === 'completed') {
@@ -229,7 +285,7 @@ export async function submitBriefing(
       scheduleId: input.scheduleId,
       userId: input.userId,
       storeId: input.storeId,
-      shiftId: morningShiftId,
+      shiftId: existing.shiftId,
       date: startOfDay(existing.date ?? now),
       parentTaskId: null,
       done: true,

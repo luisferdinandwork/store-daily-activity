@@ -109,7 +109,7 @@ export async function POST(req: NextRequest) {
 
   if (!canManageSchedule(role, empType)) {
     return NextResponse.json(
-      { success: false, error: 'Only OPS or PIC 1 can create schedules.' },
+      { success: false, error: 'Only OPS or PIC can create schedules.' },
       { status: 403 },
     );
   }
@@ -174,7 +174,7 @@ export async function DELETE(req: NextRequest) {
 
   if (!canManageSchedule(role, empType)) {
     return NextResponse.json(
-      { success: false, error: 'Only OPS or PIC 1 can delete schedules.' },
+      { success: false, error: 'Only OPS or PIC can delete schedules.' },
       { status: 403 },
     );
   }

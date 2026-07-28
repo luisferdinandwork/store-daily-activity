@@ -32,7 +32,7 @@ export async function POST(req: NextRequest) {
 
   if (!canManageSchedule(role, empType)) {
     return NextResponse.json(
-      { success: false, error: 'Only OPS or PIC 1 can create schedule entries.' },
+      { success: false, error: 'Only OPS or PIC can create schedule entries.' },
       { status: 403 },
     );
   }

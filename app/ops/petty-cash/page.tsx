@@ -295,6 +295,75 @@ function StatCard({
   );
 }
 
+// ─── Refill requests (read-only — Finance is the one who approves) ──────────
+
+interface RefillRequestRow {
+  id: number;
+  storeId: number;
+  storeName: string;
+  yearMonth: string;
+  status: 'pending' | 'approved' | 'rejected';
+  requestedAt: string;
+  requestedByName: string | null;
+  approvedAt: string | null;
+  rejectedAt: string | null;
+  rejectionReason: string | null;
+}
+
+const REFILL_STATUS_META: Record<RefillRequestRow['status'], { label: string; cls: string }> = {
+  pending: { label: 'Pending Finance', cls: 'bg-amber-50 text-amber-700 ring-amber-200' },
+  approved: { label: 'Approved', cls: 'bg-emerald-50 text-emerald-700 ring-emerald-200' },
+  rejected: { label: 'Rejected', cls: 'bg-rose-50 text-rose-600 ring-rose-200' },
+};
+
+function RefillRequestsReadOnly() {
+  const [requests, setRequests] = useState<RefillRequestRow[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/ops/petty-cash/refill-requests', { cache: 'no-store' });
+        const body = await res.json();
+        if (body.success) setRequests(body.requests);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, []);
+
+  if (loading || requests.length === 0) return null;
+
+  return (
+    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="border-b border-slate-100 px-5 py-3">
+        <p className="text-xs font-bold uppercase tracking-widest text-slate-500">
+          Petty Cash Refill Requests
+        </p>
+        <p className="mt-0.5 text-[11px] text-slate-400">Requested by PIC, approved by Finance — informational only.</p>
+      </div>
+      <div className="divide-y divide-slate-100">
+        {requests.slice(0, 10).map((r) => {
+          const meta = REFILL_STATUS_META[r.status];
+          return (
+            <div key={r.id} className="flex items-center justify-between gap-3 px-5 py-3">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold text-slate-800">{r.storeName}</p>
+                <p className="mt-0.5 text-[11px] text-slate-400">
+                  {r.yearMonth} · {r.requestedByName ?? 'PIC'} · {new Date(r.requestedAt).toLocaleDateString('id-ID')}
+                </p>
+              </div>
+              <span className={cn('shrink-0 rounded-full px-2.5 py-1 text-[10px] font-bold ring-1 ring-inset', meta.cls)}>
+                {meta.label}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 // ─── Main page ───────────────────────────────────────────────────────────────
 
 export default function OpsPettyCashPage() {
@@ -497,6 +566,8 @@ export default function OpsPettyCashPage() {
             </div>
           </div>
         )}
+
+        <RefillRequestsReadOnly />
 
         {/* Summary / filter shortcuts */}
         <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">

@@ -2,17 +2,18 @@
 
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useSession } from 'next-auth/react';
 import {
   AlertTriangle,
+  Banknote,
   Camera,
   CheckCircle2,
   ChevronLeft,
   Clock3,
   Loader2,
   ReceiptText,
-  RotateCcw,
   ShieldCheck,
   UploadCloud,
   Wallet,
@@ -22,6 +23,7 @@ import {
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import CameraCapture from '@/components/shared/CameraCapture';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -240,6 +242,74 @@ function BalanceCard({
   );
 }
 
+// ─── Refill request (PIC only) ───────────────────────────────────────────────
+
+type RefillRequestRow = {
+  id: number;
+  status: 'pending' | 'approved' | 'rejected';
+  requestedAt: string;
+  approvedAt: string | null;
+  rejectedAt: string | null;
+  rejectionReason: string | null;
+};
+
+function RefillRequestCard({
+  request,
+  requesting,
+  onRequest,
+}: {
+  request: RefillRequestRow | null;
+  requesting: boolean;
+  onRequest: () => void;
+}) {
+  if (request && (request.status === 'pending' || request.status === 'approved')) {
+    const isPending = request.status === 'pending';
+    return (
+      <div className={cn(
+        'mx-4 rounded-2xl border p-4',
+        isPending ? 'border-amber-200 bg-amber-50' : 'border-emerald-200 bg-emerald-50',
+      )}>
+        <div className="flex items-center gap-2">
+          <Banknote className={cn('h-4 w-4', isPending ? 'text-amber-600' : 'text-emerald-600')} />
+          <p className={cn('text-xs font-bold', isPending ? 'text-amber-700' : 'text-emerald-700')}>
+            {isPending ? 'Refill request pending Finance approval' : 'Refill approved — balance topped up'}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-4 rounded-2xl border border-dashed border-slate-200 bg-white p-4">
+      <div className="flex items-start gap-3">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-50">
+          <Banknote className="h-4 w-4 text-indigo-600" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-bold text-slate-800">Running low?</p>
+          <p className="mt-0.5 text-[11px] text-slate-500">
+            Request a refill back to Rp 1.000.000. Finance will review and approve it.
+          </p>
+          {request?.status === 'rejected' && (
+            <p className="mt-1.5 text-[11px] font-medium text-rose-600">
+              Last request was rejected{request.rejectionReason ? `: ${request.rejectionReason}` : '.'} You can request again.
+            </p>
+          )}
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onRequest}
+        disabled={requesting}
+        className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 text-xs font-bold text-white transition active:scale-[0.99] disabled:opacity-60"
+      >
+        {requesting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Banknote className="h-3.5 w-3.5" />}
+        Request Refill
+      </button>
+    </div>
+  );
+}
+
 // ─── Receipt capture: pick → preview → confirm ───────────────────────────────
 // Splitting capture into its own step (rather than uploading the instant a
 // file is picked) means a blurry or wrong photo never silently goes to
@@ -252,91 +322,35 @@ function ReceiptCapture({
   uploading: boolean;
   onConfirm: (file: File) => void;
 }) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [preview, setPreview] = useState<{ file: File; url: string } | null>(null);
-
-  function pick() {
-    inputRef.current?.click();
-  }
-
-  function handleFile(file: File) {
-    const url = URL.createObjectURL(file);
-    setPreview({ file, url });
-  }
-
-  function retake() {
-    if (preview) URL.revokeObjectURL(preview.url);
-    setPreview(null);
-  }
-
-  if (preview) {
-    return (
-      <div className="mt-3">
-        <div className="overflow-hidden rounded-xl border border-indigo-200">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={preview.url} alt="Receipt preview" className="h-44 w-full object-cover" />
-        </div>
-
-        <div className="mt-2.5 flex gap-2">
-          <button
-            type="button"
-            onClick={retake}
-            disabled={uploading}
-            className="flex h-10 flex-1 items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-white text-xs font-bold text-slate-600 transition active:scale-[0.99] disabled:opacity-50"
-          >
-            <RotateCcw className="h-3.5 w-3.5" />
-            Retake
-          </button>
-
-          <button
-            type="button"
-            onClick={() => onConfirm(preview.file)}
-            disabled={uploading}
-            className={cn(
-              'flex h-10 flex-[2] items-center justify-center gap-1.5 rounded-xl text-xs font-bold transition active:scale-[0.99]',
-              uploading ? 'bg-slate-100 text-slate-400' : 'bg-indigo-600 text-white',
-            )}
-          >
-            {uploading ? (
-              <>
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                Uploading…
-              </>
-            ) : (
-              <>
-                <CheckCircle2 className="h-3.5 w-3.5" />
-                Use This Photo
-              </>
-            )}
-          </button>
-        </div>
-      </div>
-    );
-  }
+  const [cameraOpen, setCameraOpen] = useState(false);
 
   return (
     <>
-      <input
-        ref={inputRef}
-        type="file"
-        accept="image/*"
-        capture="environment"
-        className="hidden"
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (file) handleFile(file);
-          e.target.value = '';
-        }}
-      />
-
       <button
         type="button"
-        onClick={pick}
-        className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 text-xs font-bold text-white transition active:scale-[0.99]"
+        onClick={() => setCameraOpen(true)}
+        disabled={uploading}
+        className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 text-xs font-bold text-white transition active:scale-[0.99] disabled:opacity-60"
       >
-        <Camera className="h-4 w-4" />
-        Take or Choose Receipt Photo
+        {uploading ? (
+          <>
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Uploading…
+          </>
+        ) : (
+          <>
+            <Camera className="h-4 w-4" />
+            Take Receipt Photo
+          </>
+        )}
       </button>
+
+      <CameraCapture
+        open={cameraOpen}
+        onClose={() => setCameraOpen(false)}
+        onCapture={(file) => { setCameraOpen(false); onConfirm(file); }}
+        title="Receipt Photo"
+      />
     </>
   );
 }
@@ -462,6 +476,10 @@ function TxItem({
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function EmployeePettyCashPage() {
+  const { data: session } = useSession();
+  const employeeType = (session?.user as any)?.employeeType as string | undefined;
+  const isPic = employeeType === 'pic_1' || employeeType === 'pic_2';
+
   const [data, setData] = useState<PageData | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -477,6 +495,9 @@ export default function EmployeePettyCashPage() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+
+  const [refillRequest, setRefillRequest] = useState<RefillRequestRow | null>(null);
+  const [requestingRefill, setRequestingRefill] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -501,9 +522,40 @@ export default function EmployeePettyCashPage() {
     }
   }, []);
 
+  const loadRefillStatus = useCallback(async () => {
+    try {
+      const res = await fetch('/api/employee/petty-cash/refill-request', { cache: 'no-store' });
+      const body = await res.json();
+      if (body.success) setRefillRequest(body.request ?? null);
+    } catch {
+      // Non-critical — the request button just won't show a status yet.
+    }
+  }, []);
+
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (isPic) void loadRefillStatus();
+  }, [isPic, loadRefillStatus]);
+
+  async function handleRequestRefill() {
+    setRequestingRefill(true);
+    setActionError(null);
+    setSuccessMessage(null);
+    try {
+      const res = await fetch('/api/employee/petty-cash/refill-request', { method: 'POST' });
+      const body = await res.json();
+      if (!res.ok || !body.success) throw new Error(body.error ?? 'Failed to request refill.');
+      setRefillRequest(body.request);
+      setSuccessMessage('Refill requested — Finance will review it.');
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : 'Failed to request refill.');
+    } finally {
+      setRequestingRefill(false);
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -696,6 +748,14 @@ export default function EmployeePettyCashPage() {
             month={data?.month ?? ''}
             totalApprovedSpend={summary.approvedSpend}
             pendingAmount={summary.pendingAmount}
+          />
+        )}
+
+        {!loading && !loadError && isPic && (
+          <RefillRequestCard
+            request={refillRequest}
+            requesting={requestingRefill}
+            onRequest={handleRequestRefill}
           />
         )}
 

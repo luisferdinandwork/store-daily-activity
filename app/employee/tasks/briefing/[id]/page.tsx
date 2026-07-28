@@ -26,7 +26,7 @@ type BriefingTask = {
   shiftId: string;
   date: string | null;
   done: boolean;
-  status: 'pending' | 'in_progress' | 'completed' | 'discrepancy';
+  status: 'not_started' | 'in_progress' | 'completed' | 'pending';
   notes: string | null;
   completedAt: string | null;
 };
@@ -156,7 +156,7 @@ export default function BriefingTaskPage() {
       scheduleId={task.scheduleId}
       storeId={task.storeId}
       taskStatus={task.status}
-      requireGeo
+      taskType="briefing"
     >
       {({ banner, lockedOverlay, dis, geo, readonly, locked }) => {
         const canSubmit =
@@ -222,7 +222,7 @@ export default function BriefingTaskPage() {
                           ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
                           : 'border-amber-200 bg-amber-50 text-amber-700',
                       )}>
-                        {task.status === 'completed' ? 'Selesai' : 'Pending'}
+                        {task.status === 'completed' ? 'Selesai' : 'Not Started'}
                       </span>
                     </div>
                   </div>

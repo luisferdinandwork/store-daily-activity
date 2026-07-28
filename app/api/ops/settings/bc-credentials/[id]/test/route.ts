@@ -6,7 +6,7 @@
 // endpoint using the stored credentials, to confirm apiUrl/auth are valid.
 // Does not change any data.
 //
-// Access: OPS HO only.
+// Access: IT only.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -14,21 +14,14 @@ import { eq } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import { businessCentralSettings } from '@/lib/db/schema';
-import { resolveOpsScope } from '@/lib/performance/ops-scope';
+import { resolveItScope } from '@/lib/auth/it-scope';
 
 type Params = { params: Promise<{ id: string }> };
 
 export async function POST(_req: NextRequest, { params }: Params) {
-  const scope = await resolveOpsScope();
+  const scope = await resolveItScope();
   if (!scope.ok) {
     return NextResponse.json({ success: false, error: scope.error }, { status: scope.status });
-  }
-
-  if (scope.scope !== 'all_areas') {
-    return NextResponse.json(
-      { success: false, error: 'Forbidden: only OPS HO can manage Business Central credentials.' },
-      { status: 403 },
-    );
   }
 
   const { id: idRaw } = await params;

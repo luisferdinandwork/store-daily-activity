@@ -20,8 +20,8 @@ import {
   itemDroppingTasks,
   itemReturnTasks,
   itemReturnEntries,
-  cekUangMukaTasks,
-  cekUangMukaDenominations,
+  cekUangModalTasks,
+  cekUangModalDenominations,
   serahTerimaTasks,
 
   type StoreOpeningTask,
@@ -39,8 +39,8 @@ import { getOrCreateMarketingCheckForSchedule } from '@/lib/db/utils/marketing-c
 
 export const DEFAULT_GEOFENCE_RADIUS_M = 100;
 
-const PENDING_STATUSES: readonly ['pending', 'in_progress'] = ['pending', 'in_progress'] as const;
-const ACTIVE_STATUSES: readonly ['pending', 'in_progress', 'discrepancy'] = ['pending', 'in_progress', 'discrepancy'] as const;
+const PENDING_STATUSES: readonly ['not_started', 'in_progress'] = ['not_started', 'in_progress'] as const;
+const ACTIVE_STATUSES: readonly ['not_started', 'in_progress', 'pending'] = ['not_started', 'in_progress', 'pending'] as const;
 const FINAL_STATUSES: readonly ['completed'] = ['completed'] as const;
 
 function isFinalStatus(status: string | null | undefined): boolean {
@@ -153,13 +153,13 @@ export interface SubmitBriefingInput {
   done:         boolean;
   /**
    * true  → status becomes 'completed'
-   * false → status becomes 'discrepancy'; task carries to next shift
+   * false → status becomes 'pending'; task carries to next shift
    */
   isBalanced:   boolean;
   notes?:       string;
   skipGeo?:     boolean;
   /**
-   * Set when continuing a discrepancy task from a prior shift.
+   * Set when continuing a pending (unresolved discrepancy) task from a prior shift.
    * The function will UPDATE that row rather than insert a new one.
    */
   parentTaskId?: number;
@@ -204,11 +204,11 @@ export interface FlatTask {
 }
 
 export interface StoreTaskSummary {
-  pending:     number;
-  inProgress:  number;
-  completed:   number;
-  discrepancy: number;
-  total:       number;
+  notStarted: number;
+  inProgress: number;
+  completed:  number;
+  pending:    number;
+  total:      number;
 }
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
@@ -448,8 +448,9 @@ async function replaceCheckedBins(
 // ─── Discrepancy helpers ──────────────────────────────────────────────────────
 
 /**
- * Returns the active (pending / in_progress / discrepancy) task for a store on
- * a given date. Also surfaces unresolved discrepancies from prior days.
+ * Returns the active (not_started / in_progress / pending) task for a store on
+ * a given date. Also surfaces unresolved discrepancies (status 'pending') from
+ * prior days.
  */
 export async function getActiveDiscrepancyTask<T extends { id: number; status: string | null; parentTaskId: number | null }>(
   table:   any,
@@ -476,7 +477,7 @@ export async function getActiveDiscrepancyTask<T extends { id: number; status: s
   const prior = await db
     .select()
     .from(table)
-    .where(and(eq(table.storeId, storeId), eq(table.status, 'discrepancy'), isNull(table.parentTaskId)))
+    .where(and(eq(table.storeId, storeId), eq(table.status, 'pending'), isNull(table.parentTaskId)))
     .orderBy(table.createdAt)
     .limit(1);
 
@@ -507,7 +508,7 @@ export async function materialiseTasksForSchedule(
   const morningId = shiftMap['morning'] ?? sched.shiftId;
   const eveningId = shiftMap['evening'] ?? sched.shiftId;
 
-  const baseCommon = { scheduleId, userId: sched.userId, storeId: sched.storeId, date: dayStart, status: 'pending' as const };
+  const baseCommon = { scheduleId, userId: sched.userId, storeId: sched.storeId, date: dayStart, status: 'not_started' as const };
 
   async function insertShared(
     name:   string,
@@ -604,15 +605,15 @@ export async function materialiseTasksForSchedule(
         .limit(1).then(r => r[0]),
       () => db.insert(itemReturnTasks).values({ ...base, hasReturn: false }));
 
-    await insertShared('cekUangMuka',
-      () => db.select({ id: cekUangMukaTasks.id }).from(cekUangMukaTasks)
+    await insertShared('cekUangModal',
+      () => db.select({ id: cekUangModalTasks.id }).from(cekUangModalTasks)
         .where(and(
-          eq(cekUangMukaTasks.storeId, sched.storeId),
-          eq(cekUangMukaTasks.date, dayStart),
-          inArray(cekUangMukaTasks.status, ACTIVE_STATUSES),
+          eq(cekUangModalTasks.storeId, sched.storeId),
+          eq(cekUangModalTasks.date, dayStart),
+          inArray(cekUangModalTasks.status, ACTIVE_STATUSES),
         ))
         .limit(1).then(r => r[0]),
-      () => db.insert(cekUangMukaTasks).values({ ...base, totalAmount: '0' }));
+      () => db.insert(cekUangModalTasks).values({ ...base, totalAmount: '0' }));
 
     // Briefing — now available on morning and evening shift.
     await insertShared('briefingMorning',
@@ -759,8 +760,8 @@ export async function deleteTasksForSchedule(scheduleId: number): Promise<void> 
       .where(and(eq(itemDroppingTasks.scheduleId, scheduleId), inArray(itemDroppingTasks.status, ACTIVE_STATUSES))),
     db.delete(itemReturnTasks)
       .where(and(eq(itemReturnTasks.scheduleId, scheduleId), inArray(itemReturnTasks.status, ACTIVE_STATUSES))),
-    db.delete(cekUangMukaTasks)
-      .where(and(eq(cekUangMukaTasks.scheduleId, scheduleId), inArray(cekUangMukaTasks.status, ACTIVE_STATUSES))),
+    db.delete(cekUangModalTasks)
+      .where(and(eq(cekUangModalTasks.scheduleId, scheduleId), inArray(cekUangModalTasks.status, ACTIVE_STATUSES))),
     db.delete(serahTerimaTasks)
       .where(and(eq(serahTerimaTasks.scheduleId, scheduleId), inArray(serahTerimaTasks.status, ACTIVE_STATUSES))),
     // Evening tasks
@@ -984,7 +985,7 @@ export async function autoSaveCekBin(
       saved.push('selectedBins');
     }
 
-    if (task.status === 'pending') update.status = 'in_progress';
+    if (task.status === 'not_started') update.status = 'in_progress';
 
     await db.update(cekBinTasks).set(update).where(eq(cekBinTasks.id, task.id));
 
@@ -1171,7 +1172,7 @@ export async function submitGrooming(
 export async function getTasksForSchedule(scheduleId: number) {
   const [
     storeOpening, setoran,
-    storeFront, cekBin, vmChecklist, marketingCheck, itemDropping, itemReturn, cekUangMuka, briefing,
+    storeFront, cekBin, vmChecklist, marketingCheck, itemDropping, itemReturn, cekUangModal, briefing,
     serahTerima, storeClosing, grooming,
   ] = await Promise.all([
     db.select().from(storeOpeningTasks)      .where(eq(storeOpeningTasks.scheduleId,      scheduleId)).limit(1),
@@ -1182,7 +1183,7 @@ export async function getTasksForSchedule(scheduleId: number) {
     db.select().from(marketingCheckTasks)    .where(eq(marketingCheckTasks.scheduleId,    scheduleId)).limit(1),
     db.select().from(itemDroppingTasks)      .where(eq(itemDroppingTasks.scheduleId,      scheduleId)).limit(1),
     db.select().from(itemReturnTasks)        .where(eq(itemReturnTasks.scheduleId,        scheduleId)).limit(1),
-    db.select().from(cekUangMukaTasks)       .where(eq(cekUangMukaTasks.scheduleId,       scheduleId)).limit(1),
+    db.select().from(cekUangModalTasks)       .where(eq(cekUangModalTasks.scheduleId,       scheduleId)).limit(1),
     db.select().from(briefingTasks)          .where(eq(briefingTasks.scheduleId,          scheduleId)).limit(1),
     db.select().from(serahTerimaTasks)       .where(eq(serahTerimaTasks.scheduleId,       scheduleId)).limit(1),
     db.select().from(storeClosingTasks)      .where(eq(storeClosingTasks.scheduleId,      scheduleId)).limit(1),
@@ -1198,7 +1199,7 @@ export async function getTasksForSchedule(scheduleId: number) {
     marketingCheck:    marketingCheck[0]    ?? null,
     itemDropping:      itemDropping[0]      ?? null,
     itemReturn:        itemReturn[0]        ?? null,
-    cekUangMuka:       cekUangMuka[0]       ?? null,
+    cekUangModal:      cekUangModal[0]      ?? null,
     briefing:          briefing[0]          ?? null,
     serahTerima:       serahTerima[0]       ?? null,
     storeClosing:      storeClosing[0]      ?? null,
@@ -1218,16 +1219,16 @@ export async function getDailyTaskSummary(storeId: number, date: Date) {
 
   function summarise(rows: { status: string | null; count: number }[]) {
     return {
-      pending:     rows.find(r => r.status === 'pending')?.count     ?? 0,
-      inProgress:  rows.find(r => r.status === 'in_progress')?.count ?? 0,
-      completed:   rows.find(r => r.status === 'completed')?.count   ?? 0,
-      discrepancy: rows.find(r => r.status === 'discrepancy')?.count ?? 0,
+      notStarted: rows.find(r => r.status === 'not_started')?.count ?? 0,
+      inProgress: rows.find(r => r.status === 'in_progress')?.count ?? 0,
+      completed:  rows.find(r => r.status === 'completed')?.count   ?? 0,
+      pending:    rows.find(r => r.status === 'pending')?.count     ?? 0,
     };
   }
 
   const [
     storeOpening, setoran,
-    storeFront, cekBin, vmChecklist, marketingCheck, itemDropping, itemReturn, cekUangMuka, briefing,
+    storeFront, cekBin, vmChecklist, marketingCheck, itemDropping, itemReturn, cekUangModal, briefing,
     serahTerima, storeClosing, grooming,
   ] = await Promise.all([
     db.select({ status: storeOpeningTasks.status,      count: sql<number>`count(*)::int` }).from(storeOpeningTasks)
@@ -1246,8 +1247,8 @@ export async function getDailyTaskSummary(storeId: number, date: Date) {
       .where(and(eq(itemDroppingTasks.storeId, storeId),      gte(itemDroppingTasks.date, dayStart),      lte(itemDroppingTasks.date, dayEnd))).groupBy(itemDroppingTasks.status).then(summarise),
     db.select({ status: itemReturnTasks.status,        count: sql<number>`count(*)::int` }).from(itemReturnTasks)
       .where(and(eq(itemReturnTasks.storeId, storeId),        gte(itemReturnTasks.date, dayStart),        lte(itemReturnTasks.date, dayEnd))).groupBy(itemReturnTasks.status).then(summarise),
-    db.select({ status: cekUangMukaTasks.status,       count: sql<number>`count(*)::int` }).from(cekUangMukaTasks)
-      .where(and(eq(cekUangMukaTasks.storeId, storeId),       gte(cekUangMukaTasks.date, dayStart),       lte(cekUangMukaTasks.date, dayEnd))).groupBy(cekUangMukaTasks.status).then(summarise),
+    db.select({ status: cekUangModalTasks.status,       count: sql<number>`count(*)::int` }).from(cekUangModalTasks)
+      .where(and(eq(cekUangModalTasks.storeId, storeId),       gte(cekUangModalTasks.date, dayStart),       lte(cekUangModalTasks.date, dayEnd))).groupBy(cekUangModalTasks.status).then(summarise),
     db.select({ status: briefingTasks.status,          count: sql<number>`count(*)::int` }).from(briefingTasks)
       .where(and(eq(briefingTasks.storeId, storeId),          gte(briefingTasks.date, dayStart),          lte(briefingTasks.date, dayEnd))).groupBy(briefingTasks.status).then(summarise),
     db.select({ status: serahTerimaTasks.status,       count: sql<number>`count(*)::int` }).from(serahTerimaTasks)
@@ -1258,7 +1259,7 @@ export async function getDailyTaskSummary(storeId: number, date: Date) {
       .where(and(eq(groomingTasks.storeId, storeId),          gte(groomingTasks.date, dayStart),          lte(groomingTasks.date, dayEnd))).groupBy(groomingTasks.status).then(summarise),
   ]);
 
-  return { storeOpening, setoran, storeFront, cekBin, vmChecklist, marketingCheck, itemDropping, itemReturn, cekUangMuka, briefing, serahTerima, storeClosing, grooming };
+  return { storeOpening, setoran, storeFront, cekBin, vmChecklist, marketingCheck, itemDropping, itemReturn, cekUangModal, briefing, serahTerima, storeClosing, grooming };
 }
 
 function parsePhotosField(raw: unknown): string[] {
@@ -1442,15 +1443,15 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
     return map;
   }
 
-  async function loadCekUangMukaDenominationsByTaskId(taskIds: number[]) {
+  async function loadCekUangModalDenominationsByTaskId(taskIds: number[]) {
     const map = new Map<number, Array<Record<string, unknown>>>();
     if (!taskIds.length) return map;
 
     const rows = await db
       .select()
-      .from(cekUangMukaDenominations)
-      .where(inArray(cekUangMukaDenominations.taskId, taskIds))
-      .orderBy(cekUangMukaDenominations.denominationValue);
+      .from(cekUangModalDenominations)
+      .where(inArray(cekUangModalDenominations.taskId, taskIds))
+      .orderBy(cekUangModalDenominations.denominationValue);
 
     for (const row of rows) {
       const item = {
@@ -1482,7 +1483,7 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
     marketingCheck,
     itemDropping,
     itemReturn,
-    cekUangMuka,
+    cekUangModal,
     briefing,
     serahTerima,
     storeClosing,
@@ -1510,7 +1511,7 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
     loadTable(marketingCheckTasks, 'marketing_check', []),
     loadTable(itemDroppingTasks, 'item_dropping', []),
     loadTable(itemReturnTasks, 'item_return', []),
-    loadTable(cekUangMukaTasks, 'cek_uang_muka', []),
+    loadTable(cekUangModalTasks, 'cek_uang_modal', []),
     loadTable(briefingTasks, 'briefing', []),
     loadTable(serahTerimaTasks, 'serah_terima', []),
     loadTable(storeClosingTasks, 'store_closing', ['eodEdcSettlementPhoto']),
@@ -1520,8 +1521,8 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
   const itemReturnEntriesByTaskId = await loadItemReturnEntriesByTaskId(
     itemReturn.map((task) => task.id),
   );
-  const cekUangMukaDenominationsByTaskId = await loadCekUangMukaDenominationsByTaskId(
-    cekUangMuka.map((task) => task.id),
+  const cekUangModalDenominationsByTaskId = await loadCekUangModalDenominationsByTaskId(
+    cekUangModal.map((task) => task.id),
   );
 
   const itemReturnWithEntries: FlatTask[] = itemReturn.map((task) => {
@@ -1539,8 +1540,8 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
     };
   });
 
-  const cekUangMukaWithDenominations: FlatTask[] = cekUangMuka.map((task) => {
-    const denominations = cekUangMukaDenominationsByTaskId.get(task.id) ?? [];
+  const cekUangModalWithDenominations: FlatTask[] = cekUangModal.map((task) => {
+    const denominations = cekUangModalDenominationsByTaskId.get(task.id) ?? [];
     const totalQuantity = denominations.reduce((sum, row) => sum + Number(row.quantity ?? 0), 0);
     const filledDenominationCount = denominations.filter((row) => Number(row.quantity ?? 0) > 0).length;
 
@@ -1565,7 +1566,7 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
     ...marketingCheck,
     ...itemDropping,
     ...itemReturnWithEntries,
-    ...cekUangMukaWithDenominations,
+    ...cekUangModalWithDenominations,
     ...briefing,
     ...serahTerima,
     ...storeClosing,
@@ -1587,15 +1588,15 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
 
 export function summariseTasks(tasks: FlatTask[]): StoreTaskSummary {
   const s: StoreTaskSummary = {
-    pending: 0, inProgress: 0, completed: 0,
-    discrepancy: 0, total: tasks.length,
+    notStarted: 0, inProgress: 0, completed: 0,
+    pending: 0, total: tasks.length,
   };
   for (const t of tasks) {
     switch (t.status) {
-      case 'pending':     s.pending++;     break;
-      case 'in_progress': s.inProgress++;  break;
-      case 'completed':   s.completed++;   break;
-      case 'discrepancy': s.discrepancy++; break;
+      case 'not_started': s.notStarted++; break;
+      case 'in_progress': s.inProgress++; break;
+      case 'completed':   s.completed++;  break;
+      case 'pending':     s.pending++;    break;
     }
   }
   return s;
@@ -1615,18 +1616,18 @@ export async function getAreaTaskOverview(opsUserId: string, date: Date) {
   const results = await Promise.all(areaStores.map(async (s) => {
     const daily = await getDailyTaskSummary(s.id, date);
     const summary: StoreTaskSummary = {
-      pending: 0, inProgress: 0, completed: 0,
-      discrepancy: 0, total: 0,
+      notStarted: 0, inProgress: 0, completed: 0,
+      pending: 0, total: 0,
     };
     for (const perType of Object.values(daily)) {
-      summary.pending     += perType.pending;
-      summary.inProgress  += perType.inProgress;
-      summary.completed   += perType.completed;
-      summary.discrepancy += perType.discrepancy;
+      summary.notStarted += perType.notStarted;
+      summary.inProgress += perType.inProgress;
+      summary.completed  += perType.completed;
+      summary.pending    += perType.pending;
     }
     summary.total =
-      summary.pending + summary.inProgress + summary.completed +
-      summary.discrepancy;
+      summary.notStarted + summary.inProgress + summary.completed +
+      summary.pending;
     return { ...s, summary };
   }));
 
@@ -1652,25 +1653,25 @@ export async function getAllTaskOverview(date: Date) {
       const daily = await getDailyTaskSummary(s.id, date);
 
       const summary: StoreTaskSummary = {
-        pending: 0,
+        notStarted: 0,
         inProgress: 0,
         completed: 0,
-        discrepancy: 0,
+        pending: 0,
         total: 0,
       };
 
       for (const perType of Object.values(daily)) {
-        summary.pending += perType.pending;
+        summary.notStarted += perType.notStarted;
         summary.inProgress += perType.inProgress;
         summary.completed += perType.completed;
-        summary.discrepancy += perType.discrepancy;
+        summary.pending += perType.pending;
       }
 
       summary.total =
-        summary.pending +
+        summary.notStarted +
         summary.inProgress +
         summary.completed +
-        summary.discrepancy;
+        summary.pending;
 
       return {
         id: s.id,
@@ -1708,10 +1709,10 @@ export async function getAllTaskOverview(date: Date) {
 export interface StoreDateSummary {
   storeId: number;
   date: string;
-  pending: number;
+  notStarted: number;
   inProgress: number;
   completed: number;
-  discrepancy: number;
+  pending: number;
   total: number;
 }
 
@@ -1757,7 +1758,7 @@ export async function getStoreSummariesForRange(
     marketingCheck,
     itemDropping,
     itemReturn,
-    cekUangMuka,
+    cekUangModal,
     briefing,
     serahTerima,
     storeClosing,
@@ -1771,7 +1772,7 @@ export async function getStoreSummariesForRange(
     loadTable(marketingCheckTasks),
     loadTable(itemDroppingTasks),
     loadTable(itemReturnTasks),
-    loadTable(cekUangMukaTasks),
+    loadTable(cekUangModalTasks),
     loadTable(briefingTasks),
     loadTable(serahTerimaTasks),
     loadTable(storeClosingTasks),
@@ -1787,7 +1788,7 @@ export async function getStoreSummariesForRange(
     ...marketingCheck,
     ...itemDropping,
     ...itemReturn,
-    ...cekUangMuka,
+    ...cekUangModal,
     ...briefing,
     ...serahTerima,
     ...storeClosing,
@@ -1807,10 +1808,10 @@ export async function getStoreSummariesForRange(
       entry = {
         storeId: row.storeId,
         date: dateKey,
-        pending: 0,
+        notStarted: 0,
         inProgress: 0,
         completed: 0,
-        discrepancy: 0,
+        pending: 0,
         total: 0,
       };
 
@@ -1820,8 +1821,8 @@ export async function getStoreSummariesForRange(
     entry.total++;
 
     switch (row.status) {
-      case 'pending':
-        entry.pending++;
+      case 'not_started':
+        entry.notStarted++;
         break;
 
       case 'in_progress':
@@ -1832,8 +1833,8 @@ export async function getStoreSummariesForRange(
         entry.completed++;
         break;
 
-      case 'discrepancy':
-        entry.discrepancy++;
+      case 'pending':
+        entry.pending++;
         break;
     }
   }

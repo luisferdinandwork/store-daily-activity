@@ -4,6 +4,7 @@
 import { useEffect, useState, useCallback, type ElementType } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -26,13 +27,16 @@ import {
   Moon,
   AlertTriangle,
   Zap,
-  LogIn,
   LogOut,
   RefreshCw,
   Loader2,
   History,
+  Lock,
+  Check,
+  ListOrdered,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import EmployeeLogoMark from "@/components/employee/EmployeeLogoMark";
 
 // ─── Task types ────────────────────────────────────────────────────────────────
 
@@ -45,22 +49,28 @@ export type TaskType =
   | "marketing_check"
   | "item_dropping"
   | "item_return"
-  | "cek_uang_muka"
+  | "cek_uang_modal"
   | "briefing"
   | "serah_terima"
   | "store_closing"
   | "grooming";
 
 export type TaskStatus =
-  | "pending"
+  | "not_started"
   | "in_progress"
   | "completed"
-  | "discrepancy"
+  | "pending"
   | "verified"
   | "rejected";
 
 type ShiftCode = string;
 type ShiftTaskMap = Record<string, TaskType[]>;
+// Whether a task type is mandatory for a given shift — independent of order.
+type ShiftTaskRequiredMap = Record<string, Partial<Record<TaskType, boolean>>>;
+// Whether a task type is part of the shift's fixed, gated order (managed
+// from OPS → Shift & Tasks → Fixed Order). Sequenced tasks are locked until
+// every earlier sequenced task is done; everything else can be done anytime.
+type ShiftTaskSequencedMap = Record<string, Partial<Record<TaskType, boolean>>>;
 
 interface AttendanceShiftSlot {
   schedule: {
@@ -224,7 +234,7 @@ export interface ItemReturnData extends TaskBase {
   }>;
 }
 
-export interface CekUangMukaData extends TaskBase {
+export interface CekUangModalData extends TaskBase {
   totalAmount: string | null;
   denominations: Array<{
     id: string;
@@ -315,13 +325,13 @@ export type TaskItem =
   | { type: "marketing_check"; shift: ShiftCode; data: MarketingCheckData }
   | { type: "item_dropping"; shift: ShiftCode; data: ItemDroppingData }
   | { type: "item_return"; shift: ShiftCode; data: ItemReturnData }
-  | { type: "cek_uang_muka"; shift: ShiftCode; data: CekUangMukaData }
+  | { type: "cek_uang_modal"; shift: ShiftCode; data: CekUangModalData }
   | { type: "briefing"; shift: ShiftCode; data: BriefingData }
   | { type: "store_closing"; shift: ShiftCode; data: StoreClosingData }
   | { type: "grooming"; shift: ShiftCode; data: GroomingData }
   | { type: "serah_terima"; shift: ShiftCode; data: SerahTerimaData };
 
-type Filter = "all" | "pending" | "in_progress" | "completed";
+type Filter = "all" | "not_started" | "in_progress" | "completed";
 
 // ─── Config ────────────────────────────────────────────────────────────────────
 
@@ -334,9 +344,9 @@ const STATUS_CFG: Record<
     accentCls: string;
   }
 > = {
-  discrepancy: {
+  pending: {
     Icon: AlertTriangle,
-    label: "Discrepancy",
+    label: "Pending",
     badgeCls: "bg-amber-100 text-amber-700 hover:bg-amber-100",
     accentCls: "bg-amber-400",
   },
@@ -346,9 +356,9 @@ const STATUS_CFG: Record<
     badgeCls: "bg-primary/10 text-primary hover:bg-primary/10",
     accentCls: "bg-primary",
   },
-  pending: {
+  not_started: {
     Icon: Circle,
-    label: "Pending",
+    label: "Not Started",
     badgeCls: "bg-amber-50 text-amber-600 hover:bg-amber-50",
     accentCls: "bg-amber-200",
   },
@@ -373,9 +383,9 @@ const STATUS_CFG: Record<
 };
 
 const STATUS_PRIORITY: Record<TaskStatus, number> = {
-  discrepancy: 0,
+  pending: 0,
   in_progress: 1,
-  pending: 2,
+  not_started: 2,
   rejected: 3,
   completed: 4,
   verified: 5,
@@ -427,9 +437,9 @@ const TASK_META: Record<
     Icon: Truck,
     hasPhoto: true,
   },
-  cek_uang_muka: {
-    title: "Cek Uang Muka",
-    description: "Input pecahan dan jumlah uang muka kasir toko.",
+  cek_uang_modal: {
+    title: "Cek Uang Modal",
+    description: "Input pecahan dan jumlah uang modal kasir toko.",
     Icon: Wallet,
     hasPhoto: false,
   },
@@ -474,7 +484,7 @@ const TASK_ROUTES: Record<TaskType, string> = {
   vm_checklist: "vm-checklist",
   item_dropping: "item-dropping",
   item_return: "item-return",
-  cek_uang_muka: "cek-uang-muka",
+  cek_uang_modal: "cek-uang-modal",
   briefing: "briefing",
   store_closing: "store-closing",
   grooming: "grooming",
@@ -484,42 +494,65 @@ const TASK_ROUTES: Record<TaskType, string> = {
 
 const DEFAULT_SHIFT_TASK_MAP: ShiftTaskMap = {
   morning: [
-    "store_opening",
     "store_front",
     "setoran",
+    "store_opening",
+    "cek_uang_modal",
     "cek_bin",
+    "grooming",
     "vm_checklist",
     "marketing_check",
     "item_dropping",
     "item_return",
-    "cek_uang_muka",
     "briefing",
     "serah_terima",
-    "grooming",
   ],
   evening: [
+    "grooming",
     "item_dropping",
     "item_return",
     "briefing",
     "serah_terima",
     "store_closing",
-    "grooming",
   ],
   full_day: [
-    "store_opening",
     "store_front",
     "setoran",
+    "store_opening",
+    "cek_uang_modal",
     "cek_bin",
+    "grooming",
     "vm_checklist",
     "marketing_check",
     "item_dropping",
     "item_return",
-    "cek_uang_muka",
     "briefing",
     "serah_terima",
     "store_closing",
-    "grooming",
   ],
+};
+
+// Fallback used before DB config (shift_tasks.isSequenced) has loaded —
+// mirrors the seed's default fixed order (see lib/shift-tasks.ts
+// DEFAULT_SEQUENCED_TASK_TYPES). IT owns the real thing from
+// OPS → Shift & Tasks → Fixed Order.
+const DEFAULT_SHIFT_TASK_SEQUENCED: ShiftTaskSequencedMap = {
+  morning: {
+    store_front: true,
+    setoran: true,
+    store_opening: true,
+    cek_uang_modal: true,
+    cek_bin: true,
+    grooming: true,
+  },
+  full_day: {
+    store_front: true,
+    setoran: true,
+    store_opening: true,
+    cek_uang_modal: true,
+    cek_bin: true,
+    grooming: true,
+  },
 };
 
 function normaliseShiftTaskMap(value: unknown): ShiftTaskMap {
@@ -542,6 +575,32 @@ function normaliseShiftTaskMap(value: unknown): ShiftTaskMap {
 
   // Backward-compatible fallback while seed/API is still empty.
   return Object.keys(out).length ? out : DEFAULT_SHIFT_TASK_MAP;
+}
+
+/** Shared shape for shiftTaskRequired / shiftTaskSequenced payloads from the API. */
+function normaliseTaskBooleanMap(
+  value: unknown,
+): Record<string, Partial<Record<TaskType, boolean>>> {
+  if (!value || typeof value !== "object") return {};
+
+  const input = value as Record<string, unknown>;
+  const out: Record<string, Partial<Record<TaskType, boolean>>> = {};
+
+  for (const [shiftCode, rawMap] of Object.entries(input)) {
+    if (!shiftCode || !rawMap || typeof rawMap !== "object") continue;
+
+    const inner: Partial<Record<TaskType, boolean>> = {};
+    for (const [rawType, rawValue] of Object.entries(
+      rawMap as Record<string, unknown>,
+    )) {
+      const taskType = normaliseTaskType(rawType);
+      if (taskType) inner[taskType] = Boolean(rawValue);
+    }
+
+    if (Object.keys(inner).length) out[shiftCode] = inner;
+  }
+
+  return out;
 }
 
 function normaliseTaskType(type: unknown): TaskType | null {
@@ -571,7 +630,7 @@ function normaliseTaskItem(raw: unknown): TaskItem | null {
 
   const status: TaskStatus = isValidTaskStatus(data.status)
     ? data.status
-    : "pending";
+    : "not_started";
 
   return {
     ...row,
@@ -591,7 +650,7 @@ function getTaskRoute(type: TaskType): string {
 
 const FILTERS: { key: Filter; label: string }[] = [
   { key: "all", label: "All" },
-  { key: "pending", label: "Pending" },
+  { key: "not_started", label: "Not Started" },
   { key: "in_progress", label: "Active" },
   { key: "completed", label: "Done" },
 ];
@@ -605,10 +664,10 @@ const SHIFT_SCOPED_SHARED_TASK_TYPES = new Set<TaskType>([
 
 function isValidTaskStatus(value: unknown): value is TaskStatus {
   return (
-    value === "pending" ||
+    value === "not_started" ||
     value === "in_progress" ||
     value === "completed" ||
-    value === "discrepancy" ||
+    value === "pending" ||
     value === "verified" ||
     value === "rejected"
   );
@@ -650,6 +709,10 @@ function rankShiftScopedCandidate(task: TaskItem): number {
 }
 
 function getDisplayShift(task: TaskItem): ShiftCode {
+  // Store Closing is a night/closing task — it must always stay grouped under
+  // the Evening section, even on a full_day schedule row. No exceptions.
+  if (task.type === "store_closing") return "evening";
+
   if (SHIFT_SCOPED_SHARED_TASK_TYPES.has(task.type)) {
     return getShiftScopedDisplayShift(task);
   }
@@ -658,6 +721,86 @@ function getDisplayShift(task: TaskItem): ShiftCode {
   if (task.shift === "full_day") return "morning";
 
   return task.shift || "morning";
+}
+
+// ─── Task ordering + sequential gating ─────────────────────────────────────
+// IT chooses which tasks are part of the fixed, gated order (and in what
+// sequence) from OPS → Shift & Tasks → Fixed Order — shift_tasks.isSequenced.
+// A sequenced task is locked until every earlier sequenced task is
+// completed/verified. Every other task ("Lainnya") is never gated — it can
+// be done anytime — but always sorts below the sequenced ones, using the
+// order IT configured (shift_tasks.sortOrder, via shiftTaskMap) as a
+// tiebreaker within each group.
+//
+// isRequired is a separate, independent concept (whether a task is
+// mandatory for the shift at all) and plays no part in this gating.
+
+function taskCardKey(task: TaskItem): string {
+  return `${task.type}-${task.data.id}`;
+}
+
+function orderIndexOf(task: TaskItem, shiftTaskMap: ShiftTaskMap): number {
+  const list = shiftTaskMap[task.shift];
+  if (!list) return Number.MAX_SAFE_INTEGER;
+  const idx = list.indexOf(task.type);
+  return idx === -1 ? Number.MAX_SAFE_INTEGER : idx;
+}
+
+function isTaskSequenced(
+  task: TaskItem,
+  shiftTaskSequenced: ShiftTaskSequencedMap,
+): boolean {
+  return shiftTaskSequenced[task.shift]?.[task.type] ?? false;
+}
+
+/** Whether a task is mandatory for its shift — unrelated to ordering/gating, just drives the "Optional" badge. */
+function isTaskRequired(
+  task: TaskItem,
+  shiftTaskRequired: ShiftTaskRequiredMap,
+): boolean {
+  return shiftTaskRequired[task.shift]?.[task.type] ?? true;
+}
+
+/** 0 for sequenced tasks (fixed order), 1 for everything else (tied, broken by IT-configured order). */
+function priorityRank(
+  task: TaskItem,
+  shiftTaskSequenced: ShiftTaskSequencedMap,
+): number {
+  return isTaskSequenced(task, shiftTaskSequenced) ? 0 : 1;
+}
+
+function isTaskDone(task: TaskItem): boolean {
+  return task.data.status === "completed" || task.data.status === "verified";
+}
+
+/** Map of taskCardKey -> label of the earliest incomplete sequenced step blocking it. */
+function computeLockedMap(
+  items: TaskItem[],
+  shiftTaskSequenced: ShiftTaskSequencedMap,
+): Map<string, string> {
+  const lockedMap = new Map<string, string>();
+  let blockingType: TaskType | null = null;
+
+  for (const item of items) {
+    // Only sequenced tasks gate anything. Everything else ("Lainnya") can be
+    // done anytime and never blocks, or is blocked by, the chain.
+    if (!isTaskSequenced(item, shiftTaskSequenced)) continue;
+
+    const done = isTaskDone(item);
+
+    if (blockingType && !done) {
+      lockedMap.set(
+        taskCardKey(item),
+        TASK_META[blockingType]?.title ?? blockingType,
+      );
+    }
+
+    if (!blockingType && !done) {
+      blockingType = item.type;
+    }
+  }
+
+  return lockedMap;
 }
 
 function canShowForOwnShifts(
@@ -764,6 +907,19 @@ function fmtAttendanceTime(value: string | null | undefined) {
   });
 }
 
+// Fixed id so repeated calls (page load, then every blocked task click)
+// update the same toast instead of stacking duplicates.
+const NOT_CHECKED_IN_TOAST_ID = "not-checked-in";
+
+function notifyNotCheckedIn() {
+  toast.warning("Belum absen masuk", {
+    id: NOT_CHECKED_IN_TOAST_ID,
+    description:
+      "Kamu harus melakukan absensi masuk terlebih dahulu sebelum mengerjakan task.",
+    duration: 3500,
+  });
+}
+
 function AttendanceCheckCard({
   attendance,
   loading,
@@ -825,27 +981,12 @@ function AttendanceCheckCard({
     );
   }
 
+  // Not-checked-in is surfaced via a toast (see notifyNotCheckedIn) instead
+  // of a persistent banner — it fires once on load and again on every task
+  // click attempt, so it stays visible without permanently eating space
+  // above the task list.
   if (!attendance.checkedIn) {
-    return (
-      <div className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-red-700 shadow-sm">
-        <LogIn className="mt-0.5 h-4 w-4 shrink-0" />
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-bold">Belum absen masuk</p>
-          <p className="mt-0.5 text-xs">
-            Kamu harus melakukan absensi masuk terlebih dahulu sebelum
-            mengerjakan task.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={onRefresh}
-          className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-red-100 px-2.5 py-1.5 text-[11px] font-bold text-red-700 hover:bg-red-200"
-        >
-          <RefreshCw className="h-3 w-3" />
-          Cek ulang
-        </button>
-      </div>
-    );
+    return null;
   }
 
   if (attendance.checkedOut) {
@@ -865,18 +1006,9 @@ function AttendanceCheckCard({
     );
   }
 
-  return (
-    <div className="flex items-start gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-emerald-700 shadow-sm">
-      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-bold">Sudah absen masuk</p>
-        <p className="mt-0.5 text-xs">
-          Check-in {fmtAttendanceTime(attendance.checkInAt)}. Task sudah bisa
-          dikerjakan.
-        </p>
-      </div>
-    </div>
-  );
+  // Checked-in-and-ready is the normal state — no banner needed above the
+  // task list once attendance is confirmed.
+  return null;
 }
 
 function RingProgress({ pct }: { pct: number }) {
@@ -922,6 +1054,10 @@ export default function EmployeeTasksPage() {
   const [shiftTaskMap, setShiftTaskMap] = useState<ShiftTaskMap>(
     DEFAULT_SHIFT_TASK_MAP,
   );
+  const [shiftTaskRequired, setShiftTaskRequired] =
+    useState<ShiftTaskRequiredMap>({});
+  const [shiftTaskSequenced, setShiftTaskSequenced] =
+    useState<ShiftTaskSequencedMap>(DEFAULT_SHIFT_TASK_SEQUENCED);
   const [attendance, setAttendance] = useState<AttendanceStatus | null>(null);
   const [attendanceLoading, setAttendanceLoading] = useState(true);
   const [loading, setLoading] = useState(true);
@@ -936,6 +1072,8 @@ export default function EmployeeTasksPage() {
         shift?: ShiftCode | null;
         shifts?: string[];
         shiftTaskMap?: unknown;
+        shiftTaskRequired?: unknown;
+        shiftTaskSequenced?: unknown;
         assignedTaskTypes?: TaskType[];
       };
 
@@ -946,6 +1084,12 @@ export default function EmployeeTasksPage() {
       setTasks(normalisedTasks);
       setShift(data.shift ?? null);
       setShiftTaskMap(normaliseShiftTaskMap(data.shiftTaskMap));
+      setShiftTaskRequired(normaliseTaskBooleanMap(data.shiftTaskRequired));
+
+      const sequenced = normaliseTaskBooleanMap(data.shiftTaskSequenced);
+      setShiftTaskSequenced(
+        Object.keys(sequenced).length ? sequenced : DEFAULT_SHIFT_TASK_SEQUENCED,
+      );
 
       // Fallback while /api/employee/attendance is still loading or if it fails.
       // The attendance endpoint will override this with the complete shift set.
@@ -1055,18 +1199,30 @@ export default function EmployeeTasksPage() {
     void loadAttendance();
   }, [sessionStatus, load, loadAttendance]);
 
+  // Fires once per fresh attendance read — on initial load, and again every
+  // time openTask() re-checks attendance after being blocked by a task click.
+  useEffect(() => {
+    if (attendanceLoading || !attendance) return;
+    if (attendance.hasSchedule && !attendance.checkedIn) {
+      notifyNotCheckedIn();
+    }
+  }, [attendance, attendanceLoading]);
+
   const openTask = useCallback(
     async (item: TaskItem) => {
       if (attendanceLoading) return;
 
       if (!attendance || !attendance.hasSchedule || !attendance.checkedIn) {
+        if (attendance?.hasSchedule && !attendance.checkedIn) {
+          notifyNotCheckedIn();
+        }
         void loadAttendance();
         return;
       }
 
       const { status, id } = item.data;
 
-      if (status === "pending") {
+      if (status === "not_started") {
         setTasks((prev) =>
           prev.map((t) =>
             t.data.id === id
@@ -1096,6 +1252,39 @@ export default function EmployeeTasksPage() {
 
   const visibleTasks = normaliseVisibleTasks(tasks, myShifts, shiftTaskMap);
 
+  // Sort IT's fixed/sequenced tasks to the top (in their configured order),
+  // then everything else ("Lainnya") below using the same IT-configured
+  // order as a tiebreaker (falls back to status priority). This runs BEFORE
+  // the status filter is applied, so locking stays correct no matter which
+  // filter tab is active.
+  const orderedVisibleTasks = [...visibleTasks].sort((a, b) => {
+    const priorityDiff =
+      priorityRank(a, shiftTaskSequenced) - priorityRank(b, shiftTaskSequenced);
+    if (priorityDiff !== 0) return priorityDiff;
+    const orderDiff =
+      orderIndexOf(a, shiftTaskMap) - orderIndexOf(b, shiftTaskMap);
+    if (orderDiff !== 0) return orderDiff;
+    return (
+      (STATUS_PRIORITY[a.data.status] ?? 9) -
+      (STATUS_PRIORITY[b.data.status] ?? 9)
+    );
+  });
+
+  const tasksByDisplayShiftAll = new Map<ShiftCode, TaskItem[]>();
+  for (const task of orderedVisibleTasks) {
+    const displayShift = getDisplayShift(task);
+    const bucket = tasksByDisplayShiftAll.get(displayShift) ?? [];
+    bucket.push(task);
+    tasksByDisplayShiftAll.set(displayShift, bucket);
+  }
+
+  const lockedTaskMap = new Map<string, string>();
+  for (const items of tasksByDisplayShiftAll.values()) {
+    for (const [key, label] of computeLockedMap(items, shiftTaskSequenced)) {
+      lockedTaskMap.set(key, label);
+    }
+  }
+
   const countFilter = (f: Filter) => {
     if (f === "all") return visibleTasks.length;
 
@@ -1103,31 +1292,24 @@ export default function EmployeeTasksPage() {
       return visibleTasks.filter(
         (task) =>
           task.data.status === "in_progress" ||
-          task.data.status === "discrepancy",
+          task.data.status === "pending",
       ).length;
     }
 
     return visibleTasks.filter((task) => task.data.status === f).length;
   };
 
-  const filtered = visibleTasks
-    .filter((task) => {
-      if (filter === "all") return true;
+  const filtered = orderedVisibleTasks.filter((task) => {
+    if (filter === "all") return true;
 
-      if (filter === "in_progress") {
-        return (
-          task.data.status === "in_progress" ||
-          task.data.status === "discrepancy"
-        );
-      }
+    if (filter === "in_progress") {
+      return (
+        task.data.status === "in_progress" || task.data.status === "pending"
+      );
+    }
 
-      return task.data.status === filter;
-    })
-    .sort(
-      (a, b) =>
-        (STATUS_PRIORITY[a.data.status] ?? 9) -
-        (STATUS_PRIORITY[b.data.status] ?? 9),
-    );
+    return task.data.status === filter;
+  });
 
   const tasksByDisplayShift = new Map<ShiftCode, TaskItem[]>();
   for (const task of filtered) {
@@ -1151,12 +1333,12 @@ export default function EmployeeTasksPage() {
 
   // Stats for the ring
   const stats = {
-    pending: visibleTasks.filter((task) => task.data.status === "pending")
+    notStarted: visibleTasks.filter((task) => task.data.status === "not_started")
       .length,
     inProgress: visibleTasks.filter(
       (task) =>
         task.data.status === "in_progress" ||
-        task.data.status === "discrepancy",
+        task.data.status === "pending",
     ).length,
     completed: visibleTasks.filter(
       (task) =>
@@ -1178,6 +1360,7 @@ export default function EmployeeTasksPage() {
         <div className="relative flex items-end justify-between gap-4">
           {/* Left: title + date + shift pill */}
           <div className="flex-1 min-w-0">
+            <EmployeeLogoMark variant="white" className="mb-4 w-28" />
             <p className="text-xs font-semibold uppercase tracking-widest text-primary-foreground/60">
               Today
             </p>
@@ -1220,8 +1403,8 @@ export default function EmployeeTasksPage() {
               <div className="mt-3 flex flex-wrap gap-2">
                 {[
                   {
-                    label: "Pending",
-                    value: stats.pending,
+                    label: "Not Started",
+                    value: stats.notStarted,
                     color: "bg-amber-400/25 text-amber-200",
                   },
                   {
@@ -1347,38 +1530,152 @@ export default function EmployeeTasksPage() {
           </div>
         ) : (
           <>
-            {orderedShiftSections.map(([shiftCode, items]) => (
-              <section key={shiftCode}>
-                <div className="mb-2.5 flex items-center gap-2">
-                  {shiftCode === "evening" ? (
-                    <Moon className="h-4 w-4 text-blue-500" />
-                  ) : shiftCode === "full_day" ? (
-                    <Zap className="h-4 w-4 text-orange-500" />
-                  ) : (
-                    <Sun className="h-4 w-4 text-amber-500" />
+            {orderedShiftSections.map(([shiftCode, items]) => {
+              const priorityItems = items.filter((item) =>
+                isTaskSequenced(item, shiftTaskSequenced),
+              );
+              const otherItems = items.filter(
+                (item) => !isTaskSequenced(item, shiftTaskSequenced),
+              );
+
+              return (
+                <section key={shiftCode} className="mb-6 last:mb-0">
+                  <div className="mb-2.5 flex items-center gap-2">
+                    {shiftCode === "evening" ? (
+                      <Moon className="h-4 w-4 text-blue-500" />
+                    ) : shiftCode === "full_day" ? (
+                      <Zap className="h-4 w-4 text-orange-500" />
+                    ) : (
+                      <Sun className="h-4 w-4 text-amber-500" />
+                    )}
+                    <h2 className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
+                      {shiftCode.replaceAll("_", " ")} Shift
+                    </h2>
+                    <div className="h-px flex-1 bg-border" />
+                    <span className="text-[10px] font-semibold text-muted-foreground">
+                      {items.length}
+                    </span>
+                  </div>
+
+                  {priorityItems.length > 0 && (
+                    <div className={cn(otherItems.length > 0 && "mb-4")}>
+                      {otherItems.length > 0 && (
+                        <p className="mb-2 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest text-primary">
+                          <ListOrdered className="h-3 w-3" />
+                          Prioritas — kerjakan berurutan
+                        </p>
+                      )}
+                      <div>
+                        {priorityItems.map((item, idx) => {
+                          const key = taskCardKey(item);
+                          const lockedLabel =
+                            lockedTaskMap.get(key) ?? null;
+                          return (
+                            <div key={key} className="flex gap-2.5">
+                              <StepRail
+                                index={idx}
+                                total={priorityItems.length}
+                                done={isTaskDone(item)}
+                                locked={!!lockedLabel}
+                              />
+                              <div className="min-w-0 flex-1 pb-3 last:pb-0">
+                                <TaskCard
+                                  item={item}
+                                  locked={!!lockedLabel}
+                                  lockedLabel={lockedLabel}
+                                  required={isTaskRequired(
+                                    item,
+                                    shiftTaskRequired,
+                                  )}
+                                  onOpen={openTask}
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
                   )}
-                  <h2 className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
-                    {shiftCode.replaceAll("_", " ")} Shift
-                  </h2>
-                  <div className="h-px flex-1 bg-border" />
-                  <span className="text-[10px] font-semibold text-muted-foreground">
-                    {items.length}
-                  </span>
-                </div>
-                <div className="space-y-2.5">
-                  {items.map((item) => (
-                    <TaskCard
-                      key={`${item.type}-${item.data.id}`}
-                      item={item}
-                      onOpen={openTask}
-                    />
-                  ))}
-                </div>
-              </section>
-            ))}
+
+                  {otherItems.length > 0 && (
+                    <div>
+                      {priorityItems.length > 0 && (
+                        <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                          Lainnya — bisa dikerjakan kapan saja
+                        </p>
+                      )}
+                      <div className="space-y-2.5">
+                        {otherItems.map((item) => (
+                          <TaskCard
+                            key={taskCardKey(item)}
+                            item={item}
+                            locked={false}
+                            lockedLabel={null}
+                            required={isTaskRequired(
+                              item,
+                              shiftTaskRequired,
+                            )}
+                            onOpen={openTask}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </section>
+              );
+            })}
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+// ─── Priority step rail ─────────────────────────────────────────────────────
+// Numbered circle + connecting line, so the fixed 6-step sequence reads as an
+// obvious "do this, then this" checklist instead of a flat card list.
+
+function StepRail({
+  index,
+  total,
+  done,
+  locked,
+}: {
+  index: number;
+  total: number;
+  done: boolean;
+  locked: boolean;
+}) {
+  const isLast = index === total - 1;
+
+  return (
+    <div className="flex w-7 flex-shrink-0 flex-col items-center">
+      <div
+        className={cn(
+          "flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-[11px] font-bold transition-colors",
+          done
+            ? "bg-green-500 text-white"
+            : locked
+              ? "bg-secondary text-muted-foreground"
+              : "bg-primary text-primary-foreground shadow-sm",
+        )}
+      >
+        {done ? (
+          <Check className="h-3.5 w-3.5" strokeWidth={3} />
+        ) : locked ? (
+          <Lock className="h-3 w-3" />
+        ) : (
+          index + 1
+        )}
+      </div>
+      {!isLast && (
+        <div
+          className={cn(
+            "my-0.5 w-0.5 flex-1 rounded-full",
+            done ? "bg-green-300" : "bg-border",
+          )}
+        />
+      )}
     </div>
   );
 }
@@ -1387,14 +1684,34 @@ export default function EmployeeTasksPage() {
 
 function TaskCard({
   item,
+  locked,
+  lockedLabel,
+  required = true,
   onOpen,
 }: {
   item: TaskItem;
+  locked?: boolean;
+  lockedLabel?: string | null;
+  required?: boolean;
   onOpen: (item: TaskItem) => void;
 }) {
-  const status = item.data.status ?? "pending";
+  const status = item.data.status ?? "not_started";
 
-  const cfg = STATUS_CFG[status] ?? STATUS_CFG.pending;
+  const handleClick = () => {
+    if (locked) {
+      toast.warning("Selesaikan task sebelumnya", {
+        description: lockedLabel
+          ? `Selesaikan "${lockedLabel}" terlebih dahulu sebelum membuka task ini.`
+          : "Ada task sebelumnya yang harus diselesaikan dulu.",
+        duration: 3000,
+      });
+      return;
+    }
+
+    onOpen(item);
+  };
+
+  const cfg = STATUS_CFG[status] ?? STATUS_CFG.not_started;
 
   const meta = TASK_META[item.type] ?? {
     title: item.type.replaceAll("_", " "),
@@ -1408,7 +1725,7 @@ function TaskCard({
 
   const isTerminal = status === "completed" || status === "verified";
   const isRejected = status === "rejected";
-  const isDiscrepancy = status === "discrepancy";
+  const isDiscrepancy = status === "pending";
   const isStoreClosingHold =
     item.type === "store_closing" &&
     ((item.data as StoreClosingData).isOnHold ||
@@ -1475,13 +1792,13 @@ function TaskCard({
       : "Pilih ada/tidak item return dari BC hari ini.";
   })();
 
-  const cekUangMukaLabel = (() => {
-    if (item.type !== "cek_uang_muka") return null;
-    const d = item.data as CekUangMukaData;
+  const cekUangModalLabel = (() => {
+    if (item.type !== "cek_uang_modal") return null;
+    const d = item.data as CekUangModalData;
     const total = Number(d.totalAmount ?? 0);
 
     if (total > 0) {
-      return `Total uang muka: Rp ${total.toLocaleString("id-ID")}`;
+      return `Total uang modal: Rp ${total.toLocaleString("id-ID")}`;
     }
 
     return "Isi jumlah lembar/koin untuk setiap pecahan rupiah.";
@@ -1501,7 +1818,7 @@ function TaskCard({
     }
 
     if (
-      (d.status === "pending" || d.status === "in_progress") &&
+      (d.status === "not_started" || d.status === "in_progress") &&
       previousUnpaid > 0
     ) {
       return `Wajib bayar sisa kemarin: Rp ${previousUnpaid.toLocaleString("id-ID")}`;
@@ -1518,30 +1835,35 @@ function TaskCard({
       ? "Open Statement sedang On Hold. Setelah issue resolved, task ini akan bisa diselesaikan lagi."
       : null;
 
-  const description = itemDroppingLabel
-    ? itemDroppingLabel
-    : itemReturnLabel
-      ? itemReturnLabel
-      : cekUangMukaLabel
-        ? cekUangMukaLabel
-        : setoranDeficitLabel
-          ? setoranDeficitLabel
-          : storeClosingHoldLabel
-            ? storeClosingHoldLabel
-            : showCarryForward
-              ? (carryForwardDescription[item.type] ?? meta.description)
-              : meta.description;
+  const description = locked
+    ? lockedLabel
+      ? `Selesaikan "${lockedLabel}" terlebih dahulu.`
+      : "Selesaikan task sebelumnya terlebih dahulu."
+    : itemDroppingLabel
+      ? itemDroppingLabel
+      : itemReturnLabel
+        ? itemReturnLabel
+        : cekUangModalLabel
+          ? cekUangModalLabel
+          : setoranDeficitLabel
+            ? setoranDeficitLabel
+            : storeClosingHoldLabel
+              ? storeClosingHoldLabel
+              : showCarryForward
+                ? (carryForwardDescription[item.type] ?? meta.description)
+                : meta.description;
 
   return (
     <Card
       className={cn(
-        "relative overflow-hidden border-border shadow-sm transition-all cursor-pointer active:scale-[0.99]",
+        "relative overflow-hidden border-border shadow-sm transition-all active:scale-[0.99]",
+        locked ? "cursor-not-allowed opacity-60" : "cursor-pointer",
         isTerminal && "opacity-75",
         isRejected && "border-red-200",
         isDiscrepancy && "border-amber-300",
         hasSetoranDeficit && !isDiscrepancy && "border-amber-300",
       )}
-      onClick={() => onOpen(item)}
+      onClick={handleClick}
     >
       <div
         className={cn(
@@ -1582,6 +1904,8 @@ function TaskCard({
                     minute: "2-digit",
                   })}
                 </span>
+              ) : locked ? (
+                <Lock className="mt-0.5 h-4 w-4 flex-shrink-0 text-muted-foreground" />
               ) : (
                 <ChevronRight className="mt-0.5 h-4 w-4 flex-shrink-0 text-muted-foreground" />
               )}
@@ -1622,6 +1946,15 @@ function TaskCard({
                   className="h-[18px] px-1.5 text-[10px]"
                 >
                   Shared
+                </Badge>
+              )}
+
+              {!required && (
+                <Badge
+                  variant="outline"
+                  className="h-[18px] px-1.5 text-[10px] text-slate-500 border-slate-200"
+                >
+                  Optional
                 </Badge>
               )}
 

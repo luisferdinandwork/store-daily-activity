@@ -448,7 +448,7 @@ export async function autoSaveItemReturnById(
     const update: Record<string, unknown> = { updatedAt: new Date() };
     if ('hasReturn' in patch) update.hasReturn = Boolean(patch.hasReturn);
     if ('notes' in patch) update.notes = patch.notes;
-    if (existing.status === 'pending') update.status = 'in_progress';
+    if (existing.status === 'not_started') update.status = 'in_progress';
 
     await db.update(itemReturnTasks).set(update).where(eq(itemReturnTasks.id, existing.id));
 
@@ -508,7 +508,7 @@ export async function materialiseItemReturnTask(
     shiftId: morningShiftId,
     date: dayStart,
     hasReturn: false,
-    status: 'pending',
+    status: 'not_started',
   });
 
   return 'created';
@@ -536,7 +536,7 @@ export async function getOrCreateItemReturnForSchedule(
       shiftId: morningShiftId,
       date: dayStart,
       hasReturn: false,
-      status: 'pending',
+      status: 'not_started',
     })
     .onConflictDoNothing()
     .returning();

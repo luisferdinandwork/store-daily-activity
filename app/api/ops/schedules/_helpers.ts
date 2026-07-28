@@ -20,7 +20,7 @@ export interface OpsActor {
 
 /**
  * OPS schedule access:
- * - admin role: all stores
+ * - it role: all stores
  * - ops role: allowed
  * - employeeType ops_ho: all stores
  * - employeeType ops_area: stores inside their area only
@@ -44,7 +44,7 @@ export async function getOpsActor(userId: string): Promise<OpsActor | null> {
 
   if (!row) return null;
 
-  const isAdmin = row.role === 'admin';
+  const isAdmin = row.role === 'it';
   const isOpsRole = row.role === 'ops';
   const isOpsArea = row.employeeType === 'ops_area';
   const isOpsHO = row.employeeType === 'ops_ho';

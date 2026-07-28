@@ -12,7 +12,7 @@
 // All business logic (autosave, no-geo guard, upload, submit gating) is
 // unchanged from the previous version.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
   AlertCircle, AlertTriangle, Camera, Check, CreditCard,
@@ -27,10 +27,12 @@ import {
   TaskSubmitBar,
   SaveIndicator,
 } from '@/components/employee/tasks';
+import CameraCapture from '@/components/shared/CameraCapture';
+import { uploadTaskPhoto } from '@/lib/tasks-upload';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'discrepancy' | 'verified' | 'rejected';
+type TaskStatus = 'not_started' | 'in_progress' | 'completed' | 'pending' | 'verified' | 'rejected';
 
 type SetoranTaskData = {
   id: string;
@@ -86,13 +88,11 @@ export default function SetoranTaskPage() {
   const params = useParams<{ id: string }>();
   const taskId = String(params?.id ?? '');
 
-  const resiInputRef = useRef<HTMLInputElement | null>(null);
-  const atmInputRef = useRef<HTMLInputElement | null>(null);
-
   const [task, setTask] = useState<SetoranTaskData | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [uploading, setUploading] = useState<'resi' | 'atm_card_selfie' | null>(null);
+  const [cameraTarget, setCameraTarget] = useState<'resi' | 'atm_card_selfie' | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   const [actualReceivedAmount, setActualReceivedAmount] = useState('');
@@ -175,6 +175,7 @@ export default function SetoranTaskPage() {
       scheduleId={task.scheduleId}
       storeId={task.storeId}
       taskStatus={task.status}
+      taskType="setoran"
       requireGeo={false}
     >
       {({ readonly, dis, locked, banner, lockedOverlay }) => (
@@ -206,8 +207,8 @@ export default function SetoranTaskPage() {
           setUploading={setUploading}
           submitError={submitError}
           setSubmitError={setSubmitError}
-          resiInputRef={resiInputRef}
-          atmInputRef={atmInputRef}
+          cameraTarget={cameraTarget}
+          setCameraTarget={setCameraTarget}
           router={router}
         />
       )}
@@ -245,8 +246,8 @@ interface BodyProps {
   setUploading: (v: 'resi' | 'atm_card_selfie' | null) => void;
   submitError: string | null;
   setSubmitError: (v: string | null) => void;
-  resiInputRef: React.MutableRefObject<HTMLInputElement | null>;
-  atmInputRef: React.MutableRefObject<HTMLInputElement | null>;
+  cameraTarget: 'resi' | 'atm_card_selfie' | null;
+  setCameraTarget: (v: 'resi' | 'atm_card_selfie' | null) => void;
   router: ReturnType<typeof useRouter>;
 }
 
@@ -258,7 +259,7 @@ function SetoranPageBody(props: BodyProps) {
     readonly, dis, accessOk, banner, lockedOverlay,
     submitting, setSubmitting, uploading, setUploading,
     submitError, setSubmitError,
-    resiInputRef, atmInputRef, router,
+    cameraTarget, setCameraTarget, router,
   } = props;
 
   // ─── Autosave (no geo) ───────────────────────────────────────────────────
@@ -296,20 +297,14 @@ function SetoranPageBody(props: BodyProps) {
     setUploading(photoType);
     setSubmitError(null);
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('photoType', photoType);
-
-      const res = await fetch('/api/employee/tasks/upload', { method: 'POST', body: formData });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error ?? 'Upload gagal.');
+      const url = await uploadTaskPhoto(file, photoType);
 
       if (photoType === 'resi') {
-        setResiPhoto(data.url);
-        autoSave({ resiPhoto: data.url });
+        setResiPhoto(url);
+        autoSave({ resiPhoto: url });
       } else {
-        setAtmCardSelfiePhoto(data.url);
-        autoSave({ atmCardSelfiePhoto: data.url });
+        setAtmCardSelfiePhoto(url);
+        autoSave({ atmCardSelfiePhoto: url });
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -491,7 +486,7 @@ function SetoranPageBody(props: BodyProps) {
                   photo={resiPhoto}
                   disabled={dis || uploading !== null}
                   loading={uploading === 'resi'}
-                  onClick={() => resiInputRef.current?.click()}
+                  onClick={() => setCameraTarget('resi')}
                   icon={<Receipt className="h-4 w-4" />}
                 />
                 <div className="h-px bg-border" />
@@ -501,34 +496,21 @@ function SetoranPageBody(props: BodyProps) {
                   photo={atmCardSelfiePhoto}
                   disabled={dis || uploading !== null}
                   loading={uploading === 'atm_card_selfie'}
-                  onClick={() => atmInputRef.current?.click()}
+                  onClick={() => setCameraTarget('atm_card_selfie')}
                   icon={<CreditCard className="h-4 w-4" />}
                 />
               </div>
 
-              <input
-                ref={resiInputRef}
-                type="file"
-                accept="image/*"
-                capture="environment"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  e.target.value = '';
-                  if (file) void uploadPhoto(file, 'resi');
+              <CameraCapture
+                open={cameraTarget !== null}
+                onClose={() => setCameraTarget(null)}
+                onCapture={(file) => {
+                  const target = cameraTarget;
+                  setCameraTarget(null);
+                  if (target) void uploadPhoto(file, target);
                 }}
-              />
-              <input
-                ref={atmInputRef}
-                type="file"
-                accept="image/*"
-                capture="environment"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  e.target.value = '';
-                  if (file) void uploadPhoto(file, 'atm_card_selfie');
-                }}
+                title={cameraTarget === 'atm_card_selfie' ? 'Selfie + Kartu ATM' : 'Foto Resi'}
+                facingMode={cameraTarget === 'atm_card_selfie' ? 'user' : 'environment'}
               />
             </div>
 

@@ -7,6 +7,7 @@ import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
 import { briefingTasks } from '@/lib/db/schema';
 import { submitBriefing, type GeoPoint } from '@/lib/db/utils/briefing';
+import { resolveActorScheduleId } from '@/lib/db/utils/shift-lookup';
 
 function parseId(raw: string): number | null {
   const n = Number(raw);
@@ -17,10 +18,14 @@ function toIso(d: Date | null | undefined): string | null {
   return d ? d.toISOString() : null;
 }
 
-function serialize(row: typeof briefingTasks.$inferSelect) {
+function serialize(row: typeof briefingTasks.$inferSelect, actorScheduleId: number) {
   return {
     id: String(row.id),
-    scheduleId: String(row.scheduleId),
+    // Briefing is shared per store/shift/day — send the logged-in
+    // employee's OWN schedule so AccessGuard checks their own attendance,
+    // not whoever happened to create this row first.
+    scheduleId: String(actorScheduleId),
+    originalScheduleId: String(row.scheduleId),
     userId: row.userId,
     storeId: String(row.storeId),
     shiftId: String(row.shiftId),
@@ -63,7 +68,10 @@ export async function GET(
     return NextResponse.json({ success: false, error: 'Briefing task not found.' }, { status: 404 });
   }
 
-  return NextResponse.json({ success: true, task: serialize(task) });
+  const actorScheduleId =
+    (await resolveActorScheduleId(session.user.id, task.storeId, task.shiftId, task.date)) ?? task.scheduleId;
+
+  return NextResponse.json({ success: true, task: serialize(task, actorScheduleId) });
 }
 
 export async function POST(
@@ -106,9 +114,12 @@ export async function POST(
     );
   }
 
+  const actorScheduleId =
+    (await resolveActorScheduleId(session.user.id, task.storeId, task.shiftId, task.date)) ?? task.scheduleId;
+
   const result = await submitBriefing({
     taskId: id,
-    scheduleId: task.scheduleId,
+    scheduleId: actorScheduleId,
     userId: session.user.id,
     storeId: task.storeId,
     shiftId: task.shiftId,
@@ -121,5 +132,5 @@ export async function POST(
     return NextResponse.json({ success: false, error: result.error }, { status: 400 });
   }
 
-  return NextResponse.json({ success: true, task: serialize(result.data) });
+  return NextResponse.json({ success: true, task: serialize(result.data, actorScheduleId) });
 }

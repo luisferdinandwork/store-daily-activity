@@ -17,6 +17,9 @@ import {
   uncappedPct,
   toDateOnly,
   toYearMonth,
+  listStoreRoster,
+  computeMonthlyRosterAllocations,
+  getScheduledUserIdsForStoreDate,
 } from "@/lib/performance/target-utils";
 
 /**
@@ -83,6 +86,57 @@ function getUniqueReceiptCount(entries: SalesEntry[]) {
 
 function sumSales(entries: SalesEntry[]) {
   return entries.reduce((sum, entry) => sum + normalizeSalesAmount(entry), 0);
+}
+
+/** Sums sales per `salesStaff` (users.nik) — the per-employee breakdown used by the contribution ring. */
+function sumSalesByStaff(entries: SalesEntry[]): Map<string, number> {
+  const byStaff = new Map<string, number>();
+  for (const entry of entries) {
+    const staff = entry.salesStaff;
+    if (!staff) continue;
+    byStaff.set(staff, (byStaff.get(staff) ?? 0) + normalizeSalesAmount(entry));
+  }
+  return byStaff;
+}
+
+export interface EmployeeContribution {
+  userId: string;
+  nik: string;
+  name: string;
+  isCurrentUser: boolean;
+  /** Actual sales ÷ store target, capped at this employee's own target-share % — never overstates their "fair share". */
+  contributionPct: number;
+}
+
+/**
+ * Builds the whole store roster's contribution-to-target breakdown for one
+ * period, each employee's slice capped at their own target-allocation share
+ * (e.g. a PIC1 allocated 4% of the store target never shows more than 4%,
+ * even if they actually sold more) — powers the multi-employee ring in
+ * StoreContributionChart.
+ */
+function buildEmployeeContributions(params: {
+  roster: { userId: string; nik: string; name: string }[];
+  actualsByNik: Map<string, number>;
+  targetSharePctByUserId: Map<string, number>;
+  storeTarget: number;
+  currentUserId: string;
+}): EmployeeContribution[] {
+  const { roster, actualsByNik, targetSharePctByUserId, storeTarget, currentUserId } = params;
+
+  return roster.map((member) => {
+    const actualSales = actualsByNik.get(member.nik) ?? 0;
+    const targetSharePct = targetSharePctByUserId.get(member.userId) ?? 0;
+    const actualPctOfTarget = safeContribution(actualSales, storeTarget);
+
+    return {
+      userId: member.userId,
+      nik: member.nik,
+      name: member.name,
+      isCurrentUser: member.userId === currentUserId,
+      contributionPct: Math.min(actualPctOfTarget, targetSharePct),
+    };
+  });
 }
 
 async function getAuthenticatedEmployee(userId: string) {
@@ -238,6 +292,8 @@ export async function getEmployeePerformance(params: {
       employeeDailyContributionPct: 0,
 
       employeeStoreContributionPct: 0,
+      dailyEmployeeContributions: [],
+      monthlyEmployeeContributions: [],
       actualsSource: "unavailable",
       targetSource: "no_store_target",
       employeeMonthlyTargetId: null,
@@ -279,12 +335,18 @@ export async function getEmployeePerformance(params: {
     (entry) => normalizeEntryDate(entry.date) === dateOnly,
   );
 
-  const targets = await resolvePerformanceTargets({
-    userId: employee.id,
-    storeId,
-    yearMonth,
-    date: dateOnly,
-  });
+  const [targets, roster, monthlyRosterAllocations, scheduledTodayUserIds] =
+    await Promise.all([
+      resolvePerformanceTargets({
+        userId: employee.id,
+        storeId,
+        yearMonth,
+        date: dateOnly,
+      }),
+      listStoreRoster({ storeId, yearMonth }),
+      computeMonthlyRosterAllocations({ storeId, yearMonth }),
+      getScheduledUserIdsForStoreDate({ storeId, date: dateOnly }),
+    ]);
 
   const storeMonthlySalesAmount = sumSales(monthlyEntriesForStore);
   const storeMonthlyTransactionCount = getUniqueReceiptCount(
@@ -308,6 +370,42 @@ export async function getEmployeePerformance(params: {
       ? Math.round(monthlySalesAmount / monthlyTransactionCount)
       : 0;
 
+  // ── Whole-roster contribution breakdown, capped per employee at their own
+  // target-allocation share — powers the multi-employee ring chart.
+  const actualsByNikDaily = sumSalesByStaff(todayEntriesForStore);
+  const actualsByNikMonthly = sumSalesByStaff(monthlyEntriesForStore);
+
+  // Percentage is fixed for the whole month now, so the monthly cap applies
+  // as-is; the daily cap zeroes out anyone not scheduled today (they
+  // couldn't have contributed today regardless of their monthly share).
+  const monthlyTargetSharePctByUserId = new Map(
+    [...monthlyRosterAllocations.byUserId.entries()].map(([userId, row]) => [
+      userId,
+      row.percentage,
+    ]),
+  );
+  const dailyTargetSharePctByUserId = new Map(
+    [...monthlyTargetSharePctByUserId.entries()].map(([userId, pct]) => [
+      userId,
+      scheduledTodayUserIds.has(userId) ? pct : 0,
+    ]),
+  );
+
+  const dailyEmployeeContributions = buildEmployeeContributions({
+    roster,
+    actualsByNik: actualsByNikDaily,
+    targetSharePctByUserId: dailyTargetSharePctByUserId,
+    storeTarget: targets.storeDailySalesTarget,
+    currentUserId: employee.id,
+  });
+  const monthlyEmployeeContributions = buildEmployeeContributions({
+    roster,
+    actualsByNik: actualsByNikMonthly,
+    targetSharePctByUserId: monthlyTargetSharePctByUserId,
+    storeTarget: targets.storeMonthlySalesTarget,
+    currentUserId: employee.id,
+  });
+
   return {
     success: true,
 
@@ -327,9 +425,9 @@ export async function getEmployeePerformance(params: {
     targetSource: targets.source,
     employeeMonthlyTargetId: targets.employeeMonthlyTargetId,
     employeeTargetRoleCode: targets.employeeTargetRoleCode,
-    /** Today's slot, e.g. "SA2" — null if not scheduled today. */
+    /** This month's fixed slot, e.g. "SA2" — null if not on the roster. */
     employeeSlotCode: targets.employeeSlotCode,
-    /** Today's effective allocation % of the store's daily target. */
+    /** Fixed monthly allocation % (same value every day this month). */
     dailyAllocationPct: targets.dailyAllocationPct,
     /** Explicit target-share names used by the contribution chart. */
     dailyTargetSharePct: targets.dailyAllocationPct,
@@ -425,6 +523,12 @@ export async function getEmployeePerformance(params: {
       monthlySalesAmount,
       storeMonthlySalesAmount,
     ),
+
+    /** Whole-roster contribution-to-target breakdown, each capped at that
+     *  employee's own target-allocation share. Powers the multi-employee
+     *  ring on the employee dashboard. */
+    dailyEmployeeContributions,
+    monthlyEmployeeContributions,
 
     actualsSource: salesResult.source,
 

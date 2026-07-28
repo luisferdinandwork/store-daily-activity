@@ -1,17 +1,18 @@
 'use client';
-// app/employee/schedule/page.tsx  (PIC 1 — calendar view)
+// app/employee/schedule/page.tsx  (PIC — read-only calendar view)
+//
+// Pure viewing surface: shows the store's monthly schedule. All editing
+// (add/edit entries, Excel import/template) lives in the PIC Panel at /pic.
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useSession }  from 'next-auth/react';
 import { useRouter }   from 'next/navigation';
 import {
-  Sun, Moon, Upload, Loader2, Trash2, RefreshCw,
-  Shield, Calendar, Users, X, ChevronLeft, ChevronRight,
-  CheckCircle2, AlertCircle, ChevronDown, ChevronUp,
-  FileSpreadsheet, Plus, Clock,
+  Loader2, Shield, Calendar, X, ChevronLeft, ChevronRight, RefreshCw,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
+import EmployeeLogoMark from '@/components/employee/EmployeeLogoMark';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -45,25 +46,6 @@ interface MonthlySchedule {
   createdAt: string;
   updatedAt: string;
   entries:   DayEntry[];
-}
-
-interface ImportResult {
-  success:          boolean;
-  schedulesCreated: number;
-  entriesCreated:   number;
-  skipped:          number;
-  errors:           string[];
-  notFound:         string[];
-  month?:           string;
-  sheet?:           string;
-  sections?:        string[];
-  dateErrors?:      string[];
-}
-
-interface EmployeeOption {
-  id:           string;
-  name:         string;
-  employeeType: string | null;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -128,14 +110,12 @@ function buildCalendarGrid(yearMonth: string): (Date | null)[] {
   return grid;
 }
 
-// ─── DayDetailSheet ───────────────────────────────────────────────────────────
+// ─── DayDetailSheet (read-only) ───────────────────────────────────────────────
 
-function DayDetailSheet({ date, entries, shiftOptions, onEdit, onAdd, onClose }: {
+function DayDetailSheet({ date, entries, shiftOptions, onClose }: {
   date:         Date;
   entries:      DayEntry[];
   shiftOptions: ShiftOption[];
-  onEdit:       (e: DayEntry) => void;
-  onAdd:        () => void;
   onClose:      () => void;
 }) {
   const label   = date.toLocaleDateString('en-ID', { weekday: 'long', day: 'numeric', month: 'long' });
@@ -180,29 +160,18 @@ function DayDetailSheet({ date, entries, shiftOptions, onEdit, onAdd, onClose }:
           <div className="flex flex-col items-center gap-3 py-8 text-center px-6">
             <Calendar className="h-8 w-8 text-slate-200" />
             <p className="text-sm text-slate-400">No employees scheduled on this day.</p>
-            <button onClick={onAdd} className="mt-2 flex items-center gap-1.5 rounded-xl bg-indigo-500 px-4 py-2 text-xs font-bold text-white active:scale-[0.98]">
-              <Plus className="h-3.5 w-3.5" /> Add employee
-            </button>
           </div>
         ) : (
           <div className="space-y-1 px-4">
-            <button
-              onClick={onAdd}
-              className="mb-3 flex w-full items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-indigo-200 bg-indigo-50 py-2.5 text-xs font-bold text-indigo-600 active:scale-[0.98]"
-            >
-              <Plus className="h-3.5 w-3.5" /> Add another employee
-            </button>
-
             {working.length > 0 && (
               <div className="mb-2">
                 <p className="mb-1.5 px-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">Working</p>
                 {working.map(entry => {
                   const pal = shiftPalette(entry.shift, false, false);
                   return (
-                    <button
+                    <div
                       key={entry.id}
-                      onClick={() => onEdit(entry)}
-                      className="flex w-full items-center gap-3 rounded-2xl border px-4 py-3 mb-2 text-left transition-all active:scale-[0.98]"
+                      className="flex w-full items-center gap-3 rounded-2xl border px-4 py-3 mb-2"
                       style={{ borderColor: pal.border, background: pal.bg }}
                     >
                       <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-xs font-extrabold" style={{ background: pal.dot + '30', color: pal.text }}>
@@ -218,7 +187,7 @@ function DayDetailSheet({ date, entries, shiftOptions, onEdit, onAdd, onClose }:
                       <div className="rounded-lg px-2 py-0.5 text-[10px] font-bold" style={{ background: pal.dot + '20', color: pal.text }}>
                         {entry.shift ? (shiftLabel[entry.shift] ?? entry.shift) : '—'}
                       </div>
-                    </button>
+                    </div>
                   );
                 })}
               </div>
@@ -228,14 +197,14 @@ function DayDetailSheet({ date, entries, shiftOptions, onEdit, onAdd, onClose }:
               <div className="mb-2">
                 <p className="mb-1.5 px-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">On Leave</p>
                 {leave.map(entry => (
-                  <button key={entry.id} onClick={() => onEdit(entry)} className="flex w-full items-center gap-3 rounded-2xl border border-indigo-100 bg-indigo-50 px-4 py-3 mb-2 text-left active:scale-[0.98]">
+                  <div key={entry.id} className="flex w-full items-center gap-3 rounded-2xl border border-indigo-100 bg-indigo-50 px-4 py-3 mb-2">
                     <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-indigo-100 text-xs font-extrabold text-indigo-600">AL</div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-bold text-slate-800 truncate">{entry.userName}</p>
                       <p className="text-[11px] text-slate-400">{EMP_LABEL[entry.userType ?? ''] ?? '—'}</p>
                     </div>
                     <span className="rounded-lg bg-indigo-100 px-2 py-0.5 text-[10px] font-bold text-indigo-600">Leave</span>
-                  </button>
+                  </div>
                 ))}
               </div>
             )}
@@ -244,14 +213,14 @@ function DayDetailSheet({ date, entries, shiftOptions, onEdit, onAdd, onClose }:
               <div className="mb-2">
                 <p className="mb-1.5 px-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">Day Off</p>
                 {off.map(entry => (
-                  <button key={entry.id} onClick={() => onEdit(entry)} className="flex w-full items-center gap-3 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 mb-2 text-left active:scale-[0.98]">
+                  <div key={entry.id} className="flex w-full items-center gap-3 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 mb-2">
                     <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-xs font-bold text-slate-400">—</div>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-bold text-slate-500 truncate">{entry.userName}</p>
                       <p className="text-[11px] text-slate-400">{EMP_LABEL[entry.userType ?? ''] ?? '—'}</p>
                     </div>
                     <span className="rounded-lg bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-400">Off</span>
-                  </button>
+                  </div>
                 ))}
               </div>
             )}
@@ -259,409 +228,6 @@ function DayDetailSheet({ date, entries, shiftOptions, onEdit, onAdd, onClose }:
         )}
       </div>
       <style>{`@keyframes slideUp{from{transform:translateY(100%);opacity:0}to{transform:translateY(0);opacity:1}}`}</style>
-    </div>
-  );
-}
-
-// ─── ShiftPicker ──────────────────────────────────────────────────────────────
-// Reusable grid used in both Add and Edit modals.
-
-function ShiftPicker({ shiftOptions, selected, onSelect }: {
-  shiftOptions: ShiftOption[];
-  selected:     string;   // shift code | 'off' | 'leave'
-  onSelect:     (v: string) => void;
-}) {
-  // Special non-shift options always appended
-  const specials = [
-    { code: 'off',   label: 'Day Off', sub: 'No work today',   accent: '#64748b', icon: <X          className="h-5 w-5" /> },
-    { code: 'leave', label: 'Leave',   sub: 'AL / CU / Sick',  accent: '#4338ca', icon: <Calendar   className="h-5 w-5" /> },
-  ];
-
-  const allOptions = [
-    ...shiftOptions.map(s => ({
-      code:   s.code,
-      label:  s.label,
-      sub:    [formatTime(s.startTime), formatTime(s.endTime)].filter(Boolean).join(' – ') || '—',
-      accent: s.code === 'morning' ? '#ea580c' : s.code === 'evening' ? '#7c3aed' : s.code === 'full_day' ? '#15803d' : '#475569',
-      icon:   s.code === 'morning'
-        ? <Sun  className="h-5 w-5" />
-        : s.code === 'evening'
-          ? <Moon className="h-5 w-5" />
-          : s.code === 'full_day'
-            ? <Clock className="h-5 w-5" />
-            : <Calendar className="h-5 w-5" />,
-    })),
-    ...specials,
-  ];
-
-  return (
-    <div className="grid grid-cols-2 gap-2.5">
-      {allOptions.map(opt => {
-        const active = selected === opt.code;
-        return (
-          <button
-            key={opt.code}
-            onClick={() => onSelect(opt.code)}
-            className="relative flex flex-col items-start gap-1.5 rounded-2xl border-2 px-4 py-3.5 text-left transition-all active:scale-[0.97]"
-            style={{
-              borderColor: active ? opt.accent : '#e2e8f0',
-              background:  active ? `${opt.accent}12` : '#f8fafc',
-              boxShadow:   active ? `0 0 0 3px ${opt.accent}20` : 'none',
-            }}
-          >
-            <span style={{ color: active ? opt.accent : '#94a3b8' }}>{opt.icon}</span>
-            <div>
-              <p className="text-sm font-bold" style={{ color: active ? opt.accent : '#334155' }}>{opt.label}</p>
-              <p className="text-[10px] text-slate-400">{opt.sub}</p>
-            </div>
-            {active && (
-              <span className="absolute right-2.5 top-2.5 flex h-4 w-4 items-center justify-center rounded-full" style={{ background: opt.accent }}>
-                <CheckCircle2 className="h-3 w-3 text-white" />
-              </span>
-            )}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-// ─── AddEntryModal ────────────────────────────────────────────────────────────
-
-function AddEntryModal({ date, employees, shiftOptions, existingUserIds, onSave, onClose, saving }: {
-  date:            Date;
-  employees:       EmployeeOption[];
-  shiftOptions:    ShiftOption[];
-  existingUserIds: Set<string>;
-  onSave:          (p: { userId: string; shift: string | null; isOff: boolean; isLeave: boolean }) => Promise<void>;
-  onClose:         () => void;
-  saving:          boolean;
-}) {
-  const [selectedUserId, setSelectedUserId] = useState('');
-  const [mode,           setMode]           = useState('morning');
-
-  const label     = date.toLocaleDateString('en-ID', { weekday: 'long', day: 'numeric', month: 'long' });
-  const available = employees.filter(e => !existingUserIds.has(e.id));
-
-  function handleSubmit() {
-    if (!selectedUserId) { toast.error('Please select an employee'); return; }
-    const isOff   = mode === 'off';
-    const isLeave = mode === 'leave';
-    const shift   = isOff || isLeave ? null : mode;
-    onSave({ userId: selectedUserId, shift, isOff, isLeave });
-  }
-
-  return (
-    <div
-      className="fixed inset-0 z-[100] flex items-end justify-center"
-      style={{ background: 'rgba(15,23,42,0.65)', backdropFilter: 'blur(6px)' }}
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-md rounded-t-3xl bg-white px-5 pb-10 pt-4 shadow-2xl"
-        style={{ animation: 'slideUp 0.25s cubic-bezier(0.34,1.56,0.64,1)', maxHeight: '90vh', overflow: 'auto' }}
-        onClick={e => e.stopPropagation()}
-      >
-        <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-slate-200" />
-
-        <div className="mb-5 flex items-start justify-between">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Add Employee</p>
-            <p className="mt-0.5 text-lg font-bold text-slate-900">{label}</p>
-          </div>
-          <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-slate-400">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        {/* Employee picker */}
-        <div className="mb-4">
-          <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Employee</p>
-          {available.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 py-6 text-center">
-              <p className="text-xs text-slate-400">All employees already assigned to this day.</p>
-            </div>
-          ) : (
-            <div className="max-h-48 space-y-1.5 overflow-y-auto">
-              {available.map(emp => {
-                const active = selectedUserId === emp.id;
-                return (
-                  <button
-                    key={emp.id}
-                    onClick={() => setSelectedUserId(emp.id)}
-                    className="flex w-full items-center gap-3 rounded-xl border-2 px-3 py-2.5 text-left transition-all active:scale-[0.98]"
-                    style={{ borderColor: active ? '#6366f1' : '#e2e8f0', background: active ? '#eef2ff' : '#f8fafc' }}
-                  >
-                    <div
-                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xs font-bold"
-                      style={{ background: active ? '#6366f1' : '#e2e8f0', color: active ? 'white' : '#64748b' }}
-                    >
-                      {emp.name.slice(0, 2).toUpperCase()}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-bold text-slate-800 truncate">{emp.name}</p>
-                      <p className="text-[10px] text-slate-400">{EMP_LABEL[emp.employeeType ?? ''] ?? '—'}</p>
-                    </div>
-                    {active && <CheckCircle2 className="h-4 w-4 shrink-0 text-indigo-500" />}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        {/* Shift picker — fetched from DB */}
-        <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Shift</p>
-        <div className="mb-6">
-          {shiftOptions.length === 0
-            ? <div className="flex items-center justify-center py-6"><Loader2 className="h-4 w-4 animate-spin text-slate-400" /></div>
-            : <ShiftPicker shiftOptions={shiftOptions} selected={mode} onSelect={setMode} />
-          }
-        </div>
-
-        <div className="flex gap-2.5">
-          <button onClick={onClose} className="flex h-12 flex-1 items-center justify-center rounded-2xl border border-slate-200 bg-white text-sm font-semibold text-slate-600 active:scale-[0.98]">
-            Cancel
-          </button>
-          <button
-            onClick={handleSubmit}
-            disabled={saving || !selectedUserId || available.length === 0}
-            className="flex h-12 flex-[2] items-center justify-center gap-2 rounded-2xl text-sm font-bold text-white transition-all active:scale-[0.98] disabled:opacity-60"
-            style={{ background: 'linear-gradient(135deg, #4f46e5, #7c3aed)' }}
-          >
-            {saving ? <><Loader2 className="h-4 w-4 animate-spin" />Adding…</> : 'Add to Schedule'}
-          </button>
-        </div>
-      </div>
-      <style>{`@keyframes slideUp{from{transform:translateY(100%);opacity:0}to{transform:translateY(0);opacity:1}}`}</style>
-    </div>
-  );
-}
-
-// ─── EditDayModal ─────────────────────────────────────────────────────────────
-
-function EditDayModal({ entry, shiftOptions, onSave, onClose, saving }: {
-  entry:        DayEntry;
-  shiftOptions: ShiftOption[];
-  onSave:       (p: { shift: string | null; isOff: boolean; isLeave: boolean }) => Promise<void>;
-  onClose:      () => void;
-  saving:       boolean;
-}) {
-  // Derive the initial picker mode from the entry
-  const initialMode = entry.isLeave ? 'leave' : entry.isOff ? 'off' : (entry.shift ?? 'off');
-  const [mode, setMode] = useState(initialMode);
-
-  const dateObj = new Date(entry.date);
-  const label   = dateObj.toLocaleDateString('en-ID', { weekday: 'long', day: 'numeric', month: 'long' });
-
-  function handleSave() {
-    const isOff   = mode === 'off';
-    const isLeave = mode === 'leave';
-    const shift   = isOff || isLeave ? null : mode;
-    onSave({ shift, isOff, isLeave });
-  }
-
-  return (
-    <div
-      className="fixed inset-0 z-99 flex items-end justify-center"
-      style={{ background: 'rgba(15,23,42,0.65)', backdropFilter: 'blur(6px)' }}
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-md rounded-t-3xl bg-white px-5 pb-10 pt-4 shadow-2xl"
-        style={{ animation: 'slideUp 0.25s cubic-bezier(0.34,1.56,0.64,1)', maxHeight: '90vh', overflow: 'auto' }}
-        onClick={e => e.stopPropagation()}
-      >
-        <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-slate-200" />
-
-        <div className="mb-5 flex items-start justify-between">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Edit Shift</p>
-            <p className="mt-0.5 text-lg font-bold text-slate-900">{entry.userName}</p>
-            <p className="text-sm text-slate-500">{label}</p>
-          </div>
-          <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-slate-400">
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        <div className="mb-6">
-          {shiftOptions.length === 0
-            ? <div className="flex items-center justify-center py-6"><Loader2 className="h-4 w-4 animate-spin text-slate-400" /></div>
-            : <ShiftPicker shiftOptions={shiftOptions} selected={mode} onSelect={setMode} />
-          }
-        </div>
-
-        <div className="flex gap-2.5">
-          <button onClick={onClose} className="flex h-12 flex-1 items-center justify-center rounded-2xl border border-slate-200 bg-white text-sm font-semibold text-slate-600 active:scale-[0.98]">
-            Cancel
-          </button>
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="flex h-12 flex-[2] items-center justify-center gap-2 rounded-2xl text-sm font-bold text-white transition-all active:scale-[0.98] disabled:opacity-60"
-            style={{ background: 'linear-gradient(135deg, #4f46e5, #7c3aed)' }}
-          >
-            {saving ? <><Loader2 className="h-4 w-4 animate-spin" />Saving…</> : 'Save Changes'}
-          </button>
-        </div>
-      </div>
-      <style>{`@keyframes slideUp{from{transform:translateY(100%);opacity:0}to{transform:translateY(0);opacity:1}}`}</style>
-    </div>
-  );
-}
-
-// ─── ImportButton ─────────────────────────────────────────────────────────────
-
-function ImportButton({ onImported }: { onImported: () => void }) {
-  const inputRef                    = useRef<HTMLInputElement>(null);
-  const [importing,  setImporting]  = useState(false);
-  const [result,     setResult]     = useState<ImportResult | null>(null);
-  const [showErrors, setShowErrors] = useState(false);
-
-  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = '';
-    setImporting(true);
-    setResult(null);
-    setShowErrors(false);
-
-    try {
-      const form = new FormData();
-      form.append('file', file);
-      const res  = await fetch('/api/pic/schedule/import', { method: 'POST', body: form });
-      const json = (await res.json()) as ImportResult & { error?: string };
-
-      const normalised: ImportResult = {
-        success:          json.success          ?? false,
-        schedulesCreated: json.schedulesCreated ?? 0,
-        entriesCreated:   json.entriesCreated   ?? 0,
-        skipped:          json.skipped          ?? 0,
-        errors:           json.errors           ?? (json.error ? [json.error] : []),
-        notFound:         json.notFound         ?? [],
-        month:            json.month,
-        sheet:            json.sheet,
-        sections:         json.sections,
-        dateErrors:       json.dateErrors,
-      };
-
-      setResult(normalised);
-
-      if (normalised.dateErrors && normalised.dateErrors.length > 0) {
-        setShowErrors(true);
-        toast.error('Excel has wrong dates — please fix and re-upload');
-        return;
-      }
-
-      if (normalised.schedulesCreated > 0 && normalised.errors.length === 0 && normalised.notFound.length === 0) {
-        toast.success(`Imported ${normalised.entriesCreated} entries`);
-        onImported();
-      } else if (normalised.schedulesCreated > 0) {
-        toast.warning('Imported with warnings');
-        setShowErrors(true);
-        onImported();
-      } else if (!normalised.success) {
-        toast.error(normalised.errors[0] ?? 'Import failed');
-        setShowErrors(true);
-      } else {
-        toast.info('No new data imported');
-      }
-    } catch (err) {
-      setResult({ success: false, schedulesCreated: 0, entriesCreated: 0, skipped: 0, errors: [String(err)], notFound: [] });
-      setShowErrors(true);
-      toast.error('Network error');
-    } finally {
-      setImporting(false);
-    }
-  }
-
-  const hasDateErrors = (result?.dateErrors?.length ?? 0) > 0;
-  const hasErrors     = (result?.errors.length     ?? 0) > 0;
-  const hasNotFound   = (result?.notFound.length   ?? 0) > 0;
-  const hasWarnings   = hasDateErrors || hasErrors || hasNotFound;
-  const isFullSuccess = result?.success && !hasWarnings;
-  const isHardFail    = result && !result.success && (hasDateErrors || (result.schedulesCreated === 0));
-
-  return (
-    <div className="space-y-2">
-      <input ref={inputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleFile} />
-      <button
-        type="button"
-        onClick={() => { setResult(null); setShowErrors(false); inputRef.current?.click(); }}
-        disabled={importing}
-        className="flex h-11 w-full items-center justify-center gap-2 rounded-2xl border-2 border-dashed text-sm font-semibold transition-all active:scale-[0.98]"
-        style={{
-          borderColor: importing ? '#e2e8f0' : '#a5b4fc',
-          background:  importing ? '#f8fafc'  : '#eef2ff',
-          color:       importing ? '#94a3b8'  : '#4f46e5',
-        }}
-      >
-        {importing
-          ? <><Loader2 className="h-4 w-4 animate-spin" />Importing…</>
-          : <><Upload className="h-4 w-4" />Import Schedule (.xlsx)</>}
-      </button>
-
-      {result && (
-        <div className={cn('overflow-hidden rounded-2xl border text-sm', isFullSuccess ? 'border-emerald-200 bg-emerald-50' : isHardFail ? 'border-red-200 bg-red-50' : 'border-amber-200 bg-amber-50')}>
-          <div className="flex items-center gap-3 px-4 py-3">
-            {isFullSuccess
-              ? <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
-              : <AlertCircle  className={cn('h-4 w-4 shrink-0', isHardFail ? 'text-red-500' : 'text-amber-500')} />}
-            <div className="flex-1 min-w-0">
-              <p className={cn('font-bold text-sm', isFullSuccess ? 'text-emerald-800' : isHardFail ? 'text-red-800' : 'text-amber-800')}>
-                {isFullSuccess ? 'Import successful' : hasDateErrors ? 'Wrong dates in Excel' : isHardFail ? 'Import failed' : 'Imported with warnings'}
-              </p>
-              <p className="text-[11px] text-slate-500 mt-0.5">
-                {result.entriesCreated} entries · {result.schedulesCreated} store(s)
-                {result.month && ` · ${formatYearMonth(result.month)}`}
-              </p>
-            </div>
-            {hasWarnings && (
-              <button onClick={() => setShowErrors(v => !v)} className={cn('text-[11px] font-semibold flex items-center gap-0.5', isHardFail ? 'text-red-700' : 'text-amber-700')}>
-                Details {showErrors ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-              </button>
-            )}
-            <button onClick={() => setResult(null)} className="text-slate-400"><X className="h-3.5 w-3.5" /></button>
-          </div>
-
-          {hasWarnings && showErrors && (
-            <div className={cn('border-t bg-white/70 px-4 py-3 space-y-3', isHardFail ? 'border-red-200' : 'border-amber-200')}>
-              {hasDateErrors && (
-                <div>
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-red-700 mb-1.5">Wrong dates — please fix your Excel file</p>
-                  <ul className="max-h-40 overflow-y-auto space-y-1">
-                    {result.dateErrors!.map((e, i) => <li key={i} className="text-[11px] leading-relaxed text-red-700">• {e}</li>)}
-                  </ul>
-                </div>
-              )}
-              {hasNotFound && (
-                <div>
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-amber-700 mb-1">Employees not found in system</p>
-                  <div className="flex flex-wrap gap-1">
-                    {result.notFound.map(n => <span key={n} className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">{n}</span>)}
-                  </div>
-                </div>
-              )}
-              {hasErrors && (
-                <div>
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-red-700 mb-1">Errors</p>
-                  <ul className="max-h-28 overflow-y-auto space-y-0.5">
-                    {result.errors.map((e, i) => <li key={i} className="text-[11px] text-red-700 font-mono break-all">{e}</li>)}
-                  </ul>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {!result && !importing && (
-        <p className="flex items-center gap-1.5 px-1 text-[10px] text-slate-400">
-          <FileSpreadsheet className="h-3 w-3 shrink-0" />
-          E = Morning · L = Evening · FD = Full Day · AL/CU = Leave
-        </p>
-      )}
     </div>
   );
 }
@@ -775,25 +341,15 @@ export default function SchedulePage() {
   const [selectedMonth, setSelectedMonth] = useState(currentYearMonth());
   const [schedule,      setSchedule]      = useState<MonthlySchedule | null>(null);
   const [loading,       setLoading]       = useState(false);
-  const [deleting,      setDeleting]      = useState(false);
-  const [creating,      setCreating]      = useState(false);
 
-  // Shifts from DB — fetched once
-  const [shiftOptions,    setShiftOptions]    = useState<ShiftOption[]>([]);
-  const [loadingShifts,   setLoadingShifts]   = useState(false);
+  // Shifts from DB — fetched once, just for labels/legend
+  const [shiftOptions, setShiftOptions] = useState<ShiftOption[]>([]);
 
-  // Employee list
-  const [employees, setEmployees] = useState<EmployeeOption[]>([]);
-
-  // Detail sheet / add / edit state
+  // Detail sheet state
   const [detailDate,    setDetailDate]    = useState<Date | null>(null);
   const [detailEntries, setDetailEntries] = useState<DayEntry[]>([]);
-  const [addingDate,    setAddingDate]    = useState<Date | null>(null);
-  const [addingEntry,   setAddingEntry]   = useState(false);
-  const [editEntry,     setEditEntry]     = useState<DayEntry | null>(null);
-  const [savingEntry,   setSavingEntry]   = useState(false);
 
-  const isPic1 = employeeType === 'pic_1';
+  const isPic1 = employeeType === 'pic_1' || employeeType === 'pic_2';
 
   // ── Auth guard ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -805,21 +361,10 @@ export default function SchedulePage() {
   // ── Fetch shifts from DB ───────────────────────────────────────────────────
   useEffect(() => {
     if (!isPic1) return;
-    setLoadingShifts(true);
     fetch('/api/pic/schedule/shifts')
       .then(r => r.json())
       .then(j => { if (j.success) setShiftOptions(j.shifts ?? []); })
-      .catch(() => toast.error('Failed to load shift options'))
-      .finally(() => setLoadingShifts(false));
-  }, [isPic1]);
-
-  // ── Fetch employees ────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!isPic1) return;
-    fetch('/api/pic/schedule/employees')
-      .then(r => r.json())
-      .then(j => { if (j.success) setEmployees(j.employees ?? []); })
-      .catch(() => toast.error('Failed to load employees'));
+      .catch(() => toast.error('Failed to load shift options'));
   }, [isPic1]);
 
   // ── Load schedule ──────────────────────────────────────────────────────────
@@ -853,74 +398,6 @@ export default function SchedulePage() {
     setDetailEntries(entries);
   }
 
-  function handleEditFromSheet(entry: DayEntry) { setEditEntry(entry); }
-
-  function handleAddFromSheet() {
-    if (!detailDate) return;
-    setAddingDate(detailDate);
-    setDetailDate(null);
-  }
-
-  async function handleCreate() {
-    if (schedule) { toast.error('A schedule already exists for this month'); return; }
-    if (!confirm(`Create an empty schedule for ${formatYearMonth(selectedMonth)}?`)) return;
-    setCreating(true);
-    try {
-      const res  = await fetch('/api/pic/schedule/monthly', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ yearMonth: selectedMonth }) });
-      const json = await res.json();
-      if (!json.success) throw new Error(json.error);
-      toast.success('Empty schedule created — tap days to assign shifts');
-      loadSchedule(selectedMonth);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Create failed');
-    } finally { setCreating(false); }
-  }
-
-  async function handleDelete() {
-    if (!confirm(`Delete the ${formatYearMonth(selectedMonth)} schedule? Attended days are preserved.`)) return;
-    setDeleting(true);
-    try {
-      const res  = await fetch(`/api/pic/schedule/monthly?yearMonth=${selectedMonth}`, { method: 'DELETE' });
-      const json = await res.json();
-      if (!json.success) throw new Error(json.error);
-      toast.success(json.lockedCount > 0 ? `Cleared — ${json.lockedCount} attended day(s) preserved` : 'Schedule deleted');
-      loadSchedule(selectedMonth);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Delete failed');
-    } finally { setDeleting(false); }
-  }
-
-  async function handleSaveEntry(patch: { shift: string | null; isOff: boolean; isLeave: boolean }) {
-    if (!editEntry) return;
-    setSavingEntry(true);
-    try {
-      const res  = await fetch(`/api/pic/schedule/entry/${editEntry.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) });
-      const json = await res.json();
-      if (!json.success) throw new Error(json.error);
-      toast.success('Day updated');
-      setEditEntry(null);
-      setDetailDate(null);
-      loadSchedule(selectedMonth);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Update failed');
-    } finally { setSavingEntry(false); }
-  }
-
-  async function handleSaveNewEntry(payload: { userId: string; shift: string | null; isOff: boolean; isLeave: boolean }) {
-    if (!addingDate) return;
-    setAddingEntry(true);
-    try {
-      const res  = await fetch('/api/pic/schedule/entry', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, date: isoDate(addingDate) }) });
-      const json = await res.json();
-      if (!json.success) throw new Error(json.error || `HTTP ${res.status}`);
-      toast.success('Employee added to this day');
-      setAddingDate(null);
-      loadSchedule(selectedMonth);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Add failed');
-    } finally { setAddingEntry(false); }
-  }
-
   // ── Auth loading ───────────────────────────────────────────────────────────
   if (authStatus === 'loading' || !session) return (
     <div className="flex min-h-screen items-center justify-center bg-white">
@@ -932,7 +409,7 @@ export default function SchedulePage() {
     <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-white p-8 text-center">
       <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-red-50"><Shield className="h-8 w-8 text-red-500" /></div>
       <p className="text-base font-bold text-slate-800">Access Restricted</p>
-      <p className="text-sm text-slate-500">Only PIC 1 can manage store schedules.</p>
+      <p className="text-sm text-slate-500">Only PIC can view the store schedule here.</p>
     </div>
   );
 
@@ -951,24 +428,13 @@ export default function SchedulePage() {
 
         <div className="relative flex items-start justify-between">
           <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-300">PIC 1 · Schedules</p>
+            <EmployeeLogoMark variant="white" className="mb-4 w-28" />
+            <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-300">PIC · Schedule</p>
             <h1 className="mt-0.5 text-2xl font-bold text-white">Staff Schedule</h1>
           </div>
-          <div className="flex gap-2 mt-1">
-            <button onClick={() => loadSchedule(selectedMonth)} className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white/70 hover:bg-white/20">
-              <RefreshCw className="h-4 w-4" />
-            </button>
-            {!schedule && (
-              <button onClick={handleCreate} disabled={creating} className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white/70 hover:bg-emerald-400/30 disabled:opacity-40" title="Create empty schedule">
-                {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-              </button>
-            )}
-            {schedule && (
-              <button onClick={handleDelete} disabled={deleting} className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white/70 hover:bg-red-400/30 disabled:opacity-40">
-                {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-              </button>
-            )}
-          </div>
+          <button onClick={() => loadSchedule(selectedMonth)} className="mt-1 flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white/70 hover:bg-white/20">
+            <RefreshCw className="h-4 w-4" />
+          </button>
         </div>
 
         {/* Month navigator */}
@@ -988,8 +454,6 @@ export default function SchedulePage() {
 
       {/* Body */}
       <div className="flex-1 space-y-3 p-4 pb-24">
-
-        <ImportButton onImported={() => loadSchedule(selectedMonth)} />
 
         {loading && <div className="flex items-center justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-indigo-400" /></div>}
 
@@ -1024,7 +488,7 @@ export default function SchedulePage() {
                 <span className="h-2 w-2 rounded-full" style={{ background: '#818cf8' }} />
                 Leave
               </div>
-              <span className="ml-auto text-[10px] text-slate-400">Tap a day to edit</span>
+              <span className="ml-auto text-[10px] text-slate-400">Tap a day for details</span>
             </div>
 
             <CalendarGrid schedule={schedule} yearMonth={selectedMonth} onDayPress={handleDayPress} />
@@ -1040,43 +504,19 @@ export default function SchedulePage() {
             </div>
             <div>
               <p className="text-sm font-bold text-slate-700">No schedule for {formatYearMonth(selectedMonth)}</p>
-              <p className="mt-1 text-xs text-slate-400">Import an Excel file above, or tap the + button in the header to create an empty schedule.</p>
+              <p className="mt-1 text-xs text-slate-400">Go to the PIC Panel to import or set up this month.</p>
             </div>
           </div>
         )}
       </div>
 
-      {/* Modals */}
-      {addingDate && (
-        <AddEntryModal
-          date={addingDate}
-          employees={employees}
-          shiftOptions={shiftOptions}
-          existingUserIds={new Set((schedule?.entries ?? []).filter(e => toLocalDateKey(e.date) === isoDate(addingDate)).map(e => e.userId))}
-          onSave={handleSaveNewEntry}
-          onClose={() => setAddingDate(null)}
-          saving={addingEntry}
-        />
-      )}
-
-      {detailDate && !editEntry && !addingDate && (
+      {/* Detail sheet */}
+      {detailDate && (
         <DayDetailSheet
           date={detailDate}
           entries={detailEntries}
           shiftOptions={shiftOptions}
-          onEdit={handleEditFromSheet}
-          onAdd={handleAddFromSheet}
           onClose={() => setDetailDate(null)}
-        />
-      )}
-
-      {editEntry && (
-        <EditDayModal
-          entry={editEntry}
-          shiftOptions={shiftOptions}
-          onSave={handleSaveEntry}
-          onClose={() => setEditEntry(null)}
-          saving={savingEntry}
         />
       )}
     </div>

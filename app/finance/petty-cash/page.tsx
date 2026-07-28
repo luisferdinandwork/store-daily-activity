@@ -13,10 +13,12 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
 } from 'react';
+import { toast } from 'sonner';
 import {
   AlertTriangle,
   CheckCheck,
@@ -203,18 +205,50 @@ function StoreRow({
   expanded,
   onToggle,
   onReload,
+  refillRequest,
+  onRefillActionDone,
 }: {
   store: PettyCashStoreRow;
   month: string;
   expanded: boolean;
   onToggle: () => void;
   onReload: () => void;
+  refillRequest: RefillRequestRow | null;
+  onRefillActionDone: () => void;
 }) {
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [verifyingId, setVerifyingId]   = useState<number | null>(null);
   const [verifyingAll, setVerifyingAll] = useState(false);
   const [refilling, setRefilling]       = useState(false);
   const [actionError, setActionError]   = useState<string | null>(null);
+
+  const [rejectingRequest, setRejectingRequest] = useState(false);
+  const [rejectionReason, setRejectionReason]   = useState('');
+  const [refillActionBusy, setRefillActionBusy] = useState<'approve' | 'reject' | null>(null);
+
+  async function actOnRefillRequest(action: 'approve' | 'reject') {
+    if (!refillRequest) return;
+    setRefillActionBusy(action);
+    setActionError(null);
+    try {
+      const res = await fetch(`/api/finance/petty-cash/refill-requests/${refillRequest.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, rejectionReason: action === 'reject' ? rejectionReason || undefined : undefined }),
+      });
+      const body = await res.json();
+      if (!res.ok || !body.success) throw new Error(body.error ?? 'Action failed');
+      toast.success(action === 'approve' ? 'Refill approved.' : 'Refill request rejected.');
+      setRejectingRequest(false);
+      setRejectionReason('');
+      onRefillActionDone();
+      onReload();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Action failed');
+    } finally {
+      setRefillActionBusy(null);
+    }
+  }
 
   const status = storeStatus(store);
   const meta   = STATUS_META[status];
@@ -342,7 +376,26 @@ function StoreRow({
 
         {/* Actions */}
         <div className="flex items-center justify-end gap-2" onClick={(e) => e.stopPropagation()}>
-          {status === 'needs-review' && (
+          {refillRequest ? (
+            <>
+              <button
+                onClick={() => actOnRefillRequest('approve')}
+                disabled={refillActionBusy !== null}
+                title={`Requested by ${refillRequest.requestedByName ?? 'PIC'}${refillRequest.notes ? `: "${refillRequest.notes}"` : ''}`}
+                className="flex h-7 items-center gap-1.5 rounded-lg bg-indigo-600 px-3 text-[11px] font-bold text-white transition hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {refillActionBusy === 'approve' ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCheck className="h-3 w-3" />}
+                Approve refill
+              </button>
+              <button
+                onClick={() => setRejectingRequest((v) => !v)}
+                disabled={refillActionBusy !== null}
+                className="flex h-7 items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-2.5 text-[11px] font-bold text-rose-600 transition hover:bg-rose-50 disabled:opacity-50"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </>
+          ) : status === 'needs-review' ? (
             <button
               onClick={() => verify()}
               disabled={verifyingAll}
@@ -351,8 +404,7 @@ function StoreRow({
               {verifyingAll ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCheck className="h-3 w-3" />}
               Verify all
             </button>
-          )}
-          {status === 'ready-to-refill' && (
+          ) : status === 'ready-to-refill' ? (
             <button
               onClick={refill}
               disabled={refilling}
@@ -361,14 +413,36 @@ function StoreRow({
               {refilling ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wallet className="h-3 w-3" />}
               Refill
             </button>
-          )}
-          {status === 'refilled' && (
+          ) : status === 'refilled' ? (
             <span className="text-[10px] font-semibold text-slate-400">
               +{idr(store.refillAmount ?? 0)} refilled
             </span>
-          )}
+          ) : null}
         </div>
       </div>
+
+      {/* Reject-reason inline row */}
+      {rejectingRequest && refillRequest && (
+        <div
+          className="flex items-center gap-2 border-b border-rose-100 bg-rose-50/60 px-14 py-2.5"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <input
+            type="text"
+            value={rejectionReason}
+            onChange={(e) => setRejectionReason(e.target.value)}
+            placeholder="Reason for rejecting this refill request (optional)"
+            className="h-8 flex-1 rounded-lg border border-rose-200 bg-white px-3 text-xs focus:outline-none focus:ring-2 focus:ring-rose-500/30"
+          />
+          <button
+            onClick={() => actOnRefillRequest('reject')}
+            disabled={refillActionBusy !== null}
+            className="h-8 shrink-0 rounded-lg bg-rose-600 px-3 text-xs font-bold text-white hover:bg-rose-700 disabled:opacity-50"
+          >
+            {refillActionBusy === 'reject' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Confirm reject'}
+          </button>
+        </div>
+      )}
 
       {/* Error toast */}
       {actionError && (
@@ -451,6 +525,23 @@ function SummaryStrip({ stores }: { stores: PettyCashStoreRow[] }) {
   );
 }
 
+// ─── Refill requests (PIC-initiated mid-month top-ups) ───────────────────────
+//
+// Surfaced per-store in StoreRow's existing Action column (see below) rather
+// than a standalone list — keeps everything about one store in one row even
+// when many stores have requests at once.
+
+interface RefillRequestRow {
+  id: number;
+  storeId: number;
+  storeName: string;
+  yearMonth: string;
+  status: 'pending' | 'approved' | 'rejected';
+  requestedAt: string;
+  requestedByName: string | null;
+  notes: string | null;
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function FinancePettyCashPage() {
@@ -461,6 +552,7 @@ export default function FinancePettyCashPage() {
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [search, setSearch]         = useState('');
   const [areaFilter, setAreaFilter] = useState('');
+  const [refillRequests, setRefillRequests] = useState<RefillRequestRow[]>([]);
 
   const load = useCallback(async (m: string) => {
     setLoading(true);
@@ -483,7 +575,26 @@ export default function FinancePettyCashPage() {
     }
   }, []);
 
+  const loadRefillRequests = useCallback(async () => {
+    try {
+      const res = await fetch('/api/finance/petty-cash/refill-requests', { cache: 'no-store' });
+      const body = await res.json();
+      if (body.success) setRefillRequests(body.requests);
+    } catch {
+      // Non-critical — the Action column just won't show a refill-request badge yet.
+    }
+  }, []);
+
   useEffect(() => { void load(month); }, [load, month]);
+  useEffect(() => { void loadRefillRequests(); }, [loadRefillRequests]);
+
+  const refillRequestByStore = useMemo(() => {
+    const map = new Map<number, RefillRequestRow>();
+    for (const r of refillRequests) {
+      if (r.status === 'pending') map.set(r.storeId, r);
+    }
+    return map;
+  }, [refillRequests]);
 
   // Derived list
   const areas = [...new Set(allStores.map((s) => s.areaName))].sort();
@@ -652,6 +763,8 @@ export default function FinancePettyCashPage() {
                 expanded={expandedIds.has(store.storeId)}
                 onToggle={() => toggle(store.storeId)}
                 onReload={() => load(month)}
+                refillRequest={refillRequestByStore.get(store.storeId) ?? null}
+                onRefillActionDone={loadRefillRequests}
               />
             ))}
           </div>

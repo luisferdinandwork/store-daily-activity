@@ -33,13 +33,15 @@ export async function getOpsActor(userId: string): Promise<OpsActor | null> {
 
   if (!row) return null;
 
-  if (row.role !== 'ops') return null;
+  const isIt = row.role === 'it';
 
-  const isOpsHo = row.employeeType === 'ops_ho';
-  const isOpsArea = row.employeeType === 'ops_area';
+  if (row.role !== 'ops' && !isIt) return null;
+
+  const isOpsHo = isIt || row.employeeType === 'ops_ho';
+  const isOpsArea = !isIt && row.employeeType === 'ops_area';
 
   /**
-   * Only allow these 2 OPS types.
+   * Only allow these 2 OPS types (IT counts as HO-equivalent).
    * This prevents generic ops users or wrongly configured users
    * from accessing the OPS task dashboard.
    */

@@ -32,10 +32,10 @@ import {
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type StoreSummary = {
-  pending: number;
+  notStarted: number;
   inProgress: number;
   completed: number;
-  discrepancy: number;
+  pending: number;
   verified: number;
   rejected: number;
   total: number;
@@ -76,10 +76,10 @@ type DetailResponse = {
 type RangeSummaryRow = {
   storeId: string;
   date: string;
-  pending: number;
+  notStarted: number;
   inProgress: number;
   completed: number;
-  discrepancy: number;
+  pending: number;
   verified?: number;
   rejected?: number;
   total: number;
@@ -179,7 +179,7 @@ function progressRingColor(rate: number): string {
 }
 
 function emptySummary(): StoreSummary {
-  return { pending: 0, inProgress: 0, completed: 0, discrepancy: 0, verified: 0, rejected: 0, total: 0, completionRate: 0 };
+  return { notStarted: 0, inProgress: 0, completed: 0, pending: 0, verified: 0, rejected: 0, total: 0, completionRate: 0 };
 }
 
 // ─── Shared atoms ─────────────────────────────────────────────────────────────
@@ -215,19 +215,19 @@ function ProgressBar({ pct, className }: { pct: number; className?: string }) {
 
 function TaskRow({ task, onSelect }: { task: FlatTask; onSelect: () => void }) {
   const label    = TASK_LABELS[task.type] ?? task.type.replaceAll('_', ' ');
-  const status   = task.status ?? 'pending';
+  const status   = task.status ?? 'not_started';
   const TaskIcon = TASK_ICONS[task.type] ?? ClipboardList;
 
   const accentClass =
     status === 'completed'   ? 'bg-emerald-500' :
     status === 'in_progress' ? 'bg-indigo-500' :
-    status === 'discrepancy' ? 'bg-amber-400 animate-pulse' :
+    status === 'pending'     ? 'bg-amber-400 animate-pulse' :
     'bg-amber-300';
 
   const iconBg =
     status === 'completed'   ? 'bg-emerald-50 text-emerald-600' :
     status === 'in_progress' ? 'bg-indigo-50 text-indigo-600' :
-    status === 'discrepancy' ? 'bg-amber-50 text-amber-600' :
+    status === 'pending'     ? 'bg-amber-50 text-amber-600' :
     'bg-amber-50 text-amber-500';
 
   return (
@@ -277,23 +277,23 @@ function GroomingGroupCard({ tasks, onSelectEmployee }: {
   const totalEmployees = tasks.length;
   const doneEmployees  = tasks.filter(t => t.status === 'completed').length;
   const activeCount    = tasks.filter(t => t.status === 'in_progress').length;
-  const issueCount     = tasks.filter(t => t.status === 'discrepancy').length;
+  const issueCount     = tasks.filter(t => t.status === 'pending').length;
 
   const aggregateStatus: TaskStatus =
     doneEmployees === totalEmployees ? 'completed' :
     activeCount > 0 ? 'in_progress' :
-    issueCount > 0  ? 'discrepancy' : 'pending';
+    issueCount > 0  ? 'pending' : 'not_started';
 
   const accentClass =
     aggregateStatus === 'completed'   ? 'bg-emerald-500' :
     aggregateStatus === 'in_progress' ? 'bg-indigo-500' :
-    aggregateStatus === 'discrepancy' ? 'bg-amber-400 animate-pulse' :
+    aggregateStatus === 'pending'     ? 'bg-amber-400 animate-pulse' :
     'bg-amber-300';
 
   const iconBg =
     aggregateStatus === 'completed'   ? 'bg-emerald-50 text-emerald-600' :
     aggregateStatus === 'in_progress' ? 'bg-indigo-50 text-indigo-600' :
-    aggregateStatus === 'discrepancy' ? 'bg-amber-50 text-amber-600' :
+    aggregateStatus === 'pending'     ? 'bg-amber-50 text-amber-600' :
     'bg-amber-50 text-amber-500';
 
   return (
@@ -321,7 +321,7 @@ function GroomingGroupCard({ tasks, onSelectEmployee }: {
               <span className="text-[10px] text-slate-400">
                 {activeCount > 0 && <span className="text-indigo-500">{activeCount} aktif</span>}
                 {activeCount > 0 && issueCount > 0 && ' · '}
-                {issueCount > 0 && <span className="text-amber-600">{issueCount} discrepancy</span>}
+                {issueCount > 0 && <span className="text-amber-600">{issueCount} pending</span>}
               </span>
             </div>
           </div>
@@ -334,7 +334,7 @@ function GroomingGroupCard({ tasks, onSelectEmployee }: {
         <div className="border-t border-slate-100 bg-slate-50/70 p-3">
           <div className="space-y-2">
             {tasks.map(task => {
-              const empStatus = task.status ?? 'pending';
+              const empStatus = task.status ?? 'not_started';
               return (
                 <button key={task.id} type="button" onClick={() => onSelectEmployee?.(taskKey(task))}
                   className="flex w-full items-center gap-3 overflow-hidden rounded-lg border border-slate-200 bg-white px-3 py-2 text-left transition hover:bg-slate-50"
@@ -343,7 +343,7 @@ function GroomingGroupCard({ tasks, onSelectEmployee }: {
                     'flex h-7 w-7 shrink-0 items-center justify-center rounded-md',
                     empStatus === 'completed'   ? 'bg-emerald-50 text-emerald-600' :
                     empStatus === 'in_progress' ? 'bg-indigo-50 text-indigo-600' :
-                    empStatus === 'discrepancy' ? 'bg-amber-50 text-amber-600' :
+                    empStatus === 'pending'     ? 'bg-amber-50 text-amber-600' :
                     'bg-amber-50 text-amber-500',
                   )}>
                     <User className="h-3.5 w-3.5" />
@@ -374,8 +374,8 @@ function SummaryBreakdown({ summary }: { summary: StoreSummary }) {
   const rows = [
     { label: 'Completed',   value: summary.completed,   cls: 'text-emerald-600' },
     { label: 'In Progress', value: summary.inProgress,  cls: 'text-indigo-600'  },
-    { label: 'Pending',     value: summary.pending,     cls: 'text-amber-500'   },
-    { label: 'Discrepancy', value: summary.discrepancy, cls: 'text-amber-600'   },
+    { label: 'Not Started', value: summary.notStarted,  cls: 'text-amber-500'   },
+    { label: 'Pending',     value: summary.pending,     cls: 'text-amber-600'   },
   ];
   return (
     <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -432,7 +432,7 @@ function StoreProgressCard({ store, active, onOpen, rangeSummary, loadingRange }
             <p className="mt-1 text-[10px] text-slate-400">
               {rangeSummary.completed}/{rangeSummary.total} task selesai
               {rangeSummary.inProgress > 0 && <span className="ml-1.5 text-indigo-500">{rangeSummary.inProgress} aktif</span>}
-              {rangeSummary.discrepancy > 0 && <span className="ml-1.5 text-amber-500">{rangeSummary.discrepancy} discrepancy</span>}
+              {rangeSummary.pending > 0 && <span className="ml-1.5 text-amber-500">{rangeSummary.pending} pending</span>}
             </p>
           </>
         ) : null}
@@ -470,12 +470,12 @@ function AreaStoreGroup({
         const src = rangeOverviewMap?.[s.id] ?? s.summary;
         acc.completed   += src.completed;
         acc.total       += src.total;
-        acc.pending     += src.pending;
+        acc.notStarted  += src.notStarted;
         acc.inProgress  += src.inProgress;
-        acc.discrepancy += src.discrepancy;
+        acc.pending     += src.pending;
         return acc;
       },
-      { completed: 0, total: 0, pending: 0, inProgress: 0, discrepancy: 0 },
+      { completed: 0, total: 0, notStarted: 0, inProgress: 0, pending: 0 },
     );
     const rate = sum.total > 0 ? Math.round((sum.completed / sum.total) * 100) : 0;
     return { ...sum, rate };
@@ -559,11 +559,11 @@ function AreaGridPanel({ areaName, stores, onSelectStore }: {
         acc.completed   += s.summary.completed;
         acc.total       += s.summary.total;
         acc.inProgress  += s.summary.inProgress;
-        acc.discrepancy += s.summary.discrepancy;
         acc.pending     += s.summary.pending;
+        acc.notStarted  += s.summary.notStarted;
         return acc;
       },
-      { completed: 0, total: 0, inProgress: 0, discrepancy: 0, pending: 0 },
+      { completed: 0, total: 0, inProgress: 0, pending: 0, notStarted: 0 },
     );
     return { ...sum, rate: sum.total > 0 ? Math.round((sum.completed / sum.total) * 100) : 0 };
   }, [stores]);
@@ -581,7 +581,7 @@ function AreaGridPanel({ areaName, stores, onSelectStore }: {
               <span className="text-emerald-600">{aggregate.completed} task selesai</span>
               <span className="text-slate-300"> · </span>
               <span className={aggregate.inProgress > 0 ? 'text-indigo-600' : 'text-slate-400'}>{aggregate.inProgress} aktif</span>
-              {aggregate.discrepancy > 0 && <><span className="text-slate-300"> · </span><span className="text-amber-600">{aggregate.discrepancy} discrepancy</span></>}
+              {aggregate.pending > 0 && <><span className="text-slate-300"> · </span><span className="text-amber-600">{aggregate.pending} pending</span></>}
             </p>
           </div>
         </div>
@@ -593,7 +593,7 @@ function AreaGridPanel({ areaName, stores, onSelectStore }: {
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {stores.map(store => {
               const rate     = store.summary.completionRate;
-              const hasIssue = store.summary.discrepancy > 0;
+              const hasIssue = store.summary.pending > 0;
               return (
                 <button key={store.id} type="button" onClick={() => onSelectStore(store.id)}
                   className="group flex flex-col gap-2 rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-indigo-300 hover:shadow-sm"
@@ -615,7 +615,7 @@ function AreaGridPanel({ areaName, stores, onSelectStore }: {
                       {store.summary.inProgress > 0 && <span className="text-indigo-500">{store.summary.inProgress} aktif</span>}
                       {hasIssue && (
                         <span className="flex items-center gap-0.5 text-amber-600">
-                          <AlertTriangle className="h-3 w-3" />{store.summary.discrepancy}
+                          <AlertTriangle className="h-3 w-3" />{store.summary.pending}
                         </span>
                       )}
                     </div>
@@ -648,11 +648,11 @@ function RangeOverviewPanel({ stores, rangeOverviewMap, loading, periodLabel, ar
         acc.completed   += src.completed;
         acc.total       += src.total;
         acc.inProgress  += src.inProgress;
-        acc.discrepancy += src.discrepancy;
         acc.pending     += src.pending;
+        acc.notStarted  += src.notStarted;
         return acc;
       },
-      { completed: 0, total: 0, inProgress: 0, discrepancy: 0, pending: 0 },
+      { completed: 0, total: 0, inProgress: 0, pending: 0, notStarted: 0 },
     );
     return { ...sum, rate: sum.total > 0 ? Math.round((sum.completed / sum.total) * 100) : 0 };
   }, [stores, rangeOverviewMap]);
@@ -680,7 +680,7 @@ function RangeOverviewPanel({ stores, rangeOverviewMap, loading, periodLabel, ar
                 <span className="text-emerald-600">{aggregate.completed} task selesai</span>
                 <span className="text-slate-300"> · </span>
                 <span className={aggregate.inProgress > 0 ? 'text-indigo-600' : 'text-slate-400'}>{aggregate.inProgress} aktif</span>
-                {aggregate.discrepancy > 0 && <><span className="text-slate-300"> · </span><span className="text-amber-600">{aggregate.discrepancy} discrepancy</span></>}
+                {aggregate.pending > 0 && <><span className="text-slate-300"> · </span><span className="text-amber-600">{aggregate.pending} pending</span></>}
               </p>
             )}
           </div>
@@ -699,7 +699,7 @@ function RangeOverviewPanel({ stores, rangeOverviewMap, loading, periodLabel, ar
             {sorted.map(store => {
               const summary  = rangeOverviewMap[store.id];
               const rate     = summary?.completionRate ?? 0;
-              const hasIssue = (summary?.discrepancy ?? 0) > 0;
+              const hasIssue = (summary?.pending ?? 0) > 0;
               return (
                 <button key={store.id} type="button" onClick={() => onSelectStore(store.id)}
                   className="group flex flex-col gap-2 rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-indigo-300 hover:shadow-sm"
@@ -725,7 +725,7 @@ function RangeOverviewPanel({ stores, rangeOverviewMap, loading, periodLabel, ar
                       {(summary?.inProgress ?? 0) > 0 && <span className="text-indigo-500">{summary!.inProgress} aktif</span>}
                       {hasIssue && (
                         <span className="flex items-center gap-0.5 text-amber-600">
-                          <AlertTriangle className="h-3 w-3" />{summary!.discrepancy}
+                          <AlertTriangle className="h-3 w-3" />{summary!.pending}
                         </span>
                       )}
                     </div>
@@ -801,7 +801,7 @@ function StoreRangeMatrixPanel({ storeName, storeAddress, rows, loading, periodL
                     <div className="flex items-baseline justify-between gap-2">
                       <p className="text-xs font-semibold text-slate-500">
                         {row.aggregate.completed}/{row.aggregate.total} task selesai
-                        {row.aggregate.discrepancy > 0 && <span className="text-amber-600"> · {row.aggregate.discrepancy} discrepancy</span>}
+                        {row.aggregate.pending > 0 && <span className="text-amber-600"> · {row.aggregate.pending} pending</span>}
                       </p>
                       <span className={cn('shrink-0 text-sm font-black tabular-nums', progressTextClass(rate))}>{rate}%</span>
                     </div>
@@ -881,7 +881,7 @@ function StoreDetailPanel({ detail, loading, emptyMessage, onSelectTask }: {
               <span className="text-emerald-600">{detail.summary.completed} selesai</span>
               <span className="text-slate-300"> · </span>
               <span className={detail.summary.inProgress > 0 ? 'text-indigo-600' : 'text-slate-400'}>{detail.summary.inProgress} aktif</span>
-              {detail.summary.discrepancy > 0 && <><span className="text-slate-300"> · </span><span className="text-amber-600">{detail.summary.discrepancy} discrepancy</span></>}
+              {detail.summary.pending > 0 && <><span className="text-slate-300"> · </span><span className="text-amber-600">{detail.summary.pending} pending</span></>}
             </p>
           </div>
         </div>
@@ -1036,10 +1036,10 @@ export default function OpsTaskProgressPage() {
     const map = new Map<string, StoreSummary>();
     for (const row of rangeData.summaries) {
       const existing = map.get(row.storeId) ?? emptySummary();
-      existing.pending     += row.pending;
+      existing.notStarted  += row.notStarted;
       existing.inProgress  += row.inProgress;
       existing.completed   += row.completed;
-      existing.discrepancy += row.discrepancy;
+      existing.pending     += row.pending;
       existing.verified    += row.verified ?? 0;
       existing.rejected    += row.rejected ?? 0;
       existing.total       += row.total;
@@ -1059,8 +1059,8 @@ export default function OpsTaskProgressPage() {
       const completed   = row?.completed   ?? 0;
       const total       = row?.total       ?? 0;
       const inProgress  = row?.inProgress  ?? 0;
+      const notStarted  = row?.notStarted  ?? 0;
       const pending     = row?.pending     ?? 0;
-      const discrepancy = row?.discrepancy ?? 0;
       const verified    = row?.verified    ?? 0;
       const rejected    = row?.rejected    ?? 0;
       return {
@@ -1069,7 +1069,7 @@ export default function OpsTaskProgressPage() {
         dayLabel: String(d.getDate()),
         isToday: isSameDay(d, today),
         aggregate: {
-          completed, total, inProgress, pending, discrepancy,
+          completed, total, inProgress, notStarted, pending,
           verified, rejected,
           completionRate: total > 0 ? Math.round((completed / total) * 100) : 0,
         },

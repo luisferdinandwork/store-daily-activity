@@ -10,6 +10,8 @@ import { ReactNode, useState } from 'react';
 // For this client layout, auth is handled by middleware / page-level guards.
 import OpsSidebar from '@/components/ops/layout/OpsSidebar';
 import OpsNavbar  from '@/components/ops/layout/OpsNavbar';
+import NotificationBell from '@/components/ops/layout/NotificationBell';
+import RoleSwitchBanner from '@/components/shared/RoleSwitchBanner';
 import { useSession } from 'next-auth/react';
 
 export default function OpsLayout({ children }: { children: ReactNode }) {
@@ -23,9 +25,11 @@ export default function OpsLayout({ children }: { children: ReactNode }) {
         storeName={(session?.user as any)?.storeName}
       />
       <div className="flex flex-1 flex-col overflow-hidden">
+        <RoleSwitchBanner />
         <OpsNavbar
           collapsed={collapsed}
           onToggle={() => setCollapsed((v) => !v)}
+          right={<NotificationBell />}
         />
         <main className="flex-1 overflow-y-auto">
           {children}

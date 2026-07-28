@@ -288,7 +288,7 @@ export async function getOrCreateCekBinForSchedule(
           totalStoreBins: activeBins.length,
           minimumBinsToCheck: min,
           checkedBinsCount: 0,
-          status: 'pending',
+          status: 'not_started',
           updatedAt: new Date(),
         })
         .onConflictDoNothing()
@@ -300,7 +300,7 @@ export async function getOrCreateCekBinForSchedule(
     if (!task) return { success: false, error: 'Gagal membuat task Cek BIN.' };
 
     // Keep minimum updated while task is not completed yet.
-    if (task.status === 'pending' || task.status === 'in_progress') {
+    if (task.status === 'not_started' || task.status === 'in_progress') {
       const [updated] = await db
         .update(cekBinTasks)
         .set({
@@ -421,7 +421,7 @@ export async function autoSaveCekBin(
       saved.push('selectedBins');
     }
 
-    if (task.status === 'pending') update.status = 'in_progress';
+    if (task.status === 'not_started') update.status = 'in_progress';
 
     await db.update(cekBinTasks).set(update).where(eq(cekBinTasks.id, task.id));
 

@@ -14,7 +14,8 @@ import {
   Store, DoorClosed, WalletCards, PackageCheck, MonitorCheck, Megaphone,
   UsersRound, ReceiptText, FileText, ListChecks, Shirt,
   ClipboardList, Layers, Plus, Pencil, Loader2, X,
-  ChevronRight, Search, CheckCircle2, Shield, ListPlus, Trash2,
+  ChevronRight, ChevronUp, ChevronDown, Search, Shield, ListPlus, Trash2,
+  ListOrdered,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -95,10 +96,11 @@ function ShiftListCard({ shift, active, onOpen }: {
 
 // ─── Shift detail panel (right column) ────────────────────────────────────────
 
-function ShiftDetailPanel({ shift, onEdit, onManageTasks }: {
+function ShiftDetailPanel({ shift, onEdit, onManageTasks, onManageOrder }: {
   shift: ShiftWithTasks | null;
   onEdit: () => void;
   onManageTasks: () => void;
+  onManageOrder: () => void;
 }) {
   if (!shift) {
     return (
@@ -115,49 +117,10 @@ function ShiftDetailPanel({ shift, onEdit, onManageTasks }: {
   }
 
   const pal = paletteOf(shift.accent);
+  // shift.tasks arrives pre-sorted by sortOrder — that IS the execution order,
+  // so it's shown as a single numbered sequence rather than split by required/optional.
   const active = shift.tasks.filter(t => t.isActive);
-  const required = active.filter(t => t.isRequired);
-  const optional = active.filter(t => !t.isRequired);
   const range = shiftTimeRange(shift.startTime, shift.endTime);
-
-  const Group = ({ title, items }: { title: string; items: typeof active }) => {
-    if (items.length === 0) return null;
-    return (
-      <div>
-        <p className="mb-1.5 px-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">
-          {title} · {items.length}
-        </p>
-        <div className="space-y-2">
-          {items.map(t => {
-            const tp = paletteOf(t.accent);
-            return (
-              <div
-                key={t.id}
-                className="flex items-center gap-3 rounded-2xl border px-4 py-3"
-                style={{ borderColor: tp.border, background: tp.bg }}
-              >
-                <div
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl"
-                  style={{ background: tp.dot + '30', color: tp.text }}
-                >
-                  <TaskGlyph name={t.icon} className="h-4 w-4" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-bold text-slate-800">{t.label}</p>
-                  <p className="text-[11px] text-slate-400 font-mono">{t.code}</p>
-                </div>
-                {t.isPersonal && (
-                  <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-bold text-violet-600">
-                    Personal
-                  </span>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    );
-  };
 
   return (
     <article className="flex max-h-[calc(100vh-9rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -218,6 +181,13 @@ function ShiftDetailPanel({ shift, onEdit, onManageTasks }: {
           >
             <ListPlus className="h-3.5 w-3.5" /> Manage tasks
           </button>
+          <button
+            type="button"
+            onClick={onManageOrder}
+            className="flex h-9 items-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3 text-xs font-bold text-amber-700 hover:bg-amber-100"
+          >
+            <ListOrdered className="h-3.5 w-3.5" /> Fixed order
+          </button>
         </div>
       </div>
 
@@ -236,13 +206,117 @@ function ShiftDetailPanel({ shift, onEdit, onManageTasks }: {
             </button>
           </div>
         ) : (
-          <div className="space-y-5">
-            <Group title="Required" items={required} />
-            <Group title="Optional" items={optional} />
-          </div>
+          <TaskOrderPreview active={active} />
         )}
       </div>
     </article>
+  );
+}
+
+// ─── Task order preview ────────────────────────────────────────────────────────
+// Mirrors what employees actually see: sequenced tasks as a numbered chain,
+// everything else ("Anytime") below it, unordered/unrestricted.
+
+function TaskOrderPreview({ active }: { active: ShiftWithTasks['tasks'] }) {
+  const sequenced = active.filter(t => t.isSequenced);
+  const anytime = active.filter(t => !t.isSequenced);
+
+  return (
+    <div className="space-y-5">
+      {sequenced.length > 0 && (
+        <div className="space-y-2">
+          <p className="mb-1.5 flex items-center gap-1.5 px-1 text-[10px] font-bold uppercase tracking-widest text-amber-600">
+            <ListOrdered className="h-3 w-3" /> Fixed order · {sequenced.length}
+          </p>
+          {sequenced.map((t, i) => {
+            const tp = paletteOf(t.accent);
+            return (
+              <div
+                key={t.id}
+                className="flex items-center gap-3 rounded-2xl border px-4 py-3"
+                style={{ borderColor: tp.border, background: tp.bg }}
+              >
+                <span
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white text-[11px] font-bold"
+                  style={{ color: tp.text }}
+                >
+                  {i + 1}
+                </span>
+                <div
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl"
+                  style={{ background: tp.dot + '30', color: tp.text }}
+                >
+                  <TaskGlyph name={t.icon} className="h-4 w-4" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-bold text-slate-800">{t.label}</p>
+                  <p className="text-[11px] text-slate-400 font-mono">{t.code}</p>
+                </div>
+                <span
+                  className={cn(
+                    'shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold',
+                    t.isRequired ? 'bg-indigo-50 text-indigo-600' : 'bg-slate-100 text-slate-500',
+                  )}
+                >
+                  {t.isRequired ? 'Required' : 'Optional'}
+                </span>
+                {t.isPersonal && (
+                  <span className="shrink-0 rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-bold text-violet-600">
+                    Personal
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="space-y-2">
+        <p className="mb-1.5 px-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+          Anytime · {anytime.length}
+        </p>
+        {anytime.length === 0 ? (
+          <p className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-center text-xs text-slate-400">
+            Every task in this shift is in the fixed order.
+          </p>
+        ) : (
+          anytime.map(t => {
+            const tp = paletteOf(t.accent);
+            return (
+              <div
+                key={t.id}
+                className="flex items-center gap-3 rounded-2xl border px-4 py-3"
+                style={{ borderColor: tp.border, background: tp.bg }}
+              >
+                <div
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl"
+                  style={{ background: tp.dot + '30', color: tp.text }}
+                >
+                  <TaskGlyph name={t.icon} className="h-4 w-4" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-bold text-slate-800">{t.label}</p>
+                  <p className="text-[11px] text-slate-400 font-mono">{t.code}</p>
+                </div>
+                <span
+                  className={cn(
+                    'shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold',
+                    t.isRequired ? 'bg-indigo-50 text-indigo-600' : 'bg-slate-100 text-slate-500',
+                  )}
+                >
+                  {t.isRequired ? 'Required' : 'Optional'}
+                </span>
+                {t.isPersonal && (
+                  <span className="shrink-0 rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-bold text-violet-600">
+                    Personal
+                  </span>
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -508,93 +582,180 @@ function ShiftForm({ initial, mode, saving, onSubmit, onCancel }: {
   );
 }
 
-// ─── Task multi-select (manage tasks) ─────────────────────────────────────────
+// ─── Task multi-select + reorder (manage tasks) ────────────────────────────────
+// Selected tasks are shown as a single numbered sequence — this order is used
+// as a tiebreaker for the "Anytime" tasks on the employee list, and as the
+// starting order when a task is added to the Fixed Order (see the separate
+// "Fixed order" tab, which is where the actual required step-by-step chain is
+// managed). Use the up/down arrows to reorder and the required/optional
+// toggle to mark whether a task is mandatory for this shift at all.
 
-type Selection = Record<number, { isRequired: boolean }>;
+type SelectionItem = { taskDefinitionId: number; isRequired: boolean; isSequenced: boolean };
 
 function TaskMultiSelect({ catalog, initial, saving, onSubmit, onCancel }: {
   catalog: TaskDefinitionDTO[];
-  initial: Selection;
+  initial: SelectionItem[];
   saving: boolean;
-  onSubmit: (sel: Selection) => void;
+  onSubmit: (sel: SelectionItem[]) => void;
   onCancel: () => void;
 }) {
-  const [sel, setSel] = useState<Selection>(initial);
+  const [sel, setSel] = useState<SelectionItem[]>(initial);
+  const catalogById = useMemo(() => new Map(catalog.map(t => [t.id, t])), [catalog]);
 
-  const toggle = (id: number) =>
+  const selectedIds = new Set(sel.map(s => s.taskDefinitionId));
+  const available = catalog.filter(t => !selectedIds.has(t.id));
+
+  const add = (id: number) =>
+    setSel(prev => [...prev, { taskDefinitionId: id, isRequired: true, isSequenced: false }]);
+  const remove = (id: number) => setSel(prev => prev.filter(s => s.taskDefinitionId !== id));
+  const setRequired = (id: number, isRequired: boolean) =>
+    setSel(prev => prev.map(s => (s.taskDefinitionId === id ? { ...s, isRequired } : s)));
+  const move = (index: number, dir: -1 | 1) =>
     setSel(prev => {
-      const next = { ...prev };
-      if (next[id]) delete next[id];
-      else next[id] = { isRequired: true };
+      const target = index + dir;
+      if (target < 0 || target >= prev.length) return prev;
+      const next = [...prev];
+      [next[index], next[target]] = [next[target], next[index]];
       return next;
     });
 
-  const setRequired = (id: number, isRequired: boolean) =>
-    setSel(prev => (prev[id] ? { ...prev, [id]: { isRequired } } : prev));
-
-  const count = Object.keys(sel).length;
-
   return (
     <>
-      <div className="flex-1 overflow-y-auto px-5 py-4">
-        <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">
-          Tasks · {count} selected
-        </p>
-        <div className="space-y-1.5">
-          {catalog.map(t => {
-            const picked = !!sel[t.id];
-            const tp = paletteOf(t.accent);
-            return (
-              <div
-                key={t.id}
-                className="rounded-xl border-2 transition-all"
-                style={{ borderColor: picked ? tp.dot : '#e2e8f0', background: picked ? tp.bg : '#f8fafc' }}
-              >
-                <button
-                  type="button"
-                  onClick={() => toggle(t.id)}
-                  className="flex w-full items-center gap-3 px-3 py-2.5 text-left"
-                >
-                  <div
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"
-                    style={{ background: picked ? tp.dot + '30' : '#e2e8f0', color: picked ? tp.text : '#64748b' }}
-                  >
-                    <TaskGlyph name={t.icon} className="h-4 w-4" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-bold text-slate-800">{t.label}</p>
-                    <p className="truncate text-[10px] text-slate-400 font-mono">{t.code}</p>
-                  </div>
-                  {picked
-                    ? <CheckCircle2 className="h-5 w-5 shrink-0" style={{ color: tp.text }} />
-                    : <span className="h-5 w-5 shrink-0 rounded-full border-2 border-slate-300" />}
-                </button>
+      <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+        <div>
+          <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+            Task order · {sel.length} selected
+          </p>
 
-                {picked && (
-                  <div className="flex gap-1.5 border-t px-3 py-2" style={{ borderColor: tp.border }}>
-                    {(['required', 'optional'] as const).map(opt => {
-                      const on = opt === 'required' ? sel[t.id].isRequired : !sel[t.id].isRequired;
-                      return (
-                        <button
-                          key={opt}
-                          type="button"
-                          onClick={() => setRequired(t.id, opt === 'required')}
-                          className={cn(
-                            'rounded-lg px-2.5 py-1 text-[11px] font-bold capitalize transition',
-                            on ? 'bg-white shadow-sm' : 'text-slate-400 hover:text-slate-600',
-                          )}
-                          style={on ? { color: tp.text } : undefined}
+          {sel.length === 0 ? (
+            <p className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-center text-xs text-slate-400">
+              No tasks yet. Add from the list below.
+            </p>
+          ) : (
+            <div className="space-y-1.5">
+              {sel.map((s, i) => {
+                const t = catalogById.get(s.taskDefinitionId);
+                if (!t) return null;
+                const tp = paletteOf(t.accent);
+                return (
+                  <div
+                    key={s.taskDefinitionId}
+                    className="rounded-xl border-2"
+                    style={{ borderColor: tp.dot, background: tp.bg }}
+                  >
+                    <div className="flex items-center gap-2 px-3 py-2.5">
+                      <span
+                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white text-[11px] font-bold"
+                        style={{ color: tp.text }}
+                      >
+                        {i + 1}
+                      </span>
+                      <div
+                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"
+                        style={{ background: tp.dot + '30', color: tp.text }}
+                      >
+                        <TaskGlyph name={t.icon} className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-bold text-slate-800">{t.label}</p>
+                        <p className="truncate text-[10px] text-slate-400 font-mono">{t.code}</p>
+                      </div>
+                      {s.isSequenced && (
+                        <span
+                          className="flex shrink-0 items-center gap-1 rounded-full bg-amber-50 px-1.5 py-1 text-[10px] font-bold text-amber-600"
+                          title="In the Fixed Order — manage its step position from the Fixed order tab."
                         >
-                          {opt}
+                          <ListOrdered className="h-3 w-3" />
+                        </span>
+                      )}
+                      <div className="flex shrink-0 flex-col">
+                        <button
+                          type="button"
+                          disabled={i === 0}
+                          onClick={() => move(i, -1)}
+                          aria-label="Move up"
+                          className="flex h-5 w-6 items-center justify-center text-slate-400 transition hover:text-slate-700 disabled:opacity-20"
+                        >
+                          <ChevronUp className="h-3.5 w-3.5" />
                         </button>
-                      );
-                    })}
+                        <button
+                          type="button"
+                          disabled={i === sel.length - 1}
+                          onClick={() => move(i, 1)}
+                          aria-label="Move down"
+                          className="flex h-5 w-6 items-center justify-center text-slate-400 transition hover:text-slate-700 disabled:opacity-20"
+                        >
+                          <ChevronDown className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => remove(s.taskDefinitionId)}
+                        aria-label="Remove task"
+                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-white hover:text-rose-500"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+
+                    <div className="flex gap-1.5 border-t px-3 py-2" style={{ borderColor: tp.border }}>
+                      {(['required', 'optional'] as const).map(opt => {
+                        const on = opt === 'required' ? s.isRequired : !s.isRequired;
+                        return (
+                          <button
+                            key={opt}
+                            type="button"
+                            onClick={() => setRequired(s.taskDefinitionId, opt === 'required')}
+                            className={cn(
+                              'rounded-lg px-2.5 py-1 text-[11px] font-bold capitalize transition',
+                              on ? 'bg-white shadow-sm' : 'text-slate-400 hover:text-slate-600',
+                            )}
+                            style={on ? { color: tp.text } : undefined}
+                          >
+                            {opt}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
-                )}
-              </div>
-            );
-          })}
+                );
+              })}
+            </div>
+          )}
         </div>
+
+        {available.length > 0 && (
+          <div>
+            <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+              Available · {available.length}
+            </p>
+            <div className="space-y-1.5">
+              {available.map(t => {
+                const tp = paletteOf(t.accent);
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => add(t.id)}
+                    className="flex w-full items-center gap-3 rounded-xl border border-dashed border-slate-200 px-3 py-2.5 text-left transition hover:border-solid hover:bg-slate-50"
+                  >
+                    <div
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"
+                      style={{ background: tp.dot + '20', color: tp.text }}
+                    >
+                      <TaskGlyph name={t.icon} className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-bold text-slate-800">{t.label}</p>
+                      <p className="truncate text-[10px] text-slate-400 font-mono">{t.code}</p>
+                    </div>
+                    <Plus className="h-4 w-4 shrink-0 text-slate-300" />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="flex gap-2.5 border-t border-slate-100 px-5 py-4">
@@ -608,7 +769,212 @@ function TaskMultiSelect({ catalog, initial, saving, onSubmit, onCancel }: {
           className="flex h-12 flex-[2] items-center justify-center gap-2 rounded-2xl text-sm font-bold text-white transition-all disabled:opacity-60"
           style={{ background: 'linear-gradient(135deg, #4f46e5, #7c3aed)' }}
         >
-          {saving ? <><Loader2 className="h-4 w-4 animate-spin" />Saving…</> : `Save ${count} task${count !== 1 ? 's' : ''}`}
+          {saving ? <><Loader2 className="h-4 w-4 animate-spin" />Saving…</> : `Save ${sel.length} task${sel.length !== 1 ? 's' : ''}`}
+        </button>
+      </div>
+    </>
+  );
+}
+
+// ─── Fixed order manager ───────────────────────────────────────────────────────
+// Separate from "Manage tasks": this only decides WHICH already-assigned tasks
+// are part of the shift's required, gated sequence, and in what order. Tasks
+// left in "Anytime" are never locked for employees, regardless of position.
+// To add/remove a task from the shift entirely, use "Manage tasks" instead.
+
+type FixedOrderPayloadItem = {
+  taskDefinitionId: number;
+  isRequired: boolean;
+  isSequenced: boolean;
+  sortOrder: number;
+};
+
+function FixedOrderManager({ shift, saving, onSubmit, onCancel }: {
+  shift: ShiftWithTasks;
+  saving: boolean;
+  onSubmit: (items: FixedOrderPayloadItem[]) => void;
+  onCancel: () => void;
+}) {
+  const assigned = shift.tasks; // pre-sorted by sortOrder
+  const assignedById = useMemo(
+    () => new Map(assigned.map(t => [t.taskDefinitionId, t])),
+    [assigned],
+  );
+
+  const [sequencedIds, setSequencedIds] = useState<number[]>(() =>
+    assigned.filter(t => t.isSequenced).map(t => t.taskDefinitionId),
+  );
+
+  const sequencedSet = new Set(sequencedIds);
+  const anytimeAssigned = assigned.filter(t => !sequencedSet.has(t.taskDefinitionId));
+
+  const addToOrder = (id: number) => setSequencedIds(prev => [...prev, id]);
+  const removeFromOrder = (id: number) => setSequencedIds(prev => prev.filter(x => x !== id));
+  const move = (index: number, dir: -1 | 1) =>
+    setSequencedIds(prev => {
+      const target = index + dir;
+      if (target < 0 || target >= prev.length) return prev;
+      const next = [...prev];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+
+  const handleSave = () => {
+    const remaining = assigned.filter(t => !sequencedSet.has(t.taskDefinitionId));
+
+    const payload: FixedOrderPayloadItem[] = [
+      ...sequencedIds.map((id, i) => {
+        const existing = assignedById.get(id)!;
+        return {
+          taskDefinitionId: id,
+          isRequired: existing.isRequired,
+          isSequenced: true,
+          sortOrder: (i + 1) * 10,
+        };
+      }),
+      ...remaining.map((t, i) => ({
+        taskDefinitionId: t.taskDefinitionId,
+        isRequired: t.isRequired,
+        isSequenced: false,
+        sortOrder: 1000 + (i + 1) * 10,
+      })),
+    ];
+
+    onSubmit(payload);
+  };
+
+  return (
+    <>
+      <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+        <p className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2.5 text-[11px] text-amber-700">
+          Employees must complete these steps in order — each one unlocks only after the step before it is
+          completed/verified. Tasks left in <span className="font-semibold">Anytime</span> are never locked,
+          regardless of position.
+        </p>
+
+        <div>
+          <p className="mb-2 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest text-amber-600">
+            <ListOrdered className="h-3 w-3" /> Fixed order · {sequencedIds.length} step
+            {sequencedIds.length !== 1 ? 's' : ''}
+          </p>
+
+          {sequencedIds.length === 0 ? (
+            <p className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-center text-xs text-slate-400">
+              No steps yet. Add tasks from Anytime below.
+            </p>
+          ) : (
+            <div className="space-y-1.5">
+              {sequencedIds.map((id, i) => {
+                const t = assignedById.get(id);
+                if (!t) return null;
+                const tp = paletteOf(t.accent);
+                return (
+                  <div
+                    key={id}
+                    className="flex items-center gap-2 rounded-xl border-2 px-3 py-2.5"
+                    style={{ borderColor: tp.dot, background: tp.bg }}
+                  >
+                    <span
+                      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white text-[11px] font-bold"
+                      style={{ color: tp.text }}
+                    >
+                      {i + 1}
+                    </span>
+                    <div
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"
+                      style={{ background: tp.dot + '30', color: tp.text }}
+                    >
+                      <TaskGlyph name={t.icon} className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-bold text-slate-800">{t.label}</p>
+                      <p className="truncate text-[10px] text-slate-400 font-mono">{t.code}</p>
+                    </div>
+                    <div className="flex shrink-0 flex-col">
+                      <button
+                        type="button"
+                        disabled={i === 0}
+                        onClick={() => move(i, -1)}
+                        aria-label="Move up"
+                        className="flex h-5 w-6 items-center justify-center text-slate-400 transition hover:text-slate-700 disabled:opacity-20"
+                      >
+                        <ChevronUp className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={i === sequencedIds.length - 1}
+                        onClick={() => move(i, 1)}
+                        aria-label="Move down"
+                        className="flex h-5 w-6 items-center justify-center text-slate-400 transition hover:text-slate-700 disabled:opacity-20"
+                      >
+                        <ChevronDown className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => removeFromOrder(id)}
+                      aria-label="Remove from fixed order"
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-white hover:text-rose-500"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div>
+          <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+            Anytime · {anytimeAssigned.length}
+          </p>
+          {anytimeAssigned.length === 0 ? (
+            <p className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-center text-xs text-slate-400">
+              Every assigned task is in the fixed order.
+            </p>
+          ) : (
+            <div className="space-y-1.5">
+              {anytimeAssigned.map(t => {
+                const tp = paletteOf(t.accent);
+                return (
+                  <button
+                    key={t.taskDefinitionId}
+                    type="button"
+                    onClick={() => addToOrder(t.taskDefinitionId)}
+                    className="flex w-full items-center gap-3 rounded-xl border border-dashed border-slate-200 px-3 py-2.5 text-left transition hover:border-solid hover:bg-slate-50"
+                  >
+                    <div
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"
+                      style={{ background: tp.dot + '20', color: tp.text }}
+                    >
+                      <TaskGlyph name={t.icon} className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-bold text-slate-800">{t.label}</p>
+                      <p className="truncate text-[10px] text-slate-400 font-mono">{t.code}</p>
+                    </div>
+                    <Plus className="h-4 w-4 shrink-0 text-slate-300" />
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="flex gap-2.5 border-t border-slate-100 px-5 py-4">
+        <button onClick={onCancel}
+          className="flex h-12 flex-1 items-center justify-center rounded-2xl border border-slate-200 bg-white text-sm font-semibold text-slate-600 hover:bg-slate-50">
+          Cancel
+        </button>
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="flex h-12 flex-[2] items-center justify-center gap-2 rounded-2xl text-sm font-bold text-white transition-all disabled:opacity-60"
+          style={{ background: 'linear-gradient(135deg, #d97706, #f59e0b)' }}
+        >
+          {saving ? <><Loader2 className="h-4 w-4 animate-spin" />Saving…</> : 'Save fixed order'}
         </button>
       </div>
     </>
@@ -617,10 +983,10 @@ function TaskMultiSelect({ catalog, initial, saving, onSubmit, onCancel }: {
 
 // ─── Right-side drawer ────────────────────────────────────────────────────────
 
-type DrawerView = 'create' | 'edit' | 'tasks';
+type DrawerView = 'create' | 'edit' | 'tasks' | 'order';
 
 function ShiftDrawer({
-  view, shift, catalog, saving, onClose, onCreate, onEdit, onSaveTasks,
+  view, shift, catalog, saving, onClose, onCreate, onEdit, onSaveTasks, onSaveOrder,
 }: {
   view: DrawerView;
   shift: ShiftWithTasks | null;
@@ -629,9 +995,14 @@ function ShiftDrawer({
   onClose: () => void;
   onCreate: (v: ShiftFormValue, taskIds: number[]) => void;
   onEdit: (v: ShiftFormValue) => void;
-  onSaveTasks: (sel: Selection) => void;
+  onSaveTasks: (sel: SelectionItem[]) => void;
+  onSaveOrder: (items: FixedOrderPayloadItem[]) => void;
 }) {
-  const eyebrow = view === 'create' ? 'New Shift' : view === 'edit' ? 'Edit Shift' : 'Manage Tasks';
+  const eyebrow =
+    view === 'create' ? 'New Shift'
+      : view === 'edit' ? 'Edit Shift'
+      : view === 'order' ? 'Fixed Order'
+      : 'Manage Tasks';
   const title = view === 'create' ? 'Create a shift' : (shift?.label ?? 'Shift');
 
   const blankForm: ShiftFormValue = {
@@ -651,8 +1022,15 @@ function ShiftDrawer({
   // For 'create' we let the form also drive the task selection in a second step,
   // but to keep things simple here the create flow assigns tasks afterwards via
   // "Manage tasks". So create() submits with an empty task list.
-  const initialSelection: Selection = {};
-  if (shift) for (const t of shift.tasks) initialSelection[t.taskDefinitionId] = { isRequired: t.isRequired };
+  // shift.tasks arrives pre-sorted by sortOrder, so this preserves the current order.
+  // isSequenced is carried through unedited — this tab isn't where it's managed.
+  const initialSelection: SelectionItem[] = shift
+    ? shift.tasks.map(t => ({
+        taskDefinitionId: t.taskDefinitionId,
+        isRequired: t.isRequired,
+        isSequenced: t.isSequenced,
+      }))
+    : [];
 
   return (
     <div className="fixed inset-0 z-50 flex" onClick={onClose}>
@@ -709,6 +1087,14 @@ function ShiftDrawer({
               onCancel={onClose}
             />
           )}
+          {view === 'order' && shift && (
+            <FixedOrderManager
+              shift={shift}
+              saving={saving}
+              onSubmit={onSaveOrder}
+              onCancel={onClose}
+            />
+          )}
         </div>
       </div>
       <style>{`
@@ -725,7 +1111,7 @@ export default function OpsShiftTasksPage() {
   const { data: session, status: authStatus } = useSession();
   const router = useRouter();
   const role = (session?.user as any)?.role as string | undefined;
-  const isOps = role === 'ops' || role === 'admin';
+  const isIt = role === 'it';
 
   const [shifts, setShifts]       = useState<ShiftWithTasks[]>([]);
   const [catalog, setCatalog]     = useState<TaskDefinitionDTO[]>([]);
@@ -739,8 +1125,8 @@ export default function OpsShiftTasksPage() {
   useEffect(() => {
     if (authStatus === 'loading') return;
     if (!session) { router.replace('/login'); return; }
-    if (!isOps)   router.replace('/');
-  }, [authStatus, session, isOps, router]);
+    if (!isIt)    router.replace('/');
+  }, [authStatus, session, isIt, router]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -757,7 +1143,7 @@ export default function OpsShiftTasksPage() {
     }
   }, []);
 
-  useEffect(() => { if (isOps) void load(); }, [isOps, load]);
+  useEffect(() => { if (isIt) void load(); }, [isIt, load]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -829,13 +1215,18 @@ export default function OpsShiftTasksPage() {
     } finally { setSaving(false); }
   }
 
-  async function handleSaveTasks(sel: Selection) {
+  async function handleSaveTasks(sel: SelectionItem[]) {
     if (!selected) return;
     setSaving(true);
     try {
-      const tasks = Object.entries(sel).map(([id, meta]) => ({
-        taskDefinitionId: Number(id),
-        isRequired: meta.isRequired,
+      // Array order IS the task sequence — the API assigns sortOrder from
+      // each item's position when an explicit value isn't sent. isSequenced
+      // is echoed through unedited (this tab doesn't manage it) so it isn't
+      // silently reset — this route replaces the shift's whole task set.
+      const tasks = sel.map(s => ({
+        taskDefinitionId: s.taskDefinitionId,
+        isRequired: s.isRequired,
+        isSequenced: s.isSequenced,
       }));
       const res = await fetch(`/api/ops/shift-tasks/shift/${selected.id}/tasks`, {
         method: 'PUT',
@@ -852,6 +1243,25 @@ export default function OpsShiftTasksPage() {
     } finally { setSaving(false); }
   }
 
+  async function handleSaveOrder(items: FixedOrderPayloadItem[]) {
+    if (!selected) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/ops/shift-tasks/shift/${selected.id}/tasks`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tasks: items }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error ?? 'Update failed');
+      toast.success('Fixed order updated');
+      setDrawerView(null);
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Update failed');
+    } finally { setSaving(false); }
+  }
+
   // ── Guards ──────────────────────────────────────────────────────────────────
 
   if (authStatus === 'loading' || !session) return (
@@ -860,11 +1270,11 @@ export default function OpsShiftTasksPage() {
     </div>
   );
 
-  if (!isOps) return (
+  if (!isIt) return (
     <div className="flex min-h-full flex-col items-center justify-center gap-4 bg-slate-50 p-8 text-center">
       <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-red-50"><Shield className="h-8 w-8 text-red-500" /></div>
       <p className="text-base font-bold text-slate-800">Access Restricted</p>
-      <p className="text-sm text-slate-500">Only OPS users can manage shift tasks.</p>
+      <p className="text-sm text-slate-500">Only IT can manage shift tasks.</p>
     </div>
   );
 
@@ -939,6 +1349,7 @@ export default function OpsShiftTasksPage() {
               shift={selected}
               onEdit={() => setDrawerView('edit')}
               onManageTasks={() => setDrawerView('tasks')}
+              onManageOrder={() => setDrawerView('order')}
             />
           </div>
         </div>
@@ -954,6 +1365,7 @@ export default function OpsShiftTasksPage() {
           onCreate={(v) => handleCreate(v)}
           onEdit={handleEdit}
           onSaveTasks={handleSaveTasks}
+          onSaveOrder={handleSaveOrder}
         />
       )}
     </div>

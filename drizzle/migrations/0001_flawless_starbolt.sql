@@ -1,0 +1,4 @@
+ALTER TABLE "users" ADD COLUMN "switched_from_role_id" integer;--> statement-breakpoint
+ALTER TABLE "users" ADD COLUMN "switched_from_employee_type_id" integer;--> statement-breakpoint
+ALTER TABLE "users" ADD CONSTRAINT "users_switched_from_role_id_user_roles_id_fk" FOREIGN KEY ("switched_from_role_id") REFERENCES "public"."user_roles"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "users" ADD CONSTRAINT "users_switched_from_employee_type_id_employee_types_id_fk" FOREIGN KEY ("switched_from_employee_type_id") REFERENCES "public"."employee_types"("id") ON DELETE no action ON UPDATE no action;

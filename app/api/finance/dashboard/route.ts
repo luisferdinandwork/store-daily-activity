@@ -76,7 +76,7 @@ export async function GET(): Promise<NextResponse<FinanceDashboardResponse>> {
         .where(
           and(
             inArray(issues.id, ids),
-            inArray(issues.status, ['reported', 'in_review']),
+            inArray(issues.status, ['reported', 'in_review', 'completed']),
           ),
         );
       openIssueCount = issuesRow?.count ?? 0;
