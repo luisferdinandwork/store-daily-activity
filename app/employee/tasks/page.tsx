@@ -36,7 +36,6 @@ import {
   ListOrdered,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import EmployeeLogoMark from "@/components/employee/EmployeeLogoMark";
 
 // ─── Task types ────────────────────────────────────────────────────────────────
 
@@ -1368,14 +1367,13 @@ export default function EmployeeTasksPage() {
   return (
     <div className="flex flex-col min-h-screen bg-background">
       {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <div className="relative overflow-hidden bg-primary px-6 pb-6 pt-12">
+      <div className="relative overflow-hidden bg-primary px-6 pb-6 pt-6">
         <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-white/5" />
         <div className="pointer-events-none absolute -right-4 bottom-0 h-24 w-24 rounded-full bg-white/5" />
 
         <div className="relative flex items-end justify-between gap-4">
           {/* Left: title + date + shift pill */}
           <div className="flex-1 min-w-0">
-            <EmployeeLogoMark variant="white" className="mb-4 w-28" />
             <p className="text-xs font-semibold uppercase tracking-widest text-primary-foreground/60">
               Today
             </p>

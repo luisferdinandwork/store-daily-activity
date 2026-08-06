@@ -24,7 +24,6 @@ import {
 import { cn } from "@/lib/utils";
 
 import { StoreContributionChart } from "@/components/employee/StoreContributionChart";
-import EmployeeLogoMark from "@/components/employee/EmployeeLogoMark";
 
 interface AttSlot {
   schedule: { shift: "morning" | "evening" | "full_day" };
@@ -331,7 +330,7 @@ export default function EmployeeDashboard() {
   return (
     <div className="flex flex-col">
       {/* ── Hero — greeting + shift status only ────────────────────────── */}
-      <div className="relative overflow-hidden bg-primary px-6 pb-8 pt-10">
+      <div className="relative overflow-hidden bg-primary px-6 pb-8 pt-6">
         {/* Decorative atmosphere */}
         <div className="pointer-events-none absolute -right-16 -top-16 h-56 w-56 rounded-full bg-white/5 blur-2xl" />
         <div className="pointer-events-none absolute -left-10 top-32 h-40 w-40 rounded-full bg-amber-300/5 blur-3xl" />
@@ -340,7 +339,6 @@ export default function EmployeeDashboard() {
           {/* Greeting + period toggle */}
           <div className="flex items-start justify-between gap-3">
             <div>
-              <EmployeeLogoMark variant="white" className="mb-4 w-28" />
               <p className="text-xs font-semibold uppercase tracking-widest text-primary-foreground/60">
                 {greeting()}
               </p>
@@ -462,7 +460,7 @@ export default function EmployeeDashboard() {
 
         <div className="space-y-2.5">
           <Link href="/employee/tasks">
-            <Card className="border-border shadow-sm transition-all active:scale-[0.98]">
+            <Card className="cursor-pointer border-border shadow-sm transition-all hover:border-primary/25 hover:shadow-md active:scale-[0.98]">
               <CardContent className="flex items-center gap-3 p-4">
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10">
                   <CheckSquare className="h-5 w-5 text-primary" />
@@ -481,7 +479,7 @@ export default function EmployeeDashboard() {
           </Link>
 
           <Link href="/employee/attendance">
-            <Card className="border-border shadow-sm transition-all active:scale-[0.98]">
+            <Card className="cursor-pointer border-border shadow-sm transition-all hover:border-primary/25 hover:shadow-md active:scale-[0.98]">
               <CardContent className="flex items-center gap-3 p-4">
                 <div
                   className={cn(
@@ -525,7 +523,7 @@ export default function EmployeeDashboard() {
           </Link>
 
           <Link href="/employee/profile">
-            <Card className="border-border shadow-sm transition-all active:scale-[0.98]">
+            <Card className="cursor-pointer border-border shadow-sm transition-all hover:border-primary/25 hover:shadow-md active:scale-[0.98]">
               <CardContent className="flex items-center gap-3 p-4">
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-secondary">
                   <UserCircle className="h-5 w-5 text-muted-foreground" />

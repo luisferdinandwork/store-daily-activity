@@ -3,14 +3,12 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import {
   AlertTriangle,
   Banknote,
   Camera,
   CheckCircle2,
-  ChevronLeft,
   Clock3,
   Loader2,
   ReceiptText,
@@ -889,22 +887,13 @@ export default function EmployeePettyCashPage() {
         <Lightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
       )}
 
-      <div className="sticky top-0 z-10 flex items-center gap-3 border-b border-border bg-card/90 px-4 py-3.5 backdrop-blur">
-        <Link
-          href="/employee"
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-secondary text-muted-foreground"
-        >
-          <ChevronLeft className="h-4 w-4" />
-        </Link>
-
-        <div>
-          <p className="text-xs font-semibold text-muted-foreground">
-            Petty Cash Request
-          </p>
-          <p className="text-sm font-bold leading-none text-foreground">
-            {data?.storeName ?? '…'}
-          </p>
-        </div>
+      <div className="px-4 pt-5">
+        <p className="text-xs font-semibold text-muted-foreground">
+          Petty Cash Request
+        </p>
+        <p className="text-sm font-bold leading-none text-foreground">
+          {data?.storeName ?? '…'}
+        </p>
       </div>
 
       <div className="space-y-5 py-5">

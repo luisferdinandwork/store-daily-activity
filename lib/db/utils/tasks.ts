@@ -1848,3 +1848,66 @@ function toKey(d: Date): string {
     d.getDate(),
   ).padStart(2, '0')}`;
 }
+
+// ─── Shift breakdown ──────────────────────────────────────────────────────────
+
+export interface ShiftTaskSummary {
+  shift: string;
+  completed: number;
+  total: number;
+}
+
+export async function getShiftTaskSummary(
+  storeIds: number[],
+  date: Date,
+): Promise<ShiftTaskSummary[]> {
+  if (!storeIds.length) return [];
+
+  const dayStart = startOfDay(date);
+  const dayEnd = endOfDay(date);
+
+  type RawRow = { shiftId: number | null; status: string | null };
+
+  async function loadTable(table: any): Promise<RawRow[]> {
+    return db
+      .select({ shiftId: table.shiftId, status: table.status })
+      .from(table)
+      .where(
+        and(
+          inArray(table.storeId, storeIds),
+          gte(table.date, dayStart),
+          lte(table.date, dayEnd),
+        ),
+      );
+  }
+
+  const rowsPerTable = await Promise.all([
+    loadTable(storeOpeningTasks),
+    loadTable(setoranTasks),
+    loadTable(storeFrontTasks),
+    loadTable(cekBinTasks),
+    loadTable(vmChecklistTasks),
+    loadTable(marketingCheckTasks),
+    loadTable(itemDroppingTasks),
+    loadTable(itemReturnTasks),
+    loadTable(cekUangModalTasks),
+    loadTable(briefingTasks),
+    loadTable(storeClosingTasks),
+    loadTable(groomingTasks),
+  ]);
+
+  const shiftRows = await db.select({ id: shifts.id, code: shifts.code }).from(shifts);
+  const codeById = new Map(shiftRows.map((s) => [s.id, s.code]));
+
+  const byShift = new Map<string, { completed: number; total: number }>();
+
+  for (const row of rowsPerTable.flat()) {
+    const code = row.shiftId != null ? codeById.get(row.shiftId) ?? 'unknown' : 'unknown';
+    const bucket = byShift.get(code) ?? { completed: 0, total: 0 };
+    bucket.total++;
+    if (row.status === 'completed') bucket.completed++;
+    byShift.set(code, bucket);
+  }
+
+  return [...byShift.entries()].map(([shift, v]) => ({ shift, ...v }));
+}

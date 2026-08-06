@@ -11,7 +11,6 @@ import {
   UserCircle, IdCard, Briefcase, Store,
   Clock, LogOut, Sun, Moon, Loader2,
 } from 'lucide-react';
-import EmployeeLogoMark from '@/components/employee/EmployeeLogoMark';
 
 interface TodaySchedule {
   shift: 'morning' | 'evening' | null;
@@ -72,11 +71,9 @@ export default function EmployeeProfilePage() {
   return (
     <div className="flex flex-col">
       {/* ── Hero ── */}
-      <div className="relative overflow-hidden bg-primary px-6 pb-8 pt-12 text-center">
+      <div className="relative overflow-hidden bg-primary px-6 pb-8 pt-8 text-center">
         <div className="pointer-events-none absolute -left-10 -top-10 h-40 w-40 rounded-full bg-white/5" />
         <div className="pointer-events-none absolute -right-10 top-4 h-28 w-28 rounded-full bg-white/5" />
-
-        <EmployeeLogoMark variant="white" className="absolute left-5 top-4 w-20" />
 
         {/* Avatar */}
         <div className="relative mx-auto flex h-20 w-20 items-center justify-center rounded-full border-2 border-white/20 bg-white/10">

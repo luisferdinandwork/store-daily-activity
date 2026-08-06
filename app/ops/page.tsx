@@ -1,63 +1,142 @@
 'use client';
 // app/ops/page.tsx
 
-import { useCallback, useEffect, useState, type ElementType } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import {
+  AlertCircle,
+  AlertTriangle,
+  ArrowRight,
   CalendarDays,
   CheckCircle2,
-  ListTodo,
-  Plus,
-  RefreshCw,
+  ChevronRight,
+  Clock3,
+  ListChecks,
   TrendingUp,
   Users,
+  Wallet,
+  XCircle,
 } from 'lucide-react';
 
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Progress } from '@/components/ui/progress';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+type TaskBucket = {
+  notStarted: number;
+  inProgress: number;
+  completed: number;
+  pending: number;
+  total: number;
+  completionRate: number;
+};
+
+type ShiftBucket = {
+  shift: string;
+  completed: number;
+  total: number;
+  completionRate: number;
+};
+
+type PettyCashRow = {
+  id: number;
+  amount: string;
+  description: string;
+  status: 'pending_ops' | 'ops_approved' | 'ops_rejected' | string;
+  storeName: string;
+  submittedByName: string;
+  createdAt: string;
+};
+
+type IssueRow = {
+  id: string;
+  title: string;
+  storeName: string;
+  reporterName: string;
+  createdAt: string;
+};
+
 type DashboardData = {
   date: string;
+  scope: 'all_areas' | 'area';
+  storeCount: number;
   tasks: {
-    total: number;
-    pending: number;
-    inProgress: number;
-    completed: number;
-    completionRate: number;
+    today: TaskBucket;
+    shiftToday: ShiftBucket[];
+    month: { completed: number; total: number; completionRate: number };
   };
   attendance: {
-    scheduled: number;
+    total: number;
     present: number;
     late: number;
     absent: number;
     excused: number;
+    unset: number;
+    rate: number;
   };
-  taskTemplates: {
-    daily: number;
-    weekly: number;
-    monthly: number;
+  pettyCash: {
+    pendingCount: number;
+    recent: PettyCashRow[];
   };
-  recentCompleted: Array<{
-    employeeTask: { id: string; completedAt: string | null; shift: string };
-    task: { id: string; title: string } | null;
-    user: { id: string; name: string } | null;
-  }>;
+  issues: {
+    unreviewedCount: number;
+    recent: IssueRow[];
+  };
 };
 
-// TODO: replace this with the real storeId from session/scope when available.
-const STORE_ID = 'your-store-id';
+// ─── Design tokens ───────────────────────────────────────────────────────────
+// One small palette, reused everywhere as dots / bars / chips — color always
+// carries meaning (status), never decoration.
 
-function fmtTime(iso: string | null) {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleTimeString('id-ID', {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+const TONE = {
+  emerald: { ring: '#10b981', chip: 'bg-emerald-50', text: 'text-emerald-600' },
+  amber: { ring: '#f59e0b', chip: 'bg-amber-50', text: 'text-amber-600' },
+  rose: { ring: '#e11d48', chip: 'bg-rose-50', text: 'text-rose-600' },
+  sky: { ring: '#0ea5e9', chip: 'bg-sky-50', text: 'text-sky-600' },
+  indigo: { ring: '#4f46e5', chip: 'bg-indigo-50', text: 'text-indigo-600' },
+  slate: { ring: '#94a3b8', chip: 'bg-slate-100', text: 'text-slate-500' },
+} as const;
+
+type Tone = keyof typeof TONE;
+
+const STATUS_WORD: Record<'emerald' | 'amber' | 'rose', string> = {
+  emerald: 'On track',
+  amber: 'Watch',
+  rose: 'Behind',
+};
+
+const SHIFT_LABEL: Record<string, string> = {
+  morning: 'Pagi',
+  evening: 'Sore',
+  full_day: 'Full day',
+  unknown: 'Lainnya',
+};
+
+const SHIFT_DOT: Record<string, string> = {
+  morning: '#f59e0b',
+  evening: '#7c3aed',
+  full_day: '#0ea5e9',
+  unknown: '#94a3b8',
+};
+
+const PETTY_CASH_STATUS: Record<string, { label: string; tone: Tone }> = {
+  pending_ops: { label: 'Pending', tone: 'amber' },
+  ops_approved: { label: 'Approved', tone: 'emerald' },
+  ops_rejected: { label: 'Rejected', tone: 'rose' },
+};
+
+// ─── Formatting helpers ─────────────────────────────────────────────────────
+
+const IDR = new Intl.NumberFormat('id-ID', {
+  style: 'currency',
+  currency: 'IDR',
+  maximumFractionDigits: 0,
+});
+
+function todayKey() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 function todayFull() {
@@ -69,43 +148,153 @@ function todayFull() {
   });
 }
 
-// ─── Stat card ────────────────────────────────────────────────────────────────
+function timeShort(d: Date) {
+  return d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+}
 
-function StatCard({
-  title,
-  value,
-  sub,
-  icon: Icon,
-  highlight,
-}: {
-  title: string;
-  value: string | number;
-  sub?: string;
-  icon: ElementType;
-  highlight?: 'green' | 'amber' | 'red' | 'primary';
-}) {
-  const colorMap = {
-    green: 'text-emerald-600',
-    amber: 'text-amber-500',
-    red: 'text-rose-600',
-    primary: 'text-indigo-600',
-  };
+function relativeTime(iso: string) {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diffMs / 60_000);
+  const hours = Math.floor(diffMs / 3_600_000);
+  const days = Math.floor(diffMs / 86_400_000);
+  if (mins < 1) return 'baru saja';
+  if (mins < 60) return `${mins}m lalu`;
+  if (hours < 24) return `${hours}j lalu`;
+  if (days < 7) return `${days}h lalu`;
+  return new Date(iso).toLocaleDateString('id-ID', { day: '2-digit', month: 'short' });
+}
 
+function rateTone(rate: number): 'emerald' | 'amber' | 'rose' {
+  if (rate >= 80) return 'emerald';
+  if (rate >= 50) return 'amber';
+  return 'rose';
+}
+
+// ─── Shared visual atoms ────────────────────────────────────────────────────
+
+function SectionHeading({ children, right }: { children: ReactNode; right?: ReactNode }) {
   return (
-    <Card className="border-slate-200 bg-white shadow-sm">
-      <CardContent className="p-5">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <p className="text-xs font-medium uppercase tracking-wider text-slate-400">{title}</p>
-            <p className={`mt-1 text-3xl font-bold ${highlight ? colorMap[highlight] : 'text-slate-900'}`}>
-              {value}
-            </p>
-            {sub && <p className="mt-1 text-xs text-slate-500">{sub}</p>}
-          </div>
-          <div className="rounded-xl bg-indigo-50 p-2 text-indigo-500">
-            <Icon className="h-4 w-4" />
-          </div>
+    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+      <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">{children}</p>
+      {right && <div className="text-[11px] text-slate-400">{right}</div>}
+    </div>
+  );
+}
+
+function CardIcon({ icon: Icon, tone }: { icon: typeof Users; tone: Tone }) {
+  return (
+    <span
+      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${TONE[tone].chip} ${TONE[tone].text}`}
+    >
+      <Icon className="h-3.5 w-3.5" />
+    </span>
+  );
+}
+
+function TrendChip({ tone, children }: { tone: Tone; children: ReactNode }) {
+  return (
+    <span
+      className={`inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-semibold ${TONE[tone].chip} ${TONE[tone].text}`}
+    >
+      {children}
+    </span>
+  );
+}
+
+function Bar({ pct, tone }: { pct: number; tone: Tone }) {
+  const clamped = Math.max(0, Math.min(100, pct));
+  return (
+    <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+      <div
+        className="h-full rounded-full transition-all duration-700 ease-out"
+        style={{ width: `${clamped}%`, background: TONE[tone].ring }}
+      />
+    </div>
+  );
+}
+
+function SegmentedBar({ segments }: { segments: Array<{ value: number; tone: Tone }> }) {
+  const total = segments.reduce((a, s) => a + s.value, 0);
+  if (total <= 0) {
+    return <div className="h-2.5 w-full rounded-full bg-slate-100" />;
+  }
+  return (
+    <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
+      {segments
+        .filter((s) => s.value > 0)
+        .map((s, i) => (
+          <div
+            key={i}
+            className="h-full transition-all duration-700 ease-out"
+            style={{ width: `${(s.value / total) * 100}%`, background: TONE[s.tone].ring }}
+          />
+        ))}
+    </div>
+  );
+}
+
+function LegendGrid({ items }: { items: Array<{ label: string; value: number; tone: Tone }> }) {
+  return (
+    <div className="grid grid-cols-2 gap-x-4 gap-y-2.5">
+      {items.map(({ label, value, tone }) => (
+        <div key={label} className="flex items-center justify-between gap-2 text-xs">
+          <span className="flex items-center gap-2 text-slate-600">
+            <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: TONE[tone].ring }} />
+            {label}
+          </span>
+          <span className="font-semibold tabular-nums text-slate-900">{value}</span>
         </div>
+      ))}
+    </div>
+  );
+}
+
+function ViewLink({ href, children }: { href: string; children: ReactNode }) {
+  return (
+    <Link
+      href={href}
+      className="group flex shrink-0 items-center gap-1 text-xs font-medium text-slate-500 transition-colors hover:text-indigo-600"
+    >
+      {children}
+      <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
+    </Link>
+  );
+}
+
+// ─── KPI card (top row) ──────────────────────────────────────────────────────
+
+function KpiCard({
+  label,
+  value,
+  tone,
+  footer,
+}: {
+  label: string;
+  value: string;
+  tone?: 'emerald' | 'amber' | 'rose';
+  footer?: ReactNode;
+}) {
+  return (
+    <Card className="rounded-2xl border-slate-200 bg-white shadow-sm transition-shadow hover:shadow-md">
+      <CardContent className="p-5">
+        <div className="flex items-start justify-between gap-2">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">{label}</p>
+          {tone && <TrendChip tone={tone}>{STATUS_WORD[tone]}</TrendChip>}
+        </div>
+        <p className="mt-2 text-[32px] font-semibold leading-none tracking-tight text-slate-900">{value}</p>
+        {footer && <div className="mt-4">{footer}</div>}
+      </CardContent>
+    </Card>
+  );
+}
+
+function KpiSkeleton() {
+  return (
+    <Card className="rounded-2xl border-slate-200 bg-white shadow-sm">
+      <CardContent className="p-5">
+        <div className="h-3 w-24 animate-pulse rounded bg-slate-100" />
+        <div className="mt-3 h-8 w-16 animate-pulse rounded bg-slate-100" />
+        <div className="mt-4 h-1.5 w-full animate-pulse rounded-full bg-slate-100" />
       </CardContent>
     </Card>
   );
@@ -117,20 +306,19 @@ export default function OpsDashboardPage() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [generating, setGenerating] = useState(false);
-  const [genMsg, setGenMsg] = useState('');
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   const load = useCallback(async (mode: 'initial' | 'refresh' = 'refresh') => {
     if (mode === 'initial') setLoading(true);
     else setRefreshing(true);
 
     try {
-      const res = await fetch(
-        `/api/ops/dashboard?storeId=${STORE_ID}&date=${new Date().toISOString()}`,
-        { cache: 'no-store' },
-      );
+      const res = await fetch(`/api/ops/dashboard?date=${todayKey()}`, { cache: 'no-store' });
       const json = await res.json();
-      if (json.success) setData(json.data);
+      if (json.success) {
+        setData(json);
+        setLastUpdated(new Date());
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -143,39 +331,17 @@ export default function OpsDashboardPage() {
     return () => clearInterval(id);
   }, [load]);
 
-  async function handleGenerate() {
-    setGenerating(true);
-    setGenMsg('');
+  const today = data?.tasks.today;
+  const month = data?.tasks.month;
+  const shiftToday = (data?.tasks.shiftToday ?? []).filter((s) => s.total > 0);
+  const att = data?.attendance;
+  const pettyCashPending = data?.pettyCash.pendingCount ?? 0;
+  const issuesUnreviewed = data?.issues.unreviewedCount ?? 0;
+  const needsAttentionTotal = pettyCashPending + issuesUnreviewed;
 
-    try {
-      const res = await fetch('/api/ops/tasks/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ storeId: STORE_ID, createdBy: 'ops-user-id' }),
-      });
-      const json = await res.json();
-
-      setGenMsg(
-        json.success
-          ? `✓ ${json.tasksCreated} tasks generated`
-          : `✗ ${json.errors?.[0] ?? 'Error generating tasks'}`,
-      );
-
-      await load('refresh');
-    } finally {
-      setGenerating(false);
-    }
-  }
-
-  const rate = data?.tasks.completionRate ?? 0;
-  const total = data?.tasks.total ?? 0;
-  const completed = data?.tasks.completed ?? 0;
-  const scheduled = data?.attendance.scheduled ?? 0;
-  const present = (data?.attendance.present ?? 0) + (data?.attendance.late ?? 0);
-  const templates =
-    (data?.taskTemplates.daily ?? 0) +
-    (data?.taskTemplates.weekly ?? 0) +
-    (data?.taskTemplates.monthly ?? 0);
+  const scopeLabel = data
+    ? `${data.scope === 'all_areas' ? 'All Areas' : 'Area'} · ${data.storeCount} store${data.storeCount === 1 ? '' : 's'}`
+    : '';
 
   return (
     <div className="min-h-full bg-slate-50">
@@ -186,181 +352,310 @@ export default function OpsDashboardPage() {
         onRefresh={() => void load('refresh')}
         refreshing={refreshing}
         contentClassName="w-full"
-        actions={
-          <>
-            <Link href="/ops/tasks/new">
-              <Button variant="outline" size="sm" className="h-10 gap-1.5 rounded-xl border-slate-200 bg-white font-semibold text-slate-600 hover:bg-slate-50">
-                <Plus className="h-3.5 w-3.5" />
-                New Task
-              </Button>
-            </Link>
-            <Button
-              size="sm"
-              onClick={handleGenerate}
-              disabled={generating}
-              className="h-10 gap-1.5 rounded-xl font-bold"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${generating ? 'animate-spin' : ''}`} />
-              {generating ? 'Generating…' : 'Generate Tasks'}
-            </Button>
-          </>
-        }
       />
 
-      <div className="mx-auto max-w-7xl space-y-6 p-6 lg:p-8">
-        {genMsg && (
-          <p className={`text-xs ${genMsg.startsWith('✓') ? 'text-emerald-600' : 'text-rose-600'}`}>
-            {genMsg}
-          </p>
-        )}
+      <div className="mx-auto max-w-[1400px] space-y-10 p-6 lg:p-10">
+        {/* ── Snapshot ─────────────────────────────────────────────────────── */}
+        <section>
+          <SectionHeading
+            right={
+              data && (
+                <span>
+                  {scopeLabel}
+                  {lastUpdated && <> · Updated {timeShort(lastUpdated)}</>}
+                </span>
+              )
+            }
+          >
+            Today&apos;s Snapshot
+          </SectionHeading>
 
-        {loading ? (
-          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <Card key={i} className="border-slate-200 bg-white">
-                <CardContent className="p-5">
-                  <div className="h-16 animate-pulse rounded-xl bg-slate-100" />
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-            <StatCard
-              title="Completion Rate"
-              value={`${Math.round(rate)}%`}
-              sub={`${completed} of ${total} tasks done`}
-              icon={TrendingUp}
-              highlight={rate >= 80 ? 'green' : rate >= 50 ? 'amber' : 'red'}
-            />
-            <StatCard
-              title="Tasks Today"
-              value={total}
-              sub={`${data?.tasks.pending ?? 0} pending · ${data?.tasks.inProgress ?? 0} active`}
-              icon={ListTodo}
-            />
-            <StatCard
-              title="Attendance"
-              value={`${present}/${scheduled}`}
-              sub={`${data?.attendance.absent ?? 0} absent · ${data?.attendance.late ?? 0} late`}
-              icon={Users}
-              highlight={scheduled > 0 && present === scheduled ? 'green' : 'amber'}
-            />
-            <StatCard
-              title="Task Templates"
-              value={templates}
-              sub={`${data?.taskTemplates.daily ?? 0} daily · ${data?.taskTemplates.weekly ?? 0} weekly · ${data?.taskTemplates.monthly ?? 0} monthly`}
-              icon={CalendarDays}
-              highlight="primary"
-            />
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <Card className="border-slate-200 bg-white shadow-sm">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-semibold text-slate-900">Task Breakdown</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {[
-                { label: 'Completed', value: data?.tasks.completed ?? 0, textColor: 'text-emerald-600' },
-                { label: 'In Progress', value: data?.tasks.inProgress ?? 0, textColor: 'text-indigo-600' },
-                { label: 'Pending', value: data?.tasks.pending ?? 0, textColor: 'text-amber-600' },
-              ].map(({ label, value, textColor }) => (
-                <div key={label}>
-                  <div className="mb-1 flex justify-between text-xs">
-                    <span className={`font-medium ${textColor}`}>{label}</span>
-                    <span className="tabular-nums text-slate-500">{value}</span>
-                  </div>
-                  <Progress value={total > 0 ? (value / total) * 100 : 0} className="h-1.5" />
-                </div>
+          {loading ? (
+            <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <KpiSkeleton key={i} />
               ))}
-            </CardContent>
-          </Card>
-
-          <Card className="border-slate-200 bg-white shadow-sm">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-semibold text-slate-900">Today&apos;s Attendance</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {[
-                { label: 'Present', value: data?.attendance.present ?? 0, variant: 'default' as const },
-                { label: 'Late', value: data?.attendance.late ?? 0, variant: 'secondary' as const },
-                { label: 'Absent', value: data?.attendance.absent ?? 0, variant: 'destructive' as const },
-                { label: 'Excused', value: data?.attendance.excused ?? 0, variant: 'outline' as const },
-              ].map(({ label, value, variant }) => (
-                <div key={label} className="flex items-center justify-between border-b border-slate-100 py-2.5 last:border-0">
-                  <span className="text-sm text-slate-700">{label}</span>
-                  <Badge variant={variant}>{value}</Badge>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-        </div>
-
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <Card className="border-slate-200 bg-white shadow-sm">
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-sm font-semibold text-slate-900">Active Task Templates</CardTitle>
-                <Link href="/ops/tasks">
-                  <Button variant="ghost" size="sm" className="h-7 text-xs text-indigo-600">
-                    Manage →
-                  </Button>
-                </Link>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-3 gap-3">
-                {[
-                  { label: 'Daily', value: data?.taskTemplates.daily ?? 0, color: 'bg-indigo-50 text-indigo-600' },
-                  { label: 'Weekly', value: data?.taskTemplates.weekly ?? 0, color: 'bg-violet-50 text-violet-600' },
-                  { label: 'Monthly', value: data?.taskTemplates.monthly ?? 0, color: 'bg-amber-50 text-amber-600' },
-                ].map(({ label, value, color }) => (
-                  <div key={label} className={`rounded-xl p-3 text-center ${color}`}>
-                    <p className="text-2xl font-bold">{value}</p>
-                    <p className="mt-0.5 text-xs font-semibold uppercase tracking-wide opacity-70">
-                      {label}
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+              <KpiCard
+                label="Attendance Rate"
+                value={`${att?.rate ?? 0}%`}
+                tone={rateTone(att?.rate ?? 0)}
+                footer={
+                  <>
+                    <Bar pct={att?.rate ?? 0} tone={rateTone(att?.rate ?? 0)} />
+                    <p className="mt-2 text-xs text-slate-500">
+                      {(att?.present ?? 0) + (att?.late ?? 0)}/{att?.total ?? 0} hadir hari ini
                     </p>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
+                  </>
+                }
+              />
 
-          <Card className="border-slate-200 bg-white shadow-sm">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-semibold text-slate-900">Recently Completed</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {!data?.recentCompleted?.length ? (
-                <p className="py-4 text-center text-sm text-slate-500">No completions yet today</p>
-              ) : (
-                <ul className="space-y-0">
-                  {data.recentCompleted.map((item, i) => (
-                    <li key={i} className="flex items-center justify-between border-b border-slate-100 py-2.5 last:border-0">
-                      <div>
-                        <p className="text-sm font-medium text-slate-900">
-                          {item.task?.title ?? 'Unknown Task'}
-                        </p>
-                        <div className="mt-0.5 flex items-center gap-1.5">
-                          <span className="text-xs text-slate-500">{item.user?.name}</span>
-                          <Badge variant="outline" className="h-4 px-1.5 text-[10px]">
-                            {item.employeeTask.shift}
-                          </Badge>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1 text-xs text-slate-500">
-                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
-                        {fmtTime(item.employeeTask.completedAt)}
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+              <KpiCard
+                label="Completion — Today"
+                value={`${today?.completionRate ?? 0}%`}
+                tone={rateTone(today?.completionRate ?? 0)}
+                footer={
+                  <>
+                    <Bar pct={today?.completionRate ?? 0} tone={rateTone(today?.completionRate ?? 0)} />
+                    <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+                      {shiftToday.length ? (
+                        shiftToday.map((s) => (
+                          <span key={s.shift} className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                            <span
+                              className="h-1.5 w-1.5 shrink-0 rounded-full"
+                              style={{ background: SHIFT_DOT[s.shift] ?? SHIFT_DOT.unknown }}
+                            />
+                            {SHIFT_LABEL[s.shift] ?? s.shift}
+                            <span className="font-semibold text-slate-900">{s.completionRate}%</span>
+                          </span>
+                        ))
+                      ) : (
+                        <span className="text-[11px] text-slate-400">Belum ada task hari ini</span>
+                      )}
+                    </div>
+                  </>
+                }
+              />
+
+              <KpiCard
+                label="Completion — Month"
+                value={`${month?.completionRate ?? 0}%`}
+                tone={rateTone(month?.completionRate ?? 0)}
+                footer={
+                  <>
+                    <Bar pct={month?.completionRate ?? 0} tone={rateTone(month?.completionRate ?? 0)} />
+                    <p className="mt-2 text-xs text-slate-500">
+                      {month?.completed ?? 0} dari {month?.total ?? 0} task bulan ini
+                    </p>
+                  </>
+                }
+              />
+
+              <KpiCard
+                label="Needs Attention"
+                value={String(needsAttentionTotal)}
+                tone={needsAttentionTotal > 0 ? 'amber' : 'emerald'}
+                footer={
+                  <div className="-mx-1.5 space-y-0.5">
+                    <Link
+                      href="/ops/petty-cash"
+                      className="flex items-center justify-between rounded-lg px-1.5 py-1 text-xs text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
+                    >
+                      <span className="flex items-center gap-2">
+                        <span className="h-1.5 w-1.5 rounded-full" style={{ background: TONE.amber.ring }} />
+                        Petty cash pending
+                      </span>
+                      <span className="flex items-center gap-0.5 font-semibold text-slate-900">
+                        {pettyCashPending}
+                        <ChevronRight className="h-3 w-3 text-slate-300" />
+                      </span>
+                    </Link>
+                    <Link
+                      href="/ops/issues"
+                      className="flex items-center justify-between rounded-lg px-1.5 py-1 text-xs text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
+                    >
+                      <span className="flex items-center gap-2">
+                        <span className="h-1.5 w-1.5 rounded-full" style={{ background: TONE.rose.ring }} />
+                        Unreviewed issues
+                      </span>
+                      <span className="flex items-center gap-0.5 font-semibold text-slate-900">
+                        {issuesUnreviewed}
+                        <ChevronRight className="h-3 w-3 text-slate-300" />
+                      </span>
+                    </Link>
+                  </div>
+                }
+              />
+            </div>
+          )}
+        </section>
+
+        {/* ── Operations health ────────────────────────────────────────────── */}
+        <section>
+          <SectionHeading>Operations Health</SectionHeading>
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+            <Card className="rounded-2xl border-slate-200 bg-white shadow-sm">
+              <CardHeader className="pb-2">
+                <CardTitle className="flex items-center gap-2.5 text-sm font-semibold text-slate-900">
+                  <CardIcon icon={ListChecks} tone="indigo" />
+                  Task Breakdown — Today
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-6 pt-2">
+                <div className="mb-1.5 flex items-baseline justify-between">
+                  <p className="text-xs text-slate-500">{today?.total ?? 0} task hari ini</p>
+                  <p className="text-xs font-semibold text-slate-900">{today?.completionRate ?? 0}% selesai</p>
+                </div>
+                <SegmentedBar
+                  segments={[
+                    { value: today?.completed ?? 0, tone: 'emerald' },
+                    { value: today?.inProgress ?? 0, tone: 'indigo' },
+                    { value: today?.pending ?? 0, tone: 'amber' },
+                    { value: today?.notStarted ?? 0, tone: 'slate' },
+                  ]}
+                />
+                <div className="mt-5">
+                  <LegendGrid
+                    items={[
+                      { label: 'Completed', value: today?.completed ?? 0, tone: 'emerald' },
+                      { label: 'In Progress', value: today?.inProgress ?? 0, tone: 'indigo' },
+                      { label: 'Pending', value: today?.pending ?? 0, tone: 'amber' },
+                      { label: 'Not Started', value: today?.notStarted ?? 0, tone: 'slate' },
+                    ]}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="rounded-2xl border-slate-200 bg-white shadow-sm">
+              <CardHeader className="pb-2">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="flex items-center gap-2.5 text-sm font-semibold text-slate-900">
+                    <CardIcon icon={Users} tone="emerald" />
+                    Attendance — All Stores
+                  </CardTitle>
+                  <ViewLink href="/ops/attendance">View Detail</ViewLink>
+                </div>
+              </CardHeader>
+              <CardContent className="p-6 pt-2">
+                <div className="mb-1.5 flex items-baseline justify-between">
+                  <p className="text-xs text-slate-500">{att?.total ?? 0} jadwal hari ini</p>
+                  <p className="text-xs font-semibold text-slate-900">{att?.rate ?? 0}% hadir</p>
+                </div>
+                <SegmentedBar
+                  segments={[
+                    { value: att?.present ?? 0, tone: 'emerald' },
+                    { value: att?.late ?? 0, tone: 'amber' },
+                    { value: att?.absent ?? 0, tone: 'rose' },
+                    { value: att?.excused ?? 0, tone: 'sky' },
+                  ]}
+                />
+                <div className="mt-5">
+                  <LegendGrid
+                    items={[
+                      { label: 'Present', value: att?.present ?? 0, tone: 'emerald' },
+                      { label: 'Late', value: att?.late ?? 0, tone: 'amber' },
+                      { label: 'Absent', value: att?.absent ?? 0, tone: 'rose' },
+                      { label: 'Leave', value: att?.excused ?? 0, tone: 'sky' },
+                    ]}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </section>
+
+        {/* ── Requests & follow-ups ────────────────────────────────────────── */}
+        <section>
+          <SectionHeading>Requests &amp; Follow-ups</SectionHeading>
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+            <Card className="rounded-2xl border-slate-200 bg-white shadow-sm">
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="flex items-center gap-2.5 text-sm font-semibold text-slate-900">
+                    <CardIcon icon={Wallet} tone="amber" />
+                    Recent Petty Cash
+                    {pettyCashPending > 0 && <TrendChip tone="amber">{pettyCashPending} pending</TrendChip>}
+                  </CardTitle>
+                  <ViewLink href="/ops/petty-cash">View all</ViewLink>
+                </div>
+              </CardHeader>
+              <CardContent className="overflow-x-auto p-0 pb-2">
+                {!data?.pettyCash.recent.length ? (
+                  <div className="flex flex-col items-center gap-1.5 py-10 text-center">
+                    <Wallet className="h-5 w-5 text-slate-300" />
+                    <p className="text-sm text-slate-500">Belum ada request bulan ini</p>
+                  </div>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-100 text-left text-[11px] uppercase tracking-wide text-slate-400">
+                        <th className="px-6 py-2.5 font-medium">Store</th>
+                        <th className="px-6 py-2.5 font-medium">Amount</th>
+                        <th className="px-6 py-2.5 font-medium">Status</th>
+                        <th className="px-6 py-2.5 font-medium">When</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.pettyCash.recent.map((row) => {
+                        const meta = PETTY_CASH_STATUS[row.status] ?? { label: row.status, tone: 'slate' as Tone };
+                        return (
+                          <tr
+                            key={row.id}
+                            className="border-b border-slate-50 transition-colors last:border-0 hover:bg-slate-50/70"
+                          >
+                            <td className="max-w-[140px] truncate px-6 py-3 text-slate-700">{row.storeName}</td>
+                            <td className="whitespace-nowrap px-6 py-3 font-medium text-slate-900">
+                              {IDR.format(Number(row.amount))}
+                            </td>
+                            <td className="px-6 py-3">
+                              <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-600">
+                                <span className="h-1.5 w-1.5 rounded-full" style={{ background: TONE[meta.tone].ring }} />
+                                {meta.label}
+                              </span>
+                            </td>
+                            <td className="whitespace-nowrap px-6 py-3 text-xs text-slate-500">
+                              {relativeTime(row.createdAt)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="rounded-2xl border-slate-200 bg-white shadow-sm">
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="flex items-center gap-2.5 text-sm font-semibold text-slate-900">
+                    <CardIcon icon={AlertTriangle} tone="rose" />
+                    Unreviewed Issues
+                    {issuesUnreviewed > 0 && <TrendChip tone="rose">{issuesUnreviewed} open</TrendChip>}
+                  </CardTitle>
+                  <ViewLink href="/ops/issues">View all</ViewLink>
+                </div>
+              </CardHeader>
+              <CardContent className="overflow-x-auto p-0 pb-2">
+                {!data?.issues.recent.length ? (
+                  <div className="flex flex-col items-center gap-1.5 py-10 text-center">
+                    <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+                    <p className="text-sm text-slate-500">Semua issue sudah direview</p>
+                  </div>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-100 text-left text-[11px] uppercase tracking-wide text-slate-400">
+                        <th className="px-6 py-2.5 font-medium">Issue</th>
+                        <th className="px-6 py-2.5 font-medium">Store</th>
+                        <th className="px-6 py-2.5 font-medium">Reporter</th>
+                        <th className="px-6 py-2.5 font-medium">When</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.issues.recent.map((row) => (
+                        <tr
+                          key={row.id}
+                          className="border-b border-slate-50 transition-colors last:border-0 hover:bg-slate-50/70"
+                        >
+                          <td className="max-w-[180px] truncate px-6 py-3 font-medium text-slate-900">{row.title}</td>
+                          <td className="max-w-[120px] truncate px-6 py-3 text-slate-700">{row.storeName}</td>
+                          <td className="max-w-[120px] truncate px-6 py-3 text-slate-500">{row.reporterName}</td>
+                          <td className="whitespace-nowrap px-6 py-3 text-xs text-slate-500">
+                            {relativeTime(row.createdAt)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        </section>
       </div>
     </div>
   );

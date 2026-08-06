@@ -20,7 +20,6 @@ import {
 } from 'lucide-react';
 import { cn, formatRupiah } from '@/lib/utils';
 import { toast } from 'sonner';
-import EmployeeLogoMark from '@/components/employee/EmployeeLogoMark';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -607,11 +606,10 @@ export default function EmployeeAttendancePage() {
   return (
     <div className="flex flex-col">
       {/* Header */}
-      <div className="relative overflow-hidden bg-primary px-6 pb-8 pt-12">
+      <div className="relative overflow-hidden bg-primary px-6 pb-8 pt-6">
         <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-white/5" />
         <div className="pointer-events-none absolute -right-4 bottom-0 h-24 w-24 rounded-full bg-white/5" />
         <div className="relative">
-          <EmployeeLogoMark variant="white" className="mb-4 w-28" />
           <p className="text-xs font-semibold uppercase tracking-widest text-primary-foreground/60">Attendance</p>
           <h1 className="mt-0.5 text-2xl font-bold text-primary-foreground">Today</h1>
           <p className="mt-1 text-xs text-primary-foreground/50">{todayFull()}</p>

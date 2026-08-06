@@ -3,12 +3,11 @@
 //
 // Knowledge Manual — read-only list of store-operations manuals uploaded by
 // Ops HO. Reached from the floating "More" menu (replaces the old dead
-// "Help & FAQ" link). Secondary utility page, so it follows the same simple
-// sticky back-button header convention as Petty Cash rather than the hero
-// header used by the 6 primary bottom-nav pages.
+// "Help & FAQ" link). The route-level back/title chrome comes from the
+// shared EmployeeHeader (see components/employee/EmployeeHeader.tsx); the
+// document-viewer overlays below keep their own contextual header.
 
 import { useEffect, useRef, useState } from 'react';
-import Link from 'next/link';
 import {
   BookOpen,
   ChevronLeft,
@@ -316,20 +315,6 @@ export default function KnowledgeManualPage() {
 
   return (
     <div className="flex h-full flex-col bg-background pb-16">
-      <div className="sticky top-0 z-10 flex items-center gap-3 border-b border-border bg-card/90 px-4 py-3.5 backdrop-blur">
-        <Link
-          href="/employee"
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-secondary text-muted-foreground"
-        >
-          <ChevronLeft className="h-4 w-4" />
-        </Link>
-
-        <div>
-          <p className="text-xs font-semibold text-muted-foreground">Store Operations</p>
-          <p className="text-sm font-bold leading-none text-foreground">Knowledge Manual</p>
-        </div>
-      </div>
-
       <div className="flex-1 space-y-2.5 overflow-y-auto px-4 py-4">
         {loading ? (
           <div className="flex flex-1 items-center justify-center py-16">

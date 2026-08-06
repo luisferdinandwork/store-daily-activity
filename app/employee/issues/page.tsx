@@ -2,8 +2,8 @@
 
 // app/employee/issues/page.tsx — mobile-first issue reporting for store staff.
 //
-// Header follows the same hero convention as the other primary employee pages
-// (bg-primary hero + decorative blurs + logo mark, see EmployeeLogoMark).
+// Route chrome (logo/back button + notification bell) comes from the shared
+// EmployeeHeader; this hero only carries page-specific content (title, stats).
 //
 // Status lifecycle: draft -> reported -> in_review -> solved -> completed.
 // - draft issues are private and fully editable by the reporter
@@ -47,7 +47,6 @@ import type { LucideIcon } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import CameraCapture from '@/components/shared/CameraCapture';
-import EmployeeLogoMark from '@/components/employee/EmployeeLogoMark';
 import {
   type Issue,
   type IssueStatus,
@@ -1110,13 +1109,12 @@ export default function IssuesPage() {
   return (
     <div className="flex h-full flex-col bg-background pb-16">
       {/* Header */}
-      <div className="relative overflow-hidden bg-primary px-6 pb-6 pt-12 mb-2">
+      <div className="relative overflow-hidden bg-primary px-6 pb-6 pt-6 mb-2">
         <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-white/5" />
         <div className="pointer-events-none absolute -right-4 bottom-0 h-24 w-24 rounded-full bg-white/5" />
 
         <div className="relative flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
-            <EmployeeLogoMark variant="white" className="mb-4 w-28" />
             <p className="text-xs font-semibold uppercase tracking-widest text-primary-foreground/60">
               Store Issues
             </p>

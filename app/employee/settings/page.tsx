@@ -5,9 +5,8 @@
 // from the floating "More" menu (the link previously 404'd).
 
 import { useState } from 'react';
-import Link from 'next/link';
 import { signOut } from 'next-auth/react';
-import { ChevronLeft, Eye, EyeOff, KeyRound, Loader2, LogOut } from 'lucide-react';
+import { Eye, EyeOff, KeyRound, Loader2, LogOut } from 'lucide-react';
 import { toast } from 'sonner';
 
 function PasswordField({
@@ -86,20 +85,6 @@ export default function EmployeeSettingsPage() {
 
   return (
     <div className="flex h-full flex-col bg-background pb-16">
-      <div className="sticky top-0 z-10 flex items-center gap-3 border-b border-border bg-card/90 px-4 py-3.5 backdrop-blur">
-        <Link
-          href="/employee"
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-secondary text-muted-foreground"
-        >
-          <ChevronLeft className="h-4 w-4" />
-        </Link>
-
-        <div>
-          <p className="text-xs font-semibold text-muted-foreground">Account</p>
-          <p className="text-sm font-bold leading-none text-foreground">Settings</p>
-        </div>
-      </div>
-
       <div className="flex-1 space-y-4 overflow-y-auto px-4 py-5">
         <div className="rounded-2xl border border-border bg-card p-4 shadow-sm">
           <div className="mb-4 flex items-center gap-2.5">

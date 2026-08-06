@@ -10,6 +10,7 @@ import {
   X,
   MessageSquare,
   BookOpen,
+  Bell,
   Settings,
   ChevronRight,
   DollarSign,
@@ -30,6 +31,7 @@ interface MenuItem {
 const MORE_MENU_ITEMS: MenuItem[] = [
   { label: 'Petty Cash', href: '/employee/pettycash', icon: DollarSign, color: 'text-blue-500' },
   { label: 'Knowledge Manual', href: '/employee/knowledge', icon: BookOpen,    color: 'text-indigo-500' },
+  { label: 'Notifications',    href: '/employee/announcements', icon: Bell,    color: 'text-amber-500' },
   { label: 'Settings',         href: '/employee/settings', icon: Settings,      color: 'text-muted-foreground' },
 ];
 

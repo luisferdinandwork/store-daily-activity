@@ -15,7 +15,6 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
-import EmployeeLogoMark from '@/components/employee/EmployeeLogoMark';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -521,13 +520,12 @@ export default function SchedulePage() {
     <div className="flex min-h-screen flex-col bg-slate-50">
 
       {/* Header */}
-      <div className="relative overflow-hidden bg-primary px-5 pb-4 pt-12">
+      <div className="relative overflow-hidden bg-primary px-5 pb-4 pt-6">
         <div className="pointer-events-none absolute -right-10 -top-10 h-44 w-44 rounded-full bg-white/5" />
         <div className="pointer-events-none absolute -left-6 bottom-0 h-28 w-28 rounded-full bg-white/5" />
 
         <div className="relative flex items-start justify-between">
           <div>
-            <EmployeeLogoMark variant="white" className="mb-4 w-28" />
             <p className="text-[10px] font-bold uppercase tracking-widest text-primary-foreground/60">My Schedule</p>
             <h1 className="mt-0.5 text-2xl font-bold tracking-tight text-primary-foreground">This Month's Shifts</h1>
           </div>
