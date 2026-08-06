@@ -7,11 +7,9 @@ import { getServerSession } from 'next-auth';
 import { db } from '@/lib/db';
 import { authOptions } from '@/lib/auth';
 import { stores, users } from '@/lib/db/schema/core';
-import {
-  PETTY_CASH_MAX_BALANCE,
-  pettyCashPeriods,
-  pettyCashTransactions,
-} from '@/lib/db/schema/petty-cash';
+import { pettyCashTransactions } from '@/lib/db/schema/petty-cash';
+import { isPicType } from '@/lib/db/utils/petty-cash-refill';
+import { getActivePeriod } from '@/lib/db/utils/petty-cash-period';
 
 function currentYearMonth() {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -36,38 +34,12 @@ async function getEmployeeStore(userId: string) {
   return user?.homeStoreId ?? null;
 }
 
+// Petty cash balance carries forward across months — a store only gets a
+// fresh max-balance period when it's actually refilled (see
+// lib/db/utils/petty-cash-period.ts). This just resolves whichever period
+// is currently active for the store.
 async function ensurePettyCashPeriod(storeId: number, yearMonth: string) {
-  await db
-    .insert(pettyCashPeriods)
-    .values({
-      storeId,
-      yearMonth,
-      openingBalance: String(PETTY_CASH_MAX_BALANCE),
-      currentBalance: String(PETTY_CASH_MAX_BALANCE),
-      status: 'open',
-    })
-    .onConflictDoNothing({
-      target: [pettyCashPeriods.storeId, pettyCashPeriods.yearMonth],
-    });
-
-  const [period] = await db
-    .select({
-      id: pettyCashPeriods.id,
-      openingBalance: pettyCashPeriods.openingBalance,
-      currentBalance: pettyCashPeriods.currentBalance,
-      closingBalance: pettyCashPeriods.closingBalance,
-      status: pettyCashPeriods.status,
-    })
-    .from(pettyCashPeriods)
-    .where(
-      and(
-        eq(pettyCashPeriods.storeId, storeId),
-        eq(pettyCashPeriods.yearMonth, yearMonth),
-      ),
-    )
-    .limit(1);
-
-  return period ?? null;
+  return getActivePeriod(storeId, yearMonth);
 }
 
 function getRows(result: unknown): unknown[] {
@@ -120,6 +92,13 @@ export async function GET() {
     );
   }
 
+  // period.yearMonth (not the raw calendar `month`) drives which
+  // transactions we show: a refill pre-creates NEXT month's period as soon
+  // as it's received, and the employee should immediately see that fresh
+  // envelope — balance and history both — rather than waiting for the
+  // calendar to catch up. See getActivePeriod in petty-cash-period.ts.
+  const activeMonth = period.yearMonth;
+
   const txList = await db
     .select({
       id: pettyCashTransactions.id,
@@ -130,14 +109,13 @@ export async function GET() {
       approvedAt: pettyCashTransactions.approvedAt,
       rejectedAt: pettyCashTransactions.rejectedAt,
       rejectionReason: pettyCashTransactions.rejectionReason,
-      verifiedAt: pettyCashTransactions.verifiedAt,
       createdAt: pettyCashTransactions.createdAt,
     })
     .from(pettyCashTransactions)
     .where(
       and(
         eq(pettyCashTransactions.storeId, storeId),
-        eq(pettyCashTransactions.yearMonth, month),
+        eq(pettyCashTransactions.yearMonth, activeMonth),
       ),
     )
     .orderBy(desc(pettyCashTransactions.createdAt));
@@ -149,7 +127,7 @@ export async function GET() {
     openingBalance: period.openingBalance,
     closingBalance: period.closingBalance,
     periodStatus: period.status,
-    month,
+    month: activeMonth,
     transactions: txList.map((t) => ({
       id: t.id,
       amount: t.amount,
@@ -159,7 +137,6 @@ export async function GET() {
       approvedAt: t.approvedAt ? new Date(t.approvedAt).toISOString() : null,
       rejectedAt: t.rejectedAt ? new Date(t.rejectedAt).toISOString() : null,
       rejectionReason: t.rejectionReason,
-      verifiedAt: t.verifiedAt ? new Date(t.verifiedAt).toISOString() : null,
       createdAt: new Date(t.createdAt).toISOString(),
     })),
   });
@@ -171,6 +148,14 @@ export async function POST(req: NextRequest) {
 
   if (!userId) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const employeeType = (session?.user as { employeeType?: string | null } | undefined)?.employeeType;
+  if (!isPicType(employeeType)) {
+    return NextResponse.json(
+      { error: 'Only PIC can request petty cash.' },
+      { status: 403 },
+    );
   }
 
   let body: {
@@ -237,7 +222,11 @@ export async function POST(req: NextRequest) {
       status: 'pending_ops',
       imageUrl: null,
       imageKey: null,
-      yearMonth: month,
+      // Tag with the period's OWN month, not the raw calendar month — once a
+      // refill has pre-created next month's period, new spend is already
+      // happening against that envelope (see getActivePeriod), so it must be
+      // grouped under that month for Finance's per-month ledger to add up.
+      yearMonth: period.yearMonth,
     })
     .returning({
       id: pettyCashTransactions.id,
@@ -304,7 +293,6 @@ export async function PATCH(req: NextRequest) {
     WHERE id = ${txId}
       AND user_id = ${userId}
       AND status = 'ops_approved'
-      AND verified_at IS NULL
     RETURNING id::int
   `);
 
@@ -314,8 +302,7 @@ export async function PATCH(req: NextRequest) {
   if (!row) {
     return NextResponse.json(
       {
-        error:
-          'Receipt upload failed. Request must be OPS approved and not yet verified.',
+        error: 'Receipt upload failed. Request must be OPS approved.',
       },
       { status: 409 },
     );

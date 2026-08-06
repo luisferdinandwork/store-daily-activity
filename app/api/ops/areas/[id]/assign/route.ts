@@ -12,7 +12,7 @@
 // Note: the Neon HTTP driver this app uses (drizzle-orm/neon-http) doesn't
 // support interactive transactions, so these are sequential awaited writes,
 // not an atomic transaction (same constraint the rest of this codebase's
-// multi-step writes already live with — see scripts/seed-shift-tasks.ts).
+// multi-step writes already live with — see scripts/seed/shift-tasks.ts).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { NextRequest, NextResponse } from 'next/server';

@@ -2,20 +2,37 @@
 //
 // PIC-initiated "top me back up" requests — distinct from Finance's own
 // month-end close-and-reset (pettyCashRefills in lib/db/schema/petty-cash.ts).
-// Approval bumps the CURRENT open period's balance directly; it does not
-// close the period or roll to next month.
+//
+// Flow: PIC requests -> Finance approves/rejects (they're the one who will
+// hand over the physical cash, but approval alone does NOT move the
+// balance yet — the store hasn't actually received the cash at this point)
+// -> once approved, any store employee uploads two proof-of-receipt photos
+// (the petty cash drawer and the Surat Terima Petty Cash) as evidence the
+// cash was physically handed over. Only once BOTH photos are in does the
+// balance actually top back up to the max — that's the real "the store now
+// has the money" moment, not Finance's approval.
+//
+// A completed refill also pre-creates NEXT month's period at max balance
+// (see petty-cash-period.ts), so once the calendar rolls over the store
+// already has a fresh envelope waiting. A store that never gets refilled
+// gets no such row — it just keeps carrying its current balance forward
+// across month boundaries until it eventually does get refilled.
 
 import { db } from '@/lib/db';
 import { and, desc, eq, inArray, or } from 'drizzle-orm';
 import {
-  PETTY_CASH_MAX_BALANCE,
-  pettyCashPeriods,
   pettyCashRefillRequests,
   stores,
   users,
   type PettyCashRefillRequest,
 } from '@/lib/db/schema';
 import { createNotificationsForUsers, getOpsUserIdsForArea } from './notifications';
+import { addMonths, getActivePeriod, topUpPeriodToMax } from './petty-cash-period';
+import { PETTY_CASH_MAX_BALANCE } from '@/lib/db/schema/petty-cash';
+
+export function isPicType(empType: unknown): boolean {
+  return empType === 'pic_1' || empType === 'pic_2';
+}
 
 export function currentYearMonthJakarta(): string {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -27,27 +44,6 @@ export function currentYearMonthJakarta(): string {
   const year = parts.find((p) => p.type === 'year')?.value;
   const month = parts.find((p) => p.type === 'month')?.value;
   return `${year}-${month}`;
-}
-
-async function ensurePeriod(storeId: number, yearMonth: string) {
-  await db
-    .insert(pettyCashPeriods)
-    .values({
-      storeId,
-      yearMonth,
-      openingBalance: String(PETTY_CASH_MAX_BALANCE),
-      currentBalance: String(PETTY_CASH_MAX_BALANCE),
-      status: 'open',
-    })
-    .onConflictDoNothing({ target: [pettyCashPeriods.storeId, pettyCashPeriods.yearMonth] });
-
-  const [period] = await db
-    .select()
-    .from(pettyCashPeriods)
-    .where(and(eq(pettyCashPeriods.storeId, storeId), eq(pettyCashPeriods.yearMonth, yearMonth)))
-    .limit(1);
-
-  return period ?? null;
 }
 
 async function notifyOps(storeId: number, input: { type: string; title: string; body: string }) {
@@ -73,7 +69,10 @@ export async function getActiveRefillRequest(
       and(
         eq(pettyCashRefillRequests.storeId, storeId),
         eq(pettyCashRefillRequests.yearMonth, yearMonth),
-        or(eq(pettyCashRefillRequests.status, 'pending'), eq(pettyCashRefillRequests.status, 'approved')),
+        or(
+          eq(pettyCashRefillRequests.status, 'pending'),
+          eq(pettyCashRefillRequests.status, 'approved'),
+        ),
       ),
     )
     .orderBy(desc(pettyCashRefillRequests.requestedAt))
@@ -118,7 +117,7 @@ export async function createRefillRequest(
     };
   }
 
-  const period = await ensurePeriod(storeId, yearMonth);
+  const period = await getActivePeriod(storeId, yearMonth);
 
   const [request] = await db
     .insert(pettyCashRefillRequests)
@@ -127,7 +126,7 @@ export async function createRefillRequest(
       yearMonth,
       requestedBy: userId,
       notes,
-      balanceBefore: period?.currentBalance ?? String(PETTY_CASH_MAX_BALANCE),
+      balanceBefore: period.currentBalance,
     })
     .returning();
 
@@ -141,26 +140,21 @@ export async function createRefillRequest(
   return { success: true, request };
 }
 
+/**
+ * Finance approves — this only marks the request approved and snapshots the
+ * balance at the time of approval. It does NOT touch the period's balance:
+ * the store hasn't received the cash yet, so the dashboard shouldn't show it
+ * as available yet either. The balance only tops up once proof photos are in
+ * (see attachRefillProof below).
+ */
 export async function approveRefillRequest(id: number, financeUserId: string): Promise<RefillRequestResult> {
   const [existing] = await db.select().from(pettyCashRefillRequests).where(eq(pettyCashRefillRequests.id, id)).limit(1);
   if (!existing) return { success: false, error: 'Request not found.' };
   if (existing.status !== 'pending') return { success: false, error: 'Request has already been processed.' };
 
-  const period = await ensurePeriod(existing.storeId, existing.yearMonth);
-  if (!period || period.status !== 'open') {
+  const period = await getActivePeriod(existing.storeId, existing.yearMonth);
+  if (period.status !== 'open') {
     return { success: false, error: 'This store\'s month is already closed — cannot refill.' };
-  }
-
-  const balanceBefore = period.currentBalance;
-
-  const updated = await db
-    .update(pettyCashPeriods)
-    .set({ currentBalance: String(PETTY_CASH_MAX_BALANCE), updatedAt: new Date() })
-    .where(and(eq(pettyCashPeriods.id, period.id), eq(pettyCashPeriods.status, 'open')))
-    .returning({ id: pettyCashPeriods.id });
-
-  if (!updated.length) {
-    return { success: false, error: 'This store\'s month was closed just now — cannot refill.' };
   }
 
   const [request] = await db
@@ -169,18 +163,14 @@ export async function approveRefillRequest(id: number, financeUserId: string): P
       status: 'approved',
       approvedBy: financeUserId,
       approvedAt: new Date(),
-      balanceBefore,
-      balanceAfter: String(PETTY_CASH_MAX_BALANCE),
+      balanceBefore: period.currentBalance,
     })
-    .where(eq(pettyCashRefillRequests.id, id))
+    .where(and(eq(pettyCashRefillRequests.id, id), eq(pettyCashRefillRequests.status, 'pending')))
     .returning();
 
-  const [storeRow] = await db.select({ name: stores.name }).from(stores).where(eq(stores.id, existing.storeId)).limit(1);
-  await notifyOps(existing.storeId, {
-    type: 'petty_cash_refill_approved',
-    title: `Petty cash refill approved — ${storeRow?.name ?? `Store ${existing.storeId}`}`,
-    body: `${existing.yearMonth} balance topped up to Rp ${PETTY_CASH_MAX_BALANCE.toLocaleString('id-ID')}.`,
-  });
+  if (!request) {
+    return { success: false, error: 'Approval failed. Request may already be processed.' };
+  }
 
   return { success: true, request };
 }
@@ -197,8 +187,76 @@ export async function rejectRefillRequest(
   const [request] = await db
     .update(pettyCashRefillRequests)
     .set({ status: 'rejected', rejectedBy: financeUserId, rejectedAt: new Date(), rejectionReason: reason })
+    .where(and(eq(pettyCashRefillRequests.id, id), eq(pettyCashRefillRequests.status, 'pending')))
+    .returning();
+
+  if (!request) return { success: false, error: 'Reject failed. Please refresh and try again.' };
+
+  return { success: true, request };
+}
+
+export type ProofPhotoKind = 'drawer' | 'signature';
+
+/**
+ * Any store employee attaches one of the two proof photos once Finance has
+ * approved. Once BOTH the drawer photo and the Surat Terima Petty Cash photo
+ * are in, this is the moment the cash is considered actually received — the
+ * period's balance tops back up to the max right here, not at approval time.
+ */
+export async function attachRefillProof(
+  id: number,
+  storeId: number,
+  userId: string,
+  kind: ProofPhotoKind,
+  imageUrl: string,
+): Promise<RefillRequestResult> {
+  const [existing] = await db.select().from(pettyCashRefillRequests).where(eq(pettyCashRefillRequests.id, id)).limit(1);
+  if (!existing) return { success: false, error: 'Request not found.' };
+  if (existing.storeId !== storeId) return { success: false, error: 'This request belongs to a different store.' };
+  if (existing.status !== 'approved') {
+    return { success: false, error: 'Proof photos can only be uploaded after Finance approves the refill.' };
+  }
+
+  const columnKey = kind === 'drawer' ? 'drawerPhotoUrl' : 'signaturePhotoUrl';
+
+  const [request] = await db
+    .update(pettyCashRefillRequests)
+    .set({
+      [columnKey]: imageUrl,
+      proofUploadedBy: userId,
+      proofUploadedAt: new Date(),
+    })
     .where(eq(pettyCashRefillRequests.id, id))
     .returning();
+
+  if (!request) return { success: false, error: 'Failed to attach photo.' };
+
+  const bothUploaded = Boolean(request.drawerPhotoUrl) && Boolean(request.signaturePhotoUrl);
+
+  // Guard on balanceAfter still being unset so a retaken photo after the
+  // top-up already happened doesn't add the money a second time.
+  if (bothUploaded && !request.balanceAfter) {
+    const currentPeriod = await getActivePeriod(existing.storeId, existing.yearMonth);
+
+    if (currentPeriod.status === 'open') {
+      const [updated] = await db
+        .update(pettyCashRefillRequests)
+        .set({ balanceAfter: String(PETTY_CASH_MAX_BALANCE), updatedAt: new Date() })
+        .where(eq(pettyCashRefillRequests.id, id))
+        .returning();
+
+      // A refill received mid-month does NOT add money to the current
+      // month — the current period's balance is left untouched so it keeps
+      // reflecting what's actually been spent. The refill instead pre-loads
+      // NEXT month's envelope at the max balance, so once the calendar rolls
+      // over the store already has a fresh, full amount waiting.
+      await topUpPeriodToMax(existing.storeId, addMonths(existing.yearMonth, 1));
+
+      if (updated) {
+        return { success: true, request: updated };
+      }
+    }
+  }
 
   return { success: true, request };
 }

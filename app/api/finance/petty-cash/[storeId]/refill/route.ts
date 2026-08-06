@@ -129,8 +129,6 @@ export async function POST(req: NextRequest, { params }: Params) {
     .select({
       amount: pettyCashTransactions.amount,
       status: pettyCashTransactions.status,
-      imageUrl: pettyCashTransactions.imageUrl,
-      verifiedAt: pettyCashTransactions.verifiedAt,
     })
     .from(pettyCashTransactions)
     .where(
@@ -142,39 +140,11 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   const pendingOpsCount = txRows.filter((tx) => tx.status === 'pending_ops').length;
 
-  const missingReceiptCount = txRows.filter(
-    (tx) => tx.status === 'ops_approved' && !tx.imageUrl,
-  ).length;
-
-  const unverifiedCount = txRows.filter(
-    (tx) => tx.status === 'ops_approved' && tx.imageUrl && !tx.verifiedAt,
-  ).length;
-
   if (pendingOpsCount > 0) {
     return NextResponse.json(
       {
         success: false,
         error: 'There are still petty cash requests waiting for OPS approval.',
-      },
-      { status: 422 },
-    );
-  }
-
-  if (missingReceiptCount > 0) {
-    return NextResponse.json(
-      {
-        success: false,
-        error: 'There are approved petty cash requests without receipt photos.',
-      },
-      { status: 422 },
-    );
-  }
-
-  if (unverifiedCount > 0) {
-    return NextResponse.json(
-      {
-        success: false,
-        error: 'Verify all receipt photos before issuing a refill.',
       },
       { status: 422 },
     );

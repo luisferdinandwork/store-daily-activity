@@ -148,8 +148,6 @@ async function fetchTaskStats(
       UNION ALL
       SELECT store_id, status FROM briefing_tasks       WHERE date >= ${start} AND date < ${end} AND store_id IN (${idList})
       UNION ALL
-      SELECT store_id, status FROM serah_terima_tasks   WHERE date >= ${start} AND date < ${end} AND store_id IN (${idList})
-      UNION ALL
       SELECT store_id, status FROM store_closing_tasks  WHERE date >= ${start} AND date < ${end} AND store_id IN (${idList})
       UNION ALL
       SELECT store_id, status FROM grooming_tasks       WHERE date >= ${start} AND date < ${end} AND store_id IN (${idList})

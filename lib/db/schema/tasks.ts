@@ -13,6 +13,7 @@ import {
 import { taskStatusEnum } from './enums';
 import { schedules, users, stores, issues } from './core';
 import { shifts } from './lookups';
+import { itemTransferOrders } from './item-transfers';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MORNING TASKS
@@ -424,14 +425,33 @@ export const itemDroppingEntries = pgTable('item_dropping_entries', {
   taskId:         integer('task_id').references(() => itemDroppingTasks.id, { onDelete: 'cascade' }).notNull(),
   userId:         text('user_id').references(() => users.id).notNull(),
   storeId:        integer('store_id').references(() => stores.id).notNull(),
+
+  // toNumber holds the linked BC Transfer Order no (transferOrderId.toaNo,
+  // kept for display/back-compat). quantity/dropTime/droppingPhotos are the
+  // legacy manual-entry fields — still populated (quantity = qtyOrdered at
+  // sync time, dropTime = now() until confirmed then the confirm time,
+  // droppingPhotos mirrors courierSignPhoto as a 1-element array) so any
+  // existing reader keeps working; qtyOrdered/qtyCounted/courierSignPhoto
+  // below are the source of truth going forward.
   toNumber:       text('to_number').notNull(),
   quantity:       integer('quantity').default(0).notNull(),
   dropTime:       timestamp('drop_time').notNull(),
   droppingPhotos: text('dropping_photos'),
   notes:          text('notes'),
+
+  // BC-driven pipeline linkage (see lib/db/schema/item-transfers.ts).
+  transferOrderId:  integer('transfer_order_id').references(() => itemTransferOrders.id),
+  qtyOrdered:       integer('qty_ordered'),
+  qtyCounted:       integer('qty_counted'),
+  courierSignPhoto: text('courier_sign_photo'),
+  submittedAt:      timestamp('submitted_at', { mode: 'date' }),
+  submittedBy:      text('submitted_by').references(() => users.id),
+
   createdAt:      timestamp('created_at').defaultNow().notNull(),
   updatedAt:      timestamp('updated_at').defaultNow().notNull(),
-});
+}, (t) => ({
+  transferOrderUnique: unique('item_dropping_entries_transfer_order_unique').on(t.transferOrderId),
+}));
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -475,6 +495,13 @@ export const itemReturnEntries = pgTable('item_return_entries', {
   userId:       text('user_id').references(() => users.id).notNull(),
   storeId:      integer('store_id').references(() => stores.id).notNull(),
 
+  // returnNumber holds the linked BC Transfer Order no (transferOrderId.toaNo,
+  // kept for display/back-compat). description/expectedAt/quantity/returnTime/
+  // returnPhotos are the legacy manual-entry fields — quantity/returnTime
+  // stay populated (quantity = qtyOrdered at sync time, returnTime = now()
+  // until confirmed then the confirm time) so any existing reader keeps
+  // working; qtyOrdered/qtyCounted/courierSignPhoto below are the source of
+  // truth going forward.
   returnNumber: text('return_number').notNull(),
   description:  text('description'),
   expectedAt:   timestamp('expected_at'),
@@ -483,11 +510,20 @@ export const itemReturnEntries = pgTable('item_return_entries', {
   returnPhotos: text('return_photos'),
   notes:        text('notes'),
 
+  // BC-driven pipeline linkage (see lib/db/schema/item-transfers.ts).
+  transferOrderId:  integer('transfer_order_id').references(() => itemTransferOrders.id),
+  qtyOrdered:       integer('qty_ordered'),
+  qtyCounted:       integer('qty_counted'),
+  courierSignPhoto: text('courier_sign_photo'),
+  submittedAt:      timestamp('submitted_at', { mode: 'date' }),
+  submittedBy:      text('submitted_by').references(() => users.id),
+
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (table) => ({
   taskIdx: index('item_return_entries_task_idx').on(table.taskId),
   returnNumberIdx: index('item_return_entries_return_number_idx').on(table.returnNumber),
+  transferOrderUnique: unique('item_return_entries_transfer_order_unique').on(table.transferOrderId),
 }));
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -662,69 +698,40 @@ export const briefingTasks = pgTable('briefing_tasks', {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const serahTerimaTasks = pgTable('serah_terima_tasks', {
-  id:         serial('id').primaryKey(),
-  scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
-  userId:     text('user_id').references(() => users.id).notNull(),
-  storeId:    integer('store_id').references(() => stores.id).notNull(),
-  shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
-  date:       timestamp('date').notNull(),
-
-  /**
-   * Free-text input written by the current shift.
-   * Backend splits this into serah_terima_items so the next shift can tick
-   * each message/action independently.
-   */
-  handoverText: text('handover_text'),
-
-  submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
-  submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
-
-  status:      taskStatusEnum('status').default('not_started').notNull(),
-  notes:       text('notes'),
-  completedAt: timestamp('completed_at'),
-  verifiedBy:  text('verified_by').references(() => users.id),
-  verifiedAt:  timestamp('verified_at'),
-  createdAt:   timestamp('created_at').defaultNow().notNull(),
-  updatedAt:   timestamp('updated_at').defaultNow().notNull(),
-}, (table) => ({
-  scheduleShiftUnique: unique('serah_terima_tasks_schedule_shift_unique')
-    .on(table.scheduleId, table.shiftId),
-  storeDateShiftUnique: unique('serah_terima_tasks_store_date_shift_unique')
-    .on(table.storeId, table.date, table.shiftId),
-  storeDateShiftIdx: index('serah_terima_tasks_store_date_shift_idx')
-    .on(table.storeId, table.date, table.shiftId),
-}));
-
-export const serahTerimaItems = pgTable('serah_terima_items', {
-  id:     serial('id').primaryKey(),
-  taskId: integer('task_id')
-    .references(() => serahTerimaTasks.id, { onDelete: 'cascade' })
-    .notNull(),
-
-  /**
-   * The task that receives this message.
-   * It is filled when the next shift task exists/materialises.
-   */
-  receiverTaskId: integer('receiver_task_id'),
-
-  storeId:     integer('store_id').references(() => stores.id).notNull(),
-  sourceUserId:text('source_user_id').references(() => users.id).notNull(),
-  targetShiftId: integer('target_shift_id').references(() => shifts.id).notNull(),
+/**
+ * Serah Terima — a shared, rolling handover board per store.
+ *
+ * Unlike the other shift-scoped tasks, this is intentionally NOT reset
+ * daily and NOT restricted to a single shift: any shift can add an entry at
+ * any time, and morning/evening/full_day all see the exact same list for
+ * their store. An entry stays in the active list (isCompleted = false)
+ * until any shift member marks it complete — there is no "next shift"
+ * targeting or chain.
+ */
+export const serahTerimaEntries = pgTable('serah_terima_entries', {
+  id:      serial('id').primaryKey(),
+  storeId: integer('store_id').references(() => stores.id).notNull(),
 
   message: text('message').notNull(),
 
-  isCompleted: boolean('is_completed').default(false).notNull(),
-  completedBy: text('completed_by').references(() => users.id),
+  createdByUserId:     text('created_by_user_id').references(() => users.id).notNull(),
+  createdByScheduleId: integer('created_by_schedule_id').references(() => schedules.id).notNull(),
+  createdByShiftId:    integer('created_by_shift_id').references(() => shifts.id).notNull(),
+  submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
+  submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
+
+  isCompleted:           boolean('is_completed').default(false).notNull(),
+  completedByUserId:     text('completed_by_user_id').references(() => users.id),
+  completedByScheduleId: integer('completed_by_schedule_id').references(() => schedules.id),
+  completedByShiftId:    integer('completed_by_shift_id').references(() => shifts.id),
   completedAt: timestamp('completed_at'),
 
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (table) => ({
-  taskIdx: index('serah_terima_items_task_idx').on(table.taskId),
-  receiverTaskIdx: index('serah_terima_items_receiver_task_idx').on(table.receiverTaskId),
-  storeTargetShiftIdx: index('serah_terima_items_store_target_shift_idx')
-    .on(table.storeId, table.targetShiftId),
+  storeIdx: index('serah_terima_entries_store_idx').on(table.storeId),
+  storeCompletedIdx: index('serah_terima_entries_store_completed_idx')
+    .on(table.storeId, table.isCompleted),
 }));
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -896,10 +903,8 @@ export type NewCekUangModalDenomination = typeof cekUangModalDenominations.$infe
 
 export type BriefingTask          = typeof briefingTasks.$inferSelect;
 export type NewBriefingTask       = typeof briefingTasks.$inferInsert;
-export type SerahTerimaTask       = typeof serahTerimaTasks.$inferSelect;
-export type NewSerahTerimaTask    = typeof serahTerimaTasks.$inferInsert;
-export type SerahTerimaItem       = typeof serahTerimaItems.$inferSelect;
-export type NewSerahTerimaItem    = typeof serahTerimaItems.$inferInsert;
+export type SerahTerimaEntry      = typeof serahTerimaEntries.$inferSelect;
+export type NewSerahTerimaEntry   = typeof serahTerimaEntries.$inferInsert;
 export type StoreClosingTask      = typeof storeClosingTasks.$inferSelect;
 export type NewStoreClosingTask   = typeof storeClosingTasks.$inferInsert;
 export type GroomingTask          = typeof groomingTasks.$inferSelect;

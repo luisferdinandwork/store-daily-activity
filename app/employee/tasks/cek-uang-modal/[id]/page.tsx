@@ -403,6 +403,7 @@ function DenominationRow({
 }) {
   const quantity = toQty(row.quantity);
   const amount = row.denominationValue * quantity;
+  const isEmpty = quantity === 0;
 
   return (
     <div
@@ -410,7 +411,9 @@ function DenominationRow({
         'rounded-2xl border p-3 transition-colors',
         quantity > 0
           ? 'border-primary/30 bg-primary/5'
-          : 'border-border bg-card',
+          : !disabled
+            ? 'border-red-200 bg-red-50/50'
+            : 'border-border bg-card',
       )}
     >
       <div className="flex items-center gap-3">
@@ -430,6 +433,11 @@ function DenominationRow({
               Maks qty saat ini: {maxQuantity.toLocaleString('id-ID')}
             </p>
           )}
+          {!disabled && isEmpty && (
+            <p className="mt-0.5 text-[10px] font-semibold text-red-600">
+              Wajib diisi
+            </p>
+          )}
         </div>
 
         <div className="w-24 shrink-0">
@@ -446,7 +454,10 @@ function DenominationRow({
             disabled={disabled}
             onChange={(e) => onQuantityChange(toQty(e.target.value))}
             placeholder="0"
-            className="h-10 w-full rounded-xl border border-border bg-secondary px-3 text-right text-sm font-bold focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
+            className={cn(
+              'h-10 w-full rounded-xl border bg-secondary px-3 text-right text-sm font-bold focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60',
+              !disabled && isEmpty ? 'border-red-300' : 'border-border',
+            )}
           />
         </div>
       </div>
@@ -545,11 +556,14 @@ export default function CekUangModalDetailPage() {
   const totalPct = maxAmount > 0 ? Math.min(100, Math.round((totalAmount / maxAmount) * 100)) : 0;
   const filledRows = rows.filter((row) => toQty(row.quantity) > 0).length;
   const isOverLimit = totalAmount > maxAmount;
-  const canSubmit = !locked && totalAmount > 0 && !isOverLimit;
+  const allDenominationsFilled = rows.every((row) => toQty(row.quantity) > 0);
+  const canSubmit = !locked && allDenominationsFilled && !isOverLimit;
 
   const submitHint = (() => {
     if (locked) return '';
-    if (totalAmount <= 0) return 'Isi minimal satu pecahan uang terlebih dahulu.';
+    if (!allDenominationsFilled) {
+      return `Semua pecahan uang wajib diisi (${filledRows} dari ${rows.length} terisi).`;
+    }
     if (isOverLimit) return `Total uang modal maksimal ${formatRupiah(maxAmount)}.`;
     return '';
   })();
@@ -601,6 +615,7 @@ export default function CekUangModalDetailPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          taskId: taskIdNum,
           scheduleId,
           storeId,
           lat: geo?.lat,
@@ -749,8 +764,14 @@ export default function CekUangModalDetailPage() {
                       <p className="mt-1 text-2xl font-black tracking-tight text-foreground">
                         {formatRupiah(totalAmount)}
                       </p>
-                      <p className="mt-1 text-[11px] text-muted-foreground">
+                      <p
+                        className={cn(
+                          'mt-1 text-[11px] font-medium',
+                          !readonly && !allDenominationsFilled ? 'text-red-600' : 'text-muted-foreground',
+                        )}
+                      >
                         {filledRows} dari {rows.length} pecahan terisi
+                        {!readonly && !allDenominationsFilled && ' · semua pecahan wajib diisi'}
                       </p>
                       <div className="mt-3 space-y-2">
                         <div className="h-2 overflow-hidden rounded-full bg-secondary">

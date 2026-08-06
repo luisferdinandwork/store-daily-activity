@@ -20,6 +20,7 @@ import {
   MapPinned,
   Store,
   Target,
+  Truck,
   UserCheck,
   Wallet,
 } from 'lucide-react';
@@ -65,6 +66,14 @@ const PERFORMANCE_TARGETS_ITEM = {
   label: 'Performance Targets',
   icon: Target,
   key: 'performance-targets',
+};
+
+// Item Return → Shipping → Item Receiving BC pipeline dashboard.
+const ITEM_TRANSFERS_ITEM = {
+  href: '/ops/item-transfers',
+  label: 'Item Transfers',
+  icon: Truck,
+  key: 'item-transfers',
 };
 
 // New: Business Central API credentials management (Settings group).
@@ -124,6 +133,7 @@ const NAV = [
       { href: '/ops/issues',               label: 'Issues',               icon: AlertTriangle },
       { href: IMPACT_VISIT_ITEM.href,      label: IMPACT_VISIT_ITEM.label, icon: IMPACT_VISIT_ITEM.icon },
       { href: '/ops/petty-cash',           label: 'Petty Cash',           icon: Wallet },
+      { href: ITEM_TRANSFERS_ITEM.href,    label: ITEM_TRANSFERS_ITEM.label, icon: ITEM_TRANSFERS_ITEM.icon },
       { href: PERFORMANCE_TARGETS_ITEM.href, label: PERFORMANCE_TARGETS_ITEM.label, icon: PERFORMANCE_TARGETS_ITEM.icon },
     ],
   },

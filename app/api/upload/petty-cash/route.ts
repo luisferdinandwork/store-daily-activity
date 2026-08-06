@@ -6,6 +6,8 @@
 // Expects multipart/form-data with:
 //   file      — a single image File
 //   storeName — store name (used in filename)
+//   kind      — optional label appended to the filename (e.g. "cash",
+//               "drawer", "signature") to distinguish refill proof photos
 //
 // Returns: { url: string; key: string }
 //   url  → public path served by Next.js static files
@@ -84,6 +86,7 @@ export async function POST(req: NextRequest) {
     const form      = await req.formData();
     const file      = form.get('file') as File | null;
     const storeName = form.get('storeName') as string | null;
+    const kind      = form.get('kind') as string | null;
 
     if (!file) {
       return NextResponse.json({ error: 'No file provided.' }, { status: 400 });
@@ -102,7 +105,8 @@ export async function POST(req: NextRequest) {
     const storeSlug = slugify(storeName ?? 'store');
     const date      = todayStr();
     const ext       = safeExt(file);
-    const filename  = `${storeSlug}_${date}.${ext}`;
+    const kindSlug  = kind ? slugify(kind) : '';
+    const filename  = `${storeSlug}_${date}${kindSlug ? `_${kindSlug}` : ''}.${ext}`;
     const finalName = await resolveFilename(uploadDir, filename);
 
     const buffer = Buffer.from(await file.arrayBuffer());

@@ -1,6 +1,9 @@
 // app/api/finance/petty-cash/refill-requests/[id]/route.ts
 //
-// PATCH — approve or reject a refill request. Body: { action: 'approve' | 'reject', rejectionReason? }
+// PATCH — approve or reject a refill request. Finance is the one physically
+// handing over the cash, so approval tops up the store's current period
+// balance immediately — this is what the employee sees as "Approved".
+// Body: { action: 'approve' | 'reject', rejectionReason? }
 
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveFinanceScope } from '@/lib/finance/scope';

@@ -6,11 +6,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
 import { stores } from '@/lib/db/schema/core';
-import {
-  PETTY_CASH_MAX_BALANCE,
-  pettyCashPeriods,
-  pettyCashTransactions,
-} from '@/lib/db/schema/petty-cash';
+import { pettyCashTransactions } from '@/lib/db/schema/petty-cash';
 
 type Params = {
   params: Promise<{
@@ -83,6 +79,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     .select({
       id: pettyCashTransactions.id,
       storeId: pettyCashTransactions.storeId,
+      periodId: pettyCashTransactions.periodId,
       yearMonth: pettyCashTransactions.yearMonth,
       amount: pettyCashTransactions.amount,
       status: pettyCashTransactions.status,
@@ -156,48 +153,14 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     });
   }
 
-  await db
-    .insert(pettyCashPeriods)
-    .values({
-      storeId: requestRow.storeId,
-      yearMonth: requestRow.yearMonth,
-      openingBalance: String(PETTY_CASH_MAX_BALANCE),
-      currentBalance: String(PETTY_CASH_MAX_BALANCE),
-      status: 'open',
-    })
-    .onConflictDoNothing({
-      target: [pettyCashPeriods.storeId, pettyCashPeriods.yearMonth],
-    });
-
-  const [period] = await db
-    .select({
-      id: pettyCashPeriods.id,
-      currentBalance: pettyCashPeriods.currentBalance,
-      status: pettyCashPeriods.status,
-    })
-    .from(pettyCashPeriods)
-    .where(
-      and(
-        eq(pettyCashPeriods.storeId, requestRow.storeId),
-        eq(pettyCashPeriods.yearMonth, requestRow.yearMonth),
-      ),
-    )
-    .limit(1);
-
-  if (!period) {
+  // The period was already fixed at request-creation time (see
+  // POST /api/employee/petty-cash) — we deduct from that exact row rather
+  // than re-deriving one by yearMonth, since balance now carries forward
+  // across months instead of resetting on the calendar.
+  if (!requestRow.periodId) {
     return NextResponse.json(
       { success: false, error: 'Petty cash period not found.' },
       { status: 500 },
-    );
-  }
-
-  if (period.status === 'closed') {
-    return NextResponse.json(
-      {
-        success: false,
-        error: 'This petty cash month is already closed.',
-      },
-      { status: 422 },
     );
   }
 
@@ -212,7 +175,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       SET
         current_balance = current_balance - ${amount}::numeric,
         updated_at = NOW()
-      WHERE id = ${period.id}
+      WHERE id = ${requestRow.periodId}
         AND status = 'open'
         AND current_balance >= ${amount}::numeric
       RETURNING

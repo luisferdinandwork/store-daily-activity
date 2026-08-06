@@ -47,6 +47,14 @@ body {
   }
 }
 
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 /* Heatmap colors */
 .heatmap-perfect {
   background-color: rgb(34 197 94);

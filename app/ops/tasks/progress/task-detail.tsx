@@ -723,42 +723,6 @@ function BriefingDetail({ task }: { task: FlatTask }) {
   );
 }
 
-function SerahTerimaDetail({ task }: { task: FlatTask }) {
-  const e = task.extra;
-  const items = Array.isArray(e.items) ? (e.items as Record<string, unknown>[]) : [];
-  const handoverText = typeof e.handoverText === 'string' ? e.handoverText : '';
-  const doneItems = items.filter(item => Boolean(item.isCompleted)).length;
-
-  return (
-    <div>
-      <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">
-        {items.length > 0 ? `${doneItems}/${items.length} pesan selesai` : 'Pesan handover'}
-      </p>
-      {items.length > 0 ? (
-        <div className="divide-y divide-slate-100">
-          {items.map((item, index) => (
-            <CheckRow
-              key={String(item.id ?? index)}
-              label={String(item.message ?? '')}
-              done={Boolean(item.isCompleted)}
-              by={(item.completedByName as string | null) ?? (item.completedBy as string | null)}
-              at={item.completedAt as string | null}
-            />
-          ))}
-        </div>
-      ) : handoverText ? (
-        <div className="whitespace-pre-line rounded-lg bg-slate-50 px-3 py-2 text-xs font-medium leading-relaxed text-slate-600">
-          {handoverText}
-        </div>
-      ) : (
-        <p className="py-2 text-xs text-slate-400">Belum ada pesan serah terima.</p>
-      )}
-      <ActorFooter task={task} />
-      <NotesBlock notes={task.notes} />
-    </div>
-  );
-}
-
 // Store Closing — replaces edc_reconciliation + eod_z_report + open_statement.
 // Order per OPS request: EOD Z-Report → EDC Summary → EDC Settlement → evidence
 // photo → Open Statement.
@@ -923,7 +887,6 @@ export function TaskDetailBody({ task }: { task: FlatTask }) {
     case 'item_return':     return <ItemReturnDetail task={task} />;
     case 'cek_uang_modal':   return <CekUangModalDetail task={task} />;
     case 'briefing':        return <BriefingDetail task={task} />;
-    case 'serah_terima':    return <SerahTerimaDetail task={task} />;
     case 'store_closing':   return <StoreClosingDetail task={task} />;
     case 'grooming':        return <GroomingEmployeeDetail task={task} />;
     default:

@@ -5,9 +5,8 @@ import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import { resolveFinanceScope } from '@/lib/finance/scope';
-import { areas, stores, users } from '@/lib/db/schema/core';
+import { areas, stores } from '@/lib/db/schema/core';
 import {
-  PETTY_CASH_MAX_BALANCE,
   pettyCashPeriods,
   pettyCashRefills,
   pettyCashTransactions,
@@ -41,9 +40,6 @@ export type PettyCashTxRow = {
   approvedAt: string | null;
   rejectedAt: string | null;
   rejectionReason: string | null;
-  verifiedAt: string | null;
-  verifiedBy: string | null;
-  canVerify: boolean;
   createdAt: string;
 };
 
@@ -61,8 +57,6 @@ export type PettyCashStoreRow = {
   monthlySpend: string;
 
   pendingOpsCount: number;
-  missingReceiptCount: number;
-  unverifiedCount: number;
   rejectedCount: number;
 
   refillIssued: boolean;
@@ -115,39 +109,18 @@ export async function GET(
 
   const storeIds = storeRows.map((store) => store.id);
 
-  if (month === currentMonth) {
-    await db
-      .insert(pettyCashPeriods)
-      .values(
-        storeRows.map((store) => ({
-          storeId: store.id,
-          yearMonth: month,
-          openingBalance: String(PETTY_CASH_MAX_BALANCE),
-          currentBalance: String(PETTY_CASH_MAX_BALANCE),
-          status: 'open',
-        })),
-      )
-      .onConflictDoNothing({
-        target: [pettyCashPeriods.storeId, pettyCashPeriods.yearMonth],
-      });
-  }
-
+  // Exact-month only, deliberately no carry-forward fallback here: this
+  // view is a per-month provisioning ledger, not a live balance dashboard.
+  // A store only appears in a given month if it actually has a period row
+  // for that exact month (created by a completed refill, or — for the very
+  // first month a store is ever used — bootstrapped lazily elsewhere). A
+  // past month's row is never touched again once a later one exists, so
+  // its balance stays exactly as it was; a store that hasn't been refilled
+  // this month simply isn't listed here at all.
   const periodRows = await db
-    .select({
-      id: pettyCashPeriods.id,
-      storeId: pettyCashPeriods.storeId,
-      openingBalance: pettyCashPeriods.openingBalance,
-      currentBalance: pettyCashPeriods.currentBalance,
-      closingBalance: pettyCashPeriods.closingBalance,
-      status: pettyCashPeriods.status,
-    })
+    .select()
     .from(pettyCashPeriods)
-    .where(
-      and(
-        eq(pettyCashPeriods.yearMonth, month),
-        inArray(pettyCashPeriods.storeId, storeIds),
-      ),
-    );
+    .where(and(eq(pettyCashPeriods.yearMonth, month), inArray(pettyCashPeriods.storeId, storeIds)));
 
   const periodByStore = new Map(periodRows.map((period) => [period.storeId, period]));
 
@@ -162,11 +135,9 @@ export async function GET(
       approvedAt: pettyCashTransactions.approvedAt,
       rejectedAt: pettyCashTransactions.rejectedAt,
       rejectionReason: pettyCashTransactions.rejectionReason,
-      verifiedAt: pettyCashTransactions.verifiedAt,
       createdAt: pettyCashTransactions.createdAt,
       submittedById: pettyCashTransactions.userId,
       submitterName: sql<string>`COALESCE((SELECT name FROM users WHERE id = ${pettyCashTransactions.userId}), 'Unknown')`,
-      verifierName: sql<string | null>`(SELECT name FROM users WHERE id = ${pettyCashTransactions.verifiedBy})`,
     })
     .from(pettyCashTransactions)
     .where(
@@ -198,8 +169,10 @@ export async function GET(
     txByStore.get(tx.storeId)?.push(tx);
   }
 
-  const data: PettyCashStoreRow[] = storeRows.map((store) => {
-    const period = periodByStore.get(store.id);
+  const data: PettyCashStoreRow[] = storeRows
+    .filter((store) => periodByStore.has(store.id))
+    .map((store) => {
+    const period = periodByStore.get(store.id)!;
     const refill = refillByStore.get(store.id) ?? null;
     const txList = txByStore.get(store.id) ?? [];
 
@@ -212,27 +185,9 @@ export async function GET(
 
     const pendingOpsCount = txList.filter((tx) => tx.status === 'pending_ops').length;
 
-    const missingReceiptCount = txList.filter(
-      (tx) => tx.status === 'ops_approved' && !tx.imageUrl,
-    ).length;
-
-    const financeUnverifiedCount = txList.filter(
-      (tx) => tx.status === 'ops_approved' && tx.imageUrl && !tx.verifiedAt,
-    ).length;
-
     const rejectedCount = txList.filter((tx) => tx.status === 'ops_rejected').length;
 
-    const openingBalance = period?.openingBalance ?? String(PETTY_CASH_MAX_BALANCE);
-
-    const fallbackBalance = Math.max(
-      0,
-      Number(openingBalance) - monthlySpend,
-    );
-
-    const balance =
-      period?.closingBalance ??
-      period?.currentBalance ??
-      String(fallbackBalance);
+    const balance = period.closingBalance ?? period.currentBalance;
 
     return {
       storeId: store.id,
@@ -240,16 +195,14 @@ export async function GET(
       storeName: store.name,
       areaName: store.areaName,
 
-      openingBalance,
+      openingBalance: period.openingBalance,
       balance,
-      closingBalance: period?.closingBalance ?? null,
-      periodStatus: period?.status === 'closed' ? 'closed' : 'open',
+      closingBalance: period.closingBalance,
+      periodStatus: period.status === 'closed' ? 'closed' : 'open',
 
       monthlySpend: String(monthlySpend),
 
       pendingOpsCount,
-      missingReceiptCount,
-      unverifiedCount: pendingOpsCount + missingReceiptCount + financeUnverifiedCount,
       rejectedCount,
 
       refillIssued: Boolean(refill),
@@ -267,17 +220,14 @@ export async function GET(
         approvedAt: tx.approvedAt ? new Date(tx.approvedAt).toISOString() : null,
         rejectedAt: tx.rejectedAt ? new Date(tx.rejectedAt).toISOString() : null,
         rejectionReason: tx.rejectionReason,
-        verifiedAt: tx.verifiedAt ? new Date(tx.verifiedAt).toISOString() : null,
-        verifiedBy: tx.verifierName ?? null,
-        canVerify: tx.status === 'ops_approved' && Boolean(tx.imageUrl) && !tx.verifiedAt,
         createdAt: new Date(tx.createdAt).toISOString(),
       })),
     };
   });
 
   data.sort((a, b) => {
-    const priorityA = a.unverifiedCount > 0 ? 0 : a.refillIssued ? 2 : 1;
-    const priorityB = b.unverifiedCount > 0 ? 0 : b.refillIssued ? 2 : 1;
+    const priorityA = a.pendingOpsCount > 0 ? 0 : a.refillIssued ? 2 : 1;
+    const priorityB = b.pendingOpsCount > 0 ? 0 : b.refillIssued ? 2 : 1;
 
     if (priorityA !== priorityB) return priorityA - priorityB;
 

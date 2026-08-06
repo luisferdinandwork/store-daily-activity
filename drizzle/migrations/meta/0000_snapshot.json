@@ -1,5 +1,5 @@
 {
-  "id": "23d2214f-837b-43fa-9436-fb0320732b36",
+  "id": "67c7cc6f-377c-4241-9c5c-b4df55d5b941",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -1850,6 +1850,18 @@
           "primaryKey": false,
           "notNull": false
         },
+        "switched_from_role_id": {
+          "name": "switched_from_role_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "switched_from_employee_type_id": {
+          "name": "switched_from_employee_type_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
         "home_store_id": {
           "name": "home_store_id",
           "type": "integer",
@@ -1951,6 +1963,32 @@
           "tableTo": "employee_types",
           "columnsFrom": [
             "employee_type_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "users_switched_from_role_id_user_roles_id_fk": {
+          "name": "users_switched_from_role_id_user_roles_id_fk",
+          "tableFrom": "users",
+          "tableTo": "user_roles",
+          "columnsFrom": [
+            "switched_from_role_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "users_switched_from_employee_type_id_employee_types_id_fk": {
+          "name": "users_switched_from_employee_type_id_employee_types_id_fk",
+          "tableFrom": "users",
+          "tableTo": "employee_types",
+          "columnsFrom": [
+            "switched_from_employee_type_id"
           ],
           "columnsTo": [
             "id"
@@ -2715,6 +2753,30 @@
           "primaryKey": false,
           "notNull": false
         },
+        "drawer_photo_url": {
+          "name": "drawer_photo_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "signature_photo_url": {
+          "name": "signature_photo_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "proof_uploaded_by": {
+          "name": "proof_uploaded_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "proof_uploaded_at": {
+          "name": "proof_uploaded_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
@@ -2813,6 +2875,19 @@
           "tableTo": "users",
           "columnsFrom": [
             "rejected_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "petty_cash_refill_requests_proof_uploaded_by_users_id_fk": {
+          "name": "petty_cash_refill_requests_proof_uploaded_by_users_id_fk",
+          "tableFrom": "petty_cash_refill_requests",
+          "tableTo": "users",
+          "columnsFrom": [
+            "proof_uploaded_by"
           ],
           "columnsTo": [
             "id"
@@ -3069,18 +3144,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "verified_by": {
-          "name": "verified_by",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "verified_at": {
-          "name": "verified_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
         "archived_at": {
           "name": "archived_at",
           "type": "timestamp",
@@ -3143,21 +3206,6 @@
           "columns": [
             {
               "expression": "status",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "pct_verified_idx": {
-          "name": "pct_verified_idx",
-          "columns": [
-            {
-              "expression": "verified_at",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -3243,19 +3291,6 @@
           "tableTo": "users",
           "columnsFrom": [
             "rejected_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "petty_cash_transactions_verified_by_users_id_fk": {
-          "name": "petty_cash_transactions_verified_by_users_id_fk",
-          "tableFrom": "petty_cash_transactions",
-          "tableTo": "users",
-          "columnsFrom": [
-            "verified_by"
           ],
           "columnsTo": [
             "id"
@@ -4540,6 +4575,42 @@
           "primaryKey": false,
           "notNull": false
         },
+        "transfer_order_id": {
+          "name": "transfer_order_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "qty_ordered": {
+          "name": "qty_ordered",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "qty_counted": {
+          "name": "qty_counted",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "courier_sign_photo": {
+          "name": "courier_sign_photo",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "submitted_at": {
+          "name": "submitted_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "submitted_by": {
+          "name": "submitted_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
@@ -4595,10 +4666,44 @@
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
+        },
+        "item_dropping_entries_transfer_order_id_item_transfer_orders_id_fk": {
+          "name": "item_dropping_entries_transfer_order_id_item_transfer_orders_id_fk",
+          "tableFrom": "item_dropping_entries",
+          "tableTo": "item_transfer_orders",
+          "columnsFrom": [
+            "transfer_order_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "item_dropping_entries_submitted_by_users_id_fk": {
+          "name": "item_dropping_entries_submitted_by_users_id_fk",
+          "tableFrom": "item_dropping_entries",
+          "tableTo": "users",
+          "columnsFrom": [
+            "submitted_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "item_dropping_entries_transfer_order_unique": {
+          "name": "item_dropping_entries_transfer_order_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "transfer_order_id"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -4864,6 +4969,42 @@
           "primaryKey": false,
           "notNull": false
         },
+        "transfer_order_id": {
+          "name": "transfer_order_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "qty_ordered": {
+          "name": "qty_ordered",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "qty_counted": {
+          "name": "qty_counted",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "courier_sign_photo": {
+          "name": "courier_sign_photo",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "submitted_at": {
+          "name": "submitted_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "submitted_by": {
+          "name": "submitted_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
@@ -4950,10 +5091,44 @@
           ],
           "onDelete": "no action",
           "onUpdate": "no action"
+        },
+        "item_return_entries_transfer_order_id_item_transfer_orders_id_fk": {
+          "name": "item_return_entries_transfer_order_id_item_transfer_orders_id_fk",
+          "tableFrom": "item_return_entries",
+          "tableTo": "item_transfer_orders",
+          "columnsFrom": [
+            "transfer_order_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "item_return_entries_submitted_by_users_id_fk": {
+          "name": "item_return_entries_submitted_by_users_id_fk",
+          "tableFrom": "item_return_entries",
+          "tableTo": "users",
+          "columnsFrom": [
+            "submitted_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
+      "uniqueConstraints": {
+        "item_return_entries_transfer_order_unique": {
+          "name": "item_return_entries_transfer_order_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "transfer_order_id"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -5615,8 +5790,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.serah_terima_items": {
-      "name": "serah_terima_items",
+    "public.serah_terima_entries": {
+      "name": "serah_terima_entries",
       "schema": "",
       "columns": {
         "id": {
@@ -5625,32 +5800,8 @@
           "primaryKey": true,
           "notNull": true
         },
-        "task_id": {
-          "name": "task_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "receiver_task_id": {
-          "name": "receiver_task_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
         "store_id": {
           "name": "store_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "source_user_id": {
-          "name": "source_user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "target_shift_id": {
-          "name": "target_shift_id",
           "type": "integer",
           "primaryKey": false,
           "notNull": true
@@ -5661,211 +5812,23 @@
           "primaryKey": false,
           "notNull": true
         },
-        "is_completed": {
-          "name": "is_completed",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "completed_by": {
-          "name": "completed_by",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "completed_at": {
-          "name": "completed_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "serah_terima_items_task_idx": {
-          "name": "serah_terima_items_task_idx",
-          "columns": [
-            {
-              "expression": "task_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "serah_terima_items_receiver_task_idx": {
-          "name": "serah_terima_items_receiver_task_idx",
-          "columns": [
-            {
-              "expression": "receiver_task_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "serah_terima_items_store_target_shift_idx": {
-          "name": "serah_terima_items_store_target_shift_idx",
-          "columns": [
-            {
-              "expression": "store_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "target_shift_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "serah_terima_items_task_id_serah_terima_tasks_id_fk": {
-          "name": "serah_terima_items_task_id_serah_terima_tasks_id_fk",
-          "tableFrom": "serah_terima_items",
-          "tableTo": "serah_terima_tasks",
-          "columnsFrom": [
-            "task_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "serah_terima_items_store_id_stores_id_fk": {
-          "name": "serah_terima_items_store_id_stores_id_fk",
-          "tableFrom": "serah_terima_items",
-          "tableTo": "stores",
-          "columnsFrom": [
-            "store_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "serah_terima_items_source_user_id_users_id_fk": {
-          "name": "serah_terima_items_source_user_id_users_id_fk",
-          "tableFrom": "serah_terima_items",
-          "tableTo": "users",
-          "columnsFrom": [
-            "source_user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "serah_terima_items_target_shift_id_shifts_id_fk": {
-          "name": "serah_terima_items_target_shift_id_shifts_id_fk",
-          "tableFrom": "serah_terima_items",
-          "tableTo": "shifts",
-          "columnsFrom": [
-            "target_shift_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "serah_terima_items_completed_by_users_id_fk": {
-          "name": "serah_terima_items_completed_by_users_id_fk",
-          "tableFrom": "serah_terima_items",
-          "tableTo": "users",
-          "columnsFrom": [
-            "completed_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.serah_terima_tasks": {
-      "name": "serah_terima_tasks",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "serial",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "schedule_id": {
-          "name": "schedule_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "user_id": {
-          "name": "user_id",
+        "created_by_user_id": {
+          "name": "created_by_user_id",
           "type": "text",
           "primaryKey": false,
           "notNull": true
         },
-        "store_id": {
-          "name": "store_id",
+        "created_by_schedule_id": {
+          "name": "created_by_schedule_id",
           "type": "integer",
           "primaryKey": false,
           "notNull": true
         },
-        "shift_id": {
-          "name": "shift_id",
+        "created_by_shift_id": {
+          "name": "created_by_shift_id",
           "type": "integer",
           "primaryKey": false,
           "notNull": true
-        },
-        "date": {
-          "name": "date",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "handover_text": {
-          "name": "handover_text",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
         },
         "submitted_lat": {
           "name": "submitted_lat",
@@ -5879,34 +5842,33 @@
           "primaryKey": false,
           "notNull": false
         },
-        "status": {
-          "name": "status",
-          "type": "task_status",
-          "typeSchema": "public",
+        "is_completed": {
+          "name": "is_completed",
+          "type": "boolean",
           "primaryKey": false,
           "notNull": true,
-          "default": "'not_started'"
+          "default": false
         },
-        "notes": {
-          "name": "notes",
+        "completed_by_user_id": {
+          "name": "completed_by_user_id",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_by_schedule_id": {
+          "name": "completed_by_schedule_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_by_shift_id": {
+          "name": "completed_by_shift_id",
+          "type": "integer",
           "primaryKey": false,
           "notNull": false
         },
         "completed_at": {
           "name": "completed_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "verified_by": {
-          "name": "verified_by",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "verified_at": {
-          "name": "verified_at",
           "type": "timestamp",
           "primaryKey": false,
           "notNull": false
@@ -5927,8 +5889,23 @@
         }
       },
       "indexes": {
-        "serah_terima_tasks_store_date_shift_idx": {
-          "name": "serah_terima_tasks_store_date_shift_idx",
+        "serah_terima_entries_store_idx": {
+          "name": "serah_terima_entries_store_idx",
+          "columns": [
+            {
+              "expression": "store_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "serah_terima_entries_store_completed_idx": {
+          "name": "serah_terima_entries_store_completed_idx",
           "columns": [
             {
               "expression": "store_id",
@@ -5937,13 +5914,7 @@
               "nulls": "last"
             },
             {
-              "expression": "date",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "shift_id",
+              "expression": "is_completed",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -5956,35 +5927,9 @@
         }
       },
       "foreignKeys": {
-        "serah_terima_tasks_schedule_id_schedules_id_fk": {
-          "name": "serah_terima_tasks_schedule_id_schedules_id_fk",
-          "tableFrom": "serah_terima_tasks",
-          "tableTo": "schedules",
-          "columnsFrom": [
-            "schedule_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "serah_terima_tasks_user_id_users_id_fk": {
-          "name": "serah_terima_tasks_user_id_users_id_fk",
-          "tableFrom": "serah_terima_tasks",
-          "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "serah_terima_tasks_store_id_stores_id_fk": {
-          "name": "serah_terima_tasks_store_id_stores_id_fk",
-          "tableFrom": "serah_terima_tasks",
+        "serah_terima_entries_store_id_stores_id_fk": {
+          "name": "serah_terima_entries_store_id_stores_id_fk",
+          "tableFrom": "serah_terima_entries",
           "tableTo": "stores",
           "columnsFrom": [
             "store_id"
@@ -5995,12 +5940,12 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "serah_terima_tasks_shift_id_shifts_id_fk": {
-          "name": "serah_terima_tasks_shift_id_shifts_id_fk",
-          "tableFrom": "serah_terima_tasks",
-          "tableTo": "shifts",
+        "serah_terima_entries_created_by_user_id_users_id_fk": {
+          "name": "serah_terima_entries_created_by_user_id_users_id_fk",
+          "tableFrom": "serah_terima_entries",
+          "tableTo": "users",
           "columnsFrom": [
-            "shift_id"
+            "created_by_user_id"
           ],
           "columnsTo": [
             "id"
@@ -6008,12 +5953,64 @@
           "onDelete": "no action",
           "onUpdate": "no action"
         },
-        "serah_terima_tasks_verified_by_users_id_fk": {
-          "name": "serah_terima_tasks_verified_by_users_id_fk",
-          "tableFrom": "serah_terima_tasks",
+        "serah_terima_entries_created_by_schedule_id_schedules_id_fk": {
+          "name": "serah_terima_entries_created_by_schedule_id_schedules_id_fk",
+          "tableFrom": "serah_terima_entries",
+          "tableTo": "schedules",
+          "columnsFrom": [
+            "created_by_schedule_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "serah_terima_entries_created_by_shift_id_shifts_id_fk": {
+          "name": "serah_terima_entries_created_by_shift_id_shifts_id_fk",
+          "tableFrom": "serah_terima_entries",
+          "tableTo": "shifts",
+          "columnsFrom": [
+            "created_by_shift_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "serah_terima_entries_completed_by_user_id_users_id_fk": {
+          "name": "serah_terima_entries_completed_by_user_id_users_id_fk",
+          "tableFrom": "serah_terima_entries",
           "tableTo": "users",
           "columnsFrom": [
-            "verified_by"
+            "completed_by_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "serah_terima_entries_completed_by_schedule_id_schedules_id_fk": {
+          "name": "serah_terima_entries_completed_by_schedule_id_schedules_id_fk",
+          "tableFrom": "serah_terima_entries",
+          "tableTo": "schedules",
+          "columnsFrom": [
+            "completed_by_schedule_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "serah_terima_entries_completed_by_shift_id_shifts_id_fk": {
+          "name": "serah_terima_entries_completed_by_shift_id_shifts_id_fk",
+          "tableFrom": "serah_terima_entries",
+          "tableTo": "shifts",
+          "columnsFrom": [
+            "completed_by_shift_id"
           ],
           "columnsTo": [
             "id"
@@ -6023,25 +6020,7 @@
         }
       },
       "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "serah_terima_tasks_schedule_shift_unique": {
-          "name": "serah_terima_tasks_schedule_shift_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "schedule_id",
-            "shift_id"
-          ]
-        },
-        "serah_terima_tasks_store_date_shift_unique": {
-          "name": "serah_terima_tasks_store_date_shift_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "store_id",
-            "date",
-            "shift_id"
-          ]
-        }
-      },
+      "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false
@@ -8588,6 +8567,13 @@
           "notNull": true,
           "default": true
         },
+        "is_sequenced": {
+          "name": "is_sequenced",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
         "is_active": {
           "name": "is_active",
           "type": "boolean",
@@ -8873,6 +8859,20 @@
           "primaryKey": false,
           "notNull": true,
           "default": 0
+        },
+        "percentage": {
+          "name": "percentage",
+          "type": "numeric(5, 2)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
+        },
+        "is_percentage_overridden": {
+          "name": "is_percentage_overridden",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         },
         "notes": {
           "name": "notes",
@@ -9301,159 +9301,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.daily_target_overrides": {
-      "name": "daily_target_overrides",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "serial",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "store_id": {
-          "name": "store_id",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "date": {
-          "name": "date",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "percentage": {
-          "name": "percentage",
-          "type": "numeric(5, 2)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "created_by": {
-          "name": "created_by",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "updated_by": {
-          "name": "updated_by",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "daily_target_overrides_store_date_idx": {
-          "name": "daily_target_overrides_store_date_idx",
-          "columns": [
-            {
-              "expression": "store_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "date",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "daily_target_overrides_store_id_stores_id_fk": {
-          "name": "daily_target_overrides_store_id_stores_id_fk",
-          "tableFrom": "daily_target_overrides",
-          "tableTo": "stores",
-          "columnsFrom": [
-            "store_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "daily_target_overrides_user_id_users_id_fk": {
-          "name": "daily_target_overrides_user_id_users_id_fk",
-          "tableFrom": "daily_target_overrides",
-          "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "daily_target_overrides_created_by_users_id_fk": {
-          "name": "daily_target_overrides_created_by_users_id_fk",
-          "tableFrom": "daily_target_overrides",
-          "tableTo": "users",
-          "columnsFrom": [
-            "created_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        },
-        "daily_target_overrides_updated_by_users_id_fk": {
-          "name": "daily_target_overrides_updated_by_users_id_fk",
-          "tableFrom": "daily_target_overrides",
-          "tableTo": "users",
-          "columnsFrom": [
-            "updated_by"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {
-        "daily_target_overrides_store_date_user_unique": {
-          "name": "daily_target_overrides_store_date_user_unique",
-          "nullsNotDistinct": false,
-          "columns": [
-            "store_id",
-            "date",
-            "user_id"
-          ]
-        }
-      },
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.target_allocation_templates": {
       "name": "target_allocation_templates",
       "schema": "",
@@ -9744,6 +9591,211 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.item_transfer_orders": {
+      "name": "item_transfer_orders",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "serial",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "toa_no": {
+          "name": "toa_no",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "transfer_from_code": {
+          "name": "transfer_from_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "transfer_to_code": {
+          "name": "transfer_to_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "from_store_id": {
+          "name": "from_store_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "to_store_id": {
+          "name": "to_store_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "qty_ordered": {
+          "name": "qty_ordered",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "bc_status": {
+          "name": "bc_status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "posting_date": {
+          "name": "posting_date",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "return_detected_at": {
+          "name": "return_detected_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "return_submitted_at": {
+          "name": "return_submitted_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "whse_shipment_no": {
+          "name": "whse_shipment_no",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "whse_shipment_lines": {
+          "name": "whse_shipment_lines",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "dropping_detected_at": {
+          "name": "dropping_detected_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "dropping_submitted_at": {
+          "name": "dropping_submitted_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "received_at": {
+          "name": "received_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "item_transfer_orders_from_store_idx": {
+          "name": "item_transfer_orders_from_store_idx",
+          "columns": [
+            {
+              "expression": "from_store_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "item_transfer_orders_to_store_idx": {
+          "name": "item_transfer_orders_to_store_idx",
+          "columns": [
+            {
+              "expression": "to_store_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "item_transfer_orders_whse_shipment_no_idx": {
+          "name": "item_transfer_orders_whse_shipment_no_idx",
+          "columns": [
+            {
+              "expression": "whse_shipment_no",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "item_transfer_orders_from_store_id_stores_id_fk": {
+          "name": "item_transfer_orders_from_store_id_stores_id_fk",
+          "tableFrom": "item_transfer_orders",
+          "tableTo": "stores",
+          "columnsFrom": [
+            "from_store_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "item_transfer_orders_to_store_id_stores_id_fk": {
+          "name": "item_transfer_orders_to_store_id_stores_id_fk",
+          "tableFrom": "item_transfer_orders",
+          "tableTo": "stores",
+          "columnsFrom": [
+            "to_store_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "item_transfer_orders_toa_no_unique": {
+          "name": "item_transfer_orders_toa_no_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "toa_no"
+          ]
+        }
+      },
       "policies": {},
       "checkConstraints": {},
       "isRLSEnabled": false

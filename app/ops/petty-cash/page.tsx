@@ -11,9 +11,7 @@ import {
   Clock3,
   Loader2,
   MapPin,
-  ReceiptText,
   Search,
-  ShieldCheck,
   Wallet,
   X,
   XCircle,
@@ -33,7 +31,6 @@ type OpsPettyCashRow = {
   approvedAt: string | null;
   rejectedAt: string | null;
   rejectionReason: string | null;
-  verifiedAt: string | null;
   createdAt: string;
 
   storeId: number;
@@ -59,13 +56,7 @@ type ApiResponse =
       error: string;
     };
 
-type StatusFilter =
-  | 'all'
-  | 'pending_ops'
-  | 'missing_receipt'
-  | 'waiting_finance'
-  | 'verified'
-  | 'ops_rejected';
+type StatusFilter = 'all' | 'pending_ops' | 'approved' | 'ops_rejected';
 
 type SortKey = 'date_desc' | 'date_asc' | 'amount_desc' | 'amount_asc' | 'store_asc';
 
@@ -122,9 +113,7 @@ function formatDate(value: string) {
 function classify(row: OpsPettyCashRow): Exclude<StatusFilter, 'all'> {
   if (row.status === 'pending_ops') return 'pending_ops';
   if (row.status === 'ops_rejected') return 'ops_rejected';
-  if (row.verifiedAt) return 'verified';
-  if (row.status === 'ops_approved' && !row.imageUrl) return 'missing_receipt';
-  return 'waiting_finance';
+  return 'approved';
 }
 
 const STATUS_META: Record<
@@ -138,23 +127,9 @@ const STATUS_META: Record<
     rowAccent: 'bg-amber-400',
     dot: 'bg-amber-400',
   },
-  missing_receipt: {
-    label: 'Waiting receipt',
-    icon: ReceiptText,
-    badge: 'bg-sky-50 text-sky-700 ring-sky-200',
-    rowAccent: 'bg-sky-400',
-    dot: 'bg-sky-400',
-  },
-  waiting_finance: {
-    label: 'Waiting finance',
+  approved: {
+    label: 'Approved',
     icon: CheckCircle2,
-    badge: 'bg-violet-50 text-violet-700 ring-violet-200',
-    rowAccent: 'bg-violet-400',
-    dot: 'bg-violet-400',
-  },
-  verified: {
-    label: 'Finance verified',
-    icon: ShieldCheck,
     badge: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
     rowAccent: 'bg-emerald-500',
     dot: 'bg-emerald-500',
@@ -173,18 +148,14 @@ const STATUS_META: Record<
 // queue; everything else follows the natural process order.
 const STATUS_PRIORITY: Record<Exclude<StatusFilter, 'all'>, number> = {
   pending_ops: 0,
-  missing_receipt: 1,
-  waiting_finance: 2,
-  ops_rejected: 3,
-  verified: 4,
+  ops_rejected: 1,
+  approved: 2,
 };
 
 const STATUS_FILTERS: { id: StatusFilter; label: string }[] = [
   { id: 'all', label: 'All' },
   { id: 'pending_ops', label: 'Waiting OPS' },
-  { id: 'missing_receipt', label: 'Waiting receipt' },
-  { id: 'waiting_finance', label: 'Waiting finance' },
-  { id: 'verified', label: 'Verified' },
+  { id: 'approved', label: 'Approved' },
   { id: 'ops_rejected', label: 'Rejected' },
 ];
 
@@ -257,13 +228,11 @@ function StatCard({
   value: number;
   active: boolean;
   onClick: () => void;
-  tone: 'neutral' | 'amber' | 'sky' | 'violet' | 'emerald' | 'rose';
+  tone: 'neutral' | 'amber' | 'emerald' | 'rose';
 }) {
   const tones: Record<typeof tone, string> = {
     neutral: 'border-slate-200 bg-white text-slate-900',
     amber: 'border-amber-100 bg-amber-50 text-amber-700',
-    sky: 'border-sky-100 bg-sky-50 text-sky-700',
-    violet: 'border-violet-100 bg-violet-50 text-violet-700',
     emerald: 'border-emerald-100 bg-emerald-50 text-emerald-700',
     rose: 'border-rose-100 bg-rose-50 text-rose-700',
   };
@@ -271,8 +240,6 @@ function StatCard({
   const labelTones: Record<typeof tone, string> = {
     neutral: 'text-slate-400',
     amber: 'text-amber-600',
-    sky: 'text-sky-600',
-    violet: 'text-violet-600',
     emerald: 'text-emerald-600',
     rose: 'text-rose-600',
   };
@@ -296,6 +263,19 @@ function StatCard({
 }
 
 // ─── Refill requests (read-only — Finance is the one who approves) ──────────
+//
+// This used to render every request as a full-height card, unconditionally
+// expanded, above the approval table. On a busy month that meant OPS had to
+// scroll past a list that grew with every store before reaching the queue
+// they actually act on — and OPS is already notified about refills via the
+// top-bar notification, so this only needs to be a quiet, bounded reference,
+// not a second table competing for the top of the page.
+//
+// It now renders as a single collapsed summary row. Opening it reveals a
+// capped, scrollable list (fixed max height + a hard row limit) so its
+// footprint never grows with the data. Status is shown as a small dot + label
+// instead of a full colored pill, so it doesn't visually compete with the
+// real approval-status badges in the table below.
 
 interface RefillRequestRow {
   id: number;
@@ -305,20 +285,34 @@ interface RefillRequestRow {
   status: 'pending' | 'approved' | 'rejected';
   requestedAt: string;
   requestedByName: string | null;
+  notes: string | null;
   approvedAt: string | null;
   rejectedAt: string | null;
   rejectionReason: string | null;
+  drawerPhotoUrl: string | null;
+  signaturePhotoUrl: string | null;
 }
 
-const REFILL_STATUS_META: Record<RefillRequestRow['status'], { label: string; cls: string }> = {
-  pending: { label: 'Pending Finance', cls: 'bg-amber-50 text-amber-700 ring-amber-200' },
-  approved: { label: 'Approved', cls: 'bg-emerald-50 text-emerald-700 ring-emerald-200' },
-  rejected: { label: 'Rejected', cls: 'bg-rose-50 text-rose-600 ring-rose-200' },
+const REFILL_STATUS_META: Record<
+  RefillRequestRow['status'],
+  { label: string; dot: string; text: string }
+> = {
+  pending: { label: 'Pending Finance', dot: 'bg-amber-400', text: 'text-amber-700' },
+  approved: { label: 'Approved', dot: 'bg-emerald-500', text: 'text-emerald-700' },
+  rejected: { label: 'Rejected', dot: 'bg-rose-400', text: 'text-rose-600' },
 };
 
-function RefillRequestsReadOnly() {
+const REFILL_VISIBLE_LIMIT = 30;
+
+function proofProgress(r: RefillRequestRow) {
+  const total = [r.drawerPhotoUrl, r.signaturePhotoUrl].filter(Boolean).length;
+  return `${total}/2 proof photos`;
+}
+
+function RefillRequestsSummary() {
   const [requests, setRequests] = useState<RefillRequestRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -334,32 +328,80 @@ function RefillRequestsReadOnly() {
 
   if (loading || requests.length === 0) return null;
 
+  const pendingCount = requests.filter((r) => r.status === 'pending').length;
+  const visible = requests.slice(0, REFILL_VISIBLE_LIMIT);
+  const hiddenCount = requests.length - visible.length;
+
   return (
     <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="border-b border-slate-100 px-5 py-3">
-        <p className="text-xs font-bold uppercase tracking-widest text-slate-500">
-          Petty Cash Refill Requests
-        </p>
-        <p className="mt-0.5 text-[11px] text-slate-400">Requested by PIC, approved by Finance — informational only.</p>
-      </div>
-      <div className="divide-y divide-slate-100">
-        {requests.slice(0, 10).map((r) => {
-          const meta = REFILL_STATUS_META[r.status];
-          return (
-            <div key={r.id} className="flex items-center justify-between gap-3 px-5 py-3">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-slate-800">{r.storeName}</p>
-                <p className="mt-0.5 text-[11px] text-slate-400">
-                  {r.yearMonth} · {r.requestedByName ?? 'PIC'} · {new Date(r.requestedAt).toLocaleDateString('id-ID')}
-                </p>
-              </div>
-              <span className={cn('shrink-0 rounded-full px-2.5 py-1 text-[10px] font-bold ring-1 ring-inset', meta.cls)}>
-                {meta.label}
-              </span>
-            </div>
-          );
-        })}
-      </div>
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+        className="flex w-full items-center gap-3 px-5 py-3 text-left"
+      >
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+          <Wallet className="h-4 w-4" />
+        </span>
+
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-bold text-slate-800">Petty Cash Refill Requests</span>
+          <span className="block text-[11px] text-slate-400">
+            {requests.length} total · requested by PIC, approved by Finance
+          </span>
+        </span>
+
+        {pendingCount > 0 && (
+          <span className="shrink-0 rounded-full bg-amber-50 px-2.5 py-1 text-[10px] font-bold text-amber-700 ring-1 ring-inset ring-amber-200">
+            {pendingCount} pending
+          </span>
+        )}
+
+        <ChevronDown
+          className={cn(
+            'h-4 w-4 shrink-0 text-slate-400 transition-transform',
+            expanded && 'rotate-180',
+          )}
+        />
+      </button>
+
+      {expanded && (
+        <div className="max-h-64 overflow-y-auto border-t border-slate-100">
+          <div className="divide-y divide-slate-100">
+            {visible.map((r) => {
+              const meta = REFILL_STATUS_META[r.status];
+              return (
+                <div key={r.id} className="flex items-center justify-between gap-3 px-5 py-2.5">
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-bold text-slate-700">{r.storeName}</p>
+                    <p className="mt-0.5 truncate text-[10.5px] text-slate-400">
+                      {r.yearMonth} · {r.requestedByName ?? 'PIC'}
+                      {r.status === 'approved' && <> · {proofProgress(r)}</>}
+                    </p>
+                    {r.status === 'rejected' && r.rejectionReason && (
+                      <p className="mt-0.5 truncate text-[10.5px] font-semibold text-rose-500">
+                        {r.rejectionReason}
+                      </p>
+                    )}
+                  </div>
+                  <span
+                    className={cn(
+                      'inline-flex shrink-0 items-center gap-1.5 text-[10.5px] font-bold',
+                      meta.text,
+                    )}
+                  >
+                    <span className={cn('h-1.5 w-1.5 rounded-full', meta.dot)} />
+                    {meta.label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          {hiddenCount > 0 && (
+            <p className="px-5 py-2 text-[10.5px] text-slate-400">+{hiddenCount} more not shown</p>
+          )}
+        </div>
+      )}
     </section>
   );
 }
@@ -425,9 +467,7 @@ export default function OpsPettyCashPage() {
     const acc = {
       total: 0,
       pending_ops: 0,
-      missing_receipt: 0,
-      waiting_finance: 0,
-      verified: 0,
+      approved: 0,
       ops_rejected: 0,
       totalAmount: 0,
     };
@@ -550,7 +590,7 @@ export default function OpsPettyCashPage() {
       <OpsPageHeader
         scope={isHoScope ? 'OPS HO · All Areas' : 'OPS · Area Approval'}
         title="Petty Cash"
-        subtitle={`${monthLabelFromDateKey(date)} · Approve store petty cash requests before Finance verification`}
+        subtitle={`${monthLabelFromDateKey(date)} · Approve store petty cash usage requests from PIC`}
         periodProps={{ period, date, onDateChange: setDate }}
         onRefresh={() => void load()}
         refreshing={loading}
@@ -567,10 +607,10 @@ export default function OpsPettyCashPage() {
           </div>
         )}
 
-        <RefillRequestsReadOnly />
+        <RefillRequestsSummary />
 
         {/* Summary / filter shortcuts */}
-        <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <StatCard
             label="Total"
             value={summary.total}
@@ -586,25 +626,11 @@ export default function OpsPettyCashPage() {
             onClick={() => setStatusFilter('pending_ops')}
           />
           <StatCard
-            label="Waiting receipt"
-            value={summary.missing_receipt}
-            tone="sky"
-            active={statusFilter === 'missing_receipt'}
-            onClick={() => setStatusFilter('missing_receipt')}
-          />
-          <StatCard
-            label="Finance queue"
-            value={summary.waiting_finance}
-            tone="violet"
-            active={statusFilter === 'waiting_finance'}
-            onClick={() => setStatusFilter('waiting_finance')}
-          />
-          <StatCard
-            label="Verified"
-            value={summary.verified}
+            label="Approved"
+            value={summary.approved}
             tone="emerald"
-            active={statusFilter === 'verified'}
-            onClick={() => setStatusFilter('verified')}
+            active={statusFilter === 'approved'}
+            onClick={() => setStatusFilter('approved')}
           />
           <StatCard
             label="Rejected"

@@ -3,7 +3,6 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useSession } from 'next-auth/react';
 import {
   useCallback,
   useEffect,
@@ -15,18 +14,13 @@ import {
 import { Home, CheckSquare, CalendarDays, LayoutGrid, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-const BASE_NAV = [
+const NAV_ITEMS = [
   { href: '/employee',            label: 'Home',       Icon: Home         },
   { href: '/employee/tasks',      label: 'Tasks',      Icon: CheckSquare  },
   { href: '/employee/attendance', label: 'Attendance', Icon: CalendarDays },
+  { href: '/employee/schedule',   label: 'Schedule',   Icon: LayoutGrid   },
   { href: '/employee/issues',     label: 'Issues',     Icon: AlertTriangle },
 ];
-
-const PIC1_NAV_ITEM = {
-  href:  '/employee/schedule',
-  label: 'Schedule',
-  Icon:  LayoutGrid,
-};
 
 // ── Tuning knobs ────────────────────────────────────────────────────────────
 const SCROLL_SHRINK_THRESHOLD = 24; // px scrolled before the bar is allowed to compact
@@ -36,12 +30,8 @@ const SWIPE_THRESHOLD = 40;         // px of horizontal drag needed to switch ta
 export default function EmployeeMobileNav() {
   const pathname = usePathname();
   const router = useRouter();
-  const { data: session } = useSession();
-  const employeeType = (session?.user as any)?.employeeType as string | null;
 
-  const navItems = employeeType === 'pic_1' || employeeType === 'pic_2'
-    ? [BASE_NAV[0], BASE_NAV[1], BASE_NAV[2], PIC1_NAV_ITEM, BASE_NAV[3]]
-    : BASE_NAV;
+  const navItems = NAV_ITEMS;
 
   const activeIndex = navItems.findIndex(({ href }) =>
     href === '/employee' ? pathname === href : pathname.startsWith(href),

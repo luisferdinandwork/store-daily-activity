@@ -10,7 +10,13 @@ import {
   type CekUangModalTask,
   type CekUangModalDenomination,
 } from '@/lib/db/schema';
-import { getMorningShiftId } from '@/lib/db/utils/shared-daily-morning-task';
+import {
+  getMorningShiftId,
+  getEveningShiftId,
+  getFullDayShiftId,
+  startOfDay,
+  endOfDay,
+} from '@/lib/db/utils/shift-lookup';
 
 export const DEFAULT_GEOFENCE_RADIUS_M = 100;
 
@@ -54,6 +60,7 @@ export interface UangModalDenominationInput {
 }
 
 export interface SubmitCekUangModalInput {
+  taskId?: number;
   scheduleId: number;
   userId: string;
   storeId: number;
@@ -78,18 +85,6 @@ export interface CekUangModalWithDenominations {
   task: CekUangModalTask;
   denominations: CekUangModalDenomination[];
   summary: CekUangModalSummary;
-}
-
-function startOfDay(d: Date): Date {
-  const r = new Date(d);
-  r.setHours(0, 0, 0, 0);
-  return r;
-}
-
-function endOfDay(d: Date): Date {
-  const r = new Date(d);
-  r.setHours(23, 59, 59, 999);
-  return r;
 }
 
 function formatRupiah(value: number): string {
@@ -281,19 +276,18 @@ async function ensureDenominationRows(task: CekUangModalTask): Promise<void> {
 
 export async function getActiveCekUangModalTask(
   storeId: number,
-  _shiftId: number,
+  shiftId: number,
   date: Date,
 ): Promise<CekUangModalTask | null> {
   const dayStart = startOfDay(date);
   const dayEnd = endOfDay(date);
-  const morningShiftId = await getMorningShiftId();
 
   const [today] = await db
     .select()
     .from(cekUangModalTasks)
     .where(and(
       eq(cekUangModalTasks.storeId, storeId),
-      eq(cekUangModalTasks.shiftId, morningShiftId),
+      eq(cekUangModalTasks.shiftId, shiftId),
       gte(cekUangModalTasks.date, dayStart),
       lte(cekUangModalTasks.date, dayEnd),
     ))
@@ -319,35 +313,54 @@ export async function submitCekUangModal(
     if (gateErr) return { success: false, error: gateErr };
 
     const normalized = normalizeDenominations(input.denominations);
-    const total = totalAmount(normalized);
 
-    if (total <= 0) {
-      return { success: false, error: 'Total uang modal harus lebih dari Rp 0.' };
+    const missing = normalized.filter((row) => row.quantity <= 0);
+    if (missing.length > 0) {
+      return {
+        success: false,
+        error: `Semua pecahan uang wajib diisi. Pecahan yang masih kosong: ${missing.map((row) => formatRupiah(row.denominationValue)).join(', ')}.`,
+      };
     }
 
+    const total = totalAmount(normalized);
     const summary = assertWithinDailyLimit(total);
 
     const now = new Date();
-    const morningShiftId = await getMorningShiftId();
 
-    const [schedule] = await db
-      .select({ date: schedules.date })
-      .from(schedules)
-      .where(eq(schedules.id, input.scheduleId))
-      .limit(1);
+    let existing: CekUangModalTask | undefined;
 
-    const taskDate = schedule?.date ?? now;
-
-    let existing = await getActiveCekUangModalTask(input.storeId, morningShiftId, taskDate);
+    if (input.taskId) {
+      [existing] = await db
+        .select()
+        .from(cekUangModalTasks)
+        .where(eq(cekUangModalTasks.id, input.taskId))
+        .limit(1);
+    }
 
     if (!existing) {
-      existing = await getOrCreateCekUangModalForSchedule(
-        input.scheduleId,
-        input.userId,
-        input.storeId,
-        morningShiftId,
-        taskDate,
-      );
+      const [schedule] = await db
+        .select({ date: schedules.date, shiftId: schedules.shiftId })
+        .from(schedules)
+        .where(eq(schedules.id, input.scheduleId))
+        .limit(1);
+
+      const taskDate = schedule?.date ?? now;
+      const fullDayShiftId = await getFullDayShiftId();
+      const targetShiftId = schedule?.shiftId === fullDayShiftId || !schedule
+        ? await getMorningShiftId()
+        : schedule.shiftId;
+
+      existing = (await getActiveCekUangModalTask(input.storeId, targetShiftId, taskDate)) ?? undefined;
+
+      if (!existing) {
+        [existing] = await getOrCreateCekUangModalForSchedule(
+          input.scheduleId,
+          input.userId,
+          input.storeId,
+          targetShiftId,
+          taskDate,
+        );
+      }
     }
 
     if (!existing) {
@@ -364,8 +377,8 @@ export async function submitCekUangModal(
         scheduleId: input.scheduleId,
         userId: input.userId,
         storeId: input.storeId,
-        shiftId: morningShiftId,
-        date: startOfDay(taskDate),
+        shiftId: existing.shiftId,
+        date: startOfDay(existing.date ?? now),
         totalAmount: String(summary.totalAmount),
         maxAmount: String(summary.maxAmount),
         remainingAmount: String(summary.remainingAmount),
@@ -443,72 +456,32 @@ export async function autoSaveCekUangModal(
   patch: AutoSaveCekUangModalPatch,
 ): Promise<TaskResult<{ saved: string[]; summary?: CekUangModalSummary }>> {
   const [schedule] = await db
-    .select({ storeId: schedules.storeId, date: schedules.date })
+    .select({ storeId: schedules.storeId, date: schedules.date, shiftId: schedules.shiftId })
     .from(schedules)
     .where(eq(schedules.id, scheduleId))
     .limit(1);
 
   if (!schedule) return { success: false, error: 'Schedule not found.' };
 
-  const morningShiftId = await getMorningShiftId();
-  const existing = await getActiveCekUangModalTask(schedule.storeId, morningShiftId, schedule.date);
+  const fullDayShiftId = await getFullDayShiftId();
+  const targetShiftId = schedule.shiftId === fullDayShiftId
+    ? await getMorningShiftId()
+    : schedule.shiftId;
+
+  const existing = await getActiveCekUangModalTask(schedule.storeId, targetShiftId, schedule.date);
 
   if (!existing) return { success: false, error: 'Task Cek Uang Modal tidak ditemukan.' };
   return autoSaveCekUangModalById(existing.id, patch);
 }
 
-export async function materialiseCekUangModalTask(
+async function getOrCreateSingleCekUangModalRow(
   scheduleId: number,
   userId: string,
   storeId: number,
-  _shiftId: number,
-  date: Date,
-): Promise<'created' | 'skipped'> {
-  const morningShiftId = await getMorningShiftId();
-  const dayStart = startOfDay(date);
-  const dayEnd = endOfDay(date);
-
-  const [existing] = await db
-    .select({ id: cekUangModalTasks.id })
-    .from(cekUangModalTasks)
-    .where(and(
-      eq(cekUangModalTasks.storeId, storeId),
-      eq(cekUangModalTasks.shiftId, morningShiftId),
-      gte(cekUangModalTasks.date, dayStart),
-      lte(cekUangModalTasks.date, dayEnd),
-    ))
-    .limit(1);
-
-  if (existing) return 'skipped';
-
-  const [task] = await db
-    .insert(cekUangModalTasks)
-    .values({
-      scheduleId,
-      userId,
-      storeId,
-      shiftId: morningShiftId,
-      date: dayStart,
-      totalAmount: '0',
-      maxAmount: String(CEK_UANG_MODAL_MAX_TOTAL),
-      remainingAmount: String(CEK_UANG_MODAL_MAX_TOTAL),
-      status: 'not_started',
-    })
-    .returning();
-
-  await ensureDenominationRows(task);
-  return 'created';
-}
-
-export async function getOrCreateCekUangModalForSchedule(
-  scheduleId: number,
-  userId: string,
-  storeId: number,
-  _shiftId: number,
+  targetShiftId: number,
   date: Date,
 ): Promise<CekUangModalTask> {
-  const morningShiftId = await getMorningShiftId();
-  const existing = await getActiveCekUangModalTask(storeId, morningShiftId, date);
+  const existing = await getActiveCekUangModalTask(storeId, targetShiftId, date);
   if (existing) return existing;
 
   const dayStart = startOfDay(date);
@@ -519,7 +492,7 @@ export async function getOrCreateCekUangModalForSchedule(
       scheduleId,
       userId,
       storeId,
-      shiftId: morningShiftId,
+      shiftId: targetShiftId,
       date: dayStart,
       totalAmount: '0',
       maxAmount: String(CEK_UANG_MODAL_MAX_TOTAL),
@@ -529,21 +502,54 @@ export async function getOrCreateCekUangModalForSchedule(
     .onConflictDoNothing()
     .returning();
 
-  const task = row ?? (await getActiveCekUangModalTask(storeId, morningShiftId, date))!;
+  const task = row ?? (await getActiveCekUangModalTask(storeId, targetShiftId, date))!;
   await ensureDenominationRows(task);
   return task;
 }
 
+/**
+ * Ensures the cek uang modal row for this schedule's shift exists. Morning-only
+ * task: a morning schedule gets its own row, shared with every other employee
+ * on that same shift/store/day; a full_day schedule gets the morning row too
+ * (cashier opening float is checked once, at store opening); an evening
+ * schedule gets no row at all — cek uang modal is not applicable to a
+ * standalone evening shift.
+ */
+export async function getOrCreateCekUangModalForSchedule(
+  scheduleId: number,
+  userId: string,
+  storeId: number,
+  shiftId: number,
+  date: Date,
+): Promise<CekUangModalTask[]> {
+  const morningShiftId = await getMorningShiftId();
+  const eveningShiftId = await getEveningShiftId();
+  const fullDayShiftId = await getFullDayShiftId();
+
+  if (shiftId === eveningShiftId) return [];
+
+  const targetShiftId = shiftId === fullDayShiftId ? morningShiftId : shiftId;
+
+  return [
+    await getOrCreateSingleCekUangModalRow(scheduleId, userId, storeId, targetShiftId, date),
+  ];
+}
+
 export async function getCekUangModalBySchedule(scheduleId: number): Promise<CekUangModalTask | null> {
   const [schedule] = await db
-    .select({ storeId: schedules.storeId, date: schedules.date })
+    .select({ storeId: schedules.storeId, date: schedules.date, shiftId: schedules.shiftId })
     .from(schedules)
     .where(eq(schedules.id, scheduleId))
     .limit(1);
 
   if (!schedule) return null;
-  const morningShiftId = await getMorningShiftId();
-  return getActiveCekUangModalTask(schedule.storeId, morningShiftId, schedule.date);
+
+  const fullDayShiftId = await getFullDayShiftId();
+  const targetShiftId = schedule.shiftId === fullDayShiftId
+    ? await getMorningShiftId()
+    : schedule.shiftId;
+
+  return getActiveCekUangModalTask(schedule.storeId, targetShiftId, schedule.date);
 }
 
 export async function getCekUangModalById(id: number): Promise<CekUangModalTask | null> {

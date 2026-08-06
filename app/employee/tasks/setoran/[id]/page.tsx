@@ -440,7 +440,7 @@ function SetoranPageBody(props: BodyProps) {
             {/* ─── Inputs ─────────────────────────────────────────────────── */}
             <div className="space-y-3">
               <AmountField
-                label="Uang aktual diterima hari ini"
+                label="Uang aktual diterima kemarin"
                 value={actualReceivedAmount}
                 onChange={(v) => setActualReceivedAmount(onlyDigits(v))}
                 onBlur={() => autoSave({ actualReceivedAmount })}

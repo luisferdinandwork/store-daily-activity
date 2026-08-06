@@ -1,23 +1,25 @@
 'use client';
 // app/employee/tasks/item-return/[id]/page.tsx
+//
+// BC-driven Item Return task: every open transfer order (fetched live from
+// Business Central every time this page loads — see
+// app/api/employee/tasks/item-return/[id]/route.ts) gets its own inline
+// "Confirm hand-off to courier" action (qty counted + courier-signed-paper
+// photo), submitted independently per transfer order so its pickup timer
+// freezes at the exact hand-off moment.
 
 import { useEffect, useState, useCallback } from 'react';
-import { useParams, useRouter }              from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import {
-  ArrowLeft, CheckCircle2, X, Loader2,
-  AlertCircle, Check, Cloud, CloudOff, Save,
+  CheckCircle2, Loader2, AlertCircle,
   LogIn, Navigation, NavigationOff, RefreshCw,
-  PackageOpen, PackageCheck, Clock, Hash,
-  ChevronDown, ChevronUp, WifiOff,
+  Store, Clock, Package, Inbox,
 } from 'lucide-react';
-import { cn }    from '@/lib/utils';
 import { toast } from 'sonner';
-import { useAutoSave } from '@/lib/hooks/useAutoSave';
 import { useTaskLocationSetting } from '@/lib/hooks/useTaskLocationSetting';
-import { TaskHeader, TaskSubmitBar, SaveIndicator } from '@/components/employee/tasks';
+import TaskHeader from '@/components/employee/tasks/TaskHeader';
 import PhotoUploadGrid from '@/components/shared/PhotoUploadGrid';
 import { uploadTaskPhoto } from '@/lib/tasks-upload';
-import type { AvailableReturn } from '@/app/api/employee/tasks/item-return/available-returns/route';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -31,67 +33,52 @@ type AccessStatus =
   | { status: 'outside_geofence'; distanceM: number; radiusM: number }
   | { status: 'geo_unavailable' };
 
-interface ReturnEntry {
-  id:             string;
-  taskId:         string;
-  userId:         string;
-  storeId:        string;
-  returnNumber:       string;
-  description:    string | null;
-  expectedAt:     string | null;
-  quantity:       number;           // ← ADD
-  returnTime:       string | null;
-  returnPhotos: string[];
-  notes:          string | null;
-  createdAt:      string | null;
+interface StoreRef {
+  id: number;
+  name: string;
+  storeNo: string;
 }
 
-interface ItemReturnData {
-  id:          string;
-  scheduleId:  string;
-  userId:      string;
-  storeId:     string;
-  shift:       'morning' | 'evening' | 'full_day';
-  date:        string;
-  status:      TaskStatus;
-  notes:       string | null;
-  completedAt: string | null;
-  verifiedBy:  string | null;
-  verifiedAt:  string | null;
+interface ItemReturnEntryData {
+  id: string;
+  toaNo: string;
+  qtyOrdered: number;
+  qtyCounted: number | null;
+  courierSignPhoto: string | null;
+  submittedAt: string | null;
+  fromStore: StoreRef | null;
+  toStore: StoreRef | null;
+  transferFromCode: string | null;
+  transferToCode: string | null;
+  bcStatus: string | null;
+  returnDetectedAt: string | null;
+}
+
+interface ItemReturnTaskData {
+  id: string;
+  status: TaskStatus;
   hasReturn: boolean;
-  entries:     ReturnEntry[];
+  notes: string | null;
+  completedAt: string | null;
+  verifiedBy: string | null;
+  verifiedAt: string | null;
+  storeId: string;
+  date: string;
 }
 
-interface DraftEntry {
-  localId:        string;
-  returnNumber:       string;
-  description:    string | null;
-  expectedAt:     string | null;
-  quantity:       number;           // ← ADD
-  returnTime:       string;
-  returnPhotos: string[];
-  notes:          string;
-}
-
-const PHOTO_RULES = { returnPhoto: { min: 1, max: 5 } } as const;
-
-function makeDraft(to: AvailableReturn): DraftEntry {
-  return {
-    localId:        crypto.randomUUID(),
-    returnNumber:       to.returnNumber,
-    description:    to.description,
-    expectedAt:     to.expectedAt,
-    quantity:       to.quantity ?? 0,   // ← ADD (pre-fill from API)
-    returnTime:       '',
-    returnPhotos: [],
-    notes:          '',
-  };
+interface LoadResponse {
+  success: boolean;
+  error?: string;
+  scheduleId?: number;
+  task?: ItemReturnTaskData;
+  entries?: ItemReturnEntryData[];
+  syncWarning?: string | null;
 }
 
 // ─── Geo hook ─────────────────────────────────────────────────────────────────
 
 function useGeo(required: boolean) {
-  const [geo,      setGeo]      = useState<{ lat: number; lng: number } | null>(null);
+  const [geo, setGeo] = useState<{ lat: number; lng: number } | null>(null);
   const [geoError, setGeoError] = useState<string | null>(null);
   const [geoReady, setGeoReady] = useState(false);
 
@@ -111,7 +98,7 @@ function useGeo(required: boolean) {
     }
     navigator.geolocation.getCurrentPosition(
       pos => { setGeo({ lat: pos.coords.latitude, lng: pos.coords.longitude }); setGeoReady(true); },
-      ()  => { setGeoError('Lokasi tidak dapat diperoleh.'); setGeoReady(true); },
+      () => { setGeoError('Lokasi tidak dapat diperoleh.'); setGeoReady(true); },
       { timeout: 10_000, maximumAge: 0 },
     );
   }, [required]);
@@ -124,12 +111,12 @@ function useGeo(required: boolean) {
 
 function useAccessStatus(
   scheduleId: string,
-  storeId:    string,
-  geo:        { lat: number; lng: number } | null,
-  geoReady:   boolean,
+  storeId: string,
+  geo: { lat: number; lng: number } | null,
+  geoReady: boolean,
   taskStatus: TaskStatus | undefined,
 ) {
-  const [accessStatus,  setAccessStatus]  = useState<AccessStatus | null>(null);
+  const [accessStatus, setAccessStatus] = useState<AccessStatus | null>(null);
   const [accessLoading, setAccessLoading] = useState(true);
 
   const fetchAccess = useCallback(async () => {
@@ -143,7 +130,7 @@ function useAccessStatus(
     try {
       const params = new URLSearchParams({ scheduleId, storeId });
       if (geo) { params.set('lat', String(geo.lat)); params.set('lng', String(geo.lng)); }
-      const res  = await fetch(`/api/employee/tasks/access?${params}`);
+      const res = await fetch(`/api/employee/tasks/access?${params}`);
       const data = await res.json() as AccessStatus;
       setAccessStatus(data);
     } catch {
@@ -229,380 +216,171 @@ function AccessBanner({
   );
 }
 
-// ─── Photo Uploader ───────────────────────────────────────────────────────────
+// ─── Elapsed time ─────────────────────────────────────────────────────────────
 
-function PhotoUploader({
-  label, photoType, photos, onChange, min, max, disabled, hint,
+function useTicking(intervalMs = 30_000) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTick((x) => x + 1), intervalMs);
+    return () => clearInterval(t);
+  }, [intervalMs]);
+}
+
+function formatElapsedSince(fromIso: string | null): string {
+  if (!fromIso) return '—';
+  const diffMin = Math.max(0, Math.floor((Date.now() - new Date(fromIso).getTime()) / 60_000));
+  const hours = Math.floor(diffMin / 60);
+  const minutes = diffMin % 60;
+  if (hours >= 24) return `${Math.floor(hours / 24)}h ${hours % 24}j`;
+  if (hours > 0) return `${hours}j ${minutes}m`;
+  return `${minutes}m`;
+}
+
+function formatDurationBetween(startIso: string | null, endIso: string | null): string {
+  if (!startIso || !endIso) return '—';
+  const diffMin = Math.max(0, Math.round((new Date(endIso).getTime() - new Date(startIso).getTime()) / 60_000));
+  const hours = Math.floor(diffMin / 60);
+  const minutes = diffMin % 60;
+  if (hours >= 24) return `${Math.floor(hours / 24)}h ${hours % 24}j`;
+  if (hours > 0) return `${hours}j ${minutes}m`;
+  return `${minutes}m`;
+}
+
+// ─── Store pill ───────────────────────────────────────────────────────────────
+
+function StorePill({ store, code }: { store: StoreRef | null; code: string | null }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-lg bg-secondary px-2 py-1 text-[11px] font-semibold text-foreground">
+      <Store className="h-3 w-3 text-muted-foreground" />
+      {store ? store.name : (code ?? '—')}
+      {store && <span className="font-mono text-[10px] text-muted-foreground">({store.storeNo})</span>}
+    </span>
+  );
+}
+
+// ─── Open entry card ──────────────────────────────────────────────────────────
+
+function OpenReturnEntryCard({
+  entry, disabled, confirming, onConfirm,
 }: {
-  label: string; photoType: string; photos: string[];
-  onChange: (urls: string[]) => void;
-  min?: number; max: number; disabled?: boolean; hint?: string;
+  entry: ItemReturnEntryData;
+  disabled: boolean;
+  confirming: boolean;
+  onConfirm: (entryId: string, qtyCounted: number, courierSignPhoto: string) => void;
 }) {
-  return (
-    <PhotoUploadGrid
-      label={label}
-      hint={hint}
-      photos={photos}
-      onChange={onChange}
-      min={min}
-      max={max}
-      disabled={disabled}
-      upload={file => uploadTaskPhoto(file, photoType)}
-    />
-  );
-}
-
-// ─── Section wrapper ──────────────────────────────────────────────────────────
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="space-y-3">
-      <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">{title}</p>
-      {children}
-    </div>
-  );
-}
-
-// ─── Option button ────────────────────────────────────────────────────────────
-
-function OptionButton({ selected, onClick, icon: Icon, label, description, color, disabled }: {
-  selected: boolean; onClick: () => void; icon: React.ElementType;
-  label: string; description: string; color: 'green' | 'amber'; disabled?: boolean;
-}) {
-  const c = {
-    green: { active: 'border-green-400 bg-green-50', icon: 'bg-green-100 text-green-700', label: 'text-green-800', inactive: 'border-border bg-card hover:border-green-200' },
-    amber: { active: 'border-amber-400 bg-amber-50', icon: 'bg-amber-100 text-amber-700', label: 'text-amber-800', inactive: 'border-border bg-card hover:border-amber-200' },
-  }[color];
-  return (
-    <button type="button" onClick={() => !disabled && onClick()}
-      className={cn('flex w-full items-start gap-3 rounded-2xl border-2 p-4 text-left transition-all', selected ? c.active : c.inactive, disabled && 'cursor-default opacity-60')}>
-      <div className={cn('flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl transition-colors', selected ? c.icon : 'bg-secondary text-muted-foreground')}>
-        <Icon className="h-5 w-5" />
-      </div>
-      <div className="min-w-0 flex-1 pt-0.5">
-        <div className="flex items-center gap-2">
-          <p className={cn('text-sm font-bold', selected ? c.label : 'text-foreground')}>{label}</p>
-          {selected && (
-            <span className={cn('flex h-4 w-4 items-center justify-center rounded-full', color === 'green' ? 'bg-green-500' : 'bg-amber-500')}>
-              <Check className="h-2.5 w-2.5 text-white" strokeWidth={3} />
-            </span>
-          )}
-        </div>
-        <p className="mt-0.5 text-[11px] text-muted-foreground">{description}</p>
-      </div>
-    </button>
-  );
-}
-
-// ─── Return Selector ──────────────────────────────────────────────────────────────
-
-function ReturnSelector({
-  availableReturns, loadingReturns, returnsError, selectedNumbers, onToggle, onRetry, disabled,
-}: {
-  availableReturns:    AvailableReturn[];
-  loadingReturns:      boolean;
-  returnsError:        string | null;
-  selectedNumbers: Set<string>;
-  onToggle:        (to: AvailableReturn) => void;
-  onRetry:         () => void;
-  disabled?:       boolean;
-}) {
-  if (loadingReturns) {
-    return (
-      <div className="flex items-center gap-3 rounded-2xl border border-border bg-secondary px-4 py-4">
-        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground flex-shrink-0" />
-        <p className="text-xs text-muted-foreground">Memuat daftar return untuk toko ini…</p>
-      </div>
-    );
-  }
-
-  if (returnsError) {
-    return (
-      <div className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3.5">
-        <WifiOff className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-500" />
-        <div className="flex-1 min-w-0">
-          <p className="text-xs font-bold text-red-700">Gagal memuat daftar return</p>
-          <p className="mt-0.5 text-[11px] text-red-600">{returnsError}</p>
-        </div>
-        <button onClick={onRetry}
-          className="flex-shrink-0 flex items-center gap-1 rounded-lg bg-red-100 px-2.5 py-1.5 text-[11px] font-semibold text-red-700 hover:bg-red-200 transition-colors">
-          <RefreshCw className="h-3 w-3" />Coba lagi
-        </button>
-      </div>
-    );
-  }
-
-  if (availableReturns.length === 0) {
-    return (
-      <div className="rounded-2xl border border-border bg-secondary px-4 py-5 text-center">
-        <p className="text-xs font-semibold text-foreground">Tidak ada return terdaftar</p>
-        <p className="mt-1 text-[11px] text-muted-foreground">
-          Belum ada return yang dialokasikan untuk toko ini hari ini.
-        </p>
-        <button onClick={onRetry}
-          className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-[11px] font-semibold text-foreground hover:bg-secondary transition-colors">
-          <RefreshCw className="h-3 w-3" />Muat ulang
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between">
-        <p className="text-[11px] text-muted-foreground">
-          {selectedNumbers.size > 0
-            ? `${selectedNumbers.size} dari ${availableReturns.length} return dipilih`
-            : `${availableReturns.length} return tersedia — pilih yang perlu diproses hari ini`}
-        </p>
-        <button onClick={onRetry} disabled={disabled}
-          className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40">
-          <RefreshCw className="h-3 w-3" />Muat ulang
-        </button>
-      </div>
-
-      {availableReturns.map(to => {
-        const selected = selectedNumbers.has(to.returnNumber);
-        return (
-          <button key={to.returnNumber} type="button"
-            onClick={() => !disabled && onToggle(to)}
-            className={cn(
-              'flex w-full items-center gap-3 rounded-2xl border-2 px-4 py-3.5 text-left transition-all',
-              selected ? 'border-amber-400 bg-amber-50' : 'border-border bg-card hover:border-amber-200',
-              disabled && 'cursor-default opacity-60',
-            )}>
-            <div className={cn(
-              'flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md border-2 transition-colors',
-              selected ? 'border-amber-500 bg-amber-500' : 'border-border bg-background',
-            )}>
-              {selected && <Check className="h-3 w-3 text-white" strokeWidth={3} />}
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1.5">
-                <Hash className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
-                <p className={cn('text-sm font-bold font-mono truncate', selected ? 'text-amber-800' : 'text-foreground')}>
-                  {to.returnNumber}
-                </p>
-              </div>
-              {to.description && (
-                <p className="mt-0.5 text-[11px] text-muted-foreground truncate pl-5">
-                  {to.description}
-                </p>
-              )}
-              {to.expectedAt && (
-                <p className="mt-0.5 text-[10px] text-muted-foreground pl-5">
-                  Estimasi: {new Date(to.expectedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
-                </p>
-              )}
-            </div>
-            {selected && (
-              <span className="flex-shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">
-                Dipilih
-              </span>
-            )}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-// ─── Draft Entry Card ─────────────────────────────────────────────────────────
-
-// REPLACEMENT for the DraftEntryCard component in:
-// app/employee/tasks/item-return/[id]/page.tsx
-//
-// Fix: the outer expand/collapse row was a <button>, which contained the
-// "Batal" <button> — invalid HTML (button inside button).
-// Changed the outer element to a <div role="button"> with keyboard support.
-
-function DraftEntryCard({
-  entry, index, onChange, onDeselect, disabled,
-}: {
-  entry:      DraftEntry;
-  index:      number;
-  disabled?:  boolean;
-  onChange:   (patch: Partial<DraftEntry>) => void;
-  onDeselect: () => void;
-}) {
-  const [expanded, setExpanded] = useState(true);
-  const valid = entry.quantity > 0 && entry.returnTime.length > 0 && entry.returnPhotos.length >= PHOTO_RULES.returnPhoto.min;
-
-  return (
-    <div className={cn(
-      'rounded-2xl border-2 transition-colors',
-      valid ? 'border-amber-300 bg-amber-50/40' : 'border-amber-200 bg-amber-50/20',
-    )}>
-      {/* ── Header row: div instead of button to avoid nested-button error ── */}
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={() => setExpanded(v => !v)}
-        onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && setExpanded(v => !v)}
-        className="flex w-full cursor-pointer items-center gap-3 px-4 py-3.5 text-left select-none"
-      >
-        <div className={cn(
-          'flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full',
-          valid ? 'bg-amber-500' : 'bg-amber-200',
-        )}>
-          {valid
-            ? <Check className="h-3.5 w-3.5 text-white" strokeWidth={3} />
-            : <span className="text-[10px] font-bold text-amber-700">{index + 1}</span>}
-        </div>
-
-        <div className="min-w-0 flex-1">
-          <p className="truncate font-mono text-sm font-bold text-amber-800">{entry.returnNumber}</p>
-          {entry.description && (
-            <p className="truncate text-[10px] text-amber-700">{entry.description}</p>
-          )}
-        </div>
-
-        {/* "Batal" is a real <button> — safe here because the parent is a <div> */}
-        {!disabled && (
-          <button
-            type="button"
-            onClick={e => { e.stopPropagation(); onDeselect(); }}
-            className="mr-1 flex flex-shrink-0 items-center gap-1 rounded-lg bg-red-100 px-2.5 py-1.5 text-[11px] font-semibold text-red-700 hover:bg-red-200 transition-colors"
-          >
-            <X className="h-3 w-3" />Batal
-          </button>
-        )}
-
-        {expanded
-          ? <ChevronUp   className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
-          : <ChevronDown className="h-4 w-4 flex-shrink-0 text-muted-foreground" />}
-      </div>
-
-      {/* ── Expanded body ─────────────────────────────────────────────────── */}
-      {expanded && (
-        <div className="space-y-4 border-t border-amber-200 px-4 pb-4 pt-4">
-
-          {/* Quantity */}
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-foreground">Jumlah Barang</label>
-            <p className="text-[10px] text-muted-foreground">Jumlah item yang diterima untuk return ini.</p>
-            <input
-              type="number"
-              min="0"
-              value={entry.quantity === 0 ? '' : entry.quantity}
-              disabled={disabled}
-              onChange={e => onChange({ quantity: Math.max(0, Math.floor(Number(e.target.value || 0))) })}
-              placeholder="0"
-              className="w-full rounded-xl border border-border bg-secondary px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
-            />
-          </div>
-
-          {/* Drop time */}
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-foreground">Waktu Return</label>
-            <p className="text-[10px] text-muted-foreground">Waktu saat item return diproses di toko.</p>
-            <div className="relative">
-              <Clock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <input
-                type="datetime-local"
-                value={entry.returnTime}
-                disabled={disabled}
-                onChange={e => onChange({ returnTime: e.target.value })}
-                className="w-full rounded-xl border border-border bg-secondary py-3 pl-9 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
-              />
-            </div>
-          </div>
-
-          {/* Photos */}
-          <PhotoUploader
-            label="Foto Return"
-            photoType="item_return"
-            photos={entry.returnPhotos}
-            min={PHOTO_RULES.returnPhoto.min}
-            max={PHOTO_RULES.returnPhoto.max}
-            disabled={disabled}
-            hint="Foto bukti item return / dokumen return (wajib)"
-            onChange={urls => onChange({ returnPhotos: urls })}
-          />
-
-          {/* Notes */}
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-foreground">Catatan (opsional)</label>
-            <textarea
-              value={entry.notes}
-              disabled={disabled}
-              rows={2}
-              onChange={e => onChange({ notes: e.target.value })}
-              placeholder="Catatan untuk return ini…"
-              className="w-full resize-none rounded-xl border border-border bg-secondary px-4 py-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
-            />
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-// ─── Saved Entry Card ─────────────────────────────────────────────────────────
-
-function SavedEntryCard({ entry, index }: { entry: ReturnEntry; index: number }) {
+  useTicking();
   const [expanded, setExpanded] = useState(false);
+  const [qtyCounted, setQtyCounted] = useState(String(entry.qtyOrdered));
+  const [photos, setPhotos] = useState<string[]>([]);
 
-  function fmt(iso: string | null) {
-    if (!iso) return '–';
-    return new Date(iso).toLocaleString('id-ID', {
-      day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit',
-    });
-  }
+  const canConfirm = qtyCounted.trim() !== '' && Number(qtyCounted) >= 0 && photos.length >= 1;
 
   return (
-    <div className="rounded-2xl border border-border bg-card overflow-hidden">
-      <button type="button" onClick={() => setExpanded(v => !v)}
-        className="flex w-full items-center gap-3 px-4 py-3.5 text-left">
-        <div className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-green-100">
-          <Check className="h-3.5 w-3.5 text-green-700" strokeWidth={3} />
+    <div className="overflow-hidden rounded-2xl border-2 border-amber-300 bg-amber-50/60">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center gap-3 px-4 py-3.5 text-left"
+      >
+        <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
+          <Package className="h-5 w-5" />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-bold font-mono text-foreground truncate">{entry.returnNumber}</p>
-          <p className="text-[10px] text-muted-foreground">{fmt(entry.returnTime)}</p>
+          <p className="font-mono text-sm font-bold text-foreground">{entry.toaNo}</p>
+          <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <span>Ke</span>
+            <StorePill store={entry.toStore} code={entry.transferToCode} />
+          </div>
+          <p className="mt-1 text-[11px] text-muted-foreground">Qty pesanan: {entry.qtyOrdered}</p>
         </div>
-        <span className="flex-shrink-0 rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-bold text-green-700 mr-1">
-          Return #{index + 1}
-        </span>
-        {expanded
-          ? <ChevronUp   className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
-          : <ChevronDown className="h-4 w-4 flex-shrink-0 text-muted-foreground" />}
+        <div className="flex-shrink-0 text-right">
+          <div className="flex items-center gap-1 text-amber-700">
+            <Clock className="h-3.5 w-3.5" />
+            <span className="text-xs font-bold">{formatElapsedSince(entry.returnDetectedAt)}</span>
+          </div>
+          <p className="text-[10px] text-muted-foreground">menunggu diambil</p>
+        </div>
       </button>
 
       {expanded && (
-        <div className="border-t border-border px-4 pb-4 pt-3 space-y-3">
-          {entry.returnPhotos.length > 0 && (
-            <div className="space-y-2">
-              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Foto</p>
-              <div className="flex flex-wrap gap-2">
-                {entry.returnPhotos.map((url, i) => (
-                  <div key={i} className="h-16 w-16 overflow-hidden rounded-xl border border-border">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={url} alt="" className="h-full w-full object-cover" />
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          {entry.notes && <p className="text-[11px] text-muted-foreground">{entry.notes}</p>}
+        <div className="space-y-3 border-t border-amber-200 bg-card px-4 py-3.5">
+          <div>
+            <label className="text-xs font-semibold text-foreground">Jumlah dihitung</label>
+            <input
+              type="number"
+              min={0}
+              inputMode="numeric"
+              value={qtyCounted}
+              onChange={(e) => setQtyCounted(e.target.value)}
+              disabled={disabled}
+              className="mt-1 h-10 w-full rounded-xl border border-border bg-background px-3 text-sm"
+            />
+          </div>
+
+          <PhotoUploadGrid
+            label="Foto bukti tanda tangan kurir"
+            hint="Foto surat jalan yang sudah ditandatangani kurir."
+            photos={photos}
+            onChange={setPhotos}
+            min={1}
+            max={1}
+            disabled={disabled}
+            upload={(file) => uploadTaskPhoto(file, 'item_return_courier_sign')}
+          />
+
+          <button
+            type="button"
+            disabled={disabled || !canConfirm || confirming}
+            onClick={() => onConfirm(entry.id, Number(qtyCounted), photos[0])}
+            className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-primary text-sm font-bold text-primary-foreground transition-all active:scale-[0.98] disabled:opacity-40"
+          >
+            {confirming ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+            Konfirmasi Serah Terima ke Kurir
+          </button>
         </div>
       )}
     </div>
   );
 }
 
-// ─── Locked overlay ───────────────────────────────────────────────────────────
+// ─── Confirmed entry card ─────────────────────────────────────────────────────
 
-function LockedOverlay({ accessStatus }: { accessStatus: AccessStatus | null }) {
-  if (!accessStatus || accessStatus.status === 'ok' || accessStatus.status === 'geo_unavailable') return null;
-  const isCheckIn = accessStatus.status === 'not_checked_in';
+function ConfirmedReturnEntryCard({ entry }: { entry: ItemReturnEntryData }) {
   return (
-    <div className="pointer-events-none absolute inset-0 rounded-2xl bg-background/70 backdrop-blur-[2px] flex flex-col items-center justify-center gap-2 z-10">
-      <div className={cn('flex h-12 w-12 items-center justify-center rounded-full', isCheckIn ? 'bg-red-100' : 'bg-orange-100')}>
-        {isCheckIn ? <LogIn className="h-6 w-6 text-red-600" /> : <NavigationOff className="h-6 w-6 text-orange-600" />}
+    <div className="rounded-2xl border border-green-200 bg-green-50/50 px-4 py-3.5">
+      <div className="flex items-center gap-3">
+        <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-green-100 text-green-700">
+          <CheckCircle2 className="h-5 w-5" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="font-mono text-sm font-bold text-foreground">{entry.toaNo}</p>
+          <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <span>Ke</span>
+            <StorePill store={entry.toStore} code={entry.transferToCode} />
+          </div>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            Qty pesanan {entry.qtyOrdered} · dihitung {entry.qtyCounted ?? '—'}
+          </p>
+        </div>
+        <div className="flex-shrink-0 text-right">
+          <p className="text-xs font-bold text-green-700">
+            {formatDurationBetween(entry.returnDetectedAt, entry.submittedAt)}
+          </p>
+          <p className="text-[10px] text-muted-foreground">
+            {entry.submittedAt
+              ? new Date(entry.submittedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
+              : ''}
+          </p>
+        </div>
       </div>
-      <p className={cn('text-sm font-bold', isCheckIn ? 'text-red-700' : 'text-orange-700')}>
-        {isCheckIn ? 'Absen masuk dulu' : 'Kamu di luar area toko'}
-      </p>
+      {entry.courierSignPhoto && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={entry.courierSignPhoto}
+          alt="Bukti tanda tangan kurir"
+          className="mt-3 h-20 w-20 rounded-xl border border-border object-cover"
+        />
+      )}
     </div>
   );
 }
@@ -617,37 +395,27 @@ export default function ItemReturnDetailPage() {
   const { requiresLocation } = useTaskLocationSetting('item_return');
   const { geo, geoError, geoReady, refresh: refreshGeo } = useGeo(requiresLocation);
 
-  const [taskData,    setTaskData]    = useState<ItemReturnData | null>(null);
-  const [loading,     setLoading]     = useState(true);
-  const [submitting,  setSubmitting]  = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
-
-  const [availableReturns, setAvailableReturns] = useState<AvailableReturn[]>([]);
-  const [loadingReturns,   setLoadingReturns]   = useState(false);
-  const [returnsError,     setReturnsError]     = useState<string | null>(null);
-
-  const [hasReturn,  setHasReturn]  = useState<boolean | null>(null);
-  const [selectedNums, setSelectedNums] = useState<Set<string>>(new Set());
-  const [drafts,       setDrafts]       = useState<DraftEntry[]>([]);
-  const [notes,        setNotes]        = useState('');
-
-  // ── Load task ──────────────────────────────────────────────────────────────
+  const [taskData, setTaskData] = useState<ItemReturnTaskData | null>(null);
+  const [entries, setEntries] = useState<ItemReturnEntryData[]>([]);
+  const [scheduleId, setScheduleId] = useState<string>('');
+  const [loading, setLoading] = useState(true);
+  const [syncWarning, setSyncWarning] = useState<string | null>(null);
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res  = await fetch('/api/employee/tasks');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json() as { tasks: { type: string; data: ItemReturnData }[] };
-      const found = data.tasks?.find(t => t.type === 'item_return' && t.data.id === taskId);
-      if (found) {
-        const d = found.data;
-        setTaskData(d);
-        setHasReturn(d.hasReturn);
-        setNotes(d.notes ?? '');
-      } else {
+      const res = await fetch(`/api/employee/tasks/item-return/${taskId}`, { cache: 'no-store' });
+      const data = await res.json() as LoadResponse;
+      if (!data.success || !data.task) {
+        toast.error(data.error ?? 'Gagal memuat data task.');
         setTaskData(null);
+        return;
       }
+      setTaskData(data.task);
+      setEntries(data.entries ?? []);
+      setScheduleId(String(data.scheduleId ?? ''));
+      setSyncWarning(data.syncWarning ?? null);
     } catch (e) {
       console.error('[ItemReturnDetailPage] load error:', e);
       toast.error('Gagal memuat data task.');
@@ -658,355 +426,142 @@ export default function ItemReturnDetailPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // ── Load available returns ─────────────────────────────────────────────────────
-
-  const loadReturns = useCallback(async (storeId: string, date: string) => {
-    setLoadingReturns(true);
-    setReturnsError(null);
-    try {
-      const dateStr = new Date(date).toISOString().slice(0, 10);
-      const res  = await fetch(`/api/employee/tasks/item-return/available-returns?storeId=${storeId}&date=${dateStr}`);
-      const data = await res.json() as { success: boolean; returns?: AvailableReturn[]; error?: string };
-      if (!data.success) throw new Error(data.error ?? 'Gagal memuat return');
-      setAvailableReturns(data.returns ?? []);
-    } catch (e) {
-      setReturnsError(e instanceof Error ? e.message : 'Gagal memuat daftar return.');
-    } finally {
-      setLoadingReturns(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (taskData && hasReturn === true) {
-      loadReturns(taskData.storeId, taskData.date);
-    }
-  }, [taskData, hasReturn, loadReturns]);
-
   const { accessStatus, accessLoading, refreshAccess } = useAccessStatus(
-    taskData?.scheduleId ?? '', taskData?.storeId ?? '', geo, geoReady, taskData?.status,
+    scheduleId, taskData?.storeId ?? '', geo, geoReady, taskData?.status,
   );
 
-  const scheduleId = taskData ? parseInt(taskData.scheduleId, 10) : 0;
-  const storeId    = taskData ? parseInt(taskData.storeId,    10) : 0;
-  const taskIdNum  = taskData ? parseInt(taskData.id,         10) : 0;
+  const locked = requiresLocation
+    ? accessLoading || !accessStatus || accessStatus.status !== 'ok'
+    : false;
 
-  const { status: saveStatus, lastSaved, error: saveError, save: autoSave } = useAutoSave({
-    url: '/api/employee/tasks/item-return', baseBody: { taskId: taskIdNum }, debounceMs: 800,
-  });
-
-  const taskStatus = taskData?.status;
-  const readonly   = taskStatus === 'completed' || taskStatus === 'verified';
-  const isRejected = taskStatus === 'rejected';
-  const locked     = !readonly && !!accessStatus &&
-    (accessStatus.status === 'not_checked_in' || accessStatus.status === 'outside_geofence');
-  const dis = readonly || locked;
-
-  // ── Return selection ──────────────────────────────────────────────────────────
-
-  function toggleReturn(to: AvailableReturn) {
-    const next = new Set(selectedNums);
-    if (next.has(to.returnNumber)) {
-      next.delete(to.returnNumber);
-      setDrafts(prev => prev.filter(d => d.returnNumber !== to.returnNumber));
-    } else {
-      next.add(to.returnNumber);
-      setDrafts(prev => [...prev, makeDraft(to)]);
+  const handleConfirm = useCallback(async (entryId: string, qtyCounted: number, courierSignPhoto: string) => {
+    if (locked) {
+      toast.warning('Belum bisa konfirmasi — periksa status akses di atas.');
+      return;
     }
-    setSelectedNums(next);
-  }
+    setConfirmingId(entryId);
+    try {
+      const res = await fetch(`/api/employee/tasks/item-return/${taskId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          entryId: Number(entryId),
+          qtyCounted,
+          courierSignPhoto,
+          lat: geo?.lat,
+          lng: geo?.lng,
+          skipGeo: !requiresLocation,
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error ?? 'Gagal konfirmasi.');
+      toast.success('Serah terima ke kurir dikonfirmasi.');
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal konfirmasi.');
+    } finally {
+      setConfirmingId(null);
+    }
+  }, [taskId, geo, requiresLocation, locked, load]);
 
-  function deselectReturn(returnNumber: string) {
-    setSelectedNums(prev => { const n = new Set(prev); n.delete(returnNumber); return n; });
-    setDrafts(prev => prev.filter(d => d.returnNumber !== returnNumber));
-  }
-
-  function patchDraft(localId: string, patch: Partial<DraftEntry>) {
-    setDrafts(prev => prev.map(d => d.localId === localId ? { ...d, ...patch } : d));
-  }
-
-  // ── Validation ─────────────────────────────────────────────────────────────
-
-  function isDraftValid(d: DraftEntry) {
+  if (loading && !taskData) {
     return (
-      d.quantity > 0 &&
-      d.returnTime.length > 0 &&
-      d.returnPhotos.length >= PHOTO_RULES.returnPhoto.min
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
     );
   }
 
-  const canSubmitNoDrop   = hasReturn === false;
-  const canSubmitWithDrop = hasReturn === true && drafts.length > 0 && drafts.every(isDraftValid);
-  const canSubmit         = !locked && (canSubmitNoDrop || canSubmitWithDrop);
-
-  const submitHint = (() => {
-    if (locked || hasReturn === null) return '';
-    if (hasReturn === false) return '';
-    if (drafts.length === 0)  return 'Pilih minimal satu return dari daftar di atas.';
-    const invalid = drafts.findIndex(d => !isDraftValid(d));
-    if (invalid >= 0) {
-      const d = drafts[invalid];
-      if (d.quantity <= 0)               return `${d.returnNumber}: Isi jumlah barang.`;
-      if (!d.returnTime)                   return `${d.returnNumber}: Isi waktu return.`;
-      if (d.returnPhotos.length === 0) return `${d.returnNumber}: Upload minimal 1 foto.`;
-    }
-    return '';
-  })();
-
-  // ── Submit ─────────────────────────────────────────────────────────────────
-
-  async function handleSubmit() {
-    if (!taskData) return;
-    setSubmitError(null);
-    setSubmitting(true);
-    try {
-      const entries = hasReturn
-        ? drafts.map(d => ({
-            returnNumber:       d.returnNumber,
-            description:    d.description,
-            expectedAt:     d.expectedAt,
-            quantity:       d.quantity,            // ← ADD
-            returnTime:       new Date(d.returnTime).toISOString(),
-            returnPhotos: d.returnPhotos,
-            notes:          d.notes || undefined,
-          }))
-        : undefined;
-
-      const res = await fetch('/api/employee/tasks/item-return', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mode: 'submit',
-          scheduleId, storeId,
-          lat: geo?.lat, lng: geo?.lng,
-          skipGeo: geo === null,
-          hasReturn: hasReturn ?? false,
-          entries,
-          notes: notes || undefined,
-        }),
-      });
-
-      let json: Record<string, unknown> = {};
-      if (res.headers.get('content-type')?.includes('application/json')) json = await res.json();
-
-      if (!res.ok || json.success === false) {
-        const msg = (typeof json.error === 'string' && json.error) || `HTTP ${res.status}`;
-        setSubmitError(msg); toast.error(msg, { duration: 6000 }); return;
-      }
-
-      toast.success(
-        hasReturn
-          ? `${drafts.length} return berhasil dicatat. ✓`
-          : 'Tidak ada return hari ini. Task selesai. ✓',
-        { duration: 4000 },
-      );
-      router.back();
-    } catch (e) {
-      const msg = e instanceof Error ? `Koneksi gagal: ${e.message}` : 'Gagal terhubung ke server.';
-      setSubmitError(msg); toast.error(msg, { duration: 6000 });
-    } finally {
-      setSubmitting(false);
-    }
+  if (!taskData) {
+    return (
+      <div className="flex min-h-screen flex-col bg-background">
+        <TaskHeader title="Item Return" onBack={() => router.back()} />
+        <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
+          <AlertCircle className="h-8 w-8 text-muted-foreground" />
+          <p className="text-sm font-semibold text-foreground">Task tidak ditemukan</p>
+        </div>
+      </div>
+    );
   }
 
-  function fmt(iso: string | null) {
-    if (!iso) return '–';
-    return new Date(iso).toLocaleString('id-ID', {
-      day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit',
-    });
-  }
-
-  const statusLabel: Record<TaskStatus, string> = {
-    not_started: 'Menunggu', in_progress: 'Sedang Diisi', completed: 'Selesai',
-    pending: 'Perlu Ditindaklanjuti', verified: 'Terverifikasi', rejected: 'Ditolak',
-  };
+  const openEntries = entries.filter((e) => !e.submittedAt);
+  const confirmedEntries = entries.filter((e) => e.submittedAt);
 
   return (
-    <div className="flex min-h-screen flex-col bg-background">
+    <div className="flex min-h-screen flex-col bg-background pb-28">
       <TaskHeader
         title="Item Return"
-        subtitle={
-          taskData
-            ? `${String(taskData.shift).replace('_', ' ')} shift · ${String(taskData.status).replace('_', ' ')}`
-            : undefined
-        }
-        status={taskStatus}
-        saveIndicator={
-          !readonly && !loading && taskData ? (
-            <SaveIndicator status={saveStatus} lastSaved={lastSaved ?? null} />
-          ) : null
-        }
+        subtitle={openEntries.length > 0 ? `${openEntries.length} menunggu konfirmasi` : undefined}
+        status={taskData.status}
+        onBack={() => router.back()}
       />
 
-      {/* Body */}
-      <div className="flex-1 space-y-4 p-4 pb-10">
+      <div className="space-y-4 p-4">
+        <AccessBanner
+          accessStatus={accessStatus}
+          accessLoading={accessLoading}
+          geoReady={geoReady}
+          geo={geo}
+          geoError={geoError}
+          onRefreshGeo={refreshGeo}
+          onRefreshAccess={refreshAccess}
+        />
 
-        {!readonly && !loading && taskData && (
-          <AccessBanner accessStatus={accessStatus} accessLoading={accessLoading} geoReady={geoReady}
-            geo={geo} geoError={geoError} onRefreshGeo={refreshGeo} onRefreshAccess={refreshAccess} />
-        )}
-
-        {submitError && (
-          <div className="flex items-start gap-2.5 rounded-xl border border-red-300 bg-red-50 px-4 py-3">
-            <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-600" />
-            <div className="min-w-0 flex-1">
-              <p className="text-xs font-bold text-red-700">Submit gagal</p>
-              <p className="mt-0.5 text-xs text-red-600 break-words">{submitError}</p>
-            </div>
-            <button onClick={() => setSubmitError(null)} className="flex-shrink-0 text-red-400 hover:text-red-600"><X className="h-4 w-4" /></button>
-          </div>
-        )}
-
-        {saveError && !readonly && (
-          <div className="flex items-center gap-2 rounded-xl border border-orange-200 bg-orange-50 px-4 py-2.5">
-            <CloudOff className="h-4 w-4 flex-shrink-0 text-orange-600" />
-            <p className="text-xs text-orange-700">Auto-save gagal: {saveError}</p>
-          </div>
-        )}
-
-        {isRejected && taskData?.notes && (
+        {syncWarning && (
           <div className="flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
             <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-600" />
-            <div>
-              <p className="text-xs font-bold text-red-700">Ditolak oleh OPS</p>
-              <p className="mt-0.5 text-xs text-red-600">{taskData.notes}</p>
-              <p className="mt-1.5 text-xs font-medium text-red-700">Silakan perbaiki dan submit ulang.</p>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold text-red-700">Gagal sinkronisasi dengan Business Central</p>
+              <p className="mt-0.5 text-[11px] text-red-600">{syncWarning}</p>
+              <p className="mt-0.5 text-[11px] text-red-600">Data yang ditampilkan mungkin belum terbaru.</p>
             </div>
+            <button
+              onClick={load}
+              className="flex flex-shrink-0 items-center gap-1 rounded-lg bg-red-100 px-2.5 py-1.5 text-[11px] font-semibold text-red-700 hover:bg-red-200"
+            >
+              <RefreshCw className="h-3 w-3" />Coba lagi
+            </button>
           </div>
         )}
 
-        {taskStatus === 'verified' && taskData?.verifiedAt && (
-          <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3">
-            <p className="text-xs font-semibold text-green-800">Task telah diverifikasi</p>
-            <p className="mt-0.5 text-xs text-green-600">{fmt(taskData.verifiedAt)}</p>
-          </div>
-        )}
-
-        {!readonly && !locked && !loading && taskData && (
-          <div className="flex items-center gap-2 rounded-xl border border-blue-100 bg-blue-50 px-4 py-2.5">
-            <Save className="h-4 w-4 flex-shrink-0 text-blue-500" />
-            <p className="text-xs text-blue-700">Perubahan otomatis tersimpan.</p>
-          </div>
-        )}
-
-        {loading ? (
-          <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-20 animate-pulse rounded-2xl bg-secondary" />)}</div>
-        ) : !taskData ? (
-          <div className="flex flex-col items-center py-20 text-center">
-            <AlertCircle className="mb-3 h-8 w-8 text-muted-foreground/40" />
-            <p className="text-sm font-semibold">Task tidak ditemukan</p>
+        {entries.length === 0 ? (
+          <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-border bg-secondary px-4 py-10 text-center">
+            <Inbox className="h-8 w-8 text-muted-foreground/40" />
+            <p className="text-sm font-semibold text-foreground">Belum ada item return</p>
+            <p className="text-xs text-muted-foreground">
+              Task ini akan otomatis terisi begitu Business Central mengirim transfer order dari toko ini.
+            </p>
           </div>
         ) : (
-          <div className="relative">
-            <LockedOverlay accessStatus={accessStatus} />
-            <div className="space-y-6">
-
-              {/* ── READ-ONLY ──────────────────────────────────────────────── */}
-              {readonly && (
-                <Section title="Detail Task">
-                  <div className="rounded-2xl border border-border bg-card p-4 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-muted-foreground">Ada Item Return?</span>
-                      <span className={cn('rounded-full px-2.5 py-0.5 text-[11px] font-bold',
-                        taskData.hasReturn ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700')}>
-                        {taskData.hasReturn ? `Ya · ${taskData.entries.length} Return` : 'Tidak'}
-                      </span>
-                    </div>
-                    {taskData.notes && (
-                      <div className="border-t border-border pt-3">
-                        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Catatan</p>
-                        <p className="mt-1 text-xs text-foreground">{taskData.notes}</p>
-                      </div>
-                    )}
-                    <div className="border-t border-border pt-3">
-                      <p className="text-[10px] text-muted-foreground">Tanggal: {fmt(taskData.date)}</p>
-                      {taskData.completedAt && <p className="text-[10px] text-muted-foreground">Selesai: {fmt(taskData.completedAt)}</p>}
-                    </div>
-                  </div>
-                  {taskData.entries.length > 0 && (
-                    <div className="space-y-2 mt-2">
-                      {taskData.entries.map((e, i) => <SavedEntryCard key={e.id} entry={e} index={i} />)}
-                    </div>
-                  )}
-                </Section>
-              )}
-
-              {/* ── EDITABLE FORM ──────────────────────────────────────────── */}
-              {!readonly && (
-                <>
-                  {/* Step 1 */}
-                  <Section title="Ada Item Return Hari Ini?">
-                    <div className="space-y-2.5">
-                      <OptionButton selected={hasReturn === false}
-                        onClick={() => {
-                          setHasReturn(false);
-                          setSelectedNums(new Set());
-                          setDrafts([]);
-                          autoSave({ hasReturn: false });
-                        }}
-                        icon={PackageCheck} label="Tidak Ada Item Return"
-                        description="Tidak ada item return hari ini. Task langsung selesai."
-                        color="green" disabled={dis} />
-                      <OptionButton selected={hasReturn === true}
-                        onClick={() => { setHasReturn(true); autoSave({ hasReturn: true }); }}
-                        icon={PackageOpen} label="Ada Item Return"
-                        description="Ada barang yang dikirim hari ini. Pilih nomor return dari daftar."
-                        color="amber" disabled={dis} />
-                    </div>
-                  </Section>
-
-                  {/* Step 2 — Return list */}
-                  {hasReturn === true && (
-                    <Section title={`Pilih Nomor Return${selectedNums.size > 0 ? ` · ${selectedNums.size} dipilih` : ''}`}>
-                      <ReturnSelector
-                        availableReturns={availableReturns}
-                        loadingReturns={loadingReturns}
-                        returnsError={returnsError}
-                        selectedNumbers={selectedNums}
-                        onToggle={toggleReturn}
-                        onRetry={() => taskData && loadReturns(taskData.storeId, taskData.date)}
-                        disabled={dis}
-                      />
-                    </Section>
-                  )}
-
-                  {/* Step 3 — detail per Return */}
-                  {hasReturn === true && drafts.length > 0 && (
-                    <Section title={`Detail Return · ${drafts.length} Return`}>
-                      <div className="space-y-3">
-                        {drafts.map((d, i) => (
-                          <DraftEntryCard
-                            key={d.localId}
-                            entry={d}
-                            index={i}
-                            disabled={dis}
-                            onChange={patch => patchDraft(d.localId, patch)}
-                            onDeselect={() => deselectReturn(d.returnNumber)}
-                          />
-                        ))}
-                      </div>
-                    </Section>
-                  )}
-
-                  {/* Notes */}
-                  <Section title="Catatan (opsional)">
-                    <textarea value={notes} disabled={dis} rows={3}
-                      onChange={e => { setNotes(e.target.value); autoSave({ notes: e.target.value }); }}
-                      placeholder="Tambahkan catatan jika ada…"
-                      className="w-full resize-none rounded-xl border border-border bg-secondary px-4 py-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60" />
-                  </Section>
-
-                  <TaskSubmitBar
-                    label="Submit Item Return"
-                    onSubmit={handleSubmit}
-                    submitting={submitting}
-                    disabled={!canSubmit}
-                    hidden={readonly}
-                    hint={!canSubmit ? submitHint : undefined}
+          <>
+            {openEntries.length > 0 && (
+              <section className="space-y-2.5">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-amber-600">
+                  Menunggu diambil kurir · {openEntries.length}
+                </p>
+                {openEntries.map((entry) => (
+                  <OpenReturnEntryCard
+                    key={entry.id}
+                    entry={entry}
+                    disabled={locked}
+                    confirming={confirmingId === entry.id}
+                    onConfirm={handleConfirm}
                   />
-                </>
-              )}
-            </div>
-          </div>
+                ))}
+              </section>
+            )}
+
+            {confirmedEntries.length > 0 && (
+              <section className="space-y-2.5">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                  Sudah dikonfirmasi · {confirmedEntries.length}
+                </p>
+                {confirmedEntries.map((entry) => (
+                  <ConfirmedReturnEntryCard key={entry.id} entry={entry} />
+                ))}
+              </section>
+            )}
+          </>
         )}
       </div>
     </div>

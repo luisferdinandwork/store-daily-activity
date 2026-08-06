@@ -64,8 +64,10 @@ export async function POST(req: NextRequest) {
     const skipGeo = Boolean(body.skipGeo);
     const userId = session.user.id as string;
     const denominations = readDenominations(body.denominations);
+    const taskId = body.taskId != null ? toInt(body.taskId, 'taskId') : undefined;
 
     const result = await submitCekUangModal({
+      taskId,
       scheduleId,
       userId,
       storeId,

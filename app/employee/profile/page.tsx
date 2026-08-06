@@ -8,7 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import {
-  UserCircle, Mail, Briefcase, Store,
+  UserCircle, IdCard, Briefcase, Store,
   Clock, LogOut, Sun, Moon, Loader2,
 } from 'lucide-react';
 import EmployeeLogoMark from '@/components/employee/EmployeeLogoMark';
@@ -48,9 +48,9 @@ export default function EmployeeProfilePage() {
 
   const infoRows = [
     {
-      icon:  Mail,
-      label: 'Email',
-      value: user?.email ?? '—',
+      icon:  IdCard,
+      label: 'NIK',
+      value: user?.nik ?? '—',
     },
     {
       icon:  Briefcase,

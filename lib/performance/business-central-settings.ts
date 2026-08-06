@@ -1,5 +1,5 @@
 // lib/performance/business-central-settings.ts
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import { businessCentralSettings } from '@/lib/db/schema';
@@ -17,11 +17,28 @@ function cleanEnv(value: string | undefined) {
   return value?.trim() || '';
 }
 
-export async function getActiveBusinessCentralSettings(): Promise<ResolvedBusinessCentralSettings | null> {
+/**
+ * Resolves the active BC credentials for one integration, keyed by
+ * `business_central_settings.code`. Defaults to 'sales_entries' to preserve
+ * the original caller's behavior.
+ *
+ * IMPORTANT: this used to ignore `code` entirely and just grab the single
+ * latest active row — that broke the moment a second settings row existed
+ * for a different integration (e.g. the item-transfer BC syncs). Every
+ * caller MUST now pass its own code explicitly.
+ *
+ * The env-var fallback only applies to 'sales_entries' (the original
+ * env var names are specific to it) — other codes with no matching DB row
+ * simply return null, and callers should surface a clear "not configured"
+ * error (see getBusinessCentralSalesEntries for the pattern).
+ */
+export async function getActiveBusinessCentralSettings(
+  code: string = 'sales_entries',
+): Promise<ResolvedBusinessCentralSettings | null> {
   const [dbSettings] = await db
     .select()
     .from(businessCentralSettings)
-    .where(eq(businessCentralSettings.isActive, true))
+    .where(and(eq(businessCentralSettings.code, code), eq(businessCentralSettings.isActive, true)))
     .orderBy(desc(businessCentralSettings.id))
     .limit(1);
 
@@ -37,6 +54,8 @@ export async function getActiveBusinessCentralSettings(): Promise<ResolvedBusine
       source: 'db',
     };
   }
+
+  if (code !== 'sales_entries') return null;
 
   const apiUrl = cleanEnv(process.env.BC_SALES_ENTRIES_URL);
 

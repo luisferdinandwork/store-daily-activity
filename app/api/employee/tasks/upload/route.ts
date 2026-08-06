@@ -27,9 +27,10 @@ type PhotoType =
   | 'resi'
   | 'atm_card_selfie'
 
-  // Item Dropping task
-  | 'item_dropping'
-  | 'item_dropping_receive'
+  // Item Return / Item Dropping tasks — one courier-signed-paper photo per
+  // transfer-order confirmation (see lib/db/utils/item-transfers.ts).
+  | 'item_return_courier_sign'
+  | 'item_dropping_courier_sign'
 
   // Grooming task
   | 'grooming_selfie'
@@ -59,9 +60,9 @@ const PHOTO_FOLDER: Record<PhotoType, string> = {
   resi: 'setoran/resi',
   atm_card_selfie: 'setoran/atm-card-selfie',
 
-  // Item Dropping task folders
-  item_dropping: 'item-dropping/drop',
-  item_dropping_receive: 'item-dropping/receive',
+  // Item Return / Item Dropping courier-sign photo folders
+  item_return_courier_sign: 'item-return/courier-sign',
+  item_dropping_courier_sign: 'item-dropping/courier-sign',
 
   // Grooming task folders
   grooming_selfie: 'grooming/selfie',
@@ -89,8 +90,8 @@ const PHOTO_LIMITS: Record<PhotoType, number> = {
   resi: 1,
   atm_card_selfie: 1,
 
-  item_dropping: 5,
-  item_dropping_receive: 5,
+  item_return_courier_sign: 1,
+  item_dropping_courier_sign: 1,
 
   grooming_selfie: 3,
 

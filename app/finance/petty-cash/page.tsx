@@ -3,9 +3,15 @@
 //
 // Finance · Petty Cash Review
 //
-// Built for 50+ stores. Design priorities:
-//   1. Fast triage: color-coded status at a glance (needs review / ready / done)
-//   2. Minimal clicks: "Verify all" + "Refill" per store without modal stack
+// Finance's only action here is approving/rejecting PIC refill requests.
+// Usage-request approval belongs to OPS — Finance no longer reviews or
+// verifies individual spend transactions, and no longer has a separate
+// "close the month" action; the balance itself only tops back up once the
+// store uploads its drawer + Surat Terima Petty Cash proof photos.
+//
+// Design priorities:
+//   1. Fast triage: color-coded status at a glance (pending OPS / refilled / done)
+//   2. Minimal clicks: refill-request approve/reject, one click each
 //   3. Image lightbox: click photo → full-screen without leaving the page
 //   4. Month picker: review any past month without navigation
 //   5. Search + area filter: find a store in under 2 seconds
@@ -28,7 +34,6 @@ import {
   Loader2,
   RefreshCw,
   Search,
-  ShieldCheck,
   Wallet,
   X,
   ZoomIn,
@@ -64,18 +69,18 @@ function currentMonth() {
 
 // ─── Status system ────────────────────────────────────────────────────────────
 
-type StoreStatus = 'needs-review' | 'ready-to-refill' | 'refilled' | 'no-activity';
+type StoreStatus = 'pending-ops' | 'ready-to-refill' | 'refilled' | 'no-activity';
 
 function storeStatus(s: PettyCashStoreRow): StoreStatus {
   if (s.refillIssued) return 'refilled';
   if (s.transactions.length === 0) return 'no-activity';
-  if (s.unverifiedCount > 0) return 'needs-review';
+  if (s.pendingOpsCount > 0) return 'pending-ops';
   return 'ready-to-refill';
 }
 
 const STATUS_META: Record<StoreStatus, { dot: string; badge: string; label: string; priority: number }> = {
-  'needs-review':    { dot: 'bg-amber-400',   badge: 'bg-amber-50 text-amber-700 ring-amber-200',     label: 'Needs review',     priority: 0 },
-  'ready-to-refill': { dot: 'bg-emerald-500', badge: 'bg-emerald-50 text-emerald-700 ring-emerald-200', label: 'Ready to refill', priority: 1 },
+  'pending-ops':     { dot: 'bg-amber-400',   badge: 'bg-amber-50 text-amber-700 ring-amber-200',     label: 'Pending OPS',      priority: 0 },
+  'ready-to-refill': { dot: 'bg-emerald-500', badge: 'bg-emerald-50 text-emerald-700 ring-emerald-200', label: 'Up to date', priority: 1 },
   'refilled':        { dot: 'bg-slate-300',   badge: 'bg-slate-50 text-slate-500 ring-slate-200',      label: 'Refilled',         priority: 3 },
   'no-activity':     { dot: 'bg-slate-200',   badge: 'bg-slate-50 text-slate-400 ring-slate-200',      label: 'No activity',      priority: 2 },
 };
@@ -111,29 +116,27 @@ function Lightbox({ src, onClose }: { src: string; onClose: () => void }) {
   );
 }
 
-// ─── Transaction row ──────────────────────────────────────────────────────────
+// ─── Transaction row (read-only — OPS owns approval, Finance just sees it) ───
+
+const TX_STATUS_META: Record<string, { dot: string; label: string; text: string }> = {
+  pending_ops: { dot: 'bg-amber-400', label: 'Waiting OPS', text: 'text-amber-600' },
+  ops_approved: { dot: 'bg-emerald-400', label: 'Approved', text: 'text-emerald-600' },
+  ops_rejected: { dot: 'bg-rose-400', label: 'Rejected', text: 'text-rose-500' },
+};
 
 function TxRow({
   tx,
-  onVerify,
   onViewImage,
-  verifying,
 }: {
   tx: PettyCashTxRow;
-  onVerify: (id: number) => void;
   onViewImage: (url: string) => void;
-  verifying: boolean;
 }) {
+  const meta = TX_STATUS_META[tx.status] ?? TX_STATUS_META.pending_ops;
+
   return (
-    <div className={cn(
-      'grid grid-cols-[auto_1fr_auto_auto_auto] items-center gap-x-4 border-b border-slate-100/70 px-14 py-3 text-sm last:border-0',
-      tx.verifiedAt ? 'bg-white' : 'bg-amber-50/30',
-    )}>
-      {/* Verified dot */}
-      <span className={cn(
-        'h-2 w-2 shrink-0 rounded-full',
-        tx.verifiedAt ? 'bg-emerald-400' : 'bg-amber-400',
-      )} />
+    <div className="grid grid-cols-[auto_1fr_auto_auto_auto] items-center gap-x-4 border-b border-slate-100/70 bg-white px-14 py-3 text-sm last:border-0">
+      {/* Status dot */}
+      <span className={cn('h-2 w-2 shrink-0 rounded-full', meta.dot)} />
 
       {/* Description + submitter */}
       <div className="min-w-0">
@@ -171,27 +174,11 @@ function TxRow({
         )}
       </div>
 
-      {/* Verify button */}
-      <div className="w-24 shrink-0">
-        {tx.verifiedAt ? (
-          <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-600">
-            <ShieldCheck className="h-3.5 w-3.5" />
-            Verified
-          </span>
-        ) : tx.canVerify ? (
-          <button
-            onClick={() => onVerify(tx.id)}
-            disabled={verifying}
-            className="flex h-7 items-center gap-1.5 rounded-lg bg-emerald-600 px-2.5 text-[11px] font-bold text-white transition hover:bg-emerald-700 disabled:opacity-50"
-          >
-            {verifying ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCheck className="h-3 w-3" />}
-            Verify
-          </button>
-        ) : (
-          <span className="text-[10px] font-bold text-slate-400">
-            Not ready
-          </span>
-        )}
+      {/* Status */}
+      <div className="w-24 shrink-0 text-right">
+        <span className={cn('text-[10px] font-bold', meta.text)}>
+          {meta.label}
+        </span>
       </div>
     </div>
   );
@@ -217,10 +204,6 @@ function StoreRow({
   onRefillActionDone: () => void;
 }) {
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
-  const [verifyingId, setVerifyingId]   = useState<number | null>(null);
-  const [verifyingAll, setVerifyingAll] = useState(false);
-  const [refilling, setRefilling]       = useState(false);
-  const [actionError, setActionError]   = useState<string | null>(null);
 
   const [rejectingRequest, setRejectingRequest] = useState(false);
   const [rejectionReason, setRejectionReason]   = useState('');
@@ -229,7 +212,6 @@ function StoreRow({
   async function actOnRefillRequest(action: 'approve' | 'reject') {
     if (!refillRequest) return;
     setRefillActionBusy(action);
-    setActionError(null);
     try {
       const res = await fetch(`/api/finance/petty-cash/refill-requests/${refillRequest.id}`, {
         method: 'PATCH',
@@ -252,51 +234,6 @@ function StoreRow({
 
   const status = storeStatus(store);
   const meta   = STATUS_META[status];
-
-  async function verify(txId?: number) {
-    setActionError(null);
-    if (txId !== undefined) setVerifyingId(txId);
-    else setVerifyingAll(true);
-
-    try {
-      const res = await fetch(`/api/finance/petty-cash/${store.storeId}/verify`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(
-          txId !== undefined
-            ? { txId, yearMonth: month }
-            : { yearMonth: month },
-        ),
-      });
-      const body = await res.json();
-      if (!body.success) setActionError(body.error ?? 'Verification failed.');
-      else onReload();
-    } catch {
-      setActionError('Network error.');
-    } finally {
-      setVerifyingId(null);
-      setVerifyingAll(false);
-    }
-  }
-
-  async function refill() {
-    setActionError(null);
-    setRefilling(true);
-    try {
-      const res = await fetch(`/api/finance/petty-cash/${store.storeId}/refill`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ yearMonth: month }),
-      });
-      const body = await res.json();
-      if (!body.success) setActionError(body.error ?? 'Refill failed.');
-      else onReload();
-    } catch {
-      setActionError('Network error.');
-    } finally {
-      setRefilling(false);
-    }
-  }
 
   const balancePct = Math.min(100, Math.round((Number(store.balance) / 1_000_000) * 100));
 
@@ -336,27 +273,15 @@ function StoreRow({
           <p className="ml-4 mt-0.5 text-[11px] text-slate-400">{store.areaName}</p>
         </div>
 
-        {/* Balance bar */}
-        <div className="min-w-0">
-          <div className="mb-1 flex items-center justify-between text-[10px]">
-            <span className="font-medium text-slate-500">Balance</span>
-            <span className={cn(
-              'font-bold tabular-nums',
-              balancePct < 30 ? 'text-rose-600' : balancePct < 60 ? 'text-amber-600' : 'text-emerald-600',
-            )}>
-              {balancePct}%
-            </span>
-          </div>
-          <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
-            <div
-              className={cn(
-                'h-full rounded-full transition-all',
-                balancePct < 30 ? 'bg-rose-400' : balancePct < 60 ? 'bg-amber-400' : 'bg-emerald-500',
-              )}
-              style={{ width: `${balancePct}%` }}
-            />
-          </div>
-          <p className="mt-0.5 text-[10px] tabular-nums text-slate-500">{idr(store.balance)}</p>
+        {/* Balance */}
+        <div className="text-right">
+          <p className={cn(
+            'text-sm font-semibold tabular-nums',
+            balancePct < 30 ? 'text-rose-600' : balancePct < 60 ? 'text-amber-600' : 'text-slate-700',
+          )}>
+            {idr(store.balance)}
+          </p>
+          <p className="text-[10px] text-slate-400">Balance</p>
         </div>
 
         {/* Monthly spend */}
@@ -368,8 +293,8 @@ function StoreRow({
         {/* Status badge */}
         <div className="flex justify-center">
           <span className={cn('inline-flex items-center rounded-md px-2 py-1 text-[10px] font-bold ring-1 ring-inset', meta.badge)}>
-            {store.unverifiedCount > 0
-              ? `${store.unverifiedCount} pending`
+            {store.pendingOpsCount > 0
+              ? `${store.pendingOpsCount} pending`
               : meta.label}
           </span>
         </div>
@@ -395,24 +320,10 @@ function StoreRow({
                 <X className="h-3 w-3" />
               </button>
             </>
-          ) : status === 'needs-review' ? (
-            <button
-              onClick={() => verify()}
-              disabled={verifyingAll}
-              className="flex h-7 items-center gap-1.5 rounded-lg bg-amber-500 px-3 text-[11px] font-bold text-white transition hover:bg-amber-600 disabled:opacity-50"
-            >
-              {verifyingAll ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCheck className="h-3 w-3" />}
-              Verify all
-            </button>
-          ) : status === 'ready-to-refill' ? (
-            <button
-              onClick={refill}
-              disabled={refilling}
-              className="flex h-7 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-[11px] font-bold text-white transition hover:bg-emerald-700 disabled:opacity-50"
-            >
-              {refilling ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wallet className="h-3 w-3" />}
-              Refill
-            </button>
+          ) : status === 'pending-ops' ? (
+            <span className="text-[10px] font-semibold text-amber-600">
+              Waiting on OPS
+            </span>
           ) : status === 'refilled' ? (
             <span className="text-[10px] font-semibold text-slate-400">
               +{idr(store.refillAmount ?? 0)} refilled
@@ -444,14 +355,6 @@ function StoreRow({
         </div>
       )}
 
-      {/* Error toast */}
-      {actionError && (
-        <div className="border-b border-rose-100 bg-rose-50 px-14 py-2 text-xs font-medium text-rose-700">
-          <span className="mr-2">⚠️</span>{actionError}
-          <button onClick={() => setActionError(null)} className="ml-3 underline">Dismiss</button>
-        </div>
-      )}
-
       {/* Transaction accordion */}
       {expanded && (
         <div className="border-b border-slate-100 bg-slate-50/50">
@@ -467,16 +370,14 @@ function StoreRow({
                 <span>Description / Submitted by</span>
                 <span>Amount</span>
                 <span>Photo</span>
-                <span className="w-24">Action</span>
+                <span className="w-24 text-right">Status</span>
               </div>
 
               {store.transactions.map((tx) => (
                 <TxRow
                   key={tx.id}
                   tx={tx}
-                  onVerify={(id) => verify(id)}
                   onViewImage={setLightboxUrl}
-                  verifying={verifyingId === tx.id}
                 />
               ))}
 
@@ -500,16 +401,16 @@ function StoreRow({
 // ─── Summary strip ────────────────────────────────────────────────────────────
 
 function SummaryStrip({ stores }: { stores: PettyCashStoreRow[] }) {
-  const needsReview    = stores.filter((s) => storeStatus(s) === 'needs-review').length;
-  const readyToRefill  = stores.filter((s) => storeStatus(s) === 'ready-to-refill').length;
+  const pendingOps     = stores.filter((s) => storeStatus(s) === 'pending-ops').length;
+  const upToDate       = stores.filter((s) => storeStatus(s) === 'ready-to-refill').length;
   const refilled       = stores.filter((s) => storeStatus(s) === 'refilled').length;
   const totalSpend     = stores.reduce((sum, s) => sum + Number(s.monthlySpend), 0);
 
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
       {[
-        { value: needsReview,   label: 'Needs review',    accent: 'bg-amber-50 text-amber-600',   dot: 'bg-amber-400' },
-        { value: readyToRefill, label: 'Ready to refill', accent: 'bg-emerald-50 text-emerald-600', dot: 'bg-emerald-500' },
+        { value: pendingOps,   label: 'Pending OPS',    accent: 'bg-amber-50 text-amber-600',   dot: 'bg-amber-400' },
+        { value: upToDate, label: 'Up to date', accent: 'bg-emerald-50 text-emerald-600', dot: 'bg-emerald-500' },
         { value: refilled,      label: 'Refilled',        accent: 'bg-slate-50 text-slate-500',   dot: 'bg-slate-300' },
         { value: idr(totalSpend), label: 'Total spend',   accent: 'bg-sky-50 text-sky-600',       dot: 'bg-sky-400' },
       ].map(({ value, label, accent, dot }) => (
@@ -562,9 +463,6 @@ export default function FinancePettyCashPage() {
       const body = await res.json();
       if (body.success) {
         setAllStores(body.data);
-        // Auto-expand first store with unverified transactions
-        const first = body.data.find((s: PettyCashStoreRow) => s.unverifiedCount > 0);
-        if (first) setExpandedIds(new Set([first.storeId]));
       } else {
         setError(body.error ?? 'Failed to load.');
       }
@@ -644,8 +542,7 @@ export default function FinancePettyCashPage() {
                 </span>
                 <button
                   onClick={() => setMonth(nextMonth(month))}
-                  disabled={isCurrentMonth}
-                  className="flex h-full w-8 items-center justify-center rounded-r-xl text-slate-500 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  className="flex h-full w-8 items-center justify-center rounded-r-xl text-slate-500 hover:bg-slate-50"
                 >›</button>
               </div>
 

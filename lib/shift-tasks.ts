@@ -3,7 +3,7 @@
 // Shared helpers for the "Shift & Tasks" admin feature.
 //
 // This file is used by:
-//   • scripts/seed-shift-tasks.ts
+//   • scripts/seed/shift-tasks.ts
 //   • OPS Shift & Tasks admin page + /api/ops/shift-tasks routes
 //   • any helper that needs stable task codes/labels
 //
@@ -359,14 +359,31 @@ export function taskIconOf(code: string | null | undefined): string {
 // OPS → Shift & Tasks → Fixed Order (add/remove/reorder), independent of this
 // list. Do not treat this as authoritative at runtime; read shift_tasks.isSequenced
 // instead.
-export const DEFAULT_SEQUENCED_TASK_TYPES: TaskType[] = [
-  'store_front',
-  'setoran',
-  'store_opening',
-  'cek_uang_modal',
-  'cek_bin',
-  'grooming',
-];
+//
+// Fixed order only applies to morning and full_day: Store Front → Setoran →
+// Store Opening → Cek Uang Modal → Grooming → Briefing → Serah Terima. Evening
+// has no fixed order — its tasks stay doable anytime.
+export const DEFAULT_SEQUENCED_TASK_TYPES: Record<ShiftCode, TaskType[]> = {
+  morning: [
+    'store_front',
+    'setoran',
+    'store_opening',
+    'cek_uang_modal',
+    'grooming',
+    'briefing',
+    'serah_terima',
+  ],
+  full_day: [
+    'store_front',
+    'setoran',
+    'store_opening',
+    'cek_uang_modal',
+    'grooming',
+    'briefing',
+    'serah_terima',
+  ],
+  evening: [],
+};
 
 export function normalizeTaskCodes(
   input: unknown,
@@ -400,7 +417,7 @@ export function normalizeTaskCodes(
 
 // ─── Default seeded Shift ↔ Task mapping ─────────────────────────────────────
 // The runtime employee task page reads from DB (task_definitions + shift_tasks).
-// This map is only the default source for scripts/seed-shift-tasks.ts.
+// This map is only the default source for scripts/seed/shift-tasks.ts.
 
 export const SHIFT_TASK_MAP: Record<ShiftCode, TaskType[]> = {
   // Default sequence: Store Front → Setoran → Store Opening → Cek Uang Modal
@@ -422,6 +439,8 @@ export const SHIFT_TASK_MAP: Record<ShiftCode, TaskType[]> = {
   ],
 
   evening: [
+    // cek_uang_modal is intentionally excluded — it's a morning/full_day-only
+    // task (cashier opening float), not applicable to a standalone evening shift.
     'grooming',
     'item_dropping',
     'item_return',

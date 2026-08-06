@@ -17,8 +17,7 @@ import {
   vmChecklistTasks,
   marketingCheckTasks,
   briefingTasks,
-  serahTerimaTasks,
-  serahTerimaItems,
+  serahTerimaEntries,
   storeClosingTasks,
   groomingTasks,
   itemDroppingTasks,
@@ -44,7 +43,7 @@ import { getOrCreateItemReturnForSchedule } from "@/lib/db/utils/item-return";
 import { getOrCreateCekUangModalForSchedule } from "@/lib/db/utils/cek-uang-modal";
 import { getOrCreateGroomingForSchedule } from "@/lib/db/utils/grooming";
 import { getOrCreateBriefingForSchedule } from "@/lib/db/utils/briefing";
-import { getOrCreateSerahTerimaForSchedule } from "@/lib/db/utils/serah-terima";
+import { listSerahTerimaEntries } from "@/lib/db/utils/serah-terima";
 import {
   getOrCreateStoreClosingForSchedule,
   getVisibleStoreClosingTasksForStores,
@@ -242,6 +241,22 @@ async function getAssignedTaskTypesFromDb(
   };
 }
 
+// Task types that genuinely materialize separate morning/evening rows and
+// must be strictly shift-matched, so a morning employee never sees the
+// evening row (and vice versa). Everything else keeps the legacy lenient
+// behavior: a single row per store/day, where "shift" is informational only
+// (the row may have been created by whichever schedule happened to run
+// first) and any employee whose shift has the type assigned should see it.
+// Note: marketing_check is intentionally left out — it has an explicit
+// morning-only business rule (see assertMorningSchedule in
+// lib/db/utils/marketing-check.ts) and never materializes an evening row.
+const SHIFT_SCOPED_TASK_TYPES = new Set<TaskType>([
+  "briefing",
+  "item_dropping",
+  "item_return",
+  "cek_uang_modal",
+]);
+
 function taskAllowedForEmployeeShift(
   taskType: TaskType,
   taskShift: string,
@@ -254,17 +269,14 @@ function taskAllowedForEmployeeShift(
     const allowedForShift = shiftTaskMap[shiftCode] ?? [];
     if (!allowedForShift.includes(taskType)) return false;
 
-    // Store-level shared rows can be created on a different schedule/shift row.
-    // When the task type is assigned to this employee's shift, let them see it.
-    if (taskShift === shiftCode) return true;
-    if (
-      taskShift === "morning" ||
-      taskShift === "evening" ||
-      taskShift === "full_day"
-    )
-      return true;
+    if (!SHIFT_SCOPED_TASK_TYPES.has(taskType)) return true;
 
-    return taskShift === shiftCode;
+    // Shift-scoped types: only the matching row, or full_day (which sees both
+    // the morning and evening rows it was materialized for).
+    if (taskShift === shiftCode) return true;
+    if (shiftCode === "full_day") return true;
+
+    return false;
   });
 }
 
@@ -387,8 +399,7 @@ export async function GET(request: NextRequest) {
       cekUangModalDenominationRows,
       storeClosingRows,
       briefingRows,
-      serahTerimaRows,
-      serahTerimaItemRows,
+      serahTerimaEntryRows,
       groomingRows,
     ] = await Promise.all([
       shouldLoadTask("store_opening")
@@ -770,59 +781,19 @@ export async function GET(request: NextRequest) {
         : Promise.resolve([]),
 
       shouldLoadTask("serah_terima")
-        ? (async () => {
-            await Promise.all(
-              todaySchedules.map((s) =>
-                getOrCreateSerahTerimaForSchedule(
-                  s.id,
-                  userId,
-                  s.storeId,
-                  s.shiftId,
-                  targetDate,
-                ),
+        ? // Serah Terima is a shared, rolling handover board per store now —
+          // not a per-shift/per-day row. Nothing to materialize; just read
+          // every active (incomplete) entry for the employee's store(s).
+          db
+            .select()
+            .from(serahTerimaEntries)
+            .where(
+              and(
+                inArray(serahTerimaEntries.storeId, storeIds),
+                eq(serahTerimaEntries.isCompleted, false),
               ),
-            );
-
-            return db
-              .select()
-              .from(serahTerimaTasks)
-              .where(
-                and(
-                  inArray(serahTerimaTasks.storeId, storeIds),
-                  gte(serahTerimaTasks.date, dayStart),
-                  lte(serahTerimaTasks.date, dayEnd),
-                ),
-              )
-              .orderBy(desc(serahTerimaTasks.date));
-          })()
-        : Promise.resolve([]),
-
-      shouldLoadTask("serah_terima")
-        ? (async () => {
-            const taskIds = await db
-              .select({ id: serahTerimaTasks.id })
-              .from(serahTerimaTasks)
-              .where(
-                and(
-                  inArray(serahTerimaTasks.storeId, storeIds),
-                  gte(serahTerimaTasks.date, dayStart),
-                  lte(serahTerimaTasks.date, dayEnd),
-                ),
-              );
-
-            if (!taskIds.length) return [];
-
-            return db
-              .select()
-              .from(serahTerimaItems)
-              .where(
-                inArray(
-                  serahTerimaItems.taskId,
-                  taskIds.map((r) => r.id),
-                ),
-              )
-              .orderBy(asc(serahTerimaItems.id));
-          })()
+            )
+            .orderBy(asc(serahTerimaEntries.createdAt))
         : Promise.resolve([]),
 
       shouldLoadTask("grooming")
@@ -919,11 +890,12 @@ export async function GET(request: NextRequest) {
       uangModalDenominationsByTaskId.set(row.taskId, bucket);
     }
 
-    const serahItemsByTaskId = new Map<number, typeof serahTerimaItemRows>();
-    for (const item of serahTerimaItemRows) {
-      const bucket = serahItemsByTaskId.get(item.taskId) ?? [];
-      bucket.push(item);
-      serahItemsByTaskId.set(item.taskId, bucket);
+    const serahTerimaPendingByStoreId = new Map<number, number>();
+    for (const entry of serahTerimaEntryRows) {
+      serahTerimaPendingByStoreId.set(
+        entry.storeId,
+        (serahTerimaPendingByStoreId.get(entry.storeId) ?? 0) + 1,
+      );
     }
 
     const availableBinsByStoreId = new Map<number, typeof availableBinRows>();
@@ -1278,6 +1250,10 @@ export async function GET(request: NextRequest) {
             droppingPhotos: parsePhotos(e.droppingPhotos),
             notes: e.notes,
             createdAt: toIso(e.createdAt),
+            // BC-driven pipeline fields (see lib/db/schema/item-transfers.ts).
+            qtyOrdered: e.qtyOrdered ?? e.quantity ?? 0,
+            qtyCounted: e.qtyCounted ?? null,
+            submittedAt: toIso(e.submittedAt),
           }));
 
           return {
@@ -1321,6 +1297,10 @@ export async function GET(request: NextRequest) {
             returnPhotos: parsePhotos(e.returnPhotos),
             notes: e.notes,
             createdAt: toIso(e.createdAt),
+            // BC-driven pipeline fields (see lib/db/schema/item-transfers.ts).
+            qtyOrdered: e.qtyOrdered ?? e.quantity ?? 0,
+            qtyCounted: e.qtyCounted ?? null,
+            submittedAt: toIso(e.submittedAt),
           }));
 
           return {
@@ -1431,60 +1411,43 @@ export async function GET(request: NextRequest) {
           };
         }),
 
-      ...serahTerimaRows
-        .filter((r) => inStore(r.storeId))
-        .map((t) => {
-          const items = (serahItemsByTaskId.get(t.id) ?? []).map((item) => ({
-            id: String(item.id),
-            taskId: String(item.taskId),
-            receiverTaskId: item.receiverTaskId
-              ? String(item.receiverTaskId)
-              : null,
-            message: item.message,
-            isCompleted: item.isCompleted,
-            completedBy: item.completedBy,
-            completedAt: toIso(item.completedAt),
-            createdAt: toIso(item.createdAt),
-          }));
+      // Serah Terima is a shared, rolling handover board per store — not a
+      // per-shift/per-day row. Synthesize one summary card per store the
+      // employee is scheduled at today; both morning and evening (and
+      // full_day) see the exact same board, so it's deliberately NOT in
+      // SHIFT_SCOPED_TASK_TYPES above.
+      ...(shouldLoadTask("serah_terima")
+        ? [...new Set(todaySchedules.map((s) => s.storeId))]
+            .filter((storeId) => inStore(storeId))
+            .map((storeId) => {
+              const ownSchedule = todaySchedules.find((s) => s.storeId === storeId);
+              const shift = (shiftCodeMap[ownSchedule?.shiftId ?? 0] ??
+                primaryShift ??
+                "morning") as ShiftCode;
+              const pendingCount = serahTerimaPendingByStoreId.get(storeId) ?? 0;
 
-          // Serah Terima is now a genuinely shift-scoped row (morning row /
-          // evening row), so label + actor resolution follow the ROW's own
-          // shift, not a forced "morning" default.
-          const rowShiftCode = shiftCodeMap[t.shiftId] ?? "morning";
-          const preferredMap =
-            rowShiftCode === "evening" ? closingScheduleByStoreId : morningScheduleByStoreId;
-          const actorSchedule = preferredMap.get(t.storeId);
-          const actorScheduleId = actorSchedule?.id ?? t.scheduleId;
-          const shift = rowShiftCode as ShiftCode;
+              return {
+                type: "serah_terima" as const,
+                shift,
+                data: {
+                  id: `store-${storeId}`,
+                  scheduleId: String(ownSchedule?.id ?? ""),
+                  userId,
+                  storeId: String(storeId),
+                  shift,
+                  date: targetDate.toISOString(),
 
-          return {
-            type: "serah_terima" as const,
-            shift,
-            data: {
-              id: String(t.id),
-              // Serah Terima is shared per store/shift/day. The row may have
-              // been created by another employee on the same shift, but
-              // AccessGuard checks attendance by scheduleId — send the
-              // logged-in employee's own scheduleId here.
-              scheduleId: String(actorScheduleId),
-              originalScheduleId: String(t.scheduleId),
-              userId,
-              assignedUserId: t.userId,
-              storeId: String(t.storeId),
-              shift,
-              date: t.date.toISOString(),
+                  pendingCount,
 
-              handoverText: t.handoverText ?? "",
-              items,
-
-              status: t.status,
-              notes: t.notes,
-              completedAt: toIso(t.completedAt),
-              verifiedBy: t.verifiedBy,
-              verifiedAt: toIso(t.verifiedAt),
-            },
-          };
-        }),
+                  status: pendingCount > 0 ? "in_progress" : "not_started",
+                  notes: null,
+                  completedAt: null,
+                  verifiedBy: null,
+                  verifiedAt: null,
+                },
+              };
+            })
+        : []),
 
       ...storeClosingRows
         .filter((r) => inStore(r.storeId))
@@ -1836,23 +1799,9 @@ export async function PATCH(request: NextRequest) {
             .then(() => {}),
       },
 
-      serah_terima: {
-        getRow: async (id) =>
-          (
-            await db
-              .select({ status: serahTerimaTasks.status })
-              .from(serahTerimaTasks)
-              .where(eq(serahTerimaTasks.id, id))
-              .limit(1)
-          )[0],
-
-        update: (id) =>
-          db
-            .update(serahTerimaTasks)
-            .set({ status: "in_progress", updatedAt: new Date() })
-            .where(eq(serahTerimaTasks.id, id))
-            .then(() => {}),
-      },
+      // serah_terima intentionally has no entry here — it's a synthetic,
+      // store-scoped summary card (id like "store-123", not a numeric row
+      // id), not a single materialized row that can be marked in_progress.
 
       briefing: {
         getRow: async (id) =>

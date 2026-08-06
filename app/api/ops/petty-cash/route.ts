@@ -54,7 +54,6 @@ export async function GET(req: NextRequest) {
       approvedAt: pettyCashTransactions.approvedAt,
       rejectedAt: pettyCashTransactions.rejectedAt,
       rejectionReason: pettyCashTransactions.rejectionReason,
-      verifiedAt: pettyCashTransactions.verifiedAt,
       createdAt: pettyCashTransactions.createdAt,
 
       storeId: stores.id,
@@ -94,7 +93,6 @@ export async function GET(req: NextRequest) {
       approvedAt: row.approvedAt ? new Date(row.approvedAt).toISOString() : null,
       rejectedAt: row.rejectedAt ? new Date(row.rejectedAt).toISOString() : null,
       rejectionReason: row.rejectionReason,
-      verifiedAt: row.verifiedAt ? new Date(row.verifiedAt).toISOString() : null,
       createdAt: new Date(row.createdAt).toISOString(),
 
       storeId: row.storeId,

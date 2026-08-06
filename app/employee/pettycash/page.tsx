@@ -38,7 +38,6 @@ type TxRow = {
   approvedAt: string | null;
   rejectedAt: string | null;
   rejectionReason: string | null;
-  verifiedAt: string | null;
   createdAt: string;
 };
 
@@ -96,7 +95,7 @@ function monthLabel(ym?: string) {
 }
 
 function needsReceipt(tx: TxRow) {
-  return tx.status === 'ops_approved' && !tx.imageUrl && !tx.verifiedAt;
+  return tx.status === 'ops_approved' && !tx.imageUrl;
 }
 
 function statusMeta(tx: TxRow) {
@@ -118,29 +117,20 @@ function statusMeta(tx: TxRow) {
     };
   }
 
-  if (tx.verifiedAt) {
-    return {
-      label: 'Verified by Finance',
-      icon: ShieldCheck,
-      className: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-      note: 'Receipt has been verified by Finance.',
-    };
-  }
-
   if (needsReceipt(tx)) {
     return {
       label: 'Upload Receipt',
       icon: UploadCloud,
       className: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
-      note: 'OPS approved this request. Upload the receipt photo now.',
+      note: 'OPS approved this request. Upload the receipt photo for your records.',
     };
   }
 
   return {
-    label: 'Waiting Finance',
-    icon: CheckCircle2,
-    className: 'bg-violet-50 text-violet-700 ring-violet-200',
-    note: 'Receipt uploaded. Waiting for Finance verification.',
+    label: 'Approved',
+    icon: ShieldCheck,
+    className: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+    note: 'Approved by OPS. Money can be used.',
   };
 }
 
@@ -180,6 +170,9 @@ function Lightbox({ src, onClose }: { src: string; onClose: () => void }) {
 }
 
 // ─── Balance card ─────────────────────────────────────────────────────────────
+// Left as the one intentionally-colorful element on the page (like the
+// schedule page's header) — the gradient is the balance-health signal
+// itself (low/warning/healthy), not decoration, so it's doing real work.
 
 function BalanceCard({
   balance,
@@ -242,41 +235,178 @@ function BalanceCard({
   );
 }
 
-// ─── Refill request (PIC only) ───────────────────────────────────────────────
+// ─── Refill request (PIC requests; every employee can see status) ───────────
+
+type RefillProofKind = 'drawer' | 'signature';
 
 type RefillRequestRow = {
   id: number;
   status: 'pending' | 'approved' | 'rejected';
   requestedAt: string;
   approvedAt: string | null;
+  balanceAfter: string | null;
   rejectedAt: string | null;
   rejectionReason: string | null;
+  drawerPhotoUrl: string | null;
+  signaturePhotoUrl: string | null;
 };
+
+const PROOF_STEPS: { kind: RefillProofKind; label: string }[] = [
+  { kind: 'drawer', label: 'Petty Cash Drawer' },
+  { kind: 'signature', label: 'Surat Terima Petty Cash' },
+];
+
+function RefillProofCapture({
+  label,
+  imageUrl,
+  uploading,
+  onConfirm,
+  onView,
+}: {
+  label: string;
+  imageUrl: string | null;
+  uploading: boolean;
+  onConfirm: (file: File) => void;
+  onView: (url: string) => void;
+}) {
+  const [cameraOpen, setCameraOpen] = useState(false);
+
+  return (
+    <div className="flex items-center gap-3 rounded-xl border border-slate-100 bg-white p-2.5">
+      {imageUrl ? (
+        <button
+          type="button"
+          onClick={() => onView(imageUrl)}
+          className="h-11 w-11 shrink-0 overflow-hidden rounded-lg border border-slate-100"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={imageUrl} alt="" className="h-full w-full object-cover" />
+        </button>
+      ) : (
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50">
+          <Camera className="h-4 w-4 text-slate-300" />
+        </div>
+      )}
+
+      <div className="min-w-0 flex-1">
+        <p className="text-xs font-bold text-slate-700">{label}</p>
+        <p className={cn('text-[10px] font-semibold', imageUrl ? 'text-emerald-600' : 'text-slate-400')}>
+          {imageUrl ? 'Uploaded' : 'Not uploaded yet'}
+        </p>
+      </div>
+
+      <button
+        type="button"
+        onClick={() => setCameraOpen(true)}
+        disabled={uploading}
+        className={cn(
+          'flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-[11px] font-bold transition active:scale-[0.98] disabled:opacity-60',
+          imageUrl ? 'border border-slate-200 text-slate-500' : 'bg-indigo-600 text-white',
+        )}
+      >
+        {uploading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Camera className="h-3 w-3" />}
+        {imageUrl ? 'Retake' : 'Take Photo'}
+      </button>
+
+      <CameraCapture
+        open={cameraOpen}
+        onClose={() => setCameraOpen(false)}
+        onCapture={(file) => { setCameraOpen(false); onConfirm(file); }}
+        title={label}
+      />
+    </div>
+  );
+}
 
 function RefillRequestCard({
   request,
+  isPic,
   requesting,
   onRequest,
+  uploadingKind,
+  onUploadProof,
+  onViewImage,
 }: {
   request: RefillRequestRow | null;
+  isPic: boolean;
   requesting: boolean;
   onRequest: () => void;
+  uploadingKind: RefillProofKind | null;
+  onUploadProof: (kind: RefillProofKind, file: File) => void;
+  onViewImage: (url: string) => void;
 }) {
-  if (request && (request.status === 'pending' || request.status === 'approved')) {
-    const isPending = request.status === 'pending';
+  // Card shells are neutral now (white / slate-200) — status still reads
+  // clearly from the icon + heading color and, for "approved", from the
+  // action itself (proof capture rows). Colored fills stayed only in the
+  // small elements whose entire job is to signal status.
+  if (request?.status === 'pending') {
     return (
-      <div className={cn(
-        'mx-4 rounded-2xl border p-4',
-        isPending ? 'border-amber-200 bg-amber-50' : 'border-emerald-200 bg-emerald-50',
-      )}>
+      <div className="mx-4 rounded-2xl border border-slate-200 bg-white p-4">
         <div className="flex items-center gap-2">
-          <Banknote className={cn('h-4 w-4', isPending ? 'text-amber-600' : 'text-emerald-600')} />
-          <p className={cn('text-xs font-bold', isPending ? 'text-amber-700' : 'text-emerald-700')}>
-            {isPending ? 'Refill request pending Finance approval' : 'Refill approved — balance topped up'}
-          </p>
+          <Banknote className="h-4 w-4 text-amber-600" />
+          <p className="text-xs font-bold text-amber-700">Refill request pending Finance approval</p>
         </div>
       </div>
     );
+  }
+
+  if (request?.status === 'approved') {
+    const photoUrls: Record<RefillProofKind, string | null> = {
+      drawer: request.drawerPhotoUrl,
+      signature: request.signaturePhotoUrl,
+    };
+    const toppedUp = Boolean(request.balanceAfter);
+
+    // Once the refill is fully received (both proof photos in), the topped-up
+    // balance applies to NEXT month, not the current one — this month's
+    // balance keeps reflecting what's actually been spent. So there's nothing
+    // left to action here; replace the card with a simple status note instead
+    // of leaving the (now-redundant) approve/photo-capture UI on screen.
+    if (toppedUp) {
+      return (
+        <div className="mx-4 rounded-2xl border border-slate-200 bg-white p-4">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="h-4 w-4 text-emerald-600" />
+            <p className="text-xs font-bold text-emerald-700">This month&apos;s petty cash has already been refilled</p>
+          </div>
+          <p className="mt-1.5 text-[11px] text-slate-500">
+            The refill has been received and will top up next month&apos;s balance. The next refill can be requested starting next month.
+          </p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="mx-4 rounded-2xl border border-slate-200 bg-white p-4">
+        <div className="flex items-center gap-2">
+          <Banknote className="h-4 w-4 text-indigo-600" />
+          <p className="text-xs font-bold text-indigo-700">
+            Finance approved — take proof photos to receive the cash
+          </p>
+        </div>
+
+        <p className="mt-1.5 text-[11px] text-indigo-600/80">
+          When Finance hands over the cash, take a photo of the petty cash drawer and the Surat Terima Petty Cash below. The balance updates once both photos are submitted.
+        </p>
+
+        <div className="mt-3 space-y-2">
+          {PROOF_STEPS.map((step) => (
+            <RefillProofCapture
+              key={step.kind}
+              label={step.label}
+              imageUrl={photoUrls[step.kind]}
+              uploading={uploadingKind === step.kind}
+              onConfirm={(file) => onUploadProof(step.kind, file)}
+              onView={onViewImage}
+            />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (!isPic) {
+    return null;
   }
 
   return (
@@ -367,7 +497,7 @@ function NeedsReceiptCard({
   onUpload: (tx: TxRow, file: File) => void;
 }) {
   return (
-    <div className="rounded-2xl border-2 border-indigo-200 bg-indigo-50/40 p-4 shadow-sm">
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <span className="inline-flex items-center gap-1 rounded-full bg-indigo-600 px-2 py-0.5 text-[10px] font-bold text-white">
@@ -388,7 +518,7 @@ function NeedsReceiptCard({
       </div>
 
       <p className="mt-2 text-[11px] font-medium text-indigo-700">
-        OPS approved this request. Upload the receipt photo to send it to Finance.
+        OPS approved this request. Upload the receipt photo for your records.
       </p>
 
       <ReceiptCapture uploading={uploading} onConfirm={(file) => onUpload(tx, file)} />
@@ -498,6 +628,7 @@ export default function EmployeePettyCashPage() {
 
   const [refillRequest, setRefillRequest] = useState<RefillRequestRow | null>(null);
   const [requestingRefill, setRequestingRefill] = useState(false);
+  const [uploadingProofKind, setUploadingProofKind] = useState<RefillProofKind | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -537,8 +668,8 @@ export default function EmployeePettyCashPage() {
   }, [load]);
 
   useEffect(() => {
-    if (isPic) void loadRefillStatus();
-  }, [isPic, loadRefillStatus]);
+    void loadRefillStatus();
+  }, [loadRefillStatus]);
 
   async function handleRequestRefill() {
     setRequestingRefill(true);
@@ -554,6 +685,52 @@ export default function EmployeePettyCashPage() {
       setActionError(e instanceof Error ? e.message : 'Failed to request refill.');
     } finally {
       setRequestingRefill(false);
+    }
+  }
+
+  async function handleUploadProof(kind: RefillProofKind, file: File) {
+    setActionError(null);
+    setSuccessMessage(null);
+
+    if (!refillRequest) return;
+
+    if (file.size > 5 * 1024 * 1024) {
+      setActionError('Photo must be less than 5 MB.');
+      return;
+    }
+
+    if (!data?.storeName) {
+      setActionError('Store data is not loaded.');
+      return;
+    }
+
+    setUploadingProofKind(kind);
+
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('storeName', data.storeName);
+      form.append('kind', kind);
+
+      const uploadRes = await fetch('/api/upload/petty-cash', { method: 'POST', body: form });
+      const uploadBody = await uploadRes.json();
+      if (!uploadRes.ok) throw new Error(uploadBody.error ?? 'Photo upload failed.');
+
+      const patchRes = await fetch('/api/employee/petty-cash/refill-request', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: refillRequest.id, kind, imageUrl: uploadBody.url }),
+      });
+      const patchBody = await patchRes.json();
+      if (!patchRes.ok || !patchBody.success) throw new Error(patchBody.error ?? 'Failed to attach photo.');
+
+      setRefillRequest(patchBody.request);
+      setSuccessMessage('Photo uploaded.');
+      setTimeout(() => setSuccessMessage(null), 4000);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Photo upload failed. Try again.');
+    } finally {
+      setUploadingProofKind(null);
     }
   }
 
@@ -663,7 +840,7 @@ export default function EmployeePettyCashPage() {
         throw new Error(patchBody.error ?? 'Failed to attach receipt.');
       }
 
-      setSuccessMessage('Receipt uploaded. Waiting for Finance verification.');
+      setSuccessMessage('Receipt uploaded and saved.');
       setTimeout(() => setSuccessMessage(null), 4000);
 
       await load();
@@ -695,10 +872,7 @@ export default function EmployeePettyCashPage() {
     return {
       pendingOps: transactions.filter((tx) => tx.status === 'pending_ops').length,
       waitingReceipt: needsReceiptTxs.length,
-      waitingFinance: transactions.filter(
-        (tx) => tx.status === 'ops_approved' && tx.imageUrl && !tx.verifiedAt,
-      ).length,
-      verified: transactions.filter((tx) => Boolean(tx.verifiedAt)).length,
+      approved: transactions.filter((tx) => tx.status === 'ops_approved').length,
       rejected: transactions.filter((tx) => tx.status === 'ops_rejected').length,
       pendingAmount: transactions
         .filter((tx) => tx.status === 'pending_ops')
@@ -751,17 +925,21 @@ export default function EmployeePettyCashPage() {
           />
         )}
 
-        {!loading && !loadError && isPic && (
+        {!loading && !loadError && (isPic || refillRequest) && (
           <RefillRequestCard
             request={refillRequest}
+            isPic={isPic}
             requesting={requestingRefill}
             onRequest={handleRequestRefill}
+            uploadingKind={uploadingProofKind}
+            onUploadProof={handleUploadProof}
+            onViewImage={setLightboxSrc}
           />
         )}
 
         {!loading && !loadError && (
           <section className="grid grid-cols-3 gap-2 px-4">
-            <div className="rounded-2xl border border-amber-100 bg-amber-50 p-3">
+            <div className="rounded-2xl border border-slate-200 bg-white p-3">
               <p className="text-[10px] font-bold uppercase tracking-wide text-amber-600">
                 OPS
               </p>
@@ -770,7 +948,7 @@ export default function EmployeePettyCashPage() {
               </p>
             </div>
 
-            <div className="rounded-2xl border border-indigo-100 bg-indigo-50 p-3">
+            <div className="rounded-2xl border border-slate-200 bg-white p-3">
               <p className="text-[10px] font-bold uppercase tracking-wide text-indigo-600">
                 Receipt
               </p>
@@ -779,12 +957,12 @@ export default function EmployeePettyCashPage() {
               </p>
             </div>
 
-            <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-3">
+            <div className="rounded-2xl border border-slate-200 bg-white p-3">
               <p className="text-[10px] font-bold uppercase tracking-wide text-emerald-600">
-                Verified
+                Approved
               </p>
               <p className="mt-1 text-xl font-black text-emerald-700">
-                {summary.verified}
+                {summary.approved}
               </p>
             </div>
           </section>
@@ -808,7 +986,7 @@ export default function EmployeePettyCashPage() {
           </section>
         )}
 
-        {!loading && !loadError && needsReceiptTxs.length > 0 && (
+        {!loading && !loadError && isPic && needsReceiptTxs.length > 0 && (
           <section className="px-4">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-sm font-bold text-foreground">
@@ -833,7 +1011,18 @@ export default function EmployeePettyCashPage() {
           </section>
         )}
 
-        {!loading && !loadError && (
+        {!loading && !loadError && !isPic && (
+          <section className="px-4">
+            <div className="rounded-2xl border border-dashed border-slate-200 bg-secondary/30 p-4">
+              <p className="text-xs font-bold text-slate-700">Only PIC can send petty cash requests</p>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">
+                You can view request status here. Ask your store&apos;s PIC to submit a new request.
+              </p>
+            </div>
+          </section>
+        )}
+
+        {!loading && !loadError && isPic && (
           <section className="px-4">
             <h2 className="mb-3 text-sm font-bold text-foreground">
               New Petty Cash Request

@@ -213,6 +213,10 @@ export interface ItemDroppingData extends TaskBase {
     droppingPhotos: string[];
     notes: string | null;
     createdAt: string | null;
+    // BC-driven pipeline fields — see lib/db/schema/item-transfers.ts.
+    qtyOrdered: number;
+    qtyCounted: number | null;
+    submittedAt: string | null;
   }>;
 }
 
@@ -231,6 +235,10 @@ export interface ItemReturnData extends TaskBase {
     returnPhotos: string[];
     notes: string | null;
     createdAt: string | null;
+    // BC-driven pipeline fields — see lib/db/schema/item-transfers.ts.
+    qtyOrdered: number;
+    qtyCounted: number | null;
+    submittedAt: string | null;
   }>;
 }
 
@@ -303,17 +311,9 @@ export interface GroomingData extends TaskBase {
 }
 
 export interface SerahTerimaData extends TaskBase {
-  handoverText: string | null;
-  items: Array<{
-    id: string;
-    taskId: string;
-    receiverTaskId: string | null;
-    message: string;
-    isCompleted: boolean;
-    completedBy: string | null;
-    completedAt: string | null;
-    createdAt: string | null;
-  }>;
+  // Serah Terima is now a shared, rolling handover board per store — this
+  // card is a synthetic per-store summary, not a single materialized row.
+  pendingCount: number;
 }
 
 export type TaskItem =
@@ -470,7 +470,7 @@ const TASK_META: Record<
   },
   serah_terima: {
     title: "Serah Terima",
-    description: "Tulis pesan handover untuk shift berikutnya.",
+    description: "Papan handover bersama — semua shift bisa menambah dan menyelesaikan item.",
     Icon: ClipboardList,
     hasPhoto: false,
   },
@@ -535,23 +535,26 @@ const DEFAULT_SHIFT_TASK_MAP: ShiftTaskMap = {
 // Fallback used before DB config (shift_tasks.isSequenced) has loaded —
 // mirrors the seed's default fixed order (see lib/shift-tasks.ts
 // DEFAULT_SEQUENCED_TASK_TYPES). IT owns the real thing from
-// OPS → Shift & Tasks → Fixed Order.
+// OPS → Shift & Tasks → Fixed Order. Evening has no fixed order — its
+// tasks stay doable anytime, so it's intentionally omitted here.
 const DEFAULT_SHIFT_TASK_SEQUENCED: ShiftTaskSequencedMap = {
   morning: {
     store_front: true,
     setoran: true,
     store_opening: true,
     cek_uang_modal: true,
-    cek_bin: true,
     grooming: true,
+    briefing: true,
+    serah_terima: true,
   },
   full_day: {
     store_front: true,
     setoran: true,
     store_opening: true,
     cek_uang_modal: true,
-    cek_bin: true,
     grooming: true,
+    briefing: true,
+    serah_terima: true,
   },
 };
 
@@ -655,13 +658,6 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: "completed", label: "Done" },
 ];
 
-const SHIFT_SCOPED_SHARED_TASK_TYPES = new Set<TaskType>([
-  "briefing",
-  "item_dropping",
-  "item_return",
-  "serah_terima",
-]);
-
 function isValidTaskStatus(value: unknown): value is TaskStatus {
   return (
     value === "not_started" ||
@@ -694,30 +690,16 @@ function getTaskScheduleKey(task: TaskItem): string {
   return String(task.data.scheduleId ?? "unknown-schedule");
 }
 
-function getShiftScopedDisplayShift(task: TaskItem): ShiftCode {
-  // Legacy safety: if old full_day rows still exist for these shared tasks,
-  // treat them as the morning row. New seed/util logic should create only
-  // morning/evening rows for these task types.
-  return task.shift === "evening" ? "evening" : "morning";
-}
-
-function rankShiftScopedCandidate(task: TaskItem): number {
-  // Prefer a real morning/evening row over a legacy full_day row, then prefer
-  // tasks needing attention so employees don't miss active/discrepancy work.
-  const shiftRank = task.shift === "full_day" ? 10 : 0;
-  return shiftRank + (STATUS_PRIORITY[task.data.status] ?? 99);
-}
-
 function getDisplayShift(task: TaskItem): ShiftCode {
   // Store Closing is a night/closing task — it must always stay grouped under
   // the Evening section, even on a full_day schedule row. No exceptions.
   if (task.type === "store_closing") return "evening";
 
-  if (SHIFT_SCOPED_SHARED_TASK_TYPES.has(task.type)) {
-    return getShiftScopedDisplayShift(task);
-  }
-
-  // Legacy full_day rows are shown in Morning to avoid duplicate sections.
+  // Full_day rows are shown in Morning to avoid duplicate sections. This is
+  // display grouping ONLY — it must never mutate task.shift, since
+  // orderIndexOf/isTaskSequenced/priorityRank key off the task's real shift
+  // to look up the IT-configured order for that exact shift (including
+  // full_day and any custom shift).
   if (task.shift === "full_day") return "morning";
 
   return task.shift || "morning";
@@ -739,8 +721,40 @@ function taskCardKey(task: TaskItem): string {
   return `${task.type}-${task.data.id}`;
 }
 
-function orderIndexOf(task: TaskItem, shiftTaskMap: ShiftTaskMap): number {
-  const list = shiftTaskMap[task.shift];
+/**
+ * shiftTaskMap/shiftTaskSequenced/shiftTaskRequired are keyed by the
+ * EMPLOYEE's own scheduled shift(s) today (see
+ * app/api/employee/tasks/route.ts), NOT necessarily by the task row's own
+ * stored shift tag. Several shared task types (setoran, store_opening,
+ * cek_bin, vm_checklist, marketing_check, and — for full_day employees —
+ * item_dropping/item_return/cek_uang_modal/briefing) are always tagged with
+ * a concrete 'morning' or 'evening' shiftId on the row, even when a full_day
+ * employee is the one doing them. A full_day employee's config is only ever
+ * keyed 'full_day', so blindly indexing by task.shift silently drops the
+ * fixed-order/sequencing config IT set up for full_day (and any custom
+ * shift whose employees pick up morning/evening-tagged shared rows).
+ * Resolve the shift whose config should actually govern this task: prefer
+ * whichever of the employee's own shift(s) has this task type assigned,
+ * falling back to the row's own shift tag if none match.
+ */
+function resolveConfigShift(
+  task: TaskItem,
+  myShifts: Set<ShiftCode>,
+  shiftTaskMap: ShiftTaskMap,
+): ShiftCode {
+  for (const shiftCode of myShifts) {
+    if (shiftTaskMap[shiftCode]?.includes(task.type)) return shiftCode;
+  }
+  return task.shift;
+}
+
+function orderIndexOf(
+  task: TaskItem,
+  shiftTaskMap: ShiftTaskMap,
+  myShifts: Set<ShiftCode>,
+): number {
+  const configShift = resolveConfigShift(task, myShifts, shiftTaskMap);
+  const list = shiftTaskMap[configShift];
   if (!list) return Number.MAX_SAFE_INTEGER;
   const idx = list.indexOf(task.type);
   return idx === -1 ? Number.MAX_SAFE_INTEGER : idx;
@@ -749,24 +763,32 @@ function orderIndexOf(task: TaskItem, shiftTaskMap: ShiftTaskMap): number {
 function isTaskSequenced(
   task: TaskItem,
   shiftTaskSequenced: ShiftTaskSequencedMap,
+  shiftTaskMap: ShiftTaskMap,
+  myShifts: Set<ShiftCode>,
 ): boolean {
-  return shiftTaskSequenced[task.shift]?.[task.type] ?? false;
+  const configShift = resolveConfigShift(task, myShifts, shiftTaskMap);
+  return shiftTaskSequenced[configShift]?.[task.type] ?? false;
 }
 
 /** Whether a task is mandatory for its shift — unrelated to ordering/gating, just drives the "Optional" badge. */
 function isTaskRequired(
   task: TaskItem,
   shiftTaskRequired: ShiftTaskRequiredMap,
+  shiftTaskMap: ShiftTaskMap,
+  myShifts: Set<ShiftCode>,
 ): boolean {
-  return shiftTaskRequired[task.shift]?.[task.type] ?? true;
+  const configShift = resolveConfigShift(task, myShifts, shiftTaskMap);
+  return shiftTaskRequired[configShift]?.[task.type] ?? true;
 }
 
 /** 0 for sequenced tasks (fixed order), 1 for everything else (tied, broken by IT-configured order). */
 function priorityRank(
   task: TaskItem,
   shiftTaskSequenced: ShiftTaskSequencedMap,
+  shiftTaskMap: ShiftTaskMap,
+  myShifts: Set<ShiftCode>,
 ): number {
-  return isTaskSequenced(task, shiftTaskSequenced) ? 0 : 1;
+  return isTaskSequenced(task, shiftTaskSequenced, shiftTaskMap, myShifts) ? 0 : 1;
 }
 
 function isTaskDone(task: TaskItem): boolean {
@@ -777,6 +799,8 @@ function isTaskDone(task: TaskItem): boolean {
 function computeLockedMap(
   items: TaskItem[],
   shiftTaskSequenced: ShiftTaskSequencedMap,
+  shiftTaskMap: ShiftTaskMap,
+  myShifts: Set<ShiftCode>,
 ): Map<string, string> {
   const lockedMap = new Map<string, string>();
   let blockingType: TaskType | null = null;
@@ -784,7 +808,7 @@ function computeLockedMap(
   for (const item of items) {
     // Only sequenced tasks gate anything. Everything else ("Lainnya") can be
     // done anytime and never blocks, or is blocked by, the chain.
-    if (!isTaskSequenced(item, shiftTaskSequenced)) continue;
+    if (!isTaskSequenced(item, shiftTaskSequenced, shiftTaskMap, myShifts)) continue;
 
     const done = isTaskDone(item);
 
@@ -838,41 +862,16 @@ function normaliseVisibleTasks(
   shiftTaskMap: ShiftTaskMap,
 ): TaskItem[] {
   const regularSeen = new Set<string>();
-  const shiftScopedByKey = new Map<string, TaskItem>();
   const result: TaskItem[] = [];
 
   for (const task of tasks) {
-    if (SHIFT_SCOPED_SHARED_TASK_TYPES.has(task.type)) {
-      const displayShift = getShiftScopedDisplayShift(task);
-      const key = [
-        task.type,
-        getTaskStoreKey(task),
-        getTaskDayKey(task.data.date),
-        displayShift,
-      ].join("::");
-
-      const normalizedTask = {
-        ...task,
-        shift: displayShift,
-        data: {
-          ...task.data,
-          shift: displayShift,
-        },
-      } as TaskItem;
-
-      const existing = shiftScopedByKey.get(key);
-      if (
-        !existing ||
-        rankShiftScopedCandidate(normalizedTask) <
-          rankShiftScopedCandidate(existing)
-      ) {
-        shiftScopedByKey.set(key, normalizedTask);
-      }
-
-      continue;
-    }
-
-    // Personal tasks must stay per schedule; shared tasks can dedupe by type/store/day/shift.
+    // Personal tasks must stay per schedule; shared tasks dedupe by
+    // type/store/day/shift/id. The server already guarantees at most one row
+    // per (store, date, shift) for shift-scoped shared types (briefing,
+    // item_dropping, item_return, cek_uang_modal), so no extra
+    // morning/evening collapsing is needed here — doing so would mutate
+    // task.shift and break order/sequence lookups for full_day and custom
+    // shifts (see getDisplayShift for the display-only equivalent).
     const key =
       task.type === "grooming"
         ? [task.type, getTaskScheduleKey(task), task.data.id].join("::")
@@ -888,8 +887,6 @@ function normaliseVisibleTasks(
     regularSeen.add(key);
     result.push(task);
   }
-
-  result.push(...shiftScopedByKey.values());
 
   return result.filter((task) =>
     canShowForOwnShifts(task, ownShifts, shiftTaskMap),
@@ -1222,6 +1219,17 @@ export default function EmployeeTasksPage() {
 
       const { status, id } = item.data;
 
+      // Serah Terima is a synthetic per-store summary card (no single
+      // materialized row), not a real completable task — its status is
+      // purely derived from pendingCount, so there's nothing to mark
+      // in_progress, and it links to the shared board (no id suffix).
+      if (item.type === "serah_terima") {
+        router.push(
+          `/employee/tasks/${getTaskRoute(item.type)}?storeId=${item.data.storeId}`,
+        );
+        return;
+      }
+
       if (status === "not_started") {
         setTasks((prev) =>
           prev.map((t) =>
@@ -1259,10 +1267,12 @@ export default function EmployeeTasksPage() {
   // filter tab is active.
   const orderedVisibleTasks = [...visibleTasks].sort((a, b) => {
     const priorityDiff =
-      priorityRank(a, shiftTaskSequenced) - priorityRank(b, shiftTaskSequenced);
+      priorityRank(a, shiftTaskSequenced, shiftTaskMap, myShifts) -
+      priorityRank(b, shiftTaskSequenced, shiftTaskMap, myShifts);
     if (priorityDiff !== 0) return priorityDiff;
     const orderDiff =
-      orderIndexOf(a, shiftTaskMap) - orderIndexOf(b, shiftTaskMap);
+      orderIndexOf(a, shiftTaskMap, myShifts) -
+      orderIndexOf(b, shiftTaskMap, myShifts);
     if (orderDiff !== 0) return orderDiff;
     return (
       (STATUS_PRIORITY[a.data.status] ?? 9) -
@@ -1280,7 +1290,12 @@ export default function EmployeeTasksPage() {
 
   const lockedTaskMap = new Map<string, string>();
   for (const items of tasksByDisplayShiftAll.values()) {
-    for (const [key, label] of computeLockedMap(items, shiftTaskSequenced)) {
+    for (const [key, label] of computeLockedMap(
+      items,
+      shiftTaskSequenced,
+      shiftTaskMap,
+      myShifts,
+    )) {
       lockedTaskMap.set(key, label);
     }
   }
@@ -1532,10 +1547,11 @@ export default function EmployeeTasksPage() {
           <>
             {orderedShiftSections.map(([shiftCode, items]) => {
               const priorityItems = items.filter((item) =>
-                isTaskSequenced(item, shiftTaskSequenced),
+                isTaskSequenced(item, shiftTaskSequenced, shiftTaskMap, myShifts),
               );
               const otherItems = items.filter(
-                (item) => !isTaskSequenced(item, shiftTaskSequenced),
+                (item) =>
+                  !isTaskSequenced(item, shiftTaskSequenced, shiftTaskMap, myShifts),
               );
 
               return (
@@ -1586,6 +1602,8 @@ export default function EmployeeTasksPage() {
                                   required={isTaskRequired(
                                     item,
                                     shiftTaskRequired,
+                                    shiftTaskMap,
+                                    myShifts,
                                   )}
                                   onOpen={openTask}
                                 />
@@ -1614,6 +1632,8 @@ export default function EmployeeTasksPage() {
                             required={isTaskRequired(
                               item,
                               shiftTaskRequired,
+                              shiftTaskMap,
+                              myShifts,
                             )}
                             onOpen={openTask}
                           />
@@ -1680,6 +1700,21 @@ function StepRail({
   );
 }
 
+// Short "Xj Ym lalu" / "Xh Yj lalu" elapsed-time formatter, used by the
+// item_dropping/item_return card descriptions below.
+function elapsedShort(fromIso: string | null): string {
+  if (!fromIso) return "—";
+  const diffMin = Math.max(
+    0,
+    Math.floor((Date.now() - new Date(fromIso).getTime()) / 60_000),
+  );
+  const hours = Math.floor(diffMin / 60);
+  const minutes = diffMin % 60;
+  if (hours >= 24) return `${Math.floor(hours / 24)}h ${hours % 24}j lalu`;
+  if (hours > 0) return `${hours}j ${minutes}m lalu`;
+  return `${minutes}m lalu`;
+}
+
 // ─── Task card ────────────────────────────────────────────────────────────────
 
 function TaskCard({
@@ -1735,61 +1770,61 @@ function TaskCard({
     isDiscrepancy &&
     (item.type === "item_dropping" ||
       item.type === "item_return" ||
-      item.type === "store_closing" ||
-      item.type === "serah_terima");
+      item.type === "store_closing");
 
   const carryForwardDescription: Partial<Record<TaskType, string>> = {
     item_return:
       "Ada item return yang belum diselesaikan — tap untuk lanjutkan konfirmasi.",
+    item_dropping:
+      "Ada item dropping yang belum diselesaikan — tap untuk lanjutkan konfirmasi.",
     store_closing:
       "Store Closing tertahan karena Open Statement On Hold — tap untuk lanjutkan setelah issue resolved.",
-    serah_terima:
-      "Ada pesan serah terima yang belum selesai — tap untuk lanjutkan.",
   };
 
-  const itemDroppingLabel = (() => {
-    if (item.type !== "item_dropping" || !isDiscrepancy) return null;
-    const d = item.data as ItemDroppingData;
-    const firstEntry = d.entries?.[0];
-    if (!d.hasDropping || !firstEntry?.dropTime)
-      return "Item belum diterima — tap untuk konfirmasi.";
-    const diffMin = Math.max(
-      0,
-      Math.floor(
-        (Date.now() - new Date(firstEntry.dropTime).getTime()) / 60_000,
-      ),
+  // Both item_dropping and item_return are now BC-driven: each transfer
+  // order is its own entry, confirmed independently (see
+  // app/employee/tasks/item-return|item-dropping/[id]/page.tsx). An entry is
+  // "open" until its own submittedAt is set — unrelated to the old
+  // hasReturn/hasDropping flag.
+  const oldestOpenEntry = <T extends { createdAt: string | null }>(
+    open: T[],
+  ): T =>
+    open.reduce((a, b) =>
+      new Date(a.createdAt ?? 0).getTime() <= new Date(b.createdAt ?? 0).getTime()
+        ? a
+        : b,
     );
-    const hours = Math.floor(diffMin / 60);
-    const minutes = diffMin % 60;
-    const elapsed =
-      hours >= 24
-        ? `${Math.floor(hours / 24)}h ${hours % 24}j lalu`
-        : hours > 0
-          ? `${hours}j ${minutes}m lalu`
-          : `${minutes}m lalu`;
-    return `Belum diterima · Drop ${elapsed}`;
+
+  const itemDroppingLabel = (() => {
+    if (item.type !== "item_dropping") return null;
+    const d = item.data as ItemDroppingData;
+    if (d.entries.length === 0) {
+      return isDiscrepancy ? "Menunggu transfer order dari Business Central." : null;
+    }
+
+    const open = d.entries.filter((e) => !e.submittedAt);
+    if (open.length > 0) {
+      const elapsed = elapsedShort(oldestOpenEntry(open).createdAt);
+      return `${open.length} dalam perjalanan · tertua ${elapsed}`;
+    }
+
+    return `${d.entries.length} item dropping sudah dikonfirmasi.`;
   })();
 
   const itemReturnLabel = (() => {
     if (item.type !== "item_return") return null;
     const d = item.data as ItemReturnData;
-    if (isDiscrepancy) {
-      const firstEntry = d.entries?.[0];
-      if (!d.hasReturn || !firstEntry?.returnTime) {
-        return "Item return belum dikonfirmasi — tap untuk lanjutkan.";
-      }
-      return `Belum selesai · Return ${firstEntry.returnNumber}`;
+    if (d.entries.length === 0) {
+      return isDiscrepancy ? "Menunggu transfer order dari Business Central." : null;
     }
 
-    if (d.status === "completed" || d.status === "verified") {
-      return d.hasReturn
-        ? `${d.entries.length} dokumen return sudah dicatat.`
-        : "Tidak ada item return hari ini.";
+    const open = d.entries.filter((e) => !e.submittedAt);
+    if (open.length > 0) {
+      const elapsed = elapsedShort(oldestOpenEntry(open).createdAt);
+      return `${open.length} menunggu diambil kurir · tertua ${elapsed}`;
     }
 
-    return d.hasReturn
-      ? `${d.entries.length} return sedang dicatat.`
-      : "Pilih ada/tidak item return dari BC hari ini.";
+    return `${d.entries.length} item return sudah dikonfirmasi.`;
   })();
 
   const cekUangModalLabel = (() => {
@@ -1827,8 +1862,20 @@ function TaskCard({
     return null;
   })();
 
+  const serahTerimaLabel = (() => {
+    if (item.type !== "serah_terima") return null;
+    const d = item.data as SerahTerimaData;
+    if (d.pendingCount > 0) {
+      return `${d.pendingCount} item handover belum selesai — tap untuk lihat papan.`;
+    }
+    return "Papan handover kosong — tap untuk tambah item baru.";
+  })();
+
   const hasSetoranDeficit = item.type === "setoran" && !!setoranDeficitLabel;
-  const needsAttention = isDiscrepancy || hasSetoranDeficit || isRejected;
+  const hasSerahTerimaPending =
+    item.type === "serah_terima" &&
+    (item.data as SerahTerimaData).pendingCount > 0;
+  const needsAttention = isDiscrepancy || hasSetoranDeficit || isRejected || hasSerahTerimaPending;
 
   const storeClosingHoldLabel =
     isStoreClosingHold && !isTerminal
@@ -1849,9 +1896,11 @@ function TaskCard({
             ? setoranDeficitLabel
             : storeClosingHoldLabel
               ? storeClosingHoldLabel
-              : showCarryForward
-                ? (carryForwardDescription[item.type] ?? meta.description)
-                : meta.description;
+              : serahTerimaLabel
+                ? serahTerimaLabel
+                : showCarryForward
+                  ? (carryForwardDescription[item.type] ?? meta.description)
+                  : meta.description;
 
   return (
     <Card

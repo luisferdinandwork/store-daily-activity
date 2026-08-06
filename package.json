@@ -2,30 +2,18 @@
   "name": "sports-retail-management",
   "version": "0.1.0",
   "private": true,
-  "scripts": 
-  {
+  "scripts": {
     "dev": "next dev",
     "dev:https": "next dev --experimental-https",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-
     "db:generate": "tsx scripts/generate.ts",
     "db:migrate": "tsx scripts/migrate.ts",
     "db:clear": "tsx scripts/clear.ts",
     "db:studio": "drizzle-kit studio",
     "db:reset": "tsx scripts/reset.ts",
-
-    "seed:setup": "dotenv -e .env.local -- tsx scripts/seed-setup.ts",
-    "seed:schedules": "dotenv -e .env.local -- tsx scripts/seed-current-month.ts",
-    "seed:attendance": "dotenv -e .env.local -- tsx scripts/seed-attendance.ts",
-    "seed:tasks": "dotenv -e .env.local -- tsx scripts/seed-tasks.ts",
-    "seed:shift-tasks": "dotenv -e .env.local -- tsx scripts/seed-shift-tasks.ts",
-    "seed:bc-settings": "dotenv -e .env.local -- tsx scripts/seed-business-central-settings.ts",
-    "seed:performance-targets": "dotenv -e .env.local -- tsx scripts/seed-performance-targets.ts",
-    "seed:petty-cash": "dotenv -e .env.local -- tsx scripts/seed-petty-cash.ts",
-
-    "seed:all": "npm run seed:setup && npm run seed:bc-settings && npm run seed:performance-targets && npm run seed:shift-tasks && npm run seed:schedules && npm run seed:tasks && npm run seed:attendance && npm run seed:petty-cash"
+    "db:seed": "dotenv -e .env.local -- tsx scripts/seed/index.ts"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.11.1",
@@ -43,6 +31,7 @@
     "next": "16.1.6",
     "next-auth": "^4.24.13",
     "next-themes": "^0.4.6",
+    "pdfjs-dist": "^6.2.108",
     "radix-ui": "^1.4.3",
     "react": "19.2.3",
     "react-day-picker": "^9.13.0",

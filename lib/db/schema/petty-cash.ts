@@ -101,10 +101,6 @@ export const pettyCashTransactions = pgTable(
     rejectedAt: timestamp('rejected_at'),
     rejectionReason: text('rejection_reason'),
 
-    // Finance verification after receipt image exists.
-    verifiedBy: text('verified_by').references(() => users.id),
-    verifiedAt: timestamp('verified_at'),
-
     // Keep column if already exists, but do not use image deletion anymore.
     archivedAt: timestamp('archived_at'),
 
@@ -115,7 +111,6 @@ export const pettyCashTransactions = pgTable(
     periodIdx: index('pct_period_idx').on(t.periodId),
     storeMonthIdx: index('pct_store_month_idx').on(t.storeId, t.yearMonth),
     statusIdx: index('pct_status_idx').on(t.status),
-    verifiedIdx: index('pct_verified_idx').on(t.verifiedAt),
     yearMonthIdx: index('pct_year_month_idx').on(t.yearMonth),
   }),
 );
@@ -170,9 +165,13 @@ export const pettyCashRefills = pgTable(
 // close-and-reset `pettyCashRefills` above) ────────────────────────────────
 //
 // PIC asks for a mid-month top-up back to PETTY_CASH_MAX_BALANCE when the
-// store runs low before month-end. Finance approves/rejects; approval bumps
-// the CURRENT (still-open) period's balance directly — it does not close
-// the period or roll to next month, unlike pettyCashRefills.
+// store runs low before month-end. Finance approves/rejects, but approval
+// alone does NOT move the balance — the store hasn't physically received
+// the cash yet. Any store employee (not just PIC) then uploads two proof
+// photos: the petty cash drawer (cash counted inside it) and the Surat
+// Terima Petty Cash. Only once BOTH photos are in does the CURRENT
+// (still-open) period's balance actually top up; it does not close the
+// period or roll to next month, unlike pettyCashRefills.
 //
 // "One request per store per month" is enforced in application code
 // (lib/db/utils/petty-cash-refill.ts), not a DB constraint: a rejected
@@ -202,12 +201,20 @@ export const pettyCashRefillRequests = pgTable(
     balanceBefore: decimal('balance_before', { precision: 12, scale: 2 }),
     balanceAfter: decimal('balance_after', { precision: 12, scale: 2 }),
 
+    // Finance approval/rejection — this is what the employee sees as "Approved".
     approvedBy: text('approved_by').references(() => users.id),
     approvedAt: timestamp('approved_at'),
 
     rejectedBy: text('rejected_by').references(() => users.id),
     rejectedAt: timestamp('rejected_at'),
     rejectionReason: text('rejection_reason'),
+
+    // Proof-of-receipt photos, uploaded by any store employee once Finance
+    // approves and hands over the cash outside the system.
+    drawerPhotoUrl: text('drawer_photo_url'),
+    signaturePhotoUrl: text('signature_photo_url'),
+    proofUploadedBy: text('proof_uploaded_by').references(() => users.id),
+    proofUploadedAt: timestamp('proof_uploaded_at'),
 
     createdAt: timestamp('created_at').defaultNow().notNull(),
     updatedAt: timestamp('updated_at').$onUpdate(() => new Date()).notNull(),

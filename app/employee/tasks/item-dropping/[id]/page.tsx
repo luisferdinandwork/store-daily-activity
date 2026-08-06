@@ -1,23 +1,25 @@
 'use client';
 // app/employee/tasks/item-dropping/[id]/page.tsx
+//
+// BC-driven Item Dropping task: every open transfer order (fetched live from
+// Business Central every time this page loads — see
+// app/api/employee/tasks/item-dropping/[id]/route.ts) gets its own inline
+// "Confirm drop-off from courier" action (qty counted + courier-signed-paper
+// photo), submitted independently per transfer order so its in-transit timer
+// freezes at the exact drop-off moment and Item Receiving can start.
 
 import { useEffect, useState, useCallback } from 'react';
-import { useParams, useRouter }              from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import {
-  ArrowLeft, CheckCircle2, X, Loader2,
-  AlertCircle, Check, Cloud, CloudOff, Save,
+  CheckCircle2, Loader2, AlertCircle,
   LogIn, Navigation, NavigationOff, RefreshCw,
-  PackageOpen, PackageCheck, Clock, Hash,
-  ChevronDown, ChevronUp, WifiOff,
+  Store, Clock, Truck, Inbox,
 } from 'lucide-react';
-import { cn }    from '@/lib/utils';
 import { toast } from 'sonner';
-import { useAutoSave } from '@/lib/hooks/useAutoSave';
 import { useTaskLocationSetting } from '@/lib/hooks/useTaskLocationSetting';
-import { TaskHeader, TaskSubmitBar, SaveIndicator } from '@/components/employee/tasks';
+import TaskHeader from '@/components/employee/tasks/TaskHeader';
 import PhotoUploadGrid from '@/components/shared/PhotoUploadGrid';
 import { uploadTaskPhoto } from '@/lib/tasks-upload';
-import type { AvailableTo } from '@/app/api/employee/tasks/item-dropping/available-tos/route';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -31,63 +33,61 @@ type AccessStatus =
   | { status: 'outside_geofence'; distanceM: number; radiusM: number }
   | { status: 'geo_unavailable' };
 
-interface ToEntry {
-  id:             string;
-  taskId:         string;
-  userId:         string;
-  storeId:        string;
-  toNumber:       string;
-  quantity:       number;           // ← ADD
-  dropTime:       string | null;
-  droppingPhotos: string[];
-  notes:          string | null;
-  createdAt:      string | null;
+interface StoreRef {
+  id: number;
+  name: string;
+  storeNo: string;
 }
 
-interface ItemDroppingData {
-  id:          string;
-  scheduleId:  string;
-  userId:      string;
-  storeId:     string;
-  shift:       'morning' | 'evening' | 'full_day';
-  date:        string;
-  status:      TaskStatus;
-  notes:       string | null;
-  completedAt: string | null;
-  verifiedBy:  string | null;
-  verifiedAt:  string | null;
+interface WhseShipmentLine {
+  itemNo?: string;
+  variantCode?: string;
+  description?: string;
+  quantity: number;
+}
+
+interface ItemDroppingEntryData {
+  id: string;
+  toaNo: string;
+  qtyOrdered: number;
+  qtyCounted: number | null;
+  courierSignPhoto: string | null;
+  submittedAt: string | null;
+  fromStore: StoreRef | null;
+  toStore: StoreRef | null;
+  transferFromCode: string | null;
+  transferToCode: string | null;
+  bcStatus: string | null;
+  whseShipmentNo: string | null;
+  whseShipmentLines: WhseShipmentLine[];
+  inTransitSince: string | null;
+}
+
+interface ItemDroppingTaskData {
+  id: string;
+  status: TaskStatus;
   hasDropping: boolean;
-  entries:     ToEntry[];
+  notes: string | null;
+  completedAt: string | null;
+  verifiedBy: string | null;
+  verifiedAt: string | null;
+  storeId: string;
+  date: string;
 }
 
-interface DraftEntry {
-  localId:        string;
-  toNumber:       string;
-  description:    string | null;
-  quantity:       number;           // ← ADD
-  dropTime:       string;
-  droppingPhotos: string[];
-  notes:          string;
-}
-
-const PHOTO_RULES = { dropping: { min: 1, max: 5 } } as const;
-
-function makeDraft(to: AvailableTo): DraftEntry {
-  return {
-    localId:        crypto.randomUUID(),
-    toNumber:       to.toNumber,
-    description:    to.description,
-    quantity:       to.quantity ?? 0,   // ← ADD (pre-fill from API)
-    dropTime:       '',
-    droppingPhotos: [],
-    notes:          '',
-  };
+interface LoadResponse {
+  success: boolean;
+  error?: string;
+  scheduleId?: number;
+  task?: ItemDroppingTaskData;
+  entries?: ItemDroppingEntryData[];
+  syncWarning?: string | null;
 }
 
 // ─── Geo hook ─────────────────────────────────────────────────────────────────
 
 function useGeo(required: boolean) {
-  const [geo,      setGeo]      = useState<{ lat: number; lng: number } | null>(null);
+  const [geo, setGeo] = useState<{ lat: number; lng: number } | null>(null);
   const [geoError, setGeoError] = useState<string | null>(null);
   const [geoReady, setGeoReady] = useState(false);
 
@@ -107,7 +107,7 @@ function useGeo(required: boolean) {
     }
     navigator.geolocation.getCurrentPosition(
       pos => { setGeo({ lat: pos.coords.latitude, lng: pos.coords.longitude }); setGeoReady(true); },
-      ()  => { setGeoError('Lokasi tidak dapat diperoleh.'); setGeoReady(true); },
+      () => { setGeoError('Lokasi tidak dapat diperoleh.'); setGeoReady(true); },
       { timeout: 10_000, maximumAge: 0 },
     );
   }, [required]);
@@ -120,12 +120,12 @@ function useGeo(required: boolean) {
 
 function useAccessStatus(
   scheduleId: string,
-  storeId:    string,
-  geo:        { lat: number; lng: number } | null,
-  geoReady:   boolean,
+  storeId: string,
+  geo: { lat: number; lng: number } | null,
+  geoReady: boolean,
   taskStatus: TaskStatus | undefined,
 ) {
-  const [accessStatus,  setAccessStatus]  = useState<AccessStatus | null>(null);
+  const [accessStatus, setAccessStatus] = useState<AccessStatus | null>(null);
   const [accessLoading, setAccessLoading] = useState(true);
 
   const fetchAccess = useCallback(async () => {
@@ -139,7 +139,7 @@ function useAccessStatus(
     try {
       const params = new URLSearchParams({ scheduleId, storeId });
       if (geo) { params.set('lat', String(geo.lat)); params.set('lng', String(geo.lng)); }
-      const res  = await fetch(`/api/employee/tasks/access?${params}`);
+      const res = await fetch(`/api/employee/tasks/access?${params}`);
       const data = await res.json() as AccessStatus;
       setAccessStatus(data);
     } catch {
@@ -225,380 +225,188 @@ function AccessBanner({
   );
 }
 
-// ─── Photo Uploader ───────────────────────────────────────────────────────────
+// ─── Elapsed time ─────────────────────────────────────────────────────────────
 
-function PhotoUploader({
-  label, photoType, photos, onChange, min, max, disabled, hint,
+function useTicking(intervalMs = 30_000) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTick((x) => x + 1), intervalMs);
+    return () => clearInterval(t);
+  }, [intervalMs]);
+}
+
+function formatElapsedSince(fromIso: string | null): string {
+  if (!fromIso) return '—';
+  const diffMin = Math.max(0, Math.floor((Date.now() - new Date(fromIso).getTime()) / 60_000));
+  const hours = Math.floor(diffMin / 60);
+  const minutes = diffMin % 60;
+  if (hours >= 24) return `${Math.floor(hours / 24)}h ${hours % 24}j`;
+  if (hours > 0) return `${hours}j ${minutes}m`;
+  return `${minutes}m`;
+}
+
+function formatDurationBetween(startIso: string | null, endIso: string | null): string {
+  if (!startIso || !endIso) return '—';
+  const diffMin = Math.max(0, Math.round((new Date(endIso).getTime() - new Date(startIso).getTime()) / 60_000));
+  const hours = Math.floor(diffMin / 60);
+  const minutes = diffMin % 60;
+  if (hours >= 24) return `${Math.floor(hours / 24)}h ${hours % 24}j`;
+  if (hours > 0) return `${hours}j ${minutes}m`;
+  return `${minutes}m`;
+}
+
+// ─── Store pill ───────────────────────────────────────────────────────────────
+
+function StorePill({ store, code }: { store: StoreRef | null; code: string | null }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-lg bg-secondary px-2 py-1 text-[11px] font-semibold text-foreground">
+      <Store className="h-3 w-3 text-muted-foreground" />
+      {store ? store.name : (code ?? '—')}
+      {store && <span className="font-mono text-[10px] text-muted-foreground">({store.storeNo})</span>}
+    </span>
+  );
+}
+
+// ─── Open entry card ──────────────────────────────────────────────────────────
+
+function OpenDroppingEntryCard({
+  entry, disabled, confirming, onConfirm,
 }: {
-  label: string; photoType: string; photos: string[];
-  onChange: (urls: string[]) => void;
-  min?: number; max: number; disabled?: boolean; hint?: string;
+  entry: ItemDroppingEntryData;
+  disabled: boolean;
+  confirming: boolean;
+  onConfirm: (entryId: string, qtyCounted: number, courierSignPhoto: string) => void;
 }) {
-  return (
-    <PhotoUploadGrid
-      label={label}
-      hint={hint}
-      photos={photos}
-      onChange={onChange}
-      min={min}
-      max={max}
-      disabled={disabled}
-      upload={file => uploadTaskPhoto(file, photoType)}
-    />
-  );
-}
-
-// ─── Section wrapper ──────────────────────────────────────────────────────────
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="space-y-3">
-      <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">{title}</p>
-      {children}
-    </div>
-  );
-}
-
-// ─── Option button ────────────────────────────────────────────────────────────
-
-function OptionButton({ selected, onClick, icon: Icon, label, description, color, disabled }: {
-  selected: boolean; onClick: () => void; icon: React.ElementType;
-  label: string; description: string; color: 'green' | 'amber'; disabled?: boolean;
-}) {
-  const c = {
-    green: { active: 'border-green-400 bg-green-50', icon: 'bg-green-100 text-green-700', label: 'text-green-800', inactive: 'border-border bg-card hover:border-green-200' },
-    amber: { active: 'border-amber-400 bg-amber-50', icon: 'bg-amber-100 text-amber-700', label: 'text-amber-800', inactive: 'border-border bg-card hover:border-amber-200' },
-  }[color];
-  return (
-    <button type="button" onClick={() => !disabled && onClick()}
-      className={cn('flex w-full items-start gap-3 rounded-2xl border-2 p-4 text-left transition-all', selected ? c.active : c.inactive, disabled && 'cursor-default opacity-60')}>
-      <div className={cn('flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl transition-colors', selected ? c.icon : 'bg-secondary text-muted-foreground')}>
-        <Icon className="h-5 w-5" />
-      </div>
-      <div className="min-w-0 flex-1 pt-0.5">
-        <div className="flex items-center gap-2">
-          <p className={cn('text-sm font-bold', selected ? c.label : 'text-foreground')}>{label}</p>
-          {selected && (
-            <span className={cn('flex h-4 w-4 items-center justify-center rounded-full', color === 'green' ? 'bg-green-500' : 'bg-amber-500')}>
-              <Check className="h-2.5 w-2.5 text-white" strokeWidth={3} />
-            </span>
-          )}
-        </div>
-        <p className="mt-0.5 text-[11px] text-muted-foreground">{description}</p>
-      </div>
-    </button>
-  );
-}
-
-// ─── TO Selector ──────────────────────────────────────────────────────────────
-
-function ToSelector({
-  availableTos, loadingTos, tosError, selectedNumbers, onToggle, onRetry, disabled,
-}: {
-  availableTos:    AvailableTo[];
-  loadingTos:      boolean;
-  tosError:        string | null;
-  selectedNumbers: Set<string>;
-  onToggle:        (to: AvailableTo) => void;
-  onRetry:         () => void;
-  disabled?:       boolean;
-}) {
-  if (loadingTos) {
-    return (
-      <div className="flex items-center gap-3 rounded-2xl border border-border bg-secondary px-4 py-4">
-        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground flex-shrink-0" />
-        <p className="text-xs text-muted-foreground">Memuat daftar TO untuk toko ini…</p>
-      </div>
-    );
-  }
-
-  if (tosError) {
-    return (
-      <div className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3.5">
-        <WifiOff className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-500" />
-        <div className="flex-1 min-w-0">
-          <p className="text-xs font-bold text-red-700">Gagal memuat daftar TO</p>
-          <p className="mt-0.5 text-[11px] text-red-600">{tosError}</p>
-        </div>
-        <button onClick={onRetry}
-          className="flex-shrink-0 flex items-center gap-1 rounded-lg bg-red-100 px-2.5 py-1.5 text-[11px] font-semibold text-red-700 hover:bg-red-200 transition-colors">
-          <RefreshCw className="h-3 w-3" />Coba lagi
-        </button>
-      </div>
-    );
-  }
-
-  if (availableTos.length === 0) {
-    return (
-      <div className="rounded-2xl border border-border bg-secondary px-4 py-5 text-center">
-        <p className="text-xs font-semibold text-foreground">Tidak ada TO terdaftar</p>
-        <p className="mt-1 text-[11px] text-muted-foreground">
-          Belum ada TO yang dialokasikan untuk toko ini hari ini.
-        </p>
-        <button onClick={onRetry}
-          className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-[11px] font-semibold text-foreground hover:bg-secondary transition-colors">
-          <RefreshCw className="h-3 w-3" />Muat ulang
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between">
-        <p className="text-[11px] text-muted-foreground">
-          {selectedNumbers.size > 0
-            ? `${selectedNumbers.size} dari ${availableTos.length} TO dipilih`
-            : `${availableTos.length} TO tersedia — pilih yang tiba hari ini`}
-        </p>
-        <button onClick={onRetry} disabled={disabled}
-          className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40">
-          <RefreshCw className="h-3 w-3" />Muat ulang
-        </button>
-      </div>
-
-      {availableTos.map(to => {
-        const selected = selectedNumbers.has(to.toNumber);
-        return (
-          <button key={to.toNumber} type="button"
-            onClick={() => !disabled && onToggle(to)}
-            className={cn(
-              'flex w-full items-center gap-3 rounded-2xl border-2 px-4 py-3.5 text-left transition-all',
-              selected ? 'border-amber-400 bg-amber-50' : 'border-border bg-card hover:border-amber-200',
-              disabled && 'cursor-default opacity-60',
-            )}>
-            <div className={cn(
-              'flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md border-2 transition-colors',
-              selected ? 'border-amber-500 bg-amber-500' : 'border-border bg-background',
-            )}>
-              {selected && <Check className="h-3 w-3 text-white" strokeWidth={3} />}
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-1.5">
-                <Hash className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
-                <p className={cn('text-sm font-bold font-mono truncate', selected ? 'text-amber-800' : 'text-foreground')}>
-                  {to.toNumber}
-                </p>
-              </div>
-              {to.description && (
-                <p className="mt-0.5 text-[11px] text-muted-foreground truncate pl-5">
-                  {to.description}
-                </p>
-              )}
-              {to.expectedAt && (
-                <p className="mt-0.5 text-[10px] text-muted-foreground pl-5">
-                  Estimasi: {new Date(to.expectedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
-                </p>
-              )}
-            </div>
-            {selected && (
-              <span className="flex-shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">
-                Dipilih
-              </span>
-            )}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-// ─── Draft Entry Card ─────────────────────────────────────────────────────────
-
-// REPLACEMENT for the DraftEntryCard component in:
-// app/employee/tasks/item-dropping/[id]/page.tsx
-//
-// Fix: the outer expand/collapse row was a <button>, which contained the
-// "Batal" <button> — invalid HTML (button inside button).
-// Changed the outer element to a <div role="button"> with keyboard support.
-
-function DraftEntryCard({
-  entry, index, onChange, onDeselect, disabled,
-}: {
-  entry:      DraftEntry;
-  index:      number;
-  disabled?:  boolean;
-  onChange:   (patch: Partial<DraftEntry>) => void;
-  onDeselect: () => void;
-}) {
-  const [expanded, setExpanded] = useState(true);
-  const valid = entry.quantity > 0 && entry.dropTime.length > 0 && entry.droppingPhotos.length >= PHOTO_RULES.dropping.min;
-
-  return (
-    <div className={cn(
-      'rounded-2xl border-2 transition-colors',
-      valid ? 'border-amber-300 bg-amber-50/40' : 'border-amber-200 bg-amber-50/20',
-    )}>
-      {/* ── Header row: div instead of button to avoid nested-button error ── */}
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={() => setExpanded(v => !v)}
-        onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && setExpanded(v => !v)}
-        className="flex w-full cursor-pointer items-center gap-3 px-4 py-3.5 text-left select-none"
-      >
-        <div className={cn(
-          'flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full',
-          valid ? 'bg-amber-500' : 'bg-amber-200',
-        )}>
-          {valid
-            ? <Check className="h-3.5 w-3.5 text-white" strokeWidth={3} />
-            : <span className="text-[10px] font-bold text-amber-700">{index + 1}</span>}
-        </div>
-
-        <div className="min-w-0 flex-1">
-          <p className="truncate font-mono text-sm font-bold text-amber-800">{entry.toNumber}</p>
-          {entry.description && (
-            <p className="truncate text-[10px] text-amber-700">{entry.description}</p>
-          )}
-        </div>
-
-        {/* "Batal" is a real <button> — safe here because the parent is a <div> */}
-        {!disabled && (
-          <button
-            type="button"
-            onClick={e => { e.stopPropagation(); onDeselect(); }}
-            className="mr-1 flex flex-shrink-0 items-center gap-1 rounded-lg bg-red-100 px-2.5 py-1.5 text-[11px] font-semibold text-red-700 hover:bg-red-200 transition-colors"
-          >
-            <X className="h-3 w-3" />Batal
-          </button>
-        )}
-
-        {expanded
-          ? <ChevronUp   className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
-          : <ChevronDown className="h-4 w-4 flex-shrink-0 text-muted-foreground" />}
-      </div>
-
-      {/* ── Expanded body ─────────────────────────────────────────────────── */}
-      {expanded && (
-        <div className="space-y-4 border-t border-amber-200 px-4 pb-4 pt-4">
-
-          {/* Quantity */}
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-foreground">Jumlah Barang</label>
-            <p className="text-[10px] text-muted-foreground">Jumlah item yang diterima untuk TO ini.</p>
-            <input
-              type="number"
-              min="0"
-              value={entry.quantity === 0 ? '' : entry.quantity}
-              disabled={disabled}
-              onChange={e => onChange({ quantity: Math.max(0, Math.floor(Number(e.target.value || 0))) })}
-              placeholder="0"
-              className="w-full rounded-xl border border-border bg-secondary px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
-            />
-          </div>
-
-          {/* Drop time */}
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-foreground">Waktu Dropping</label>
-            <p className="text-[10px] text-muted-foreground">Waktu saat barang tiba di toko.</p>
-            <div className="relative">
-              <Clock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <input
-                type="datetime-local"
-                value={entry.dropTime}
-                disabled={disabled}
-                onChange={e => onChange({ dropTime: e.target.value })}
-                className="w-full rounded-xl border border-border bg-secondary py-3 pl-9 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
-              />
-            </div>
-          </div>
-
-          {/* Photos */}
-          <PhotoUploader
-            label="Foto Dropping"
-            photoType="item_dropping"
-            photos={entry.droppingPhotos}
-            min={PHOTO_RULES.dropping.min}
-            max={PHOTO_RULES.dropping.max}
-            disabled={disabled}
-            hint="Foto tanda tangan kurir dengan barang (wajib)"
-            onChange={urls => onChange({ droppingPhotos: urls })}
-          />
-
-          {/* Notes */}
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-foreground">Catatan (opsional)</label>
-            <textarea
-              value={entry.notes}
-              disabled={disabled}
-              rows={2}
-              onChange={e => onChange({ notes: e.target.value })}
-              placeholder="Catatan untuk TO ini…"
-              className="w-full resize-none rounded-xl border border-border bg-secondary px-4 py-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
-            />
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-// ─── Saved Entry Card ─────────────────────────────────────────────────────────
-
-function SavedEntryCard({ entry, index }: { entry: ToEntry; index: number }) {
+  useTicking();
   const [expanded, setExpanded] = useState(false);
+  const [qtyCounted, setQtyCounted] = useState(String(entry.qtyOrdered));
+  const [photos, setPhotos] = useState<string[]>([]);
 
-  function fmt(iso: string | null) {
-    if (!iso) return '–';
-    return new Date(iso).toLocaleString('id-ID', {
-      day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit',
-    });
-  }
+  const canConfirm = qtyCounted.trim() !== '' && Number(qtyCounted) >= 0 && photos.length >= 1;
 
   return (
-    <div className="rounded-2xl border border-border bg-card overflow-hidden">
-      <button type="button" onClick={() => setExpanded(v => !v)}
-        className="flex w-full items-center gap-3 px-4 py-3.5 text-left">
-        <div className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-green-100">
-          <Check className="h-3.5 w-3.5 text-green-700" strokeWidth={3} />
+    <div className="overflow-hidden rounded-2xl border-2 border-sky-300 bg-sky-50/60">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center gap-3 px-4 py-3.5 text-left"
+      >
+        <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-sky-100 text-sky-700">
+          <Truck className="h-5 w-5" />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-bold font-mono text-foreground truncate">{entry.toNumber}</p>
-          <p className="text-[10px] text-muted-foreground">{fmt(entry.dropTime)}</p>
+          <p className="font-mono text-sm font-bold text-foreground">{entry.toaNo}</p>
+          <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <span>Dari</span>
+            <StorePill store={entry.fromStore} code={entry.transferFromCode} />
+          </div>
+          <p className="mt-1 text-[11px] text-muted-foreground">Qty: {entry.qtyOrdered}</p>
         </div>
-        <span className="flex-shrink-0 rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-bold text-green-700 mr-1">
-          TO #{index + 1}
-        </span>
-        {expanded
-          ? <ChevronUp   className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
-          : <ChevronDown className="h-4 w-4 flex-shrink-0 text-muted-foreground" />}
+        <div className="flex-shrink-0 text-right">
+          <div className="flex items-center gap-1 text-sky-700">
+            <Clock className="h-3.5 w-3.5" />
+            <span className="text-xs font-bold">{formatElapsedSince(entry.inTransitSince)}</span>
+          </div>
+          <p className="text-[10px] text-muted-foreground">dalam perjalanan</p>
+        </div>
       </button>
 
       {expanded && (
-        <div className="border-t border-border px-4 pb-4 pt-3 space-y-3">
-          {entry.droppingPhotos.length > 0 && (
-            <div className="space-y-2">
-              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Foto</p>
-              <div className="flex flex-wrap gap-2">
-                {entry.droppingPhotos.map((url, i) => (
-                  <div key={i} className="h-16 w-16 overflow-hidden rounded-xl border border-border">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={url} alt="" className="h-full w-full object-cover" />
-                  </div>
+        <div className="space-y-3 border-t border-sky-200 bg-card px-4 py-3.5">
+          {entry.whseShipmentLines.length > 0 && (
+            <div className="rounded-xl border border-border bg-secondary/50 px-3 py-2.5">
+              <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Isi kiriman</p>
+              <ul className="space-y-1">
+                {entry.whseShipmentLines.map((line, i) => (
+                  <li key={i} className="flex items-center justify-between text-[11px]">
+                    <span className="truncate text-foreground">
+                      {line.description ?? line.itemNo ?? 'Item'}
+                      {line.variantCode ? ` (${line.variantCode})` : ''}
+                    </span>
+                    <span className="flex-shrink-0 font-semibold text-muted-foreground">×{line.quantity}</span>
+                  </li>
                 ))}
-              </div>
+              </ul>
             </div>
           )}
-          {entry.notes && <p className="text-[11px] text-muted-foreground">{entry.notes}</p>}
+
+          <div>
+            <label className="text-xs font-semibold text-foreground">Jumlah dihitung</label>
+            <input
+              type="number"
+              min={0}
+              inputMode="numeric"
+              value={qtyCounted}
+              onChange={(e) => setQtyCounted(e.target.value)}
+              disabled={disabled}
+              className="mt-1 h-10 w-full rounded-xl border border-border bg-background px-3 text-sm"
+            />
+          </div>
+
+          <PhotoUploadGrid
+            label="Foto bukti tanda tangan kurir"
+            hint="Foto surat jalan yang sudah ditandatangani kurir saat drop-off."
+            photos={photos}
+            onChange={setPhotos}
+            min={1}
+            max={1}
+            disabled={disabled}
+            upload={(file) => uploadTaskPhoto(file, 'item_dropping_courier_sign')}
+          />
+
+          <button
+            type="button"
+            disabled={disabled || !canConfirm || confirming}
+            onClick={() => onConfirm(entry.id, Number(qtyCounted), photos[0])}
+            className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-primary text-sm font-bold text-primary-foreground transition-all active:scale-[0.98] disabled:opacity-40"
+          >
+            {confirming ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+            Konfirmasi Terima dari Kurir
+          </button>
         </div>
       )}
     </div>
   );
 }
 
-// ─── Locked overlay ───────────────────────────────────────────────────────────
+// ─── Confirmed entry card ─────────────────────────────────────────────────────
 
-function LockedOverlay({ accessStatus }: { accessStatus: AccessStatus | null }) {
-  if (!accessStatus || accessStatus.status === 'ok' || accessStatus.status === 'geo_unavailable') return null;
-  const isCheckIn = accessStatus.status === 'not_checked_in';
+function ConfirmedDroppingEntryCard({ entry }: { entry: ItemDroppingEntryData }) {
   return (
-    <div className="pointer-events-none absolute inset-0 rounded-2xl bg-background/70 backdrop-blur-[2px] flex flex-col items-center justify-center gap-2 z-10">
-      <div className={cn('flex h-12 w-12 items-center justify-center rounded-full', isCheckIn ? 'bg-red-100' : 'bg-orange-100')}>
-        {isCheckIn ? <LogIn className="h-6 w-6 text-red-600" /> : <NavigationOff className="h-6 w-6 text-orange-600" />}
+    <div className="rounded-2xl border border-green-200 bg-green-50/50 px-4 py-3.5">
+      <div className="flex items-center gap-3">
+        <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-green-100 text-green-700">
+          <CheckCircle2 className="h-5 w-5" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="font-mono text-sm font-bold text-foreground">{entry.toaNo}</p>
+          <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+            <span>Dari</span>
+            <StorePill store={entry.fromStore} code={entry.transferFromCode} />
+          </div>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            Qty pesanan {entry.qtyOrdered} · dihitung {entry.qtyCounted ?? '—'}
+          </p>
+        </div>
+        <div className="flex-shrink-0 text-right">
+          <p className="text-xs font-bold text-green-700">
+            {formatDurationBetween(entry.inTransitSince, entry.submittedAt)}
+          </p>
+          <p className="text-[10px] text-muted-foreground">
+            {entry.submittedAt
+              ? new Date(entry.submittedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
+              : ''}
+          </p>
+        </div>
       </div>
-      <p className={cn('text-sm font-bold', isCheckIn ? 'text-red-700' : 'text-orange-700')}>
-        {isCheckIn ? 'Absen masuk dulu' : 'Kamu di luar area toko'}
-      </p>
+      {entry.courierSignPhoto && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={entry.courierSignPhoto}
+          alt="Bukti tanda tangan kurir"
+          className="mt-3 h-20 w-20 rounded-xl border border-border object-cover"
+        />
+      )}
     </div>
   );
 }
@@ -613,37 +421,27 @@ export default function ItemDroppingDetailPage() {
   const { requiresLocation } = useTaskLocationSetting('item_dropping');
   const { geo, geoError, geoReady, refresh: refreshGeo } = useGeo(requiresLocation);
 
-  const [taskData,    setTaskData]    = useState<ItemDroppingData | null>(null);
-  const [loading,     setLoading]     = useState(true);
-  const [submitting,  setSubmitting]  = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
-
-  const [availableTos, setAvailableTos] = useState<AvailableTo[]>([]);
-  const [loadingTos,   setLoadingTos]   = useState(false);
-  const [tosError,     setTosError]     = useState<string | null>(null);
-
-  const [hasDropping,  setHasDropping]  = useState<boolean | null>(null);
-  const [selectedNums, setSelectedNums] = useState<Set<string>>(new Set());
-  const [drafts,       setDrafts]       = useState<DraftEntry[]>([]);
-  const [notes,        setNotes]        = useState('');
-
-  // ── Load task ──────────────────────────────────────────────────────────────
+  const [taskData, setTaskData] = useState<ItemDroppingTaskData | null>(null);
+  const [entries, setEntries] = useState<ItemDroppingEntryData[]>([]);
+  const [scheduleId, setScheduleId] = useState<string>('');
+  const [loading, setLoading] = useState(true);
+  const [syncWarning, setSyncWarning] = useState<string | null>(null);
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res  = await fetch('/api/employee/tasks');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json() as { tasks: { type: string; data: ItemDroppingData }[] };
-      const found = data.tasks?.find(t => t.type === 'item_dropping' && t.data.id === taskId);
-      if (found) {
-        const d = found.data;
-        setTaskData(d);
-        setHasDropping(d.hasDropping);
-        setNotes(d.notes ?? '');
-      } else {
+      const res = await fetch(`/api/employee/tasks/item-dropping/${taskId}`, { cache: 'no-store' });
+      const data = await res.json() as LoadResponse;
+      if (!data.success || !data.task) {
+        toast.error(data.error ?? 'Gagal memuat data task.');
         setTaskData(null);
+        return;
       }
+      setTaskData(data.task);
+      setEntries(data.entries ?? []);
+      setScheduleId(String(data.scheduleId ?? ''));
+      setSyncWarning(data.syncWarning ?? null);
     } catch (e) {
       console.error('[ItemDroppingDetailPage] load error:', e);
       toast.error('Gagal memuat data task.');
@@ -654,353 +452,142 @@ export default function ItemDroppingDetailPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // ── Load available TOs ─────────────────────────────────────────────────────
-
-  const loadTos = useCallback(async (storeId: string, date: string) => {
-    setLoadingTos(true);
-    setTosError(null);
-    try {
-      const dateStr = new Date(date).toISOString().slice(0, 10);
-      const res  = await fetch(`/api/employee/tasks/item-dropping/available-tos?storeId=${storeId}&date=${dateStr}`);
-      const data = await res.json() as { success: boolean; tos?: AvailableTo[]; error?: string };
-      if (!data.success) throw new Error(data.error ?? 'Gagal memuat TO');
-      setAvailableTos(data.tos ?? []);
-    } catch (e) {
-      setTosError(e instanceof Error ? e.message : 'Gagal memuat daftar TO.');
-    } finally {
-      setLoadingTos(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (taskData && hasDropping === true) {
-      loadTos(taskData.storeId, taskData.date);
-    }
-  }, [taskData, hasDropping, loadTos]);
-
   const { accessStatus, accessLoading, refreshAccess } = useAccessStatus(
-    taskData?.scheduleId ?? '', taskData?.storeId ?? '', geo, geoReady, taskData?.status,
+    scheduleId, taskData?.storeId ?? '', geo, geoReady, taskData?.status,
   );
 
-  const scheduleId = taskData ? parseInt(taskData.scheduleId, 10) : 0;
-  const storeId    = taskData ? parseInt(taskData.storeId,    10) : 0;
-  const taskIdNum  = taskData ? parseInt(taskData.id,         10) : 0;
+  const locked = requiresLocation
+    ? accessLoading || !accessStatus || accessStatus.status !== 'ok'
+    : false;
 
-  const { status: saveStatus, lastSaved, error: saveError, save: autoSave } = useAutoSave({
-    url: '/api/employee/tasks/item-dropping', baseBody: { taskId: taskIdNum }, debounceMs: 800,
-  });
-
-  const taskStatus = taskData?.status;
-  const readonly   = taskStatus === 'completed' || taskStatus === 'verified';
-  const isRejected = taskStatus === 'rejected';
-  const locked     = !readonly && !!accessStatus &&
-    (accessStatus.status === 'not_checked_in' || accessStatus.status === 'outside_geofence');
-  const dis = readonly || locked;
-
-  // ── TO selection ──────────────────────────────────────────────────────────
-
-  function toggleTo(to: AvailableTo) {
-    const next = new Set(selectedNums);
-    if (next.has(to.toNumber)) {
-      next.delete(to.toNumber);
-      setDrafts(prev => prev.filter(d => d.toNumber !== to.toNumber));
-    } else {
-      next.add(to.toNumber);
-      setDrafts(prev => [...prev, makeDraft(to)]);
+  const handleConfirm = useCallback(async (entryId: string, qtyCounted: number, courierSignPhoto: string) => {
+    if (locked) {
+      toast.warning('Belum bisa konfirmasi — periksa status akses di atas.');
+      return;
     }
-    setSelectedNums(next);
-  }
+    setConfirmingId(entryId);
+    try {
+      const res = await fetch(`/api/employee/tasks/item-dropping/${taskId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          entryId: Number(entryId),
+          qtyCounted,
+          courierSignPhoto,
+          lat: geo?.lat,
+          lng: geo?.lng,
+          skipGeo: !requiresLocation,
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error ?? 'Gagal konfirmasi.');
+      toast.success('Penerimaan dari kurir dikonfirmasi.');
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal konfirmasi.');
+    } finally {
+      setConfirmingId(null);
+    }
+  }, [taskId, geo, requiresLocation, locked, load]);
 
-  function deselectTo(toNumber: string) {
-    setSelectedNums(prev => { const n = new Set(prev); n.delete(toNumber); return n; });
-    setDrafts(prev => prev.filter(d => d.toNumber !== toNumber));
-  }
-
-  function patchDraft(localId: string, patch: Partial<DraftEntry>) {
-    setDrafts(prev => prev.map(d => d.localId === localId ? { ...d, ...patch } : d));
-  }
-
-  // ── Validation ─────────────────────────────────────────────────────────────
-
-  function isDraftValid(d: DraftEntry) {
+  if (loading && !taskData) {
     return (
-      d.quantity > 0 &&
-      d.dropTime.length > 0 &&
-      d.droppingPhotos.length >= PHOTO_RULES.dropping.min
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
     );
   }
 
-  const canSubmitNoDrop   = hasDropping === false;
-  const canSubmitWithDrop = hasDropping === true && drafts.length > 0 && drafts.every(isDraftValid);
-  const canSubmit         = !locked && (canSubmitNoDrop || canSubmitWithDrop);
-
-  const submitHint = (() => {
-    if (locked || hasDropping === null) return '';
-    if (hasDropping === false) return '';
-    if (drafts.length === 0)  return 'Pilih minimal satu TO dari daftar di atas.';
-    const invalid = drafts.findIndex(d => !isDraftValid(d));
-    if (invalid >= 0) {
-      const d = drafts[invalid];
-      if (d.quantity <= 0)               return `${d.toNumber}: Isi jumlah barang.`;
-      if (!d.dropTime)                   return `${d.toNumber}: Isi waktu dropping.`;
-      if (d.droppingPhotos.length === 0) return `${d.toNumber}: Upload minimal 1 foto.`;
-    }
-    return '';
-  })();
-
-  // ── Submit ─────────────────────────────────────────────────────────────────
-
-  async function handleSubmit() {
-    if (!taskData) return;
-    setSubmitError(null);
-    setSubmitting(true);
-    try {
-      const entries = hasDropping
-        ? drafts.map(d => ({
-            toNumber:       d.toNumber,
-            quantity:       d.quantity,            // ← ADD
-            dropTime:       new Date(d.dropTime).toISOString(),
-            droppingPhotos: d.droppingPhotos,
-            notes:          d.notes || undefined,
-          }))
-        : undefined;
-
-      const res = await fetch('/api/employee/tasks/item-dropping', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mode: 'submit',
-          scheduleId, storeId,
-          lat: geo?.lat, lng: geo?.lng,
-          skipGeo: geo === null,
-          hasDropping: hasDropping ?? false,
-          entries,
-          notes: notes || undefined,
-        }),
-      });
-
-      let json: Record<string, unknown> = {};
-      if (res.headers.get('content-type')?.includes('application/json')) json = await res.json();
-
-      if (!res.ok || json.success === false) {
-        const msg = (typeof json.error === 'string' && json.error) || `HTTP ${res.status}`;
-        setSubmitError(msg); toast.error(msg, { duration: 6000 }); return;
-      }
-
-      toast.success(
-        hasDropping
-          ? `${drafts.length} TO berhasil dicatat. ✓`
-          : 'Tidak ada dropping hari ini. Task selesai. ✓',
-        { duration: 4000 },
-      );
-      router.back();
-    } catch (e) {
-      const msg = e instanceof Error ? `Koneksi gagal: ${e.message}` : 'Gagal terhubung ke server.';
-      setSubmitError(msg); toast.error(msg, { duration: 6000 });
-    } finally {
-      setSubmitting(false);
-    }
+  if (!taskData) {
+    return (
+      <div className="flex min-h-screen flex-col bg-background">
+        <TaskHeader title="Item Dropping" onBack={() => router.back()} />
+        <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
+          <AlertCircle className="h-8 w-8 text-muted-foreground" />
+          <p className="text-sm font-semibold text-foreground">Task tidak ditemukan</p>
+        </div>
+      </div>
+    );
   }
 
-  function fmt(iso: string | null) {
-    if (!iso) return '–';
-    return new Date(iso).toLocaleString('id-ID', {
-      day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit',
-    });
-  }
-
-  const statusLabel: Record<TaskStatus, string> = {
-    not_started: 'Menunggu', in_progress: 'Sedang Diisi', completed: 'Selesai',
-    pending: 'Perlu Ditindaklanjuti', verified: 'Terverifikasi', rejected: 'Ditolak',
-  };
+  const openEntries = entries.filter((e) => !e.submittedAt);
+  const confirmedEntries = entries.filter((e) => e.submittedAt);
 
   return (
-    <div className="flex min-h-screen flex-col bg-background">
+    <div className="flex min-h-screen flex-col bg-background pb-28">
       <TaskHeader
         title="Item Dropping"
-        subtitle={
-          taskData
-            ? `${String(taskData.shift).replace('_', ' ')} shift · ${String(taskData.status).replace('_', ' ')}`
-            : undefined
-        }
-        status={taskStatus}
-        saveIndicator={
-          !readonly && !loading && taskData ? (
-            <SaveIndicator status={saveStatus} lastSaved={lastSaved ?? null} />
-          ) : null
-        }
+        subtitle={openEntries.length > 0 ? `${openEntries.length} menunggu konfirmasi` : undefined}
+        status={taskData.status}
+        onBack={() => router.back()}
       />
 
-      {/* Body */}
-      <div className="flex-1 space-y-4 p-4 pb-10">
+      <div className="space-y-4 p-4">
+        <AccessBanner
+          accessStatus={accessStatus}
+          accessLoading={accessLoading}
+          geoReady={geoReady}
+          geo={geo}
+          geoError={geoError}
+          onRefreshGeo={refreshGeo}
+          onRefreshAccess={refreshAccess}
+        />
 
-        {!readonly && !loading && taskData && (
-          <AccessBanner accessStatus={accessStatus} accessLoading={accessLoading} geoReady={geoReady}
-            geo={geo} geoError={geoError} onRefreshGeo={refreshGeo} onRefreshAccess={refreshAccess} />
-        )}
-
-        {submitError && (
-          <div className="flex items-start gap-2.5 rounded-xl border border-red-300 bg-red-50 px-4 py-3">
-            <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-600" />
-            <div className="min-w-0 flex-1">
-              <p className="text-xs font-bold text-red-700">Submit gagal</p>
-              <p className="mt-0.5 text-xs text-red-600 break-words">{submitError}</p>
-            </div>
-            <button onClick={() => setSubmitError(null)} className="flex-shrink-0 text-red-400 hover:text-red-600"><X className="h-4 w-4" /></button>
-          </div>
-        )}
-
-        {saveError && !readonly && (
-          <div className="flex items-center gap-2 rounded-xl border border-orange-200 bg-orange-50 px-4 py-2.5">
-            <CloudOff className="h-4 w-4 flex-shrink-0 text-orange-600" />
-            <p className="text-xs text-orange-700">Auto-save gagal: {saveError}</p>
-          </div>
-        )}
-
-        {isRejected && taskData?.notes && (
+        {syncWarning && (
           <div className="flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
             <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-600" />
-            <div>
-              <p className="text-xs font-bold text-red-700">Ditolak oleh OPS</p>
-              <p className="mt-0.5 text-xs text-red-600">{taskData.notes}</p>
-              <p className="mt-1.5 text-xs font-medium text-red-700">Silakan perbaiki dan submit ulang.</p>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-semibold text-red-700">Gagal sinkronisasi dengan Business Central</p>
+              <p className="mt-0.5 text-[11px] text-red-600">{syncWarning}</p>
+              <p className="mt-0.5 text-[11px] text-red-600">Data yang ditampilkan mungkin belum terbaru.</p>
             </div>
+            <button
+              onClick={load}
+              className="flex flex-shrink-0 items-center gap-1 rounded-lg bg-red-100 px-2.5 py-1.5 text-[11px] font-semibold text-red-700 hover:bg-red-200"
+            >
+              <RefreshCw className="h-3 w-3" />Coba lagi
+            </button>
           </div>
         )}
 
-        {taskStatus === 'verified' && taskData?.verifiedAt && (
-          <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3">
-            <p className="text-xs font-semibold text-green-800">Task telah diverifikasi</p>
-            <p className="mt-0.5 text-xs text-green-600">{fmt(taskData.verifiedAt)}</p>
-          </div>
-        )}
-
-        {!readonly && !locked && !loading && taskData && (
-          <div className="flex items-center gap-2 rounded-xl border border-blue-100 bg-blue-50 px-4 py-2.5">
-            <Save className="h-4 w-4 flex-shrink-0 text-blue-500" />
-            <p className="text-xs text-blue-700">Perubahan otomatis tersimpan.</p>
-          </div>
-        )}
-
-        {loading ? (
-          <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="h-20 animate-pulse rounded-2xl bg-secondary" />)}</div>
-        ) : !taskData ? (
-          <div className="flex flex-col items-center py-20 text-center">
-            <AlertCircle className="mb-3 h-8 w-8 text-muted-foreground/40" />
-            <p className="text-sm font-semibold">Task tidak ditemukan</p>
+        {entries.length === 0 ? (
+          <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-border bg-secondary px-4 py-10 text-center">
+            <Inbox className="h-8 w-8 text-muted-foreground/40" />
+            <p className="text-sm font-semibold text-foreground">Belum ada item dropping</p>
+            <p className="text-xs text-muted-foreground">
+              Task ini akan otomatis terisi begitu Business Central mengirim kiriman untuk toko ini.
+            </p>
           </div>
         ) : (
-          <div className="relative">
-            <LockedOverlay accessStatus={accessStatus} />
-            <div className="space-y-6">
-
-              {/* ── READ-ONLY ──────────────────────────────────────────────── */}
-              {readonly && (
-                <Section title="Detail Task">
-                  <div className="rounded-2xl border border-border bg-card p-4 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-muted-foreground">Ada Item Dropping?</span>
-                      <span className={cn('rounded-full px-2.5 py-0.5 text-[11px] font-bold',
-                        taskData.hasDropping ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700')}>
-                        {taskData.hasDropping ? `Ya · ${taskData.entries.length} TO` : 'Tidak'}
-                      </span>
-                    </div>
-                    {taskData.notes && (
-                      <div className="border-t border-border pt-3">
-                        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Catatan</p>
-                        <p className="mt-1 text-xs text-foreground">{taskData.notes}</p>
-                      </div>
-                    )}
-                    <div className="border-t border-border pt-3">
-                      <p className="text-[10px] text-muted-foreground">Tanggal: {fmt(taskData.date)}</p>
-                      {taskData.completedAt && <p className="text-[10px] text-muted-foreground">Selesai: {fmt(taskData.completedAt)}</p>}
-                    </div>
-                  </div>
-                  {taskData.entries.length > 0 && (
-                    <div className="space-y-2 mt-2">
-                      {taskData.entries.map((e, i) => <SavedEntryCard key={e.id} entry={e} index={i} />)}
-                    </div>
-                  )}
-                </Section>
-              )}
-
-              {/* ── EDITABLE FORM ──────────────────────────────────────────── */}
-              {!readonly && (
-                <>
-                  {/* Step 1 */}
-                  <Section title="Ada Item Dropping Hari Ini?">
-                    <div className="space-y-2.5">
-                      <OptionButton selected={hasDropping === false}
-                        onClick={() => {
-                          setHasDropping(false);
-                          setSelectedNums(new Set());
-                          setDrafts([]);
-                          autoSave({ hasDropping: false });
-                        }}
-                        icon={PackageCheck} label="Tidak Ada Dropping"
-                        description="Tidak ada pengiriman barang hari ini. Task langsung selesai."
-                        color="green" disabled={dis} />
-                      <OptionButton selected={hasDropping === true}
-                        onClick={() => { setHasDropping(true); autoSave({ hasDropping: true }); }}
-                        icon={PackageOpen} label="Ada Item Dropping"
-                        description="Ada barang yang dikirim hari ini. Pilih nomor TO dari daftar."
-                        color="amber" disabled={dis} />
-                    </div>
-                  </Section>
-
-                  {/* Step 2 — TO list */}
-                  {hasDropping === true && (
-                    <Section title={`Pilih Nomor TO${selectedNums.size > 0 ? ` · ${selectedNums.size} dipilih` : ''}`}>
-                      <ToSelector
-                        availableTos={availableTos}
-                        loadingTos={loadingTos}
-                        tosError={tosError}
-                        selectedNumbers={selectedNums}
-                        onToggle={toggleTo}
-                        onRetry={() => taskData && loadTos(taskData.storeId, taskData.date)}
-                        disabled={dis}
-                      />
-                    </Section>
-                  )}
-
-                  {/* Step 3 — detail per TO */}
-                  {hasDropping === true && drafts.length > 0 && (
-                    <Section title={`Detail Dropping · ${drafts.length} TO`}>
-                      <div className="space-y-3">
-                        {drafts.map((d, i) => (
-                          <DraftEntryCard
-                            key={d.localId}
-                            entry={d}
-                            index={i}
-                            disabled={dis}
-                            onChange={patch => patchDraft(d.localId, patch)}
-                            onDeselect={() => deselectTo(d.toNumber)}
-                          />
-                        ))}
-                      </div>
-                    </Section>
-                  )}
-
-                  {/* Notes */}
-                  <Section title="Catatan (opsional)">
-                    <textarea value={notes} disabled={dis} rows={3}
-                      onChange={e => { setNotes(e.target.value); autoSave({ notes: e.target.value }); }}
-                      placeholder="Tambahkan catatan jika ada…"
-                      className="w-full resize-none rounded-xl border border-border bg-secondary px-4 py-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60" />
-                  </Section>
-
-                  <TaskSubmitBar
-                    label="Submit Item Dropping"
-                    onSubmit={handleSubmit}
-                    submitting={submitting}
-                    disabled={!canSubmit}
-                    hidden={readonly}
-                    hint={!canSubmit ? submitHint : undefined}
+          <>
+            {openEntries.length > 0 && (
+              <section className="space-y-2.5">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-sky-600">
+                  Dalam perjalanan · {openEntries.length}
+                </p>
+                {openEntries.map((entry) => (
+                  <OpenDroppingEntryCard
+                    key={entry.id}
+                    entry={entry}
+                    disabled={locked}
+                    confirming={confirmingId === entry.id}
+                    onConfirm={handleConfirm}
                   />
-                </>
-              )}
-            </div>
-          </div>
+                ))}
+              </section>
+            )}
+
+            {confirmedEntries.length > 0 && (
+              <section className="space-y-2.5">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                  Sudah diterima · {confirmedEntries.length}
+                </p>
+                {confirmedEntries.map((entry) => (
+                  <ConfirmedDroppingEntryCard key={entry.id} entry={entry} />
+                ))}
+              </section>
+            )}
+          </>
         )}
       </div>
     </div>

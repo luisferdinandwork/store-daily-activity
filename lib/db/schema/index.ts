@@ -10,6 +10,7 @@ export * from './target-allocation';
 export * from './notifications';
 export * from './impact-visits';       // ← NEW: OPS store-visit audit
 export * from './manuals';             // ← NEW: Knowledge Manual library
+export * from './item-transfers';      // ← NEW: BC transfer order pipeline
 
 import * as enums            from './enums';
 import * as lookups          from './lookups';
@@ -22,6 +23,7 @@ import * as targetAllocation from './target-allocation';
 import * as notifications    from './notifications';
 import * as impactVisits     from './impact-visits';        // ← NEW
 import * as manuals          from './manuals';               // ← NEW
+import * as itemTransfers    from './item-transfers';        // ← NEW
 
 export const schema = {
   ...enums,
@@ -35,4 +37,5 @@ export const schema = {
   ...notifications,
   ...impactVisits,   // ← NEW
   ...manuals,         // ← NEW
+  ...itemTransfers,   // ← NEW
 };

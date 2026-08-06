@@ -7,7 +7,7 @@
 //
 // Both consumers (employee API, seed-tasks) treat an EMPTY result as "no config
 // yet" and fall back to their original hardcoded rules, so nothing breaks before
-// `npm run seed:shift-tasks` has been run.
+// the shift-tasks seed step (`npm run db:seed`) has been run.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { and, eq, inArray } from 'drizzle-orm';

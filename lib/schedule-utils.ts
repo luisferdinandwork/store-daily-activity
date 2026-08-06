@@ -31,7 +31,6 @@ import {
   marketingCheckTasks,
   itemDroppingTasks,
   briefingTasks,
-  serahTerimaTasks,
   storeClosingTasks,
   groomingTasks,
   type Area,
@@ -308,9 +307,8 @@ async function deleteAllTasksForSchedules(
         .delete(itemDroppingTasks)
         .where(inArray(itemDroppingTasks.scheduleId, batch)),
       db.delete(briefingTasks).where(inArray(briefingTasks.scheduleId, batch)),
-      db
-        .delete(serahTerimaTasks)
-        .where(inArray(serahTerimaTasks.scheduleId, batch)),
+      // serah_terima intentionally excluded — entries aren't tied to a
+      // schedule's lifecycle anymore (shared rolling board per store).
       db
         .delete(storeClosingTasks)
         .where(inArray(storeClosingTasks.scheduleId, batch)),
@@ -1050,6 +1048,120 @@ export async function getMonthlySchedule(
       shiftCode: r.shiftRow?.code ?? null,
       shiftLabel: r.shiftRow?.label ?? null,
     })),
+  };
+}
+
+export interface PersonalMonthlyScheduleEntry {
+  id: number;
+  date: Date;
+  shiftId: number | null;
+  shiftCode: string | null;
+  shiftLabel: string | null;
+  startTime: string | null;
+  endTime: string | null;
+  isOff: boolean;
+  isLeave: boolean;
+  attendance: {
+    status: string;
+    checkInTime: Date | null;
+    checkOutTime: Date | null;
+    onBreak: boolean;
+  } | null;
+}
+
+export interface PersonalMonthlyScheduleWithEntries {
+  schedule: MonthlySchedule;
+  entries: PersonalMonthlyScheduleEntry[];
+}
+
+/**
+ * Same data as getMonthlySchedule(), but scoped to a single employee and
+ * enriched with their attendance record per day (check-in/out, status) —
+ * used by the employee-facing "My Schedule" list, as opposed to the
+ * store-wide roster PIC sees.
+ */
+export async function getMonthlyScheduleForUser(
+  storeId: number,
+  yearMonth: string,
+  userId: string,
+): Promise<PersonalMonthlyScheduleWithEntries | null> {
+  const [ms] = await db
+    .select()
+    .from(monthlySchedules)
+    .where(
+      and(
+        eq(monthlySchedules.storeId, storeId),
+        eq(monthlySchedules.yearMonth, yearMonth),
+      ),
+    )
+    .limit(1);
+
+  if (!ms) return null;
+
+  const rawEntries = await db
+    .select({
+      entry: monthlyScheduleEntries,
+      shiftCode: shifts.code,
+      shiftLabel: shifts.label,
+      startTime: shifts.startTime,
+      endTime: shifts.endTime,
+    })
+    .from(monthlyScheduleEntries)
+    .leftJoin(shifts, eq(monthlyScheduleEntries.shiftId, shifts.id))
+    .where(
+      and(
+        eq(monthlyScheduleEntries.monthlyScheduleId, ms.id),
+        eq(monthlyScheduleEntries.userId, userId),
+      ),
+    )
+    .orderBy(monthlyScheduleEntries.date);
+
+  const entryIds = rawEntries.map((r) => r.entry.id);
+
+  const attRows = entryIds.length
+    ? await db
+        .select({
+          entryId: schedules.monthlyScheduleEntryId,
+          status: attendance.status,
+          checkInTime: attendance.checkInTime,
+          checkOutTime: attendance.checkOutTime,
+          onBreak: attendance.onBreak,
+        })
+        .from(schedules)
+        .innerJoin(attendance, eq(attendance.scheduleId, schedules.id))
+        .where(inArray(schedules.monthlyScheduleEntryId, entryIds))
+    : [];
+
+  const attByEntryId = new Map(
+    attRows
+      .filter((r): r is typeof r & { entryId: number } => r.entryId != null)
+      .map((r) => [r.entryId, r]),
+  );
+
+  return {
+    schedule: ms,
+    entries: rawEntries.map((r) => {
+      const att = attByEntryId.get(r.entry.id);
+      return {
+        id: r.entry.id,
+        date: r.entry.date,
+        shiftId: r.entry.shiftId,
+        shiftCode: r.shiftCode ?? null,
+        shiftLabel: r.shiftLabel ?? null,
+        startTime: r.startTime ?? null,
+        endTime: r.endTime ?? null,
+        isOff: r.entry.isOff,
+        isLeave: r.entry.isLeave,
+        attendance: att
+          ? {
+              status: att.status,
+              checkInTime: att.checkInTime,
+              checkOutTime: att.checkOutTime,
+              onBreak: att.onBreak,
+            }
+          : null,
+      };
+    }),
   };
 }
 
