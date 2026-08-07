@@ -22,6 +22,7 @@ import {
   Target,
   Truck,
   UserCheck,
+  Users,
   Wallet,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -103,10 +104,10 @@ const IMPACT_VISIT_ITEM = {
   key: 'impact-visit',
 };
 
-// OPS HO only — manage the Knowledge Manual library employees see.
+// OPS HO only — manage the Knowledge Base library employees see.
 const MANUALS_ITEM = {
   href: '/ops/manuals',
-  label: 'Knowledge Manual',
+  label: 'Knowledge Base',
   icon: BookOpen,
   key: 'manuals',
 };
@@ -124,6 +125,7 @@ const NAV = [
     items: [
       { href: '/ops/schedules',  label: 'Schedules',  icon: Calendar },
       { href: '/ops/attendance', label: 'Attendance', icon: UserCheck },
+      { href: '/ops/employees',  label: 'Employees',  icon: Users },
       { href: '/ops/manage',     label: 'Manage',     icon: ClipboardCheck },
     ],
   },

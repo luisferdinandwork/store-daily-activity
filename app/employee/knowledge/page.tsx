@@ -1,7 +1,7 @@
 'use client';
 // app/employee/knowledge/page.tsx
 //
-// Knowledge Manual — read-only list of store-operations manuals uploaded by
+// Knowledge Base — read-only list of store-operations manuals uploaded by
 // Ops HO. Reached from the floating "More" menu (replaces the old dead
 // "Help & FAQ" link). The route-level back/title chrome comes from the
 // shared EmployeeHeader (see components/employee/EmployeeHeader.tsx); the
@@ -102,7 +102,7 @@ function ExcelViewerOverlay({ manual, onClose }: { manual: ManualRow; onClose: (
         </button>
 
         <div className="min-w-0 flex-1">
-          <p className="text-xs font-semibold text-muted-foreground">Knowledge Manual</p>
+          <p className="text-xs font-semibold text-muted-foreground">Knowledge Base</p>
           <p className="truncate text-sm font-bold leading-none text-foreground">{manual.title}</p>
         </div>
 
@@ -259,7 +259,7 @@ function PdfViewerOverlay({ manual, onClose }: { manual: ManualRow; onClose: () 
 
         <div className="min-w-0 flex-1">
           <p className="text-xs font-semibold text-muted-foreground">
-            Knowledge Manual{numPages ? ` · ${numPages} page${numPages > 1 ? 's' : ''}` : ''}
+            Knowledge Base{numPages ? ` · ${numPages} page${numPages > 1 ? 's' : ''}` : ''}
           </p>
           <p className="truncate text-sm font-bold leading-none text-foreground">{manual.title}</p>
         </div>

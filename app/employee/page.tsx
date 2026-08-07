@@ -26,13 +26,27 @@ import { cn } from "@/lib/utils";
 import { StoreContributionChart } from "@/components/employee/StoreContributionChart";
 
 interface AttSlot {
-  schedule: { shift: "morning" | "evening" | "full_day" };
+  schedule: {
+    shift: "morning" | "evening" | "full_day";
+    shiftLabel?: string | null;
+    /** "HH:MM:SS", store-local wall-clock time. */
+    startTime?: string | null;
+  };
   attendance: {
     status: "present" | "late" | "absent" | "excused";
     checkInTime: string | null;
     checkOutTime: string | null;
     onBreak: boolean;
   } | null;
+}
+
+/** Combines today's date with a "HH:MM:SS" wall-clock time, same convention
+ *  as the check-in "late" cutoff in lib/schedule-utils.ts (employeeCheckIn). */
+function todayAt(time: string): Date {
+  const [h, m, s] = time.split(":").map(Number);
+  const d = new Date();
+  d.setHours(h || 0, m || 0, s || 0, 0);
+  return d;
 }
 
 interface PerformanceData {
@@ -295,6 +309,11 @@ export default function EmployeeDashboard() {
   const isOnBreak = primaryAtt?.onBreak ?? false;
   const attCfg = primaryAtt ? ATT_CFG[primaryAtt.status] : null;
 
+  // Shift(s) that have already started today but have no check-in at all yet.
+  const missedCheckIns = attSlots.filter(
+    (s) => !s.attendance && s.schedule.startTime && new Date() > todayAt(s.schedule.startTime),
+  );
+
   const hasPerf = !!perf?.success;
   const monthLabel = monthLabelFromYm(perf?.yearMonth);
   const isDaily = period === "daily";
@@ -399,6 +418,31 @@ export default function EmployeeDashboard() {
               </div>
             ) : null}
           </div>
+
+          {/* Missed check-in alert — shift already started, no attendance
+              row at all yet. Computed live from the shifts already fetched
+              above, so it's accurate the moment the dashboard loads (no
+              cron/notification-table round trip needed). */}
+          {!loading && missedCheckIns.length > 0 && (
+            <Link
+              href="/employee/attendance"
+              className="flex items-center gap-3 rounded-2xl border border-rose-400/40 bg-rose-500/15 px-3.5 py-3 transition-colors active:scale-[0.99]"
+            >
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-rose-500/20">
+                <AlertCircle className="h-4 w-4 text-rose-200" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-bold text-rose-100">
+                  Belum absen masuk
+                </p>
+                <p className="mt-0.5 text-[11px] leading-snug text-rose-200/80">
+                  {missedCheckIns[0].schedule.shiftLabel ?? "Shift"} kamu sudah
+                  dimulai. Ketuk untuk check-in sekarang.
+                </p>
+              </div>
+              <ChevronRight className="h-4 w-4 shrink-0 text-rose-200/60" />
+            </Link>
+          )}
 
           {/* Warning banner — always shown when the API sends one (roster/
               target/schedule gaps), regardless of whether the chart below

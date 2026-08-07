@@ -1,7 +1,7 @@
 'use client';
 // app/ops/manuals/page.tsx — OPS HO only.
 //
-// Knowledge Manual admin: upload store-operations manuals (PDF/Word/Excel/
+// Knowledge Base admin: upload store-operations manuals (PDF/Word/Excel/
 // image), toggle visibility, edit metadata, delete. Employees see only the
 // active ones via GET /api/employee/manuals.
 
@@ -386,7 +386,7 @@ export default function OpsManualsPage() {
     <div className="min-h-full bg-slate-50">
       <OpsPageHeader
         scope="OPS · Head Office"
-        title="Knowledge Manual"
+        title="Knowledge Base"
         subtitle={`${manuals.length} manual · ${manuals.filter((m) => m.isActive).length} visible to employees`}
         onRefresh={() => void load()}
         refreshing={loading}

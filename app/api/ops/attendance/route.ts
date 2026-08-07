@@ -2,7 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession }          from 'next-auth';
 import { authOptions }               from '@/lib/auth';
-import { getAttendanceForDate, opsMarkAttendance } from '@/lib/schedule-utils';
+import { getAttendanceForDate, opsMarkAttendance, autoCheckoutOverdueAttendance } from '@/lib/schedule-utils';
 import { db }                        from '@/lib/db';
 import { breakSessions, shifts }     from '@/lib/db/schema';
 import { eq }                        from 'drizzle-orm';
@@ -43,6 +43,10 @@ export async function GET(req: NextRequest) {
     if (isNaN(date.getTime())) {
       return NextResponse.json({ success: false, error: 'invalid date' }, { status: 400 });
     }
+
+    // Close out anyone in this store left checked-in past their shift end
+    // before reading the day's rows — mirrors the employee-side lazy fixer.
+    await autoCheckoutOverdueAttendance({ storeIds: [storeId] });
 
     const data       = await getAttendanceForDate(storeId, date);
     const shiftCodes = await getShiftCodeMap();

@@ -27,7 +27,7 @@ const ROOT_TABS = new Set([
 const TITLES: Record<string, string> = {
   '/employee/profile': 'My Profile',
   '/employee/settings': 'Settings',
-  '/employee/knowledge': 'Knowledge Manual',
+  '/employee/knowledge': 'Knowledge Base',
   '/employee/pettycash': 'Petty Cash',
   '/employee/announcements': 'Notifications',
 };

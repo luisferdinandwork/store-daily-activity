@@ -1,6 +1,7 @@
 {
   "crons": [
     { "path": "/api/cron/revert-transfers", "schedule": "5 0 * * *" },
-    { "path": "/api/cron/cleanup-task-images", "schedule": "30 0 * * *" }
+    { "path": "/api/cron/cleanup-task-images", "schedule": "30 0 * * *" },
+    { "path": "/api/cron/auto-checkout", "schedule": "45 0 * * *" }
   ]
 }

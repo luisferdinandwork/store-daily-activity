@@ -14,10 +14,14 @@ import {
   Clock,
   History,
   Infinity as InfinityIcon,
+  KeyRound,
   Loader2,
   MapPin,
+  Pencil,
+  Save,
   ShieldAlert,
   Sparkles,
+  UserCog,
   X,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -25,10 +29,12 @@ import { cn } from '@/lib/utils';
 
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -45,6 +51,8 @@ interface Props {
   isHO: boolean;
   onClose: () => void;
   onTransferComplete: (toStoreId: number) => Promise<void> | void;
+  /** Called after a name/role/status/password edit is saved successfully. */
+  onEditSaved: () => Promise<void> | void;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -74,8 +82,8 @@ function dateOnly(d: Date): string {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function EmployeeDetailSheet({ employee, stores, employeeTypes, employeeRoleId, isHO, onClose, onTransferComplete }: Props) {
-  const [tab, setTab] = useState<'transfer' | 'schedule' | 'history'>('transfer');
+export function EmployeeDetailSheet({ employee, stores, employeeTypes, employeeRoleId, isHO, onClose, onTransferComplete, onEditSaved }: Props) {
+  const [tab, setTab] = useState<'edit' | 'transfer' | 'schedule' | 'history'>('edit');
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [schedule, setSchedule] = useState<ScheduleDay[]>([]);
   const [auxLoading, setAuxLoading] = useState(true);
@@ -155,7 +163,11 @@ export function EmployeeDetailSheet({ employee, stores, employeeTypes, employeeR
           {/* ── Tabs ── */}
           <Tabs value={tab} onValueChange={(v) => setTab(v as any)} className="flex flex-1 min-h-0 flex-col">
             <div className="shrink-0 border-b border-slate-200 bg-white px-6 pt-3">
-              <TabsList className="grid w-full grid-cols-3 bg-slate-100">
+              <TabsList className="grid w-full grid-cols-4 bg-slate-100">
+                <TabsTrigger value="edit" className="gap-1.5 data-[state=active]:bg-white data-[state=active]:text-violet-700 data-[state=active]:shadow-sm">
+                  <Pencil className="h-3.5 w-3.5" />
+                  Edit
+                </TabsTrigger>
                 <TabsTrigger value="transfer" className="gap-1.5 data-[state=active]:bg-white data-[state=active]:text-violet-700 data-[state=active]:shadow-sm">
                   <ArrowLeftRight className="h-3.5 w-3.5" />
                   Transfer
@@ -172,6 +184,9 @@ export function EmployeeDetailSheet({ employee, stores, employeeTypes, employeeR
             </div>
 
             <div className="flex-1 min-h-0">
+              <TabsContent value="edit" className="m-0 h-full data-[state=inactive]:hidden">
+                <EditForm employee={employee} employeeTypes={employeeTypes} onSaved={onEditSaved} />
+              </TabsContent>
               <TabsContent value="transfer" className="m-0 h-full data-[state=inactive]:hidden">
                 <TransferWizard
                   employee={employee}
@@ -193,6 +208,137 @@ export function EmployeeDetailSheet({ employee, stores, employeeTypes, employeeR
         </div>
       </SheetContent>
     </Sheet>
+  );
+}
+
+// ─── Edit form (name / role / active / password) ───────────────────────────────
+// Store is deliberately not editable here — that's the Transfer tab's job, so
+// schedule/attendance stay consistent when an employee moves stores.
+
+function EditForm({
+  employee,
+  employeeTypes,
+  onSaved,
+}: {
+  employee: ManageEmployee;
+  employeeTypes: Array<{ id: number; code: string; label: string }>;
+  onSaved: () => Promise<void> | void;
+}) {
+  const [name, setName] = useState(employee.name);
+  const [employeeTypeId, setEmployeeTypeId] = useState<string>(
+    employee.employeeTypeId ? String(employee.employeeTypeId) : '',
+  );
+  const [isActive, setIsActive] = useState(employee.isActive);
+  const [newPassword, setNewPassword] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setName(employee.name);
+    setEmployeeTypeId(employee.employeeTypeId ? String(employee.employeeTypeId) : '');
+    setIsActive(employee.isActive);
+    setNewPassword('');
+  }, [employee]);
+
+  const dirty =
+    name.trim() !== employee.name ||
+    employeeTypeId !== (employee.employeeTypeId ? String(employee.employeeTypeId) : '') ||
+    isActive !== employee.isActive ||
+    newPassword.length > 0;
+
+  async function handleSave() {
+    if (!name.trim()) {
+      toast.error('Nama tidak boleh kosong.');
+      return;
+    }
+    if (newPassword && newPassword.length < 6) {
+      toast.error('Password baru minimal 6 karakter.');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/ops/users/${employee.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: name.trim(),
+          employeeTypeId: employeeTypeId ? Number(employeeTypeId) : undefined,
+          isActive,
+          ...(newPassword ? { password: newPassword } : {}),
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? 'Gagal menyimpan perubahan.');
+
+      toast.success(`${name.trim()} berhasil diperbarui.`);
+      setNewPassword('');
+      await onSaved();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Gagal menyimpan perubahan.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <ScrollArea className="h-full">
+      <div className="space-y-5 px-6 py-5">
+        <div>
+          <Label icon={UserCog}>Nama</Label>
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className="h-11 focus-visible:ring-violet-400"
+          />
+        </div>
+
+        <div>
+          <Label icon={Sparkles}>Role (tipe karyawan)</Label>
+          <Select value={employeeTypeId} onValueChange={setEmployeeTypeId}>
+            <SelectTrigger className="h-11 focus:ring-violet-400">
+              <SelectValue placeholder="Pilih role…" />
+            </SelectTrigger>
+            <SelectContent>
+              {employeeTypes.map((t) => (
+                <SelectItem key={t.id} value={String(t.id)}>{t.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-3.5 py-3">
+          <div>
+            <p className="text-sm font-bold text-slate-800">Status aktif</p>
+            <p className="mt-0.5 text-[11px] text-slate-400">
+              {isActive ? 'Karyawan dapat login dan bekerja.' : 'Karyawan tidak dapat login.'}
+            </p>
+          </div>
+          <Switch checked={isActive} onCheckedChange={setIsActive} />
+        </div>
+
+        <div>
+          <Label icon={KeyRound}>Reset password (opsional)</Label>
+          <Input
+            type="password"
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+            placeholder="Kosongkan jika tidak diubah"
+            className="h-11 focus-visible:ring-violet-400"
+          />
+        </div>
+
+        <div className="border-t border-slate-100 pt-4">
+          <Button
+            onClick={handleSave}
+            disabled={!dirty || saving}
+            className="w-full gap-1.5 bg-violet-600 hover:bg-violet-700 text-white"
+          >
+            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+            Simpan perubahan
+          </Button>
+        </div>
+      </div>
+    </ScrollArea>
   );
 }
 

@@ -304,6 +304,7 @@ export function ManageWorkspace({ data, onReload }: Props) {
           isHO={data.actor.isHO}
           onClose={() => setSelectedEmployee(null)}
           onTransferComplete={handleTransferComplete}
+          onEditSaved={onReload}
         />
       )}
     </div>

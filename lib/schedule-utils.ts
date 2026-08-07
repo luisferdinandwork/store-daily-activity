@@ -37,7 +37,7 @@ import {
   type MonthlySchedule,
   type MonthlyScheduleEntry,
 } from "@/lib/db/schema";
-import { and, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNotNull, isNull, lte, sql } from "drizzle-orm";
 
 export type { BreakType } from "@/lib/db/schema";
 import type { BreakType } from "@/lib/db/schema";
@@ -1450,6 +1450,109 @@ export async function employeeCheckOut(
   } catch (err) {
     return { success: false, error: `Check-out failed: ${err}` };
   }
+}
+
+// ─── Auto checkout (overdue attendance) ─────────────────────────────────────
+//
+// Employees who forget to check out get closed out automatically once their
+// shift has been over for AUTO_CHECKOUT_GRACE_MINUTES. Runs lazily (called
+// from the employee + ops attendance GET routes, scoped to what's being
+// viewed) and from a daily cron (app/api/cron/auto-checkout) as a system-wide
+// safety net — same pattern as autoRevertExpiredTransfers above.
+
+const AUTO_CHECKOUT_GRACE_MINUTES = 30;
+/** Bounds the scan so it never has to walk the whole attendance table. */
+const AUTO_CHECKOUT_LOOKBACK_DAYS = 3;
+
+/** Combines a day (from `schedules`/`attendance`.date) with a "HH:MM:SS"
+ *  wall-clock time, same local-time convention employeeCheckIn already uses
+ *  for its "late" cutoff (`shiftStart.setHours(...)`). */
+function dateWithTime(day: Date, time: string): Date {
+  const [h, m, s] = time.split(":").map(Number);
+  const d = new Date(day);
+  d.setHours(h || 0, m || 0, s || 0, 0);
+  return d;
+}
+
+export interface AutoCheckoutFilter {
+  userId?: string;
+  storeIds?: number[];
+}
+
+/**
+ * Finds still-open attendance rows (checked in, never checked out) whose
+ * shift ended more than AUTO_CHECKOUT_GRACE_MINUTES ago and closes them out:
+ * checkOutTime is set to the shift's scheduled end time (not "now" — that's
+ * when the system happened to notice, not when the shift actually ended),
+ * any dangling open break is ended at the same moment, and a note is
+ * appended so it's clear on the ops side this wasn't a manual check-out.
+ */
+export async function autoCheckoutOverdueAttendance(
+  filter: AutoCheckoutFilter = {},
+): Promise<{ checkedOut: number }> {
+  const now = new Date();
+  const lookbackStart = startOfDay(now);
+  lookbackStart.setDate(lookbackStart.getDate() - AUTO_CHECKOUT_LOOKBACK_DAYS);
+
+  const conditions = [
+    isNotNull(attendance.checkInTime),
+    isNull(attendance.checkOutTime),
+    gte(attendance.date, lookbackStart),
+  ];
+  if (filter.userId) conditions.push(eq(attendance.userId, filter.userId));
+  if (filter.storeIds?.length) conditions.push(inArray(attendance.storeId, filter.storeIds));
+
+  const rows = await db
+    .select({
+      id: attendance.id,
+      date: attendance.date,
+      onBreak: attendance.onBreak,
+      notes: attendance.notes,
+      endTime: shifts.endTime,
+    })
+    .from(attendance)
+    .innerJoin(shifts, eq(attendance.shiftId, shifts.id))
+    .where(and(...conditions));
+
+  let checkedOut = 0;
+
+  for (const row of rows) {
+    if (!row.endTime) continue;
+
+    const shiftEnd = dateWithTime(row.date, row.endTime);
+    const deadline = new Date(shiftEnd.getTime() + AUTO_CHECKOUT_GRACE_MINUTES * 60_000);
+    if (now < deadline) continue;
+
+    if (row.onBreak) {
+      const [openBreak] = await db
+        .select({ id: breakSessions.id })
+        .from(breakSessions)
+        .where(and(eq(breakSessions.attendanceId, row.id), isNull(breakSessions.returnTime)))
+        .limit(1);
+
+      if (openBreak) {
+        await db
+          .update(breakSessions)
+          .set({ returnTime: shiftEnd, updatedAt: new Date() })
+          .where(eq(breakSessions.id, openBreak.id));
+      }
+    }
+
+    const note = "Auto checked-out by system (no manual check-out after shift end).";
+    await db
+      .update(attendance)
+      .set({
+        checkOutTime: shiftEnd,
+        onBreak: false,
+        notes: row.notes ? `${row.notes} ${note}` : note,
+        updatedAt: new Date(),
+      })
+      .where(eq(attendance.id, row.id));
+
+    checkedOut++;
+  }
+
+  return { checkedOut };
 }
 
 export async function startBreak(

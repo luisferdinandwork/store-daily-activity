@@ -18,6 +18,7 @@ import {
   startBreak,
   endBreak,
   todayInStoreTimezone,
+  autoCheckoutOverdueAttendance,
 } from '@/lib/schedule-utils';
 
 import type { Shift, BreakType } from '@/lib/schedule-utils';
@@ -209,6 +210,10 @@ export async function GET(_req: NextRequest) {
     if (!homeStoreId || Number.isNaN(homeStoreId)) {
       return NextResponse.json({ success: true, shifts: [] });
     }
+
+    // Close out any of this employee's own shifts left open past their end
+    // time before reading today's rows, so the response is always current.
+    await autoCheckoutOverdueAttendance({ userId });
 
     const today = todayInStoreTimezone();
     const dayStart = startOfDay(today);

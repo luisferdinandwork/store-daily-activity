@@ -23,6 +23,7 @@
 //   • Future task rows are deleted; they re-materialise on next check-in.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import bcrypt from 'bcryptjs';
 import { db } from '@/lib/db';
 import {
   areas,
@@ -869,4 +870,173 @@ export async function getUserScheduleSnapshot(
       isLeave: r.isLeave,
     })),
   };
+}
+
+// ─── Create / edit employee (OPS-scoped) ───────────────────────────────────────
+//
+// Same authorization model as transfers: HO/IT can create or edit any
+// employee; Area OPS is limited to employees whose current store sits in
+// their own area, and can only place new employees into a store in their
+// own area. Both routes force the target role to 'employee' and the
+// employeeType to a non-OPS type — OPS accounts are managed by IT only
+// (app/api/it/users), never through this employee-directory flow. Store
+// changes are deliberately NOT supported here — that still goes through the
+// transfer flow above, which keeps schedules/attendance consistent.
+
+const SALT_ROUNDS = 10;
+
+async function resolveEmployeeRoleId(): Promise<number | null> {
+  const [row] = await db.select({ id: userRoles.id }).from(userRoles).where(eq(userRoles.code, 'employee')).limit(1);
+  return row?.id ?? null;
+}
+
+async function assertEmployeeTypeAllowed(employeeTypeId: number): Promise<TransferResult<void>> {
+  const [empType] = await db
+    .select({ id: employeeTypes.id, code: employeeTypes.code, isActive: employeeTypes.isActive })
+    .from(employeeTypes)
+    .where(eq(employeeTypes.id, employeeTypeId))
+    .limit(1);
+
+  if (!empType || !empType.isActive) return { success: false, error: 'Invalid or inactive employee type.' };
+  if (empType.code === 'ops_ho' || empType.code === 'ops_area') {
+    return { success: false, error: 'OPS employee types cannot be assigned here.' };
+  }
+  return { success: true, data: undefined };
+}
+
+export interface CreateEmployeeInput {
+  nik: string;
+  name: string;
+  password: string;
+  employeeTypeId: number;
+  homeStoreId: number;
+}
+
+export async function createEmployee(
+  actorId: string,
+  input: CreateEmployeeInput,
+): Promise<TransferResult<{ id: string; nik: string; name: string }>> {
+  const access = await getActorAccess(actorId);
+  if (!access.allowed) return { success: false, error: access.error };
+
+  const nik = input.nik.trim();
+  const name = input.name.trim();
+  if (!nik) return { success: false, error: 'NIK is required.' };
+  if (!name) return { success: false, error: 'Name is required.' };
+  if (!input.password || input.password.length < 6) {
+    return { success: false, error: 'Password must be at least 6 characters.' };
+  }
+
+  const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.nik, nik)).limit(1);
+  if (existing) return { success: false, error: 'A user with this NIK already exists.' };
+
+  const typeCheck = await assertEmployeeTypeAllowed(input.employeeTypeId);
+  if (!typeCheck.success) return typeCheck;
+
+  const [store] = await db
+    .select({ id: stores.id, areaId: stores.areaId })
+    .from(stores)
+    .where(eq(stores.id, input.homeStoreId))
+    .limit(1);
+  if (!store) return { success: false, error: 'Store not found.' };
+
+  if (!access.actor.isHO && store.areaId !== access.actor.areaId) {
+    return { success: false, error: 'Store is outside your area.' };
+  }
+
+  const employeeRoleId = await resolveEmployeeRoleId();
+  if (!employeeRoleId) return { success: false, error: 'Employee role not found in DB.' };
+
+  const hashed = await bcrypt.hash(input.password, SALT_ROUNDS);
+
+  const [created] = await db
+    .insert(users)
+    .values({
+      nik,
+      name,
+      password: hashed,
+      roleId: employeeRoleId,
+      employeeTypeId: input.employeeTypeId,
+      homeStoreId: store.id,
+      areaId: store.areaId,
+      isActive: true,
+    })
+    .returning({ id: users.id, nik: users.nik, name: users.name });
+
+  await db.insert(userStoreAssignments).values({
+    userId: created.id,
+    storeId: store.id,
+    areaId: store.areaId,
+    roleId: employeeRoleId,
+    employeeTypeId: input.employeeTypeId,
+    isActive: true,
+    notes: 'Created through OPS Employees directory.',
+  });
+
+  return { success: true, data: created };
+}
+
+export interface UpdateEmployeeInput {
+  name?: string;
+  employeeTypeId?: number;
+  isActive?: boolean;
+  password?: string;
+}
+
+export async function updateEmployeeBasics(
+  actorId: string,
+  targetUserId: string,
+  input: UpdateEmployeeInput,
+): Promise<TransferResult<{ id: string; nik: string; name: string; isActive: boolean }>> {
+  const access = await getActorAccess(actorId);
+  if (!access.allowed) return { success: false, error: access.error };
+
+  const [target] = await db
+    .select({ id: users.id, roleCode: userRoles.code, homeStoreAreaId: stores.areaId, userAreaId: users.areaId })
+    .from(users)
+    .innerJoin(userRoles, eq(userRoles.id, users.roleId))
+    .leftJoin(stores, eq(stores.id, users.homeStoreId))
+    .where(eq(users.id, targetUserId))
+    .limit(1);
+
+  if (!target) return { success: false, error: 'User not found.' };
+  if (target.roleCode !== 'employee') return { success: false, error: 'OPS users cannot be managed through this flow.' };
+
+  if (!access.actor.isHO) {
+    const areaId = target.homeStoreAreaId ?? target.userAreaId;
+    if (areaId && areaId !== access.actor.areaId) {
+      return { success: false, error: 'Employee is outside your area.' };
+    }
+  }
+
+  const updates: Partial<typeof users.$inferInsert> = { updatedAt: new Date() };
+
+  if (input.name !== undefined) {
+    const name = input.name.trim();
+    if (!name) return { success: false, error: 'Name cannot be empty.' };
+    updates.name = name;
+  }
+
+  if (input.employeeTypeId !== undefined) {
+    const typeCheck = await assertEmployeeTypeAllowed(input.employeeTypeId);
+    if (!typeCheck.success) return typeCheck;
+    updates.employeeTypeId = input.employeeTypeId;
+  }
+
+  if (input.isActive !== undefined) {
+    updates.isActive = input.isActive;
+  }
+
+  if (input.password !== undefined) {
+    if (input.password.length < 6) return { success: false, error: 'Password must be at least 6 characters.' };
+    updates.password = await bcrypt.hash(input.password, SALT_ROUNDS);
+  }
+
+  const [updated] = await db
+    .update(users)
+    .set(updates)
+    .where(eq(users.id, targetUserId))
+    .returning({ id: users.id, nik: users.nik, name: users.name, isActive: users.isActive });
+
+  return { success: true, data: updated };
 }
