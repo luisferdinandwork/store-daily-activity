@@ -8,6 +8,13 @@
       "when": 1785991843199,
       "tag": "0000_smiling_jackpot",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1786086605971,
+      "tag": "0001_silly_diamondback",
+      "breakpoints": true
     }
   ]
 }

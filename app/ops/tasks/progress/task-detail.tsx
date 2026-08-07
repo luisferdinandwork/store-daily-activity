@@ -2,6 +2,7 @@
 // app/ops/tasks/progress/task-detail.tsx
 
 import { useCallback, useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Banknote,
   Box,
@@ -220,7 +221,16 @@ function Lightbox({
     return () => window.removeEventListener('keydown', onKey);
   }, [go, onClose]);
 
-  return (
+  // Portal straight to <body> — this is opened from deep inside
+  // TaskDetailView's `overflow-hidden` scroll panel, and browsers clip
+  // `position: fixed` descendants to a clipped/scrolling ancestor's box
+  // despite the fixed containing block technically being the viewport. Left
+  // in place, the panel's own header (a sibling a few levels up) painted on
+  // top of the lightbox. Rendering outside that subtree avoids the clip
+  // entirely instead of trying to out-z-index it.
+  if (typeof document === 'undefined') return null;
+
+  return createPortal(
     <div
       className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm"
       onClick={onClose}
@@ -269,7 +279,8 @@ function Lightbox({
           {index + 1} / {urls.length}
         </div>
       )}
-    </div>
+    </div>,
+    document.body,
   );
 }
 

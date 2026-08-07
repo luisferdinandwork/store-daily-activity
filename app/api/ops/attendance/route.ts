@@ -2,18 +2,54 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession }          from 'next-auth';
 import { authOptions }               from '@/lib/auth';
-import { getAttendanceForDate, opsMarkAttendance, autoCheckoutOverdueAttendance } from '@/lib/schedule-utils';
+import { getAttendanceForDate, opsMarkAttendance, autoCheckoutOverdueAttendance, autoMarkAbsentPastSchedules } from '@/lib/schedule-utils';
 import { db }                        from '@/lib/db';
-import { breakSessions, shifts }     from '@/lib/db/schema';
+import { breakSessions, shifts, employeeTypes } from '@/lib/db/schema';
 import { eq }                        from 'drizzle-orm';
 
-// Cache shift id → code lookups in-process
-let shiftCodeCache: Map<number, string> | null = null;
-async function getShiftCodeMap(): Promise<Map<number, string>> {
-  if (shiftCodeCache) return shiftCodeCache;
-  const rows = await db.select({ id: shifts.id, code: shifts.code }).from(shifts);
-  shiftCodeCache = new Map(rows.map(r => [r.id, r.code]));
-  return shiftCodeCache;
+// Cache shift id → full shift info lookups in-process. Shifts are dynamic
+// (morning/evening/full_day today, more can be added later), so the page
+// needs real label/time/icon data rather than assuming a fixed set of codes
+// — this is what let PIC 1's full-day shift silently vanish from the list
+// before: the frontend only knew how to group "morning" and "evening".
+interface ShiftInfo {
+  code:      string;
+  label:     string;
+  startTime: string | null;
+  endTime:   string | null;
+  icon:      string | null;
+  accent:    string | null;
+  sortOrder: number;
+}
+let shiftInfoCache: Map<number, ShiftInfo> | null = null;
+async function getShiftInfoMap(): Promise<Map<number, ShiftInfo>> {
+  if (shiftInfoCache) return shiftInfoCache;
+  const rows = await db
+    .select({
+      id:        shifts.id,
+      code:      shifts.code,
+      label:     shifts.label,
+      startTime: shifts.startTime,
+      endTime:   shifts.endTime,
+      icon:      shifts.icon,
+      accent:    shifts.accent,
+      sortOrder: shifts.sortOrder,
+    })
+    .from(shifts);
+  shiftInfoCache = new Map(rows.map(r => [r.id, {
+    code: r.code, label: r.label, startTime: r.startTime, endTime: r.endTime,
+    icon: r.icon, accent: r.accent, sortOrder: r.sortOrder,
+  }]));
+  return shiftInfoCache;
+}
+
+// Cache employeeType id → { code, label } lookups in-process
+let empTypeCache: Map<number, { code: string; label: string }> | null = null;
+async function getEmpTypeMap(): Promise<Map<number, { code: string; label: string }>> {
+  if (empTypeCache) return empTypeCache;
+  const rows = await db.select({ id: employeeTypes.id, code: employeeTypes.code, label: employeeTypes.label }).from(employeeTypes);
+  empTypeCache = new Map(rows.map(r => [r.id, { code: r.code, label: r.label }]));
+  return empTypeCache;
 }
 
 // GET /api/ops/attendance?storeId=...&date=ISO
@@ -44,12 +80,15 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'invalid date' }, { status: 400 });
     }
 
-    // Close out anyone in this store left checked-in past their shift end
-    // before reading the day's rows — mirrors the employee-side lazy fixer.
+    // Close out anyone in this store left checked-in past their shift end,
+    // and mark absent anyone from a past day who never got an attendance
+    // record at all — both mirror the employee-side lazy fixers.
     await autoCheckoutOverdueAttendance({ storeIds: [storeId] });
+    await autoMarkAbsentPastSchedules({ storeIds: [storeId] });
 
-    const data       = await getAttendanceForDate(storeId, date);
-    const shiftCodes = await getShiftCodeMap();
+    const data      = await getAttendanceForDate(storeId, date);
+    const shiftInfo = await getShiftInfoMap();
+    const empTypes  = await getEmpTypeMap();
 
     const serialized = await Promise.all(
       data.map(async ({ schedule, user, attendance }) => {
@@ -75,22 +114,35 @@ export async function GET(req: NextRequest) {
           }));
         }
 
+        const schedShift = shiftInfo.get(schedule.shiftId) ?? null;
+
         return {
           schedule: {
-            id:      schedule.id,
-            shiftId: schedule.shiftId,
-            shift:   shiftCodes.get(schedule.shiftId) ?? null,    // legacy field for the page
-            date:    schedule.date.toISOString(),
+            id:        schedule.id,
+            shiftId:   schedule.shiftId,
+            shift:     schedShift?.code  ?? null,    // legacy field for the page
+            shiftLabel:     schedShift?.label     ?? null,
+            shiftStartTime: schedShift?.startTime ?? null,
+            shiftEndTime:   schedShift?.endTime   ?? null,
+            shiftIcon:      schedShift?.icon      ?? null,
+            shiftAccent:    schedShift?.accent    ?? null,
+            shiftSortOrder: schedShift?.sortOrder ?? 0,
+            date:      schedule.date.toISOString(),
           },
           user: user
-            ? { id: user.id, name: user.name, employeeTypeId: user.employeeTypeId }
+            ? {
+                id:            user.id,
+                name:          user.name,
+                employeeType:      user.employeeTypeId ? (empTypes.get(user.employeeTypeId)?.code  ?? null) : null,
+                employeeTypeLabel: user.employeeTypeId ? (empTypes.get(user.employeeTypeId)?.label ?? null) : null,
+              }
             : null,
           attendance: attendance
             ? {
                 id:           attendance.id,
                 status:       attendance.status,
                 shiftId:      attendance.shiftId,
-                shift:        shiftCodes.get(attendance.shiftId) ?? null,
+                shift:        shiftInfo.get(attendance.shiftId)?.code ?? null,
                 checkInTime:  attendance.checkInTime?.toISOString()  ?? null,
                 checkOutTime: attendance.checkOutTime?.toISOString() ?? null,
                 onBreak:      attendance.onBreak,

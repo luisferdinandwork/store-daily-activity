@@ -37,7 +37,8 @@ import {
   type MonthlySchedule,
   type MonthlyScheduleEntry,
 } from "@/lib/db/schema";
-import { and, eq, gte, inArray, isNotNull, isNull, lte, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNotNull, isNull, lt, lte, sql } from "drizzle-orm";
+import { createNotification, deleteNotificationsByRelated } from "@/lib/db/utils/notifications";
 
 export type { BreakType } from "@/lib/db/schema";
 import type { BreakType } from "@/lib/db/schema";
@@ -1555,6 +1556,88 @@ export async function autoCheckoutOverdueAttendance(
   return { checkedOut };
 }
 
+// ─── Auto-mark-absent (whole-day no-shows) ──────────────────────────────────
+//
+// If a schedule's day has fully passed with no attendance record at all —
+// the employee never checked in and nobody marked them manually — the
+// system marks them absent and notifies that employee directly (not OPS),
+// since they're the one who needs to know they missed a check-in. Runs
+// lazily (ops attendance GET routes, scoped to what's being viewed) and
+// from a daily cron (app/api/cron/auto-absent) as a system-wide safety net
+// — same pattern as autoCheckoutOverdueAttendance above. The notification
+// created here is cleared automatically once an ops user records the
+// employee's real attendance status (see opsMarkAttendance).
+
+const AUTO_ABSENT_LOOKBACK_DAYS = 7;
+
+export interface AutoAbsentFilter {
+  storeIds?: number[];
+}
+
+export async function autoMarkAbsentPastSchedules(
+  filter: AutoAbsentFilter = {},
+): Promise<{ marked: number }> {
+  const todayStart = startOfDay(todayInStoreTimezone());
+  const lookbackStart = new Date(todayStart);
+  lookbackStart.setDate(lookbackStart.getDate() - AUTO_ABSENT_LOOKBACK_DAYS);
+
+  const conditions = [
+    eq(schedules.isHoliday, false),
+    gte(schedules.date, lookbackStart),
+    lt(schedules.date, todayStart),
+    isNull(attendance.id),
+  ];
+  if (filter.storeIds?.length) conditions.push(inArray(schedules.storeId, filter.storeIds));
+
+  const rows = await db
+    .select({
+      scheduleId: schedules.id,
+      userId:     schedules.userId,
+      storeId:    schedules.storeId,
+      shiftId:    schedules.shiftId,
+      date:       schedules.date,
+    })
+    .from(schedules)
+    .leftJoin(attendance, eq(attendance.scheduleId, schedules.id))
+    .where(and(...conditions));
+
+  let marked = 0;
+
+  for (const row of rows) {
+    try {
+      await db.insert(attendance).values({
+        scheduleId: row.scheduleId,
+        userId:     row.userId,
+        storeId:    row.storeId,
+        date:       row.date,
+        shiftId:    row.shiftId,
+        status:     "absent",
+        onBreak:    false,
+        notes:      "Auto-marked absent — no attendance recorded for this shift.",
+      });
+    } catch {
+      // Unique constraint on scheduleId — another run already handled this
+      // row (lazy view + cron racing). Safe to skip.
+      continue;
+    }
+
+    marked++;
+
+    const dateLabel = row.date.toLocaleDateString("en-ID", { day: "numeric", month: "short" });
+    await createNotification({
+      userId: row.userId,
+      type:   "attendance_auto_absent",
+      title:  "Marked absent — you didn't check in",
+      body:   `No attendance was recorded for your shift on ${dateLabel}, so you were marked absent. Contact your OPS/PIC if this is wrong.`,
+      link:   "/employee/attendance",
+      relatedType: "schedule",
+      relatedId:   row.scheduleId,
+    });
+  }
+
+  return { marked };
+}
+
 export async function startBreak(
   userId: string,
   storeId: number,
@@ -1830,6 +1913,10 @@ export async function opsMarkAttendance(
 
       attendanceId = att.id;
     }
+
+    // The employee's real status is now on record — clear any "auto-marked
+    // absent" notification this schedule may have generated.
+    await deleteNotificationsByRelated("schedule", scheduleId);
 
     return { success: true, attendanceId };
   } catch (err) {

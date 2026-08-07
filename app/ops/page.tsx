@@ -95,7 +95,7 @@ const TONE = {
   rose: { ring: '#e11d48', chip: 'bg-rose-50', text: 'text-rose-600' },
   sky: { ring: '#0ea5e9', chip: 'bg-sky-50', text: 'text-sky-600' },
   indigo: { ring: '#4f46e5', chip: 'bg-indigo-50', text: 'text-indigo-600' },
-  slate: { ring: '#94a3b8', chip: 'bg-slate-100', text: 'text-slate-500' },
+  slate: { ring: '#cbd5e1', chip: 'bg-slate-50', text: 'text-slate-400' },
 } as const;
 
 type Tone = keyof typeof TONE;
@@ -528,7 +528,7 @@ export default function OpsDashboardPage() {
                   segments={[
                     { value: att?.present ?? 0, tone: 'emerald' },
                     { value: att?.late ?? 0, tone: 'amber' },
-                    { value: att?.absent ?? 0, tone: 'rose' },
+                    { value: att?.unset ?? 0, tone: 'slate' },
                     { value: att?.excused ?? 0, tone: 'sky' },
                   ]}
                 />
@@ -537,7 +537,7 @@ export default function OpsDashboardPage() {
                     items={[
                       { label: 'Present', value: att?.present ?? 0, tone: 'emerald' },
                       { label: 'Late', value: att?.late ?? 0, tone: 'amber' },
-                      { label: 'Absent', value: att?.absent ?? 0, tone: 'rose' },
+                      { label: 'Not Yet Attended', value: att?.unset ?? 0, tone: 'slate' },
                       { label: 'Leave', value: att?.excused ?? 0, tone: 'sky' },
                     ]}
                   />

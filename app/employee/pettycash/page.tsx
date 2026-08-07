@@ -10,6 +10,7 @@ import {
   Camera,
   CheckCircle2,
   Clock3,
+  Info,
   Loader2,
   ReceiptText,
   ShieldCheck,
@@ -59,6 +60,10 @@ const IDR = new Intl.NumberFormat('id-ID', {
 
 const idr = (v: string | number) => IDR.format(Number(v));
 
+// Balance health uses its own emerald/amber/rose "fuel gauge" scale — kept
+// separate from the sky/indigo/emerald/rose status-badge language below so
+// the two systems never overload the same color with two different meanings
+// (e.g. amber never means both "low balance" AND "waiting on someone else").
 function balanceColor(balance: number) {
   if (balance <= 0) return 'text-rose-500';
   if (balance < 250_000) return 'text-rose-400';
@@ -71,6 +76,37 @@ function balanceBg(balance: number) {
   if (balance < 250_000) return 'from-rose-50 to-orange-50';
   if (balance < 500_000) return 'from-amber-50 to-yellow-50';
   return 'from-emerald-50 to-teal-50';
+}
+
+function balanceHealth(balance: number, isPic: boolean) {
+  if (balance <= 0) {
+    return {
+      label: 'Empty',
+      detail: isPic
+        ? 'Request a refill before sending new requests.'
+        : 'Ask your PIC to request a refill.',
+      textClass: 'text-rose-600',
+    };
+  }
+  if (balance < 250_000) {
+    return {
+      label: 'Critical',
+      detail: isPic
+        ? 'Running very low — request a refill now.'
+        : 'Running very low — ask your PIC to request a refill.',
+      textClass: 'text-rose-600',
+    };
+  }
+  if (balance < 500_000) {
+    return {
+      label: 'Getting low',
+      detail: isPic
+        ? 'Consider requesting a refill soon.'
+        : 'Your PIC may want to request a refill soon.',
+      textClass: 'text-amber-600',
+    };
+  }
+  return { label: 'Healthy', detail: null, textClass: 'text-emerald-600' };
 }
 
 function fmtDate(iso: string) {
@@ -96,12 +132,17 @@ function needsReceipt(tx: TxRow) {
   return tx.status === 'ops_approved' && !tx.imageUrl;
 }
 
+// One consistent status language across the whole page:
+//   sky    = waiting on someone else to act
+//   indigo = action needed from you
+//   emerald = done / approved
+//   rose   = rejected / problem
 function statusMeta(tx: TxRow) {
   if (tx.status === 'pending_ops') {
     return {
       label: 'Waiting OPS Approval',
       icon: Clock3,
-      className: 'bg-amber-50 text-amber-700 ring-amber-200',
+      className: 'bg-sky-50 text-sky-700 ring-sky-200',
       note: 'Your request has been sent to OPS for approval.',
     };
   }
@@ -178,22 +219,30 @@ function BalanceCard({
   totalApprovedSpend,
   pendingAmount,
   month,
+  isPic,
 }: {
   balance: number;
   storeName: string;
   totalApprovedSpend: number;
   pendingAmount: number;
   month: string;
+  isPic: boolean;
 }) {
   const pct = Math.min(100, Math.round((balance / 1_000_000) * 100));
+  const health = balanceHealth(balance, isPic);
 
   return (
     <div className={cn('mx-4 rounded-2xl bg-gradient-to-br p-5 shadow-sm', balanceBg(balance))}>
-      <div className="mb-1 flex items-center gap-2">
-        <Wallet className="h-4 w-4 text-slate-500" />
-        <p className="text-xs font-semibold text-slate-500">
-          {storeName} · {monthLabel(month)}
-        </p>
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Wallet className="h-4 w-4 text-slate-500" />
+          <p className="text-xs font-semibold text-slate-500">
+            {storeName} · {monthLabel(month)}
+          </p>
+        </div>
+        <span className={cn('text-[10px] font-bold uppercase tracking-wide', health.textClass)}>
+          {health.label}
+        </span>
       </div>
 
       <p className={cn('text-4xl font-bold tracking-tight', balanceColor(balance))}>
@@ -219,9 +268,15 @@ function BalanceCard({
         <span>Approved spend {idr(totalApprovedSpend)}</span>
       </div>
 
+      {health.detail && (
+        <p className={cn('mt-2 text-[11px] font-semibold', health.textClass)}>
+          {health.detail}
+        </p>
+      )}
+
       {pendingAmount > 0 && (
         <div className="mt-3 rounded-xl bg-white/60 px-3 py-2">
-          <p className="text-[11px] font-semibold text-amber-700">
+          <p className="text-[11px] font-semibold text-sky-700">
             Pending OPS request: {idr(pendingAmount)}
           </p>
           <p className="mt-0.5 text-[10px] text-slate-500">
@@ -341,8 +396,8 @@ function RefillRequestCard({
     return (
       <div className="mx-4 rounded-2xl border border-slate-200 bg-white p-4">
         <div className="flex items-center gap-2">
-          <Banknote className="h-4 w-4 text-amber-600" />
-          <p className="text-xs font-bold text-amber-700">Refill request pending Finance approval</p>
+          <Clock3 className="h-4 w-4 text-sky-600" />
+          <p className="text-xs font-bold text-sky-700">Refill request pending Finance approval</p>
         </div>
       </div>
     );
@@ -414,9 +469,10 @@ function RefillRequestCard({
           <Banknote className="h-4 w-4 text-indigo-600" />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-xs font-bold text-slate-800">Running low?</p>
+          <p className="text-xs font-bold text-slate-800">Running low on the whole balance?</p>
           <p className="mt-0.5 text-[11px] text-slate-500">
-            Request a refill back to Rp 1.000.000. Finance will review and approve it.
+            A refill tops the store's whole petty cash back up to Rp 1.000.000.
+            It's separate from a spending request — Finance reviews and approves it.
           </p>
           {request?.status === 'rejected' && (
             <p className="mt-1.5 text-[11px] font-medium text-rose-600">
@@ -425,11 +481,13 @@ function RefillRequestCard({
           )}
         </div>
       </div>
+      {/* Outline style — a secondary action, visually distinct from the
+          filled primary "Send Request to OPS" button below the page. */}
       <button
         type="button"
         onClick={onRequest}
         disabled={requesting}
-        className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 text-xs font-bold text-white transition active:scale-[0.99] disabled:opacity-60"
+        className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-indigo-200 bg-white text-xs font-bold text-indigo-700 transition active:scale-[0.99] disabled:opacity-60"
       >
         {requesting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Banknote className="h-3.5 w-3.5" />}
         Request Refill
@@ -623,6 +681,7 @@ export default function EmployeePettyCashPage() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const [showInfo, setShowInfo] = useState(true);
 
   const [refillRequest, setRefillRequest] = useState<RefillRequestRow | null>(null);
   const [requestingRefill, setRequestingRefill] = useState(false);
@@ -896,6 +955,33 @@ export default function EmployeePettyCashPage() {
         </p>
       </div>
 
+      {showInfo && (
+        <div className="mx-4 mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3.5">
+          <div className="flex items-start gap-2.5">
+            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <p className="text-[11px] leading-snug text-slate-600">
+                <span className="font-bold text-slate-800">Request</span> — spend
+                money on something specific. Goes to OPS for approval.
+              </p>
+              <p className="text-[11px] leading-snug text-slate-600">
+                <span className="font-bold text-slate-800">Refill</span> — top the
+                whole balance back up to Rp 1.000.000 when it's running low. Goes
+                to Finance for approval.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowInfo(false)}
+              className="shrink-0 rounded-lg p-1 text-slate-400 transition hover:bg-slate-200/60"
+              aria-label="Dismiss"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="space-y-5 py-5">
         {loading ? (
           <div className="mx-4 h-36 animate-pulse rounded-2xl bg-slate-100" />
@@ -911,6 +997,7 @@ export default function EmployeePettyCashPage() {
             month={data?.month ?? ''}
             totalApprovedSpend={summary.approvedSpend}
             pendingAmount={summary.pendingAmount}
+            isPic={isPic}
           />
         )}
 
@@ -929,10 +1016,10 @@ export default function EmployeePettyCashPage() {
         {!loading && !loadError && (
           <section className="grid grid-cols-3 gap-2 px-4">
             <div className="rounded-2xl border border-slate-200 bg-white p-3">
-              <p className="text-[10px] font-bold uppercase tracking-wide text-amber-600">
+              <p className="text-[10px] font-bold uppercase tracking-wide text-sky-600">
                 OPS
               </p>
-              <p className="mt-1 text-xl font-black text-amber-700">
+              <p className="mt-1 text-xl font-black text-sky-700">
                 {summary.pendingOps}
               </p>
             </div>
@@ -1018,11 +1105,11 @@ export default function EmployeePettyCashPage() {
             </h2>
 
             <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="rounded-2xl border border-indigo-100 bg-indigo-50 px-4 py-3">
-                <p className="text-xs font-bold text-indigo-700">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <p className="text-xs font-bold text-slate-700">
                   Receipt photo is not required yet.
                 </p>
-                <p className="mt-1 text-[11px] text-indigo-600">
+                <p className="mt-1 text-[11px] text-slate-500">
                   Send the request first. After OPS approves it, you&apos;ll see it under
                   &quot;Needs Your Action&quot; to upload the receipt.
                 </p>

@@ -1,6 +1,6 @@
 // lib/db/utils/notifications.ts
 import { db } from '@/lib/db';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, lt } from 'drizzle-orm';
 import { notifications, users, employeeTypes, type Notification } from '@/lib/db/schema';
 
 /**
@@ -22,6 +22,8 @@ export interface CreateNotificationInput {
   title: string;
   body?: string;
   link?: string;
+  relatedType?: string;
+  relatedId?: number;
 }
 
 export async function createNotification(input: CreateNotificationInput): Promise<void> {
@@ -86,4 +88,31 @@ export async function markAllNotificationsRead(userId: string): Promise<void> {
     .update(notifications)
     .set({ isRead: true, readAt: new Date() })
     .where(and(eq(notifications.userId, userId), eq(notifications.isRead, false)));
+}
+
+/**
+ * Removes notifications tied to a specific entity (e.g. a schedule that was
+ * auto-marked absent) once that entity's underlying issue has been resolved
+ * — e.g. an ops user records the employee's real attendance status.
+ */
+export async function deleteNotificationsByRelated(relatedType: string, relatedId: number): Promise<void> {
+  await db
+    .delete(notifications)
+    .where(and(eq(notifications.relatedType, relatedType), eq(notifications.relatedId, relatedId)));
+}
+
+/**
+ * Housekeeping: notifications the user has already read stick around for a
+ * grace period, then get purged so the inbox doesn't grow forever.
+ */
+export async function deleteReadNotificationsOlderThan(days: number): Promise<{ deleted: number }> {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+
+  const deleted = await db
+    .delete(notifications)
+    .where(and(eq(notifications.isRead, true), lt(notifications.readAt, cutoff)))
+    .returning({ id: notifications.id });
+
+  return { deleted: deleted.length };
 }

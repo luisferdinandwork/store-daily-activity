@@ -106,6 +106,10 @@ export interface EmployeeContribution {
   isCurrentUser: boolean;
   /** Actual sales ÷ store target, capped at this employee's own target-share % — never overstates their "fair share". */
   contributionPct: number;
+  /** This employee's assigned target ÷ store target — the slice size of the store target they're on the hook for. 0 if not on the roster/no target set. */
+  targetSharePct: number;
+  /** True once their actual sales ÷ store target reaches or exceeds their own target share — i.e. they hit their personal goal. Always false when they have no target share assigned. */
+  reachedGoal: boolean;
 }
 
 /**
@@ -135,6 +139,8 @@ function buildEmployeeContributions(params: {
       name: member.name,
       isCurrentUser: member.userId === currentUserId,
       contributionPct: Math.min(actualPctOfTarget, targetSharePct),
+      targetSharePct,
+      reachedGoal: targetSharePct > 0 && actualPctOfTarget >= targetSharePct,
     };
   });
 }

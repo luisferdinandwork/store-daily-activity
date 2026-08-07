@@ -71,20 +71,25 @@ type Tab = 'checklist' | 'cash' | 'vm';
 
 // ─── Small atoms ──────────────────────────────────────────────────────────────
 
-function ScoreBanner({ score, max, grade, passThreshold }: { score: number; max: number; grade: string | null; passThreshold: number }) {
+// Compact score readout for the sticky control panel — lives next to the
+// tabs so the current score stays visible while switching between sections,
+// instead of the old full-size banner buried inside each tab's content.
+function ScorePill({ score, max, grade, passThreshold }: { score: number; max: number; grade: string | null; passThreshold: number }) {
   const pass = grade === 'A';
   return (
-    <div className={cn(
-      'flex items-center justify-between rounded-2xl border px-4 py-3',
-      pass ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50',
-    )}>
-      <div>
-        <p className="text-2xl font-black tabular-nums text-slate-900">{score}<span className="text-sm font-semibold text-slate-400"> / {max}</span></p>
-        <p className="text-[11px] text-slate-500">Pass at {passThreshold}+</p>
-      </div>
+    <div
+      title={`Pass at ${passThreshold}+`}
+      className={cn(
+        'flex shrink-0 items-center gap-1.5 rounded-full border pl-2.5 pr-1 py-1',
+        pass ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50',
+      )}
+    >
+      <span className="text-xs font-black tabular-nums text-slate-800">
+        {score}<span className="font-semibold text-slate-400">/{max}</span>
+      </span>
       <span className={cn(
-        'flex h-10 w-10 items-center justify-center rounded-full text-sm font-black',
-        pass ? 'bg-emerald-500 text-white' : 'bg-amber-400 text-white',
+        'flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-black text-white',
+        pass ? 'bg-emerald-500' : 'bg-amber-400',
       )}>
         {grade ?? '—'}
       </span>
@@ -409,26 +414,87 @@ export default function ImpactVisitDetailPage() {
 
   const cash = visit.cashMoneyData ?? emptyCashMoneyData();
 
+  const activeScore =
+    tab === 'checklist' ? { score: visit.checklistScore, max: visit.checklistMaxScore, grade: visit.checklistGrade, passThreshold: IMPACT_CHECKLIST_PASS_THRESHOLD } :
+    tab === 'vm'        ? { score: visit.vmChecklistScore, max: visit.vmChecklistMaxScore, grade: visit.vmChecklistGrade, passThreshold: VM_CHECKLIST_PASS_THRESHOLD } :
+    null;
+
   return (
     <div className="min-h-full bg-slate-50 pb-16">
-      {/* Header */}
-      <div className="sticky top-0 z-20 border-b border-slate-200 bg-white/90 px-4 py-3 backdrop-blur">
-        <div className="mx-auto flex max-w-4xl items-center gap-3">
-          <button onClick={() => router.push('/ops/impact-visits')} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200">
-            <ArrowLeft className="h-4 w-4" />
-          </button>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-bold text-slate-900">{visit.store.name}</p>
-            <p className="text-[11px] text-slate-400">
-              {visit.store.storeNo} {visit.areaName && `· ${visit.areaName}`} · {new Date(visit.visitDate).toLocaleDateString('id-ID')}
-            </p>
+      {/*
+        Everything ops needs while filling this out — identity/status, the
+        period fields, the section tabs, and the running score — lives in one
+        floating panel so it's always in view while scrolling a long
+        checklist. z-10 keeps it *below* OpsNavbar (z-20 in app/ops/layout),
+        which is what actually contains the notification bell's dropdown —
+        going any higher here would let this panel paint over that dropdown.
+      */}
+      <div className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 backdrop-blur">
+        <div className="mx-auto max-w-4xl px-4 py-2.5">
+          <div className="flex items-center gap-3">
+            <button onClick={() => router.push('/ops/impact-visits')} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200">
+              <ArrowLeft className="h-4 w-4" />
+            </button>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-bold text-slate-900">{visit.store.name}</p>
+              <p className="text-[11px] text-slate-400">
+                {visit.store.storeNo} {visit.areaName && `· ${visit.areaName}`} · {new Date(visit.visitDate).toLocaleDateString('id-ID')}
+              </p>
+            </div>
+            <span className={cn(
+              'shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold',
+              visit.status === 'submitted' ? 'bg-indigo-50 text-indigo-700' : 'bg-amber-50 text-amber-700',
+            )}>
+              {visit.status === 'submitted' ? 'Submitted' : 'Draft'}
+            </span>
           </div>
-          <span className={cn(
-            'shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold',
-            visit.status === 'submitted' ? 'bg-indigo-50 text-indigo-700' : 'bg-amber-50 text-amber-700',
-          )}>
-            {visit.status === 'submitted' ? 'Submitted' : 'Draft'}
-          </span>
+
+          {/* Period — compact inline fields */}
+          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">
+            <label className="flex items-center gap-1.5">
+              <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Target</span>
+              <input
+                type="text"
+                value={visit.targetBulanBerjalan ?? ''}
+                disabled={locked}
+                onChange={(e) => setHeaderField('targetBulanBerjalan', e.target.value)}
+                className="h-7 w-32 rounded-md border border-slate-200 px-2 text-xs focus:border-indigo-300 focus:outline-none disabled:opacity-60"
+              />
+            </label>
+            <label className="flex items-center gap-1.5">
+              <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Periode</span>
+              <input
+                type="text"
+                value={visit.periodeTanggal ?? ''}
+                disabled={locked}
+                onChange={(e) => setHeaderField('periodeTanggal', e.target.value)}
+                className="h-7 w-32 rounded-md border border-slate-200 px-2 text-xs focus:border-indigo-300 focus:outline-none disabled:opacity-60"
+              />
+            </label>
+          </div>
+
+          {/* Tabs + running score */}
+          <div className="mt-2 flex items-center gap-2">
+            <div className="flex flex-1 gap-1 overflow-x-auto rounded-xl bg-slate-100 p-1">
+              {([
+                { key: 'checklist' as const, label: 'Checklist', Icon: ClipboardCheck },
+                { key: 'cash' as const, label: 'Cash Money', Icon: Wallet },
+                { key: 'vm' as const, label: 'VM Checklist', Icon: Sparkles },
+              ]).map(({ key, label, Icon }) => (
+                <button
+                  key={key}
+                  onClick={() => setTab(key)}
+                  className={cn(
+                    'flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-colors',
+                    tab === key ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-200',
+                  )}
+                >
+                  <Icon className="h-3.5 w-3.5" /> {label}
+                </button>
+              ))}
+            </div>
+            {activeScore && <ScorePill {...activeScore} />}
+          </div>
         </div>
       </div>
 
@@ -445,53 +511,8 @@ export default function ImpactVisitDetailPage() {
           </p>
         )}
 
-        {/* Header fields */}
-        <div className="grid grid-cols-1 gap-3 rounded-2xl border border-slate-200 bg-white p-4 sm:grid-cols-2">
-          <div>
-            <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-400">Target Bulan Berjalan</label>
-            <input
-              type="text"
-              value={visit.targetBulanBerjalan ?? ''}
-              disabled={locked}
-              onChange={(e) => setHeaderField('targetBulanBerjalan', e.target.value)}
-              className="h-9 w-full rounded-lg border border-slate-200 px-2.5 text-sm focus:border-indigo-300 focus:outline-none disabled:opacity-60"
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-400">Periode Tanggal</label>
-            <input
-              type="text"
-              value={visit.periodeTanggal ?? ''}
-              disabled={locked}
-              onChange={(e) => setHeaderField('periodeTanggal', e.target.value)}
-              className="h-9 w-full rounded-lg border border-slate-200 px-2.5 text-sm focus:border-indigo-300 focus:outline-none disabled:opacity-60"
-            />
-          </div>
-        </div>
-
-        {/* Tabs */}
-        <div className="flex gap-2 overflow-x-auto rounded-2xl border border-slate-200 bg-white p-1.5">
-          {([
-            { key: 'checklist' as const, label: 'Checklist', Icon: ClipboardCheck },
-            { key: 'cash' as const, label: 'Cash Money', Icon: Wallet },
-            { key: 'vm' as const, label: 'VM Checklist', Icon: Sparkles },
-          ]).map(({ key, label, Icon }) => (
-            <button
-              key={key}
-              onClick={() => setTab(key)}
-              className={cn(
-                'flex flex-1 items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs font-bold transition-colors',
-                tab === key ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-100',
-              )}
-            >
-              <Icon className="h-3.5 w-3.5" /> {label}
-            </button>
-          ))}
-        </div>
-
         {tab === 'checklist' && (
           <div className="space-y-4">
-            <ScoreBanner score={visit.checklistScore} max={visit.checklistMaxScore} grade={visit.checklistGrade} passThreshold={IMPACT_CHECKLIST_PASS_THRESHOLD} />
             {IMPACT_CHECKLIST_SECTIONS.map(({ section, total }) => (
               <div key={section}>
                 <div className="mb-2 flex items-center justify-between">
@@ -537,7 +558,6 @@ export default function ImpactVisitDetailPage() {
 
         {tab === 'vm' && (
           <div className="space-y-4">
-            <ScoreBanner score={visit.vmChecklistScore} max={visit.vmChecklistMaxScore} grade={visit.vmChecklistGrade} passThreshold={VM_CHECKLIST_PASS_THRESHOLD} />
             {VM_CHECKLIST_SECTIONS.map(({ section, total }) => (
               <div key={section}>
                 <div className="mb-2 flex items-center justify-between">

@@ -20,10 +20,13 @@ import {
   AlertCircle,
   Zap,
   CalendarOff,
+  Receipt,
+  CircleDollarSign,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-import { StoreContributionChart } from "@/components/employee/StoreContributionChart";
+import { EmployeeTargetGauge } from "@/components/employee/EmployeeTargetGauge";
+import { StoreContributionPie } from "@/components/employee/StoreContributionPie";
 
 interface AttSlot {
   schedule: {
@@ -47,6 +50,16 @@ function todayAt(time: string): Date {
   const d = new Date();
   d.setHours(h || 0, m || 0, s || 0, 0);
   return d;
+}
+
+interface EmployeeContribution {
+  userId: string;
+  nik: string;
+  name: string;
+  isCurrentUser: boolean;
+  contributionPct: number;
+  targetSharePct: number;
+  reachedGoal: boolean;
 }
 
 interface PerformanceData {
@@ -132,19 +145,11 @@ interface PerformanceData {
   employeeStoreContributionPct: number;
 
   /** Whole-roster contribution-to-target breakdown, each employee capped at
-   *  their own target-allocation share. Powers the multi-employee ring. */
+   *  their own target-allocation share. Powers the store contribution pie. */
   dailyEmployeeContributions?: EmployeeContribution[];
   monthlyEmployeeContributions?: EmployeeContribution[];
 
   warning?: string;
-}
-
-interface EmployeeContribution {
-  userId: string;
-  nik: string;
-  name: string;
-  isCurrentUser: boolean;
-  contributionPct: number;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -204,6 +209,15 @@ function calculatePct(
   return Math.round((safeActual / safeTarget) * 1000) / 10;
 }
 
+function fmtCompactRp(value: number | null | undefined): string {
+  const n = Math.max(0, Number(value ?? 0));
+  if (!Number.isFinite(n)) return "Rp 0";
+  if (n >= 1_000_000_000) return `Rp ${(n / 1_000_000_000).toFixed(1)}M`;
+  if (n >= 1_000_000) return `Rp ${(n / 1_000_000).toFixed(1)}jt`;
+  if (n >= 1_000) return `Rp ${Math.round(n / 1_000)}rb`;
+  return `Rp ${Math.round(n)}`;
+}
+
 const ATT_CFG = {
   present: {
     Icon: CheckCircle2,
@@ -241,7 +255,7 @@ function PeriodToggle({
   onChange: (v: "daily" | "monthly") => void;
 }) {
   return (
-    <div className="relative flex h-9 w-full overflow-hidden rounded-full border border-slate-200 bg-slate-100 p-1">
+    <div className="relative flex h-9 w-[200px] shrink-0 overflow-hidden rounded-full border border-slate-200 bg-slate-100 p-1">
       {/* Sliding pill */}
       <span
         className="pointer-events-none absolute top-1 bottom-1 w-[calc(50%-4px)] rounded-full bg-white shadow-sm transition-transform duration-300 ease-out"
@@ -267,6 +281,52 @@ function PeriodToggle({
           {v === "daily" ? "Hari ini" : "Bulan ini"}
         </button>
       ))}
+    </div>
+  );
+}
+
+// ─── StatTile — small secondary metric card in the light Performance section ──
+
+function StatTile({
+  icon: Icon,
+  iconBg,
+  iconColor,
+  label,
+  value,
+  sub,
+  pct,
+}: {
+  icon: typeof Receipt;
+  iconBg: string;
+  iconColor: string;
+  label: string;
+  value: string;
+  sub?: string;
+  pct?: number | null;
+}) {
+  return (
+    <div className="flex-1 rounded-2xl border border-slate-200 bg-white p-3.5 shadow-sm">
+      <div className={cn("flex h-8 w-8 items-center justify-center rounded-xl", iconBg)}>
+        <Icon className={cn("h-4 w-4", iconColor)} strokeWidth={2.2} />
+      </div>
+      <p className="mt-2.5 text-lg font-bold leading-none text-slate-900 tabular-nums">
+        {value}
+      </p>
+      <p className="mt-1 text-[10px] font-bold uppercase tracking-wide text-slate-400">
+        {label}
+      </p>
+      {sub && <p className="mt-0.5 text-[10px] text-slate-400">{sub}</p>}
+      {pct != null && (
+        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100">
+          <div
+            className={cn(
+              "h-full rounded-full transition-all",
+              pct >= 100 ? "bg-emerald-500" : "bg-violet-500",
+            )}
+            style={{ width: `${Math.max(0, Math.min(100, pct))}%` }}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -323,19 +383,16 @@ export default function EmployeeDashboard() {
   const notScheduledToday = isDaily && perf?.isScheduledToday === false;
 
   // Keep concepts separate:
-  // 1) ring contribution = whole roster's actual-vs-store-target breakdown,
+  // 1) contribution pie = whole roster's actual-vs-store-target breakdown,
   //    each employee capped at their own target-allocation share (computed
   //    server-side — see dailyEmployeeContributions/monthlyEmployeeContributions)
-  // 2) target achievement = employee actual / employee target (personal card)
+  // 2) target gauge = employee actual / employee target (personal card)
   const chartEmployeeSales = isDaily
     ? perf?.salesAmount
     : perf?.monthlySalesAmount;
   const chartEmployeeTargetSales = isDaily
     ? (perf?.employeeDailySalesTarget ?? perf?.salesTarget)
     : (perf?.employeeMonthlySalesTarget ?? perf?.monthlySalesTarget);
-  const chartStoreTargetSales = isDaily
-    ? perf?.storeDailySalesTarget
-    : perf?.storeMonthlySalesTarget;
   const chartEmployeeContributions = isDaily
     ? perf?.dailyEmployeeContributions
     : perf?.monthlyEmployeeContributions;
@@ -346,34 +403,41 @@ export default function EmployeeDashboard() {
       calculatePct(perf?.monthlySalesAmount, chartEmployeeTargetSales));
   const chartPeriodLabel = isDaily ? "Hari ini" : monthLabel;
 
+  // Secondary metrics — transactions & average transaction value
+  const chartTransactionCount = isDaily
+    ? perf?.transactionCount
+    : perf?.monthlyTransactionCount;
+  const chartTransactionTarget = isDaily
+    ? perf?.transactionTarget
+    : perf?.monthlyTransactionTarget;
+  const chartTransactionPct = isDaily
+    ? perf?.transactionPct
+    : perf?.monthlyTransactionPct;
+  const chartAtv = isDaily
+    ? perf?.transactionCount
+      ? (perf.salesAmount ?? 0) / perf.transactionCount
+      : 0
+    : perf?.monthlyAtv;
+
   return (
     <div className="flex flex-col">
       {/* ── Hero — greeting + shift status only ────────────────────────── */}
-      <div className="relative overflow-hidden bg-primary px-6 pb-8 pt-6">
+      <div className="relative overflow-hidden bg-primary px-6 pb-7 pt-6">
         {/* Decorative atmosphere */}
         <div className="pointer-events-none absolute -right-16 -top-16 h-56 w-56 rounded-full bg-white/5 blur-2xl" />
         <div className="pointer-events-none absolute -left-10 top-32 h-40 w-40 rounded-full bg-amber-300/5 blur-3xl" />
 
         <div className="relative space-y-4">
-          {/* Greeting + period toggle */}
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-widest text-primary-foreground/60">
-                {greeting()}
-              </p>
-              <h1 className="mt-0.5 text-2xl font-bold text-primary-foreground">
-                {firstName} 👋
-              </h1>
-              <p className="mt-1 text-xs text-primary-foreground/50">
-                {todayLabel()}
-              </p>
-            </div>
-
-            {hasPerf && (
-              <div className="w-[200px] shrink-0">
-                <PeriodToggle value={period} onChange={setPeriod} />
-              </div>
-            )}
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-widest text-primary-foreground/60">
+              {greeting()}
+            </p>
+            <h1 className="mt-0.5 text-2xl font-bold text-primary-foreground">
+              {firstName} 👋
+            </h1>
+            <p className="mt-1 text-xs text-primary-foreground/50">
+              {todayLabel()}
+            </p>
           </div>
 
           <div className="flex flex-wrap gap-2">
@@ -445,9 +509,8 @@ export default function EmployeeDashboard() {
           )}
 
           {/* Warning banner — always shown when the API sends one (roster/
-              target/schedule gaps), regardless of whether the chart below
-              can still render. This used to be buried inside the "no
-              performance data" branch and never actually appeared. */}
+              target/schedule gaps), regardless of whether performance data
+              below can still render. */}
           {!loading && perf?.warning && (
             <div className="flex items-start gap-2 rounded-2xl border border-amber-400/30 bg-amber-500/10 px-3.5 py-2.5">
               <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-200" />
@@ -456,44 +519,87 @@ export default function EmployeeDashboard() {
               </p>
             </div>
           )}
+        </div>
+      </div>
 
-          {/* Store contribution chart — daily/monthly, matching the toggle above */}
-          {loading ? (
-            <div className="h-56 animate-pulse rounded-2xl border " />
-          ) : notScheduledToday ? (
-            <div className="flex items-center gap-3 rounded-2xl border border-dashed border-white/15 bg-white/[0.03] px-4 py-6">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/10">
-                <CalendarOff className="h-4 w-4 text-primary-foreground/60" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-xs font-bold text-primary-foreground/80">
-                  Tidak ada jadwal hari ini
-                </p>
-                <p className="mt-0.5 text-[11px] text-primary-foreground/45">
-                  Kontribusi harian butuh jadwal kerja hari itu — lihat
-                  kontribusi bulanan di tab "Bulan ini" di bawah.
-                </p>
-              </div>
+      {/* ── Performance — target gauge + store contribution pie ──────────── */}
+      <div className="bg-slate-50 px-4 pt-5 pb-2">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <p className="text-[11px] font-bold uppercase tracking-widest text-slate-400">
+            Performance
+          </p>
+          {hasPerf && <PeriodToggle value={period} onChange={setPeriod} />}
+        </div>
+
+        {loading ? (
+          <div className="space-y-3">
+            <div className="h-64 animate-pulse rounded-3xl bg-slate-200/60" />
+            <div className="h-64 animate-pulse rounded-3xl bg-slate-200/60" />
+          </div>
+        ) : notScheduledToday ? (
+          <div className="flex items-center gap-3 rounded-3xl border border-dashed border-slate-200 bg-white px-4 py-6">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-100">
+              <CalendarOff className="h-4 w-4 text-slate-400" />
             </div>
-          ) : hasPerf ? (
-            <div className="rounded-2xl">
-              <StoreContributionChart
-                employeeMonthlySales={chartEmployeeSales}
-                storeTargetSales={chartStoreTargetSales}
-                employeeTargetSales={chartEmployeeTargetSales}
-                targetAchievementPct={chartAchievementPct}
-                employeeContributions={chartEmployeeContributions}
-                periodLabel={chartPeriodLabel}
-              />
-            </div>
-          ) : (
-            <div className="rounded-2xl border border-dashed border-white/15 px-5 py-8 text-center">
-              <p className="text-xs font-medium text-primary-foreground/50">
-                Data performa belum tersedia.
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-bold text-slate-600">
+                Tidak ada jadwal hari ini
+              </p>
+              <p className="mt-0.5 text-[11px] text-slate-400">
+                Kontribusi harian butuh jadwal kerja hari itu — lihat
+                kontribusi bulanan di tab &quot;Bulan ini&quot; di atas.
               </p>
             </div>
-          )}
-        </div>
+          </div>
+        ) : hasPerf ? (
+          <div className="space-y-3">
+            <EmployeeTargetGauge
+              employeeSales={chartEmployeeSales}
+              employeeTarget={chartEmployeeTargetSales}
+              achievementPct={chartAchievementPct}
+              periodLabel={chartPeriodLabel}
+            />
+
+            <StoreContributionPie
+              employeeContributions={chartEmployeeContributions}
+              periodLabel={chartPeriodLabel}
+            />
+
+            <div className="flex gap-3">
+              <StatTile
+                icon={Receipt}
+                iconBg="bg-violet-50"
+                iconColor="text-violet-600"
+                label="Transactions"
+                value={String(chartTransactionCount ?? 0)}
+                sub={
+                  chartTransactionTarget
+                    ? `of ${Math.round(chartTransactionTarget)} target`
+                    : undefined
+                }
+                pct={chartTransactionPct ?? null}
+              />
+              <StatTile
+                icon={CircleDollarSign}
+                iconBg="bg-sky-50"
+                iconColor="text-sky-600"
+                label="Avg. Transaction"
+                value={fmtCompactRp(chartAtv)}
+                sub={
+                  !isDaily && perf?.monthlyAtvTarget
+                    ? `target ${fmtCompactRp(perf.monthlyAtvTarget)}`
+                    : undefined
+                }
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-3xl border border-dashed border-slate-200 bg-white px-5 py-8 text-center">
+            <p className="text-xs font-medium text-slate-400">
+              Data performa belum tersedia.
+            </p>
+          </div>
+        )}
       </div>
 
       {/* ── Quick actions ─────────────────────────────────────────────────── */}
@@ -589,4 +695,3 @@ export default function EmployeeDashboard() {
     </div>
   );
 }
-
