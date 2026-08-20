@@ -41,6 +41,7 @@ export async function GET() {
     areas,
     stores: stores.map((store) => ({
       id: String(store.id),
+      storeNo: store.storeNo,
       name: store.name,
       address: store.address,
       areaId: store.areaId,

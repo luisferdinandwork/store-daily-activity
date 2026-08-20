@@ -12,7 +12,14 @@
 //   • edc_reconciliation
 //   • eod_z_report
 //   • open_statement
-// Do not re-add those codes to TASK_CATALOG or SHIFT_TASK_MAP.
+// item_dropping and item_return were also removed as daily task types — they
+// were BC-driven (Business Central transfer orders/shipments) with no manual
+// completion path, so they'd sit "pending" forever whenever BC had nothing
+// for a store that day. They now live on the standalone, on-demand
+// Item Transfers page (see app/employee/item-transfers/page.tsx) instead of
+// the per-day task checklist, and no longer count toward Task Progress or
+// the Ops Dashboard.
+// Do not re-add any of these codes to TASK_CATALOG or SHIFT_TASK_MAP.
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ─── Palette ──────────────────────────────────────────────────────────────────
@@ -125,6 +132,8 @@ export const REMOVED_TASK_TYPES = [
   'edc_reconciliation',
   'eod_z_report',
   'open_statement',
+  'item_dropping',
+  'item_return',
 ] as const;
 
 export type RemovedTaskType = typeof REMOVED_TASK_TYPES[number];
@@ -141,8 +150,6 @@ export const TASK_TYPES = [
   'cek_bin',
   'vm_checklist',
   'marketing_check',
-  'item_dropping',
-  'item_return',
   'cek_uang_modal',
   'briefing',
   'serah_terima',
@@ -250,26 +257,6 @@ export const TASK_CATALOG: TaskCatalogEntry[] = [
     accent: 'rose',
     isPersonal: false,
     sortOrder: 80,
-    requiresLocation: true,
-  },
-  {
-    code: 'item_dropping',
-    label: 'Receiving',
-    description: 'Pencatatan dropping atau receiving barang.',
-    icon: 'PackageOpen',
-    accent: 'sky',
-    isPersonal: false,
-    sortOrder: 90,
-    requiresLocation: true,
-  },
-  {
-    code: 'item_return',
-    label: 'Item Return',
-    description: 'Pencatatan retur atau pengembalian barang toko.',
-    icon: 'Undo2',
-    accent: 'rose',
-    isPersonal: false,
-    sortOrder: 100,
     requiresLocation: true,
   },
   {
@@ -396,9 +383,13 @@ export function normalizeTaskCodes(
 
   for (const value of input) {
     if (isRemovedTaskType(value)) {
+      const hint =
+        value === 'item_dropping' || value === 'item_return'
+          ? 'It now lives on the standalone Item Transfers page.'
+          : 'Use "store_closing" instead.';
       return {
         ok: false,
-        error: `task type "${value}" has been removed. Use "store_closing" instead.`,
+        error: `task type "${value}" has been removed. ${hint}`,
       };
     }
 
@@ -432,8 +423,6 @@ export const SHIFT_TASK_MAP: Record<ShiftCode, TaskType[]> = {
     'grooming',
     'vm_checklist',
     'marketing_check',
-    'item_dropping',
-    'item_return',
     'briefing',
     'serah_terima',
   ],
@@ -442,8 +431,6 @@ export const SHIFT_TASK_MAP: Record<ShiftCode, TaskType[]> = {
     // cek_uang_modal is intentionally excluded — it's a morning/full_day-only
     // task (cashier opening float), not applicable to a standalone evening shift.
     'grooming',
-    'item_dropping',
-    'item_return',
     'briefing',
     'serah_terima',
     'store_closing',
@@ -458,8 +445,6 @@ export const SHIFT_TASK_MAP: Record<ShiftCode, TaskType[]> = {
     'grooming',
     'vm_checklist',
     'marketing_check',
-    'item_dropping',
-    'item_return',
     'briefing',
     'serah_terima',
     'store_closing',

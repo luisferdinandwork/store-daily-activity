@@ -16,7 +16,6 @@ import {
   PauseCircle,
   ShieldCheck,
   Store,
-  Truck,
   User,
   Users,
   Wallet,
@@ -66,8 +65,6 @@ export const TASK_LABELS: Record<string, string> = {
   cek_bin: 'Cek Bin',
   vm_checklist: 'VM Checklist',
   marketing_check: 'Marketing Check',
-  item_dropping: 'Item Dropping',
-  item_return: 'Item Return',
   cek_uang_modal: 'Cek Uang Modal',
   briefing: 'Briefing',
   serah_terima: 'Serah Terima',
@@ -82,8 +79,6 @@ export const TASK_ICONS: Record<string, React.ElementType> = {
   cek_bin: Box,
   vm_checklist: ClipboardList,
   marketing_check: ClipboardList,
-  item_dropping: Box,
-  item_return: Truck,
   cek_uang_modal: Banknote,
   briefing: Users,
   serah_terima: ClipboardList,
@@ -582,81 +577,6 @@ function MarketingCheckDetail({ task }: { task: FlatTask }) {
   );
 }
 
-function ItemDroppingDetail({ task }: { task: FlatTask }) {
-  const e = task.extra;
-  const entries = (e.entries as Record<string, unknown>[] | undefined) ?? [];
-
-  if (!e.hasDropping) {
-    return <p className="py-2 text-xs text-slate-400">Tidak ada dropping hari ini.</p>;
-  }
-
-  return (
-    <div>
-      {entries.length === 0 ? (
-        <p className="py-2 text-xs text-amber-600">Dropping ada, belum ada entri.</p>
-      ) : (
-        entries.map((en, i) => (
-          <div key={i} className="border-t border-slate-100 py-2 first:border-0">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-slate-700">TO #{String(en.toNumber)}</span>
-              <span className="text-[10px] text-slate-400">{fmtTime(en.dropTime as string)}</span>
-            </div>
-            <p className="mt-0.5 text-[11px] text-slate-500">Qty: {String(en.quantity)}</p>
-            <PhotoGrid label="Foto Dropping" photos={en.droppingPhotos} columns={3} />
-            <PhotoGrid label="Foto Terima" photos={en.receivePhotos} columns={3} />
-          </div>
-        ))
-      )}
-      {/* Task-level fallback if photos are stored on the task instead of entries */}
-      <PhotoGrid label="Foto Dropping" photos={e.droppingPhotos} columns={3} />
-      <PhotoGrid label="Foto Terima" photos={e.receivePhotos} columns={3} />
-      <ActorFooter task={task} />
-      <NotesBlock notes={task.notes} />
-    </div>
-  );
-}
-
-function ItemReturnDetail({ task }: { task: FlatTask }) {
-  const e = task.extra;
-  const entries = Array.isArray(e.entries) ? (e.entries as Record<string, unknown>[]) : [];
-
-  if (!e.hasReturn) {
-    return <p className="py-2 text-xs text-slate-400">Tidak ada item return hari ini.</p>;
-  }
-
-  return (
-    <div>
-      {entries.length === 0 ? (
-        <p className="py-2 text-xs text-amber-600">Return ada, belum ada entri.</p>
-      ) : (
-        entries.map((entry, index) => (
-          <div key={String(entry.id ?? index)} className="border-t border-slate-100 py-2 first:border-0">
-            <div className="flex items-center justify-between gap-3">
-              <span className="truncate text-xs font-bold text-slate-700">
-                Retur #{String(entry.returnNumber ?? '-')}
-              </span>
-              <span className="shrink-0 text-[10px] text-slate-400">
-                {fmtTime(entry.returnTime as string | null)}
-              </span>
-            </div>
-            {entry.description ? (
-              <p className="mt-0.5 truncate text-[11px] text-slate-500">{String(entry.description)}</p>
-            ) : null}
-            <div className="mt-1 space-y-1 divide-y divide-slate-100">
-              <InfoRow label="Qty Return" value={String(entry.quantity ?? 0)} />
-              {entry.expectedAt ? <InfoRow label="Estimasi" value={fmtTime(entry.expectedAt as string)} /> : null}
-            </div>
-            <PhotoGrid label="Foto Return" photos={entry.returnPhotos} columns={3} />
-            {entry.notes ? <p className="mt-1 text-[11px] text-slate-500">{String(entry.notes)}</p> : null}
-          </div>
-        ))
-      )}
-      <ActorFooter task={task} />
-      <NotesBlock notes={task.notes} />
-    </div>
-  );
-}
-
 function CekUangModalDetail({ task }: { task: FlatTask }) {
   const e = task.extra;
   const denominations = Array.isArray(e.denominations)
@@ -894,8 +814,6 @@ export function TaskDetailBody({ task }: { task: FlatTask }) {
     case 'cek_bin':         return <CekBinDetail task={task} />;
     case 'vm_checklist':    return <VmChecklistDetail task={task} />;
     case 'marketing_check': return <MarketingCheckDetail task={task} />;
-    case 'item_dropping':   return <ItemDroppingDetail task={task} />;
-    case 'item_return':     return <ItemReturnDetail task={task} />;
     case 'cek_uang_modal':   return <CekUangModalDetail task={task} />;
     case 'briefing':        return <BriefingDetail task={task} />;
     case 'store_closing':   return <StoreClosingDetail task={task} />;

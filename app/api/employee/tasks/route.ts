@@ -20,10 +20,6 @@ import {
   serahTerimaEntries,
   storeClosingTasks,
   groomingTasks,
-  itemDroppingTasks,
-  itemDroppingEntries,
-  itemReturnTasks,
-  itemReturnEntries,
   cekUangModalTasks,
   cekUangModalDenominations,
 } from "@/lib/db/schema";
@@ -38,8 +34,6 @@ import {
 import { getOrCreateCekBinForSchedule } from "@/lib/db/utils/cek-bin";
 import { getOrCreateVmChecklistForSchedule } from "@/lib/db/utils/vm-checklist";
 import { getOrCreateMarketingCheckForSchedule } from "@/lib/db/utils/marketing-check";
-import { getOrCreateItemDroppingForSchedule } from "@/lib/db/utils/item-dropping";
-import { getOrCreateItemReturnForSchedule } from "@/lib/db/utils/item-return";
 import { getOrCreateCekUangModalForSchedule } from "@/lib/db/utils/cek-uang-modal";
 import { getOrCreateGroomingForSchedule } from "@/lib/db/utils/grooming";
 import { getOrCreateBriefingForSchedule } from "@/lib/db/utils/briefing";
@@ -59,8 +53,6 @@ const SUPPORTED_TASK_TYPES = [
   "cek_bin",
   "vm_checklist",
   "marketing_check",
-  "item_dropping",
-  "item_return",
   "cek_uang_modal",
   "briefing",
   "serah_terima",
@@ -252,8 +244,6 @@ async function getAssignedTaskTypesFromDb(
 // lib/db/utils/marketing-check.ts) and never materializes an evening row.
 const SHIFT_SCOPED_TASK_TYPES = new Set<TaskType>([
   "briefing",
-  "item_dropping",
-  "item_return",
   "cek_uang_modal",
 ]);
 
@@ -391,10 +381,6 @@ export async function GET(request: NextRequest) {
       cekBinRows,
       vmChecklistRows,
       marketingCheckRows,
-      itemDroppingRows,
-      itemDroppingEntryRows,
-      itemReturnRows,
-      itemReturnEntryRows,
       cekUangModalRows,
       cekUangModalDenominationRows,
       storeClosingRows,
@@ -558,118 +544,6 @@ export async function GET(request: NextRequest) {
                 ),
               )
               .orderBy(desc(marketingCheckTasks.date));
-          })()
-        : Promise.resolve([]),
-
-      shouldLoadTask("item_dropping")
-        ? (async () => {
-            await Promise.all(
-              todaySchedules.map((s) =>
-                getOrCreateItemDroppingForSchedule(
-                  s.id,
-                  userId,
-                  s.storeId,
-                  s.shiftId,
-                  targetDate,
-                ),
-              ),
-            );
-
-            return db
-              .select()
-              .from(itemDroppingTasks)
-              .where(
-                and(
-                  inArray(itemDroppingTasks.storeId, storeIds),
-                  gte(itemDroppingTasks.date, dayStart),
-                  lte(itemDroppingTasks.date, dayEnd),
-                ),
-              )
-              .orderBy(desc(itemDroppingTasks.date));
-          })()
-        : Promise.resolve([]),
-
-      shouldLoadTask("item_dropping")
-        ? (async () => {
-            const taskIds = await db
-              .select({ id: itemDroppingTasks.id })
-              .from(itemDroppingTasks)
-              .where(
-                and(
-                  inArray(itemDroppingTasks.storeId, storeIds),
-                  gte(itemDroppingTasks.date, dayStart),
-                  lte(itemDroppingTasks.date, dayEnd),
-                ),
-              );
-
-            if (!taskIds.length) return [];
-
-            return db
-              .select()
-              .from(itemDroppingEntries)
-              .where(
-                inArray(
-                  itemDroppingEntries.taskId,
-                  taskIds.map((r) => r.id),
-                ),
-              )
-              .orderBy(itemDroppingEntries.dropTime);
-          })()
-        : Promise.resolve([]),
-
-      shouldLoadTask("item_return")
-        ? (async () => {
-            await Promise.all(
-              todaySchedules.map((s) =>
-                getOrCreateItemReturnForSchedule(
-                  s.id,
-                  userId,
-                  s.storeId,
-                  s.shiftId,
-                  targetDate,
-                ),
-              ),
-            );
-
-            return db
-              .select()
-              .from(itemReturnTasks)
-              .where(
-                and(
-                  inArray(itemReturnTasks.storeId, storeIds),
-                  gte(itemReturnTasks.date, dayStart),
-                  lte(itemReturnTasks.date, dayEnd),
-                ),
-              )
-              .orderBy(desc(itemReturnTasks.date));
-          })()
-        : Promise.resolve([]),
-
-      shouldLoadTask("item_return")
-        ? (async () => {
-            const taskIds = await db
-              .select({ id: itemReturnTasks.id })
-              .from(itemReturnTasks)
-              .where(
-                and(
-                  inArray(itemReturnTasks.storeId, storeIds),
-                  gte(itemReturnTasks.date, dayStart),
-                  lte(itemReturnTasks.date, dayEnd),
-                ),
-              );
-
-            if (!taskIds.length) return [];
-
-            return db
-              .select()
-              .from(itemReturnEntries)
-              .where(
-                inArray(
-                  itemReturnEntries.taskId,
-                  taskIds.map((r) => r.id),
-                ),
-              )
-              .orderBy(itemReturnEntries.returnTime);
           })()
         : Promise.resolve([]),
 
@@ -868,20 +742,6 @@ export async function GET(request: NextRequest) {
             .orderBy(asc(cekBinTaskBins.bin))
         : Promise.resolve([]),
     ]);
-
-    const entriesByTaskId = new Map<number, typeof itemDroppingEntryRows>();
-    for (const entry of itemDroppingEntryRows) {
-      const bucket = entriesByTaskId.get(entry.taskId) ?? [];
-      bucket.push(entry);
-      entriesByTaskId.set(entry.taskId, bucket);
-    }
-
-    const returnEntriesByTaskId = new Map<number, typeof itemReturnEntryRows>();
-    for (const entry of itemReturnEntryRows) {
-      const bucket = returnEntriesByTaskId.get(entry.taskId) ?? [];
-      bucket.push(entry);
-      returnEntriesByTaskId.set(entry.taskId, bucket);
-    }
 
     const uangModalDenominationsByTaskId = new Map<number, typeof cekUangModalDenominationRows>();
     for (const row of cekUangModalDenominationRows) {
@@ -1233,98 +1093,6 @@ export async function GET(request: NextRequest) {
             verifiedAt: toIso(t.verifiedAt),
           },
         })),
-
-      ...itemDroppingRows
-        .filter((r) => inStore(r.storeId))
-        .map((t) => {
-          const shift = (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode;
-
-          const entries = (entriesByTaskId.get(t.id) ?? []).map((e) => ({
-            id: String(e.id),
-            taskId: String(e.taskId),
-            userId: e.userId,
-            storeId: String(e.storeId),
-            toNumber: e.toNumber,
-            quantity: e.quantity ?? 0,
-            dropTime: toIso(e.dropTime),
-            droppingPhotos: parsePhotos(e.droppingPhotos),
-            notes: e.notes,
-            createdAt: toIso(e.createdAt),
-            // BC-driven pipeline fields (see lib/db/schema/item-transfers.ts).
-            qtyOrdered: e.qtyOrdered ?? e.quantity ?? 0,
-            qtyCounted: e.qtyCounted ?? null,
-            submittedAt: toIso(e.submittedAt),
-          }));
-
-          return {
-            type: "item_dropping" as const,
-            shift,
-            data: {
-              id: String(t.id),
-              scheduleId: String(t.scheduleId),
-              userId: t.userId,
-              storeId: String(t.storeId),
-              shift,
-              date: t.date.toISOString(),
-
-              hasDropping: t.hasDropping,
-              entries,
-
-              status: t.status,
-              notes: t.notes,
-              completedAt: toIso(t.completedAt),
-              verifiedBy: t.verifiedBy,
-              verifiedAt: toIso(t.verifiedAt),
-            },
-          };
-        }),
-
-      ...itemReturnRows
-        .filter((r) => inStore(r.storeId))
-        .map((t) => {
-          const shift = (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode;
-
-          const entries = (returnEntriesByTaskId.get(t.id) ?? []).map((e) => ({
-            id: String(e.id),
-            taskId: String(e.taskId),
-            userId: e.userId,
-            storeId: String(e.storeId),
-            returnNumber: e.returnNumber,
-            description: e.description,
-            expectedAt: toIso(e.expectedAt),
-            quantity: e.quantity ?? 0,
-            returnTime: toIso(e.returnTime),
-            returnPhotos: parsePhotos(e.returnPhotos),
-            notes: e.notes,
-            createdAt: toIso(e.createdAt),
-            // BC-driven pipeline fields (see lib/db/schema/item-transfers.ts).
-            qtyOrdered: e.qtyOrdered ?? e.quantity ?? 0,
-            qtyCounted: e.qtyCounted ?? null,
-            submittedAt: toIso(e.submittedAt),
-          }));
-
-          return {
-            type: "item_return" as const,
-            shift,
-            data: {
-              id: String(t.id),
-              scheduleId: String(t.scheduleId),
-              userId: t.userId,
-              storeId: String(t.storeId),
-              shift,
-              date: t.date.toISOString(),
-
-              hasReturn: t.hasReturn,
-              entries,
-
-              status: t.status,
-              notes: t.notes,
-              completedAt: toIso(t.completedAt),
-              verifiedBy: t.verifiedBy,
-              verifiedAt: toIso(t.verifiedAt),
-            },
-          };
-        }),
 
       ...cekUangModalRows
         .filter((r) => inStore(r.storeId))
@@ -1742,42 +1510,6 @@ export async function PATCH(request: NextRequest) {
             .update(marketingCheckTasks)
             .set({ status: "in_progress", updatedAt: new Date() })
             .where(eq(marketingCheckTasks.id, id))
-            .then(() => {}),
-      },
-
-      item_dropping: {
-        getRow: async (id) =>
-          (
-            await db
-              .select({ status: itemDroppingTasks.status })
-              .from(itemDroppingTasks)
-              .where(eq(itemDroppingTasks.id, id))
-              .limit(1)
-          )[0],
-
-        update: (id) =>
-          db
-            .update(itemDroppingTasks)
-            .set({ status: "in_progress", updatedAt: new Date() })
-            .where(eq(itemDroppingTasks.id, id))
-            .then(() => {}),
-      },
-
-      item_return: {
-        getRow: async (id) =>
-          (
-            await db
-              .select({ status: itemReturnTasks.status })
-              .from(itemReturnTasks)
-              .where(eq(itemReturnTasks.id, id))
-              .limit(1)
-          )[0],
-
-        update: (id) =>
-          db
-            .update(itemReturnTasks)
-            .set({ status: "in_progress", updatedAt: new Date() })
-            .where(eq(itemReturnTasks.id, id))
             .then(() => {}),
       },
 

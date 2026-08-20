@@ -17,9 +17,6 @@ import {
   briefingTasks,
   storeClosingTasks,
   groomingTasks,
-  itemDroppingTasks,
-  itemReturnTasks,
-  itemReturnEntries,
   cekUangModalTasks,
   cekUangModalDenominations,
 
@@ -583,31 +580,11 @@ export async function materialiseTasksForSchedule(
       errors.push(`marketingCheck: ${err}`);
     }
 
-    // Item Dropping / Item Return / Cek Uang Modal — now genuinely per-shift
-    // (see lib/db/utils/item-dropping.ts etc.), so the existence check must
-    // also filter by shiftId or the evening block below would find this
-    // morning row and skip creating its own.
-    await insertShared('itemDroppingMorning',
-      () => db.select({ id: itemDroppingTasks.id }).from(itemDroppingTasks)
-        .where(and(
-          eq(itemDroppingTasks.storeId, sched.storeId),
-          eq(itemDroppingTasks.shiftId, morningId),
-          eq(itemDroppingTasks.date, dayStart),
-          inArray(itemDroppingTasks.status, ACTIVE_STATUSES),
-        ))
-        .limit(1).then(r => r[0]),
-      () => db.insert(itemDroppingTasks).values({ ...base, hasDropping: false }));
-
-    await insertShared('itemReturnMorning',
-      () => db.select({ id: itemReturnTasks.id }).from(itemReturnTasks)
-        .where(and(
-          eq(itemReturnTasks.storeId, sched.storeId),
-          eq(itemReturnTasks.shiftId, morningId),
-          eq(itemReturnTasks.date, dayStart),
-          inArray(itemReturnTasks.status, ACTIVE_STATUSES),
-        ))
-        .limit(1).then(r => r[0]),
-      () => db.insert(itemReturnTasks).values({ ...base, hasReturn: false }));
+    // Item Dropping / Item Return no longer materialize as daily tasks — they
+    // moved to the standalone, on-demand Item Transfers page (see
+    // app/employee/item-transfers/page.tsx and lib/db/utils/item-transfers.ts).
+    // Their container rows are now only created lazily by that page's sync
+    // call, never proactively here.
 
     await insertShared('cekUangModalMorning',
       () => db.select({ id: cekUangModalTasks.id }).from(cekUangModalTasks)
@@ -655,29 +632,8 @@ export async function materialiseTasksForSchedule(
         parentTaskId: null,
       }));
 
-    // Item Dropping / Item Return / Cek Uang Modal — evening counterpart of
-    // the morning rows above. Genuinely per-shift now, see item-dropping.ts.
-    await insertShared('itemDroppingEvening',
-      () => db.select({ id: itemDroppingTasks.id }).from(itemDroppingTasks)
-        .where(and(
-          eq(itemDroppingTasks.storeId, sched.storeId),
-          eq(itemDroppingTasks.shiftId, eveningId),
-          eq(itemDroppingTasks.date, dayStart),
-          inArray(itemDroppingTasks.status, ACTIVE_STATUSES),
-        ))
-        .limit(1).then(r => r[0]),
-      () => db.insert(itemDroppingTasks).values({ ...base, hasDropping: false }));
-
-    await insertShared('itemReturnEvening',
-      () => db.select({ id: itemReturnTasks.id }).from(itemReturnTasks)
-        .where(and(
-          eq(itemReturnTasks.storeId, sched.storeId),
-          eq(itemReturnTasks.shiftId, eveningId),
-          eq(itemReturnTasks.date, dayStart),
-          inArray(itemReturnTasks.status, ACTIVE_STATUSES),
-        ))
-        .limit(1).then(r => r[0]),
-      () => db.insert(itemReturnTasks).values({ ...base, hasReturn: false }));
+    // Item Dropping / Item Return no longer materialize as daily tasks — see
+    // the morning block above for details.
 
     // Cek Uang Modal is morning-only (cashier opening float) — no evening
     // counterpart is materialised here; see getOrCreateCekUangModalForSchedule.
@@ -762,14 +718,11 @@ export async function deleteTasksForSchedule(scheduleId: number): Promise<void> 
         eq(marketingCheckTasks.scheduleId, scheduleId),
         inArray(marketingCheckTasks.status, PENDING_STATUSES),
       )),
-    db.delete(itemDroppingTasks)
-      .where(and(eq(itemDroppingTasks.scheduleId, scheduleId), inArray(itemDroppingTasks.status, ACTIVE_STATUSES))),
-    db.delete(itemReturnTasks)
-      .where(and(eq(itemReturnTasks.scheduleId, scheduleId), inArray(itemReturnTasks.status, ACTIVE_STATUSES))),
     db.delete(cekUangModalTasks)
       .where(and(eq(cekUangModalTasks.scheduleId, scheduleId), inArray(cekUangModalTasks.status, ACTIVE_STATUSES))),
-    // serah_terima intentionally excluded — entries aren't tied to a
-    // schedule's lifecycle anymore (shared rolling board, not a per-day row).
+    // serah_terima and item_dropping/item_return intentionally excluded —
+    // entries aren't tied to a schedule's lifecycle anymore (shared rolling
+    // board / standalone on-demand page, not a per-day materialized row).
     // Evening tasks
     db.delete(briefingTasks)
       .where(and(eq(briefingTasks.scheduleId, scheduleId), inArray(briefingTasks.status, ACTIVE_STATUSES))),
@@ -1178,7 +1131,7 @@ export async function submitGrooming(
 export async function getTasksForSchedule(scheduleId: number) {
   const [
     storeOpening, setoran,
-    storeFront, cekBin, vmChecklist, marketingCheck, itemDropping, itemReturn, cekUangModal, briefing,
+    storeFront, cekBin, vmChecklist, marketingCheck, cekUangModal, briefing,
     storeClosing, grooming,
   ] = await Promise.all([
     db.select().from(storeOpeningTasks)      .where(eq(storeOpeningTasks.scheduleId,      scheduleId)).limit(1),
@@ -1187,8 +1140,6 @@ export async function getTasksForSchedule(scheduleId: number) {
     db.select().from(cekBinTasks)            .where(eq(cekBinTasks.scheduleId,            scheduleId)).limit(1),
     db.select().from(vmChecklistTasks)       .where(eq(vmChecklistTasks.scheduleId,       scheduleId)).limit(1),
     db.select().from(marketingCheckTasks)    .where(eq(marketingCheckTasks.scheduleId,    scheduleId)).limit(1),
-    db.select().from(itemDroppingTasks)      .where(eq(itemDroppingTasks.scheduleId,      scheduleId)).limit(1),
-    db.select().from(itemReturnTasks)        .where(eq(itemReturnTasks.scheduleId,        scheduleId)).limit(1),
     db.select().from(cekUangModalTasks)       .where(eq(cekUangModalTasks.scheduleId,       scheduleId)).limit(1),
     db.select().from(briefingTasks)          .where(eq(briefingTasks.scheduleId,          scheduleId)).limit(1),
     db.select().from(storeClosingTasks)      .where(eq(storeClosingTasks.scheduleId,      scheduleId)).limit(1),
@@ -1202,8 +1153,6 @@ export async function getTasksForSchedule(scheduleId: number) {
     cekBin:            cekBin[0]            ?? null,
     vmChecklist:       vmChecklist[0]       ?? null,
     marketingCheck:    marketingCheck[0]    ?? null,
-    itemDropping:      itemDropping[0]      ?? null,
-    itemReturn:        itemReturn[0]        ?? null,
     cekUangModal:      cekUangModal[0]      ?? null,
     briefing:          briefing[0]          ?? null,
     storeClosing:      storeClosing[0]      ?? null,
@@ -1232,7 +1181,7 @@ export async function getDailyTaskSummary(storeId: number, date: Date) {
 
   const [
     storeOpening, setoran,
-    storeFront, cekBin, vmChecklist, marketingCheck, itemDropping, itemReturn, cekUangModal, briefing,
+    storeFront, cekBin, vmChecklist, marketingCheck, cekUangModal, briefing,
     storeClosing, grooming,
   ] = await Promise.all([
     db.select({ status: storeOpeningTasks.status,      count: sql<number>`count(*)::int` }).from(storeOpeningTasks)
@@ -1247,10 +1196,6 @@ export async function getDailyTaskSummary(storeId: number, date: Date) {
       .where(and(eq(vmChecklistTasks.storeId, storeId),       gte(vmChecklistTasks.date, dayStart),       lte(vmChecklistTasks.date, dayEnd))).groupBy(vmChecklistTasks.status).then(summarise),
     db.select({ status: marketingCheckTasks.status,    count: sql<number>`count(*)::int` }).from(marketingCheckTasks)
       .where(and(eq(marketingCheckTasks.storeId, storeId),    gte(marketingCheckTasks.date, dayStart),    lte(marketingCheckTasks.date, dayEnd))).groupBy(marketingCheckTasks.status).then(summarise),
-    db.select({ status: itemDroppingTasks.status,      count: sql<number>`count(*)::int` }).from(itemDroppingTasks)
-      .where(and(eq(itemDroppingTasks.storeId, storeId),      gte(itemDroppingTasks.date, dayStart),      lte(itemDroppingTasks.date, dayEnd))).groupBy(itemDroppingTasks.status).then(summarise),
-    db.select({ status: itemReturnTasks.status,        count: sql<number>`count(*)::int` }).from(itemReturnTasks)
-      .where(and(eq(itemReturnTasks.storeId, storeId),        gte(itemReturnTasks.date, dayStart),        lte(itemReturnTasks.date, dayEnd))).groupBy(itemReturnTasks.status).then(summarise),
     db.select({ status: cekUangModalTasks.status,       count: sql<number>`count(*)::int` }).from(cekUangModalTasks)
       .where(and(eq(cekUangModalTasks.storeId, storeId),       gte(cekUangModalTasks.date, dayStart),       lte(cekUangModalTasks.date, dayEnd))).groupBy(cekUangModalTasks.status).then(summarise),
     db.select({ status: briefingTasks.status,          count: sql<number>`count(*)::int` }).from(briefingTasks)
@@ -1261,7 +1206,7 @@ export async function getDailyTaskSummary(storeId: number, date: Date) {
       .where(and(eq(groomingTasks.storeId, storeId),          gte(groomingTasks.date, dayStart),          lte(groomingTasks.date, dayEnd))).groupBy(groomingTasks.status).then(summarise),
   ]);
 
-  return { storeOpening, setoran, storeFront, cekBin, vmChecklist, marketingCheck, itemDropping, itemReturn, cekUangModal, briefing, storeClosing, grooming };
+  return { storeOpening, setoran, storeFront, cekBin, vmChecklist, marketingCheck, cekUangModal, briefing, storeClosing, grooming };
 }
 
 function parsePhotosField(raw: unknown): string[] {
@@ -1411,40 +1356,6 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
     return String(value);
   }
 
-  async function loadItemReturnEntriesByTaskId(taskIds: number[]) {
-    const map = new Map<number, Array<Record<string, unknown>>>();
-    if (!taskIds.length) return map;
-
-    const rows = await db
-      .select()
-      .from(itemReturnEntries)
-      .where(inArray(itemReturnEntries.taskId, taskIds))
-      .orderBy(itemReturnEntries.returnTime);
-
-    for (const row of rows) {
-      const item = {
-        id: row.id,
-        taskId: row.taskId,
-        userId: row.userId,
-        storeId: row.storeId,
-        returnNumber: row.returnNumber,
-        description: row.description,
-        expectedAt: toIsoValue(row.expectedAt),
-        quantity: row.quantity ?? 0,
-        returnTime: toIsoValue(row.returnTime),
-        returnPhotos: parsePhotosField(row.returnPhotos),
-        notes: row.notes,
-        createdAt: toIsoValue(row.createdAt),
-      };
-
-      const bucket = map.get(row.taskId) ?? [];
-      bucket.push(item);
-      map.set(row.taskId, bucket);
-    }
-
-    return map;
-  }
-
   async function loadCekUangModalDenominationsByTaskId(taskIds: number[]) {
     const map = new Map<number, Array<Record<string, unknown>>>();
     if (!taskIds.length) return map;
@@ -1483,8 +1394,6 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
     cekBin,
     vmChecklist,
     marketingCheck,
-    itemDropping,
-    itemReturn,
     cekUangModal,
     briefing,
     storeClosing,
@@ -1510,38 +1419,21 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
     loadTable(cekBinTasks, 'cek_bin', []),
     loadTable(vmChecklistTasks, 'vm_checklist', []),
     loadTable(marketingCheckTasks, 'marketing_check', []),
-    loadTable(itemDroppingTasks, 'item_dropping', []),
-    loadTable(itemReturnTasks, 'item_return', []),
     loadTable(cekUangModalTasks, 'cek_uang_modal', []),
     loadTable(briefingTasks, 'briefing', []),
     // serah_terima intentionally excluded — it's now a shared, rolling
     // handover board per store (no date/status columns), not a per-day
     // completable task row, so it no longer fits this daily flat export.
+    // item_dropping/item_return intentionally excluded — they moved to the
+    // standalone, on-demand Item Transfers page and no longer materialize
+    // per-day rows (see app/employee/item-transfers/page.tsx).
     loadTable(storeClosingTasks, 'store_closing', ['eodEdcSettlementPhoto']),
     loadTable(groomingTasks, 'grooming', ['selfiePhotos']),
   ]);
 
-  const itemReturnEntriesByTaskId = await loadItemReturnEntriesByTaskId(
-    itemReturn.map((task) => task.id),
-  );
   const cekUangModalDenominationsByTaskId = await loadCekUangModalDenominationsByTaskId(
     cekUangModal.map((task) => task.id),
   );
-
-  const itemReturnWithEntries: FlatTask[] = itemReturn.map((task) => {
-    const entries = itemReturnEntriesByTaskId.get(task.id) ?? [];
-    const totalQuantity = entries.reduce((sum, entry) => sum + Number(entry.quantity ?? 0), 0);
-
-    return {
-      ...task,
-      extra: {
-        ...task.extra,
-        entries,
-        entryCount: entries.length,
-        totalQuantity,
-      },
-    };
-  });
 
   const cekUangModalWithDenominations: FlatTask[] = cekUangModal.map((task) => {
     const denominations = cekUangModalDenominationsByTaskId.get(task.id) ?? [];
@@ -1567,8 +1459,6 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
     ...cekBin,
     ...vmChecklist,
     ...marketingCheck,
-    ...itemDropping,
-    ...itemReturnWithEntries,
     ...cekUangModalWithDenominations,
     ...briefing,
     ...storeClosing,
@@ -1758,8 +1648,6 @@ export async function getStoreSummariesForRange(
     cekBin,
     vmChecklist,
     marketingCheck,
-    itemDropping,
-    itemReturn,
     cekUangModal,
     briefing,
     storeClosing,
@@ -1771,12 +1659,12 @@ export async function getStoreSummariesForRange(
     loadTable(cekBinTasks),
     loadTable(vmChecklistTasks),
     loadTable(marketingCheckTasks),
-    loadTable(itemDroppingTasks),
-    loadTable(itemReturnTasks),
     loadTable(cekUangModalTasks),
     loadTable(briefingTasks),
     // serah_terima intentionally excluded — no date/status columns anymore
-    // (shared rolling board, not a per-day row).
+    // (shared rolling board, not a per-day row). item_dropping/item_return
+    // intentionally excluded — standalone on-demand page now, no more
+    // per-day materialized rows.
     loadTable(storeClosingTasks),
     loadTable(groomingTasks),
   ]);
@@ -1788,8 +1676,6 @@ export async function getStoreSummariesForRange(
     ...cekBin,
     ...vmChecklist,
     ...marketingCheck,
-    ...itemDropping,
-    ...itemReturn,
     ...cekUangModal,
     ...briefing,
     ...storeClosing,
@@ -1888,8 +1774,6 @@ export async function getShiftTaskSummary(
     loadTable(cekBinTasks),
     loadTable(vmChecklistTasks),
     loadTable(marketingCheckTasks),
-    loadTable(itemDroppingTasks),
-    loadTable(itemReturnTasks),
     loadTable(cekUangModalTasks),
     loadTable(briefingTasks),
     loadTable(storeClosingTasks),

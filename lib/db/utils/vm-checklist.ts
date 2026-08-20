@@ -114,6 +114,32 @@ async function assertInGeofence(storeId: number, geo: GeoPoint): Promise<string 
     : null;
 }
 
+async function findByScheduleId(scheduleId: number): Promise<VmChecklistTask | null> {
+  const [row] = await db
+    .select()
+    .from(vmChecklistTasks)
+    .where(eq(vmChecklistTasks.scheduleId, scheduleId))
+    .limit(1);
+
+  return row ?? null;
+}
+
+async function findByStoreDate(storeId: number, date: Date): Promise<VmChecklistTask | null> {
+  const [row] = await db
+    .select()
+    .from(vmChecklistTasks)
+    .where(
+      and(
+        eq(vmChecklistTasks.storeId, storeId),
+        gte(vmChecklistTasks.date, startOfDay(date)),
+        lte(vmChecklistTasks.date, endOfDay(date)),
+      ),
+    )
+    .limit(1);
+
+  return row ?? null;
+}
+
 async function assertCanProgressTask(
   scheduleId: number,
   storeId: number,
@@ -250,11 +276,14 @@ export async function submitVmChecklist(
 
     if (gateErr) return { success: false, error: gateErr };
 
-    const [existing] = await db
-      .select()
-      .from(vmChecklistTasks)
-      .where(eq(vmChecklistTasks.scheduleId, input.scheduleId))
-      .limit(1);
+    // VM Checklist is a store-shared task — whoever created the row via
+    // getOrCreateVmChecklistForSchedule may not be the same person who ends
+    // up submitting it, so a scheduleId-only lookup can miss the existing
+    // row and insert a duplicate. Fall back to store+date, same as the
+    // sibling shared-task submit functions (e.g. submitMarketingCheck).
+    const existing =
+      (await findByScheduleId(input.scheduleId)) ??
+      (await findByStoreDate(input.storeId, new Date()));
 
     if (existing?.status === 'completed') {
       return { success: false, error: 'VM Checklist task sudah selesai.' };

@@ -18,6 +18,7 @@ import { useRouter } from 'next/navigation';
 import {
   AlertCircle,
   Calendar,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
@@ -39,6 +40,9 @@ import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
 import { paletteOf } from '@/lib/shift-tasks';
+import { Button } from '@/components/ui/button';
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -90,6 +94,7 @@ interface EmployeeOption {
 
 interface StoreOption {
   id: string;
+  storeNo: string;
   name: string;
   address: string | null;
   areaId?: number | null;
@@ -947,6 +952,76 @@ function CalendarGrid({ schedule, yearMonth, shifts, onDayPress }: {
   );
 }
 
+// ─── StorePickerCombobox ────────────────────────────────────────────────────
+//
+// Searchable in place of a plain <select> — Ops can type a store's name OR
+// its store code (storeNo) to filter, instead of scrolling a long list.
+
+function StorePickerCombobox({ stores, storesByArea, selectedStore, currentStore, onSelect }: {
+  stores: StoreOption[];
+  storesByArea: { areaId: number | null | undefined; areaName: string; list: StoreOption[] }[];
+  selectedStore: string | null;
+  currentStore: StoreOption | null;
+  onSelect: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const grouped = storesByArea.length > 1;
+
+  const renderItem = (s: StoreOption) => (
+    <CommandItem
+      key={s.id}
+      value={`${s.name} ${s.storeNo}`}
+      onSelect={() => { onSelect(s.id); setOpen(false); }}
+      className="gap-2"
+    >
+      <StoreIcon className="h-3.5 w-3.5 text-slate-400" />
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-semibold">{s.name}</p>
+        <p className="truncate text-[10px] text-slate-400">
+          {s.storeNo}{s.address ? ` · ${s.address}` : ''}
+        </p>
+      </div>
+      {selectedStore === s.id && <Check className="h-3.5 w-3.5 shrink-0 text-indigo-600" />}
+    </CommandItem>
+  );
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          className="h-11 w-full justify-between gap-2 rounded-xl border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 hover:border-indigo-300 hover:bg-white focus-visible:ring-2 focus-visible:ring-indigo-100"
+        >
+          <span className="flex min-w-0 items-center gap-2">
+            <StoreIcon className="h-4 w-4 shrink-0 text-slate-400" />
+            <span className="truncate">{currentStore ? currentStore.name : 'Select a store…'}</span>
+          </span>
+          <ChevronDown className="h-4 w-4 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+        <Command>
+          <CommandInput placeholder="Search store name or code…" />
+          <CommandList>
+            <CommandEmpty>No stores found.</CommandEmpty>
+            {grouped ? (
+              storesByArea.map((group) => (
+                <CommandGroup key={group.areaName} heading={group.areaName}>
+                  {group.list.map(renderItem)}
+                </CommandGroup>
+              ))
+            ) : (
+              <CommandGroup>{stores.map(renderItem)}</CommandGroup>
+            )}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function OpsSchedulesPage() {
@@ -1289,25 +1364,13 @@ export default function OpsSchedulesPage() {
                   {isHO ? 'No stores in the system yet.' : 'No stores in your area. Contact an admin.'}
                 </div>
               ) : (
-                <div className="relative">
-                  <StoreIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                  <select
-                    value={selectedStore ?? ''}
-                    onChange={e => setSelectedStore(e.target.value)}
-                    className="h-11 w-full appearance-none rounded-xl border border-slate-200 bg-white pl-10 pr-10 text-sm font-semibold text-slate-800 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
-                  >
-                    {storesByArea.length > 1 ? (
-                      storesByArea.map(group => (
-                        <optgroup key={group.areaName} label={group.areaName}>
-                          {group.list.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                        </optgroup>
-                      ))
-                    ) : (
-                      stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)
-                    )}
-                  </select>
-                  <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                </div>
+                <StorePickerCombobox
+                  stores={stores}
+                  storesByArea={storesByArea}
+                  selectedStore={selectedStore}
+                  currentStore={currentStore}
+                  onSelect={setSelectedStore}
+                />
               )}
             </div>
           </div>

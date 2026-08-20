@@ -16,7 +16,6 @@ import {
 } from "@/lib/performance/business-central-sales";
 import {
   getMonthRange,
-  listDateKeysInMonth,
   toDateOnly,
 } from "@/lib/performance/target-utils";
 
@@ -207,20 +206,29 @@ export type EmployeeDailyActual = {
   actualTransactionCount: number;
 };
 
+/** Pure calendar-date arithmetic (UTC-anchored, so it never drifts across a server's local timezone). */
+function addDaysToDateKey(dateKey: string, delta: number): string {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + delta)).toISOString().slice(0, 10);
+}
+
 /**
  * Fetch one employee's (by NIK) daily sales + transaction counts for every
- * day in a month — used by the "monthly sales calendar" widget in the
- * employee target table's Aksi column.
+ * day in an arbitrary date range — used by the "achievement timeline" widget
+ * in the employee target table's Aksi column, where Ops picks a period and
+ * sees how many days the employee hit their flat daily target.
  *
- * Returns a day-by-day breakdown (only days with at least one entry are
- * included in `daysWithSales`; `byDate` includes zero-value days for the
- * full month so the calendar can render every cell).
+ * Returns a day-by-day breakdown; `byDate` includes zero-value days for
+ * every date in the range so the timeline can render every cell.
  */
-export async function getEmployeeDailyActualsForMonth(params: {
+export async function getEmployeeDailyActualsForRange(params: {
   storeNo: string;
-  yearMonth: string;
   /** users.nik */
   nik: string;
+  /** inclusive, YYYY-MM-DD */
+  startDate: string;
+  /** inclusive, YYYY-MM-DD */
+  endDate: string;
 }): Promise<{
   byDate: Map<string, EmployeeDailyActual>;
   totalSales: number;
@@ -229,20 +237,20 @@ export async function getEmployeeDailyActualsForMonth(params: {
   error?: string;
 }> {
   try {
-    const { start, end } = getMonthRange(params.yearMonth);
+    const endExclusive = addDaysToDateKey(params.endDate, 1);
 
     const entries = await getBusinessCentralSalesEntries({
       storeNo: params.storeNo,
-      startDate: toDateOnly(start),
-      endDate: toDateOnly(end),
+      startDate: params.startDate,
+      endDate: endExclusive,
     });
 
     const byDate = new Map<string, { sales: number; receipts: Set<string> }>();
 
     // Pre-fill every date key directly. This avoids server-timezone shifts
-    // when the calendar is rendered around midnight.
-    for (const date of listDateKeysInMonth(params.yearMonth)) {
-      byDate.set(date, { sales: 0, receipts: new Set<string>() });
+    // when the timeline is rendered around midnight.
+    for (let cursor = params.startDate; cursor < endExclusive; cursor = addDaysToDateKey(cursor, 1)) {
+      byDate.set(cursor, { sales: 0, receipts: new Set<string>() });
     }
 
     let totalSales = 0;

@@ -16,6 +16,7 @@ import { and, desc, eq, gte, inArray, lte, or } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
+import { todayInStoreTimezone } from '@/lib/schedule-utils';
 import {
   attendance,
   issueRoleAssignments,
@@ -32,6 +33,7 @@ import {
   getShiftTaskSummary,
   getStoreSummariesForRange,
 } from '@/lib/db/utils/tasks';
+import { parseDate } from '../tasks/_helpers';
 
 function startOfDay(d: Date) {
   const r = new Date(d);
@@ -58,11 +60,13 @@ export async function GET(req: NextRequest) {
   }
 
   const rawDate = req.nextUrl.searchParams.get('date');
-  const date = rawDate ? new Date(rawDate) : new Date();
+  const dateParsed = rawDate ? parseDate(rawDate) : { ok: true as const, date: todayInStoreTimezone() };
 
-  if (Number.isNaN(date.getTime())) {
-    return NextResponse.json({ success: false, error: 'Invalid date.' }, { status: 400 });
+  if (!dateParsed.ok) {
+    return NextResponse.json({ success: false, error: dateParsed.error }, { status: 400 });
   }
+
+  const date = dateParsed.date;
 
   const storeRows = await db
     .select({ id: stores.id, name: stores.name, areaId: stores.areaId })
@@ -88,6 +92,17 @@ export async function GET(req: NextRequest) {
     },
     { notStarted: 0, inProgress: 0, completed: 0, pending: 0, total: 0 },
   );
+
+  const todayByStore = overview.stores
+    .filter((s) => s.summary.total > 0)
+    .map((s) => ({
+      storeId: s.id,
+      storeName: s.name,
+      completed: s.summary.completed,
+      total: s.summary.total,
+      completionRate: completionRate(s.summary.completed, s.summary.total),
+    }))
+    .sort((a, b) => a.completionRate - b.completionRate);
 
   const shiftRows = storeIds.length ? await getShiftTaskSummary(storeIds, date) : [];
 
@@ -268,13 +283,17 @@ export async function GET(req: NextRequest) {
     storeCount: storeIds.length,
     tasks: {
       today: { ...today, completionRate: completionRate(today.completed, today.total) },
+      todayByStore,
       shiftToday: shiftRows.map((s) => ({ ...s, completionRate: completionRate(s.completed, s.total) })),
       month: { ...month, completionRate: completionRate(month.completed, month.total) },
     },
     attendance: {
       ...attendanceTotal,
       rate: completionRate(attendanceTotal.present + attendanceTotal.late, attendanceTotal.total),
-      stores: [...attendanceStoreMap.values()].filter((s) => s.total > 0),
+      stores: [...attendanceStoreMap.values()]
+        .filter((s) => s.total > 0)
+        .map((s) => ({ ...s, rate: completionRate(s.present + s.late, s.total) }))
+        .sort((a, b) => a.rate - b.rate),
     },
     pettyCash: {
       pendingCount: pettyCashPendingCount,

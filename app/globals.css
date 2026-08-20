@@ -30,14 +30,22 @@
 }
 
 /* Base styles */
-* {
-  border-color: var(--color-border);
-}
+/* Must live in @layer base — Tailwind's utility classes (border-green-200,
+   border-sky-200, ...) are generated inside @layer utilities, and CSS
+   cascade layers give ANY layered rule priority over unlayered ones
+   regardless of specificity. An unlayered `* { border-color: ... }` here
+   would silently win over every colored border utility in the app,
+   flattening them all to this default grey. */
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
 
-body {
-  background-color: var(--color-background);
-  color: var(--color-foreground);
-  font-family: system-ui, -apple-system, sans-serif;
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: system-ui, -apple-system, sans-serif;
+  }
 }
 
 /* Mobile-only styles for employee views */

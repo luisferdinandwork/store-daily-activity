@@ -18,6 +18,7 @@ import { eq } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import { areas, storeMonthlyTargets, stores } from '@/lib/db/schema';
+import { getStoreActuals } from '@/lib/performance/employee-actuals';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
 import { listStoreRoster, toYearMonth } from '@/lib/performance/target-utils';
 
@@ -60,7 +61,10 @@ export async function GET(req: NextRequest) {
   const stores_ = await Promise.all(
     storeRows.map(async (store) => {
       const plan = planByStoreId.get(store.id) ?? null;
-      const roster = await listStoreRoster({ storeId: store.id, yearMonth });
+      const [roster, actuals] = await Promise.all([
+        listStoreRoster({ storeId: store.id, yearMonth }),
+        getStoreActuals({ storeNo: store.storeNo, period: 'monthly', yearMonth }),
+      ]);
 
       const monthlySalesTarget = Number(plan?.monthlySalesTarget ?? 0);
       const monthlyTransactionTarget = Number(plan?.monthlyTransactionTarget ?? 0);
@@ -82,8 +86,10 @@ export async function GET(req: NextRequest) {
             ? Math.round(monthlySalesTarget / monthlyTransactionTarget)
             : 0,
           rosterCount: roster.length,
+          storeActualSales: actuals.storeActualSales,
+          storeActualTransactionCount: actuals.storeActualTransactionCount,
+          actualsAvailable: actuals.available,
         },
-        isLocked: plan?.isLocked ?? false,
       };
     }),
   );

@@ -2,7 +2,7 @@
 // Frontend/API-safe normalizer for employee task cards.
 //
 // Purpose:
-// - briefing, item_dropping, and serah_terima are shared daily morning tasks.
+// - briefing and serah_terima are shared daily morning tasks.
 // - If old DB rows still contain morning + evening/full_day duplicates, only show one card.
 // - full_day employees should still see the task, but it should be shown/grouped as morning.
 //
@@ -35,8 +35,6 @@ export interface NormalizableEmployeeTask {
 
 const MORNING_ONLY_SHARED_TASK_TYPES = new Set([
   'briefing',
-  'item_dropping',
-  'item-dropping',
   'serah_terima',
   'serah-terima',
 ]);

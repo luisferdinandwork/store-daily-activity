@@ -341,12 +341,31 @@ export async function getStoreArea(storeId: number): Promise<Area | null> {
 
 export async function getStoresForOps(opsUserId: string): Promise<number[]> {
   const [opsUser] = await db
-    .select({ areaId: users.areaId })
+    .select({
+      areaId: users.areaId,
+      roleCode: userRoles.code,
+      employeeTypeCode: employeeTypes.code,
+    })
     .from(users)
+    .innerJoin(userRoles, eq(userRoles.id, users.roleId))
+    .leftJoin(employeeTypes, eq(employeeTypes.id, users.employeeTypeId))
     .where(eq(users.id, opsUserId))
     .limit(1);
 
-  if (!opsUser?.areaId) return [];
+  if (!opsUser) return [];
+
+  /**
+   * IT and OPS HO see every store (they're seeded with areaId = null,
+   * which is *not* "no access" — it means "all areas").
+   */
+  const isAllAreas = opsUser.roleCode === "it" || opsUser.employeeTypeCode === "ops_ho";
+
+  if (isAllAreas) {
+    const allStores = await db.select({ id: stores.id }).from(stores);
+    return allStores.map((s) => s.id);
+  }
+
+  if (!opsUser.areaId) return [];
 
   const areaStores = await db
     .select({ id: stores.id })

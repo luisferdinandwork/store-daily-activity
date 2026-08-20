@@ -15,6 +15,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
 import EmployeeLogoMark from './EmployeeLogoMark';
 import EmployeeNotificationBell from './EmployeeNotificationBell';
+import EmployeeItemTransfersBadge from './EmployeeItemTransfersBadge';
 
 const ROOT_TABS = new Set([
   '/employee',
@@ -30,6 +31,7 @@ const TITLES: Record<string, string> = {
   '/employee/knowledge': 'Knowledge Base',
   '/employee/pettycash': 'Petty Cash',
   '/employee/announcements': 'Notifications',
+  '/employee/item-transfers': 'Item Transfers',
 };
 
 const VISIBLE_PATHS = new Set<string>([...ROOT_TABS, ...Object.keys(TITLES)]);
@@ -64,6 +66,7 @@ export default function EmployeeHeader() {
 
       {isRootTab && <div className="flex-1" />}
 
+      {isRootTab && <EmployeeItemTransfersBadge />}
       <EmployeeNotificationBell />
     </header>
   );

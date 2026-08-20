@@ -18,7 +18,6 @@ import {
   Store,
   Wallet,
   Box,
-  Truck,
   Users,
   CreditCard,
   ClipboardList,
@@ -46,8 +45,6 @@ export type TaskType =
   | "store_front"
   | "vm_checklist"
   | "marketing_check"
-  | "item_dropping"
-  | "item_return"
   | "cek_uang_modal"
   | "briefing"
   | "serah_terima"
@@ -199,48 +196,6 @@ export interface VmChecklistData extends TaskBase {
   floorDisplayCleanliness: boolean;
   vmToolsStorage: boolean;
 }
-export interface ItemDroppingData extends TaskBase {
-  hasDropping: boolean;
-  entries: Array<{
-    id: string;
-    taskId: string;
-    userId: string;
-    storeId: string;
-    toNumber: string;
-    quantity: number;
-    dropTime: string | null;
-    droppingPhotos: string[];
-    notes: string | null;
-    createdAt: string | null;
-    // BC-driven pipeline fields — see lib/db/schema/item-transfers.ts.
-    qtyOrdered: number;
-    qtyCounted: number | null;
-    submittedAt: string | null;
-  }>;
-}
-
-export interface ItemReturnData extends TaskBase {
-  hasReturn: boolean;
-  entries: Array<{
-    id: string;
-    taskId: string;
-    userId: string;
-    storeId: string;
-    returnNumber: string;
-    description: string | null;
-    expectedAt: string | null;
-    quantity: number;
-    returnTime: string | null;
-    returnPhotos: string[];
-    notes: string | null;
-    createdAt: string | null;
-    // BC-driven pipeline fields — see lib/db/schema/item-transfers.ts.
-    qtyOrdered: number;
-    qtyCounted: number | null;
-    submittedAt: string | null;
-  }>;
-}
-
 export interface CekUangModalData extends TaskBase {
   totalAmount: string | null;
   denominations: Array<{
@@ -322,8 +277,6 @@ export type TaskItem =
   | { type: "cek_bin"; shift: ShiftCode; data: CekBinData }
   | { type: "vm_checklist"; shift: ShiftCode; data: VmChecklistData }
   | { type: "marketing_check"; shift: ShiftCode; data: MarketingCheckData }
-  | { type: "item_dropping"; shift: ShiftCode; data: ItemDroppingData }
-  | { type: "item_return"; shift: ShiftCode; data: ItemReturnData }
   | { type: "cek_uang_modal"; shift: ShiftCode; data: CekUangModalData }
   | { type: "briefing"; shift: ShiftCode; data: BriefingData }
   | { type: "store_closing"; shift: ShiftCode; data: StoreClosingData }
@@ -424,18 +377,6 @@ const TASK_META: Record<
     Icon: ClipboardList,
     hasPhoto: false,
   },
-  item_dropping: {
-    title: "Item Dropping",
-    description: "Log delivery arrival & receipt.",
-    Icon: Truck,
-    hasPhoto: true,
-  },
-  item_return: {
-    title: "Item Return",
-    description: "Konfirmasi item return dari BC / external app.",
-    Icon: Truck,
-    hasPhoto: true,
-  },
   cek_uang_modal: {
     title: "Cek Uang Modal",
     description: "Input pecahan dan jumlah uang modal kasir toko.",
@@ -481,8 +422,6 @@ const TASK_ROUTES: Record<TaskType, string> = {
   setoran: "setoran",
   cek_bin: "cek-bin",
   vm_checklist: "vm-checklist",
-  item_dropping: "item-dropping",
-  item_return: "item-return",
   cek_uang_modal: "cek-uang-modal",
   briefing: "briefing",
   store_closing: "store-closing",
@@ -501,15 +440,11 @@ const DEFAULT_SHIFT_TASK_MAP: ShiftTaskMap = {
     "grooming",
     "vm_checklist",
     "marketing_check",
-    "item_dropping",
-    "item_return",
     "briefing",
     "serah_terima",
   ],
   evening: [
     "grooming",
-    "item_dropping",
-    "item_return",
     "briefing",
     "serah_terima",
     "store_closing",
@@ -523,8 +458,6 @@ const DEFAULT_SHIFT_TASK_MAP: ShiftTaskMap = {
     "grooming",
     "vm_checklist",
     "marketing_check",
-    "item_dropping",
-    "item_return",
     "briefing",
     "serah_terima",
     "store_closing",
@@ -726,7 +659,7 @@ function taskCardKey(task: TaskItem): string {
  * app/api/employee/tasks/route.ts), NOT necessarily by the task row's own
  * stored shift tag. Several shared task types (setoran, store_opening,
  * cek_bin, vm_checklist, marketing_check, and — for full_day employees —
- * item_dropping/item_return/cek_uang_modal/briefing) are always tagged with
+ * cek_uang_modal/briefing) are always tagged with
  * a concrete 'morning' or 'evening' shiftId on the row, even when a full_day
  * employee is the one doing them. A full_day employee's config is only ever
  * keyed 'full_day', so blindly indexing by task.shift silently drops the
@@ -867,7 +800,7 @@ function normaliseVisibleTasks(
     // Personal tasks must stay per schedule; shared tasks dedupe by
     // type/store/day/shift/id. The server already guarantees at most one row
     // per (store, date, shift) for shift-scoped shared types (briefing,
-    // item_dropping, item_return, cek_uang_modal), so no extra
+    // cek_uang_modal), so no extra
     // morning/evening collapsing is needed here — doing so would mutate
     // task.shift and break order/sequence lookups for full_day and custom
     // shifts (see getDisplayShift for the display-only equivalent).
@@ -1698,21 +1631,6 @@ function StepRail({
   );
 }
 
-// Short "Xj Ym lalu" / "Xh Yj lalu" elapsed-time formatter, used by the
-// item_dropping/item_return card descriptions below.
-function elapsedShort(fromIso: string | null): string {
-  if (!fromIso) return "—";
-  const diffMin = Math.max(
-    0,
-    Math.floor((Date.now() - new Date(fromIso).getTime()) / 60_000),
-  );
-  const hours = Math.floor(diffMin / 60);
-  const minutes = diffMin % 60;
-  if (hours >= 24) return `${Math.floor(hours / 24)}h ${hours % 24}j lalu`;
-  if (hours > 0) return `${hours}j ${minutes}m lalu`;
-  return `${minutes}m lalu`;
-}
-
 // ─── Task card ────────────────────────────────────────────────────────────────
 
 function TaskCard({
@@ -1765,65 +1683,12 @@ function TaskCard({
       (item.data as StoreClosingData).openStatementDecision === "on_hold");
 
   const showCarryForward =
-    isDiscrepancy &&
-    (item.type === "item_dropping" ||
-      item.type === "item_return" ||
-      item.type === "store_closing");
+    isDiscrepancy && item.type === "store_closing";
 
   const carryForwardDescription: Partial<Record<TaskType, string>> = {
-    item_return:
-      "Ada item return yang belum diselesaikan — tap untuk lanjutkan konfirmasi.",
-    item_dropping:
-      "Ada item dropping yang belum diselesaikan — tap untuk lanjutkan konfirmasi.",
     store_closing:
       "Store Closing tertahan karena Open Statement On Hold — tap untuk lanjutkan setelah issue resolved.",
   };
-
-  // Both item_dropping and item_return are now BC-driven: each transfer
-  // order is its own entry, confirmed independently (see
-  // app/employee/tasks/item-return|item-dropping/[id]/page.tsx). An entry is
-  // "open" until its own submittedAt is set — unrelated to the old
-  // hasReturn/hasDropping flag.
-  const oldestOpenEntry = <T extends { createdAt: string | null }>(
-    open: T[],
-  ): T =>
-    open.reduce((a, b) =>
-      new Date(a.createdAt ?? 0).getTime() <= new Date(b.createdAt ?? 0).getTime()
-        ? a
-        : b,
-    );
-
-  const itemDroppingLabel = (() => {
-    if (item.type !== "item_dropping") return null;
-    const d = item.data as ItemDroppingData;
-    if (d.entries.length === 0) {
-      return isDiscrepancy ? "Menunggu transfer order dari Business Central." : null;
-    }
-
-    const open = d.entries.filter((e) => !e.submittedAt);
-    if (open.length > 0) {
-      const elapsed = elapsedShort(oldestOpenEntry(open).createdAt);
-      return `${open.length} dalam perjalanan · tertua ${elapsed}`;
-    }
-
-    return `${d.entries.length} item dropping sudah dikonfirmasi.`;
-  })();
-
-  const itemReturnLabel = (() => {
-    if (item.type !== "item_return") return null;
-    const d = item.data as ItemReturnData;
-    if (d.entries.length === 0) {
-      return isDiscrepancy ? "Menunggu transfer order dari Business Central." : null;
-    }
-
-    const open = d.entries.filter((e) => !e.submittedAt);
-    if (open.length > 0) {
-      const elapsed = elapsedShort(oldestOpenEntry(open).createdAt);
-      return `${open.length} menunggu diambil kurir · tertua ${elapsed}`;
-    }
-
-    return `${d.entries.length} item return sudah dikonfirmasi.`;
-  })();
 
   const cekUangModalLabel = (() => {
     if (item.type !== "cek_uang_modal") return null;
@@ -1884,21 +1749,17 @@ function TaskCard({
     ? lockedLabel
       ? `Selesaikan "${lockedLabel}" terlebih dahulu.`
       : "Selesaikan task sebelumnya terlebih dahulu."
-    : itemDroppingLabel
-      ? itemDroppingLabel
-      : itemReturnLabel
-        ? itemReturnLabel
-        : cekUangModalLabel
-          ? cekUangModalLabel
-          : setoranDeficitLabel
-            ? setoranDeficitLabel
-            : storeClosingHoldLabel
-              ? storeClosingHoldLabel
-              : serahTerimaLabel
-                ? serahTerimaLabel
-                : showCarryForward
-                  ? (carryForwardDescription[item.type] ?? meta.description)
-                  : meta.description;
+    : cekUangModalLabel
+      ? cekUangModalLabel
+      : setoranDeficitLabel
+        ? setoranDeficitLabel
+        : storeClosingHoldLabel
+          ? storeClosingHoldLabel
+          : serahTerimaLabel
+            ? serahTerimaLabel
+            : showCarryForward
+              ? (carryForwardDescription[item.type] ?? meta.description)
+              : meta.description;
 
   return (
     <Card

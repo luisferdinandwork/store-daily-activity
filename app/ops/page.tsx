@@ -39,6 +39,26 @@ type ShiftBucket = {
   completionRate: number;
 };
 
+type StoreTaskRow = {
+  storeId: number;
+  storeName: string;
+  completed: number;
+  total: number;
+  completionRate: number;
+};
+
+type StoreAttendanceRow = {
+  storeId: string;
+  storeName: string;
+  total: number;
+  present: number;
+  late: number;
+  absent: number;
+  excused: number;
+  unset: number;
+  rate: number;
+};
+
 type PettyCashRow = {
   id: number;
   amount: string;
@@ -63,6 +83,7 @@ type DashboardData = {
   storeCount: number;
   tasks: {
     today: TaskBucket;
+    todayByStore: StoreTaskRow[];
     shiftToday: ShiftBucket[];
     month: { completed: number; total: number; completionRate: number };
   };
@@ -74,6 +95,7 @@ type DashboardData = {
     excused: number;
     unset: number;
     rate: number;
+    stores: StoreAttendanceRow[];
   };
   pettyCash: {
     pendingCount: number;
@@ -213,42 +235,6 @@ function Bar({ pct, tone }: { pct: number; tone: Tone }) {
   );
 }
 
-function SegmentedBar({ segments }: { segments: Array<{ value: number; tone: Tone }> }) {
-  const total = segments.reduce((a, s) => a + s.value, 0);
-  if (total <= 0) {
-    return <div className="h-2.5 w-full rounded-full bg-slate-100" />;
-  }
-  return (
-    <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
-      {segments
-        .filter((s) => s.value > 0)
-        .map((s, i) => (
-          <div
-            key={i}
-            className="h-full transition-all duration-700 ease-out"
-            style={{ width: `${(s.value / total) * 100}%`, background: TONE[s.tone].ring }}
-          />
-        ))}
-    </div>
-  );
-}
-
-function LegendGrid({ items }: { items: Array<{ label: string; value: number; tone: Tone }> }) {
-  return (
-    <div className="grid grid-cols-2 gap-x-4 gap-y-2.5">
-      {items.map(({ label, value, tone }) => (
-        <div key={label} className="flex items-center justify-between gap-2 text-xs">
-          <span className="flex items-center gap-2 text-slate-600">
-            <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: TONE[tone].ring }} />
-            {label}
-          </span>
-          <span className="font-semibold tabular-nums text-slate-900">{value}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function ViewLink({ href, children }: { href: string; children: ReactNode }) {
   return (
     <Link
@@ -258,6 +244,71 @@ function ViewLink({ href, children }: { href: string; children: ReactNode }) {
       {children}
       <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
     </Link>
+  );
+}
+
+// ─── Store ranking card (operations health) ─────────────────────────────────
+// Ranks stores worst-first on a single rate, so ops can see *where* to act
+// instead of re-reading the same system-wide total from the KPI row above.
+
+function StoreRankCard({
+  icon,
+  tone,
+  title,
+  viewHref,
+  rows,
+  emptyLabel,
+  moreCount = 0,
+}: {
+  icon: typeof Users;
+  tone: Tone;
+  title: string;
+  viewHref: string;
+  rows: Array<{ key: string | number; name: string; rate: number; detail: string }>;
+  emptyLabel: string;
+  moreCount?: number;
+}) {
+  return (
+    <Card className="rounded-2xl border-slate-200 bg-white shadow-sm">
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between">
+          <CardTitle className="flex items-center gap-2.5 text-sm font-semibold text-slate-900">
+            <CardIcon icon={icon} tone={tone} />
+            {title}
+          </CardTitle>
+          <ViewLink href={viewHref}>View all</ViewLink>
+        </div>
+      </CardHeader>
+      <CardContent className="p-6 pt-2">
+        {rows.length === 0 ? (
+          <div className="flex flex-col items-center gap-1.5 py-8 text-center">
+            <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+            <p className="text-sm text-slate-500">{emptyLabel}</p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {rows.map((row) => {
+              const t = rateTone(row.rate);
+              return (
+                <div key={row.key}>
+                  <div className="mb-1 flex items-baseline justify-between gap-2">
+                    <p className="truncate text-sm font-medium text-slate-800">{row.name}</p>
+                    <span className="flex shrink-0 items-baseline gap-1.5">
+                      <span className="text-xs text-slate-400">{row.detail}</span>
+                      <span className={`text-xs font-semibold ${TONE[t].text}`}>{row.rate}%</span>
+                    </span>
+                  </div>
+                  <Bar pct={row.rate} tone={t} />
+                </div>
+              );
+            })}
+            {moreCount > 0 && (
+              <p className="pt-1 text-xs text-slate-400">+{moreCount} more store{moreCount === 1 ? '' : 's'} below target</p>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -338,6 +389,11 @@ export default function OpsDashboardPage() {
   const pettyCashPending = data?.pettyCash.pendingCount ?? 0;
   const issuesUnreviewed = data?.issues.unreviewedCount ?? 0;
   const needsAttentionTotal = pettyCashPending + issuesUnreviewed;
+
+  // Store-level rankings power the "Stores Needing Attention" section — the
+  // top KPI row shows the system-wide pulse, this shows *where* to act.
+  const taskStoresBehind = (data?.tasks.todayByStore ?? []).filter((s) => s.completionRate < 100);
+  const attendanceStoresBehind = (data?.attendance.stores ?? []).filter((s) => s.rate < 100);
 
   const scopeLabel = data
     ? `${data.scope === 'all_areas' ? 'All Areas' : 'Area'} · ${data.storeCount} store${data.storeCount === 1 ? '' : 's'}`
@@ -474,76 +530,42 @@ export default function OpsDashboardPage() {
 
         {/* ── Operations health ────────────────────────────────────────────── */}
         <section>
-          <SectionHeading>Operations Health</SectionHeading>
+          <SectionHeading>Stores Needing Attention</SectionHeading>
           <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-            <Card className="rounded-2xl border-slate-200 bg-white shadow-sm">
-              <CardHeader className="pb-2">
-                <CardTitle className="flex items-center gap-2.5 text-sm font-semibold text-slate-900">
-                  <CardIcon icon={ListChecks} tone="indigo" />
-                  Task Breakdown — Today
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="p-6 pt-2">
-                <div className="mb-1.5 flex items-baseline justify-between">
-                  <p className="text-xs text-slate-500">{today?.total ?? 0} task hari ini</p>
-                  <p className="text-xs font-semibold text-slate-900">{today?.completionRate ?? 0}% selesai</p>
-                </div>
-                <SegmentedBar
-                  segments={[
-                    { value: today?.completed ?? 0, tone: 'emerald' },
-                    { value: today?.inProgress ?? 0, tone: 'indigo' },
-                    { value: today?.pending ?? 0, tone: 'amber' },
-                    { value: today?.notStarted ?? 0, tone: 'slate' },
-                  ]}
-                />
-                <div className="mt-5">
-                  <LegendGrid
-                    items={[
-                      { label: 'Completed', value: today?.completed ?? 0, tone: 'emerald' },
-                      { label: 'In Progress', value: today?.inProgress ?? 0, tone: 'indigo' },
-                      { label: 'Pending', value: today?.pending ?? 0, tone: 'amber' },
-                      { label: 'Not Started', value: today?.notStarted ?? 0, tone: 'slate' },
-                    ]}
-                  />
-                </div>
-              </CardContent>
-            </Card>
+            <StoreRankCard
+              icon={ListChecks}
+              tone="indigo"
+              title="Task Completion by Store"
+              viewHref="/ops/tasks/progress"
+              emptyLabel="Semua toko sudah menyelesaikan task hari ini"
+              rows={taskStoresBehind.slice(0, 6).map((s) => ({
+                key: s.storeId,
+                name: s.storeName,
+                rate: s.completionRate,
+                detail: `${s.completed}/${s.total} task`,
+              }))}
+              moreCount={Math.max(0, taskStoresBehind.length - 6)}
+            />
 
-            <Card className="rounded-2xl border-slate-200 bg-white shadow-sm">
-              <CardHeader className="pb-2">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="flex items-center gap-2.5 text-sm font-semibold text-slate-900">
-                    <CardIcon icon={Users} tone="emerald" />
-                    Attendance — All Stores
-                  </CardTitle>
-                  <ViewLink href="/ops/attendance">View Detail</ViewLink>
-                </div>
-              </CardHeader>
-              <CardContent className="p-6 pt-2">
-                <div className="mb-1.5 flex items-baseline justify-between">
-                  <p className="text-xs text-slate-500">{att?.total ?? 0} jadwal hari ini</p>
-                  <p className="text-xs font-semibold text-slate-900">{att?.rate ?? 0}% hadir</p>
-                </div>
-                <SegmentedBar
-                  segments={[
-                    { value: att?.present ?? 0, tone: 'emerald' },
-                    { value: att?.late ?? 0, tone: 'amber' },
-                    { value: att?.unset ?? 0, tone: 'slate' },
-                    { value: att?.excused ?? 0, tone: 'sky' },
-                  ]}
-                />
-                <div className="mt-5">
-                  <LegendGrid
-                    items={[
-                      { label: 'Present', value: att?.present ?? 0, tone: 'emerald' },
-                      { label: 'Late', value: att?.late ?? 0, tone: 'amber' },
-                      { label: 'Not Yet Attended', value: att?.unset ?? 0, tone: 'slate' },
-                      { label: 'Leave', value: att?.excused ?? 0, tone: 'sky' },
-                    ]}
-                  />
-                </div>
-              </CardContent>
-            </Card>
+            <StoreRankCard
+              icon={Users}
+              tone="emerald"
+              title="Attendance by Store"
+              viewHref="/ops/attendance"
+              emptyLabel="Semua toko hadir lengkap hari ini"
+              rows={attendanceStoresBehind.slice(0, 6).map((s) => ({
+                key: s.storeId,
+                name: s.storeName,
+                rate: s.rate,
+                detail:
+                  s.absent > 0 || s.unset > 0
+                    ? `${s.absent} absen · ${s.unset} belum hadir`
+                    : s.late > 0
+                      ? `${s.late} terlambat`
+                      : `${s.present}/${s.total} hadir`,
+              }))}
+              moreCount={Math.max(0, attendanceStoresBehind.length - 6)}
+            />
           </div>
         </section>
 

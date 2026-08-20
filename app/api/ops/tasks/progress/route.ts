@@ -6,6 +6,7 @@ import { eq } from 'drizzle-orm';
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
 import { stores } from '@/lib/db/schema';
+import { todayInStoreTimezone } from '@/lib/schedule-utils';
 import {
   getAllTaskOverview,
   getAreaTaskOverview,
@@ -101,6 +102,10 @@ function storeSummaryFromOverviewStore(store: {
   return withCompletionRate(store.summary);
 }
 
+function toDateKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 // GET /api/ops/tasks/progress?date=YYYY-MM-DD
 // GET /api/ops/tasks/progress?date=YYYY-MM-DD&storeId=1
 export async function GET(req: NextRequest) {
@@ -124,7 +129,7 @@ export async function GET(req: NextRequest) {
 
   const rawDate =
     req.nextUrl.searchParams.get('date') ??
-    new Date().toISOString().slice(0, 10);
+    toDateKey(todayInStoreTimezone());
 
   const dateParsed = parseDate(rawDate);
 

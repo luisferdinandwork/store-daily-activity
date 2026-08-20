@@ -218,7 +218,11 @@ export const authOptions: NextAuthOptions = {
 
   session: {
     strategy: 'jwt',
-    maxAge: 30 * 24 * 60 * 60,
+    // Absolute cap on a session's lifetime; refreshed by `updateAge` below
+    // whenever the client is actually active, so in practice this behaves
+    // as a 6-hour idle timeout rather than a fixed 6-hour login.
+    maxAge: 6 * 60 * 60,
+    updateAge: 5 * 60,
   },
 
   callbacks: {

@@ -67,22 +67,6 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     createdBy: scope.userId,
   });
 
-  // Locked plans can't have their target numbers changed — only unlocked
-  // first. isLocked itself can always be toggled (that's how you unlock).
-  const [currentPlan] = await db
-    .select({ isLocked: storeMonthlyTargets.isLocked })
-    .from(storeMonthlyTargets)
-    .where(eq(storeMonthlyTargets.id, planId))
-    .limit(1);
-
-  const changingAmounts = body?.monthlySalesTarget != null || body?.monthlyTransactionTarget != null;
-  if (changingAmounts && currentPlan?.isLocked && body?.isLocked !== false) {
-    return NextResponse.json(
-      { success: false, error: 'Plan is locked. Unlock it before changing the monthly target.' },
-      { status: 409 },
-    );
-  }
-
   const updates: Partial<typeof storeMonthlyTargets.$inferInsert> = {
     updatedBy: scope.userId,
     updatedAt: new Date(),

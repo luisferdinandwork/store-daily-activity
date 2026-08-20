@@ -17,12 +17,35 @@ import { itemTransferOrders, stores, areas } from '@/lib/db/schema';
 import { syncTransferOrderRegistry, syncReceivingStatus } from '@/lib/db/utils/item-transfers';
 import { getOpsActor } from '@/app/api/ops/tasks/_helpers';
 
-type Phase = 'return' | 'shipping' | 'receiving' | 'received';
+type Phase = 'return' | 'shipping' | 'receiving' | 'received' | 'to_warehouse';
 
+// Location codes for Panatrade's central warehouse/distribution locations
+// all start with "DM" (seen so far: DM, DM-RETURN, DM-BAD) — none of them
+// are a real store with a scheduled employee using this app, so neither
+// Item Return nor Item Receiving ever gets a human confirmation on that
+// side of the transfer. `fromStoreId`/`toStoreId` staying null already
+// tells us the code didn't match a registered store; combined with the
+// "DM" prefix that specifically means "warehouse", not "unmatched/unknown".
+function isWarehouseCode(code: string): boolean {
+  return /^dm/i.test(code.trim());
+}
+
+/**
+ * A transfer order whose destination is a warehouse code (a store sending
+ * stock/returns back to DM, not store-to-store) will never get a
+ * droppingSubmittedAt/receivedAt — there's no employee on the other end to
+ * confirm receipt or a BC receipt to wait for the way a store-to-store leg
+ * has. Once the origin store has submitted its Item Return, the transfer is
+ * done from OPS's perspective — resolve it to its own terminal phase instead
+ * of leaving it stuck showing "Dalam Perjalanan" forever.
+ */
 function resolvePhase(row: typeof itemTransferOrders.$inferSelect): Phase {
   if (row.receivedAt) return 'received';
   if (row.droppingSubmittedAt) return 'receiving';
-  if (row.returnSubmittedAt) return 'shipping';
+  if (row.returnSubmittedAt) {
+    const toIsWarehouse = row.toStoreId == null && isWarehouseCode(row.transferToCode);
+    return toIsWarehouse ? 'to_warehouse' : 'shipping';
+  }
   return 'return';
 }
 
@@ -42,10 +65,17 @@ export async function GET() {
     syncReceivingStatus('all'),
   ]);
 
-  const rows = await db
+  const allRows = await db
     .select()
     .from(itemTransferOrders)
     .orderBy(desc(itemTransferOrders.updatedAt));
+
+  // Only transfer orders that actually touch one of our registered stores —
+  // transferFromCode/transferToCode get resolved to fromStoreId/toStoreId by
+  // matching against stores.storeNo (see lib/db/utils/item-transfers.ts); a
+  // row where BOTH stay null is between locations we don't manage (e.g. a
+  // central "DM-RETURN" warehouse) and isn't actionable by any OPS user.
+  const rows = allRows.filter((r) => r.fromStoreId != null || r.toStoreId != null);
 
   const storeIds = [...new Set(
     rows.flatMap((r) => [r.fromStoreId, r.toStoreId]).filter((v): v is number => v != null),
@@ -95,6 +125,8 @@ export async function GET() {
     postingDate: r.postingDate?.toISOString() ?? null,
     whseShipmentNo: r.whseShipmentNo,
     phase: resolvePhase(r),
+    fromIsWarehouse: r.fromStoreId == null && isWarehouseCode(r.transferFromCode),
+    toIsWarehouse: r.toStoreId == null && isWarehouseCode(r.transferToCode),
     returnDetectedAt: r.returnDetectedAt?.toISOString() ?? null,
     returnSubmittedAt: r.returnSubmittedAt?.toISOString() ?? null,
     droppingDetectedAt: r.droppingDetectedAt?.toISOString() ?? null,

@@ -670,10 +670,10 @@ export default function SchedulePage() {
       {!todayVisible && (
         <button
           onClick={goToToday}
-          className="fixed bottom-24 right-4 z-40 flex items-center gap-1.5 rounded-full bg-primary px-3.5 py-2.5 text-primary-foreground shadow-lg shadow-primary/30 transition-transform active:scale-95 md:bottom-6"
+          className="fixed bottom-24 left-4 z-40 flex items-center gap-1.5 rounded-full bg-primary px-3.5 py-2.5 text-primary-foreground shadow-lg shadow-primary/30 transition-transform active:scale-95 md:bottom-6"
         >
           <Calendar className="h-4 w-4" />
-          <span className="text-xs font-bold">{isCurrentMonth ? 'Jump to Today' : 'Go to Today'}</span>
+          <span className="text-xs font-bold">{isCurrentMonth ? 'Jump to Today' : 'Jump to This Month'}</span>
         </button>
       )}
     </div>

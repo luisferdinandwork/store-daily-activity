@@ -9,15 +9,23 @@ import { db }                        from '@/lib/db';
 import { users, userRoles, employeeTypes } from '@/lib/db/schema';
 import { and, eq }                   from 'drizzle-orm';
 
+import { assertStoreInActorArea, getOpsActor, parseStoreId } from '../tasks/_helpers';
+
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
-  if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  if (!session?.user?.id) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const storeIdParam = req.nextUrl.searchParams.get('storeId');
-  const storeId = storeIdParam ? Number(storeIdParam) : NaN;
-  if (!storeIdParam || Number.isNaN(storeId)) {
-    return NextResponse.json({ error: 'storeId required' }, { status: 400 });
+  const actor = await getOpsActor(session.user.id);
+  if (!actor) return NextResponse.json({ error: 'OPS only.' }, { status: 403 });
+
+  const parsedStore = parseStoreId(req.nextUrl.searchParams.get('storeId'));
+  if (!parsedStore.ok) {
+    return NextResponse.json({ error: parsedStore.error }, { status: 400 });
   }
+  const storeId = parsedStore.id;
+
+  const areaError = await assertStoreInActorArea(actor, storeId);
+  if (areaError) return NextResponse.json({ error: areaError }, { status: 403 });
 
   // Login is NIK-based (no email column on users) — see lib/auth.ts.
   const rows = await db

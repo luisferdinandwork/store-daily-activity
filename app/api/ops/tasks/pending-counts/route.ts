@@ -16,6 +16,7 @@ import { sql } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
+import { getOpsActor } from '../_helpers';
 
 type Granularity = 'store_date' | 'store_date_shift' | 'schedule';
 
@@ -32,7 +33,6 @@ const TASK_DESCRIPTORS: TaskDescriptor[] = [
   { key: 'cek-bin',             table: 'cek_bin_tasks',              granularity: 'store_date' },
   { key: 'vm-checklist',        table: 'vm_checklist_tasks',         granularity: 'store_date' },
   { key: 'marketing-check',     table: 'marketing_check_tasks',      granularity: 'store_date_shift' },
-  { key: 'item-dropping',       table: 'item_dropping_tasks',        granularity: 'store_date' },
   { key: 'briefing',            table: 'briefing_tasks',             granularity: 'store_date' },
   { key: 'edc-reconciliation',  table: 'edc_reconciliation_tasks',   granularity: 'store_date' },
   { key: 'eod-z-report',        table: 'eod_z_report_tasks',         granularity: 'store_date' },
@@ -47,15 +47,19 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const actor = await getOpsActor(session.user.id);
+    if (!actor) {
+      return NextResponse.json({ error: 'Forbidden: OPS access only.' }, { status: 403 });
+    }
+    if (actor.isOpsArea && !actor.areaId) {
+      return NextResponse.json({ error: 'OPS user has no area assigned.' }, { status: 403 });
+    }
+
     const targetDate = req.nextUrl.searchParams.get('date') ?? new Date().toISOString().split('T')[0];
 
-    const userRes = await db.execute(sql`
-      SELECT area_id FROM users WHERE id = ${session.user.id}
-    `);
-    const userAreaId = (userRes.rows[0] as { area_id: number | null } | undefined)?.area_id ?? null;
-
     // Always begins with `AND` so it concats safely onto a `WHERE 1=1` anchor.
-    const areaFilter = userAreaId ? sql`AND s.area_id = ${userAreaId}` : sql``;
+    // Empty only for confirmed OPS HO / IT — everyone else is area-scoped.
+    const areaFilter = actor.isOpsHo ? sql`` : sql`AND s.area_id = ${actor.areaId}`;
 
     const selects = TASK_DESCRIPTORS.map((desc) => buildPendingSelect(desc, targetDate, areaFilter));
     const unionQuery = sql.join(selects, sql` UNION ALL `);

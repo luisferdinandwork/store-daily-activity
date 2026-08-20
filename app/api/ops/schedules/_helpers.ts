@@ -120,6 +120,7 @@ export async function listStoresForActor(actor: OpsActor) {
     return db
       .select({
         id: stores.id,
+        storeNo: stores.storeNo,
         name: stores.name,
         address: stores.address,
         areaId: stores.areaId,
@@ -135,6 +136,7 @@ export async function listStoresForActor(actor: OpsActor) {
   return db
     .select({
       id: stores.id,
+      storeNo: stores.storeNo,
       name: stores.name,
       address: stores.address,
       areaId: stores.areaId,

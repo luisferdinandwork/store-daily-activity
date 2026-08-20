@@ -3,7 +3,7 @@
 
 import { useState } from 'react';
 import { signIn } from 'next-auth/react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Image from 'next/image';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -16,6 +16,7 @@ import {
   ArrowRight,
   CheckCircle2,
   IdCard,
+  Clock,
 } from 'lucide-react';
 
 const FEATURES = [
@@ -45,6 +46,8 @@ export function LoginForm() {
   const [isLoading, setIsLoading] = useState(false);
 
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const timedOut = searchParams.get('reason') === 'timeout';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -260,6 +263,15 @@ export function LoginForm() {
                 </button>
               </div>
             </div>
+
+            {!error && timedOut && (
+              <Alert className="rounded-xl py-2.5">
+                <Clock className="h-4 w-4" />
+                <AlertDescription className="text-xs">
+                  You were signed out after 6 hours of inactivity. Please sign in again.
+                </AlertDescription>
+              </Alert>
+            )}
 
             {error && (
               <Alert variant="destructive" className="rounded-xl py-2.5">

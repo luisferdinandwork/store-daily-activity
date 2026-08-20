@@ -350,12 +350,13 @@ export default function OpsAttendancePage() {
                 variant="outline"
                 size="sm"
                 className="h-10 gap-1.5 rounded-xl border-slate-200 bg-white font-semibold text-slate-600 hover:bg-slate-50"
-                onClick={() =>
+                onClick={() => {
+                  const dateKey = toKey(selectedDate);
                   window.open(
-                    `/api/ops/attendance/export?storeId=${activeStore.id}&date=${selectedDate.toISOString()}`,
+                    `/api/ops/attendance/export?storeId=${activeStore.id}&fromDate=${dateKey}&toDate=${dateKey}`,
                     '_blank',
-                  )
-                }
+                  );
+                }}
               >
                 <Download className="h-3.5 w-3.5" />
                 Export

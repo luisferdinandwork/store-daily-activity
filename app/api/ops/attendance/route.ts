@@ -7,6 +7,8 @@ import { db }                        from '@/lib/db';
 import { breakSessions, shifts, employeeTypes } from '@/lib/db/schema';
 import { eq }                        from 'drizzle-orm';
 
+import { assertStoreInActorArea, getOpsActor } from '../tasks/_helpers';
+
 // Cache shift id → full shift info lookups in-process. Shifts are dynamic
 // (morning/evening/full_day today, more can be added later), so the page
 // needs real label/time/icon data rather than assuming a fixed set of codes
@@ -56,8 +58,13 @@ async function getEmpTypeMap(): Promise<Map<number, { code: string; label: strin
 export async function GET(req: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session?.user) {
+    if (!session?.user?.id) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const actor = await getOpsActor(session.user.id);
+    if (!actor) {
+      return NextResponse.json({ success: false, error: 'OPS only.' }, { status: 403 });
     }
 
     const storeIdRaw = req.nextUrl.searchParams.get('storeId');
@@ -73,6 +80,11 @@ export async function GET(req: NextRequest) {
     const storeId = Number(storeIdRaw);
     if (isNaN(storeId)) {
       return NextResponse.json({ success: false, error: 'invalid storeId' }, { status: 400 });
+    }
+
+    const areaError = await assertStoreInActorArea(actor, storeId);
+    if (areaError) {
+      return NextResponse.json({ success: false, error: areaError }, { status: 403 });
     }
 
     const date = new Date(dateStr);

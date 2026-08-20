@@ -15,7 +15,12 @@ import { db } from '@/lib/db';
 import { stores } from '@/lib/db/schema';
 import { getFlatTasksForStoreDate, summariseTasks } from '@/lib/db/utils/tasks';
 import { serializeTask } from '@/lib/db/utils/task-serialize';
+import { todayInStoreTimezone } from '@/lib/schedule-utils';
 import { resolveActorCodes, parseLocalDate } from '../../schedule/_utils';
+
+function toDateKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
 
 function isPicType(empType: string | null) {
   return empType === 'pic_1' || empType === 'pic_2';
@@ -49,7 +54,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ success: false, error: 'Invalid homeStoreId.' }, { status: 400 });
   }
 
-  const rawDate = req.nextUrl.searchParams.get('date') ?? new Date().toISOString().slice(0, 10);
+  const rawDate = req.nextUrl.searchParams.get('date') ?? toDateKey(todayInStoreTimezone());
   const date = parseLocalDate(rawDate);
   if (!date) {
     return NextResponse.json({ success: false, error: 'Invalid date.' }, { status: 400 });
