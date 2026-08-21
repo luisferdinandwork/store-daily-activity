@@ -160,7 +160,7 @@ export function StoreContributionPie({ employeeContributions, periodLabel }: Pro
         <div className="flex items-center gap-2">
           <PieChart className="h-4 w-4 text-slate-300" />
           <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
-            Store Contribution
+            Store Achive
           </p>
         </div>
         <p className="mt-3 text-sm font-medium text-slate-500">
@@ -174,7 +174,7 @@ export function StoreContributionPie({ employeeContributions, periodLabel }: Pro
     <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex items-center justify-between gap-3">
         <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
-          Store Contribution
+          Store Achive
         </p>
         <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-bold text-slate-500">
           {periodLabel}
@@ -231,6 +231,12 @@ export function StoreContributionPie({ employeeContributions, periodLabel }: Pro
         </div>
       </div>
 
+      <div className="flex items-center justify-between gap-3 mt-8">
+        <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+          Staff Achievement
+        </p>
+      </div>
+
       {/* Legend rows — full detail always visible, tap to highlight on the ring */}
       <div className="mt-4 space-y-1.5">
         {slices.map((s) => {
@@ -258,7 +264,7 @@ export function StoreContributionPie({ employeeContributions, periodLabel }: Pro
               />
 
               <span className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-700">
-                {s.isCurrentUser ? 'Kamu' : firstName(s.name)}
+                {firstName(s.name)}
               </span>
 
               {s.targetSharePct > 0 ? (
