@@ -103,6 +103,7 @@ export async function GET() {
     .select({
       id: pettyCashTransactions.id,
       amount: pettyCashTransactions.amount,
+      actualAmount: pettyCashTransactions.actualAmount,
       description: pettyCashTransactions.description,
       status: pettyCashTransactions.status,
       imageUrl: pettyCashTransactions.imageUrl,
@@ -131,6 +132,7 @@ export async function GET() {
     transactions: txList.map((t) => ({
       id: t.id,
       amount: t.amount,
+      actualAmount: t.actualAmount,
       description: t.description,
       status: t.status,
       imageUrl: t.imageUrl,
@@ -255,6 +257,7 @@ export async function PATCH(req: NextRequest) {
     txId?: unknown;
     imageUrl?: unknown;
     imageKey?: unknown;
+    actualAmount?: unknown;
   };
 
   try {
@@ -277,6 +280,79 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid txId.' }, { status: 400 });
   }
 
+  // Confirming the actual amount used — only the PIC who submitted the
+  // request can do this, and only once OPS has approved it. This is what
+  // finally cuts the money from the store's ready petty cash, since the
+  // originally requested amount was just an estimate.
+  if (body.actualAmount !== undefined) {
+    const actualAmount = Number(body.actualAmount);
+
+    if (!Number.isFinite(actualAmount) || actualAmount <= 0) {
+      return NextResponse.json(
+        { error: 'Actual amount used must be greater than 0.' },
+        { status: 422 },
+      );
+    }
+
+    const result = await db.execute(sql`
+      WITH target_tx AS (
+        SELECT id, period_id
+        FROM petty_cash_transactions
+        WHERE id = ${txId}
+          AND user_id = ${userId}
+          AND status = 'ops_approved'
+      ),
+
+      updated_period AS (
+        UPDATE petty_cash_periods
+        SET
+          current_balance = current_balance - ${actualAmount.toFixed(2)}::numeric,
+          updated_at = NOW()
+        WHERE id = (SELECT period_id FROM target_tx)
+          AND status = 'open'
+          AND current_balance >= ${actualAmount.toFixed(2)}::numeric
+        RETURNING id, current_balance::text AS new_balance
+      ),
+
+      completed_tx AS (
+        UPDATE petty_cash_transactions
+        SET
+          actual_amount = ${actualAmount.toFixed(2)}::numeric,
+          actual_amount_by = ${userId},
+          actual_amount_at = NOW(),
+          status = 'completed',
+          image_url = COALESCE(${imageUrl}, image_url),
+          image_key = COALESCE(${imageKey}, image_key),
+          updated_at = NOW()
+        FROM updated_period
+        WHERE petty_cash_transactions.id = (SELECT id FROM target_tx)
+        RETURNING petty_cash_transactions.id::int AS tx_id, petty_cash_transactions.status
+      )
+
+      SELECT tx_id, status, new_balance FROM completed_tx CROSS JOIN updated_period
+    `);
+
+    const rows = getRows(result);
+    const row = rows[0] as { tx_id: number; status: string; new_balance: string } | undefined;
+
+    if (!row) {
+      return NextResponse.json(
+        {
+          error:
+            'Could not confirm the actual amount. The request must be OPS approved, not yet confirmed, and the balance must cover this amount.',
+        },
+        { status: 409 },
+      );
+    }
+
+    return NextResponse.json({
+      success: true,
+      txId: row.tx_id,
+      status: row.status,
+      newBalance: row.new_balance,
+    });
+  }
+
   if (!imageUrl) {
     return NextResponse.json(
       { error: 'Receipt photo is required.' },
@@ -292,7 +368,7 @@ export async function PATCH(req: NextRequest) {
       updated_at = NOW()
     WHERE id = ${txId}
       AND user_id = ${userId}
-      AND status = 'ops_approved'
+      AND status IN ('ops_approved', 'completed')
     RETURNING id::int
   `);
 

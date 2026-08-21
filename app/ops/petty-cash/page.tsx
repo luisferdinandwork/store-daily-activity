@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   ArrowUpDown,
+  Banknote,
   CheckCircle2,
   ChevronDown,
   Clock3,
@@ -25,6 +26,7 @@ import OpsPageHeader, { type Period } from '@/components/ops/layout/OpsPageHeade
 type OpsPettyCashRow = {
   id: number;
   amount: string;
+  actualAmount: string | null;
   description: string;
   status: 'pending_ops' | 'ops_approved' | 'ops_rejected' | string;
   imageUrl: string | null;
@@ -281,6 +283,8 @@ interface RefillRequestRow {
   id: number;
   storeId: number;
   storeName: string;
+  storeNo?: string;
+  areaName?: string;
   yearMonth: string;
   status: 'pending' | 'approved' | 'rejected';
   requestedAt: string;
@@ -293,113 +297,262 @@ interface RefillRequestRow {
   signaturePhotoUrl: string | null;
 }
 
+type RefillStatusFilter = 'all' | 'pending' | 'approved' | 'rejected';
+
 const REFILL_STATUS_META: Record<
   RefillRequestRow['status'],
-  { label: string; dot: string; text: string }
+  { label: string; icon: typeof Clock3; badge: string; rowAccent: string }
 > = {
-  pending: { label: 'Pending Finance', dot: 'bg-amber-400', text: 'text-amber-700' },
-  approved: { label: 'Approved', dot: 'bg-emerald-500', text: 'text-emerald-700' },
-  rejected: { label: 'Rejected', dot: 'bg-rose-400', text: 'text-rose-600' },
+  pending:  { label: 'Waiting OPS', icon: Clock3,       badge: 'bg-amber-50 text-amber-700 ring-amber-200',     rowAccent: 'bg-amber-400' },
+  approved: { label: 'Approved',    icon: CheckCircle2, badge: 'bg-emerald-50 text-emerald-700 ring-emerald-200', rowAccent: 'bg-emerald-500' },
+  rejected: { label: 'Rejected',    icon: XCircle,      badge: 'bg-rose-50 text-rose-700 ring-rose-200',        rowAccent: 'bg-rose-400' },
 };
 
-const REFILL_VISIBLE_LIMIT = 30;
+const REFILL_STATUS_FILTERS: { id: RefillStatusFilter; label: string }[] = [
+  { id: 'all', label: 'All' },
+  { id: 'pending', label: 'Waiting OPS' },
+  { id: 'approved', label: 'Approved' },
+  { id: 'rejected', label: 'Rejected' },
+];
 
 function proofProgress(r: RefillRequestRow) {
   const total = [r.drawerPhotoUrl, r.signaturePhotoUrl].filter(Boolean).length;
   return `${total}/2 proof photos`;
 }
 
-function RefillRequestsSummary() {
+// ─── Refill requests — a full table, not a cramped collapsed list ───────────
+// This used to be a bounded, collapsed 30-row preview, which doesn't scale
+// as the store count grows. It's now a proper always-visible table with its
+// own search/filter, deliberately styled in indigo (vs. the usage-approval
+// table's sky/amber/emerald/rose) so the two request types never get visually
+// confused even though they live on the same page.
+
+function RefillRequestsSection() {
   const [requests, setRequests] = useState<RefillRequestRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [expanded, setExpanded] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [rejectingId, setRejectingId] = useState<number | null>(null);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await fetch('/api/ops/petty-cash/refill-requests', { cache: 'no-store' });
-        const body = await res.json();
-        if (body.success) setRequests(body.requests);
-      } finally {
-        setLoading(false);
-      }
-    })();
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState<RefillStatusFilter>('all');
+
+  const load = useCallback(async () => {
+    setError(null);
+    try {
+      const res = await fetch('/api/ops/petty-cash/refill-requests', { cache: 'no-store' });
+      const body = await res.json();
+      if (!res.ok || !body.success) throw new Error(body.error ?? 'Failed to load refill requests.');
+      setRequests(body.requests);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load refill requests.');
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  if (loading || requests.length === 0) return null;
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function act(id: number, action: 'approve' | 'reject', rejectionReason?: string) {
+    setBusyId(id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/ops/petty-cash/refill-requests/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, rejectionReason }),
+      });
+      const body = await res.json();
+      if (!res.ok || !body.success) throw new Error(body.error ?? 'Action failed.');
+      setRejectingId(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Action failed.');
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   const pendingCount = requests.filter((r) => r.status === 'pending').length;
-  const visible = requests.slice(0, REFILL_VISIBLE_LIMIT);
-  const hiddenCount = requests.length - visible.length;
+
+  const visibleRequests = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return requests
+      .filter((r) => statusFilter === 'all' || r.status === statusFilter)
+      .filter((r) => !q || [r.storeName, r.storeNo, r.requestedByName, r.notes].join(' ').toLowerCase().includes(q))
+      .sort((a, b) => {
+        const priority = { pending: 0, approved: 1, rejected: 2 } as const;
+        if (priority[a.status] !== priority[b.status]) return priority[a.status] - priority[b.status];
+        return new Date(b.requestedAt).getTime() - new Date(a.requestedAt).getTime();
+      });
+  }, [requests, search, statusFilter]);
+
+  if (!loading && requests.length === 0) return null;
 
   return (
-    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <button
-        type="button"
-        onClick={() => setExpanded((v) => !v)}
-        aria-expanded={expanded}
-        className="flex w-full items-center gap-3 px-5 py-3 text-left"
-      >
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
-          <Wallet className="h-4 w-4" />
+    <section className="overflow-hidden rounded-2xl border-2 border-indigo-200 bg-white shadow-sm">
+      {/* Header banner — indigo, distinct from the usage table below */}
+      <div className="flex flex-wrap items-center gap-3 border-b border-indigo-100 bg-indigo-50/60 px-5 py-3.5">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-white">
+          <Banknote className="h-4 w-4" />
         </span>
-
-        <span className="min-w-0 flex-1">
-          <span className="block text-sm font-bold text-slate-800">Petty Cash Refill Requests</span>
-          <span className="block text-[11px] text-slate-400">
-            {requests.length} total · requested by PIC, approved by Finance
-          </span>
-        </span>
-
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-bold text-indigo-900">Petty Cash Refill Requests</p>
+          <p className="text-[11px] text-indigo-500">
+            Mid-month top-up requests — requested by PIC, approved here by OPS. Separate from spending requests below.
+          </p>
+        </div>
         {pendingCount > 0 && (
-          <span className="shrink-0 rounded-full bg-amber-50 px-2.5 py-1 text-[10px] font-bold text-amber-700 ring-1 ring-inset ring-amber-200">
-            {pendingCount} pending
+          <span className="shrink-0 rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-bold text-amber-800 ring-1 ring-inset ring-amber-300">
+            {pendingCount} waiting
           </span>
         )}
+      </div>
 
-        <ChevronDown
-          className={cn(
-            'h-4 w-4 shrink-0 text-slate-400 transition-transform',
-            expanded && 'rotate-180',
-          )}
-        />
-      </button>
+      {error && (
+        <div className="flex items-start gap-2 border-b border-indigo-100 bg-rose-50 px-5 py-2.5 text-rose-700">
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <p className="text-xs font-semibold">{error}</p>
+        </div>
+      )}
 
-      {expanded && (
-        <div className="max-h-64 overflow-y-auto border-t border-slate-100">
-          <div className="divide-y divide-slate-100">
-            {visible.map((r) => {
-              const meta = REFILL_STATUS_META[r.status];
-              return (
-                <div key={r.id} className="flex items-center justify-between gap-3 px-5 py-2.5">
-                  <div className="min-w-0">
-                    <p className="truncate text-xs font-bold text-slate-700">{r.storeName}</p>
-                    <p className="mt-0.5 truncate text-[10.5px] text-slate-400">
-                      {r.yearMonth} · {r.requestedByName ?? 'PIC'}
-                      {r.status === 'approved' && <> · {proofProgress(r)}</>}
-                    </p>
-                    {r.status === 'rejected' && r.rejectionReason && (
-                      <p className="mt-0.5 truncate text-[10.5px] font-semibold text-rose-500">
-                        {r.rejectionReason}
-                      </p>
-                    )}
-                  </div>
-                  <span
-                    className={cn(
-                      'inline-flex shrink-0 items-center gap-1.5 text-[10.5px] font-bold',
-                      meta.text,
-                    )}
+      {/* Toolbar */}
+      <div className="flex flex-col gap-2.5 border-b border-indigo-100 bg-white px-5 py-3 sm:flex-row sm:items-center">
+        <label className="relative block sm:w-56 sm:shrink-0">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search store, PIC..."
+            className="h-8 w-full rounded-lg border border-slate-200 bg-slate-50 pl-8 pr-3 text-xs focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+          />
+        </label>
+
+        <div className="flex flex-1 flex-wrap items-center gap-1.5">
+          {REFILL_STATUS_FILTERS.map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              onClick={() => setStatusFilter(f.id)}
+              className={cn(
+                'rounded-full px-2.5 py-1 text-[11px] font-bold transition',
+                statusFilter === f.id
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-slate-100 text-slate-500 hover:bg-slate-200',
+              )}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Table */}
+      {loading ? (
+        <div className="space-y-2 p-4">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="h-12 animate-pulse rounded-xl bg-slate-100" />
+          ))}
+        </div>
+      ) : visibleRequests.length === 0 ? (
+        <p className="px-5 py-8 text-center text-xs text-slate-400">No refill requests match here.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[760px] border-collapse text-sm">
+            <thead>
+              <tr className="border-b border-slate-200 bg-slate-50/80 text-left text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                <th className="w-2 px-0" aria-hidden />
+                <th className="px-3 py-2.5">Status</th>
+                <th className="px-3 py-2.5">Store</th>
+                <th className="px-3 py-2.5">Requested by</th>
+                <th className="px-3 py-2.5">Notes / Proof</th>
+                <th className="px-3 py-2.5">Date</th>
+                <th className="px-3 py-2.5 text-right">Action</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {visibleRequests.map((r) => {
+                const meta = REFILL_STATUS_META[r.status];
+                const Icon = meta.icon;
+                const isBusy = busyId === r.id;
+                const isPending = r.status === 'pending';
+                const isRejecting = rejectingId === r.id;
+
+                return (
+                  <tr
+                    key={r.id}
+                    className={cn('transition-colors', isPending ? 'bg-amber-50/40 hover:bg-amber-50/70' : 'hover:bg-slate-50/70')}
                   >
-                    <span className={cn('h-1.5 w-1.5 rounded-full', meta.dot)} />
-                    {meta.label}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-          {hiddenCount > 0 && (
-            <p className="px-5 py-2 text-[10.5px] text-slate-400">+{hiddenCount} more not shown</p>
-          )}
+                    <td className="w-2 px-0">
+                      <span className={cn('block h-full w-1', meta.rowAccent)} />
+                    </td>
+
+                    <td className="whitespace-nowrap px-3 py-2.5">
+                      <span className={cn('inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-bold ring-1', meta.badge)}>
+                        <Icon className="h-3.5 w-3.5" />
+                        {meta.label}
+                      </span>
+                      {r.status === 'rejected' && r.rejectionReason && (
+                        <p className="mt-1 max-w-[160px] truncate text-[11px] font-semibold text-rose-500">{r.rejectionReason}</p>
+                      )}
+                    </td>
+
+                    <td className="px-3 py-2.5">
+                      <p className="text-sm font-bold text-slate-900">{r.storeName}</p>
+                      {r.storeNo && <p className="text-[11px] font-semibold text-slate-400">{r.storeNo}</p>}
+                    </td>
+
+                    <td className="whitespace-nowrap px-3 py-2.5 text-slate-600">{r.requestedByName ?? 'PIC'}</td>
+
+                    <td className="max-w-[220px] px-3 py-2.5">
+                      {r.notes && <p className="truncate font-semibold text-slate-700" title={r.notes}>&ldquo;{r.notes}&rdquo;</p>}
+                      {r.status === 'approved' && <p className="text-[11px] text-slate-400">{proofProgress(r)}</p>}
+                      {!r.notes && r.status !== 'approved' && <span className="text-slate-300">—</span>}
+                    </td>
+
+                    <td className="whitespace-nowrap px-3 py-2.5 text-xs text-slate-400">{formatDate(r.requestedAt)}</td>
+
+                    <td className="px-3 py-2.5">
+                      {isPending ? (
+                        isRejecting ? (
+                          <div className="flex justify-end">
+                            <RejectControl
+                              busy={isBusy}
+                              onConfirm={(reason) => void act(r.id, 'reject', reason)}
+                              onCancel={() => setRejectingId(null)}
+                            />
+                          </div>
+                        ) : (
+                          <div className="flex justify-end gap-2">
+                            <button
+                              onClick={() => setRejectingId(r.id)}
+                              disabled={isBusy}
+                              className="inline-flex h-8 items-center gap-1.5 rounded-xl border border-rose-200 bg-white px-2.5 text-xs font-bold text-rose-600 transition hover:bg-rose-50 disabled:opacity-60"
+                            >
+                              <XCircle className="h-3.5 w-3.5" />
+                              Reject
+                            </button>
+                            <button
+                              onClick={() => void act(r.id, 'approve')}
+                              disabled={isBusy}
+                              className="inline-flex h-8 items-center gap-1.5 rounded-xl bg-indigo-600 px-2.5 text-xs font-bold text-white transition hover:bg-indigo-700 disabled:opacity-60"
+                            >
+                              {isBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                              Approve
+                            </button>
+                          </div>
+                        )
+                      ) : (
+                        <p className="text-right text-xs font-semibold text-slate-300">—</p>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       )}
     </section>
@@ -607,10 +760,10 @@ export default function OpsPettyCashPage() {
           </div>
         )}
 
-        <RefillRequestsSummary />
+        <RefillRequestsSection />
 
         {/* Summary / filter shortcuts */}
-        <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {/* <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <StatCard
             label="Total"
             value={summary.total}
@@ -639,7 +792,7 @@ export default function OpsPettyCashPage() {
             active={statusFilter === 'ops_rejected'}
             onClick={() => setStatusFilter('ops_rejected')}
           />
-        </section>
+        </section> */}
 
         {/* Toolbar: search, area (HO only), status pills, sort */}
         <section className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
@@ -817,8 +970,15 @@ export default function OpsPettyCashPage() {
                           </p>
                         </td>
 
-                        <td className="whitespace-nowrap px-3 py-3 text-right font-black tabular-nums text-slate-900">
-                          {idr(row.amount)}
+                        <td className="whitespace-nowrap px-3 py-3 text-right">
+                          <p className="font-black tabular-nums text-slate-900">
+                            {idr(row.actualAmount ?? row.amount)}
+                          </p>
+                          {row.status === 'ops_approved' && (
+                            <p className="text-[10px] font-semibold text-slate-400">
+                              Requested — awaiting PIC&apos;s actual amount
+                            </p>
+                          )}
                         </td>
 
                         <td className="whitespace-nowrap px-3 py-3 text-slate-600">

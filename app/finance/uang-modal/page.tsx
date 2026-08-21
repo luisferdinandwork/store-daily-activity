@@ -100,7 +100,9 @@ const STATUS_META: Record<UangModalStoreEntry['status'], { dot: string; badge: s
   completed:   { dot: 'bg-emerald-500', badge: 'bg-emerald-50 text-emerald-700 ring-emerald-200', label: 'Selesai' },
   in_progress: { dot: 'bg-blue-400',    badge: 'bg-blue-50 text-blue-700 ring-blue-200',          label: 'Sedang dihitung' },
   not_started: { dot: 'bg-slate-300',   badge: 'bg-slate-100 text-slate-500 ring-slate-200',      label: 'Belum mulai' },
-  pending:     { dot: 'bg-rose-500',    badge: 'bg-rose-50 text-rose-700 ring-rose-200',          label: 'Pending' },
+  // Day already ended and this store still has no completed submission —
+  // this is the "employee didn't do it" case, always shown in red.
+  pending:     { dot: 'bg-rose-500',    badge: 'bg-rose-50 text-rose-700 ring-rose-200',          label: 'Belum Lapor' },
 };
 
 // ─── Day cell ─────────────────────────────────────────────────────────────────
@@ -114,7 +116,8 @@ function DayCell({
   isToday: boolean;
   onClick: () => void;
 }) {
-  const allSubmitted = cell.totalStoreCount > 0 && cell.pendingCount === 0;
+  const hasNotDone = cell.notDoneCount > 0;
+  const allSubmitted = cell.totalStoreCount > 0 && cell.pendingCount === 0 && cell.notDoneCount === 0;
   const partial      = cell.totalStoreCount > 0 && cell.pendingCount > 0;
 
   return (
@@ -124,7 +127,9 @@ function DayCell({
       className={cn(
         'group flex h-[92px] flex-col rounded-xl border p-2.5 text-left transition-all',
         cell.hasData
-          ? 'cursor-pointer border-slate-200 bg-white hover:-translate-y-0.5 hover:border-emerald-300 hover:shadow-md'
+          ? hasNotDone
+            ? 'cursor-pointer border-rose-200 bg-rose-50/40 hover:-translate-y-0.5 hover:border-rose-300 hover:shadow-md'
+            : 'cursor-pointer border-slate-200 bg-white hover:-translate-y-0.5 hover:border-emerald-300 hover:shadow-md'
           : 'cursor-default border-slate-100 bg-slate-50/50',
         isToday && 'ring-2 ring-emerald-400 ring-offset-1',
       )}
@@ -139,7 +144,7 @@ function DayCell({
         {cell.hasData && (
           <span className={cn(
             'h-1.5 w-1.5 rounded-full',
-            allSubmitted ? 'bg-emerald-500' : partial ? 'bg-amber-400' : 'bg-slate-300',
+            hasNotDone ? 'bg-rose-500' : allSubmitted ? 'bg-emerald-500' : partial ? 'bg-amber-400' : 'bg-slate-300',
           )} />
         )}
       </div>
@@ -149,8 +154,13 @@ function DayCell({
           <p className="truncate text-[13px] font-bold tabular-nums text-slate-800 group-hover:text-emerald-700">
             {idr(cell.totalAmount)}
           </p>
-          <p className="mt-0.5 text-[10px] text-slate-400">
-            {cell.submittedCount}/{cell.totalStoreCount} toko
+          <p className={cn(
+            'mt-0.5 text-[10px]',
+            hasNotDone ? 'font-bold text-rose-600' : 'text-slate-400',
+          )}>
+            {hasNotDone
+              ? `${cell.notDoneCount} belum lapor`
+              : `${cell.submittedCount}/${cell.totalStoreCount} toko`}
           </p>
         </div>
       ) : (
@@ -536,7 +546,11 @@ export default function FinanceUangModalPage() {
             </span>
             <span className="flex items-center gap-1.5">
               <span className="h-2 w-2 rounded-full bg-amber-400" />
-              Sebagian toko belum submit
+              Sebagian toko belum submit (hari ini)
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-rose-500" />
+              Ada toko belum lapor (hari sudah lewat)
             </span>
             <span className="flex items-center gap-1.5">
               <span className="h-2 w-2 rounded-full bg-slate-300" />

@@ -76,6 +76,9 @@ export const pettyCashTransactions = pgTable(
       onDelete: 'set null',
     }),
 
+    // The amount the PIC originally asked for — an estimate. The amount
+    // actually deducted from the balance is `actualAmount` below, once the
+    // PIC records what was really spent.
     amount: decimal('amount', { precision: 12, scale: 2 }).notNull(),
     description: text('description').notNull(),
 
@@ -84,7 +87,11 @@ export const pettyCashTransactions = pgTable(
 
     // New request status:
     // pending_ops   = employee requested, waiting OPS approval
-    // ops_approved  = OPS approved, balance deducted
+    // ops_approved  = OPS approved the request itself; balance NOT deducted
+    //                 yet — waiting on the PIC to record the actual amount
+    //                 used (requested amounts are rarely exact)
+    // completed     = PIC recorded the actual amount used; balance deducted
+    //                 by that actual amount
     // ops_rejected  = OPS rejected, no balance deduction
     status: text('status').default('pending_ops').notNull(),
 
@@ -100,6 +107,14 @@ export const pettyCashTransactions = pgTable(
     rejectedBy: text('rejected_by').references(() => users.id),
     rejectedAt: timestamp('rejected_at'),
     rejectionReason: text('rejection_reason'),
+
+    // The real amount spent, filled in by the PIC after OPS approves —
+    // requests are rough estimates, so this is what actually gets cut from
+    // the store's ready petty cash balance (see the PATCH handler in
+    // app/api/employee/petty-cash/route.ts).
+    actualAmount: decimal('actual_amount', { precision: 12, scale: 2 }),
+    actualAmountBy: text('actual_amount_by').references(() => users.id),
+    actualAmountAt: timestamp('actual_amount_at'),
 
     // Keep column if already exists, but do not use image deletion anymore.
     archivedAt: timestamp('archived_at'),
@@ -165,9 +180,11 @@ export const pettyCashRefills = pgTable(
 // close-and-reset `pettyCashRefills` above) ────────────────────────────────
 //
 // PIC asks for a mid-month top-up back to PETTY_CASH_MAX_BALANCE when the
-// store runs low before month-end. Finance approves/rejects, but approval
-// alone does NOT move the balance — the store hasn't physically received
-// the cash yet. Any store employee (not just PIC) then uploads two proof
+// store runs low before month-end. OPS approves/rejects the request itself;
+// approval alone does NOT move the balance — the store hasn't physically
+// received the cash yet, and Finance (who still physically hands over the
+// cash) hasn't necessarily done so at approval time either. Any store
+// employee (not just PIC) then uploads two proof
 // photos: the petty cash drawer (cash counted inside it) and the Surat
 // Terima Petty Cash. Only once BOTH photos are in does the CURRENT
 // (still-open) period's balance actually top up; it does not close the
@@ -201,7 +218,7 @@ export const pettyCashRefillRequests = pgTable(
     balanceBefore: decimal('balance_before', { precision: 12, scale: 2 }),
     balanceAfter: decimal('balance_after', { precision: 12, scale: 2 }),
 
-    // Finance approval/rejection — this is what the employee sees as "Approved".
+    // OPS approval/rejection — this is what the employee sees as "Approved".
     approvedBy: text('approved_by').references(() => users.id),
     approvedAt: timestamp('approved_at'),
 
@@ -209,8 +226,8 @@ export const pettyCashRefillRequests = pgTable(
     rejectedAt: timestamp('rejected_at'),
     rejectionReason: text('rejection_reason'),
 
-    // Proof-of-receipt photos, uploaded by any store employee once Finance
-    // approves and hands over the cash outside the system.
+    // Proof-of-receipt photos, uploaded by any store employee once OPS
+    // approves and Finance hands over the cash outside the system.
     drawerPhotoUrl: text('drawer_photo_url'),
     signaturePhotoUrl: text('signature_photo_url'),
     proofUploadedBy: text('proof_uploaded_by').references(() => users.id),

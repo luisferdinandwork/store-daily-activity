@@ -1,18 +1,24 @@
-// app/api/finance/petty-cash/refill-requests/[id]/route.ts
+// app/api/ops/petty-cash/refill-requests/[id]/route.ts
 //
-// PATCH — approve or reject a refill request. Finance is the one physically
-// handing over the cash, so approval tops up the store's current period
-// balance immediately — this is what the employee sees as "Approved".
+// PATCH — OPS approves or rejects a PIC-initiated refill request. This is
+// the administrative approval only: it does NOT move any balance and Finance
+// is still the one who physically hands over the cash (see
+// lib/db/utils/petty-cash-refill.ts for the full flow).
 // Body: { action: 'approve' | 'reject', rejectionReason? }
 
 import { NextRequest, NextResponse } from 'next/server';
-import { resolveFinanceScope } from '@/lib/finance/scope';
+import { eq } from 'drizzle-orm';
+
+import { db } from '@/lib/db';
+import { resolveOpsScope } from '@/lib/performance/ops-scope';
+import { stores } from '@/lib/db/schema/core';
+import { pettyCashRefillRequests } from '@/lib/db/schema/petty-cash';
 import { approveRefillRequest, rejectRefillRequest } from '@/lib/db/utils/petty-cash-refill';
 
 type Params = { params: Promise<{ id: string }> };
 
 export async function PATCH(req: NextRequest, { params }: Params) {
-  const scope = await resolveFinanceScope();
+  const scope = await resolveOpsScope();
   if (!scope.ok) {
     return NextResponse.json({ success: false, error: scope.error }, { status: scope.status });
   }
@@ -21,6 +27,26 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   const id = Number(idRaw);
   if (!Number.isFinite(id)) {
     return NextResponse.json({ success: false, error: 'Invalid id.' }, { status: 400 });
+  }
+
+  if (scope.scope === 'area') {
+    const [row] = await db
+      .select({ storeAreaId: stores.areaId })
+      .from(pettyCashRefillRequests)
+      .innerJoin(stores, eq(stores.id, pettyCashRefillRequests.storeId))
+      .where(eq(pettyCashRefillRequests.id, id))
+      .limit(1);
+
+    if (!row) {
+      return NextResponse.json({ success: false, error: 'Request not found.' }, { status: 404 });
+    }
+
+    if (row.storeAreaId !== scope.areaId) {
+      return NextResponse.json(
+        { success: false, error: 'You can only act on refill requests from your assigned area.' },
+        { status: 403 },
+      );
+    }
   }
 
   const body = await req.json().catch(() => ({}));

@@ -32,6 +32,7 @@ function isValidMonth(value: string) {
 export type PettyCashTxRow = {
   id: number;
   amount: string;
+  actualAmount: string | null;
   description: string;
   status: string;
   imageUrl: string | null;
@@ -129,6 +130,7 @@ export async function GET(
       id: pettyCashTransactions.id,
       storeId: pettyCashTransactions.storeId,
       amount: pettyCashTransactions.amount,
+      actualAmount: pettyCashTransactions.actualAmount,
       description: pettyCashTransactions.description,
       status: pettyCashTransactions.status,
       imageUrl: pettyCashTransactions.imageUrl,
@@ -176,10 +178,13 @@ export async function GET(
     const refill = refillByStore.get(store.id) ?? null;
     const txList = txByStore.get(store.id) ?? [];
 
-    const approvedTx = txList.filter((tx) => tx.status === 'ops_approved');
+    // Only 'completed' transactions have actually been deducted from the
+    // balance — 'ops_approved' ones are still waiting on the PIC to record
+    // the actual amount used, so they don't count as spend yet.
+    const completedTx = txList.filter((tx) => tx.status === 'completed');
 
-    const monthlySpend = approvedTx.reduce(
-      (sum, tx) => sum + Number(tx.amount),
+    const monthlySpend = completedTx.reduce(
+      (sum, tx) => sum + Number(tx.actualAmount ?? tx.amount),
       0,
     );
 
@@ -212,6 +217,7 @@ export async function GET(
       transactions: txList.map((tx) => ({
         id: tx.id,
         amount: tx.amount,
+        actualAmount: tx.actualAmount,
         description: tx.description,
         status: tx.status,
         imageUrl: tx.imageUrl,

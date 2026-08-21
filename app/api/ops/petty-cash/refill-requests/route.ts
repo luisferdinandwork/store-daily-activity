@@ -1,7 +1,8 @@
 // app/api/ops/petty-cash/refill-requests/route.ts
 //
 // GET — refill requests, scoped: ops_area sees only their area's stores,
-// ops_ho sees all. Read-only — only Finance approves/rejects.
+// ops_ho sees all. Approve/reject lives at
+// PATCH /api/ops/petty-cash/refill-requests/[id].
 
 import { NextResponse } from 'next/server';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';

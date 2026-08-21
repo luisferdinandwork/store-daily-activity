@@ -3,18 +3,22 @@
 //
 // Finance · Petty Cash Review
 //
-// Finance's only action here is approving/rejecting PIC refill requests.
-// Usage-request approval belongs to OPS — Finance no longer reviews or
-// verifies individual spend transactions, and no longer has a separate
-// "close the month" action; the balance itself only tops back up once the
-// store uploads its drawer + Surat Terima Petty Cash proof photos.
+// Finance has no approval actions on this page at all — both spend-request
+// approval (OPS) and refill-request approval (also OPS) happen elsewhere.
+// This page is read-only visibility into the money: balances, spend, and
+// refill status. The one interactive bit is "Mark Refilled" — a purely
+// local, personal checkbox (stored in this browser only, via localStorage)
+// that helps whoever's on Finance remember which approved refills they've
+// already physically handed cash over for. It does not call any API, does
+// not change petty_cash_refill_requests.status, and is invisible to
+// OPS/employees — it only exists to save Finance from re-checking work they
+// already did.
 //
 // Design priorities:
 //   1. Fast triage: color-coded status at a glance (pending OPS / refilled / done)
-//   2. Minimal clicks: refill-request approve/reject, one click each
-//   3. Image lightbox: click photo → full-screen without leaving the page
-//   4. Month picker: review any past month without navigation
-//   5. Search + area filter: find a store in under 2 seconds
+//   2. Image lightbox: click photo → full-screen without leaving the page
+//   3. Month picker: review any past month without navigation
+//   4. Search + area filter: find a store in under 2 seconds
 
 import {
   useCallback,
@@ -22,16 +26,15 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type KeyboardEvent,
 } from 'react';
-import { toast } from 'sonner';
 import {
   AlertTriangle,
   CheckCheck,
   ChevronDown,
   ChevronRight,
   ImageOff,
-  Loader2,
   RefreshCw,
   Search,
   Wallet,
@@ -65,6 +68,69 @@ function nextMonth(ym: string) {
 
 function currentMonth() {
   return new Date().toISOString().slice(0, 7);
+}
+
+// ─── "Mark Refilled" — a purely local, personal note for Finance ────────────
+// See the file header comment: this never touches the server, never shows up
+// for OPS or employees, and has zero effect on petty_cash_refill_requests.
+// It's just a browser-local checkbox so whoever's on Finance can tell, at a
+// glance, which approved refills they've already personally handed cash over
+// for.
+
+const REFILL_COMPLETED_STORAGE_KEY = 'financePettyCashRefilledIds';
+
+function readCompletedRefillIds(): Set<number> {
+  if (typeof window === 'undefined') return new Set();
+  try {
+    const raw = window.localStorage.getItem(REFILL_COMPLETED_STORAGE_KEY);
+    const ids = raw ? (JSON.parse(raw) as number[]) : [];
+    return new Set(ids);
+  } catch {
+    return new Set();
+  }
+}
+
+function writeCompletedRefillIds(ids: Set<number>) {
+  try {
+    window.localStorage.setItem(REFILL_COMPLETED_STORAGE_KEY, JSON.stringify([...ids]));
+  } catch {
+    // Non-critical — worst case Finance just re-marks it next visit.
+  }
+}
+
+// localStorage is external mutable state, so this reads it via
+// useSyncExternalStore rather than effect+setState — that also gets the
+// server/client snapshot handling for free, so the server-rendered pass
+// (no localStorage) never mismatches the client's hydrated value.
+const refillMarkListeners = new Set<() => void>();
+
+function subscribeToRefillMarks(listener: () => void) {
+  refillMarkListeners.add(listener);
+  return () => refillMarkListeners.delete(listener);
+}
+
+function getServerMarkedSnapshot() {
+  return false;
+}
+
+function useMarkedRefilled(requestId: number | null) {
+  const getSnapshot = useCallback(
+    () => requestId != null && readCompletedRefillIds().has(requestId),
+    [requestId],
+  );
+
+  const marked = useSyncExternalStore(subscribeToRefillMarks, getSnapshot, getServerMarkedSnapshot);
+
+  const toggle = useCallback(() => {
+    if (requestId == null) return;
+    const ids = readCompletedRefillIds();
+    if (ids.has(requestId)) ids.delete(requestId);
+    else ids.add(requestId);
+    writeCompletedRefillIds(ids);
+    for (const listener of refillMarkListeners) listener();
+  }, [requestId]);
+
+  return { marked, toggle };
 }
 
 // ─── Status system ────────────────────────────────────────────────────────────
@@ -120,7 +186,8 @@ function Lightbox({ src, onClose }: { src: string; onClose: () => void }) {
 
 const TX_STATUS_META: Record<string, { dot: string; label: string; text: string }> = {
   pending_ops: { dot: 'bg-amber-400', label: 'Waiting OPS', text: 'text-amber-600' },
-  ops_approved: { dot: 'bg-emerald-400', label: 'Approved', text: 'text-emerald-600' },
+  ops_approved: { dot: 'bg-sky-400', label: 'Awaiting actual amount', text: 'text-sky-600' },
+  completed: { dot: 'bg-emerald-400', label: 'Completed', text: 'text-emerald-600' },
   ops_rejected: { dot: 'bg-rose-400', label: 'Rejected', text: 'text-rose-500' },
 };
 
@@ -150,7 +217,7 @@ function TxRow({
 
       {/* Amount */}
       <span className="shrink-0 font-semibold tabular-nums text-slate-700">
-        {idr(tx.amount)}
+        {idr(tx.actualAmount ?? tx.amount)}
       </span>
 
       {/* Photo */}
@@ -191,46 +258,19 @@ function StoreRow({
   month,
   expanded,
   onToggle,
-  onReload,
   refillRequest,
-  onRefillActionDone,
 }: {
   store: PettyCashStoreRow;
   month: string;
   expanded: boolean;
   onToggle: () => void;
-  onReload: () => void;
   refillRequest: RefillRequestRow | null;
-  onRefillActionDone: () => void;
 }) {
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
 
-  const [rejectingRequest, setRejectingRequest] = useState(false);
-  const [rejectionReason, setRejectionReason]   = useState('');
-  const [refillActionBusy, setRefillActionBusy] = useState<'approve' | 'reject' | null>(null);
-
-  async function actOnRefillRequest(action: 'approve' | 'reject') {
-    if (!refillRequest) return;
-    setRefillActionBusy(action);
-    try {
-      const res = await fetch(`/api/finance/petty-cash/refill-requests/${refillRequest.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, rejectionReason: action === 'reject' ? rejectionReason || undefined : undefined }),
-      });
-      const body = await res.json();
-      if (!res.ok || !body.success) throw new Error(body.error ?? 'Action failed');
-      toast.success(action === 'approve' ? 'Refill approved.' : 'Refill request rejected.');
-      setRejectingRequest(false);
-      setRejectionReason('');
-      onRefillActionDone();
-      onReload();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Action failed');
-    } finally {
-      setRefillActionBusy(null);
-    }
-  }
+  const { marked: refilled, toggle: toggleRefilled } = useMarkedRefilled(
+    refillRequest?.status === 'approved' ? refillRequest.id : null,
+  );
 
   const status = storeStatus(store);
   const meta   = STATUS_META[status];
@@ -299,27 +339,31 @@ function StoreRow({
           </span>
         </div>
 
-        {/* Actions */}
+        {/* Actions — read-only for Finance; the one interactive bit is the
+            personal "Mark Refilled" note, which never touches the server. */}
         <div className="flex items-center justify-end gap-2" onClick={(e) => e.stopPropagation()}>
-          {refillRequest ? (
-            <>
-              <button
-                onClick={() => actOnRefillRequest('approve')}
-                disabled={refillActionBusy !== null}
-                title={`Requested by ${refillRequest.requestedByName ?? 'PIC'}${refillRequest.notes ? `: "${refillRequest.notes}"` : ''}`}
-                className="flex h-7 items-center gap-1.5 rounded-lg bg-indigo-600 px-3 text-[11px] font-bold text-white transition hover:bg-indigo-700 disabled:opacity-50"
-              >
-                {refillActionBusy === 'approve' ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCheck className="h-3 w-3" />}
-                Approve refill
-              </button>
-              <button
-                onClick={() => setRejectingRequest((v) => !v)}
-                disabled={refillActionBusy !== null}
-                className="flex h-7 items-center gap-1.5 rounded-lg border border-rose-200 bg-white px-2.5 text-[11px] font-bold text-rose-600 transition hover:bg-rose-50 disabled:opacity-50"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </>
+          {refillRequest?.status === 'pending' ? (
+            <span
+              className="text-[10px] font-semibold text-amber-600"
+              title={`Requested by ${refillRequest.requestedByName ?? 'PIC'}${refillRequest.notes ? `: "${refillRequest.notes}"` : ''}`}
+            >
+              Pending OPS approval
+            </span>
+          ) : refillRequest?.status === 'approved' ? (
+            <button
+              type="button"
+              onClick={toggleRefilled}
+              title="Personal note only — doesn't change any status or notify anyone."
+              className={cn(
+                'flex h-7 items-center gap-1.5 rounded-lg px-2.5 text-[11px] font-bold transition',
+                refilled
+                  ? 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200'
+                  : 'border border-slate-200 bg-white text-slate-500 hover:bg-slate-50',
+              )}
+            >
+              <CheckCheck className="h-3 w-3" />
+              {refilled ? 'Refilled' : 'Mark Refilled'}
+            </button>
           ) : status === 'pending-ops' ? (
             <span className="text-[10px] font-semibold text-amber-600">
               Waiting on OPS
@@ -331,29 +375,6 @@ function StoreRow({
           ) : null}
         </div>
       </div>
-
-      {/* Reject-reason inline row */}
-      {rejectingRequest && refillRequest && (
-        <div
-          className="flex items-center gap-2 border-b border-rose-100 bg-rose-50/60 px-14 py-2.5"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <input
-            type="text"
-            value={rejectionReason}
-            onChange={(e) => setRejectionReason(e.target.value)}
-            placeholder="Reason for rejecting this refill request (optional)"
-            className="h-8 flex-1 rounded-lg border border-rose-200 bg-white px-3 text-xs focus:outline-none focus:ring-2 focus:ring-rose-500/30"
-          />
-          <button
-            onClick={() => actOnRefillRequest('reject')}
-            disabled={refillActionBusy !== null}
-            className="h-8 shrink-0 rounded-lg bg-rose-600 px-3 text-xs font-bold text-white hover:bg-rose-700 disabled:opacity-50"
-          >
-            {refillActionBusy === 'reject' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Confirm reject'}
-          </button>
-        </div>
-      )}
 
       {/* Transaction accordion */}
       {expanded && (
@@ -489,7 +510,7 @@ export default function FinancePettyCashPage() {
   const refillRequestByStore = useMemo(() => {
     const map = new Map<number, RefillRequestRow>();
     for (const r of refillRequests) {
-      if (r.status === 'pending') map.set(r.storeId, r);
+      if (r.status === 'pending' || r.status === 'approved') map.set(r.storeId, r);
     }
     return map;
   }, [refillRequests]);
@@ -659,9 +680,7 @@ export default function FinancePettyCashPage() {
                 month={month}
                 expanded={expandedIds.has(store.storeId)}
                 onToggle={() => toggle(store.storeId)}
-                onReload={() => load(month)}
                 refillRequest={refillRequestByStore.get(store.storeId) ?? null}
-                onRefillActionDone={loadRefillRequests}
               />
             ))}
           </div>

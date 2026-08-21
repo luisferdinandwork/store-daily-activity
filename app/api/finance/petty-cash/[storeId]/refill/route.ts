@@ -128,6 +128,7 @@ export async function POST(req: NextRequest, { params }: Params) {
   const txRows = await db
     .select({
       amount: pettyCashTransactions.amount,
+      actualAmount: pettyCashTransactions.actualAmount,
       status: pettyCashTransactions.status,
     })
     .from(pettyCashTransactions)
@@ -177,8 +178,8 @@ export async function POST(req: NextRequest, { params }: Params) {
   }
 
   const approvedSpend = txRows
-    .filter((tx) => tx.status === 'ops_approved')
-    .reduce((sum, tx) => sum + Number(tx.amount), 0);
+    .filter((tx) => tx.status === 'completed')
+    .reduce((sum, tx) => sum + Number(tx.actualAmount ?? tx.amount), 0);
 
   const fallbackBalance = Math.max(0, PETTY_CASH_MAX_BALANCE - approvedSpend);
 

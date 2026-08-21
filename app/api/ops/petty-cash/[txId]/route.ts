@@ -1,7 +1,7 @@
 // app/api/ops/petty-cash/[txId]/route.ts
 
 import { NextRequest, NextResponse } from 'next/server';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
@@ -13,21 +13,6 @@ type Params = {
     txId: string;
   }>;
 };
-
-function getRows(result: unknown): unknown[] {
-  if (Array.isArray(result)) return result;
-
-  if (
-    result &&
-    typeof result === 'object' &&
-    'rows' in result &&
-    Array.isArray((result as { rows: unknown[] }).rows)
-  ) {
-    return (result as { rows: unknown[] }).rows;
-  }
-
-  return [];
-}
 
 export async function PATCH(req: NextRequest, { params }: Params) {
   const scope = await resolveOpsScope();
@@ -79,9 +64,6 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     .select({
       id: pettyCashTransactions.id,
       storeId: pettyCashTransactions.storeId,
-      periodId: pettyCashTransactions.periodId,
-      yearMonth: pettyCashTransactions.yearMonth,
-      amount: pettyCashTransactions.amount,
       status: pettyCashTransactions.status,
       storeAreaId: stores.areaId,
     })
@@ -153,76 +135,33 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     });
   }
 
-  // The period was already fixed at request-creation time (see
-  // POST /api/employee/petty-cash) — we deduct from that exact row rather
-  // than re-deriving one by yearMonth, since balance now carries forward
-  // across months instead of resetting on the calendar.
-  if (!requestRow.periodId) {
-    return NextResponse.json(
-      { success: false, error: 'Petty cash period not found.' },
-      { status: 500 },
-    );
-  }
-
-  const amount = Number(requestRow.amount).toFixed(2);
-
-  // Neon HTTP safe:
-  // 1. Deduct balance only if enough balance exists.
-  // 2. Approve the request only if deduction succeeds.
-  const result = await db.execute(sql`
-    WITH updated_period AS (
-      UPDATE petty_cash_periods
-      SET
-        current_balance = current_balance - ${amount}::numeric,
-        updated_at = NOW()
-      WHERE id = ${requestRow.periodId}
-        AND status = 'open'
-        AND current_balance >= ${amount}::numeric
-      RETURNING
-        id,
-        current_balance::text AS new_balance
-    ),
-
-    approved_request AS (
-      UPDATE petty_cash_transactions
-      SET
-        period_id = updated_period.id,
-        status = 'ops_approved',
-        approved_by = ${scope.userId},
-        approved_at = NOW(),
-        updated_at = NOW()
-      FROM updated_period
-      WHERE petty_cash_transactions.id = ${txId}
-        AND petty_cash_transactions.status = 'pending_ops'
-      RETURNING
-        petty_cash_transactions.id::int AS tx_id,
-        petty_cash_transactions.status
+  // OPS approval no longer deducts the balance — the requested amount is
+  // just an estimate. The PIC records the actual amount used afterward (see
+  // PATCH /api/employee/petty-cash), and that's what actually gets cut from
+  // the store's ready petty cash.
+  const [approved] = await db
+    .update(pettyCashTransactions)
+    .set({
+      status: 'ops_approved',
+      approvedBy: scope.userId,
+      approvedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(pettyCashTransactions.id, txId),
+        eq(pettyCashTransactions.status, 'pending_ops'),
+      ),
     )
+    .returning({
+      id: pettyCashTransactions.id,
+      status: pettyCashTransactions.status,
+    });
 
-    SELECT
-      approved_request.tx_id,
-      approved_request.status,
-      updated_period.new_balance
-    FROM approved_request
-    CROSS JOIN updated_period
-  `);
-
-  const rows = getRows(result);
-
-  const row = rows[0] as
-    | {
-        tx_id: number;
-        status: string;
-        new_balance: string;
-      }
-    | undefined;
-
-  if (!row) {
+  if (!approved) {
     return NextResponse.json(
       {
         success: false,
-        error:
-          'Approval failed. Insufficient balance or request already processed.',
+        error: 'Approval failed. Request may already be processed.',
       },
       { status: 409 },
     );
@@ -230,8 +169,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 
   return NextResponse.json({
     success: true,
-    txId: row.tx_id,
-    status: row.status,
-    newBalance: row.new_balance,
+    txId: approved.id,
+    status: approved.status,
   });
 }

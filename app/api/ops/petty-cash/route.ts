@@ -48,6 +48,7 @@ export async function GET(req: NextRequest) {
     .select({
       id: pettyCashTransactions.id,
       amount: pettyCashTransactions.amount,
+      actualAmount: pettyCashTransactions.actualAmount,
       description: pettyCashTransactions.description,
       status: pettyCashTransactions.status,
       imageUrl: pettyCashTransactions.imageUrl,
@@ -87,6 +88,7 @@ export async function GET(req: NextRequest) {
     data: rows.map((row) => ({
       id: row.id,
       amount: row.amount,
+      actualAmount: row.actualAmount,
       description: row.description,
       status: row.status,
       imageUrl: row.imageUrl,

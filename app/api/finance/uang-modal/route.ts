@@ -17,12 +17,14 @@ import { db } from '@/lib/db';
 import {
   cekUangModalTasks,
   cekUangModalDenominations,
+  schedules,
   stores,
   areas,
   users,
   type CekUangModalTask,
 } from '@/lib/db/schema';
 import { CEK_UANG_MODAL_MAX_TOTAL } from '@/lib/db/utils/cek-uang-modal';
+import { getMorningShiftId, getFullDayShiftId } from '@/lib/db/utils/shift-lookup';
 import { resolveFinanceScope } from '@/lib/finance/scope';
 
 // ─── Response types ───────────────────────────────────────────────────────────
@@ -40,7 +42,16 @@ export interface UangModalStoreEntry {
   storeNo: string;
   areaName: string;
 
+  /**
+   * 'pending' means the store was scheduled to report (morning/full-day
+   * shift) for a day that has already ended, and no completed task exists —
+   * i.e. the employee didn't do it. That's the only status the finance page
+   * renders in red. 'not_started'/'in_progress' are only used for today,
+   * while the day is still ongoing.
+   */
   status: 'not_started' | 'in_progress' | 'completed' | 'pending';
+  /** True when no task row exists at all — synthesized purely from the schedule. */
+  isMissing: boolean;
 
   totalAmount: number;
   maxAmount: number;
@@ -62,9 +73,11 @@ export interface UangModalDayCell {
   totalAmount: number;
   /** Stores that submitted (status completed) */
   submittedCount: number;
-  /** Stores with a task created but not completed (not_started/in_progress) */
+  /** Stores with a task created but not completed (not_started/in_progress) — only possible for today */
   pendingCount: number;
-  /** Total stores expected to report (all stores with a task row that day) */
+  /** Stores scheduled to report that day but didn't — day already ended (red) */
+  notDoneCount: number;
+  /** Total stores expected to report that day (scheduled morning/full-day shift) */
   totalStoreCount: number;
   hasData: boolean;
 }
@@ -111,6 +124,23 @@ function getDaysInMonth(yearMonth: string): number {
   return new Date(year, month, 0).getDate();
 }
 
+/** "Today" in Jakarta time — a day only counts as fully over (and thus
+ * eligible for a red "not done") once it's actually past in the timezone
+ * the stores operate in, not the server's own clock. */
+function jakartaTodayStr(): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jakarta',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+
+  const year  = parts.find((p) => p.type === 'year')?.value;
+  const month = parts.find((p) => p.type === 'month')?.value;
+  const day   = parts.find((p) => p.type === 'day')?.value;
+  return `${year}-${month}-${day}`;
+}
+
 // ─── Route ────────────────────────────────────────────────────────────────────
 
 export async function GET(
@@ -148,8 +178,39 @@ export async function GET(
         ),
       );
 
+    // ── 1b. Fetch which stores were even scheduled to report that day ─────────
+    // A store only "owes" a Cek Uang Modal for a day if someone had a
+    // morning/full-day shift there — that's exactly when a task row gets
+    // created (see getOrCreateCekUangModalForSchedule). Without this, a store
+    // that never opened the task at all (no row ever created) would be
+    // invisible instead of flagged as not done.
+    const morningShiftId  = await getMorningShiftId();
+    const fullDayShiftId  = await getFullDayShiftId();
+
+    const scheduleRows = await db
+      .select({ storeId: schedules.storeId, date: schedules.date })
+      .from(schedules)
+      .where(
+        and(
+          gte(schedules.date, start),
+          lt(schedules.date, end),
+          inArray(schedules.shiftId, [morningShiftId, fullDayShiftId]),
+          eq(schedules.isHoliday, false),
+          storeIdParam ? eq(schedules.storeId, Number(storeIdParam)) : undefined,
+        ),
+      );
+
+    const expectedByDate = new Map<string, Set<number>>();
+    for (const s of scheduleRows) {
+      const dateStr = toDateStr(s.date);
+      if (!expectedByDate.has(dateStr)) expectedByDate.set(dateStr, new Set());
+      expectedByDate.get(dateStr)!.add(s.storeId);
+    }
+
     // ── 2. Resolve stores + areas referenced ───────────────────────────────────
-    const storeIds = [...new Set(taskRows.map((t) => t.storeId))];
+    const storeIds = [
+      ...new Set([...taskRows.map((t) => t.storeId), ...scheduleRows.map((s) => s.storeId)]),
+    ];
 
     const storeRows = storeIds.length > 0
       ? await db
@@ -217,53 +278,99 @@ export async function GET(
     // ── 6. Build day cells + detail for every day in the month ────────────────
     const days: UangModalDayCell[] = [];
     const detail: Record<string, UangModalDayDetail> = {};
+    const todayStr = jakartaTodayStr();
 
     for (let day = 1; day <= daysInMonth; day++) {
       const d = new Date(start.getFullYear(), start.getMonth(), day);
       const dateStr = toDateStr(d);
       const dayTasks = tasksByDate.get(dateStr) ?? [];
+      const taskByStore = new Map(dayTasks.map((t) => [t.storeId, t]));
 
-      const completedTasks = dayTasks.filter((t) => t.status === 'completed');
-      const pendingTasks   = dayTasks.filter((t) => t.status === 'not_started' || t.status === 'in_progress');
+      // A day only "grades" stores once it has actually ended — a store
+      // still mid-shift today isn't flagged red just because it hasn't
+      // finished yet, and a future scheduled day has nothing to grade at all.
+      const dayHasEnded = dateStr < todayStr;
+      const expectedStoreIds = dateStr <= todayStr ? expectedByDate.get(dateStr) ?? new Set<number>() : new Set<number>();
 
-      const totalAmount = completedTasks.reduce((sum, t) => sum + Number(t.totalAmount), 0);
+      const allStoreIds = new Set<number>([...taskByStore.keys(), ...expectedStoreIds]);
+
+      const storeEntries: UangModalStoreEntry[] = [...allStoreIds]
+        .map((storeId) => {
+          const store = storeMap.get(storeId);
+          const t = taskByStore.get(storeId);
+
+          const baseInfo = {
+            storeId,
+            storeName: store?.name ?? `Store ${storeId}`,
+            storeNo:   store?.storeNo ?? '—',
+            areaName:  store?.areaName ?? '—',
+          };
+
+          if (t) {
+            // Task row exists — completed stays completed; anything else
+            // (not_started/in_progress) only turns red once the day's over.
+            const status = t.status === 'completed'
+              ? 'completed'
+              : dayHasEnded ? 'pending' : t.status;
+
+            return {
+              ...baseInfo,
+              taskId: t.id,
+              status,
+              isMissing: false,
+
+              totalAmount:     Number(t.totalAmount),
+              maxAmount:       Number(t.maxAmount),
+              remainingAmount: Number(t.remainingAmount),
+
+              submittedBy:       userName(t.userId),
+              submittedByUserId: t.userId,
+              completedAt:       t.completedAt ? t.completedAt.toISOString() : null,
+              notes:             t.notes,
+
+              denominations: denomByTask.get(t.id) ?? [],
+            } satisfies UangModalStoreEntry;
+          }
+
+          // No task row at all — scheduled to report, but the employee never
+          // even opened the task. Red once the day's over; a quiet
+          // "not started" placeholder while today is still in progress.
+          return {
+            ...baseInfo,
+            taskId: -storeId, // synthetic — no real row backs this entry
+            status: dayHasEnded ? 'pending' : 'not_started',
+            isMissing: true,
+
+            totalAmount:     0,
+            maxAmount:       CEK_UANG_MODAL_MAX_TOTAL,
+            remainingAmount: CEK_UANG_MODAL_MAX_TOTAL,
+
+            submittedBy:       null,
+            submittedByUserId: null,
+            completedAt:       null,
+            notes:             null,
+
+            denominations: [],
+          } satisfies UangModalStoreEntry;
+        })
+        .sort((a, b) => a.storeName.localeCompare(b.storeName, 'id'));
+
+      const submittedCount = storeEntries.filter((e) => e.status === 'completed').length;
+      const notDoneCount   = storeEntries.filter((e) => e.status === 'pending').length;
+      const pendingCount   = storeEntries.filter((e) => e.status === 'not_started' || e.status === 'in_progress').length;
+      const totalAmount    = storeEntries.reduce((sum, e) => sum + (e.status === 'completed' ? e.totalAmount : 0), 0);
 
       const cell: UangModalDayCell = {
         date:            dateStr,
         dayOfMonth:      day,
         totalAmount,
-        submittedCount:  completedTasks.length,
-        pendingCount:    pendingTasks.length,
-        totalStoreCount: dayTasks.length,
-        hasData:         dayTasks.length > 0,
+        submittedCount,
+        pendingCount,
+        notDoneCount,
+        totalStoreCount: storeEntries.length,
+        hasData:         storeEntries.length > 0,
       };
       days.push(cell);
-
-      const storeEntries: UangModalStoreEntry[] = dayTasks
-        .map((t) => {
-          const store = storeMap.get(t.storeId);
-          return {
-            taskId:            t.id,
-            storeId:           t.storeId,
-            storeName:         store?.name    ?? `Store ${t.storeId}`,
-            storeNo:           store?.storeNo ?? '—',
-            areaName:          store?.areaName ?? '—',
-
-            status:            t.status,
-
-            totalAmount:       Number(t.totalAmount),
-            maxAmount:         Number(t.maxAmount),
-            remainingAmount:   Number(t.remainingAmount),
-
-            submittedBy:       userName(t.userId),
-            submittedByUserId: t.userId,
-            completedAt:       t.completedAt ? t.completedAt.toISOString() : null,
-            notes:             t.notes,
-
-            denominations:     denomByTask.get(t.id) ?? [],
-          } satisfies UangModalStoreEntry;
-        })
-        .sort((a, b) => a.storeName.localeCompare(b.storeName, 'id'));
 
       detail[dateStr] = { ...cell, stores: storeEntries };
     }

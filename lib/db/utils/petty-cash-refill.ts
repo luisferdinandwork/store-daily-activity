@@ -3,10 +3,10 @@
 // PIC-initiated "top me back up" requests — distinct from Finance's own
 // month-end close-and-reset (pettyCashRefills in lib/db/schema/petty-cash.ts).
 //
-// Flow: PIC requests -> Finance approves/rejects (they're the one who will
-// hand over the physical cash, but approval alone does NOT move the
-// balance yet — the store hasn't actually received the cash at this point)
-// -> once approved, any store employee uploads two proof-of-receipt photos
+// Flow: PIC requests -> OPS approves/rejects the request (Finance is still
+// the one who will hand over the physical cash, but approval alone does NOT
+// move the balance yet — the store hasn't actually received the cash at
+// this point) -> once approved, any store employee uploads two proof-of-receipt photos
 // (the petty cash drawer and the Surat Terima Petty Cash) as evidence the
 // cash was physically handed over. Only once BOTH photos are in does the
 // balance actually top back up to the max — that's the real "the store now
@@ -141,13 +141,14 @@ export async function createRefillRequest(
 }
 
 /**
- * Finance approves — this only marks the request approved and snapshots the
+ * OPS approves — this only marks the request approved and snapshots the
  * balance at the time of approval. It does NOT touch the period's balance:
- * the store hasn't received the cash yet, so the dashboard shouldn't show it
- * as available yet either. The balance only tops up once proof photos are in
- * (see attachRefillProof below).
+ * the store hasn't received the cash yet (Finance still needs to physically
+ * hand it over), so the dashboard shouldn't show it as available yet either.
+ * The balance only tops up once proof photos are in (see attachRefillProof
+ * below).
  */
-export async function approveRefillRequest(id: number, financeUserId: string): Promise<RefillRequestResult> {
+export async function approveRefillRequest(id: number, actorUserId: string): Promise<RefillRequestResult> {
   const [existing] = await db.select().from(pettyCashRefillRequests).where(eq(pettyCashRefillRequests.id, id)).limit(1);
   if (!existing) return { success: false, error: 'Request not found.' };
   if (existing.status !== 'pending') return { success: false, error: 'Request has already been processed.' };
@@ -161,7 +162,7 @@ export async function approveRefillRequest(id: number, financeUserId: string): P
     .update(pettyCashRefillRequests)
     .set({
       status: 'approved',
-      approvedBy: financeUserId,
+      approvedBy: actorUserId,
       approvedAt: new Date(),
       balanceBefore: period.currentBalance,
     })
@@ -177,7 +178,7 @@ export async function approveRefillRequest(id: number, financeUserId: string): P
 
 export async function rejectRefillRequest(
   id: number,
-  financeUserId: string,
+  actorUserId: string,
   reason?: string,
 ): Promise<RefillRequestResult> {
   const [existing] = await db.select().from(pettyCashRefillRequests).where(eq(pettyCashRefillRequests.id, id)).limit(1);
@@ -186,7 +187,7 @@ export async function rejectRefillRequest(
 
   const [request] = await db
     .update(pettyCashRefillRequests)
-    .set({ status: 'rejected', rejectedBy: financeUserId, rejectedAt: new Date(), rejectionReason: reason })
+    .set({ status: 'rejected', rejectedBy: actorUserId, rejectedAt: new Date(), rejectionReason: reason })
     .where(and(eq(pettyCashRefillRequests.id, id), eq(pettyCashRefillRequests.status, 'pending')))
     .returning();
 
@@ -198,7 +199,7 @@ export async function rejectRefillRequest(
 export type ProofPhotoKind = 'drawer' | 'signature';
 
 /**
- * Any store employee attaches one of the two proof photos once Finance has
+ * Any store employee attaches one of the two proof photos once OPS has
  * approved. Once BOTH the drawer photo and the Surat Terima Petty Cash photo
  * are in, this is the moment the cash is considered actually received — the
  * period's balance tops back up to the max right here, not at approval time.
@@ -214,7 +215,7 @@ export async function attachRefillProof(
   if (!existing) return { success: false, error: 'Request not found.' };
   if (existing.storeId !== storeId) return { success: false, error: 'This request belongs to a different store.' };
   if (existing.status !== 'approved') {
-    return { success: false, error: 'Proof photos can only be uploaded after Finance approves the refill.' };
+    return { success: false, error: 'Proof photos can only be uploaded after OPS approves the refill.' };
   }
 
   const columnKey = kind === 'drawer' ? 'drawerPhotoUrl' : 'signaturePhotoUrl';
