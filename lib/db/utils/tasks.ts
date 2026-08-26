@@ -1408,13 +1408,15 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
       'fiveRAreaKiriPhotos',
       'fiveRAreaGudangPhotos',
     ]),
-    loadTable(setoranTasks, 'setoran', [
-      'resiPhoto',
-      'atmCardSelfiePhoto',
-    ]),
+    // resiPhoto/atmCardSelfiePhoto are single-URL string columns, not JSON
+    // arrays — passing them through parsePhotosField() would JSON.parse a
+    // bare URL and silently swallow it, so they're deliberately NOT listed
+    // as photo fields here (buildExtra leaves non-listed fields untouched).
+    loadTable(setoranTasks, 'setoran', []),
     loadTable(storeFrontTasks, 'store_front', [
       'storefrontPhotos',
-      'rollingDoorClosedPhoto',
+      // rollingDoorClosedPhoto is a single-URL string column, not a JSON
+      // array — see the resiPhoto comment above for why it's excluded here.
     ]),
     loadTable(cekBinTasks, 'cek_bin', []),
     loadTable(vmChecklistTasks, 'vm_checklist', []),
@@ -1427,7 +1429,9 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
     // item_dropping/item_return intentionally excluded — they moved to the
     // standalone, on-demand Item Transfers page and no longer materialize
     // per-day rows (see app/employee/item-transfers/page.tsx).
-    loadTable(storeClosingTasks, 'store_closing', ['eodEdcSettlementPhoto']),
+    // eodEdcSettlementPhoto is also a single-URL string column — see the
+    // resiPhoto comment above.
+    loadTable(storeClosingTasks, 'store_closing', []),
     loadTable(groomingTasks, 'grooming', ['selfiePhotos']),
   ]);
 

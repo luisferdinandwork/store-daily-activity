@@ -1,11 +1,11 @@
 // app/api/ops/tasks/progress/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
-import { stores } from '@/lib/db/schema';
+import { stores, users } from '@/lib/db/schema';
 import { todayInStoreTimezone } from '@/lib/schedule-utils';
 import {
   getAllTaskOverview,
@@ -14,6 +14,7 @@ import {
   summariseTasks,
 } from '@/lib/db/utils/tasks';
 import { serializeTask } from '@/lib/db/utils/task-serialize';
+import { listSerahTerimaEntries } from '@/lib/db/utils/serah-terima';
 
 import {
   getOpsActor,
@@ -106,6 +107,40 @@ function toDateKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+async function serializeSerahTerimaBoard(storeId: number) {
+  const board = await listSerahTerimaEntries(storeId);
+  const allEntries = [...board.active, ...board.recentCompleted];
+
+  const userIds = new Set<string>();
+  for (const e of allEntries) {
+    userIds.add(e.createdByUserId);
+    if (e.completedByUserId) userIds.add(e.completedByUserId);
+  }
+
+  const nameRows = userIds.size
+    ? await db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, [...userIds]))
+    : [];
+  const nameById = new Map(nameRows.map((u) => [u.id, u.name]));
+
+  const toIso = (d: Date | null) => (d ? d.toISOString() : null);
+  const serialize = (e: (typeof allEntries)[number]) => ({
+    id: String(e.id),
+    message: e.message,
+    createdByUserId: e.createdByUserId,
+    createdByName: nameById.get(e.createdByUserId) ?? e.createdByUserId,
+    createdAt: toIso(e.createdAt),
+    isCompleted: e.isCompleted,
+    completedByUserId: e.completedByUserId,
+    completedByName: e.completedByUserId ? (nameById.get(e.completedByUserId) ?? e.completedByUserId) : null,
+    completedAt: toIso(e.completedAt),
+  });
+
+  return {
+    active: board.active.map(serialize),
+    recentCompleted: board.recentCompleted.map(serialize),
+  };
+}
+
 // GET /api/ops/tasks/progress?date=YYYY-MM-DD
 // GET /api/ops/tasks/progress?date=YYYY-MM-DD&storeId=1
 export async function GET(req: NextRequest) {
@@ -182,10 +217,10 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const tasks = await getFlatTasksForStoreDate(
-      storeParsed.id,
-      dateParsed.date,
-    );
+    const [tasks, serahTerima] = await Promise.all([
+      getFlatTasksForStoreDate(storeParsed.id, dateParsed.date),
+      serializeSerahTerimaBoard(storeParsed.id),
+    ]);
 
     const summary = summariseTasks(tasks);
 
@@ -202,6 +237,10 @@ export async function GET(req: NextRequest) {
       },
       summary: withCompletionRate(summary),
       tasks: tasks.map(serializeTask),
+      // Serah Terima is a rolling per-store board, not date-scoped like the
+      // other tasks above — it always reflects the current board state
+      // regardless of which `date` was requested.
+      serahTerima,
     });
   }
 

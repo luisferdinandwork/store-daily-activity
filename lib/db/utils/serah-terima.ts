@@ -193,6 +193,37 @@ export async function createSerahTerimaEntry(
   }
 }
 
+export async function deleteSerahTerimaEntry(
+  entryId: number,
+  storeId: number,
+): Promise<TaskResult<void>> {
+  try {
+    const [existing] = await db
+      .select({ id: serahTerimaEntries.id, storeId: serahTerimaEntries.storeId, isCompleted: serahTerimaEntries.isCompleted })
+      .from(serahTerimaEntries)
+      .where(eq(serahTerimaEntries.id, entryId))
+      .limit(1);
+
+    if (!existing) {
+      return { success: false, error: 'Item serah terima tidak ditemukan.' };
+    }
+    if (existing.storeId !== storeId) {
+      return { success: false, error: 'Item serah terima bukan milik toko ini.' };
+    }
+    // Only completed (history) entries can be deleted — active items are
+    // still outstanding work and must be completed, not discarded.
+    if (!existing.isCompleted) {
+      return { success: false, error: 'Hanya item yang sudah selesai yang bisa dihapus.' };
+    }
+
+    await db.delete(serahTerimaEntries).where(eq(serahTerimaEntries.id, entryId));
+
+    return { success: true, data: undefined };
+  } catch (err) {
+    return { success: false, error: `deleteSerahTerimaEntry: ${err}` };
+  }
+}
+
 export async function completeSerahTerimaEntry(
   input: CompleteSerahTerimaEntryInput,
 ): Promise<TaskResult<SerahTerimaEntry>> {

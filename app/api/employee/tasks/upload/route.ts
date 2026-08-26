@@ -2,9 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { writeFile, mkdir } from 'fs/promises';
-import { join } from 'path';
-import { existsSync } from 'fs';
+import { uploadToOss } from '@/lib/oss';
 
 const ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
 const MAX_SIZE_MB = 10;
@@ -178,24 +176,8 @@ export async function POST(request: NextRequest) {
     const safeName = `${session.user.id}-${timestamp}-${random}.${ext}`;
     const storagePath = `tasks/${folder}/${safeName}`;
 
-    let url: string;
-
-    if (process.env.BLOB_READ_WRITE_TOKEN) {
-      const { put } = await import('@vercel/blob');
-      const blob = await put(storagePath, file, { access: 'public' });
-      url = blob.url;
-    } else {
-      const bytes = await file.arrayBuffer();
-      const buffer = Buffer.from(bytes);
-      const uploadDir = join(process.cwd(), 'public', 'uploads', 'tasks', folder);
-
-      if (!existsSync(uploadDir)) {
-        await mkdir(uploadDir, { recursive: true });
-      }
-
-      await writeFile(join(uploadDir, safeName), buffer);
-      url = `/uploads/tasks/${folder}/${safeName}`;
-    }
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const url = await uploadToOss(buffer, storagePath, file.type);
 
     return NextResponse.json({
       url,

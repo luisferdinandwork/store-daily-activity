@@ -1,5 +1,5 @@
 // app/api/upload/issue-ba/route.ts
-// Saves Berita Acara (BA) evidence files to /public/issue-ba/
+// Saves Berita Acara (BA) evidence files to Alibaba Cloud OSS under issue-ba/.
 // Unlike /api/upload/issue (camera-only issue-report photos), BA files are
 // picked from the device's gallery/file system and may be images OR
 // documents (PDF, Word, Excel) — a BA is often a scanned/exported document,
@@ -16,8 +16,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { writeFile, mkdir, access } from 'fs/promises';
-import path from 'path';
+import { uploadToOss, ossObjectExists } from '@/lib/oss';
 
 // ─── Allowed types ────────────────────────────────────────────────────────────
 
@@ -73,7 +72,7 @@ function safeExt(file: File): string {
   return 'bin';
 }
 
-async function resolveFilename(dir: string, filename: string): Promise<string> {
+async function resolveFilename(prefix: string, filename: string): Promise<string> {
   const dot  = filename.lastIndexOf('.');
   const base = dot !== -1 ? filename.slice(0, dot) : filename;
   const ext  = dot !== -1 ? filename.slice(dot)    : '';
@@ -81,15 +80,12 @@ async function resolveFilename(dir: string, filename: string): Promise<string> {
   let candidate = filename;
   let counter   = 2;
 
-  while (true) {
-    try {
-      await access(path.join(dir, candidate));
-      candidate = `${base}_${counter}${ext}`;
-      counter++;
-    } catch {
-      return candidate;
-    }
+  while (await ossObjectExists(`${prefix}/${candidate}`)) {
+    candidate = `${base}_${counter}${ext}`;
+    counter++;
   }
+
+  return candidate;
 }
 
 // ─── POST /api/upload/issue-ba ─────────────────────────────────────────────────
@@ -129,9 +125,6 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const uploadDir = path.join(process.cwd(), 'public', 'issue-ba');
-    await mkdir(uploadDir, { recursive: true });
-
     const titleSlug = slugify(title ?? 'issue');
     const storeSlug = slugify(storeName ?? 'store');
     const date      = todayStr();
@@ -141,11 +134,10 @@ export async function POST(req: NextRequest) {
         const ext      = safeExt(file);
         const filename = `${titleSlug}_${storeSlug}_${date}_ba_${index + 1}.${ext}`;
 
-        const finalName = await resolveFilename(uploadDir, filename);
+        const finalName = await resolveFilename('issue-ba', filename);
         const buffer    = Buffer.from(await file.arrayBuffer());
-        await writeFile(path.join(uploadDir, finalName), buffer);
 
-        return `/issue-ba/${finalName}`;
+        return uploadToOss(buffer, `issue-ba/${finalName}`, file.type);
       }),
     );
 

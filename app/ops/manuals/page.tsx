@@ -10,11 +10,25 @@ import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import {
   BookOpen, Loader2, Shield, UploadCloud, FileText, FileSpreadsheet,
-  Image as ImageIcon, Trash2, Eye, EyeOff, Pencil, Check, X, Plus,
+  Image as ImageIcon, Trash2, Eye, EyeOff, Pencil, Check, X, Plus, ScanEye,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
+import {
+  ExcelViewerOverlay,
+  PdfViewerOverlay,
+  IMAGE_EXTS,
+  SHEET_EXTS,
+  PDF_EXTS,
+} from '@/components/manuals/ManualPreviewOverlay';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog';
 
 // ─── Auth guard ───────────────────────────────────────────────────────────────
 
@@ -36,9 +50,6 @@ type ManualRow = {
   uploaderName: string | null;
   createdAt: string;
 };
-
-const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp']);
-const SHEET_EXTS = new Set(['xls', 'xlsx']);
 
 function fileIcon(fileType: string) {
   const ext = fileType.toLowerCase();
@@ -101,8 +112,8 @@ function NewManualForm({ onCreated }: { onCreated: () => void }) {
     }
   }
 
-  if (!open) {
-    return (
+  return (
+    <>
       <button
         type="button"
         onClick={() => setOpen(true)}
@@ -110,74 +121,84 @@ function NewManualForm({ onCreated }: { onCreated: () => void }) {
       >
         <Plus className="h-3.5 w-3.5" /> Upload manual baru
       </button>
-    );
-  }
 
-  return (
-    <div className="space-y-3 rounded-2xl border border-indigo-200 bg-indigo-50 p-4">
-      <input
-        autoFocus
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-        placeholder="Judul manual (mis. SOP Store Opening)"
-        className="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm focus:border-indigo-400 focus:outline-none"
-      />
-      <textarea
-        value={description}
-        onChange={(e) => setDescription(e.target.value)}
-        placeholder="Deskripsi singkat (opsional)"
-        rows={2}
-        className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none"
-      />
+      <Dialog open={open} onOpenChange={(next) => { if (!next) reset(); }}>
+        <DialogContent className="rounded-2xl border-slate-200 bg-white sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-slate-900">Upload manual baru</DialogTitle>
+            <DialogDescription className="text-slate-500">
+              Manual akan tampil untuk semua karyawan setelah disimpan.
+            </DialogDescription>
+          </DialogHeader>
 
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx"
-        className="hidden"
-        onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-      />
-      <button
-        type="button"
-        onClick={() => fileInputRef.current?.click()}
-        className="flex w-full items-center gap-2 rounded-lg border border-dashed border-slate-300 bg-white px-3 py-2.5 text-left text-xs font-semibold text-slate-500 hover:bg-slate-50"
-      >
-        <UploadCloud className="h-4 w-4 shrink-0 text-slate-400" />
-        {file ? file.name : 'Pilih file (PDF, Word, Excel, atau gambar)'}
-      </button>
+          <div className="space-y-3">
+            <input
+              autoFocus
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Judul manual (mis. SOP Store Opening)"
+              className="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm focus:border-indigo-400 focus:outline-none"
+            />
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Deskripsi singkat (opsional)"
+              rows={2}
+              className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none"
+            />
 
-      <div className="flex justify-end gap-2 pt-1">
-        <button
-          type="button"
-          onClick={reset}
-          className="flex h-9 items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-500"
-        >
-          <X className="h-3.5 w-3.5" /> Batal
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={handleSubmit}
-          className="flex h-9 items-center gap-1.5 rounded-lg bg-indigo-600 px-3 text-xs font-bold text-white disabled:opacity-50"
-        >
-          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-          Simpan
-        </button>
-      </div>
-    </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx"
+              className="hidden"
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="flex w-full items-center gap-2 rounded-lg border border-dashed border-slate-300 bg-white px-3 py-2.5 text-left text-xs font-semibold text-slate-500 hover:bg-slate-50"
+            >
+              <UploadCloud className="h-4 w-4 shrink-0 text-slate-400" />
+              {file ? file.name : 'Pilih file (PDF, Word, Excel, atau gambar)'}
+            </button>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-1">
+            <button
+              type="button"
+              onClick={reset}
+              className="flex h-9 items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-500"
+            >
+              <X className="h-3.5 w-3.5" /> Batal
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={handleSubmit}
+              className="flex h-9 items-center gap-1.5 rounded-lg bg-indigo-600 px-3 text-xs font-bold text-white disabled:opacity-50"
+            >
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+              Simpan
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
 // ─── Manual card ──────────────────────────────────────────────────────────────
 
 function ManualCard({
-  manual, busy, onToggleActive, onRename, onDelete,
+  manual, busy, onToggleActive, onRename, onDelete, onView,
 }: {
   manual: ManualRow;
   busy: boolean;
   onToggleActive: (id: string, isActive: boolean) => void;
   onRename: (id: string, title: string, description: string) => void;
   onDelete: (id: string) => void;
+  onView: (manual: ManualRow) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [titleDraft, setTitleDraft] = useState(manual.title);
@@ -249,6 +270,14 @@ function ManualCard({
           <div className="flex shrink-0 items-center gap-1">
             <button
               type="button"
+              onClick={() => onView(manual)}
+              className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600"
+              title="Lihat manual"
+            >
+              <ScanEye className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
               disabled={busy}
               onClick={() => onToggleActive(manual.id, !manual.isActive)}
               className={cn(
@@ -284,6 +313,15 @@ export default function OpsManualsPage() {
   const [manuals, setManuals] = useState<ManualRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<Set<string>>(new Set());
+  const [viewing, setViewing] = useState<ManualRow | null>(null);
+  const [viewingPdf, setViewingPdf] = useState<ManualRow | null>(null);
+
+  function handleView(manual: ManualRow) {
+    const ext = manual.fileType.toLowerCase();
+    if (PDF_EXTS.has(ext)) setViewingPdf(manual);
+    else if (SHEET_EXTS.has(ext)) setViewing(manual);
+    else window.open(manual.fileUrl, '_blank', 'noopener,noreferrer');
+  }
 
   useEffect(() => {
     if (authStatus === 'loading') return;
@@ -414,10 +452,14 @@ export default function OpsManualsPage() {
               onToggleActive={handleToggleActive}
               onRename={handleRename}
               onDelete={handleDelete}
+              onView={handleView}
             />
           ))
         )}
       </div>
+
+      {viewing && <ExcelViewerOverlay manual={viewing} onClose={() => setViewing(null)} />}
+      {viewingPdf && <PdfViewerOverlay manual={viewingPdf} onClose={() => setViewingPdf(null)} />}
     </div>
   );
 }

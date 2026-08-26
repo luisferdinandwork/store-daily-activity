@@ -21,12 +21,14 @@ import OpsPageHeader, { type Period } from '@/components/ops/layout/OpsPageHeade
 import {
   type FlatTask,
   type TaskStatus,
+  type SerahTerimaBoardView,
   TASK_LABELS,
   TASK_ICONS,
   fmtTime,
   statusBadgeClass,
   statusLabel,
   TaskDetailView,
+  SerahTerimaPanel,
 } from './task-detail';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -71,6 +73,7 @@ type DetailResponse = {
   store: { id: string; name: string; address: string; areaId?: string | null };
   summary: StoreSummary;
   tasks: FlatTask[];
+  serahTerima: SerahTerimaBoardView;
 };
 
 type RangeSummaryRow = {
@@ -890,6 +893,9 @@ function StoreDetailPanel({ detail, loading, emptyMessage, onSelectTask }: {
         <SummaryBreakdown summary={detail.summary} />
       </div>
       <div className="flex-1 overflow-y-auto">
+        <div className="p-4">
+          <SerahTerimaPanel board={detail.serahTerima} />
+        </div>
         {detail.tasks.length === 0 ? (
           <div className="p-8 text-center text-sm text-slate-400">Tidak ada task untuk toko ini pada tanggal yang dipilih.</div>
         ) : (

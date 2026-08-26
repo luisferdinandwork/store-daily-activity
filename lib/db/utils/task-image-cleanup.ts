@@ -1,19 +1,17 @@
 // lib/db/utils/task-image-cleanup.ts
 //
-// Deletes task checklist photos older than the retention window from Vercel
-// Blob, then clears the DB columns that referenced them. Driven from the DB
-// side (not Blob's own list()) so we know exactly which row/column to null
-// once the corresponding blob is gone — never leaves a DB reference pointing
-// at a deleted file.
+// Deletes task checklist photos older than the retention window from
+// Alibaba Cloud OSS, then clears the DB columns that referenced them. Driven
+// from the DB side (not a bucket list()) so we know exactly which row/column
+// to null once the corresponding object is gone — never leaves a DB
+// reference pointing at a deleted file.
 //
-// Scope: task checklist photos only (durably stored in Vercel Blob). Petty
-// cash receipts and issue-report attachments are NOT covered — those routes
-// have no Blob fallback today (a separate, more urgent storage bug) and
-// aren't touched here.
+// Scope: task checklist photos only. Petty cash receipts and issue-report
+// attachments are NOT covered — not touched here.
 
 import { db } from '@/lib/db';
 import { sql } from 'drizzle-orm';
-import { del } from '@vercel/blob';
+import { deleteFromOss, isOssUrl } from '@/lib/oss';
 
 export const IMAGE_RETENTION_DAYS = 60;
 
@@ -86,11 +84,6 @@ function parsePhotoUrls(raw: unknown): string[] {
   return [trimmed];
 }
 
-/** Only Blob-hosted URLs are safe to del() — skip local /uploads/... dev fallback paths. */
-function isBlobUrl(url: string): boolean {
-  return /^https:\/\/[a-z0-9-]+\.public\.blob\.vercel-storage\.com\//i.test(url);
-}
-
 function extractRows<T>(result: unknown): T[] {
   const withRows = result as { rows?: unknown[] };
   return Array.isArray(withRows.rows) ? (withRows.rows as T[]) : (result as unknown as T[]);
@@ -103,7 +96,7 @@ export interface CleanupSummary {
   retentionDays: number;
   cutoff: string;
   rowsCleared: number;
-  blobsDeleted: number;
+  objectsDeleted: number;
   /** Per-table match counts, always populated (even in dry-run) so the join logic is verifiable. */
   matchesByTable: Record<string, number>;
   /** A few sample rows per table (dry-run only) so you can spot-check the join found the right thing. */
@@ -113,7 +106,7 @@ export interface CleanupSummary {
 
 export interface CleanupOptions {
   retentionDays?: number;
-  /** Report what would be deleted without calling Blob del() or touching the DB. */
+  /** Report what would be deleted without calling OSS delete or touching the DB. */
   dryRun?: boolean;
 }
 
@@ -127,7 +120,7 @@ export async function cleanupOldTaskImages(options: CleanupOptions = {}): Promis
     retentionDays,
     cutoff: cutoff.toISOString(),
     rowsCleared: 0,
-    blobsDeleted: 0,
+    objectsDeleted: 0,
     matchesByTable: {},
     sample: [],
     errors: [],
@@ -150,7 +143,7 @@ export async function cleanupOldTaskImages(options: CleanupOptions = {}): Promis
       `);
 
       for (const row of extractRows<Record<string, unknown>>(result)) {
-        const urls = target.photoColumns.flatMap((c) => parsePhotoUrls(row[c])).filter(isBlobUrl);
+        const urls = target.photoColumns.flatMap((c) => parsePhotoUrls(row[c])).filter(isOssUrl);
         if (!urls.length) continue;
 
         summary.matchesByTable[target.table] = (summary.matchesByTable[target.table] ?? 0) + 1;
@@ -184,7 +177,7 @@ export async function cleanupOldTaskImages(options: CleanupOptions = {}): Promis
       `);
 
       for (const row of extractRows<Record<string, unknown>>(result)) {
-        const urls = parsePhotoUrls(row.photo).filter(isBlobUrl);
+        const urls = parsePhotoUrls(row.photo).filter(isOssUrl);
         if (!urls.length) continue;
 
         summary.matchesByTable[target.childTable] = (summary.matchesByTable[target.childTable] ?? 0) + 1;
@@ -207,17 +200,17 @@ export async function cleanupOldTaskImages(options: CleanupOptions = {}): Promis
   if (allUrls.length === 0) return summary;
 
   if (dryRun) {
-    // Report what would be deleted — no Blob call, no DB writes.
-    summary.blobsDeleted = allUrls.length;
+    // Report what would be deleted — no OSS call, no DB writes.
+    summary.objectsDeleted = allUrls.length;
     return summary;
   }
 
   try {
-    await del(allUrls);
-    summary.blobsDeleted = allUrls.length;
+    await deleteFromOss(allUrls);
+    summary.objectsDeleted = allUrls.length;
   } catch (err) {
-    // Don't null any DB reference unless we're sure the blob is actually gone.
-    summary.errors.push(`Blob delete failed, aborting DB cleanup this run: ${err instanceof Error ? err.message : String(err)}`);
+    // Don't null any DB reference unless we're sure the object is actually gone.
+    summary.errors.push(`OSS delete failed, aborting DB cleanup this run: ${err instanceof Error ? err.message : String(err)}`);
     return summary;
   }
 

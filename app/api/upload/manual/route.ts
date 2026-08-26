@@ -1,7 +1,8 @@
 // app/api/upload/manual/route.ts
-// Saves Knowledge Manual files to /public/manuals/ — Ops HO/admin uploads a
-// store-operations manual (PDF/Word/Excel/image) that becomes visible to
-// every employee. Same whitelist/shape as /api/upload/issue-ba/route.ts.
+// Saves Knowledge Manual files to Alibaba Cloud OSS under manuals/ — Ops
+// HO/admin uploads a store-operations manual (PDF/Word/Excel/image) that
+// becomes visible to every employee. Same whitelist/shape as
+// /api/upload/issue-ba/route.ts.
 //
 // Expects multipart/form-data with:
 //   file — a single File
@@ -10,8 +11,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { writeFile, mkdir, access } from 'fs/promises';
-import path from 'path';
+import { uploadToOss, ossObjectExists } from '@/lib/oss';
 
 const MIME_EXT: Record<string, string> = {
   'image/jpeg': 'jpg',
@@ -50,7 +50,7 @@ function safeExt(file: File): string {
   return 'bin';
 }
 
-async function resolveFilename(dir: string, filename: string): Promise<string> {
+async function resolveFilename(prefix: string, filename: string): Promise<string> {
   const dot  = filename.lastIndexOf('.');
   const base = dot !== -1 ? filename.slice(0, dot) : filename;
   const ext  = dot !== -1 ? filename.slice(dot)    : '';
@@ -58,15 +58,12 @@ async function resolveFilename(dir: string, filename: string): Promise<string> {
   let candidate = filename;
   let counter   = 2;
 
-  while (true) {
-    try {
-      await access(path.join(dir, candidate));
-      candidate = `${base}_${counter}${ext}`;
-      counter++;
-    } catch {
-      return candidate;
-    }
+  while (await ossObjectExists(`${prefix}/${candidate}`)) {
+    candidate = `${base}_${counter}${ext}`;
+    counter++;
   }
+
+  return candidate;
 }
 
 export async function POST(req: NextRequest) {
@@ -94,17 +91,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'File is too large (max 15MB).' }, { status: 413 });
     }
 
-    const uploadDir = path.join(process.cwd(), 'public', 'manuals');
-    await mkdir(uploadDir, { recursive: true });
-
     const ext      = safeExt(file);
     const slug     = slugify(title ?? file.name.replace(/\.[^.]+$/, ''));
-    const filename = await resolveFilename(uploadDir, `${slug}.${ext}`);
+    const filename = await resolveFilename('manuals', `${slug}.${ext}`);
 
     const buffer = Buffer.from(await file.arrayBuffer());
-    await writeFile(path.join(uploadDir, filename), buffer);
+    const url = await uploadToOss(buffer, `manuals/${filename}`, file.type);
 
-    return NextResponse.json({ url: `/manuals/${filename}`, fileType: ext }, { status: 201 });
+    return NextResponse.json({ url, fileType: ext }, { status: 201 });
 
   } catch (err) {
     console.error('[POST /api/upload/manual]', err);

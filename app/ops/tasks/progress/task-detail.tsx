@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
+  AlertTriangle,
   Banknote,
   Box,
   Camera,
@@ -13,6 +14,7 @@ import {
   Circle,
   ClipboardList,
   CreditCard,
+  ImageOff,
   PauseCircle,
   ShieldCheck,
   Store,
@@ -195,11 +197,15 @@ function Lightbox({
   index,
   onChange,
   onClose,
+  brokenUrls,
+  onPhotoError,
 }: {
   urls: string[];
   index: number;
   onChange: (i: number) => void;
   onClose: () => void;
+  brokenUrls: Set<string>;
+  onPhotoError: (url: string) => void;
 }) {
   const go = useCallback(
     (dir: number) => onChange((index + dir + urls.length) % urls.length),
@@ -250,13 +256,24 @@ function Lightbox({
         </button>
       )}
 
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={urls[index]}
-        alt={`Foto ${index + 1}`}
-        onClick={(e) => e.stopPropagation()}
-        className="max-h-[85vh] max-w-[90vw] rounded-lg object-contain shadow-2xl"
-      />
+      {brokenUrls.has(urls[index]) ? (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="flex h-[50vh] w-[50vw] max-w-md flex-col items-center justify-center gap-2 rounded-lg bg-white/10 text-white"
+        >
+          <ImageOff className="h-10 w-10 text-white/50" />
+          <p className="text-sm font-semibold text-white/70">Foto tidak tersedia</p>
+        </div>
+      ) : (
+        /* eslint-disable-next-line @next/next/no-img-element */
+        <img
+          src={urls[index]}
+          alt={`Foto ${index + 1}`}
+          onClick={(e) => e.stopPropagation()}
+          onError={() => onPhotoError(urls[index])}
+          className="max-h-[85vh] max-w-[90vw] rounded-lg object-contain shadow-2xl"
+        />
+      )}
 
       {urls.length > 1 && (
         <button
@@ -293,7 +310,11 @@ export function PhotoGrid({
   emptyHint?: string;
 }) {
   const [active, setActive] = useState<number | null>(null);
+  const [brokenUrls, setBrokenUrls] = useState<Set<string>>(new Set());
   const urls = asPhotos(photos).map(resolvePhotoUrl).filter(Boolean);
+
+  const markBroken = (url: string) =>
+    setBrokenUrls((prev) => (prev.has(url) ? prev : new Set(prev).add(url)));
 
   if (urls.length === 0) {
     if (!emptyHint) return null;
@@ -317,26 +338,44 @@ export function PhotoGrid({
         </p>
       )}
       <div className={cn('grid gap-2', gridCols)}>
-        {urls.map((url, i) => (
-          <button
-            key={`${url}-${i}`}
-            type="button"
-            onClick={() => setActive(i)}
-            className="group relative aspect-square overflow-hidden rounded-lg border border-slate-200 bg-slate-50"
-          >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={url}
-              alt={`${label ?? 'Foto'} ${i + 1}`}
-              loading="lazy"
-              className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
-            />
-            <span className="absolute inset-0 bg-black/0 transition group-hover:bg-black/10" />
-          </button>
-        ))}
+        {urls.map((url, i) =>
+          brokenUrls.has(url) ? (
+            <div
+              key={`${url}-${i}`}
+              className="flex aspect-square flex-col items-center justify-center gap-1 rounded-lg border border-slate-200 bg-slate-50 text-slate-300"
+            >
+              <ImageOff className="h-5 w-5" />
+              <span className="text-[9px] font-semibold text-slate-400">Tidak tersedia</span>
+            </div>
+          ) : (
+            <button
+              key={`${url}-${i}`}
+              type="button"
+              onClick={() => setActive(i)}
+              className="group relative aspect-square overflow-hidden rounded-lg border border-slate-200 bg-slate-50"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={url}
+                alt={`${label ?? 'Foto'} ${i + 1}`}
+                loading="lazy"
+                onError={() => markBroken(url)}
+                className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
+              />
+              <span className="absolute inset-0 bg-black/0 transition group-hover:bg-black/10" />
+            </button>
+          ),
+        )}
       </div>
       {active !== null && (
-        <Lightbox urls={urls} index={active} onChange={setActive} onClose={() => setActive(null)} />
+        <Lightbox
+          urls={urls}
+          index={active}
+          onChange={setActive}
+          onClose={() => setActive(null)}
+          brokenUrls={brokenUrls}
+          onPhotoError={markBroken}
+        />
       )}
     </div>
   );
@@ -376,6 +415,125 @@ export function InfoRow({ label, value }: { label: string; value: React.ReactNod
 function NotesBlock({ notes }: { notes: string | null | undefined }) {
   if (!notes) return null;
   return <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">{notes}</p>;
+}
+
+// ─── Serah Terima board ──────────────────────────────────────────────────────
+//
+// Serah Terima is a shared, rolling per-store handover board — unlike every
+// other task on this page, it has no date/status columns and is never
+// "completed" as a whole (see lib/db/utils/serah-terima.ts). It's shown
+// here as a backlog/health panel (active items + staleness) plus a
+// collapsible history, rather than folded into the completed/total tally.
+
+export type SerahTerimaEntryView = {
+  id: string;
+  message: string;
+  createdByUserId: string;
+  createdByName: string;
+  createdAt: string | null;
+  isCompleted: boolean;
+  completedByUserId: string | null;
+  completedByName: string | null;
+  completedAt: string | null;
+};
+
+export type SerahTerimaBoardView = {
+  active: SerahTerimaEntryView[];
+  recentCompleted: SerahTerimaEntryView[];
+};
+
+const STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000;
+
+function timeAgo(iso: string | null): string {
+  if (!iso) return '—';
+  const ms = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(ms / 60000);
+  if (mins < 1) return 'baru saja';
+  if (mins < 60) return `${mins} menit lalu`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} jam lalu`;
+  const days = Math.floor(hours / 24);
+  return `${days} hari lalu`;
+}
+
+function isStaleEntry(iso: string | null): boolean {
+  if (!iso) return false;
+  return Date.now() - new Date(iso).getTime() > STALE_THRESHOLD_MS;
+}
+
+export function SerahTerimaPanel({ board }: { board: SerahTerimaBoardView }) {
+  const [showHistory, setShowHistory] = useState(false);
+  const oldest = board.active[0] ?? null;
+  const isStale = isStaleEntry(oldest?.createdAt ?? null);
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <div className={cn(
+            'flex h-8 w-8 items-center justify-center rounded-lg',
+            board.active.length > 0 ? 'bg-amber-50 text-amber-600' : 'bg-emerald-50 text-emerald-600',
+          )}>
+            <ClipboardList className="h-4 w-4" />
+          </div>
+          <div>
+            <p className="text-sm font-bold text-slate-900">Serah Terima</p>
+            <p className="text-[11px] text-slate-400">Papan handover berjalan · tidak terikat tanggal</p>
+          </div>
+        </div>
+        <span className={cn(
+          'shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-bold',
+          board.active.length > 0 ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700',
+        )}>
+          {board.active.length} item aktif
+        </span>
+      </div>
+
+      {isStale && oldest && (
+        <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-500" />
+          <p className="text-[11px] text-red-700">Item tertua sudah {timeAgo(oldest.createdAt)} belum ditangani.</p>
+        </div>
+      )}
+
+      {board.active.length === 0 ? (
+        <p className="mt-3 text-xs text-slate-400">Tidak ada item aktif.</p>
+      ) : (
+        <div className="mt-3 space-y-2">
+          {board.active.map((e) => (
+            <div key={e.id} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+              <p className="text-xs text-slate-700">{e.message}</p>
+              <p className="mt-1 text-[10px] text-slate-400">{e.createdByName} · {timeAgo(e.createdAt)}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {board.recentCompleted.length > 0 && (
+        <div className="mt-3 border-t border-slate-100 pt-2">
+          <button
+            type="button"
+            onClick={() => setShowHistory((v) => !v)}
+            className="text-[10px] font-bold uppercase tracking-widest text-slate-400 hover:text-slate-600"
+          >
+            {showHistory ? 'Sembunyikan' : 'Lihat'} riwayat selesai ({board.recentCompleted.length})
+          </button>
+          {showHistory && (
+            <div className="mt-2 space-y-2">
+              {board.recentCompleted.map((e) => (
+                <div key={e.id} className="rounded-lg border border-slate-100 px-3 py-2">
+                  <p className="text-xs text-slate-500 line-through decoration-slate-300">{e.message}</p>
+                  <p className="mt-1 text-[10px] text-slate-400">
+                    {e.createdByName} → {e.completedByName ?? '—'} · {timeAgo(e.completedAt)}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // Shared footer that surfaces who completed/verified the task using the
@@ -452,7 +610,13 @@ function StoreOpeningDetail({ task }: { task: FlatTask }) {
       <div className="mt-3 space-y-2">
         <PhotoGrid label="Foto Meja / Cash Drawer" photos={e.cashDrawerPhotos ?? e.cashierDeskPhotos} columns={2} emptyHint="Belum ada foto cash drawer." />
         {fiveR.map(area => (
-          <PhotoGrid key={area.base} label={area.label} photos={area.photos} columns={2} />
+          <PhotoGrid
+            key={area.base}
+            label={area.label}
+            photos={area.photos}
+            columns={2}
+            emptyHint={`Belum ada foto ${area.label}.`}
+          />
         ))}
       </div>
 

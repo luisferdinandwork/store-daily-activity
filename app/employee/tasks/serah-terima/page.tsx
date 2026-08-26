@@ -9,6 +9,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { useSession } from 'next-auth/react';
 import {
   AlertCircle,
   CheckCircle2,
@@ -16,12 +17,23 @@ import {
   Loader2,
   Plus,
   RefreshCw,
+  Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { cn } from '@/lib/utils';
 import { TaskHeader } from '@/components/employee/tasks';
 import AccessGuard from '@/components/employee/tasks/AccessGuard';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 type SerahTerimaEntry = {
   id: string;
@@ -78,6 +90,8 @@ export default function SerahTerimaBoardPage() {
 function SerahTerimaBoard() {
   const searchParams = useSearchParams();
   const storeId = searchParams.get('storeId') ?? '';
+  const { data: session } = useSession();
+  const isPic = session?.user?.employeeType === 'pic_1' || session?.user?.employeeType === 'pic_2';
 
   const [scheduleId, setScheduleId] = useState<string | null>(null);
   const [entries, setEntries] = useState<SerahTerimaEntry[]>([]);
@@ -87,6 +101,8 @@ function SerahTerimaBoard() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [completingId, setCompletingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
 
   const pendingCount = entries.length;
@@ -190,6 +206,28 @@ function SerahTerimaBoard() {
       toast.error(err instanceof Error ? err.message : 'Gagal menyelesaikan item serah terima.');
     } finally {
       setCompletingId(null);
+    }
+  }
+
+  async function handleDeleteHistory(entryId: string) {
+    setDeletingId(entryId);
+
+    try {
+      const params = new URLSearchParams({ storeId, entryId });
+      const res = await fetch(`/api/employee/tasks/serah-terima?${params}`, { method: 'DELETE' });
+      const json = (await res.json()) as ApiResponse;
+
+      if (!res.ok || !json.success) {
+        throw new Error(json.error ?? 'Gagal menghapus riwayat.');
+      }
+
+      setEntries(json.entries ?? []);
+      setRecentCompleted(json.recentCompleted ?? []);
+      toast.success('Riwayat dihapus.');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Gagal menghapus riwayat.');
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -366,13 +404,30 @@ function SerahTerimaBoard() {
                       </div>
                     ) : (
                       recentCompleted.map((entry) => (
-                        <div key={entry.id} className="p-4">
-                          <p className="text-sm font-semibold leading-relaxed text-muted-foreground line-through">
-                            {entry.message}
-                          </p>
-                          <p className="mt-1 text-[11px] font-semibold text-emerald-600">
-                            Selesai {fmtTime(entry.completedAt)}
-                          </p>
+                        <div key={entry.id} className="flex items-start gap-3 p-4">
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-semibold leading-relaxed text-muted-foreground line-through">
+                              {entry.message}
+                            </p>
+                            <p className="mt-1 text-[11px] font-semibold text-emerald-600">
+                              Selesai {fmtTime(entry.completedAt)}
+                            </p>
+                          </div>
+                          {isPic && (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmDeleteId(entry.id)}
+                              disabled={deletingId === entry.id}
+                              aria-label="Hapus riwayat"
+                              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground/60 transition hover:bg-rose-50 hover:text-rose-500 disabled:opacity-60"
+                            >
+                              {deletingId === entry.id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-3.5 w-3.5" />
+                              )}
+                            </button>
+                          )}
                         </div>
                       ))
                     )}
@@ -391,6 +446,28 @@ function SerahTerimaBoard() {
               </button>
             </div>
           </div>
+
+          <AlertDialog open={!!confirmDeleteId} onOpenChange={(open) => { if (!open) setConfirmDeleteId(null); }}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Hapus item riwayat?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  Tindakan ini tidak bisa dibatalkan.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Batal</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => {
+                    if (confirmDeleteId) void handleDeleteHistory(confirmDeleteId);
+                    setConfirmDeleteId(null);
+                  }}
+                >
+                  Hapus
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       )}
     </AccessGuard>

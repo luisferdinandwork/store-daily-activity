@@ -1,6 +1,6 @@
 // app/api/upload/petty-cash/route.ts
 //
-// Saves petty cash receipt images to /public/petty-cash/
+// Saves petty cash receipt images to Alibaba Cloud OSS under petty-cash/.
 // Filename format: <store-slug>_<YYYY-MM-DD>_<n>.<ext>
 //
 // Expects multipart/form-data with:
@@ -10,14 +10,13 @@
 //               "drawer", "signature") to distinguish refill proof photos
 //
 // Returns: { url: string; key: string }
-//   url  → public path served by Next.js static files
+//   url  → public OSS URL
 //   key  → same as url; used by the archive job to locate + delete the file
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { writeFile, mkdir } from 'fs/promises';
-import path from 'path';
+import { uploadToOss, ossObjectExists } from '@/lib/oss';
 
 // ─── Helpers (identical pattern to /api/upload/issue) ────────────────────────
 
@@ -56,22 +55,17 @@ function safeExt(file: File): string {
   return 'jpg';
 }
 
-async function resolveFilename(dir: string, filename: string): Promise<string> {
-  const { access } = await import('fs/promises');
+async function resolveFilename(prefix: string, filename: string): Promise<string> {
   const dot  = filename.lastIndexOf('.');
   const base = dot !== -1 ? filename.slice(0, dot) : filename;
   const ext  = dot !== -1 ? filename.slice(dot)    : '';
   let candidate = filename;
   let counter   = 2;
-  while (true) {
-    try {
-      await access(path.join(dir, candidate));
-      candidate = `${base}_${counter}${ext}`;
-      counter++;
-    } catch {
-      return candidate;
-    }
+  while (await ossObjectExists(`${prefix}/${candidate}`)) {
+    candidate = `${base}_${counter}${ext}`;
+    counter++;
   }
+  return candidate;
 }
 
 // ─── POST /api/upload/petty-cash ─────────────────────────────────────────────
@@ -99,20 +93,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Image must be under 5 MB.' }, { status: 413 });
     }
 
-    const uploadDir = path.join(process.cwd(), 'public', 'petty-cash');
-    await mkdir(uploadDir, { recursive: true });
-
     const storeSlug = slugify(storeName ?? 'store');
     const date      = todayStr();
     const ext       = safeExt(file);
     const kindSlug  = kind ? slugify(kind) : '';
     const filename  = `${storeSlug}_${date}${kindSlug ? `_${kindSlug}` : ''}.${ext}`;
-    const finalName = await resolveFilename(uploadDir, filename);
+    const finalName = await resolveFilename('petty-cash', filename);
 
     const buffer = Buffer.from(await file.arrayBuffer());
-    await writeFile(path.join(uploadDir, finalName), buffer);
-
-    const url = `/petty-cash/${finalName}`;
+    const url = await uploadToOss(buffer, `petty-cash/${finalName}`, file.type);
 
     return NextResponse.json({ url, key: url }, { status: 201 });
   } catch (err) {

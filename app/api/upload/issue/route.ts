@@ -1,5 +1,5 @@
 // app/api/upload/issue/route.ts
-// Saves issue-report images to /public/issue-report/
+// Saves issue-report images to Alibaba Cloud OSS under issue-report/.
 // Filename format: <sanitized-title>_<sanitized-store>_<YYYY-MM-DD>_<n>.<ext>
 //
 // Expects multipart/form-data with:
@@ -11,8 +11,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { writeFile, mkdir } from 'fs/promises';
-import path from 'path';
+import { uploadToOss, ossObjectExists } from '@/lib/oss';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -96,25 +95,21 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const uploadDir = path.join(process.cwd(), 'public', 'issue-report');
-    await mkdir(uploadDir, { recursive: true });
-
     const titleSlug = slugify(title ?? 'issue');
     const storeSlug = slugify(storeName ?? 'store');
     const date      = todayStr();
 
-    // ── Write all files in parallel ───────────────────────────────────────────
+    // ── Upload all files in parallel ──────────────────────────────────────────
     const urls = await Promise.all(
       files.map(async (file, index) => {
         const ext      = safeExt(file);
         // Append 1-based index so concurrent files never collide on the same name
         const filename = `${titleSlug}_${storeSlug}_${date}_${index + 1}.${ext}`;
 
-        const finalName = await resolveFilename(uploadDir, filename);
+        const finalName = await resolveFilename('issue-report', filename);
         const buffer    = Buffer.from(await file.arrayBuffer());
-        await writeFile(path.join(uploadDir, finalName), buffer);
 
-        return `/issue-report/${finalName}`;
+        return uploadToOss(buffer, `issue-report/${finalName}`, file.type);
       }),
     );
 
@@ -127,11 +122,9 @@ export async function POST(req: NextRequest) {
 }
 
 // ─── Resolve filename collisions ──────────────────────────────────────────────
-// If <title>_<store>_<date>.jpg already exists, append _2, _3, etc.
+// If <title>_<store>_<date>.jpg already exists in OSS, append _2, _3, etc.
 
-async function resolveFilename(dir: string, filename: string): Promise<string> {
-  const { access } = await import('fs/promises');
-
+async function resolveFilename(prefix: string, filename: string): Promise<string> {
   const dot  = filename.lastIndexOf('.');
   const base = dot !== -1 ? filename.slice(0, dot) : filename;
   const ext  = dot !== -1 ? filename.slice(dot)    : '';
@@ -139,15 +132,10 @@ async function resolveFilename(dir: string, filename: string): Promise<string> {
   let candidate = filename;
   let counter   = 2;
 
-  while (true) {
-    try {
-      await access(path.join(dir, candidate));
-      // File exists — try next suffix
-      candidate = `${base}_${counter}${ext}`;
-      counter++;
-    } catch {
-      // File does not exist — this name is free
-      return candidate;
-    }
+  while (await ossObjectExists(`${prefix}/${candidate}`)) {
+    candidate = `${base}_${counter}${ext}`;
+    counter++;
   }
+
+  return candidate;
 }

@@ -16,8 +16,10 @@ import {
   listSerahTerimaEntries,
   createSerahTerimaEntry,
   completeSerahTerimaEntry,
+  deleteSerahTerimaEntry,
   type GeoPoint,
 } from '@/lib/db/utils/serah-terima';
+import { resolveActorCodes } from '../../../pic/schedule/_utils';
 
 function startOfDay(d: Date): Date {
   const r = new Date(d);
@@ -222,6 +224,49 @@ export async function PATCH(request: NextRequest) {
     skipGeo: body.skipGeo,
   });
 
+  if (!result.success) {
+    return NextResponse.json({ success: false, error: result.error }, { status: 400 });
+  }
+
+  const board = await listSerahTerimaEntries(storeId);
+
+  return NextResponse.json({
+    success: true,
+    entries: board.active.map(serializeEntry),
+    recentCompleted: board.recentCompleted.map(serializeEntry),
+  });
+}
+
+function isPicType(empType: string | null) {
+  return empType === 'pic_1' || empType === 'pic_2';
+}
+
+// DELETE — removes one entry from "Riwayat selesai" (completed history) so
+// the board doesn't accumulate indefinitely. PIC-only: keeps the board tidy
+// without letting any shift member erase handover history.
+export async function DELETE(request: NextRequest) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const { role, empType } = await resolveActorCodes(session.user.id);
+  if (role !== 'employee' || !isPicType(empType)) {
+    return NextResponse.json({ success: false, error: 'Hanya PIC yang bisa menghapus riwayat.' }, { status: 403 });
+  }
+
+  const { searchParams } = new URL(request.url);
+  const storeId = parseStoreId(searchParams);
+  const entryId = Number(searchParams.get('entryId'));
+
+  if (!storeId) {
+    return NextResponse.json({ success: false, error: 'storeId wajib diisi.' }, { status: 400 });
+  }
+  if (!Number.isInteger(entryId) || entryId <= 0) {
+    return NextResponse.json({ success: false, error: 'entryId tidak valid.' }, { status: 400 });
+  }
+
+  const result = await deleteSerahTerimaEntry(entryId, storeId);
   if (!result.success) {
     return NextResponse.json({ success: false, error: result.error }, { status: 400 });
   }
