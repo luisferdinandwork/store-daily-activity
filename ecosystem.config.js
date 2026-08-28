@@ -16,7 +16,7 @@ module.exports = {
       // Call Next's binary directly — more reliable under PM2 than an npm script.
       script: 'node_modules/next/dist/bin/next',
       args: 'start -p 3000',
-      cwd: '/var/www/store-daily-task',
+      cwd: '/home/itdevs/daily-task-store',
 
       // Next's own server is single-process; run one instance in fork mode.
       // To use more cores, switch to: exec_mode: 'cluster', instances: 'max'

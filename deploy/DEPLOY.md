@@ -2,7 +2,8 @@
 
 Target: Ubuntu server (same box that runs PostgreSQL, `103.94.239.190`).
 App: Next.js 16 on `127.0.0.1:3000`, nginx terminates the public :80/:443.
-PM2 process name: `store-daily-task`. Deploy path: `/var/www/store-daily-task`.
+Domain: `sdt.pri.co.id`. PM2 process name: `store-daily-task`.
+Deploy path: `/var/www/store-daily-task`.
 
 ---
 
@@ -38,7 +39,7 @@ runtime). Start from the dev machine's `.env.local`, then change:
 
 ```ini
 DATABASE_URL="postgresql://dts_user:Prestasi10@127.0.0.1:5432/daily-task-store"
-NEXTAUTH_URL="https://your-domain.com"      # real public URL — not localhost
+NEXTAUTH_URL="https://sdt.pri.co.id"        # real public URL — not localhost
 NEXTAUTH_SECRET="<keep or rotate>"
 CRON_SECRET="<pick a long random string>"   # must match deploy/crontab.example
 # BC_*, OSS_* — copy as-is
@@ -74,7 +75,10 @@ npm run build
 pm2 reload ecosystem.config.js        # zero-downtime
 ```
 
-## 6. nginx
+## 6. nginx (domain: sdt.pri.co.id)
+
+First point DNS: an **A record** `sdt.pri.co.id -> 103.94.239.190`. Confirm with
+`dig +short sdt.pri.co.id` before running certbot.
 
 ```bash
 sudo cp deploy/nginx/store-daily-task.conf \
@@ -82,23 +86,24 @@ sudo cp deploy/nginx/store-daily-task.conf \
 sudo ln -s /etc/nginx/sites-available/store-daily-task \
            /etc/nginx/sites-enabled/
 sudo rm -f /etc/nginx/sites-enabled/default
-# edit server_name in the file first
 sudo nginx -t && sudo systemctl reload nginx
 sudo ufw allow 'Nginx Full'
 ```
 
-Visit `http://your-domain.com` (or `http://103.94.239.190`) — you should get the app.
+`server_name` is already set to `sdt.pri.co.id`. Visit `http://sdt.pri.co.id`
+(or `http://103.94.239.190`) — you should get the app.
 
-## 7. HTTPS (recommended)
+## 7. HTTPS
 
 ```bash
 sudo apt install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d your-domain.com
+sudo certbot --nginx -d sdt.pri.co.id
 ```
 
-certbot edits the nginx file to add the 443 block + HTTP→HTTPS redirect and sets
-up auto-renewal. Make sure `NEXTAUTH_URL` uses `https://` afterwards, then
-`pm2 reload ecosystem.config.js`.
+certbot edits the nginx file to add the :443 block + HTTP→HTTPS redirect and
+sets up auto-renewal (`systemctl status certbot.timer`). Then make sure
+`NEXTAUTH_URL="https://sdt.pri.co.id"` in `.env.local`, rebuild if it changed,
+and `pm2 reload ecosystem.config.js`.
 
 ## 8. Scheduled jobs (replaces vercel.json crons)
 
