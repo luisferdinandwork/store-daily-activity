@@ -486,6 +486,13 @@ export async function importScheduleFromParsed(
       continue;
     }
 
+    // Days already in the past or already checked in are left untouched by the
+    // importer — report them as skipped rather than created.
+    if (result.skippedProtected && result.skippedProtected > 0) {
+      skipped += result.skippedProtected;
+      entriesCreated = Math.max(0, entriesCreated - result.skippedProtected);
+    }
+
     schedulesCreated++;
   }
 

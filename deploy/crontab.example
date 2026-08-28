@@ -1,0 +1,16 @@
+# Replacement for vercel.json "crons" now that the app is self-hosted.
+# Vercel used to hit these endpoints; a plain system cron does the same.
+#
+# Install:  crontab -e   (then paste the lines below)
+# Set CRON_SECRET in .env.local to the same value used here.
+#
+# Times are the server's local timezone — check with `timedatectl`.
+# Original schedules were UTC on Vercel; adjust if your server isn't UTC.
+
+CRON_SECRET=change-me-to-match-.env.local
+
+ 5 0 * * *  curl -fsS -H "Authorization: Bearer $CRON_SECRET" http://127.0.0.1:3000/api/cron/revert-transfers      > /dev/null
+30 0 * * *  curl -fsS -H "Authorization: Bearer $CRON_SECRET" http://127.0.0.1:3000/api/cron/cleanup-task-images   > /dev/null
+45 0 * * *  curl -fsS -H "Authorization: Bearer $CRON_SECRET" http://127.0.0.1:3000/api/cron/auto-checkout         > /dev/null
+50 0 * * *  curl -fsS -H "Authorization: Bearer $CRON_SECRET" http://127.0.0.1:3000/api/cron/auto-absent           > /dev/null
+55 0 * * *  curl -fsS -H "Authorization: Bearer $CRON_SECRET" http://127.0.0.1:3000/api/cron/notifications-cleanup > /dev/null

@@ -1,5 +1,5 @@
 {
-  "id": "67c7cc6f-377c-4241-9c5c-b4df55d5b941",
+  "id": "cccc00c3-1093-4971-9869-f0898d629644",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -3144,6 +3144,24 @@
           "primaryKey": false,
           "notNull": false
         },
+        "actual_amount": {
+          "name": "actual_amount",
+          "type": "numeric(12, 2)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "actual_amount_by": {
+          "name": "actual_amount_by",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "actual_amount_at": {
+          "name": "actual_amount_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
         "archived_at": {
           "name": "archived_at",
           "type": "timestamp",
@@ -3291,6 +3309,19 @@
           "tableTo": "users",
           "columnsFrom": [
             "rejected_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "petty_cash_transactions_actual_amount_by_users_id_fk": {
+          "name": "petty_cash_transactions_actual_amount_by_users_id_fk",
+          "tableFrom": "petty_cash_transactions",
+          "tableTo": "users",
+          "columnsFrom": [
+            "actual_amount_by"
           ],
           "columnsTo": [
             "id"
@@ -9424,6 +9455,18 @@
           "primaryKey": false,
           "notNull": false
         },
+        "related_type": {
+          "name": "related_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "related_id": {
+          "name": "related_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
         "is_read": {
           "name": "is_read",
           "type": "boolean",
@@ -9472,6 +9515,27 @@
             },
             {
               "expression": "is_read",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "notifications_related_idx": {
+          "name": "notifications_related_idx",
+          "columns": [
+            {
+              "expression": "related_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "related_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

@@ -547,12 +547,30 @@ export async function createEmptyMonthlySchedule(
 
 export async function createOrReplaceMonthlySchedule(
   data: CreateMonthlyScheduleInput,
-): Promise<{ success: boolean; scheduleId?: number; error?: string }> {
+): Promise<{
+  success: boolean;
+  scheduleId?: number;
+  error?: string;
+  /**
+   * Incoming entries that were dropped instead of applied because the day is
+   * already in the past or the employee has already checked in for it.
+   */
+  skippedProtected?: number;
+}> {
   try {
     const auth = await canManageSchedule(data.importedBy, data.storeId);
     if (!auth.allowed) return { success: false, error: auth.reason };
     if (!data.entries.length)
       return { success: false, error: "No entries provided." };
+
+    // A re-import must never rewrite history: any day earlier than "today"
+    // (store timezone) and any day an employee has already checked in for is
+    // locked. Keyed by userId + local-midnight timestamp so it can be matched
+    // against both the DB rows and the parsed import rows.
+    const dayKey = (userId: string, date: Date) =>
+      `${userId}|${startOfDay(date).getTime()}`;
+    const todayStart = startOfDay(todayInStoreTimezone());
+    const protectedDayKeys = new Set<string>();
 
     const uniqueEntryStoreIds = [
       ...new Set(
@@ -597,11 +615,22 @@ export async function createOrReplaceMonthlySchedule(
       monthlyScheduleId = existing.id;
 
       const entriesToCheck = await db
-        .select({ id: monthlyScheduleEntries.id })
+        .select({
+          id: monthlyScheduleEntries.id,
+          userId: monthlyScheduleEntries.userId,
+          date: monthlyScheduleEntries.date,
+        })
         .from(monthlyScheduleEntries)
         .where(eq(monthlyScheduleEntries.monthlyScheduleId, monthlyScheduleId));
 
       const entryIds = entriesToCheck.map((e) => e.id);
+
+      // Days already in the past are locked regardless of attendance.
+      const pastEntryIds = new Set(
+        entriesToCheck
+          .filter((e) => startOfDay(e.date) < todayStart)
+          .map((e) => e.id),
+      );
 
       if (entryIds.length > 0) {
         const entrySchedules = await db
@@ -624,17 +653,34 @@ export async function createOrReplaceMonthlySchedule(
           for (const a of attended) lockedSchedIds.add(a.scheduleId);
         }
 
-        const deletableSchedIds = entrySchedules
-          .filter((s) => !lockedSchedIds.has(s.id))
-          .map((s) => s.id);
-        const lockedEntryIds = new Set(
+        // Entries the import is not allowed to touch: already checked in, or
+        // already in the past.
+        const attendedEntryIds = new Set(
           entrySchedules
             .filter((s) => lockedSchedIds.has(s.id))
             .map((s) => s.entryId)
             .filter((id): id is number => id != null),
         );
+        const protectedEntryIds = new Set<number>([
+          ...attendedEntryIds,
+          ...pastEntryIds,
+        ]);
+
+        for (const e of entriesToCheck) {
+          if (protectedEntryIds.has(e.id)) {
+            protectedDayKeys.add(dayKey(e.userId, e.date));
+          }
+        }
+
+        const deletableSchedIds = entrySchedules
+          .filter(
+            (s) =>
+              !lockedSchedIds.has(s.id) &&
+              !(s.entryId != null && pastEntryIds.has(s.entryId)),
+          )
+          .map((s) => s.id);
         const deletableEntryIds = entryIds.filter(
-          (id) => !lockedEntryIds.has(id),
+          (id) => !protectedEntryIds.has(id),
         );
 
         await deleteAllTasksForSchedules(deletableSchedIds);
@@ -665,10 +711,17 @@ export async function createOrReplaceMonthlySchedule(
       monthlyScheduleId = ms.id;
     }
 
+    // Drop any incoming row that targets a locked day (past / already checked
+    // in). For a brand-new schedule nothing is locked, so this is a no-op.
+    const entriesToApply = data.entries.filter(
+      (e) => !protectedDayKeys.has(dayKey(e.userId, e.date)),
+    );
+    const skippedProtected = data.entries.length - entriesToApply.length;
+
     const BATCH = 100;
 
-    for (let i = 0; i < data.entries.length; i += BATCH) {
-      const batch = data.entries.slice(i, i + BATCH);
+    for (let i = 0; i < entriesToApply.length; i += BATCH) {
+      const batch = entriesToApply.slice(i, i + BATCH);
 
       await db
         .insert(monthlyScheduleEntries)
@@ -704,7 +757,7 @@ export async function createOrReplaceMonthlySchedule(
     }
 
     await materialiseSchedulesForMonth(data.storeId, data.yearMonth);
-    return { success: true, scheduleId: monthlyScheduleId };
+    return { success: true, scheduleId: monthlyScheduleId, skippedProtected };
   } catch (err) {
     return { success: false, error: `createOrReplaceMonthlySchedule: ${err}` };
   }

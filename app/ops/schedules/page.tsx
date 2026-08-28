@@ -43,6 +43,10 @@ import { paletteOf } from '@/lib/shift-tasks';
 import { Button } from '@/components/ui/button';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1047,6 +1051,7 @@ export default function OpsSchedulesPage() {
   const [loading,       setLoading]       = useState(false);
   const [creating,      setCreating]      = useState(false);
   const [deleting,      setDeleting]      = useState(false);
+  const [showCreateConfirm, setShowCreateConfirm] = useState(false);
   const [exporting,     setExporting]     = useState(false);
   const [templating,    setTemplating]    = useState(false);
 
@@ -1163,9 +1168,14 @@ export default function OpsSchedulesPage() {
   }, [selectedStore, selectedMonth, loadSchedule, loadEmployees]);
 
   // ── Actions ──────────────────────────────────────────────────────────────────
-  async function handleCreate() {
+  function handleCreate() {
     if (!selectedStore || schedule) return;
-    if (!confirm(`Create an empty schedule for ${formatYearMonth(selectedMonth)} at ${currentStoreName}?`)) return;
+    setShowCreateConfirm(true);
+  }
+
+  async function confirmCreate() {
+    setShowCreateConfirm(false);
+    if (!selectedStore || schedule) return;
     setCreating(true);
     try {
       const res  = await fetch('/api/ops/schedules/monthly', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ storeId: selectedStore, yearMonth: selectedMonth }) });
@@ -1520,6 +1530,24 @@ export default function OpsSchedulesPage() {
           onSaveEdit={handleSaveEntry}
         />
       )}
+
+      <AlertDialog open={showCreateConfirm} onOpenChange={setShowCreateConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Create schedule</AlertDialogTitle>
+            <AlertDialogDescription>
+              Create an empty schedule for {formatYearMonth(selectedMonth)} at{' '}
+              {currentStoreName}? You can then click days to assign shifts.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void confirmCreate()}>
+              Create
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

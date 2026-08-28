@@ -329,6 +329,9 @@ CREATE TABLE "petty_cash_transactions" (
 	"rejected_by" text,
 	"rejected_at" timestamp,
 	"rejection_reason" text,
+	"actual_amount" numeric(12, 2),
+	"actual_amount_by" text,
+	"actual_amount_at" timestamp,
 	"archived_at" timestamp,
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	"updated_at" timestamp NOT NULL
@@ -934,6 +937,8 @@ CREATE TABLE "notifications" (
 	"title" text NOT NULL,
 	"body" text,
 	"link" text,
+	"related_type" text,
+	"related_id" integer,
 	"is_read" boolean DEFAULT false NOT NULL,
 	"read_at" timestamp,
 	"created_at" timestamp DEFAULT now() NOT NULL
@@ -1039,6 +1044,7 @@ ALTER TABLE "petty_cash_transactions" ADD CONSTRAINT "petty_cash_transactions_us
 ALTER TABLE "petty_cash_transactions" ADD CONSTRAINT "petty_cash_transactions_store_id_stores_id_fk" FOREIGN KEY ("store_id") REFERENCES "public"."stores"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "petty_cash_transactions" ADD CONSTRAINT "petty_cash_transactions_approved_by_users_id_fk" FOREIGN KEY ("approved_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "petty_cash_transactions" ADD CONSTRAINT "petty_cash_transactions_rejected_by_users_id_fk" FOREIGN KEY ("rejected_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "petty_cash_transactions" ADD CONSTRAINT "petty_cash_transactions_actual_amount_by_users_id_fk" FOREIGN KEY ("actual_amount_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "briefing_tasks" ADD CONSTRAINT "briefing_tasks_schedule_id_schedules_id_fk" FOREIGN KEY ("schedule_id") REFERENCES "public"."schedules"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "briefing_tasks" ADD CONSTRAINT "briefing_tasks_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "briefing_tasks" ADD CONSTRAINT "briefing_tasks_store_id_stores_id_fk" FOREIGN KEY ("store_id") REFERENCES "public"."stores"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
@@ -1247,6 +1253,7 @@ CREATE INDEX "store_monthly_targets_active_idx" ON "store_monthly_targets" USING
 CREATE INDEX "target_allocation_templates_headcount_idx" ON "target_allocation_templates" USING btree ("headcount");--> statement-breakpoint
 CREATE INDEX "notifications_user_idx" ON "notifications" USING btree ("user_id");--> statement-breakpoint
 CREATE INDEX "notifications_user_unread_idx" ON "notifications" USING btree ("user_id","is_read");--> statement-breakpoint
+CREATE INDEX "notifications_related_idx" ON "notifications" USING btree ("related_type","related_id");--> statement-breakpoint
 CREATE INDEX "item_transfer_orders_from_store_idx" ON "item_transfer_orders" USING btree ("from_store_id");--> statement-breakpoint
 CREATE INDEX "item_transfer_orders_to_store_idx" ON "item_transfer_orders" USING btree ("to_store_id");--> statement-breakpoint
 CREATE INDEX "item_transfer_orders_whse_shipment_no_idx" ON "item_transfer_orders" USING btree ("whse_shipment_no");

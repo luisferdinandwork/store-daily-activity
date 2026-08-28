@@ -20,6 +20,10 @@ import { toast } from 'sonner';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -428,6 +432,7 @@ export default function PicPanelPage() {
   const [deleting,      setDeleting]      = useState(false);
   const [creating,      setCreating]      = useState(false);
   const [downloading,   setDownloading]   = useState(false);
+  const [showCreateConfirm, setShowCreateConfirm] = useState(false);
 
   const [shiftOptions, setShiftOptions] = useState<ShiftOption[]>([]);
   const [employees,    setEmployees]    = useState<EmployeeOption[]>([]);
@@ -491,9 +496,13 @@ export default function PicPanelPage() {
 
   // ── Handlers ────────────────────────────────────────────────────────────────
 
-  async function handleCreate() {
+  function handleCreate() {
     if (schedule) { toast.error('A schedule already exists for this month'); return; }
-    if (!confirm(`Create an empty schedule for ${formatYearMonth(selectedMonth)}?`)) return;
+    setShowCreateConfirm(true);
+  }
+
+  async function confirmCreate() {
+    setShowCreateConfirm(false);
     setCreating(true);
     try {
       const res  = await fetch('/api/pic/schedule/monthly', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ yearMonth: selectedMonth }) });
@@ -815,6 +824,24 @@ export default function PicPanelPage() {
         onClose={() => setActiveCell(null)}
         saving={savingCell}
       />
+
+      <AlertDialog open={showCreateConfirm} onOpenChange={setShowCreateConfirm}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Create schedule</AlertDialogTitle>
+            <AlertDialogDescription>
+              Create an empty schedule for {formatYearMonth(selectedMonth)}? You can
+              then click a cell to assign each day.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void confirmCreate()}>
+              Create
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
