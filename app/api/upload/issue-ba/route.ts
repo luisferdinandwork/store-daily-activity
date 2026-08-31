@@ -1,5 +1,5 @@
 // app/api/upload/issue-ba/route.ts
-// Saves Berita Acara (BA) evidence files to Alibaba Cloud OSS under issue-ba/.
+// Saves Berita Acara (BA) evidence files to Biznet NOS (S3) storage under issue-ba/.
 // Unlike /api/upload/issue (camera-only issue-report photos), BA files are
 // picked from the device's gallery/file system and may be images OR
 // documents (PDF, Word, Excel) — a BA is often a scanned/exported document,
@@ -16,7 +16,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { uploadToOss, ossObjectExists } from '@/lib/oss';
+import { uploadToStorage, storageObjectExists } from '@/lib/storage';
 
 // ─── Allowed types ────────────────────────────────────────────────────────────
 
@@ -80,7 +80,7 @@ async function resolveFilename(prefix: string, filename: string): Promise<string
   let candidate = filename;
   let counter   = 2;
 
-  while (await ossObjectExists(`${prefix}/${candidate}`)) {
+  while (await storageObjectExists(`${prefix}/${candidate}`)) {
     candidate = `${base}_${counter}${ext}`;
     counter++;
   }
@@ -137,7 +137,7 @@ export async function POST(req: NextRequest) {
         const finalName = await resolveFilename('issue-ba', filename);
         const buffer    = Buffer.from(await file.arrayBuffer());
 
-        return uploadToOss(buffer, `issue-ba/${finalName}`, file.type);
+        return uploadToStorage(buffer, `issue-ba/${finalName}`, file.type);
       }),
     );
 

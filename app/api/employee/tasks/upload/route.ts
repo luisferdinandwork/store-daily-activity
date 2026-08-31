@@ -2,7 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { uploadToOss } from '@/lib/oss';
+import { uploadToStorage } from '@/lib/storage';
 
 const ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
 const MAX_SIZE_MB = 10;
@@ -177,7 +177,7 @@ export async function POST(request: NextRequest) {
     const storagePath = `tasks/${folder}/${safeName}`;
 
     const buffer = Buffer.from(await file.arrayBuffer());
-    const url = await uploadToOss(buffer, storagePath, file.type);
+    const url = await uploadToStorage(buffer, storagePath, file.type);
 
     return NextResponse.json({
       url,

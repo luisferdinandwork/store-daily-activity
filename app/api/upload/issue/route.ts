@@ -1,5 +1,5 @@
 // app/api/upload/issue/route.ts
-// Saves issue-report images to Alibaba Cloud OSS under issue-report/.
+// Saves issue-report images to Biznet NOS (S3) storage under issue-report/.
 // Filename format: <sanitized-title>_<sanitized-store>_<YYYY-MM-DD>_<n>.<ext>
 //
 // Expects multipart/form-data with:
@@ -11,7 +11,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { uploadToOss, ossObjectExists } from '@/lib/oss';
+import { uploadToStorage, storageObjectExists } from '@/lib/storage';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -109,7 +109,7 @@ export async function POST(req: NextRequest) {
         const finalName = await resolveFilename('issue-report', filename);
         const buffer    = Buffer.from(await file.arrayBuffer());
 
-        return uploadToOss(buffer, `issue-report/${finalName}`, file.type);
+        return uploadToStorage(buffer, `issue-report/${finalName}`, file.type);
       }),
     );
 
@@ -122,7 +122,7 @@ export async function POST(req: NextRequest) {
 }
 
 // ─── Resolve filename collisions ──────────────────────────────────────────────
-// If <title>_<store>_<date>.jpg already exists in OSS, append _2, _3, etc.
+// If <title>_<store>_<date>.jpg already exists in storage, append _2, _3, etc.
 
 async function resolveFilename(prefix: string, filename: string): Promise<string> {
   const dot  = filename.lastIndexOf('.');
@@ -132,7 +132,7 @@ async function resolveFilename(prefix: string, filename: string): Promise<string
   let candidate = filename;
   let counter   = 2;
 
-  while (await ossObjectExists(`${prefix}/${candidate}`)) {
+  while (await storageObjectExists(`${prefix}/${candidate}`)) {
     candidate = `${base}_${counter}${ext}`;
     counter++;
   }

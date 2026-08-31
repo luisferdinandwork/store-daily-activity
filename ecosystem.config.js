@@ -5,7 +5,7 @@
 //   pm2 logs store-daily-task            # tail logs
 //   pm2 save                             # persist across reboots (after pm2 startup)
 //
-// Runtime env (DATABASE_URL, NEXTAUTH_*, BC_*, OSS_*, CRON_SECRET) is read from
+// Runtime env (DATABASE_URL, NEXTAUTH_*, BC_*, NOS_*, OSS_*, CRON_SECRET) is read from
 // `.env.local` / `.env.production` in `cwd` — Next.js loads those automatically.
 // Keep secrets in that file, not here.
 

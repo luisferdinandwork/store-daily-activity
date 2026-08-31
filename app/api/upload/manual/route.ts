@@ -1,5 +1,5 @@
 // app/api/upload/manual/route.ts
-// Saves Knowledge Manual files to Alibaba Cloud OSS under manuals/ — Ops
+// Saves Knowledge Manual files to Biznet NOS (S3) storage under manuals/ — Ops
 // HO/admin uploads a store-operations manual (PDF/Word/Excel/image) that
 // becomes visible to every employee. Same whitelist/shape as
 // /api/upload/issue-ba/route.ts.
@@ -11,7 +11,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { uploadToOss, ossObjectExists } from '@/lib/oss';
+import { uploadToStorage, storageObjectExists } from '@/lib/storage';
 
 const MIME_EXT: Record<string, string> = {
   'image/jpeg': 'jpg',
@@ -58,7 +58,7 @@ async function resolveFilename(prefix: string, filename: string): Promise<string
   let candidate = filename;
   let counter   = 2;
 
-  while (await ossObjectExists(`${prefix}/${candidate}`)) {
+  while (await storageObjectExists(`${prefix}/${candidate}`)) {
     candidate = `${base}_${counter}${ext}`;
     counter++;
   }
@@ -96,7 +96,7 @@ export async function POST(req: NextRequest) {
     const filename = await resolveFilename('manuals', `${slug}.${ext}`);
 
     const buffer = Buffer.from(await file.arrayBuffer());
-    const url = await uploadToOss(buffer, `manuals/${filename}`, file.type);
+    const url = await uploadToStorage(buffer, `manuals/${filename}`, file.type);
 
     return NextResponse.json({ url, fileType: ext }, { status: 201 });
 

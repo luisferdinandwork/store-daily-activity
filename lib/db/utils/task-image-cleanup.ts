@@ -1,7 +1,8 @@
 // lib/db/utils/task-image-cleanup.ts
 //
-// Deletes task checklist photos older than the retention window from
-// Alibaba Cloud OSS, then clears the DB columns that referenced them. Driven
+// Deletes task checklist photos older than the retention window from object
+// storage (Biznet NOS, plus the legacy Alibaba OSS bucket for pre-switch
+// uploads), then clears the DB columns that referenced them. Driven
 // from the DB side (not a bucket list()) so we know exactly which row/column
 // to null once the corresponding object is gone — never leaves a DB
 // reference pointing at a deleted file.
@@ -11,7 +12,17 @@
 
 import { db } from '@/lib/db';
 import { sql } from 'drizzle-orm';
-import { deleteFromOss, isOssUrl } from '@/lib/oss';
+import { deleteFromStorage, isStorageUrl } from '@/lib/storage';
+import { deleteFromLegacyOss, isLegacyOssUrl } from '@/lib/oss';
+
+// An image is ours to clean up whether it lives on the current backend (Biznet
+// NOS) or on the legacy Alibaba OSS bucket (uploads from before the switch).
+const isManagedImageUrl = (url: string): boolean => isStorageUrl(url) || isLegacyOssUrl(url);
+
+async function deleteManagedImages(urls: string[]): Promise<void> {
+  await deleteFromStorage(urls.filter(isStorageUrl));
+  await deleteFromLegacyOss(urls.filter(isLegacyOssUrl));
+}
 
 export const IMAGE_RETENTION_DAYS = 60;
 
@@ -143,7 +154,7 @@ export async function cleanupOldTaskImages(options: CleanupOptions = {}): Promis
       `);
 
       for (const row of extractRows<Record<string, unknown>>(result)) {
-        const urls = target.photoColumns.flatMap((c) => parsePhotoUrls(row[c])).filter(isOssUrl);
+        const urls = target.photoColumns.flatMap((c) => parsePhotoUrls(row[c])).filter(isManagedImageUrl);
         if (!urls.length) continue;
 
         summary.matchesByTable[target.table] = (summary.matchesByTable[target.table] ?? 0) + 1;
@@ -177,7 +188,7 @@ export async function cleanupOldTaskImages(options: CleanupOptions = {}): Promis
       `);
 
       for (const row of extractRows<Record<string, unknown>>(result)) {
-        const urls = parsePhotoUrls(row.photo).filter(isOssUrl);
+        const urls = parsePhotoUrls(row.photo).filter(isManagedImageUrl);
         if (!urls.length) continue;
 
         summary.matchesByTable[target.childTable] = (summary.matchesByTable[target.childTable] ?? 0) + 1;
@@ -206,7 +217,7 @@ export async function cleanupOldTaskImages(options: CleanupOptions = {}): Promis
   }
 
   try {
-    await deleteFromOss(allUrls);
+    await deleteManagedImages(allUrls);
     summary.objectsDeleted = allUrls.length;
   } catch (err) {
     // Don't null any DB reference unless we're sure the object is actually gone.

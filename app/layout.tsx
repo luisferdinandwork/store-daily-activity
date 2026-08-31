@@ -8,8 +8,8 @@ import { Toaster } from '@/components/ui/sonner';
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'Sports Retail Management',
-  description: 'Management system for sports retail stores',
+  title: 'PRISM — Prestasi Retail Integrated Store Management',
+  description: 'PRISM — Prestasi Retail Integrated Store Management',
 };
 
 export default function RootLayout({

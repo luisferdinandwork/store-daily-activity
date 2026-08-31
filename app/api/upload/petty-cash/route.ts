@@ -1,6 +1,6 @@
 // app/api/upload/petty-cash/route.ts
 //
-// Saves petty cash receipt images to Alibaba Cloud OSS under petty-cash/.
+// Saves petty cash receipt images to Biznet NOS (S3) storage under petty-cash/.
 // Filename format: <store-slug>_<YYYY-MM-DD>_<n>.<ext>
 //
 // Expects multipart/form-data with:
@@ -10,13 +10,13 @@
 //               "drawer", "signature") to distinguish refill proof photos
 //
 // Returns: { url: string; key: string }
-//   url  → public OSS URL
+//   url  → public storage URL
 //   key  → same as url; used by the archive job to locate + delete the file
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { uploadToOss, ossObjectExists } from '@/lib/oss';
+import { uploadToStorage, storageObjectExists } from '@/lib/storage';
 
 // ─── Helpers (identical pattern to /api/upload/issue) ────────────────────────
 
@@ -61,7 +61,7 @@ async function resolveFilename(prefix: string, filename: string): Promise<string
   const ext  = dot !== -1 ? filename.slice(dot)    : '';
   let candidate = filename;
   let counter   = 2;
-  while (await ossObjectExists(`${prefix}/${candidate}`)) {
+  while (await storageObjectExists(`${prefix}/${candidate}`)) {
     candidate = `${base}_${counter}${ext}`;
     counter++;
   }
@@ -101,7 +101,7 @@ export async function POST(req: NextRequest) {
     const finalName = await resolveFilename('petty-cash', filename);
 
     const buffer = Buffer.from(await file.arrayBuffer());
-    const url = await uploadToOss(buffer, `petty-cash/${finalName}`, file.type);
+    const url = await uploadToStorage(buffer, `petty-cash/${finalName}`, file.type);
 
     return NextResponse.json({ url, key: url }, { status: 201 });
   } catch (err) {

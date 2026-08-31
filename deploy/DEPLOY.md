@@ -42,7 +42,7 @@ DATABASE_URL="postgresql://dts_user:Prestasi10@127.0.0.1:5432/daily-task-store"
 NEXTAUTH_URL="https://sdt.pri.co.id"        # real public URL — not localhost
 NEXTAUTH_SECRET="<keep or rotate>"
 CRON_SECRET="<pick a long random string>"   # must match deploy/crontab.example
-# BC_*, OSS_* — copy as-is
+# BC_*, NOS_*, OSS_* — copy as-is (NOS_* is the image storage; set NOS_SECRET_ACCESS_KEY)
 ```
 
 ## 4. Build
