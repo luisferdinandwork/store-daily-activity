@@ -3,7 +3,7 @@
 // GET /api/employee/task-settings
 // Lightweight map of { [taskCode]: requiresLocation } for every active task
 // type, read by task detail pages before they request the geolocation
-// permission. OPS controls this per task type from /ops/tasks/settings.
+// permission. IT controls this per task type from /it/task-management.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { NextResponse } from 'next/server';

@@ -1,12 +1,12 @@
 'use client';
-// app/ops/settings/bc-credentials/page.tsx
+// app/it/bc-credentials/page.tsx
 //
 // Manage Business Central API credentials used by
 // lib/performance/business-central-settings.ts /
 // lib/performance/business-central-sales.ts.
 //
-// Access: OPS HO only (enforced server-side in
-// /api/ops/settings/bc-credentials).
+// IT-only (enforced server-side in /api/ops/settings/bc-credentials via
+// resolveItScope).
 
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -405,7 +405,7 @@ export default function BcCredentialsPage() {
   return (
     <div className="min-h-full bg-slate-50">
       <OpsPageHeader
-        scope="OPS · Settings"
+        scope="IT · Settings"
         title="BC Credentials"
         subtitle="Konfigurasi koneksi API Business Central untuk data penjualan"
         onRefresh={load}

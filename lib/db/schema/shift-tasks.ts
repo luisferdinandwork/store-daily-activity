@@ -49,7 +49,7 @@ export const taskDefinitions = pgTable('task_definitions', {
   isPersonal:  boolean('is_personal').default(false).notNull(),
 
   // Whether employees must grant/verify location to work on this task type.
-  // OPS-configurable — see app/ops/tasks/settings and /api/ops/task-definitions.
+  // IT-configurable — see app/it/task-management and /api/ops/task-definitions.
   requiresLocation: boolean('requires_location').default(true).notNull(),
 
   isActive:    boolean('is_active').default(true).notNull(),

@@ -6,7 +6,7 @@ import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
-  ArrowRight, KeyRound, ClipboardCheck, Layers, Store, Users,
+  ArrowRight, KeyRound, ClipboardCheck, Layers, Store, Users, Wallet, Percent,
   AlertTriangle, Repeat, Loader2, Shield, AlertCircle, Eye, CheckCircle2,
 } from 'lucide-react';
 
@@ -78,10 +78,16 @@ export default function ItDashboardPage() {
   const settingsLinks = [
     { href: '/it/users', label: 'Users', desc: 'Create accounts, assign roles, deactivate access.', Icon: Users },
     { href: '/it/switch-role', label: 'Switch Role', desc: 'Preview the app as another role, then switch back.', Icon: Repeat },
-    { href: '/ops/stores', label: 'Store Locations', desc: 'Set store geofence lat/lng/radius.', Icon: Store },
-    { href: '/ops/tasks/settings', label: 'Task Management', desc: 'Configure location requirements per task.', Icon: ClipboardCheck },
-    { href: '/ops/shift-tasks', label: 'Shift & Tasks', desc: 'Configure shifts and their task assignments.', Icon: Layers },
-    { href: '/ops/settings/bc-credentials', label: 'BC Credentials', desc: 'Manage Business Central API credentials.', Icon: KeyRound },
+    { href: '/it/task-management', label: 'Task Management', desc: 'Configure location requirements per task.', Icon: ClipboardCheck },
+    { href: '/it/shift-tasks', label: 'Shift & Tasks', desc: 'Configure shifts and their task assignments.', Icon: Layers },
+    { href: '/it/bc-credentials', label: 'BC Credentials', desc: 'Manage Business Central API credentials.', Icon: KeyRound },
+    { href: '/it/target-allocation', label: 'Performance Target Defaults', desc: 'PIC1 / PIC2 / SA target split percentages.', Icon: Percent },
+  ];
+
+  const panelLinks = [
+    { href: '/ops', label: 'Ops Panel', desc: 'Schedules, attendance, targets, stores, issues.', Icon: Store },
+    { href: '/finance', label: 'Finance Panel', desc: 'Petty cash, setoran, uang modal verification.', Icon: Wallet },
+    { href: '/audit', label: 'Audit Panel', desc: 'Store-visit reviews and compliance checks.', Icon: ClipboardCheck },
   ];
 
   const issueLinks = [
@@ -136,6 +142,31 @@ export default function ItDashboardPage() {
               >
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-cyan-600">
                   <Icon className="h-5 w-5 text-white" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-bold text-slate-800">{label}</p>
+                  <p className="mt-0.5 text-xs text-slate-400">{desc}</p>
+                </div>
+                <ArrowRight className="mt-2 h-4 w-4 shrink-0 text-slate-300" />
+              </Link>
+            ))}
+          </div>
+        </section>
+
+        <section>
+          <p className="mb-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">Other panels</p>
+          <p className="mb-3 -mt-1.5 text-xs text-slate-400">
+            You keep your IT role — a &quot;Back to IT&quot; banner appears while you browse.
+          </p>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            {panelLinks.map(({ href, label, desc, Icon }) => (
+              <Link
+                key={href}
+                href={href}
+                className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition-colors hover:border-cyan-300"
+              >
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100">
+                  <Icon className="h-5 w-5 text-slate-600" />
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-bold text-slate-800">{label}</p>

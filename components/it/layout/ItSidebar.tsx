@@ -11,12 +11,16 @@
 //   Management
 //     Users                 /it/users            (create/edit accounts, assign roles)
 //
-//   IT-only Settings
-//     Store Locations       /ops/stores          (geofence editing)
-//     Task Management        /ops/tasks/settings
-//     Shift & Tasks           /ops/shift-tasks
-//     BC Credentials           /ops/settings/bc-credentials
+//   Configuration (IT-only)
+//     Task Management        /it/task-management
+//     Shift & Tasks           /it/shift-tasks
+//     BC Credentials           /it/bc-credentials
 //     Performance Target Defaults /it/target-allocation (PIC1/PIC2/SA % grid)
+//
+//   Other Panels (IT keeps its role — a "Back to IT" banner shows on the way)
+//     Ops Panel             /ops
+//     Finance Panel         /finance
+//     Audit Panel           /audit
 //
 //   Issues (every role's queue — IT can view all)
 //     IT Issues              /it/issues
@@ -39,6 +43,7 @@ import {
   Repeat,
   Store,
   Users,
+  Wallet,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
@@ -78,13 +83,20 @@ const NAV: NavSection[] = [
     ],
   },
   {
-    section: 'IT-only Settings',
+    section: 'Configuration',
     items: [
-      { href: '/ops/stores', label: 'Store Locations', icon: Store },
-      { href: '/ops/tasks/settings', label: 'Task Management', icon: ClipboardCheck },
-      { href: '/ops/shift-tasks', label: 'Shift & Tasks', icon: Layers },
-      { href: '/ops/settings/bc-credentials', label: 'BC Credentials', icon: KeyRound },
+      { href: '/it/task-management', label: 'Task Management', icon: ClipboardCheck },
+      { href: '/it/shift-tasks', label: 'Shift & Tasks', icon: Layers },
+      { href: '/it/bc-credentials', label: 'BC Credentials', icon: KeyRound },
       { href: '/it/target-allocation', label: 'Performance Target Defaults', icon: Percent },
+    ],
+  },
+  {
+    section: 'Other Panels',
+    items: [
+      { href: '/ops', label: 'Ops Panel', icon: Store },
+      { href: '/finance', label: 'Finance Panel', icon: Wallet },
+      { href: '/audit', label: 'Audit Panel', icon: ClipboardCheck },
     ],
   },
   {

@@ -289,14 +289,18 @@ async function createEmployeeTargetIfMissing(
   return created;
 }
 
-export async function seedSetup() {
-  console.log('🌱  seed-setup: idempotent setup seed\n');
+export interface SeedLookupIds {
+  roleId: Record<string, number>;
+  empTypeId: Record<string, number>;
+  shiftId: Record<string, number>;
+}
 
-  console.log(
-    '🛡️   Existing data will be kept. Missing rows will be created only.\n',
-  );
-
-  // ── 1. LOOKUP TABLES ──────────────────────────────────────────────────────
+/**
+ * Seeds the pure lookup tables — user_roles, employee_types, shifts — that
+ * EVERY environment needs. Used by the full dev seed (seedSetup below) and by
+ * the production seed (scripts/seed/production.ts). Idempotent.
+ */
+export async function seedLookups(): Promise<SeedLookupIds> {
   console.log('📋  Seeding lookup tables…');
 
   const insertedRoles = await Promise.all([
@@ -427,9 +431,26 @@ export async function seedSetup() {
     insertedEmpTypes.map((r) => [r.code, r.id]),
   ) as Record<string, number>;
 
+  const shiftId = Object.fromEntries(
+    insertedShifts.map((s) => [s.code, s.id]),
+  ) as Record<string, number>;
+
   console.log(
     `✓   ${insertedRoles.length} roles, ${insertedEmpTypes.length} employee types, ${insertedShifts.length} shifts\n`,
   );
+
+  return { roleId, empTypeId, shiftId };
+}
+
+export async function seedSetup() {
+  console.log('🌱  seed-setup: idempotent setup seed\n');
+
+  console.log(
+    '🛡️   Existing data will be kept. Missing rows will be created only.\n',
+  );
+
+  // ── 1. LOOKUP TABLES ──────────────────────────────────────────────────────
+  const { roleId, empTypeId } = await seedLookups();
 
   // ── 2. AREAS ──────────────────────────────────────────────────────────────
   console.log('🗺️   Creating operational area groups…');

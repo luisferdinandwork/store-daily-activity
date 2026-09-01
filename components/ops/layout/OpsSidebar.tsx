@@ -13,8 +13,6 @@ import {
   ChevronRight,
   ClipboardCheck,
   FileCheck2,
-  KeyRound,
-  Layers,
   LayoutDashboard,
   LogOut,
   MapPinned,
@@ -43,23 +41,6 @@ const TASK_PROGRESS_ITEM = {
   key: 'progress',
 };
 
-// Per task type: does it require location? — replaces the old per-store
-// task monitoring pages entirely.
-const TASK_SETTINGS_ITEM = {
-  href: '/ops/tasks/settings',
-  label: 'Task Management',
-  icon: ClipboardCheck,
-  key: 'task-settings',
-};
-
-// Shift ↔ task configuration. Sits below Task Management.
-const SHIFT_TASKS_ITEM = {
-  href: '/ops/shift-tasks',
-  label: 'Shift & Tasks',
-  icon: Layers,
-  key: 'shift-tasks',
-};
-
 // New: employee performance target management. HO Ops sees all areas/stores,
 // Area Ops is scoped to their assigned area (resolved server-side).
 const PERFORMANCE_TARGETS_ITEM = {
@@ -75,14 +56,6 @@ const ITEM_TRANSFERS_ITEM = {
   label: 'Item Transfers',
   icon: Truck,
   key: 'item-transfers',
-};
-
-// New: Business Central API credentials management (Settings group).
-const BC_CREDENTIALS_ITEM = {
-  href: '/ops/settings/bc-credentials',
-  label: 'BC Credentials',
-  icon: KeyRound,
-  key: 'bc-credentials',
 };
 
 // OPS HO only — assign the one OPS Area user per area, rename areas, move
@@ -139,12 +112,6 @@ const NAV = [
       { href: PERFORMANCE_TARGETS_ITEM.href, label: PERFORMANCE_TARGETS_ITEM.label, icon: PERFORMANCE_TARGETS_ITEM.icon },
     ],
   },
-  {
-    section: 'Settings',
-    items: [
-      { href: BC_CREDENTIALS_ITEM.href, label: BC_CREDENTIALS_ITEM.label, icon: BC_CREDENTIALS_ITEM.icon },
-    ],
-  },
 ];
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -175,19 +142,16 @@ export default function OpsSidebar({ storeName = 'Store Manager', collapsed = fa
   const { data: session } = useSession();
 
   const isOpsHo = session?.user?.isOpsHo === true;
-  const isIt    = session?.user?.role === 'it';
 
-  // NAV[0] (Overview) renders separately below; the rest — People, Operations,
-  // Settings — render via this array, with an OPS-HO-only "OPS HQ" section
-  // spliced in right after Overview. The "Settings" section (BC Credentials)
-  // is IT-only, so it's filtered out for everyone else.
+  // NAV[0] (Overview) renders separately below; the rest — People, Operations —
+  // render via this array, with an OPS-HO-only "OPS HQ" section spliced in right
+  // after Overview. IT-only configuration (Task Management, Shift & Tasks, BC
+  // Credentials) now lives in the /it panel, not here.
   const restSections = useMemo(() => {
-    const base = isOpsHo
+    return isOpsHo
       ? [{ section: 'OPS HQ', items: [AREA_MANAGEMENT_ITEM, MANUALS_ITEM] }, ...NAV.slice(1)]
       : NAV.slice(1);
-
-    return isIt ? base : base.filter((s) => s.section !== 'Settings');
-  }, [isOpsHo, isIt]);
+  }, [isOpsHo]);
 
   const isActive = (href: string, exact?: boolean) =>
     exact ? pathname === href : pathname.startsWith(href);
@@ -300,80 +264,9 @@ export default function OpsSidebar({ storeName = 'Store Manager', collapsed = fa
                 </Link>
               )}
             </div>
-
-            {/* Task Management + Shift & Tasks — IT-only config */}
-            {isIt && (
-              <>
-                {!collapsed && <div className="mx-2.5 my-1.5 border-t border-border/50" />}
-
-                {/* Task Management — per task type: does it require location? */}
-                {collapsed ? (
-                  <NavTooltip label={TASK_SETTINGS_ITEM.label}>
-                    <Link
-                      href={TASK_SETTINGS_ITEM.href}
-                      className={cn(
-                        'flex items-center justify-center rounded-md px-2.5 py-2 text-sm font-medium transition-colors',
-                        isActive(TASK_SETTINGS_ITEM.href)
-                          ? 'bg-primary/10 text-primary'
-                          : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
-                      )}
-                    >
-                      <TASK_SETTINGS_ITEM.icon className="h-4 w-4" />
-                    </Link>
-                  </NavTooltip>
-                ) : (
-                  <Link
-                    href={TASK_SETTINGS_ITEM.href}
-                    className={cn(
-                      'flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium transition-colors',
-                      isActive(TASK_SETTINGS_ITEM.href)
-                        ? 'bg-primary/10 text-primary'
-                        : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
-                    )}
-                  >
-                    <TASK_SETTINGS_ITEM.icon className="h-4 w-4 shrink-0" />
-                    <span className="flex-1">{TASK_SETTINGS_ITEM.label}</span>
-                    {isActive(TASK_SETTINGS_ITEM.href) && <ChevronRight className="h-3 w-3 opacity-60" />}
-                  </Link>
-                )}
-
-                {/* Shift & Tasks config — sits below Task Management */}
-                <div className="mt-1">
-                  {collapsed ? (
-                    <NavTooltip label={SHIFT_TASKS_ITEM.label}>
-                      <Link
-                        href={SHIFT_TASKS_ITEM.href}
-                        className={cn(
-                          'flex items-center justify-center rounded-md px-2.5 py-2 text-sm font-medium transition-colors',
-                          isActive(SHIFT_TASKS_ITEM.href)
-                            ? 'bg-primary/10 text-primary'
-                            : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
-                        )}
-                      >
-                        <SHIFT_TASKS_ITEM.icon className="h-4 w-4" />
-                      </Link>
-                    </NavTooltip>
-                  ) : (
-                    <Link
-                      href={SHIFT_TASKS_ITEM.href}
-                      className={cn(
-                        'flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium transition-colors',
-                        isActive(SHIFT_TASKS_ITEM.href)
-                          ? 'bg-primary/10 text-primary'
-                          : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
-                      )}
-                    >
-                      <SHIFT_TASKS_ITEM.icon className="h-4 w-4 shrink-0" />
-                      <span className="flex-1">{SHIFT_TASKS_ITEM.label}</span>
-                      {isActive(SHIFT_TASKS_ITEM.href) && <ChevronRight className="h-3 w-3 opacity-60" />}
-                    </Link>
-                  )}
-                </div>
-              </>
-            )}
           </div>
 
-          {/* People + Operations + Settings sections */}
+          {/* People + Operations sections */}
           {restSections.map(({ section, items }) => (
             <div key={section}>
               {!collapsed && (

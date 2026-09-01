@@ -71,7 +71,7 @@ export const shifts = pgTable('shifts', {
   startTime:   time('start_time'),
   endTime:     time('end_time'),
 
-  // Display/config fields used by /ops/shift-tasks.
+  // Display/config fields used by /it/shift-tasks.
   accent:      text('accent'),
   icon:        text('icon'),
   breaks:      jsonb('breaks').$type<ShiftBreakJson | null>(),

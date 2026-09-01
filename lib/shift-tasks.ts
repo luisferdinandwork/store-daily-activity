@@ -4,7 +4,7 @@
 //
 // This file is used by:
 //   • scripts/seed/shift-tasks.ts
-//   • OPS Shift & Tasks admin page + /api/ops/shift-tasks routes
+//   • the IT "Shift & Tasks" admin page (/it/shift-tasks) + /api/ops/shift-tasks routes
 //   • any helper that needs stable task codes/labels
 //
 // IMPORTANT:

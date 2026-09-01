@@ -1,5 +1,6 @@
 'use client';
-// app/ops/shift-tasks/page.tsx — OPS "Shift & Tasks" configuration.
+// app/it/shift-tasks/page.tsx — IT "Shift & Tasks" configuration.
+// IT-only. Backed by /api/ops/shift-tasks* (IT-guarded).
 //
 // Layout mirrors the Task Progress page: a left list (shifts) + a right detail
 // panel. Creating / editing a shift and managing its task set all happen in ONE
@@ -1283,7 +1284,7 @@ export default function OpsShiftTasksPage() {
   return (
     <div className="min-h-full bg-slate-50">
       <OpsPageHeader
-        scope="OPS · Configuration"
+        scope="IT · Configuration"
         title="Shift & Tasks"
         subtitle={`${activeShiftCount} active shift${activeShiftCount !== 1 ? 's' : ''} · ${catalog.length} task types`}
         onRefresh={() => void load()}

@@ -1,10 +1,10 @@
 'use client';
-// app/ops/tasks/settings/page.tsx — OPS "Task Management" settings.
+// app/it/task-management/page.tsx — IT "Task Management" settings.
 //
-// Replaces the old per-task-type "monitor every store" pages. This page does
-// ONE thing: lets OPS decide, per task type, whether employees must grant
-// location before they can work on it. Everything else about a task type
-// (label, icon, shift assignment) still lives in "Shift & Tasks".
+// IT-only. This page does ONE thing: lets IT decide, per task type, whether
+// employees must grant location before they can work on it. Everything else
+// about a task type (label, icon, shift assignment) lives in "Shift & Tasks".
+// Backed by /api/ops/task-definitions (IT-guarded via resolveItScope).
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -238,7 +238,7 @@ export default function OpsTaskSettingsPage() {
   return (
     <div className="min-h-full bg-slate-50">
       <OpsPageHeader
-        scope="OPS · Configuration"
+        scope="IT · Configuration"
         title="Task Management"
         subtitle={`${tasks.length} task type${tasks.length !== 1 ? 's' : ''} · atur wajib-tidaknya lokasi per task`}
         onRefresh={() => void load()}
