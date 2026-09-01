@@ -31,7 +31,6 @@ import {
   storeBins,
   vmChecklistTasks,
   marketingCheckTasks,
-  itemDroppingTasks,
   briefingTasks,
   storeClosingTasks,
   groomingTasks,
@@ -332,7 +331,6 @@ export async function seedTasks() {
     cekBin: { created: 0, skipped: 0 },
     vmChecklist: { created: 0, skipped: 0 },
     marketingCheck: { created: 0, skipped: 0 },
-    itemDropping: { created: 0, skipped: 0 },
     briefing: { created: 0, skipped: 0 },
     // serah_terima intentionally not seeded here — it's a shared, rolling
     // handover board per store now, not a per-day task row. Add sample
@@ -350,7 +348,6 @@ export async function seedTasks() {
     cekBinKeys,
     vmKeys,
     marketingKeys,
-    itemDroppingKeys,
     briefingKeys,
     storeClosingKeys,
     groomingScheduleIds,
@@ -362,7 +359,6 @@ export async function seedTasks() {
     loadStoreDateKeys(cekBinTasks, storeIds, range.start, range.end),
     loadStoreDateKeys(vmChecklistTasks, storeIds, range.start, range.end),
     loadStoreDateKeys(marketingCheckTasks, storeIds, range.start, range.end),
-    loadStoreDateShiftKeys(itemDroppingTasks, storeIds, range.start, range.end),
     loadStoreDateShiftKeys(briefingTasks, storeIds, range.start, range.end),
     loadStoreDateKeys(storeClosingTasks, storeIds, range.start, range.end),
     loadScheduleIdKeys(groomingTasks, scheduleIds),
@@ -389,7 +385,6 @@ export async function seedTasks() {
     cekBin: [] as Array<typeof cekBinTasks.$inferInsert>,
     vmChecklist: [] as Array<typeof vmChecklistTasks.$inferInsert>,
     marketingCheck: [] as Array<typeof marketingCheckTasks.$inferInsert>,
-    itemDropping: [] as Array<typeof itemDroppingTasks.$inferInsert>,
     briefing: [] as Array<typeof briefingTasks.$inferInsert>,
     storeClosing: [] as Array<typeof storeClosingTasks.$inferInsert>,
     grooming: [] as Array<typeof groomingTasks.$inferInsert>,
@@ -448,13 +443,6 @@ export async function seedTasks() {
         rows.marketingCheck,
         morningBase,
       );
-      addStoreDateShiftTask(
-        counts,
-        itemDroppingKeys,
-        "itemDropping",
-        rows.itemDropping,
-        { ...morningBase, hasDropping: false },
-      );
       addStoreDateShiftTask(counts, briefingKeys, "briefing", rows.briefing, {
         ...morningBase,
         done: false,
@@ -464,21 +452,16 @@ export async function seedTasks() {
     }
 
     if (isEvening) {
-      if (code === "evening") {
-        addStoreDateShiftTask(
-          counts,
-          itemDroppingKeys,
-          "itemDropping",
-          rows.itemDropping,
-          { ...eveningBase, hasDropping: false },
-        );
-        addStoreDateShiftTask(counts, briefingKeys, "briefing", rows.briefing, {
-          ...eveningBase,
-          done: false,
-          isBalanced: null,
-          parentTaskId: null,
-        });
-      }
+      // Evening Briefing row — shared per store/shift/day. Created for a
+      // standalone evening schedule AND for a full_day schedule (full_day
+      // employees work both halves and complete both briefings), matching
+      // getOrCreateBriefingForSchedule in lib/db/utils/briefing.ts.
+      addStoreDateShiftTask(counts, briefingKeys, "briefing", rows.briefing, {
+        ...eveningBase,
+        done: false,
+        isBalanced: null,
+        parentTaskId: null,
+      });
 
       addStoreDateTask(
         counts,
@@ -517,7 +500,6 @@ export async function seedTasks() {
   await insertInBatches(cekBinTasks, rows.cekBin);
   await insertInBatches(vmChecklistTasks, rows.vmChecklist);
   await insertInBatches(marketingCheckTasks, rows.marketingCheck);
-  await insertInBatches(itemDroppingTasks, rows.itemDropping);
   await insertInBatches(briefingTasks, rows.briefing);
   await insertInBatches(storeClosingTasks, rows.storeClosing);
   await insertInBatches(groomingTasks, rows.grooming);

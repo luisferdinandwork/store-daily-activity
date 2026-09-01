@@ -775,12 +775,20 @@ export async function GET(request: NextRequest) {
     const tasks = [
       ...openingRows
         .filter((r) => inStore(r.storeId))
-        .map((t) => ({
+        .map((t) => {
+        // Store Opening is one shared row per store/day. Send the logged-in
+        // employee's OWN morning/full_day scheduleId (not the row creator's)
+        // so the check-in gate reads the right attendance record; keep the
+        // stored row schedule as originalScheduleId. See store_front below.
+        const actorScheduleId =
+          morningScheduleByStoreId.get(t.storeId)?.id ?? t.scheduleId;
+        return {
           type: "store_opening" as const,
           shift: (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode,
           data: {
             id: String(t.id),
-            scheduleId: String(t.scheduleId),
+            scheduleId: String(actorScheduleId),
+            originalScheduleId: String(t.scheduleId),
             userId: t.userId,
             storeId: String(t.storeId),
             shift: (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode,
@@ -851,7 +859,8 @@ export async function GET(request: NextRequest) {
             verifiedBy: t.verifiedBy,
             verifiedAt: toIso(t.verifiedAt),
           },
-        })),
+        };
+      }),
 
       ...storeFrontRows
         .filter((r) => inStore(r.storeId))
@@ -905,12 +914,17 @@ export async function GET(request: NextRequest) {
             Number(previousUnpaidAmount ?? 0)
           ).toFixed(2);
 
+          // Shared per store/day — send the logged-in employee's own schedule.
+          const actorScheduleId =
+            morningScheduleByStoreId.get(t.storeId)?.id ?? t.scheduleId;
+
           return {
             type: "setoran" as const,
             shift: (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode,
             data: {
               id: String(t.id),
-              scheduleId: String(t.scheduleId),
+              scheduleId: String(actorScheduleId),
+              originalScheduleId: String(t.scheduleId),
               userId: t.userId,
               storeId: String(t.storeId),
               shift: (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode,
@@ -990,12 +1004,17 @@ export async function GET(request: NextRequest) {
             t.minimumBinsToCheck || Math.ceil(totalStoreBins * 0.3);
           const checkedBinsCount = t.checkedBinsCount || checkedBins.length;
 
+          // Shared per store/day — send the logged-in employee's own schedule.
+          const actorScheduleId =
+            morningScheduleByStoreId.get(t.storeId)?.id ?? t.scheduleId;
+
           return {
             type: "cek_bin" as const,
             shift: (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode,
             data: {
               id: String(t.id),
-              scheduleId: String(t.scheduleId),
+              scheduleId: String(actorScheduleId),
+              originalScheduleId: String(t.scheduleId),
               userId: t.userId,
               storeId: String(t.storeId),
               shift: (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode,
@@ -1019,12 +1038,18 @@ export async function GET(request: NextRequest) {
 
       ...vmChecklistRows
         .filter((r) => inStore(r.storeId))
-        .map((t) => ({
+        .map((t) => {
+          // Shared per store/day — send the logged-in employee's own schedule.
+          const actorScheduleId =
+            morningScheduleByStoreId.get(t.storeId)?.id ?? t.scheduleId;
+
+          return {
           type: "vm_checklist" as const,
           shift: (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode,
           data: {
             id: String(t.id),
-            scheduleId: String(t.scheduleId),
+            scheduleId: String(actorScheduleId),
+            originalScheduleId: String(t.scheduleId),
             userId: t.userId,
             storeId: String(t.storeId),
             shift: (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode,
@@ -1045,16 +1070,23 @@ export async function GET(request: NextRequest) {
             verifiedBy: t.verifiedBy,
             verifiedAt: toIso(t.verifiedAt),
           },
-        })),
+          };
+        }),
 
       ...marketingCheckRows
         .filter((r) => inStore(r.storeId))
-        .map((t) => ({
+        .map((t) => {
+          // Shared per store/day — send the logged-in employee's own schedule.
+          const actorScheduleId =
+            morningScheduleByStoreId.get(t.storeId)?.id ?? t.scheduleId;
+
+          return {
           type: "marketing_check" as const,
           shift: (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode,
           data: {
             id: String(t.id),
-            scheduleId: String(t.scheduleId),
+            scheduleId: String(actorScheduleId),
+            originalScheduleId: String(t.scheduleId),
             userId: t.userId,
             storeId: String(t.storeId),
             shift: (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode,
@@ -1092,7 +1124,8 @@ export async function GET(request: NextRequest) {
             verifiedBy: t.verifiedBy,
             verifiedAt: toIso(t.verifiedAt),
           },
-        })),
+          };
+        }),
 
       ...cekUangModalRows
         .filter((r) => inStore(r.storeId))

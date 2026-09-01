@@ -411,20 +411,22 @@ export function normalizeTaskCodes(
 // This map is only the default source for scripts/seed/shift-tasks.ts.
 
 export const SHIFT_TASK_MAP: Record<ShiftCode, TaskType[]> = {
-  // Default sequence: Store Front → Setoran → Store Opening → Cek Uang Modal
-  // → Cek Bin, then the rest. IT can re-order this per shift from
-  // OPS → Shift & Tasks.
+  // Default order mirrors the live OPS → Shift & Tasks config: the fixed-order
+  // block first (Store Front → Setoran → Store Opening → Cek Uang Modal →
+  // Grooming → Briefing → Serah Terima — see DEFAULT_SEQUENCED_TASK_TYPES),
+  // then the anytime tasks (Cek Bin → VM Checklist → Marketing Check). IT can
+  // re-order and toggle required/fixed per shift from OPS → Shift & Tasks.
   morning: [
     'store_front',
     'setoran',
     'store_opening',
     'cek_uang_modal',
-    'cek_bin',
     'grooming',
-    'vm_checklist',
-    'marketing_check',
     'briefing',
     'serah_terima',
+    'cek_bin',
+    'vm_checklist',
+    'marketing_check',
   ],
 
   evening: [
@@ -441,12 +443,12 @@ export const SHIFT_TASK_MAP: Record<ShiftCode, TaskType[]> = {
     'setoran',
     'store_opening',
     'cek_uang_modal',
-    'cek_bin',
     'grooming',
-    'vm_checklist',
-    'marketing_check',
     'briefing',
     'serah_terima',
+    'cek_bin',
+    'vm_checklist',
+    'marketing_check',
     'store_closing',
   ],
 };

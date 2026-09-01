@@ -52,16 +52,12 @@ const BATCH_SIZE = Number(process.env.SEED_BATCH_SIZE ?? 500);
 // month's days become OFF, spread evenly (see pickOffDayIndices).
 const WORKING_DAYS_PER_MONTH = Number(process.env.SEED_WORKING_DAYS ?? 26);
 
-// Shift type on a WORKING day, cycled by the employee's position among their
-// own working days (not by calendar day-of-week). The store's designated
-// full-day employee (see fullDayEmployee below) always gets 'FD' instead,
-// on whichever days they work.
-const SHIFT_CYCLES: Record<string, PatternCode[]> = {
-  pic_1: ['E'],
-  pic_2: ['E', 'L'],
-  sa: ['L'],
-  default: ['E'],
-};
+// Shift assignment on a WORKING day:
+//   • The store's designated full-day employee (PIC 1 — see fullDayEmployee
+//     below) always gets 'FD'.
+//   • Every other employee alternates morning ('E') / evening ('L') by
+//     (their index among the store's non-full-day staff + calendar day), so
+//     each day the on-shift staff split ~50/50 between the two shifts.
 
 /**
  * Picks `offCount` day-indices (0-based, within a `daysInMonth`-day month)
@@ -288,21 +284,26 @@ async function seedMonth(target: TargetMonth) {
     const fullDayEmployee = emps.find((e) => e.employeeTypeId != null && empTypeCodeById[e.employeeTypeId] === 'pic_1') ?? emps[0];
     const daysInMonth = days.length;
     const offDaysCount = Math.max(0, daysInMonth - WORKING_DAYS_PER_MONTH);
+
+    // Position among the store's non-full-day staff — drives the morning/
+    // evening alternation so headcount stays balanced on every calendar day.
+    const nonFullDayIndexById = new Map(
+      emps.filter((e) => e.id !== fullDayEmployee.id).map((e, i) => [e.id, i]),
+    );
+
     console.log(
       `   🏪 ${store.name} (${area?.name ?? 'no area'}) → full-day: ${fullDayEmployee.name} · ` +
       `${WORKING_DAYS_PER_MONTH}/${daysInMonth} working days per employee`,
     );
 
     emps.forEach((emp, empIndex) => {
-      const empTypeCode = emp.employeeTypeId != null ? empTypeCodeById[emp.employeeTypeId] ?? 'default' : 'default';
-      const cycle = SHIFT_CYCLES[empTypeCode] ?? SHIFT_CYCLES.default;
       const isDailyFullDayEmployee = emp.id === fullDayEmployee.id;
+      const nonFullDayIndex = nonFullDayIndexById.get(emp.id) ?? 0;
 
       // Stagger each employee's off days by their position at the store so
       // coworkers don't all land on the same off day.
       const offDayIndices = pickOffDayIndices(daysInMonth, offDaysCount, empIndex);
 
-      let workingDayIndex = 0;
       days.forEach((date, dayIndex) => {
         const isScheduledOff = offDayIndices.has(dayIndex);
 
@@ -311,10 +312,10 @@ async function seedMonth(target: TargetMonth) {
           patternCode = 'OFF';
         } else if (isDailyFullDayEmployee) {
           patternCode = 'FD';
-          workingDayIndex += 1;
         } else {
-          patternCode = cycle[workingDayIndex % cycle.length];
-          workingDayIndex += 1;
+          // Alternate morning ('E') / evening ('L') by staff index + day so
+          // each calendar day the store's on-shift staff split ~50/50.
+          patternCode = (nonFullDayIndex + dayIndex) % 2 === 0 ? 'E' : 'L';
         }
 
         const { shiftId } = patternToShift(patternCode, shiftIdByCode);

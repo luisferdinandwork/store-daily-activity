@@ -369,8 +369,12 @@ export async function seedSetup() {
     }),
   ]);
 
-  const insertedShifts = await Promise.all([
-    getOrCreateShift({
+  // Insert sequentially, not via Promise.all: several server modules cache the
+  // shift id per code (lib/db/utils/shift-lookup.ts, store-opening.ts, tasks.ts),
+  // and racing the inserts makes the id→code mapping non-deterministic between
+  // seed runs. Sequential inserts keep morning=1, evening=2, full_day=3.
+  const insertedShifts = [
+    await getOrCreateShift({
       code: 'morning',
       label: 'Morning',
       description: 'Morning opening shift',
@@ -381,7 +385,7 @@ export async function seedSetup() {
       breaks: [{ type: 'lunch', label: 'Lunch', accent: 'amber' }],
       sortOrder: 10,
     }),
-    getOrCreateShift({
+    await getOrCreateShift({
       code: 'evening',
       label: 'Evening',
       description: 'Evening closing shift',
@@ -392,7 +396,7 @@ export async function seedSetup() {
       breaks: [{ type: 'dinner', label: 'Dinner', accent: 'violet' }],
       sortOrder: 20,
     }),
-    getOrCreateShift({
+    await getOrCreateShift({
       code: 'full_day',
       label: 'Full Day',
       description: 'Full day shift covering opening and closing tasks',
@@ -414,7 +418,7 @@ export async function seedSetup() {
       ],
       sortOrder: 30,
     }),
-  ]);
+  ];
 
   const roleId = Object.fromEntries(insertedRoles.map((r) => [r.code, r.id])) as
     Record<string, number>;

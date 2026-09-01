@@ -110,16 +110,23 @@ export async function seedShiftTaskAssignments() {
   let inserted = 0;
   let reactivated = 0;
   let skipped = 0;
+  let pruned = 0;
+  const prunedPairs: string[] = [];
   const missingShifts: string[] = [];
   const missingTasks: string[] = [];
 
   const shiftRows = await db.select({ id: shifts.id, code: shifts.code }).from(shifts);
   const shiftIdByCode = new Map(shiftRows.map((s) => [s.code, s.id]));
+  const shiftCodeById = new Map(shiftRows.map((s) => [s.id, s.code]));
 
   const defRows = await db
     .select({ id: taskDefinitions.id, code: taskDefinitions.code })
     .from(taskDefinitions);
   const defIdByCode = new Map(defRows.map((d) => [d.code, d.id]));
+  const defCodeById = new Map(defRows.map((d) => [d.id, d.code]));
+
+  // Every (shiftId, taskDefinitionId) pair that SHIFT_TASK_MAP wants active.
+  const desiredPairs = new Set<string>();
 
   for (const [shiftCode, codes] of Object.entries(SHIFT_TASK_MAP)) {
     const shiftId = shiftIdByCode.get(shiftCode);
@@ -138,6 +145,8 @@ export async function seedShiftTaskAssignments() {
         if (!missingTasks.includes(code)) missingTasks.push(code);
         continue;
       }
+
+      desiredPairs.add(`${shiftId}:${defId}`);
 
       const existing = await db
         .select({ id: shiftTasks.id })
@@ -171,7 +180,34 @@ export async function seedShiftTaskAssignments() {
     }
   }
 
-  return { inserted, reactivated, skipped, missingShifts, missingTasks };
+  // Prune drift: deactivate any still-active assignment that SHIFT_TASK_MAP no
+  // longer lists for that shift. Without this the seed only ever grows the
+  // config, so an evening shift that once had morning task types would keep
+  // leaking them into the employee task list. (Task types removed wholesale —
+  // REMOVED_TASK_TYPES — are handled separately by retireRemovedTaskDefinitions.)
+  const activeRows = await db
+    .select({ id: shiftTasks.id, shiftId: shiftTasks.shiftId, defId: shiftTasks.taskDefinitionId })
+    .from(shiftTasks)
+    .where(eq(shiftTasks.isActive, true));
+
+  const staleIds = activeRows
+    .filter((r) => !desiredPairs.has(`${r.shiftId}:${r.defId}`))
+    .map((r) => {
+      prunedPairs.push(
+        `${shiftCodeById.get(r.shiftId) ?? r.shiftId}/${defCodeById.get(r.defId) ?? r.defId}`,
+      );
+      return r.id;
+    });
+
+  if (staleIds.length) {
+    await db
+      .update(shiftTasks)
+      .set({ isActive: false, updatedAt: new Date() })
+      .where(inArray(shiftTasks.id, staleIds));
+    pruned = staleIds.length;
+  }
+
+  return { inserted, reactivated, skipped, pruned, prunedPairs, missingShifts, missingTasks };
 }
 
 // ── Runner ────────────────────────────────────────────────────────────────────
@@ -187,6 +223,12 @@ export async function seedShiftTasks() {
 
   const asg = await seedShiftTaskAssignments();
   console.log(`✅ shift_tasks       — inserted ${asg.inserted}, skipped ${asg.skipped}`);
+
+  if (asg.pruned) {
+    console.log(
+      `🧹 deactivated ${asg.pruned} drifted shift_task assignment(s): ${asg.prunedPairs.join(', ')}`,
+    );
+  }
 
   if (asg.missingShifts.length) {
     console.warn(`⚠️  Shifts not found (run the setup seed step first): ${asg.missingShifts.join(', ')}`);

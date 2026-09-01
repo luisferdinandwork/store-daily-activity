@@ -30,7 +30,6 @@ import {
   cekBinTaskBins,
   vmChecklistTasks,
   marketingCheckTasks,
-  itemDroppingTasks,
   briefingTasks,
   storeClosingTasks,
   groomingTasks,
@@ -525,10 +524,32 @@ export async function seedAttendance() {
   const cekBinMap = await loadTaskMap(cekBinTasks, scheduleIds);
   const vmMap = await loadTaskMap(vmChecklistTasks, scheduleIds);
   const marketingMap = await loadTaskMap(marketingCheckTasks, scheduleIds);
-  const itemDroppingMap = await loadTaskMap(itemDroppingTasks, scheduleIds);
-  const briefingMap = await loadTaskMap(briefingTasks, scheduleIds);
   const storeClosingMap = await loadTaskMap(storeClosingTasks, scheduleIds);
   const groomingMap = await loadTaskMap(groomingTasks, scheduleIds);
+
+  // Briefing is per (schedule, shift): a full_day schedule owns BOTH a morning
+  // and an evening briefing row, so a plain scheduleId-keyed map would drop
+  // one. Key by `${scheduleId}|${shiftId}` and complete each half separately.
+  type BriefingRow = typeof briefingTasks.$inferSelect;
+  const briefingRowsAll = await selectWhereInBatches<BriefingRow>(
+    briefingTasks,
+    briefingTasks.scheduleId,
+    scheduleIds,
+  );
+  const briefingByScheduleShift = new Map<string, BriefingRow>();
+  for (const row of briefingRowsAll) {
+    briefingByScheduleShift.set(`${row.scheduleId}|${row.shiftId}`, row);
+  }
+  const [morningShiftRow] = await db
+    .select({ id: shifts.id })
+    .from(shifts)
+    .where(eq(shifts.code, "morning"))
+    .limit(1);
+  const [eveningShiftRow] = await db
+    .select({ id: shifts.id })
+    .from(shifts)
+    .where(eq(shifts.code, "evening"))
+    .limit(1);
 
   const completedAt = new Date();
   const now = new Date();
@@ -542,6 +563,22 @@ export async function seedAttendance() {
     const ids: number[] = [];
     for (const { sched } of sourceSchedules) {
       const task = map.get(sched.id);
+      if (!task || task.status !== "not_started") continue;
+      if (!chance(probability)) continue;
+      ids.push(task.id);
+    }
+    return ids;
+  }
+
+  function pendingBriefingIds(
+    targetShiftId: number | undefined,
+    probability: number,
+    sourceSchedules: any[],
+  ) {
+    if (!targetShiftId) return [];
+    const ids: number[] = [];
+    for (const { sched } of sourceSchedules) {
+      const task = briefingByScheduleShift.get(`${sched.id}|${targetShiftId}`);
       if (!task || task.status !== "not_started") continue;
       if (!chance(probability)) continue;
       ids.push(task.id);
@@ -737,29 +774,23 @@ export async function seedAttendance() {
     },
   );
 
-  tasksCompleted += await updateTaskByIds(
-    itemDroppingTasks,
-    pendingIds(itemDroppingMap, 0.75, morningSchedules),
-    {
-      hasDropping: true,
-      notes: null,
-      status: "completed",
-      completedAt,
-      updatedAt: now,
-    },
-  );
-
+  const briefingCompletion = {
+    done: true,
+    isBalanced: true,
+    notes: null,
+    status: "completed" as const,
+    completedAt,
+    updatedAt: now,
+  };
   tasksCompleted += await updateTaskByIds(
     briefingTasks,
-    pendingIds(briefingMap, 0.85, eveningSchedules),
-    {
-      done: true,
-      isBalanced: true,
-      notes: null,
-      status: "completed",
-      completedAt,
-      updatedAt: now,
-    },
+    pendingBriefingIds(morningShiftRow?.id, 0.85, morningSchedules),
+    briefingCompletion,
+  );
+  tasksCompleted += await updateTaskByIds(
+    briefingTasks,
+    pendingBriefingIds(eveningShiftRow?.id, 0.85, eveningSchedules),
+    briefingCompletion,
   );
 
   tasksCompleted += await updateTaskByIds(
