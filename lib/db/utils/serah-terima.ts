@@ -6,15 +6,19 @@
 // their store; any shift member can mark any entry complete. Entries stay
 // in the active list (isCompleted = false) until completed — there is no
 // daily reset and no "next shift" chain/targeting.
-import { and, asc, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, lte } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import {
   attendance,
   serahTerimaEntries,
+  serahTerimaTasks,
   stores,
   type SerahTerimaEntry,
+  type SerahTerimaTask,
 } from '@/lib/db/schema';
+import { startOfDay, endOfDay } from '@/lib/db/utils/shift-lookup';
+import { todayInStoreTimezone } from '@/lib/schedule-utils';
 
 export type TaskResult<T = void> =
   | { success: true; data: T }
@@ -152,6 +156,135 @@ export async function listSerahTerimaEntries(storeId: number): Promise<SerahTeri
   return { active, recentCompleted };
 }
 
+// ─── Per-shift, per-day "handover done" task ─────────────────────────────────
+//
+// Serah terima now has a real completed state on the task list. One task row
+// per (store, shift, day) — shared by everyone on that shift, same shape as
+// briefing_tasks. Completing it locks that shift's board management for the
+// day; a fresh row the next day reopens it.
+
+const SERAH_TERIMA_LOCKED_MSG =
+  'Serah terima shift ini sudah diselesaikan hari ini. Item bisa dikelola lagi besok.';
+
+async function getSerahTerimaTaskRow(
+  storeId: number,
+  shiftId: number,
+  date: Date,
+): Promise<SerahTerimaTask | null> {
+  const [row] = await db
+    .select()
+    .from(serahTerimaTasks)
+    .where(
+      and(
+        eq(serahTerimaTasks.storeId, storeId),
+        eq(serahTerimaTasks.shiftId, shiftId),
+        gte(serahTerimaTasks.date, startOfDay(date)),
+        lte(serahTerimaTasks.date, endOfDay(date)),
+      ),
+    )
+    .limit(1);
+  return row ?? null;
+}
+
+/** True when THIS shift already marked its serah terima task complete today. */
+export async function isSerahTerimaLockedForShift(
+  storeId: number,
+  shiftId: number,
+  date: Date = todayInStoreTimezone(),
+): Promise<boolean> {
+  const row = await getSerahTerimaTaskRow(storeId, shiftId, date);
+  return row?.status === 'completed';
+}
+
+export async function getOrCreateSerahTerimaTaskForShift(
+  scheduleId: number,
+  userId: string,
+  storeId: number,
+  shiftId: number,
+  date: Date,
+): Promise<SerahTerimaTask> {
+  const existing = await getSerahTerimaTaskRow(storeId, shiftId, date);
+  if (existing) return existing;
+
+  const [created] = await db
+    .insert(serahTerimaTasks)
+    .values({
+      scheduleId,
+      userId,
+      storeId,
+      shiftId,
+      date: startOfDay(date),
+      status: 'not_started',
+    })
+    .onConflictDoNothing({
+      target: [serahTerimaTasks.storeId, serahTerimaTasks.date, serahTerimaTasks.shiftId],
+    })
+    .returning();
+
+  if (created) return created;
+
+  const row = await getSerahTerimaTaskRow(storeId, shiftId, date);
+  if (!row) throw new Error('Failed to create or find serah terima task row after conflict.');
+  return row;
+}
+
+export interface CompleteSerahTerimaTaskInput {
+  scheduleId: number;
+  userId: string;
+  storeId: number;
+  shiftId: number;
+  geo: GeoPoint;
+  notes?: string;
+  skipGeo?: boolean;
+}
+
+export async function completeSerahTerimaTask(
+  input: CompleteSerahTerimaTaskInput,
+): Promise<TaskResult<SerahTerimaTask>> {
+  try {
+    const gateErr = await assertCanProgressTask(
+      input.scheduleId,
+      input.storeId,
+      input.geo,
+      input.skipGeo,
+    );
+    if (gateErr) return { success: false, error: gateErr };
+
+    const today = todayInStoreTimezone();
+    const task = await getOrCreateSerahTerimaTaskForShift(
+      input.scheduleId,
+      input.userId,
+      input.storeId,
+      input.shiftId,
+      today,
+    );
+
+    if (task.status === 'completed') {
+      return { success: true, data: task };
+    }
+
+    const now = new Date();
+    const [row] = await db
+      .update(serahTerimaTasks)
+      .set({
+        status: 'completed',
+        completedAt: now,
+        completedBy: input.userId,
+        completedByScheduleId: input.scheduleId,
+        submittedLat: input.skipGeo ? null : String(input.geo.lat),
+        submittedLng: input.skipGeo ? null : String(input.geo.lng),
+        notes: input.notes ?? task.notes,
+        updatedAt: now,
+      })
+      .where(eq(serahTerimaTasks.id, task.id))
+      .returning();
+
+    return { success: true, data: row };
+  } catch (err) {
+    return { success: false, error: `completeSerahTerimaTask: ${err}` };
+  }
+}
+
 export async function createSerahTerimaEntry(
   input: CreateSerahTerimaEntryInput,
 ): Promise<TaskResult<SerahTerimaEntry>> {
@@ -168,6 +301,10 @@ export async function createSerahTerimaEntry(
       input.skipGeo,
     );
     if (gateErr) return { success: false, error: gateErr };
+
+    if (await isSerahTerimaLockedForShift(input.storeId, input.shiftId)) {
+      return { success: false, error: SERAH_TERIMA_LOCKED_MSG };
+    }
 
     const now = new Date();
 
@@ -196,8 +333,13 @@ export async function createSerahTerimaEntry(
 export async function deleteSerahTerimaEntry(
   entryId: number,
   storeId: number,
+  shiftId?: number,
 ): Promise<TaskResult<void>> {
   try {
+    if (shiftId != null && (await isSerahTerimaLockedForShift(storeId, shiftId))) {
+      return { success: false, error: SERAH_TERIMA_LOCKED_MSG };
+    }
+
     const [existing] = await db
       .select({ id: serahTerimaEntries.id, storeId: serahTerimaEntries.storeId, isCompleted: serahTerimaEntries.isCompleted })
       .from(serahTerimaEntries)
@@ -235,6 +377,10 @@ export async function completeSerahTerimaEntry(
       input.skipGeo,
     );
     if (gateErr) return { success: false, error: gateErr };
+
+    if (await isSerahTerimaLockedForShift(input.storeId, input.shiftId)) {
+      return { success: false, error: SERAH_TERIMA_LOCKED_MSG };
+    }
 
     const [existing] = await db
       .select()

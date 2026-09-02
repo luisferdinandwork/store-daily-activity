@@ -26,14 +26,8 @@ import {
 } from '@/lib/db/schema';
 import { getActiveBusinessCentralSettings } from '@/lib/performance/business-central-settings';
 import { fetchAllBusinessCentralRows } from '@/lib/bc/client';
-import {
-  getOrCreateItemReturnRow,
-  getActiveItemReturnTask,
-} from '@/lib/db/utils/item-return';
-import {
-  getOrCreateItemDroppingRow,
-  getActiveItemDroppingTask,
-} from '@/lib/db/utils/item-dropping';
+import { getActiveItemReturnTask } from '@/lib/db/utils/item-return';
+import { getActiveItemDroppingTask } from '@/lib/db/utils/item-dropping';
 
 export const DEFAULT_GEOFENCE_RADIUS_M = 100;
 
@@ -191,13 +185,30 @@ function escapeODataString(value: string) {
 }
 
 /**
- * `storeNo` narrows the OData query itself (same $filter pattern proven in
- * lib/performance/business-central-sales.ts against this tenant) instead of
- * pulling every transfer order company-wide and filtering client-side —
- * this is what made the employee Item Transfers page and every OPS sync
- * slow: each load re-fetched the *entire* dataset regardless of which one
- * store actually needed it. Omit `storeNo` for the OPS-wide registry sync,
- * which genuinely needs every row.
+ * Build a BC OData request URL from the stored endpoint, ignoring whatever
+ * query string it currently carries. The stored `apiUrl` is edited by hand in
+ * OPS → BC Credentials and has been saved broken before (e.g. `?=2.0` after
+ * someone deleted a `$filter`, dropping `$schemaversion` with it), which
+ * silently changed every result. Only the origin + path are trusted; we
+ * always re-apply `$schemaversion=2.0` and our own `$filter`.
+ */
+function bcRequestUrl(apiUrl: string, filter?: string): string {
+  const stored = new URL(apiUrl);
+  const url = new URL(stored.origin + stored.pathname);
+  url.searchParams.set('$schemaversion', '2.0');
+  if (filter) url.searchParams.set('$filter', filter);
+  return url.toString();
+}
+
+/**
+ * `storeNo` narrows the query to transfer orders where that store is the
+ * ORIGIN (transferFromCode) — the Item Return leg. Omit it for the OPS-wide
+ * registry sync, which pulls every recent transfer order company-wide.
+ *
+ * NOTE: this tenant's OData rejects `OR` across distinct fields
+ * ("501 The 'OR' operator is not supported on distinct fields"), so a
+ * store's INBOUND transfers are covered separately — by the shipment feed
+ * (fetchWhseShipments) and by the company-wide registry sync.
  */
 async function fetchTransferOrders(storeNo?: string): Promise<BcTransferOrderRow[]> {
   const settings = await getActiveBusinessCentralSettings('transfer_orders');
@@ -206,27 +217,35 @@ async function fetchTransferOrders(storeNo?: string): Promise<BcTransferOrderRow
       'BC Transfer Orders belum dikonfigurasi. Tambahkan business_central_settings dengan code=transfer_orders (OPS → BC Credentials).',
     );
   }
-  const url = new URL(settings.apiUrl);
-  if (storeNo) {
-    url.searchParams.set('$filter', `transferFromCode eq '${escapeODataString(storeNo)}'`);
-  }
-  const rows = await fetchAllBusinessCentralRows(url.toString(), settings);
+  const filter = storeNo
+    ? `transferFromCode eq '${escapeODataString(storeNo)}'`
+    // Registry: every transfer order (any status — Open ones matter to OPS)
+    // posted in the recency window.
+    : `postingDate ge ${lookbackDate()}`;
+  const rows = await fetchAllBusinessCentralRows(bcRequestUrl(settings.apiUrl, filter), settings);
   return rows.filter(isBcTransferOrderRow);
 }
 
-// The `whse_shipments`/`whse_receipts` BC settings rows both store the API
-// URL with a "startswith(..., 'TOA')" clause meant to keep these company-wide
-// warehouse feeds (which also carry unrelated purchase-order traffic, e.g.
-// "PORA..." receipts) scoped to transfer orders only — but the stored query
-// string lost its `$filter=` key at some point (it's literally `?=2.0&=star
-// tswith(...)`, verified against the live tenant), so BC silently ignores it
-// and these calls return EVERY warehouse movement since the integration's
-// inception. That is the actual cause of the OPS dashboard's multi-minute
-// loads (confirmed: an unbounded fetchWhseReceipts() call alone took 4+
-// minutes and returned enough rows to blow past Postgres's bound-parameter
-// limit). Re-apply the intended filter explicitly here — proven to work
-// against this tenant — instead of relying on the stored URL's broken one.
-const TOA_RECEIPT_LOOKBACK_DAYS = 180;
+// The `whse_shipments`/`whse_receipts` feeds are company-wide and carry
+// unrelated warehouse traffic (PORA receipts, etc.). We always rebuild the
+// `$filter` explicitly here rather than trusting the stored URL's query
+// string. For Posted Whse Receipts especially, a broad
+// "startswith(sourceNo,'TOA') and postingDate ge <N days>" pull returns
+// >140k rows / 25s+ against the live tenant — enough to time the OPS
+// dashboard out. `syncReceivingStatus` instead asks BC only about the
+// specific transfer orders it is still waiting on (see fetchWhseReceiptsFor).
+const RECEIPT_FILTER_CHUNK = 15;
+
+// The store-agnostic registry/receiving syncs only care about transfers that
+// could still be in flight. Anything posted more than this many days ago is
+// long since received — bounding the company-wide pulls by postingDate keeps
+// the OPS dashboard fast (the store-scoped employee syncs stay unbounded, a
+// single store has few enough rows).
+const REGISTRY_LOOKBACK_DAYS = 90;
+
+function lookbackDate(days = REGISTRY_LOOKBACK_DAYS): string {
+  return new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+}
 
 async function fetchWhseShipments(storeNo?: string): Promise<BcWhseShipmentRow[]> {
   const settings = await getActiveBusinessCentralSettings('whse_shipments');
@@ -235,26 +254,46 @@ async function fetchWhseShipments(storeNo?: string): Promise<BcWhseShipmentRow[]
       'BC Posted Whse Shipments belum dikonfigurasi. Tambahkan business_central_settings dengan code=whse_shipments (OPS → BC Credentials).',
     );
   }
-  const url = new URL(settings.apiUrl);
   const filters = [`startswith(transferOrderNo,'TOA')`];
   if (storeNo) filters.push(`transferToCode eq '${escapeODataString(storeNo)}'`);
-  url.searchParams.set('$filter', filters.join(' and '));
-  const rows = await fetchAllBusinessCentralRows(url.toString(), settings);
+  else filters.push(`postingDate ge ${lookbackDate()}`);
+  const rows = await fetchAllBusinessCentralRows(
+    bcRequestUrl(settings.apiUrl, filters.join(' and ')),
+    settings,
+  );
   return rows.filter(isBcWhseShipmentRow);
 }
 
-async function fetchWhseReceipts(): Promise<BcWhseReceiptRow[]> {
+function chunk<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
+/**
+ * Fetches Posted Whse Receipts for a specific set of transfer-order numbers
+ * only — `sourceNo eq 'TOA…' or sourceNo eq 'TOA…'`, chunked so no single
+ * OData URL gets unreasonably long. This replaces the old unbounded
+ * "every TOA receipt in the last N days" pull.
+ */
+async function fetchWhseReceiptsFor(sourceNos: string[]): Promise<BcWhseReceiptRow[]> {
+  const unique = [...new Set(sourceNos.filter(Boolean))];
+  if (unique.length === 0) return [];
+
   const settings = await getActiveBusinessCentralSettings('whse_receipts');
   if (!settings) {
     throw new Error(
       'BC Posted Whse Receipts belum dikonfigurasi. Tambahkan business_central_settings dengan code=whse_receipts (OPS → BC Credentials).',
     );
   }
-  const url = new URL(settings.apiUrl);
-  const since = new Date(Date.now() - TOA_RECEIPT_LOOKBACK_DAYS * 86_400_000).toISOString().slice(0, 10);
-  url.searchParams.set('$filter', `startswith(sourceNo,'TOA') and postingDate ge ${since}`);
-  const rows = await fetchAllBusinessCentralRows(url.toString(), settings);
-  return rows.filter(isBcWhseReceiptRow);
+
+  const all: BcWhseReceiptRow[] = [];
+  for (const group of chunk(unique, RECEIPT_FILTER_CHUNK)) {
+    const filter = group.map((n) => `sourceNo eq '${escapeODataString(n)}'`).join(' or ');
+    const rows = await fetchAllBusinessCentralRows(bcRequestUrl(settings.apiUrl, filter), settings);
+    all.push(...rows.filter(isBcWhseReceiptRow));
+  }
+  return all;
 }
 
 function groupWhseShipments(rows: BcWhseShipmentRow[]): Map<string, WhseShipmentGroup> {
@@ -291,9 +330,12 @@ function groupWhseShipments(rows: BcWhseShipmentRow[]): Map<string, WhseShipment
 
 async function upsertTransferOrderFromToRow(
   row: BcTransferOrderRow,
-  fromStoreId: number | null,
+  storeIdByCode: Map<string, number>,
 ): Promise<ItemTransferOrder> {
   const now = new Date();
+  const fromStoreId = storeIdByCode.get(row.transferFromCode) ?? null;
+  const toStoreId = storeIdByCode.get(row.transferToCode) ?? null;
+
   const [existing] = await db
     .select()
     .from(itemTransferOrders)
@@ -312,6 +354,7 @@ async function upsertTransferOrderFromToRow(
         bcStatus: row.status ?? existing.bcStatus,
         postingDate: postingDate ?? existing.postingDate,
         fromStoreId: fromStoreId ?? existing.fromStoreId,
+        toStoreId: toStoreId ?? existing.toStoreId,
         // BUG FIX: this row can already exist as a stub created by the
         // dropping/shipment leg (upsertTransferOrderFromShipmentGroup), which
         // never sets returnDetectedAt. Without this fallback, the "TO
@@ -333,6 +376,7 @@ async function upsertTransferOrderFromToRow(
       transferFromCode: row.transferFromCode,
       transferToCode: row.transferToCode,
       fromStoreId,
+      toStoreId,
       qtyOrdered: row.totalQtyOrder ?? 0,
       bcStatus: row.status ?? null,
       postingDate,
@@ -340,6 +384,12 @@ async function upsertTransferOrderFromToRow(
     })
     .returning();
   return created;
+}
+
+/** Every store's code → id, for resolving BC transferFrom/ToCode. */
+async function storeIdByCodeMap(): Promise<Map<string, number>> {
+  const rows = await db.select({ id: stores.id, storeNo: stores.storeNo }).from(stores);
+  return new Map(rows.map((s) => [s.storeNo, s.id]));
 }
 
 async function upsertTransferOrderFromShipmentGroup(
@@ -423,6 +473,10 @@ async function batchUpsertTransferOrdersFromToRows(
     transferFromCode: row.transferFromCode,
     transferToCode: row.transferToCode,
     fromStoreId: storeIdByCode.get(row.transferFromCode) ?? null,
+    // Resolve the DESTINATION store too — an inbound transfer with no
+    // Warehouse Shipment yet would otherwise never get a toStoreId and stay
+    // invisible on the OPS dashboard (which hides rows where both are null).
+    toStoreId: storeIdByCode.get(row.transferToCode) ?? null,
     qtyOrdered: row.totalQtyOrder ?? 0,
     bcStatus: row.status ?? null,
     postingDate: row.postingDate ? new Date(row.postingDate) : null,
@@ -438,6 +492,7 @@ async function batchUpsertTransferOrdersFromToRows(
         transferFromCode: sql`excluded.transfer_from_code`,
         transferToCode: sql`excluded.transfer_to_code`,
         fromStoreId: sql`coalesce(excluded.from_store_id, item_transfer_orders.from_store_id)`,
+        toStoreId: sql`coalesce(excluded.to_store_id, item_transfer_orders.to_store_id)`,
         qtyOrdered: sql`excluded.qty_ordered`,
         bcStatus: sql`excluded.bc_status`,
         postingDate: sql`coalesce(excluded.posting_date, item_transfer_orders.posting_date)`,
@@ -548,12 +603,12 @@ export interface SyncContext {
   userId: string;
   date: Date;
   /**
-   * The shift of the specific task row being synced (e.g. the task the
-   * employee currently has open) — NOT necessarily the acting employee's own
-   * shift. Item Dropping/Return are now genuinely per-shift, so the sync
-   * must attach newly-synced entries to the exact row being displayed.
+   * The single per-store/day Item Return or Item Dropping task row to attach
+   * newly-synced entries to. Item transfers are store-scoped now — every
+   * shift sees the same list — so the caller resolves the one task and passes
+   * its id here.
    */
-  shiftId: number;
+  taskId: number;
 }
 
 export async function syncItemReturnForStore(
@@ -571,11 +626,12 @@ export async function syncItemReturnForStore(
     const matched = await fetchTransferOrders(store.storeNo);
     if (!matched.length) return { success: true, data: { synced: 0 } };
 
-    const task = await getOrCreateItemReturnRow(ctx.scheduleId, ctx.userId, storeId, ctx.shiftId, ctx.date);
+    const codeMap = await storeIdByCodeMap();
+    const task = { id: ctx.taskId };
 
     let synced = 0;
     for (const row of matched) {
-      const toRow = await upsertTransferOrderFromToRow(row, storeId);
+      const toRow = await upsertTransferOrderFromToRow(row, codeMap);
 
       // INSERT ... ON CONFLICT DO NOTHING instead of SELECT-then-INSERT: the
       // employee page's own React effect can fire this sync twice in a row
@@ -627,7 +683,7 @@ export async function syncItemDroppingForStore(
     if (!matched.length) return { success: true, data: { synced: 0 } };
 
     const groups = groupWhseShipments(matched);
-    const task = await getOrCreateItemDroppingRow(ctx.scheduleId, ctx.userId, storeId, ctx.shiftId, ctx.date);
+    const task = { id: ctx.taskId };
 
     let synced = 0;
     for (const group of groups.values()) {
@@ -667,10 +723,9 @@ export async function syncItemDroppingForStore(
 // keeps the dashboard's registry current, including transfer orders no
 // employee has looked at yet.
 
-export async function syncTransferOrderRegistry(): Promise<TaskResult<{ synced: number }>> {
+export async function syncTransferOrderRegistry(): Promise<TaskResult<{ synced: number; pruned: number }>> {
   try {
-    const allStores = await db.select({ id: stores.id, storeNo: stores.storeNo }).from(stores);
-    const storeIdByCode = new Map(allStores.map((s) => [s.storeNo, s.id]));
+    const storeIdByCode = await storeIdByCodeMap();
 
     const [toRows, shipmentRows] = await Promise.all([
       fetchTransferOrders(),
@@ -686,7 +741,50 @@ export async function syncTransferOrderRegistry(): Promise<TaskResult<{ synced: 
     await batchUpsertTransferOrdersFromToRows(toRows, storeIdByCode);
     await batchUpsertTransferOrdersFromShipmentGroups(shipmentGroups, storeIdByCode);
 
-    return { success: true, data: { synced: toRows.length + shipmentGroups.length } };
+    // Reconcile: drop rows BC no longer knows about in EITHER feed, as long as
+    // nobody has acted on them and they aren't already received. This clears
+    // "shows on the website but not in BC" ghosts (e.g. a TO deleted in BC
+    // after its stub was created from a posted shipment).
+    const seen = new Set<string>([
+      ...toRows.map((r) => r.no),
+      ...shipmentGroups.map((g) => g.transferOrderNo),
+    ]);
+    const candidates = await db
+      .select({ id: itemTransferOrders.id, toaNo: itemTransferOrders.toaNo })
+      .from(itemTransferOrders)
+      .where(
+        and(
+          isNull(itemTransferOrders.receivedAt),
+          isNull(itemTransferOrders.returnSubmittedAt),
+          isNull(itemTransferOrders.droppingSubmittedAt),
+        ),
+      );
+    const maybeStale = candidates.filter((c) => !seen.has(c.toaNo)).map((c) => c.id);
+    let pruned = 0;
+    if (maybeStale.length) {
+      // Never delete one an employee's task already references (no onDelete
+      // cascade on transferOrderId, and it's audit trail either way).
+      const [returnRefs, droppingRefs] = await Promise.all([
+        db.select({ id: itemReturnEntries.transferOrderId }).from(itemReturnEntries)
+          .where(inArray(itemReturnEntries.transferOrderId, maybeStale)),
+        db.select({ id: itemDroppingEntries.transferOrderId }).from(itemDroppingEntries)
+          .where(inArray(itemDroppingEntries.transferOrderId, maybeStale)),
+      ]);
+      const referenced = new Set<number>([
+        ...returnRefs.map((r) => r.id).filter((v): v is number => v != null),
+        ...droppingRefs.map((r) => r.id).filter((v): v is number => v != null),
+      ]);
+      const staleIds = maybeStale.filter((id) => !referenced.has(id));
+      if (staleIds.length) {
+        const deleted = await db
+          .delete(itemTransferOrders)
+          .where(inArray(itemTransferOrders.id, staleIds))
+          .returning({ id: itemTransferOrders.id });
+        pruned = deleted.length;
+      }
+    }
+
+    return { success: true, data: { synced: toRows.length + shipmentGroups.length, pruned } };
   } catch (err) {
     return { success: false, error: `syncTransferOrderRegistry: ${err}` };
   }
@@ -697,22 +795,31 @@ export async function syncReceivingStatus(
   scope: 'all' | number[] = 'all',
 ): Promise<TaskResult<{ closed: number }>> {
   try {
-    const receipts = await fetchWhseReceipts();
-    const sourceNos = [...new Set(receipts.map((r) => r.sourceNo))];
-    if (sourceNos.length === 0) return { success: true, data: { closed: 0 } };
-
-    const closeConditions = [
+    // Start from what we're actually waiting on — transfer orders that have
+    // been shipped (droppingSubmittedAt) but not yet received. Usually a
+    // handful of rows; ask BC only about those.
+    const openConditions = [
       isNotNull(itemTransferOrders.droppingSubmittedAt),
       isNull(itemTransferOrders.receivedAt),
-      inArray(itemTransferOrders.toaNo, sourceNos),
     ];
-    if (scope !== 'all') closeConditions.push(inArray(itemTransferOrders.toStoreId, scope));
+    if (scope !== 'all') openConditions.push(inArray(itemTransferOrders.toStoreId, scope));
+
+    const openOrders = await db
+      .select({ toaNo: itemTransferOrders.toaNo })
+      .from(itemTransferOrders)
+      .where(and(...openConditions));
+
+    if (openOrders.length === 0) return { success: true, data: { closed: 0 } };
+
+    const receipts = await fetchWhseReceiptsFor(openOrders.map((o) => o.toaNo));
+    const receivedNos = [...new Set(receipts.map((r) => r.sourceNo))];
+    if (receivedNos.length === 0) return { success: true, data: { closed: 0 } };
 
     const now = new Date();
     const closed = await db
       .update(itemTransferOrders)
       .set({ receivedAt: now, updatedAt: now })
-      .where(and(...closeConditions))
+      .where(and(...openConditions, inArray(itemTransferOrders.toaNo, receivedNos)))
       .returning({ id: itemTransferOrders.id });
 
     return { success: true, data: { closed: closed.length } };

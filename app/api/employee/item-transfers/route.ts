@@ -73,40 +73,28 @@ export async function GET() {
     });
   }
 
-  const [droppingRows, returnRows] = await Promise.all([
+  // One shared task per store/day — every shift sees the same list.
+  const [droppingTask, returnTask] = await Promise.all([
     getOrCreateItemDroppingForSchedule(schedule.id, userId, schedule.storeId, schedule.shiftId, today),
     getOrCreateItemReturnForSchedule(schedule.id, userId, schedule.storeId, schedule.shiftId, today),
   ]);
 
-  const [droppingSyncResults, returnSyncResults] = await Promise.all([
-    Promise.all(droppingRows.map((row) =>
-      syncItemDroppingForStore(schedule.storeId, {
-        scheduleId: schedule.id,
-        userId,
-        date: today,
-        shiftId: row.shiftId,
-      }),
-    )),
-    Promise.all(returnRows.map((row) =>
-      syncItemReturnForStore(schedule.storeId, {
-        scheduleId: schedule.id,
-        userId,
-        date: today,
-        shiftId: row.shiftId,
-      }),
-    )),
+  const [droppingSync, returnSync] = await Promise.all([
+    syncItemDroppingForStore(schedule.storeId, {
+      scheduleId: schedule.id, userId, date: today, taskId: droppingTask.id,
+    }),
+    syncItemReturnForStore(schedule.storeId, {
+      scheduleId: schedule.id, userId, date: today, taskId: returnTask.id,
+    }),
   ]);
 
-  const droppingSyncWarning = droppingSyncResults.find((r) => !r.success)?.error ?? null;
-  const returnSyncWarning = returnSyncResults.find((r) => !r.success)?.error ?? null;
+  const droppingSyncWarning = droppingSync.success ? null : droppingSync.error;
+  const returnSyncWarning = returnSync.success ? null : returnSync.error;
 
-  const [droppingEntryGroups, returnEntryGroups] = await Promise.all([
-    Promise.all(droppingRows.map((row) => getItemDroppingEntriesWithTransferOrder(row.id))),
-    Promise.all(returnRows.map((row) => getItemReturnEntriesWithTransferOrder(row.id))),
+  const [droppingRaw, returnRaw] = await Promise.all([
+    getItemDroppingEntriesWithTransferOrder(droppingTask.id),
+    getItemReturnEntriesWithTransferOrder(returnTask.id),
   ]);
-
-  const droppingRaw = droppingEntryGroups.flat();
-  const returnRaw = returnEntryGroups.flat();
 
   const storeIds = [...new Set(
     [...droppingRaw, ...returnRaw]

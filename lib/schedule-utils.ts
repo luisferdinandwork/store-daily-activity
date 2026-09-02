@@ -29,7 +29,9 @@ import {
   cekBinTasks,
   vmChecklistTasks,
   marketingCheckTasks,
+  cekUangModalTasks,
   itemDroppingTasks,
+  itemReturnTasks,
   briefingTasks,
   storeClosingTasks,
   groomingTasks,
@@ -305,11 +307,18 @@ async function deleteAllTasksForSchedules(
         .delete(marketingCheckTasks)
         .where(inArray(marketingCheckTasks.scheduleId, batch)),
       db
+        .delete(cekUangModalTasks)
+        .where(inArray(cekUangModalTasks.scheduleId, batch)),
+      db
         .delete(itemDroppingTasks)
         .where(inArray(itemDroppingTasks.scheduleId, batch)),
+      db
+        .delete(itemReturnTasks)
+        .where(inArray(itemReturnTasks.scheduleId, batch)),
       db.delete(briefingTasks).where(inArray(briefingTasks.scheduleId, batch)),
-      // serah_terima intentionally excluded — entries aren't tied to a
-      // schedule's lifecycle anymore (shared rolling board per store).
+      // serah_terima_tasks / serah_terima_entries are NOT deleted here — their
+      // schedule FKs are `on delete set null` (the board is per store, not per
+      // schedule), so dropping a schedule row just nulls the provenance.
       db
         .delete(storeClosingTasks)
         .where(inArray(storeClosingTasks.scheduleId, batch)),

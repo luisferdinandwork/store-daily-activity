@@ -1,9 +1,15 @@
 // app/api/employee/tasks/serah-terima/route.ts
 //
-// Serah Terima is now a shared, rolling handover board per store (see
-// lib/db/utils/serah-terima.ts) — not a per-shift, per-day task row. This
-// route is store-scoped rather than id-scoped: GET returns the active board
-// for a store, POST adds a new entry, PATCH completes one.
+// Serah Terima = a shared rolling handover board per store PLUS a per-shift,
+// per-day completion task:
+//   GET    — the board (active + recent history) + this shift's task status
+//   POST   — { message } adds a board item; { action:'complete_task' } marks
+//            this shift's serah terima task done (locks the board for today)
+//   PATCH  — { entryId } completes one board item
+//   DELETE — PIC-only: remove one history item
+//
+// Once this shift's task is completed for the day, add/complete/delete are
+// rejected until the next day (a fresh task row).
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { and, eq, gte, lte } from 'drizzle-orm';
@@ -16,7 +22,9 @@ import {
   listSerahTerimaEntries,
   createSerahTerimaEntry,
   completeSerahTerimaEntry,
+  completeSerahTerimaTask,
   deleteSerahTerimaEntry,
+  getOrCreateSerahTerimaTaskForShift,
   type GeoPoint,
 } from '@/lib/db/utils/serah-terima';
 import { resolveActorCodes } from '../../../pic/schedule/_utils';
@@ -88,6 +96,38 @@ function parseStoreId(searchParams: URLSearchParams | Record<string, unknown>): 
   return Number.isInteger(n) && n > 0 ? n : null;
 }
 
+async function boardPayload(
+  storeId: number,
+  ownSchedule: { id: number; shiftId: number },
+  userId: string,
+) {
+  const [board, task] = await Promise.all([
+    listSerahTerimaEntries(storeId),
+    getOrCreateSerahTerimaTaskForShift(
+      ownSchedule.id,
+      userId,
+      storeId,
+      ownSchedule.shiftId,
+      todayInStoreTimezone(),
+    ),
+  ]);
+
+  return {
+    success: true as const,
+    storeId: String(storeId),
+    scheduleId: String(ownSchedule.id),
+    shiftId: String(ownSchedule.shiftId),
+    task: {
+      id: String(task.id),
+      status: task.status,
+      completedAt: toIso(task.completedAt),
+      locked: task.status === 'completed',
+    },
+    entries: board.active.map(serializeEntry),
+    recentCompleted: board.recentCompleted.map(serializeEntry),
+  };
+}
+
 export async function GET(request: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
@@ -108,16 +148,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const board = await listSerahTerimaEntries(storeId);
-
-  return NextResponse.json({
-    success: true,
-    storeId: String(storeId),
-    scheduleId: String(ownSchedule.id),
-    shiftId: String(ownSchedule.shiftId),
-    entries: board.active.map(serializeEntry),
-    recentCompleted: board.recentCompleted.map(serializeEntry),
-  });
+  return NextResponse.json(await boardPayload(storeId, ownSchedule, session.user.id));
 }
 
 export async function POST(request: NextRequest) {
@@ -127,8 +158,10 @@ export async function POST(request: NextRequest) {
   }
 
   const body = (await request.json().catch(() => ({}))) as {
+    action?: unknown;
     storeId?: unknown;
     message?: unknown;
+    notes?: unknown;
     geo?: GeoPoint;
     skipGeo?: boolean;
   };
@@ -137,11 +170,9 @@ export async function POST(request: NextRequest) {
   if (!Number.isInteger(storeId) || storeId <= 0) {
     return NextResponse.json({ success: false, error: 'storeId wajib diisi.' }, { status: 400 });
   }
-
-  const message = typeof body.message === 'string' ? body.message : '';
   if (!body.geo && !body.skipGeo) {
     return NextResponse.json(
-      { success: false, error: 'Lokasi wajib diaktifkan sebelum menambah item serah terima.' },
+      { success: false, error: 'Lokasi wajib diaktifkan.' },
       { status: 400 },
     );
   }
@@ -154,27 +185,33 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const result = await createSerahTerimaEntry({
-    storeId,
-    scheduleId: ownSchedule.id,
-    userId: session.user.id,
-    shiftId: ownSchedule.shiftId,
-    geo: body.geo ?? { lat: 0, lng: 0 },
-    message,
-    skipGeo: body.skipGeo,
-  });
+  const isCompleteTask = body.action === 'complete_task';
+
+  const result = isCompleteTask
+    ? await completeSerahTerimaTask({
+        storeId,
+        scheduleId: ownSchedule.id,
+        userId: session.user.id,
+        shiftId: ownSchedule.shiftId,
+        geo: body.geo ?? { lat: 0, lng: 0 },
+        notes: typeof body.notes === 'string' ? body.notes : undefined,
+        skipGeo: body.skipGeo,
+      })
+    : await createSerahTerimaEntry({
+        storeId,
+        scheduleId: ownSchedule.id,
+        userId: session.user.id,
+        shiftId: ownSchedule.shiftId,
+        geo: body.geo ?? { lat: 0, lng: 0 },
+        message: typeof body.message === 'string' ? body.message : '',
+        skipGeo: body.skipGeo,
+      });
 
   if (!result.success) {
     return NextResponse.json({ success: false, error: result.error }, { status: 400 });
   }
 
-  const board = await listSerahTerimaEntries(storeId);
-
-  return NextResponse.json({
-    success: true,
-    entries: board.active.map(serializeEntry),
-    recentCompleted: board.recentCompleted.map(serializeEntry),
-  });
+  return NextResponse.json(await boardPayload(storeId, ownSchedule, session.user.id));
 }
 
 export async function PATCH(request: NextRequest) {
@@ -201,7 +238,7 @@ export async function PATCH(request: NextRequest) {
   }
   if (!body.geo && !body.skipGeo) {
     return NextResponse.json(
-      { success: false, error: 'Lokasi wajib diaktifkan sebelum menyelesaikan item serah terima.' },
+      { success: false, error: 'Lokasi wajib diaktifkan.' },
       { status: 400 },
     );
   }
@@ -228,22 +265,13 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ success: false, error: result.error }, { status: 400 });
   }
 
-  const board = await listSerahTerimaEntries(storeId);
-
-  return NextResponse.json({
-    success: true,
-    entries: board.active.map(serializeEntry),
-    recentCompleted: board.recentCompleted.map(serializeEntry),
-  });
+  return NextResponse.json(await boardPayload(storeId, ownSchedule, session.user.id));
 }
 
 function isPicType(empType: string | null) {
   return empType === 'pic_1' || empType === 'pic_2';
 }
 
-// DELETE — removes one entry from "Riwayat selesai" (completed history) so
-// the board doesn't accumulate indefinitely. PIC-only: keeps the board tidy
-// without letting any shift member erase handover history.
 export async function DELETE(request: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
@@ -266,16 +294,18 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ success: false, error: 'entryId tidak valid.' }, { status: 400 });
   }
 
-  const result = await deleteSerahTerimaEntry(entryId, storeId);
+  const ownSchedule = await findOwnScheduleForStore(session.user.id, storeId);
+  if (!ownSchedule) {
+    return NextResponse.json(
+      { success: false, error: 'Tidak ada jadwal untuk toko ini hari ini.' },
+      { status: 403 },
+    );
+  }
+
+  const result = await deleteSerahTerimaEntry(entryId, storeId, ownSchedule.shiftId);
   if (!result.success) {
     return NextResponse.json({ success: false, error: result.error }, { status: 400 });
   }
 
-  const board = await listSerahTerimaEntries(storeId);
-
-  return NextResponse.json({
-    success: true,
-    entries: board.active.map(serializeEntry),
-    recentCompleted: board.recentCompleted.map(serializeEntry),
-  });
+  return NextResponse.json(await boardPayload(storeId, ownSchedule, session.user.id));
 }

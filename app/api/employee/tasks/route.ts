@@ -18,6 +18,7 @@ import {
   marketingCheckTasks,
   briefingTasks,
   serahTerimaEntries,
+  serahTerimaTasks,
   storeClosingTasks,
   groomingTasks,
   cekUangModalTasks,
@@ -37,7 +38,7 @@ import { getOrCreateMarketingCheckForSchedule } from "@/lib/db/utils/marketing-c
 import { getOrCreateCekUangModalForSchedule } from "@/lib/db/utils/cek-uang-modal";
 import { getOrCreateGroomingForSchedule } from "@/lib/db/utils/grooming";
 import { getOrCreateBriefingForSchedule } from "@/lib/db/utils/briefing";
-import { listSerahTerimaEntries } from "@/lib/db/utils/serah-terima";
+import { getOrCreateSerahTerimaTaskForShift } from "@/lib/db/utils/serah-terima";
 import {
   getOrCreateStoreClosingForSchedule,
   getVisibleStoreClosingTasksForStores,
@@ -758,6 +759,34 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    // Serah Terima now has a real completed state: one task row per
+    // (store, the employee's shift there, day). Get-or-create it here so the
+    // task list shows not_started / in_progress / completed like every other
+    // shift task. Keyed by storeId (the card is per store).
+    const serahTerimaTaskByStoreId = new Map<
+      number,
+      typeof serahTerimaTasks.$inferSelect
+    >();
+    if (shouldLoadTask("serah_terima")) {
+      const seenStores = new Set<number>();
+      for (const s of todaySchedules) {
+        if (seenStores.has(s.storeId) || !inStore(s.storeId)) continue;
+        seenStores.add(s.storeId);
+        try {
+          const task = await getOrCreateSerahTerimaTaskForShift(
+            s.id,
+            userId,
+            s.storeId,
+            s.shiftId,
+            targetDate,
+          );
+          serahTerimaTaskByStoreId.set(s.storeId, task);
+        } catch (err) {
+          console.error("[tasks] serah_terima task get-or-create failed", err);
+        }
+      }
+    }
+
     const availableBinsByStoreId = new Map<number, typeof availableBinRows>();
     for (const bin of availableBinRows) {
       const bucket = availableBinsByStoreId.get(bin.storeId) ?? [];
@@ -1212,11 +1241,10 @@ export async function GET(request: NextRequest) {
           };
         }),
 
-      // Serah Terima is a shared, rolling handover board per store — not a
-      // per-shift/per-day row. Synthesize one summary card per store the
-      // employee is scheduled at today; both morning and evening (and
-      // full_day) see the exact same board, so it's deliberately NOT in
-      // SHIFT_SCOPED_TASK_TYPES above.
+      // Serah Terima: the board (serah_terima_entries) is shared and rolling,
+      // but the TASK is per (store, shift, day) — one card per store the
+      // employee works today, showing that shift's real completion state.
+      // Completing it locks the board for that shift for the rest of the day.
       ...(shouldLoadTask("serah_terima")
         ? [...new Set(todaySchedules.map((s) => s.storeId))]
             .filter((storeId) => inStore(storeId))
@@ -1226,12 +1254,16 @@ export async function GET(request: NextRequest) {
                 primaryShift ??
                 "morning") as ShiftCode;
               const pendingCount = serahTerimaPendingByStoreId.get(storeId) ?? 0;
+              const task = serahTerimaTaskByStoreId.get(storeId);
+
+              const status =
+                task?.status ?? (pendingCount > 0 ? "in_progress" : "not_started");
 
               return {
                 type: "serah_terima" as const,
                 shift,
                 data: {
-                  id: `store-${storeId}`,
+                  id: task ? String(task.id) : `store-${storeId}`,
                   scheduleId: String(ownSchedule?.id ?? ""),
                   userId,
                   storeId: String(storeId),
@@ -1239,12 +1271,13 @@ export async function GET(request: NextRequest) {
                   date: targetDate.toISOString(),
 
                   pendingCount,
+                  locked: status === "completed",
 
-                  status: pendingCount > 0 ? "in_progress" : "not_started",
-                  notes: null,
-                  completedAt: null,
-                  verifiedBy: null,
-                  verifiedAt: null,
+                  status,
+                  notes: task?.notes ?? null,
+                  completedAt: task?.completedAt?.toISOString() ?? null,
+                  verifiedBy: task?.verifiedBy ?? null,
+                  verifiedAt: task?.verifiedAt?.toISOString() ?? null,
                 },
               };
             })
@@ -1564,9 +1597,23 @@ export async function PATCH(request: NextRequest) {
             .then(() => {}),
       },
 
-      // serah_terima intentionally has no entry here — it's a synthetic,
-      // store-scoped summary card (id like "store-123", not a numeric row
-      // id), not a single materialized row that can be marked in_progress.
+      serah_terima: {
+        getRow: async (id) =>
+          (
+            await db
+              .select({ status: serahTerimaTasks.status })
+              .from(serahTerimaTasks)
+              .where(eq(serahTerimaTasks.id, id))
+              .limit(1)
+          )[0],
+
+        update: (id) =>
+          db
+            .update(serahTerimaTasks)
+            .set({ status: "in_progress", updatedAt: new Date() })
+            .where(eq(serahTerimaTasks.id, id))
+            .then(() => {}),
+      },
 
       briefing: {
         getRow: async (id) =>

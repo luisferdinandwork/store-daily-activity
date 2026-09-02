@@ -57,9 +57,9 @@ const FALLBACK_SHIFT_TIMES: Record<
   ShiftCode,
   { startTime: string; endTime: string }
 > = {
-  morning: { startTime: "07:00:00", endTime: "15:00:00" },
-  evening: { startTime: "15:00:00", endTime: "23:00:00" },
-  full_day: { startTime: "07:00:00", endTime: "23:00:00" },
+  morning: { startTime: "08:30:00", endTime: "16:30:00" },
+  evening: { startTime: "14:00:00", endTime: "20:00:00" },
+  full_day: { startTime: "08:30:00", endTime: "20:00:00" },
 };
 
 const BREAK_CONFIG: Record<ShiftCode, BreakCfg[]> = {

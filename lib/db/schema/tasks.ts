@@ -393,7 +393,10 @@ export const vmChecklistTasks = pgTable('vm_checklist_tasks', {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Receiving Task  (morning, shared)
+ * Item Receiving (Dropping) Task — ONE per (store, day), shared by EVERY
+ * shift. Transfer orders belong to a store, not a shift; whichever shift
+ * opens the page syncs BC, and all shifts then see the same entry list.
+ * `shiftId` is provenance only (the shift that first created the row).
  */
 export const itemDroppingTasks = pgTable('item_dropping_tasks', {
   id:         serial('id').primaryKey(),
@@ -416,8 +419,8 @@ export const itemDroppingTasks = pgTable('item_dropping_tasks', {
   createdAt:   timestamp('created_at').defaultNow().notNull(),
   updatedAt:   timestamp('updated_at').defaultNow().notNull(),
 }, (table) => ({
-  uniqueStoreDateShift: unique('item_dropping_tasks_store_date_shift_unique')
-    .on(table.storeId, table.date, table.shiftId),
+  uniqueStoreDate: unique('item_dropping_tasks_store_date_unique')
+    .on(table.storeId, table.date),
 }));
 
 export const itemDroppingEntries = pgTable('item_dropping_entries', {
@@ -456,11 +459,10 @@ export const itemDroppingEntries = pgTable('item_dropping_entries', {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Item Return Task (morning, shared)
- *
- * Similar to Item Dropping, but this records return documents/items that need
- * to be processed by the store. The available return list can come from BC via
- * the employee API, then employees confirm each return with photos and time.
+ * Item Return Task — ONE per (store, day), shared by EVERY shift (see
+ * itemDroppingTasks above). Records return documents/items to be processed;
+ * the list comes from BC, then any shift member confirms each with photo +
+ * qty. `shiftId` is provenance only.
  */
 export const itemReturnTasks = pgTable('item_return_tasks', {
   id:         serial('id').primaryKey(),
@@ -483,8 +485,8 @@ export const itemReturnTasks = pgTable('item_return_tasks', {
   createdAt:   timestamp('created_at').defaultNow().notNull(),
   updatedAt:   timestamp('updated_at').defaultNow().notNull(),
 }, (table) => ({
-  uniqueStoreDateShift: unique('item_return_tasks_store_date_shift_unique')
-    .on(table.storeId, table.date, table.shiftId),
+  uniqueStoreDate: unique('item_return_tasks_store_date_unique')
+    .on(table.storeId, table.date),
   storeDateIdx: index('item_return_tasks_store_date_idx')
     .on(table.storeId, table.date),
 }));
@@ -715,14 +717,17 @@ export const serahTerimaEntries = pgTable('serah_terima_entries', {
   message: text('message').notNull(),
 
   createdByUserId:     text('created_by_user_id').references(() => users.id).notNull(),
-  createdByScheduleId: integer('created_by_schedule_id').references(() => schedules.id).notNull(),
+  // Provenance only — the board is per store, not per schedule. `set null` so
+  // re-importing a monthly schedule (which drops future `schedules` rows)
+  // never chokes on a handover note that referenced one of them.
+  createdByScheduleId: integer('created_by_schedule_id').references(() => schedules.id, { onDelete: 'set null' }),
   createdByShiftId:    integer('created_by_shift_id').references(() => shifts.id).notNull(),
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
 
   isCompleted:           boolean('is_completed').default(false).notNull(),
   completedByUserId:     text('completed_by_user_id').references(() => users.id),
-  completedByScheduleId: integer('completed_by_schedule_id').references(() => schedules.id),
+  completedByScheduleId: integer('completed_by_schedule_id').references(() => schedules.id, { onDelete: 'set null' }),
   completedByShiftId:    integer('completed_by_shift_id').references(() => shifts.id),
   completedAt: timestamp('completed_at'),
 
@@ -732,6 +737,44 @@ export const serahTerimaEntries = pgTable('serah_terima_entries', {
   storeIdx: index('serah_terima_entries_store_idx').on(table.storeId),
   storeCompletedIdx: index('serah_terima_entries_store_completed_idx')
     .on(table.storeId, table.isCompleted),
+}));
+
+/**
+ * Serah Terima Task — the per-SHIFT, per-DAY "we did our handover this shift"
+ * confirmation, so serah terima has a real completed state on the task list
+ * (the `serah_terima_entries` board above stays a shared rolling list).
+ *
+ * One row per (store, shift, date), shared by everyone on that shift — same
+ * shape/lifecycle as briefing_tasks. Once `status = 'completed'`, that shift
+ * can no longer add/complete/remove board items for that day; a fresh row the
+ * next day reopens management.
+ */
+export const serahTerimaTasks = pgTable('serah_terima_tasks', {
+  id:         serial('id').primaryKey(),
+  // Row is keyed by (store, shift, date); scheduleId is only "who touched it
+  // first" — `set null` so a schedule re-import can drop that row cleanly.
+  scheduleId: integer('schedule_id').references(() => schedules.id, { onDelete: 'set null' }),
+  userId:     text('user_id').references(() => users.id).notNull(),
+  storeId:    integer('store_id').references(() => stores.id).notNull(),
+  shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
+  date:       timestamp('date').notNull(),
+
+  submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
+  submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
+
+  completedBy:           text('completed_by').references(() => users.id),
+  completedByScheduleId: integer('completed_by_schedule_id').references(() => schedules.id, { onDelete: 'set null' }),
+
+  status:      taskStatusEnum('status').default('not_started').notNull(),
+  notes:       text('notes'),
+  completedAt: timestamp('completed_at'),
+  verifiedBy:  text('verified_by').references(() => users.id),
+  verifiedAt:  timestamp('verified_at'),
+  createdAt:   timestamp('created_at').defaultNow().notNull(),
+  updatedAt:   timestamp('updated_at').defaultNow().notNull(),
+}, (table) => ({
+  uniqueStoreDateShift: unique('serah_terima_tasks_store_date_shift_unique')
+    .on(table.storeId, table.date, table.shiftId),
 }));
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -905,6 +948,8 @@ export type BriefingTask          = typeof briefingTasks.$inferSelect;
 export type NewBriefingTask       = typeof briefingTasks.$inferInsert;
 export type SerahTerimaEntry      = typeof serahTerimaEntries.$inferSelect;
 export type NewSerahTerimaEntry   = typeof serahTerimaEntries.$inferInsert;
+export type SerahTerimaTask       = typeof serahTerimaTasks.$inferSelect;
+export type NewSerahTerimaTask    = typeof serahTerimaTasks.$inferInsert;
 export type StoreClosingTask      = typeof storeClosingTasks.$inferSelect;
 export type NewStoreClosingTask   = typeof storeClosingTasks.$inferInsert;
 export type GroomingTask          = typeof groomingTasks.$inferSelect;

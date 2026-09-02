@@ -1,4 +1,8 @@
 // lib/db/utils/item-return.ts
+//
+// Item Return is a per-STORE, per-DAY shared task — one row for the whole
+// store, seen and actionable by every shift (transfer orders belong to a
+// store, not a shift). `shiftId` on the row is just provenance.
 import { db } from '@/lib/db';
 import { eq, and, gte, lte } from 'drizzle-orm';
 import {
@@ -8,13 +12,7 @@ import {
   type ItemReturnTask,
   type ItemReturnEntry,
 } from '@/lib/db/schema';
-import {
-  getMorningShiftId,
-  getEveningShiftId,
-  getFullDayShiftId,
-  startOfDay,
-  endOfDay,
-} from '@/lib/db/utils/shift-lookup';
+import { startOfDay, endOfDay } from '@/lib/db/utils/shift-lookup';
 
 export type TaskResult<T = void> =
   | { success: true; data: T }
@@ -26,20 +24,15 @@ export interface AutoSaveItemReturnPatch {
 
 export async function getActiveItemReturnTask(
   storeId: number,
-  shiftId: number,
   date: Date,
 ): Promise<ItemReturnTask | null> {
-  const dayStart = startOfDay(date);
-  const dayEnd = endOfDay(date);
-
   const [today] = await db
     .select()
     .from(itemReturnTasks)
     .where(and(
       eq(itemReturnTasks.storeId, storeId),
-      eq(itemReturnTasks.shiftId, shiftId),
-      gte(itemReturnTasks.date, dayStart),
-      lte(itemReturnTasks.date, dayEnd),
+      gte(itemReturnTasks.date, startOfDay(date)),
+      lte(itemReturnTasks.date, endOfDay(date)),
     ))
     .limit(1);
 
@@ -84,35 +77,31 @@ export async function autoSaveItemReturn(
   patch: AutoSaveItemReturnPatch,
 ): Promise<TaskResult<{ saved: string[] }>> {
   const [schedule] = await db
-    .select({ storeId: schedules.storeId, date: schedules.date, shiftId: schedules.shiftId })
+    .select({ storeId: schedules.storeId, date: schedules.date })
     .from(schedules)
     .where(eq(schedules.id, scheduleId))
     .limit(1);
 
   if (!schedule) return { success: false, error: 'Schedule not found.' };
 
-  const fullDayShiftId = await getFullDayShiftId();
-  const targetShiftId = schedule.shiftId === fullDayShiftId
-    ? await getMorningShiftId()
-    : schedule.shiftId;
-
-  const existing = await getActiveItemReturnTask(schedule.storeId, targetShiftId, schedule.date);
-
+  const existing = await getActiveItemReturnTask(schedule.storeId, schedule.date);
   if (!existing) return { success: false, error: 'Item return task not found.' };
   return autoSaveItemReturnById(existing.id, patch);
 }
 
-async function getOrCreateSingleItemReturnRow(
+/**
+ * Get-or-create the single store/day Item Return task, shared by every shift.
+ * `shiftId` is stored as provenance (the shift that created it).
+ */
+export async function getOrCreateItemReturnRow(
   scheduleId: number,
   userId: string,
   storeId: number,
-  targetShiftId: number,
+  shiftId: number,
   date: Date,
 ): Promise<ItemReturnTask> {
-  const existing = await getActiveItemReturnTask(storeId, targetShiftId, date);
+  const existing = await getActiveItemReturnTask(storeId, date);
   if (existing) return existing;
-
-  const dayStart = startOfDay(date);
 
   const [row] = await db
     .insert(itemReturnTasks)
@@ -120,78 +109,37 @@ async function getOrCreateSingleItemReturnRow(
       scheduleId,
       userId,
       storeId,
-      shiftId: targetShiftId,
-      date: dayStart,
+      shiftId,
+      date: startOfDay(date),
       hasReturn: false,
       status: 'not_started',
     })
-    .onConflictDoNothing()
+    .onConflictDoNothing({ target: [itemReturnTasks.storeId, itemReturnTasks.date] })
     .returning();
 
-  return row ?? (await getActiveItemReturnTask(storeId, targetShiftId, date))!;
+  return row ?? (await getActiveItemReturnTask(storeId, date))!;
 }
 
-/**
- * Ensures the item return row(s) for this schedule's shift exist. A
- * full_day schedule gets BOTH the morning and evening rows (mirrors
- * briefing/serah terima); a morning/evening schedule gets its own row,
- * shared with every other employee on that same shift/store/day.
- */
+/** Back-compat alias — the store/day task is the same for any shift now. */
 export async function getOrCreateItemReturnForSchedule(
   scheduleId: number,
   userId: string,
   storeId: number,
   shiftId: number,
   date: Date,
-): Promise<ItemReturnTask[]> {
-  const morningShiftId = await getMorningShiftId();
-  const eveningShiftId = await getEveningShiftId();
-  const fullDayShiftId = await getFullDayShiftId();
-
-  const targetShiftIds =
-    shiftId === fullDayShiftId ? [morningShiftId, eveningShiftId] : [shiftId];
-
-  const rows: ItemReturnTask[] = [];
-  for (const targetShiftId of targetShiftIds) {
-    rows.push(
-      await getOrCreateSingleItemReturnRow(scheduleId, userId, storeId, targetShiftId, date),
-    );
-  }
-
-  return rows;
-}
-
-/**
- * Single-row variant for flows that already know exactly which shift's row
- * they need (e.g. the BC transfer-order sync pipeline, which re-syncs
- * whichever specific task the employee currently has open — see
- * lib/db/utils/item-transfers.ts).
- */
-export async function getOrCreateItemReturnRow(
-  scheduleId: number,
-  userId: string,
-  storeId: number,
-  targetShiftId: number,
-  date: Date,
 ): Promise<ItemReturnTask> {
-  return getOrCreateSingleItemReturnRow(scheduleId, userId, storeId, targetShiftId, date);
+  return getOrCreateItemReturnRow(scheduleId, userId, storeId, shiftId, date);
 }
 
 export async function getItemReturnBySchedule(scheduleId: number): Promise<ItemReturnTask | null> {
   const [schedule] = await db
-    .select({ storeId: schedules.storeId, date: schedules.date, shiftId: schedules.shiftId })
+    .select({ storeId: schedules.storeId, date: schedules.date })
     .from(schedules)
     .where(eq(schedules.id, scheduleId))
     .limit(1);
 
   if (!schedule) return null;
-
-  const fullDayShiftId = await getFullDayShiftId();
-  const targetShiftId = schedule.shiftId === fullDayShiftId
-    ? await getMorningShiftId()
-    : schedule.shiftId;
-
-  return getActiveItemReturnTask(schedule.storeId, targetShiftId, schedule.date);
+  return getActiveItemReturnTask(schedule.storeId, schedule.date);
 }
 
 export async function getItemReturnById(id: number): Promise<ItemReturnTask | null> {

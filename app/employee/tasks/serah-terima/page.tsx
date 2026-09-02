@@ -13,8 +13,10 @@ import { useSession } from 'next-auth/react';
 import {
   AlertCircle,
   CheckCircle2,
+  CheckCheck,
   ClipboardList,
   Loader2,
+  Lock,
   Plus,
   RefreshCw,
   Trash2,
@@ -47,12 +49,20 @@ type SerahTerimaEntry = {
   createdAt: string | null;
 };
 
+type SerahTerimaTask = {
+  id: string;
+  status: string;
+  completedAt: string | null;
+  locked: boolean;
+};
+
 type ApiResponse = {
   success: boolean;
   error?: string;
   storeId?: string;
   scheduleId?: string;
   shiftId?: string;
+  task?: SerahTerimaTask;
   entries?: SerahTerimaEntry[];
   recentCompleted?: SerahTerimaEntry[];
 };
@@ -94,18 +104,22 @@ function SerahTerimaBoard() {
   const isPic = session?.user?.employeeType === 'pic_1' || session?.user?.employeeType === 'pic_2';
 
   const [scheduleId, setScheduleId] = useState<string | null>(null);
+  const [task, setTask] = useState<SerahTerimaTask | null>(null);
   const [entries, setEntries] = useState<SerahTerimaEntry[]>([]);
   const [recentCompleted, setRecentCompleted] = useState<SerahTerimaEntry[]>([]);
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [completingTask, setCompletingTask] = useState(false);
+  const [confirmCompleteTask, setConfirmCompleteTask] = useState(false);
   const [completingId, setCompletingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
 
   const pendingCount = entries.length;
+  const taskDone = task?.status === 'completed' || task?.locked === true;
 
   const load = useCallback(async () => {
     if (!storeId) {
@@ -128,6 +142,7 @@ function SerahTerimaBoard() {
       }
 
       setScheduleId(json.scheduleId ?? null);
+      setTask(json.task ?? null);
       setEntries(json.entries ?? []);
       setRecentCompleted(json.recentCompleted ?? []);
       setLoadError(null);
@@ -169,12 +184,40 @@ function SerahTerimaBoard() {
 
       setEntries(json.entries ?? []);
       setRecentCompleted(json.recentCompleted ?? []);
+      if (json.task) setTask(json.task);
       setMessage('');
       toast.success('Item serah terima ditambahkan.');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Gagal menambah item serah terima.');
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleCompleteTask(geo: { lat: number; lng: number } | null) {
+    if (!geo) {
+      toast.error('Lokasi wajib aktif untuk menyelesaikan serah terima.');
+      return;
+    }
+    setCompletingTask(true);
+    try {
+      const res = await fetch('/api/employee/tasks/serah-terima', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ storeId, action: 'complete_task', geo }),
+      });
+      const json = (await res.json()) as ApiResponse;
+      if (!res.ok || !json.success) {
+        throw new Error(json.error ?? 'Gagal menyelesaikan serah terima.');
+      }
+      setEntries(json.entries ?? []);
+      setRecentCompleted(json.recentCompleted ?? []);
+      if (json.task) setTask(json.task);
+      toast.success('Serah terima shift ini selesai.');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Gagal menyelesaikan serah terima.');
+    } finally {
+      setCompletingTask(false);
     }
   }
 
@@ -201,6 +244,7 @@ function SerahTerimaBoard() {
 
       setEntries(json.entries ?? []);
       setRecentCompleted(json.recentCompleted ?? []);
+      if (json.task) setTask(json.task);
       toast.success('Item handover selesai.');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Gagal menyelesaikan item serah terima.');
@@ -223,6 +267,7 @@ function SerahTerimaBoard() {
 
       setEntries(json.entries ?? []);
       setRecentCompleted(json.recentCompleted ?? []);
+      if (json.task) setTask(json.task);
       toast.success('Riwayat dihapus.');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Gagal menghapus riwayat.');
@@ -263,9 +308,9 @@ function SerahTerimaBoard() {
     <AccessGuard
       scheduleId={scheduleId}
       storeId={storeId}
-      // The board itself is never "done" — it's a rolling list, not a single
-      // completable task — so it should never go permanently read-only.
-      taskStatus="in_progress"
+      // Once this shift's serah terima task is completed, the board goes
+      // read-only for the rest of the day (a fresh task reopens it tomorrow).
+      taskStatus={taskDone ? 'completed' : 'in_progress'}
       taskType="serah_terima"
     >
       {({ banner, lockedOverlay, dis, geo, readonly }) => (
@@ -273,14 +318,28 @@ function SerahTerimaBoard() {
           <TaskHeader
             title="Serah Terima"
             subtitle={
-              pendingCount > 0
-                ? `${pendingCount} item belum selesai`
-                : 'Papan handover kosong'
+              taskDone
+                ? 'Serah terima shift ini sudah selesai'
+                : pendingCount > 0
+                  ? `${pendingCount} item belum selesai`
+                  : 'Papan handover kosong'
             }
           />
 
           <div className="flex-1 space-y-4 p-4 pb-24">
             {banner}
+
+            {taskDone && (
+              <div className="flex items-start gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-emerald-700">
+                <Lock className="mt-0.5 h-4 w-4 shrink-0" />
+                <div>
+                  <p className="text-sm font-bold">Serah terima shift ini selesai</p>
+                  <p className="mt-0.5 text-xs font-semibold">
+                    Papan dikunci untuk shift ini hari ini. Bisa dikelola lagi besok.
+                  </p>
+                </div>
+              </div>
+            )}
 
             <div className="relative space-y-4">
               {lockedOverlay}
@@ -435,6 +494,22 @@ function SerahTerimaBoard() {
                 )}
               </section>
 
+              {!taskDone && (
+                <button
+                  type="button"
+                  onClick={() => setConfirmCompleteTask(true)}
+                  disabled={dis || readonly || completingTask}
+                  className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 text-sm font-bold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {completingTask ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <CheckCheck className="h-4 w-4" />
+                  )}
+                  Selesaikan Serah Terima Shift Ini
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => void load()}
@@ -446,6 +521,32 @@ function SerahTerimaBoard() {
               </button>
             </div>
           </div>
+
+          <AlertDialog open={confirmCompleteTask} onOpenChange={setConfirmCompleteTask}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Selesaikan serah terima shift ini?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {pendingCount > 0
+                    ? `Masih ada ${pendingCount} item aktif di papan. `
+                    : ''}
+                  Setelah diselesaikan, papan serah terima dikunci untuk shift ini
+                  hari ini dan hanya bisa dikelola lagi besok.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Batal</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => {
+                    setConfirmCompleteTask(false);
+                    void handleCompleteTask(geo);
+                  }}
+                >
+                  Selesaikan
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
 
           <AlertDialog open={!!confirmDeleteId} onOpenChange={(open) => { if (!open) setConfirmDeleteId(null); }}>
             <AlertDialogContent>
