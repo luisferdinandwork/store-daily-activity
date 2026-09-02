@@ -5,7 +5,8 @@
 // Generates a BLANK monthly schedule template (store's active roster,
 // weekday header, date numbers — no shift codes filled in) so PIC/OPS can
 // fill it in and re-upload via /api/pic/schedule/import. Column layout
-// matches the import parser exactly (No / PIC / Name / date columns).
+// matches the import parser exactly (No / Role / Name / date columns).
+// "Role" holds the employee_type — PIC 1 / PIC 2 / SA.
 //
 // Access: same as schedule management — canManageSchedule() from
 // lib/schedule-utils.ts (admin, ops_ho/ops_area within their area, PIC 1/2
@@ -144,7 +145,7 @@ export async function GET(req: NextRequest) {
   });
 
   sc(ws, 2, 0, 'No', headerStyle);
-  sc(ws, 2, 1, 'PIC', headerStyle);
+  sc(ws, 2, 1, 'Role', headerStyle);
   sc(ws, 2, 2, 'Name', headerStyle);
   sc(ws, 3, 0, '', { font: FONT_BASE, fill: solid('F8FAFC'), alignment: LEFT, border: border() });
   sc(ws, 3, 1, '', { font: FONT_BASE, fill: solid('F8FAFC'), alignment: LEFT, border: border() });

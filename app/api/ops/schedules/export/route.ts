@@ -9,9 +9,10 @@
 // Layout (0-based rows):
 //   0   : Title banner — store name (merged across all columns)
 //   1   : "MONTH :" label + "May-2026" value
-//   2   : Column headers — No / PIC / Name / SUN / MON / … (weekday per date)
+//   2   : Column headers — No / Role / Name / SUN / MON / … (weekday per date)
 //   3   : Date numbers — 1, 2, 3, … , daysInMonth
-//   4+  : Employee rows — No / PIC / Name / E | L | F | AL | OFF per day
+//   4+  : Employee rows — No / Role / Name / E | L | F | AL | OFF per day
+//         ("Role" = the employee_type: PIC 1 / PIC 2 / SA)
 //   last: Summary rows — MORNING / EVENING / FULL DAY / OFF/CUTI counts
 //
 // Color palette (matches the web app):
@@ -312,7 +313,7 @@ export async function GET(request: NextRequest) {
     }
 
     sc(ws, 2, 0, 'No',   fixedHeaderStyle);
-    sc(ws, 2, 1, 'PIC',  fixedHeaderStyle);
+    sc(ws, 2, 1, 'Role', fixedHeaderStyle);
     sc(ws, 2, 2, 'Name', fixedHeaderStyle);
 
     // ── Row 3: Date numbers ────────────────────────────────────────────────
@@ -433,7 +434,7 @@ export async function GET(request: NextRequest) {
 
     ws['!cols'] = [
       { wch: 5  },  // No
-      { wch: 9  },  // PIC
+      { wch: 9  },  // Role
       { wch: 24 },  // Name
       ...Array(totalDays).fill(null).map(() => ({ wch: 4.5 })),
     ];

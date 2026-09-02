@@ -1,9 +1,23 @@
 // scripts/seed/performance-targets.ts
+//
+// Seeds the September 2026 performance target for every store in
+// scripts/seed/dataset.ts that has one:
+//
+//   FF001  Rp 1.000.000.000 / 1.000 trx   (PIC 7,60% · SA 10,60%)
+//   FO001  Rp   271.000.000 /   271 trx   (PIC1 10% · PIC2 45% · SA 45%)
+//   DUMMY  Rp   100.000.000 /   400 trx   (PIC1 20% · PIC2 30% · SA 50%)  ← synthetic
+//
+// Per-employee % is stored as an override (isPercentageOverridden), so the
+// headcount template can't clobber the sheet's real numbers.
+//
+// Also seeds target_allocation_templates (the default PIC/SA % grid keyed by
+// headcount) — shared with the production seed via seedAllocationTemplate().
+
 import { config } from 'dotenv';
 config({ path: '.env.local' });
 config({ path: '.env' });
 
-import { and, asc, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import {
@@ -14,37 +28,15 @@ import {
   users,
 } from '@/lib/db/schema';
 import { syncRosterPercentages } from '@/lib/performance/target-utils';
+import { STORES, YEAR_MONTH, rosterSlots } from './dataset';
 
-const TARGET_YEAR_MONTH =
-  process.env.SEED_TARGET_YEAR_MONTH ?? new Date().toISOString().slice(0, 7);
-
-type StoreCode = 'FF001' | 'FS033' | 'FF012' | 'FS020';
-
-type StoreTotalDef = {
-  /** Store-wide monthly sales target — set directly on store_monthly_targets now. */
-  totalSalesTarget: number;
-  /** Store-wide monthly transaction target — set directly on store_monthly_targets now. */
-  totalTransactionTarget: number;
-};
-
-/**
- * Ops sets these numbers directly now (no more "sum of employee rows").
- * Daily target = totalSalesTarget / days-in-month, then split across
- * whoever is scheduled that day via target_allocation_templates below.
- */
-const storeTotalTargetDefs: Record<StoreCode, StoreTotalDef> = {
-  FF001: { totalSalesTarget: 100_000_000, totalTransactionTarget: 400 },
-  FS033: { totalSalesTarget: 80_000_000, totalTransactionTarget: 320 },
-  FF012: { totalSalesTarget: 85_000_000, totalTransactionTarget: 340 },
-  FS020: { totalSalesTarget: 75_000_000, totalTransactionTarget: 300 },
-};
+const TARGET_YEAR_MONTH = process.env.SEED_TARGET_YEAR_MONTH ?? YEAR_MONTH;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Default monthly allocation % template — transcribed from the printed
 // PIC1/PIC2/SA1-5(+) × Man-Power grid (headcount 3-13). Headcounts not
-// listed here fall back to an equal split across the whole roster; add rows
-// here (or use the IT-only /it/target-allocation admin page) if you want an
-// exact split for those too.
+// listed here fall back to an equal split across the roster; add rows here
+// (or use the IT-only /it/target-allocation admin page) for others.
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Headcount 8-13: PIC1/PIC2 fixed at 7.3% each, remaining SA slots split the
@@ -130,52 +122,14 @@ export async function seedAllocationTemplate() {
   console.log(`✓ ${ALLOCATION_TEMPLATE.length} allocation template rows seeded (headcount 3-13).`);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Roster roles: "PIC1/PIC2 fixed, rest are SA". Only ROLE + sortOrder are
-// assigned here — the fixed monthly `percentage` is filled in afterwards by
-// syncRosterPercentages() from target_allocation_templates, keyed by the
-// roster's total headcount. sortOrder ranks the SAs into SA1, SA2, ... for
-// the whole month (see assignMonthlySlots in target-utils.ts).
-// ─────────────────────────────────────────────────────────────────────────────
-
-type RosterRole = { code: 'PIC1' | 'PIC2' | 'SA'; sortOrder: number };
-
-function buildRosterRoles(totalEmployees: number): RosterRole[] {
-  if (totalEmployees <= 0) return [];
-
-  // 1 employee → just SA (no PIC split); 2+ employees → up to 2 PICs, rest SA.
-  const picCount = totalEmployees === 1 ? 0 : Math.min(2, totalEmployees - 1);
-
-  const roles: RosterRole[] = [];
-  if (picCount >= 1) roles.push({ code: 'PIC1', sortOrder: 0 });
-  if (picCount >= 2) roles.push({ code: 'PIC2', sortOrder: 0 });
-
-  const saCount = totalEmployees - picCount;
-  for (let i = 0; i < saCount; i++) {
-    roles.push({ code: 'SA', sortOrder: i + 1 });
-  }
-
-  return roles;
-}
-
 function money(value: number) {
   return value.toLocaleString('id-ID');
-}
-
-async function getStoreByNo(storeNo: StoreCode) {
-  const [store] = await db
-    .select({ id: stores.id, storeNo: stores.storeNo, name: stores.name })
-    .from(stores)
-    .where(eq(stores.storeNo, storeNo))
-    .limit(1);
-
-  return store ?? null;
 }
 
 async function deleteExistingTargetsForStore(params: { storeId: number; yearMonth: string }) {
   const { storeId, yearMonth } = params;
 
-  // Delete child rows first (employee_monthly_targets references store_monthly_targets).
+  // Child rows first — employee_monthly_targets references store_monthly_targets.
   await db
     .delete(employeeMonthlyTargets)
     .where(
@@ -195,85 +149,91 @@ async function deleteExistingTargetsForStore(params: { storeId: number; yearMont
     );
 }
 
-async function getActiveUsersForStore(storeId: number) {
-  return db
-    .select({ id: users.id, nik: users.nik, name: users.name })
-    .from(users)
-    .where(and(eq(users.homeStoreId, storeId), eq(users.isActive, true)))
-    .orderBy(asc(users.name));
-}
+async function seedStoreTarget(storeNo: string) {
+  const def = STORES.find((s) => s.storeNo === storeNo);
+  if (!def || !def.target) return;
 
-async function seedStoreTargets(params: { storeNo: StoreCode; total: StoreTotalDef }) {
-  const { storeNo, total } = params;
+  const [store] = await db
+    .select({ id: stores.id, storeNo: stores.storeNo, name: stores.name })
+    .from(stores)
+    .where(eq(stores.storeNo, storeNo))
+    .limit(1);
 
-  const store = await getStoreByNo(storeNo);
   if (!store) {
-    console.warn(`⚠️ Store ${storeNo} not found. Skipping.`);
+    console.warn(`⚠️ Store ${storeNo} not found — run the setup seed step first. Skipping.`);
     return;
   }
 
   await deleteExistingTargetsForStore({ storeId: store.id, yearMonth: TARGET_YEAR_MONTH });
 
-  // Ops sets the monthly target directly — no more "header/plan only" row.
   const [storePlan] = await db
     .insert(storeMonthlyTargets)
     .values({
       storeId: store.id,
       yearMonth: TARGET_YEAR_MONTH,
-      monthlySalesTarget: String(total.totalSalesTarget),
-      monthlyTransactionTarget: total.totalTransactionTarget,
+      monthlySalesTarget: String(def.target.monthlySalesTarget),
+      monthlyTransactionTarget: def.target.monthlyTransactionTarget,
       targetSource: 'manual',
       notes:
-        `Seeded target: Rp ${money(total.totalSalesTarget)} / ${total.totalTransactionTarget} trx per month. ` +
-        'Split across the roster below by a fixed monthly percentage from target_allocation_templates.',
+        `Seeded from the Sep 2026 break-down sheet. Store target Rp ${money(def.target.monthlySalesTarget)} / ` +
+        `${def.target.monthlyTransactionTarget} trx. Per-employee % transcribed from the sheet.`,
       isActive: true,
     })
     .returning({ id: storeMonthlyTargets.id });
 
-  const storeUsers = await getActiveUsersForStore(store.id);
-  if (storeUsers.length === 0) {
-    console.warn(`⚠️ ${store.storeNo} ${store.name}: no active users found.`);
-    return;
+  const slots = rosterSlots(def.employees);
+  const niks = slots.map((s) => s.nik);
+
+  const userRows = await db
+    .select({ id: users.id, nik: users.nik })
+    .from(users)
+    .where(inArray(users.nik, niks));
+
+  const idByNik = new Map(userRows.map((u) => [u.nik, u.id]));
+  const missing = niks.filter((n) => !idByNik.has(n));
+  if (missing.length) {
+    throw new Error(
+      `${storeNo}: roster NIK(s) not found in users: ${missing.join(', ')}. Run the setup seed step first.`,
+    );
   }
 
-  const roles = buildRosterRoles(storeUsers.length);
-
-  const rosterRows = storeUsers.map((user, index) => {
-    const role = roles[index];
-    return {
+  await db.insert(employeeMonthlyTargets).values(
+    slots.map((slot) => ({
       storeMonthlyTargetId: storePlan.id,
-      userId: user.id,
+      userId: idByNik.get(slot.nik)!,
       storeId: store.id,
       yearMonth: TARGET_YEAR_MONTH,
-      targetRoleCode: role.code,
-      sortOrder: role.sortOrder,
-      notes: `Seeded as ${role.code}${role.code === 'SA' ? ` (sortOrder ${role.sortOrder})` : ''}.`,
+      targetRoleCode: slot.roleCode,
+      sortOrder: slot.sortOrder,
+      percentage: slot.percentage.toFixed(2),
+      isPercentageOverridden: true,
+      notes: `Seeded ${slot.roleCode} at ${slot.percentage.toFixed(2)}% (from the Sep 2026 break-down sheet).`,
       isActive: true,
-    };
-  });
+    })),
+  );
 
-  await db.insert(employeeMonthlyTargets).values(rosterRows);
+  // Re-run the standard sync so derived bookkeeping matches the app. Every row
+  // is locked and the set already sums to 100%, so the stored percentages are
+  // preserved as-is.
   await syncRosterPercentages({ storeId: store.id, yearMonth: TARGET_YEAR_MONTH });
 
-  const picCount = roles.filter((r) => r.code !== 'SA').length;
-  const saCount = roles.length - picCount;
-
+  const picCount = slots.filter((s) => s.roleCode !== 'SA').length;
   console.log(
     [
       `✓ ${store.storeNo} ${store.name}`,
-      `${rosterRows.length} roster rows (${picCount} PIC, ${saCount} SA)`,
-      `monthly target Rp ${money(total.totalSalesTarget)} / ${total.totalTransactionTarget} trx`,
+      `${slots.length} roster rows (${picCount} PIC, ${slots.length - picCount} SA)`,
+      `Rp ${money(def.target.monthlySalesTarget)} / ${def.target.monthlyTransactionTarget} trx`,
     ].join(' · '),
   );
 }
 
 export async function seedPerformanceTargets() {
-  console.log(`🎯 Seeding monthly-fixed-percentage performance targets for ${TARGET_YEAR_MONTH}...`);
+  console.log(`🎯 Seeding performance targets for ${TARGET_YEAR_MONTH}...`);
 
   await seedAllocationTemplate();
 
-  for (const [storeNo, total] of Object.entries(storeTotalTargetDefs) as Array<[StoreCode, StoreTotalDef]>) {
-    await seedStoreTargets({ storeNo, total });
+  for (const s of STORES) {
+    if (s.target) await seedStoreTarget(s.storeNo);
   }
 
   console.log('✅ Performance targets + allocation template seeded.');

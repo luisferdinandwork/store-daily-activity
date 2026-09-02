@@ -9,12 +9,16 @@
  * New required format:
  *   +0  Store name row   (col 0 = "Store Thamrin", "FO DMG", "SUDIRMAN", …)
  *   +1  MONTH row        (col 0 = "MONTH :", col 3 or 4 = "Mar-2026")
- *   +2  header labels    (No / NIK / PIC / Name / SUN MON …)
+ *   +2  header labels    (No / NIK / Role / Name / SUN MON …)
  *   +3  date numbers     (first day column + = 1, 2, 3, …, 31)
- *   +4+ employee rows    (col 0 = no, col 1 = NIK, col 2 = PIC, col 3 = name, day cols = shift codes)
+ *   +4+ employee rows    (col 0 = no, col 1 = NIK, col 2 = Role, col 3 = name, day cols = shift codes)
  *
  * Old supported fallback format:
- *   No / PIC / Name / SUN MON …
+ *   No / Role / Name / SUN MON …
+ *
+ * The "Role" column (older files: "PIC") is display-only — it holds the
+ * employee_type label (PIC 1 / PIC 2 / SA) and is not used by the importer,
+ * which resolves employees by NIK or name.
  *
  * Shift codes:
  *   E / PAGI  → morning
@@ -113,7 +117,7 @@ export class ScheduleImportValidationError extends Error {
 // ─── Parser ───────────────────────────────────────────────────────────────────
 
 const SUMMARY_LABELS = /^(opening|middle|closing|off\/cuti|off|cuti)$/i;
-const SKIP_HEADER    = /^(month\s*:|no|nik|pic|name|nama)$/i;
+const SKIP_HEADER    = /^(month\s*:|no|nik|role|pic|name|nama)$/i;
 
 const WEEKDAY_MAP: Record<string, number> = {
   SUN: 0, SUNDAY: 0,

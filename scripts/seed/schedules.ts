@@ -1,403 +1,215 @@
 // scripts/seed/schedules.ts
-// Fast schedule seeder.
 //
-// Important change for speed:
-// - This file seeds monthly schedule entries + schedules ONLY.
-// - Task rows are seeded by scripts/seed/tasks.ts in bulk.
+// Seeds the September 2026 monthly schedule for every store in
+// scripts/seed/dataset.ts that has one:
 //
-// Every employee at every store gets exactly WORKING_DAYS_PER_MONTH (26)
-// scheduled/working days per month — the remaining days (2-5, depending on
-// how long the month is) are OFF. Off days are spread roughly evenly across
-// the month, with a per-employee offset (their index within the store) so
-// employees at the same store don't all land on the same off days. Shift
-// type (morning/evening/full_day) on working days cycles per employee type
-// (see SHIFT_CYCLES) instead of following the calendar day-of-week.
+//   FF001 / FO001 — transcribed verbatim from "MRO SEP 2026"
+//   DUMMY-001     — a simple deterministic pattern (synthetic)
 //
-// Supported env:
-//   SEED_SCHEDULE_MONTHS=both | current | previous | YYYY-MM
-//   SEED_MONTH=current | previous | YYYY-MM
-//   SEED_WORKING_DAYS=26 (override the per-employee working-day target)
+// Shift codes per day:
+//   E → morning · L → evening · F → full day · X → day off · A → leave (AL)
+//
+// It writes the three layers the app reads:
+//   1. monthly_schedules          — one master row per store / 2026-09
+//   2. monthly_schedule_entries   — one row per (employee, day), OFF/leave incl.
+//   3. schedules                  — the materialised working days (E/L/F only)
+//
+// Dates are stored as UTC midnight of the calendar day (`Date.UTC`), matching
+// the running app's convention (production runs in UTC — see
+// lib/schedule-utils.ts `todayInStoreTimezone`). Drizzle's timestamp column
+// serialises via `.toISOString()`, so this keeps the seed correct no matter
+// what timezone it is run from.
 
 import { config } from 'dotenv';
 config({ path: '.env.local' });
 config({ path: '.env' });
 
-import { and, eq, gte, inArray, lte } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
+
 import { db } from '@/lib/db';
 import {
-  users,
-  stores,
-  areas,
-  shifts,
-  employeeTypes,
   monthlySchedules,
   monthlyScheduleEntries,
   schedules,
+  shifts,
+  stores,
+  users,
 } from '@/lib/db/schema';
+import {
+  DAYS_IN_MONTH,
+  SEED_MONTH_INDEX,
+  SEED_YEAR,
+  STORES,
+  YEAR_MONTH,
+} from './dataset';
 
-type ShiftCode = 'morning' | 'evening' | 'full_day';
-type PatternCode = 'E' | 'L' | 'FD' | 'OFF';
+const BATCH_SIZE = 500;
 
-type TargetMonth = {
-  year: number;
-  monthIndex: number;
-  start: Date;
-  end: Date;
-  yearMonth: string;
-};
-
-const BATCH_SIZE = Number(process.env.SEED_BATCH_SIZE ?? 500);
-
-// Target working (non-OFF) days per employee per month. The rest of the
-// month's days become OFF, spread evenly (see pickOffDayIndices).
-const WORKING_DAYS_PER_MONTH = Number(process.env.SEED_WORKING_DAYS ?? 26);
-
-// Shift assignment on a WORKING day:
-//   • The store's designated full-day employee (PIC 1 — see fullDayEmployee
-//     below) always gets 'FD'.
-//   • Every other employee alternates morning ('E') / evening ('L') by
-//     (their index among the store's non-full-day staff + calendar day), so
-//     each day the on-shift staff split ~50/50 between the two shifts.
-
-/**
- * Picks `offCount` day-indices (0-based, within a `daysInMonth`-day month)
- * to mark OFF, spread roughly evenly across the month. `offset` shifts the
- * whole pattern (e.g. by employee index) so employees at the same store
- * don't all share the same off days.
- */
-function pickOffDayIndices(daysInMonth: number, offCount: number, offset: number): Set<number> {
-  const offIdx = new Set<number>();
-  if (offCount <= 0) return offIdx;
-
-  const step = daysInMonth / offCount;
-  for (let k = 0; k < offCount; k++) {
-    const idx = Math.floor((k + 0.5) * step + offset) % daysInMonth;
-    offIdx.add(idx);
-  }
-
-  return offIdx;
+/** UTC midnight of a given day-of-month — the app's stored-date convention. */
+function utcDay(day: number): Date {
+  return new Date(Date.UTC(SEED_YEAR, SEED_MONTH_INDEX, day, 0, 0, 0, 0));
 }
 
-function startOfDay(d: Date): Date {
-  const r = new Date(d);
-  r.setHours(0, 0, 0, 0);
-  return r;
+/** "YYYY-MM-DD" for a given day-of-month. */
+function ymd(day: number): string {
+  return `${YEAR_MONTH}-${String(day).padStart(2, '0')}`;
 }
 
-function endOfDay(d: Date): Date {
-  const r = new Date(d);
-  r.setHours(23, 59, 59, 999);
-  return r;
-}
-
-function ymd(d: Date): string {
-  return startOfDay(d).toISOString().slice(0, 10);
-}
-
-function resolveTargetMonth(defaultMode: 'current' | 'previous' = 'current'): TargetMonth {
-  const now = new Date();
-  const raw = (process.env.SEED_MONTH || defaultMode).trim().toLowerCase();
-
-  let year: number;
-  let monthIndex: number;
-
-  if (raw === 'current') {
-    year = now.getFullYear();
-    monthIndex = now.getMonth();
-  } else if (raw === 'previous' || raw === 'last') {
-    const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    year = d.getFullYear();
-    monthIndex = d.getMonth();
-  } else if (/^\d{4}-\d{2}$/.test(raw)) {
-    const [y, m] = raw.split('-').map(Number);
-    year = y;
-    monthIndex = m - 1;
-  } else {
-    throw new Error('Invalid SEED_MONTH. Use current, previous, or YYYY-MM.');
-  }
-
-  const start = new Date(year, monthIndex, 1, 0, 0, 0, 0);
-  const end = new Date(year, monthIndex + 1, 0, 23, 59, 59, 999);
-  const yearMonth = `${year}-${String(monthIndex + 1).padStart(2, '0')}`;
-
-  return { year, monthIndex, start, end, yearMonth };
-}
-
-function uniqueMonths(months: TargetMonth[]): TargetMonth[] {
-  const seen = new Set<string>();
-  return months.filter((m) => {
-    if (seen.has(m.yearMonth)) return false;
-    seen.add(m.yearMonth);
-    return true;
-  });
-}
-
-function resolveScheduleMonths(): TargetMonth[] {
-  const raw = (process.env.SEED_SCHEDULE_MONTHS || process.env.SEED_MONTH || 'both').trim().toLowerCase();
-
-  if (raw === 'both' || raw === 'default' || raw === 'previous,current' || raw === 'current,previous') {
-    return uniqueMonths([resolveTargetMonth('previous'), resolveTargetMonth('current')]);
-  }
-
-  if (raw === 'current') return [resolveTargetMonth('current')];
-  if (raw === 'previous' || raw === 'last') return [resolveTargetMonth('previous')];
-
-  if (/^\d{4}-\d{2}$/.test(raw)) {
-    const old = process.env.SEED_MONTH;
-    process.env.SEED_MONTH = raw;
-    const target = resolveTargetMonth('current');
-    if (old === undefined) delete process.env.SEED_MONTH;
-    else process.env.SEED_MONTH = old;
-    return [target];
-  }
-
-  throw new Error('Invalid SEED_SCHEDULE_MONTHS. Use both, current, previous, or YYYY-MM.');
-}
-
-function eachDayOfMonth(year: number, monthIndex: number): Date[] {
-  const days = new Date(year, monthIndex + 1, 0).getDate();
-  return Array.from({ length: days }, (_, i) => new Date(year, monthIndex, i + 1, 0, 0, 0, 0));
-}
-
-function patternToShift(code: PatternCode, shiftIdByCode: Record<string, number>) {
-  if (code === 'E') return { shiftCode: 'morning' as ShiftCode, shiftId: shiftIdByCode.morning };
-  if (code === 'L') return { shiftCode: 'evening' as ShiftCode, shiftId: shiftIdByCode.evening };
-  if (code === 'FD') return { shiftCode: 'full_day' as ShiftCode, shiftId: shiftIdByCode.full_day };
-  return { shiftCode: null, shiftId: null };
-}
-
-async function insertInBatches<T extends Record<string, unknown>>(table: any, rows: T[], batchSize = BATCH_SIZE) {
+async function insertInBatches<T extends Record<string, unknown>>(table: any, rows: T[]) {
   if (!rows.length) return 0;
   let inserted = 0;
-
-  for (let i = 0; i < rows.length; i += batchSize) {
-    const batch = rows.slice(i, i + batchSize);
+  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+    const batch = rows.slice(i, i + BATCH_SIZE);
     await db.insert(table).values(batch as any);
     inserted += batch.length;
   }
-
   return inserted;
 }
 
-async function seedMonth(target: TargetMonth) {
-  console.log(`\n📅 seed-current-month: ${target.yearMonth}`);
-  console.log(`   Range: ${ymd(target.start)} → ${ymd(target.end)}`);
+type ShiftName = 'morning' | 'evening' | 'full_day';
+type DayShape =
+  | { shiftCode: ShiftName; isOff: false; isLeave: false }
+  | { shiftCode: null; isOff: true; isLeave: false }
+  | { shiftCode: null; isOff: false; isLeave: true };
 
-  const [allShifts, allEmpTypes, storeRows] = await Promise.all([
-    db.select().from(shifts),
-    db.select().from(employeeTypes),
-    db
-      .select({ store: stores, area: areas })
-      .from(stores)
-      .leftJoin(areas, eq(stores.areaId, areas.id))
-      .orderBy(areas.name, stores.name),
-  ]);
+function codeToDay(code: string): DayShape {
+  if (code === 'E') return { shiftCode: 'morning', isOff: false, isLeave: false };
+  if (code === 'L') return { shiftCode: 'evening', isOff: false, isLeave: false };
+  if (code === 'F') return { shiftCode: 'full_day', isOff: false, isLeave: false };
+  if (code === 'A') return { shiftCode: null, isOff: false, isLeave: true };
+  return { shiftCode: null, isOff: true, isLeave: false }; // X / anything else
+}
 
-  if (!storeRows.length) throw new Error('No stores found. Run the setup seed step first.');
+async function seedStoreSchedule(
+  storeNo: string,
+  shiftIdByCode: Record<string, number>,
+) {
+  const def = STORES.find((s) => s.storeNo === storeNo);
+  if (!def || !def.schedule) return;
 
-  const shiftIdByCode = Object.fromEntries(allShifts.map((s: any) => [s.code, s.id])) as Record<string, number>;
-  const empTypeCodeById = Object.fromEntries(allEmpTypes.map((e: any) => [e.id, e.code])) as Record<number, string>;
+  const grid = def.schedule;
 
-  if (!shiftIdByCode.morning || !shiftIdByCode.evening || !shiftIdByCode.full_day) {
-    throw new Error('Required shifts missing: morning/evening/full_day. Run the setup seed step first.');
-  }
-
-  const storeIds = storeRows.map(({ store }: any) => store.id);
-
-  const allEmployees = await db.select().from(users).where(inArray(users.homeStoreId, storeIds));
-  const employeesByStoreId = new Map<number, any[]>();
-  for (const emp of allEmployees as any[]) {
-    if (emp.homeStoreId == null) continue;
-    const rows = employeesByStoreId.get(emp.homeStoreId) ?? [];
-    rows.push(emp);
-    employeesByStoreId.set(emp.homeStoreId, rows);
-  }
-
-  // ── Monthly schedule master rows ──────────────────────────────────────────
-  const existingMonthlyRows = await db
-    .select({ id: monthlySchedules.id, storeId: monthlySchedules.storeId, yearMonth: monthlySchedules.yearMonth })
-    .from(monthlySchedules)
-    .where(and(inArray(monthlySchedules.storeId, storeIds), eq(monthlySchedules.yearMonth, target.yearMonth)));
-
-  const monthlyKey = (storeId: number) => `${storeId}|${target.yearMonth}`;
-  const existingMonthlyKeys = new Set(existingMonthlyRows.map((r: any) => monthlyKey(r.storeId)));
-
-  const monthlyToInsert = [] as Array<typeof monthlySchedules.$inferInsert>;
-  for (const { store } of storeRows as any[]) {
-    if (existingMonthlyKeys.has(monthlyKey(store.id))) continue;
-    const emps = employeesByStoreId.get(store.id) ?? [];
-    if (!emps.length) continue;
-    const pic = emps.find((e) => e.employeeTypeId != null && empTypeCodeById[e.employeeTypeId] === 'pic_1') ?? emps[0];
-    monthlyToInsert.push({
-      storeId: store.id,
-      yearMonth: target.yearMonth,
-      importedBy: pic.id,
-      note: `Auto-seeded ${target.yearMonth}`,
-    } as any);
-  }
-
-  const monthlyCreated = await insertInBatches(monthlySchedules, monthlyToInsert);
-
-  const monthlyRows = await db
-    .select({ id: monthlySchedules.id, storeId: monthlySchedules.storeId, yearMonth: monthlySchedules.yearMonth })
-    .from(monthlySchedules)
-    .where(and(inArray(monthlySchedules.storeId, storeIds), eq(monthlySchedules.yearMonth, target.yearMonth)));
-
-  const monthlyIdByStoreId = new Map<number, number>();
-  for (const row of monthlyRows as any[]) monthlyIdByStoreId.set(row.storeId, row.id);
-
-  // ── Build entries in memory ───────────────────────────────────────────────
-  const days = eachDayOfMonth(target.year, target.monthIndex);
-  const monthlyScheduleIds = [...monthlyIdByStoreId.values()];
-
-  const existingEntries = monthlyScheduleIds.length
-    ? await db
-        .select({
-          id: monthlyScheduleEntries.id,
-          monthlyScheduleId: monthlyScheduleEntries.monthlyScheduleId,
-          userId: monthlyScheduleEntries.userId,
-          date: monthlyScheduleEntries.date,
-        })
-        .from(monthlyScheduleEntries)
-        .where(and(
-          inArray(monthlyScheduleEntries.monthlyScheduleId, monthlyScheduleIds),
-          gte(monthlyScheduleEntries.date, startOfDay(target.start)),
-          lte(monthlyScheduleEntries.date, endOfDay(target.end)),
-        ))
-    : [];
-
-  const entryKey = (monthlyScheduleId: number, userId: string, date: Date) => `${monthlyScheduleId}|${userId}|${ymd(date)}`;
-  const existingEntryKeys = new Set(existingEntries.map((r: any) => entryKey(r.monthlyScheduleId, r.userId, r.date)));
-
-  const entryRows: Array<typeof monthlyScheduleEntries.$inferInsert> = [];
-
-  for (const { store, area } of storeRows as any[]) {
-    const emps = employeesByStoreId.get(store.id) ?? [];
-    if (!emps.length) {
-      console.log(`   ⚠️ ${store.name}: no employees, skipped.`);
-      continue;
+  // Validate every grid row is exactly one entry per calendar day.
+  for (const [nik, days] of Object.entries(grid)) {
+    if (days.length !== DAYS_IN_MONTH) {
+      throw new Error(`${storeNo}: grid for ${nik} has ${days.length} days, expected ${DAYS_IN_MONTH}.`);
     }
-
-    const monthlyScheduleId = monthlyIdByStoreId.get(store.id);
-    if (!monthlyScheduleId) continue;
-
-    const fullDayEmployee = emps.find((e) => e.employeeTypeId != null && empTypeCodeById[e.employeeTypeId] === 'pic_1') ?? emps[0];
-    const daysInMonth = days.length;
-    const offDaysCount = Math.max(0, daysInMonth - WORKING_DAYS_PER_MONTH);
-
-    // Position among the store's non-full-day staff — drives the morning/
-    // evening alternation so headcount stays balanced on every calendar day.
-    const nonFullDayIndexById = new Map(
-      emps.filter((e) => e.id !== fullDayEmployee.id).map((e, i) => [e.id, i]),
-    );
-
-    console.log(
-      `   🏪 ${store.name} (${area?.name ?? 'no area'}) → full-day: ${fullDayEmployee.name} · ` +
-      `${WORKING_DAYS_PER_MONTH}/${daysInMonth} working days per employee`,
-    );
-
-    emps.forEach((emp, empIndex) => {
-      const isDailyFullDayEmployee = emp.id === fullDayEmployee.id;
-      const nonFullDayIndex = nonFullDayIndexById.get(emp.id) ?? 0;
-
-      // Stagger each employee's off days by their position at the store so
-      // coworkers don't all land on the same off day.
-      const offDayIndices = pickOffDayIndices(daysInMonth, offDaysCount, empIndex);
-
-      days.forEach((date, dayIndex) => {
-        const isScheduledOff = offDayIndices.has(dayIndex);
-
-        let patternCode: PatternCode;
-        if (isScheduledOff) {
-          patternCode = 'OFF';
-        } else if (isDailyFullDayEmployee) {
-          patternCode = 'FD';
-        } else {
-          // Alternate morning ('E') / evening ('L') by staff index + day so
-          // each calendar day the store's on-shift staff split ~50/50.
-          patternCode = (nonFullDayIndex + dayIndex) % 2 === 0 ? 'E' : 'L';
-        }
-
-        const { shiftId } = patternToShift(patternCode, shiftIdByCode);
-        const isOff = !shiftId;
-        const key = entryKey(monthlyScheduleId, emp.id, date);
-        if (existingEntryKeys.has(key)) return;
-
-        entryRows.push({
-          monthlyScheduleId,
-          userId: emp.id,
-          storeId: store.id,
-          date: startOfDay(date),
-          shiftId: shiftId ?? null,
-          isOff,
-          isLeave: false,
-        } as any);
-      });
-    });
   }
 
+  const [store] = await db
+    .select({ id: stores.id, name: stores.name })
+    .from(stores)
+    .where(eq(stores.storeNo, storeNo))
+    .limit(1);
+  if (!store) throw new Error(`Store ${storeNo} not found. Run the setup seed step first.`);
+
+  const niks = Object.keys(grid);
+  const userRows = await db
+    .select({ id: users.id, nik: users.nik })
+    .from(users)
+    .where(inArray(users.nik, niks));
+
+  const idByNik = new Map(userRows.map((u) => [u.nik, u.id]));
+  const missing = niks.filter((n) => !idByNik.has(n));
+  if (missing.length) {
+    throw new Error(`${storeNo}: employee NIK(s) not found: ${missing.join(', ')}. Run the setup seed step first.`);
+  }
+
+  // First roster member (PIC 1, by dataset order) is stamped as importer.
+  const importedBy = idByNik.get(def.employees[0]?.nik ?? niks[0]) ?? null;
+
+  // Clear any prior schedule for this store: schedules first (FK to
+  // monthly_schedule_entries with no cascade), then the master (cascades entries).
+  await db.delete(schedules).where(eq(schedules.storeId, store.id));
+  await db
+    .delete(monthlySchedules)
+    .where(and(eq(monthlySchedules.storeId, store.id), eq(monthlySchedules.yearMonth, YEAR_MONTH)));
+
+  const [master] = await db
+    .insert(monthlySchedules)
+    .values({
+      storeId: store.id,
+      yearMonth: YEAR_MONTH,
+      importedBy,
+      note: `Seeded from the Sep 2026 break-down sheet — ${storeNo}`,
+    })
+    .returning({ id: monthlySchedules.id });
+
+  // ── monthly_schedule_entries ─────────────────────────────────────────────
+  const entryRows: Array<typeof monthlyScheduleEntries.$inferInsert> = [];
+  for (const [nik, days] of Object.entries(grid)) {
+    const userId = idByNik.get(nik)!;
+    for (let day = 1; day <= DAYS_IN_MONTH; day++) {
+      const shape = codeToDay(days[day - 1]);
+      entryRows.push({
+        monthlyScheduleId: master.id,
+        userId,
+        storeId: store.id,
+        date: utcDay(day),
+        shiftId: shape.shiftCode ? shiftIdByCode[shape.shiftCode] : null,
+        isOff: shape.isOff,
+        isLeave: shape.isLeave,
+      });
+    }
+  }
   const entriesCreated = await insertInBatches(monthlyScheduleEntries, entryRows);
 
-  const allEntries = monthlyScheduleIds.length
-    ? await db
-        .select({
-          id: monthlyScheduleEntries.id,
-          monthlyScheduleId: monthlyScheduleEntries.monthlyScheduleId,
-          userId: monthlyScheduleEntries.userId,
-          storeId: monthlyScheduleEntries.storeId,
-          date: monthlyScheduleEntries.date,
-          shiftId: monthlyScheduleEntries.shiftId,
-          isOff: monthlyScheduleEntries.isOff,
-          isLeave: monthlyScheduleEntries.isLeave,
-        })
-        .from(monthlyScheduleEntries)
-        .where(and(
-          inArray(monthlyScheduleEntries.monthlyScheduleId, monthlyScheduleIds),
-          gte(monthlyScheduleEntries.date, startOfDay(target.start)),
-          lte(monthlyScheduleEntries.date, endOfDay(target.end)),
-        ))
-    : [];
+  // ── schedules (materialised working days) ─────────────────────────────────
+  // Re-read entry ids keyed by (userId, YYYY-MM-DD) — reading the date as text
+  // via to_char sidesteps any driver-side timezone reinterpretation.
+  const persisted = await db
+    .select({
+      id: monthlyScheduleEntries.id,
+      userId: monthlyScheduleEntries.userId,
+      ymd: sql<string>`to_char(${monthlyScheduleEntries.date}, 'YYYY-MM-DD')`,
+    })
+    .from(monthlyScheduleEntries)
+    .where(eq(monthlyScheduleEntries.monthlyScheduleId, master.id));
 
-  const activeEntries = (allEntries as any[]).filter((e) => !e.isOff && !e.isLeave && e.shiftId != null);
+  const entryIdByKey = new Map(persisted.map((e) => [`${e.userId}|${e.ymd}`, e.id]));
 
-  const existingSchedules = await db
-    .select({ userId: schedules.userId, storeId: schedules.storeId, date: schedules.date })
-    .from(schedules)
-    .where(and(
-      inArray(schedules.storeId, storeIds),
-      gte(schedules.date, startOfDay(target.start)),
-      lte(schedules.date, endOfDay(target.end)),
-    ));
+  const scheduleRows: Array<typeof schedules.$inferInsert> = [];
+  for (const [nik, days] of Object.entries(grid)) {
+    const userId = idByNik.get(nik)!;
+    for (let day = 1; day <= DAYS_IN_MONTH; day++) {
+      const shape = codeToDay(days[day - 1]);
+      if (!shape.shiftCode) continue; // OFF / leave — no schedules row
 
-  const scheduleKey = (userId: string, storeId: number, date: Date) => `${userId}|${storeId}|${ymd(date)}`;
-  const existingScheduleKeys = new Set(existingSchedules.map((r: any) => scheduleKey(r.userId, r.storeId, r.date)));
+      const entryId = entryIdByKey.get(`${userId}|${ymd(day)}`);
+      if (!entryId) throw new Error(`${storeNo}: missing entry for ${nik} on ${ymd(day)}`);
 
-  const scheduleRowsToInsert = activeEntries
-    .filter((entry) => !existingScheduleKeys.has(scheduleKey(entry.userId, entry.storeId, entry.date)))
-    .map((entry) => ({
-      userId: entry.userId,
-      storeId: entry.storeId,
-      shiftId: entry.shiftId,
-      date: startOfDay(entry.date),
-      monthlyScheduleEntryId: entry.id,
-      isHoliday: false,
-    } as typeof schedules.$inferInsert));
+      scheduleRows.push({
+        userId,
+        storeId: store.id,
+        shiftId: shiftIdByCode[shape.shiftCode],
+        date: utcDay(day),
+        monthlyScheduleEntryId: entryId,
+        isHoliday: false,
+      });
+    }
+  }
+  const schedulesCreated = await insertInBatches(schedules, scheduleRows);
 
-  const schedulesCreated = await insertInBatches(schedules, scheduleRowsToInsert);
-  const schedulesExisting = activeEntries.length - schedulesCreated;
-
-  console.log(`   ✓ monthly masters created : ${monthlyCreated}`);
-  console.log(`   ✓ monthly entries created : ${entriesCreated}`);
-  console.log(`   ✓ schedules created       : ${schedulesCreated}`);
-  console.log(`   ✓ schedules existing      : ${schedulesExisting}`);
+  const offCount = entryRows.filter((e) => e.isOff).length;
+  const leaveCount = entryRows.filter((e) => e.isLeave).length;
+  console.log(
+    `   ✓ ${storeNo} ${store.name} — ${entriesCreated} entries (${niks.length}×${DAYS_IN_MONTH}), ` +
+    `${schedulesCreated} work / ${offCount} off / ${leaveCount} leave`,
+  );
 }
 
 export async function seedSchedules() {
-  const targets = resolveScheduleMonths();
-  console.log(`\n🗓️  Schedule months: ${targets.map((t) => t.yearMonth).join(', ')}`);
-  console.log('⚡ Fast mode: schedules only. Tasks are seeded separately.');
+  console.log(`\n🗓️  Seeding monthly schedules for ${YEAR_MONTH}`);
 
-  for (const target of targets) await seedMonth(target);
+  const shiftRows = await db.select({ id: shifts.id, code: shifts.code }).from(shifts);
+  const shiftIdByCode = Object.fromEntries(shiftRows.map((s) => [s.code, s.id])) as Record<string, number>;
+  for (const need of ['morning', 'evening', 'full_day']) {
+    if (!shiftIdByCode[need]) throw new Error(`Shift "${need}" missing. Run the setup seed step first.`);
+  }
+
+  for (const s of STORES) {
+    if (s.schedule) await seedStoreSchedule(s.storeNo, shiftIdByCode);
+  }
 
   console.log('\n✅ seed-schedules complete.');
 }

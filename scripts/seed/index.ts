@@ -31,16 +31,31 @@ import { seedPettyCash } from './petty-cash';
 
 type SeedStep = { name: string; run: () => Promise<void> };
 
+// The default pipeline seeds the FF001 world exactly as it stands in
+// "Break down target sep 2026.xlsx": area + store + roster, the Sep 2026
+// performance target, and the Sep 2026 schedule (working days + OFF + AL).
+//
+// `tasks` and `attendance` are intentionally left OUT of the default run:
+// they synthesise randomised task-completion and check-in/out activity on top
+// of the schedule, which isn't part of the sheet. Re-enable them explicitly
+// when you want a fuller demo world:
+//   npm run db:seed -- --only=tasks,attendance
 const STEPS: SeedStep[] = [
   { name: 'setup', run: seedSetup },
   { name: 'bc-settings', run: seedBusinessCentralSettings },
   { name: 'performance-targets', run: seedPerformanceTargets },
   { name: 'shift-tasks', run: seedShiftTasks },
   { name: 'schedules', run: seedSchedules },
-  { name: 'tasks', run: seedTasks },
-  { name: 'attendance', run: seedAttendance },
   { name: 'petty-cash', run: seedPettyCash },
 ];
+
+// Available via `--only=` but not part of the default pipeline (see note above).
+const OPTIONAL_STEPS: SeedStep[] = [
+  { name: 'tasks', run: seedTasks },
+  { name: 'attendance', run: seedAttendance },
+];
+
+const ALL_STEPS: SeedStep[] = [...STEPS, ...OPTIONAL_STEPS];
 
 function parseOnly(argv: string[]): Set<string> | null {
   const flag = argv.find((a) => a.startsWith('--only='));
@@ -57,17 +72,20 @@ async function run() {
 
   if (argv.includes('--list')) {
     console.log(STEPS.map((s) => s.name).join('\n'));
+    console.log(`\n# optional (only via --only=):\n${OPTIONAL_STEPS.map((s) => s.name).join('\n')}`);
     return;
   }
 
   const only = parseOnly(argv);
-  const steps = only ? STEPS.filter((s) => only.has(s.name)) : STEPS;
+  // --only can pick from every step, including the optional ones; a bare run
+  // only executes the default pipeline.
+  const steps = only ? ALL_STEPS.filter((s) => only.has(s.name)) : STEPS;
 
   if (only) {
-    const unknown = [...only].filter((name) => !STEPS.some((s) => s.name === name));
+    const unknown = [...only].filter((name) => !ALL_STEPS.some((s) => s.name === name));
     if (unknown.length) {
       throw new Error(
-        `Unknown seed step(s): ${unknown.join(', ')}. Available: ${STEPS.map((s) => s.name).join(', ')}`,
+        `Unknown seed step(s): ${unknown.join(', ')}. Available: ${ALL_STEPS.map((s) => s.name).join(', ')}`,
       );
     }
   }
