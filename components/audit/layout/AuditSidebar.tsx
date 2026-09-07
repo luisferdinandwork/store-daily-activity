@@ -16,6 +16,7 @@ import { signOut, useSession } from 'next-auth/react';
 import {
   AlertTriangle,
   ChevronRight,
+  KeyRound,
   LayoutDashboard,
   LogOut,
 } from 'lucide-react';
@@ -53,6 +54,12 @@ const NAV: NavSection[] = [
     section: 'Issues',
     items: [
       { href: '/audit/issues', label: 'Issues', icon: AlertTriangle },
+    ],
+  },
+  {
+    section: 'Akun',
+    items: [
+      { href: '/audit/settings', label: 'Pengaturan', icon: KeyRound },
     ],
   },
 ];

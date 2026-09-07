@@ -12,6 +12,7 @@ import BackToPicPanel from '@/components/employee/BackToPicPanel';
 import FloatingMenu from '@/components/employee/FloatingMenu';
 import EmployeeHeader from '@/components/employee/EmployeeHeader';
 import RoleSwitchBanner from '@/components/shared/RoleSwitchBanner';
+import PasswordExpiryBanner from '@/components/shared/PasswordExpiryBanner';
 
 export default async function EmployeeLayout({ children }: { children: ReactNode }) {
   const session = await getServerSession(authOptions);
@@ -35,6 +36,7 @@ export default async function EmployeeLayout({ children }: { children: ReactNode
           into forceEmployeeView, in which case it stays visible on desktop too. */}
       <div className={cn('flex min-h-dvh flex-col bg-secondary', !forceEmployeeView && 'md:hidden')}>
         <RoleSwitchBanner />
+        <PasswordExpiryBanner />
         <EmployeeHeader />
         <main className="flex-1 overflow-x-hidden pb-16">{children}</main>
 

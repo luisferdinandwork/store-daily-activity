@@ -9,6 +9,8 @@ import { useSession } from 'next-auth/react';
 import AuditSidebar from '@/components/audit/layout/AuditSidebar';
 import AuditNavbar  from '@/components/audit/layout/AuditNavbar';
 import RoleSwitchBanner from '@/components/shared/RoleSwitchBanner';
+import PasswordExpiryBanner from '@/components/shared/PasswordExpiryBanner';
+import AccountNotificationBell from '@/components/shared/AccountNotificationBell';
 
 export default function AuditLayout({ children }: { children: ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -22,9 +24,11 @@ export default function AuditLayout({ children }: { children: ReactNode }) {
       />
       <div className="flex flex-1 flex-col overflow-hidden">
         <RoleSwitchBanner />
+        <PasswordExpiryBanner />
         <AuditNavbar
           collapsed={collapsed}
           onToggle={() => setCollapsed((v) => !v)}
+          right={<AccountNotificationBell />}
         />
         <main className="flex-1 overflow-y-auto">
           {children}

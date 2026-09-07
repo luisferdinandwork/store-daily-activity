@@ -1,6 +1,6 @@
 {
-  "id": "bc20ca4a-7811-4331-aede-686d7147c616",
-  "prevId": "85d04cbd-fa9c-48c4-939d-76327814e7da",
+  "id": "e44c4e0e-7eec-4b4e-a35a-7d7463bccfd7",
+  "prevId": "64aa5b9a-06dc-4dd1-a4a1-8ac0cea244cc",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1837,6 +1837,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "password_changed_at": {
+          "name": "password_changed_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
         },
         "role_id": {
           "name": "role_id",
@@ -4915,13 +4922,12 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
-        "item_dropping_tasks_store_date_shift_unique": {
-          "name": "item_dropping_tasks_store_date_shift_unique",
+        "item_dropping_tasks_store_date_unique": {
+          "name": "item_dropping_tasks_store_date_unique",
           "nullsNotDistinct": false,
           "columns": [
             "store_id",
-            "date",
-            "shift_id"
+            "date"
           ]
         }
       },
@@ -5362,13 +5368,12 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
-        "item_return_tasks_store_date_shift_unique": {
-          "name": "item_return_tasks_store_date_shift_unique",
+        "item_return_tasks_store_date_unique": {
+          "name": "item_return_tasks_store_date_unique",
           "nullsNotDistinct": false,
           "columns": [
             "store_id",
-            "date",
-            "shift_id"
+            "date"
           ]
         }
       },

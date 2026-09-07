@@ -12,6 +12,7 @@ import OpsSidebar from '@/components/ops/layout/OpsSidebar';
 import OpsNavbar  from '@/components/ops/layout/OpsNavbar';
 import NotificationBell from '@/components/ops/layout/NotificationBell';
 import RoleSwitchBanner from '@/components/shared/RoleSwitchBanner';
+import PasswordExpiryBanner from '@/components/shared/PasswordExpiryBanner';
 import { useSession } from 'next-auth/react';
 
 export default function OpsLayout({ children }: { children: ReactNode }) {
@@ -26,6 +27,7 @@ export default function OpsLayout({ children }: { children: ReactNode }) {
       />
       <div className="flex flex-1 flex-col overflow-hidden">
         <RoleSwitchBanner />
+        <PasswordExpiryBanner />
         <OpsNavbar
           collapsed={collapsed}
           onToggle={() => setCollapsed((v) => !v)}

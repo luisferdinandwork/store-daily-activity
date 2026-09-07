@@ -4,7 +4,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { signOut, useSession } from 'next-auth/react';
-import { ClipboardCheck, LogOut, Settings2, Smartphone, Store } from 'lucide-react';
+import { ClipboardCheck, KeyRound, LogOut, Settings2, Smartphone, Store } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { setEmployeeViewCookie } from '@/lib/pic-view';
 import {
@@ -18,6 +18,7 @@ import EmployeeLogoMark from '@/components/employee/EmployeeLogoMark';
 const NAV = [
   { href: '/pic', label: 'Manage Schedule', icon: Settings2, exact: true },
   { href: '/pic/tasks', label: 'Tasks', icon: ClipboardCheck },
+  { href: '/pic/settings', label: 'Settings', icon: KeyRound },
 ];
 
 interface Props {

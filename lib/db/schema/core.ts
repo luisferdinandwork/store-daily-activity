@@ -67,6 +67,15 @@ export const users = pgTable('users', {
   name:     text('name').notNull(),
   password: text('password').notNull(),
 
+  /**
+   * When the password was last set/changed. Drives the 90-day "please change
+   * your password" nudge (notification + banner) for every non-IT role — see
+   * lib/db/utils/password-policy.ts. Defaults to now() so existing rows get a
+   * full grace period from the day the column ships, and gets bumped whenever
+   * the user changes their own password or an admin resets it.
+   */
+  passwordChangedAt: timestamp('password_changed_at').defaultNow().notNull(),
+
   roleId:         integer('role_id').references(() => userRoles.id).notNull(),
   employeeTypeId: integer('employee_type_id').references(() => employeeTypes.id),
 

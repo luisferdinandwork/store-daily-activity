@@ -25,6 +25,7 @@ import {
   AlertTriangle,
   ChevronRight,
   FileText,
+  KeyRound,
   LayoutDashboard,
   LogOut,
   PocketKnife,
@@ -73,6 +74,12 @@ const NAV: NavSection[] = [
     section: 'Issues',
     items: [
       { href: '/finance/issues', label: 'Issues', icon: AlertTriangle },
+    ],
+  },
+  {
+    section: 'Akun',
+    items: [
+      { href: '/finance/settings', label: 'Pengaturan', icon: KeyRound },
     ],
   },
 ];

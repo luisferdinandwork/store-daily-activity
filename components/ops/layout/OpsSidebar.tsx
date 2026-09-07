@@ -13,6 +13,7 @@ import {
   ChevronRight,
   ClipboardCheck,
   FileCheck2,
+  KeyRound,
   LayoutDashboard,
   LogOut,
   MapPinned,
@@ -110,6 +111,12 @@ const NAV = [
       { href: '/ops/petty-cash',           label: 'Petty Cash',           icon: Wallet },
       { href: ITEM_TRANSFERS_ITEM.href,    label: ITEM_TRANSFERS_ITEM.label, icon: ITEM_TRANSFERS_ITEM.icon },
       { href: PERFORMANCE_TARGETS_ITEM.href, label: PERFORMANCE_TARGETS_ITEM.label, icon: PERFORMANCE_TARGETS_ITEM.icon },
+    ],
+  },
+  {
+    section: 'Akun',
+    items: [
+      { href: '/ops/settings', label: 'Pengaturan', icon: KeyRound },
     ],
   },
 ];

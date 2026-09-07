@@ -1,9 +1,9 @@
-// app/api/employee/change-password/route.ts
+// app/api/account/change-password/route.ts
 //
-// POST — an employee changes their own password. Requires the current
-// password and a new password of at least 6 characters. Shares its logic
-// with /api/account/change-password via changeOwnPassword(), which also
-// stamps password_changed_at and clears the 90-day expiry reminder.
+// POST — any authenticated user changes their own password. Role-agnostic;
+// the Ops / Finance / Audit settings screens post here. Employees have their
+// own thin wrapper at /api/employee/change-password, but both call the same
+// changeOwnPassword() util.
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';

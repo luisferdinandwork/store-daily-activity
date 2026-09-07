@@ -1030,6 +1030,8 @@ export async function updateEmployeeBasics(
   if (input.password !== undefined) {
     if (input.password.length < 6) return { success: false, error: 'Password must be at least 6 characters.' };
     updates.password = await bcrypt.hash(input.password, SALT_ROUNDS);
+    // Reset the 90-day password-policy clock — see lib/db/utils/password-policy.ts.
+    updates.passwordChangedAt = new Date();
   }
 
   const [updated] = await db

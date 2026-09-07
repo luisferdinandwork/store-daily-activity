@@ -14,3 +14,4 @@ CRON_SECRET=change-me-to-match-.env.local
 45 0 * * *  curl -fsS -H "Authorization: Bearer $CRON_SECRET" http://127.0.0.1:3000/api/cron/auto-checkout         > /dev/null
 50 0 * * *  curl -fsS -H "Authorization: Bearer $CRON_SECRET" http://127.0.0.1:3000/api/cron/auto-absent           > /dev/null
 55 0 * * *  curl -fsS -H "Authorization: Bearer $CRON_SECRET" http://127.0.0.1:3000/api/cron/notifications-cleanup > /dev/null
+ 0 1 * * *  curl -fsS -H "Authorization: Bearer $CRON_SECRET" http://127.0.0.1:3000/api/cron/password-expiry-check > /dev/null

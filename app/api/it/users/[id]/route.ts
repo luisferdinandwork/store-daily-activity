@@ -99,6 +99,8 @@ export async function PATCH(
       return NextResponse.json({ success: false, error: 'Password must be at least 6 characters.' }, { status: 400 });
     }
     updates.password = await bcrypt.hash(body.password, SALT_ROUNDS);
+    // Reset the 90-day password-policy clock — see lib/db/utils/password-policy.ts.
+    updates.passwordChangedAt = new Date();
   }
 
   const [updated] = await db
