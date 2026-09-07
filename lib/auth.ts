@@ -218,11 +218,15 @@ export const authOptions: NextAuthOptions = {
 
   session: {
     strategy: 'jwt',
-    // Absolute cap on a session's lifetime; refreshed by `updateAge` below
-    // whenever the client is actually active, so in practice this behaves
-    // as a 6-hour idle timeout rather than a fixed 6-hour login.
-    maxAge: 6 * 60 * 60,
-    updateAge: 5 * 60,
+    // 15-minute idle timeout. The JWT expires 15 min after it was last
+    // issued; an active client re-issues it (extending the window) via the
+    // SessionProvider's `refetchInterval` poll + refetch-on-focus, and
+    // `updateAge: 60` lets every such refetch actually roll the token
+    // forward. Once the client stops polling (tab hidden / user gone) the
+    // token lapses after 15 min. `components/idle-logout-watcher.tsx`
+    // enforces the same 15-minute idle cut-off on the client.
+    maxAge: 15 * 60,
+    updateAge: 60,
   },
 
   callbacks: {

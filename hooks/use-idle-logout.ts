@@ -4,7 +4,7 @@
 import { useEffect, useRef } from 'react';
 import { signOut, useSession } from 'next-auth/react';
 
-const IDLE_TIMEOUT_MS = 6 * 60 * 60 * 1000;
+const IDLE_TIMEOUT_MS = 15 * 60 * 1000;
 const ACTIVITY_EVENTS = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'wheel'] as const;
 // Avoid clearing/resetting the timeout on every single mousemove/scroll event.
 const RESET_THROTTLE_MS = 30 * 1000;
