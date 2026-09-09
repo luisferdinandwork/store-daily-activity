@@ -35,6 +35,7 @@ type PhotoType =
 
   // Store Closing task
   | 'eod_edc_settlement_photo'
+  | 'storefront_locked'
 
   // Backward-compatible aliases
   | 'eod_edc_settlement'
@@ -67,6 +68,7 @@ const PHOTO_FOLDER: Record<PhotoType, string> = {
 
   // Store Closing task folders
   eod_edc_settlement_photo: 'store-closing/eod-edc-settlement',
+  storefront_locked: 'store-closing/storefront-locked',
 
   // Backward-compatible aliases
   eod_edc_settlement: 'store-closing/eod-edc-settlement',
@@ -95,6 +97,7 @@ const PHOTO_LIMITS: Record<PhotoType, number> = {
 
   // Store Closing only needs 1 required side-by-side image.
   eod_edc_settlement_photo: 1,
+  storefront_locked: 1,
 
   // Backward-compatible aliases.
   eod_edc_settlement: 1,
@@ -123,6 +126,8 @@ function normalizePhotoType(value: string): PhotoType | null {
   if (value === 'eodEdcSettlementPhoto') return 'eod_edc_settlement_photo';
   if (value === 'eod_edc_settlement_image') return 'eod_edc_settlement_photo';
   if (value === 'store_closing') return 'eod_edc_settlement_photo';
+  if (value === 'storefrontLockedPhoto') return 'storefront_locked';
+  if (value === 'storefront_locked_photo') return 'storefront_locked';
 
   return null;
 }

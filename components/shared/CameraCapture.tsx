@@ -6,13 +6,21 @@
 // It replaces every `<input type="file" capture="environment">` in the tasks,
 // petty cash, and issue-report flows.
 //
-// Flow: live preview → shutter → frozen preview (retake / use photo) → onCapture.
+// Flow: live preview → (optional self-timer countdown) → shutter → frozen
+// preview (retake / use photo) → onCapture.
+//
+// Mirroring: the LIVE preview is flipped horizontally whenever the front
+// ("user") camera is active — a natural selfie-mirror feel — and this follows
+// the camera the user actually switched to, not just the initial prop. The
+// SAVED photo is never mirrored (see useCameraCapture.capture()).
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useEffect, useState } from 'react';
-import { CameraOff, Check, Loader2, RotateCcw, SwitchCamera, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { CameraOff, Check, Loader2, RotateCcw, SwitchCamera, Timer, TimerOff, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useCameraCapture, type CameraFacingMode } from '@/lib/hooks/useCameraCapture';
+
+const TIMER_OPTIONS = [0, 3, 10] as const;
 
 interface CameraCaptureProps {
   open: boolean;
@@ -26,9 +34,24 @@ interface CameraCaptureProps {
 export default function CameraCapture({
   open, onClose, onCapture, facingMode = 'environment', allowSwitchCamera = true, title,
 }: CameraCaptureProps) {
-  const { videoRef, status, error, start, stop, switchCamera, capture } = useCameraCapture();
+  const {
+    videoRef, status, error, facingMode: liveFacingMode, start, stop, switchCamera, capture,
+  } = useCameraCapture();
   const [preview, setPreview] = useState<{ file: File; url: string } | null>(null);
   const [capturing, setCapturing] = useState(false);
+
+  // Self-timer: seconds to wait after pressing the shutter (0 = off).
+  const [timerSec, setTimerSec] = useState<number>(0);
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const countdownTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  function clearCountdown() {
+    if (countdownTimer.current) {
+      clearInterval(countdownTimer.current);
+      countdownTimer.current = null;
+    }
+    setCountdown(null);
+  }
 
   // Start/stop the stream as the modal opens/closes.
   useEffect(() => {
@@ -36,6 +59,7 @@ export default function CameraCapture({
       void start(facingMode);
     } else {
       stop();
+      clearCountdown();
       setPreview(p => {
         if (p) URL.revokeObjectURL(p.url);
         return null;
@@ -52,9 +76,14 @@ export default function CameraCapture({
     return () => { document.body.style.overflow = prev; };
   }, [open]);
 
+  // Always clear a running countdown interval on unmount.
+  useEffect(() => () => {
+    if (countdownTimer.current) clearInterval(countdownTimer.current);
+  }, []);
+
   if (!open) return null;
 
-  async function handleShutter() {
+  async function doCapture() {
     setCapturing(true);
     try {
       const file = await capture();
@@ -67,12 +96,36 @@ export default function CameraCapture({
     }
   }
 
+  function handleShutter() {
+    if (timerSec <= 0) {
+      void doCapture();
+      return;
+    }
+    let remaining = timerSec;
+    setCountdown(remaining);
+    countdownTimer.current = setInterval(() => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        clearCountdown();
+        void doCapture();
+      } else {
+        setCountdown(remaining);
+      }
+    }, 1000);
+  }
+
+  function cycleTimer() {
+    const idx = TIMER_OPTIONS.indexOf(timerSec as (typeof TIMER_OPTIONS)[number]);
+    setTimerSec(TIMER_OPTIONS[(idx + 1) % TIMER_OPTIONS.length]);
+  }
+
   function handleRetake() {
+    clearCountdown();
     setPreview(p => {
       if (p) URL.revokeObjectURL(p.url);
       return null;
     });
-    void start(facingMode);
+    void start(liveFacingMode);
   }
 
   function handleUsePhoto() {
@@ -83,6 +136,7 @@ export default function CameraCapture({
   }
 
   function handleClose() {
+    clearCountdown();
     stop();
     setPreview(p => {
       if (p) URL.revokeObjectURL(p.url);
@@ -90,6 +144,9 @@ export default function CameraCapture({
     });
     onClose();
   }
+
+  const counting = countdown !== null;
+  const showCameraControls = status === 'streaming' && !preview && !counting;
 
   return (
     <div
@@ -108,19 +165,37 @@ export default function CameraCapture({
         >
           <X className="h-5 w-5" />
         </button>
-        {title && <p className="max-w-[60%] truncate text-sm font-semibold text-white">{title}</p>}
-        {allowSwitchCamera && status === 'streaming' && !preview ? (
-          <button
-            type="button"
-            onClick={switchCamera}
-            aria-label="Ganti kamera"
-            className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white active:scale-95"
-          >
-            <SwitchCamera className="h-5 w-5" />
-          </button>
-        ) : (
-          <div className="h-9 w-9" aria-hidden="true" />
-        )}
+        {title && <p className="max-w-[45%] truncate text-sm font-semibold text-white">{title}</p>}
+
+        <div className="flex items-center gap-2">
+          {showCameraControls && (
+            <button
+              type="button"
+              onClick={cycleTimer}
+              aria-label={timerSec === 0 ? 'Aktifkan timer' : `Timer ${timerSec} detik`}
+              className={cn(
+                'flex h-9 min-w-9 items-center justify-center gap-1 rounded-full px-2 text-white active:scale-95',
+                timerSec === 0 ? 'bg-white/10' : 'bg-white/25',
+              )}
+            >
+              {timerSec === 0
+                ? <TimerOff className="h-5 w-5" />
+                : <><Timer className="h-4 w-4" /><span className="text-xs font-bold">{timerSec}s</span></>}
+            </button>
+          )}
+          {allowSwitchCamera && showCameraControls ? (
+            <button
+              type="button"
+              onClick={switchCamera}
+              aria-label="Ganti kamera"
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white active:scale-95"
+            >
+              <SwitchCamera className="h-5 w-5" />
+            </button>
+          ) : (
+            <div className="h-9 w-9" aria-hidden="true" />
+          )}
+        </div>
       </div>
 
       {/* Viewport */}
@@ -134,7 +209,7 @@ export default function CameraCapture({
             autoPlay
             playsInline
             muted
-            className={cn('h-full w-full object-cover', facingMode === 'user' && 'scale-x-[-1]')}
+            className={cn('h-full w-full object-cover', liveFacingMode === 'user' && 'scale-x-[-1]')}
           />
         )}
 
@@ -142,6 +217,21 @@ export default function CameraCapture({
           <div className="absolute inset-0 flex items-center justify-center">
             <Loader2 className="h-8 w-8 animate-spin text-white" />
           </div>
+        )}
+
+        {/* Self-timer countdown — tap anywhere to cancel */}
+        {counting && (
+          <button
+            type="button"
+            onClick={clearCountdown}
+            aria-label="Batalkan timer"
+            className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black/40"
+          >
+            <span className="flex h-28 w-28 items-center justify-center rounded-full bg-black/50 text-6xl font-bold tabular-nums text-white">
+              {countdown}
+            </span>
+            <span className="text-xs font-semibold text-white/80">Ketuk untuk batal</span>
+          </button>
         )}
 
         {status === 'error' && (
@@ -184,8 +274,8 @@ export default function CameraCapture({
           <button
             type="button"
             onClick={handleShutter}
-            disabled={status !== 'streaming' || capturing}
-            aria-label="Ambil foto"
+            disabled={status !== 'streaming' || capturing || counting}
+            aria-label={timerSec > 0 ? `Ambil foto dengan timer ${timerSec} detik` : 'Ambil foto'}
             className="flex h-16 w-16 items-center justify-center rounded-full border-4 border-white/80 disabled:opacity-40"
           >
             {capturing

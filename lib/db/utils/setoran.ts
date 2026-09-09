@@ -12,7 +12,7 @@
 // - amount is accepted as storedAmount
 
 import { db } from '@/lib/db';
-import { and, desc, eq, lt } from 'drizzle-orm';
+import { and, desc, eq, gte, lt, lte } from 'drizzle-orm';
 import {
   setoranTasks,
   setoranMoneyStorage,
@@ -67,6 +67,40 @@ function startOfDay(d: Date): Date {
   const r = new Date(d);
   r.setHours(0, 0, 0, 0);
   return r;
+}
+
+function endOfDay(d: Date): Date {
+  const r = new Date(d);
+  r.setHours(23, 59, 59, 999);
+  return r;
+}
+
+/**
+ * Setoran is a single shared row per store/day (setoran_tasks_store_date_unique).
+ * `setoran_tasks.userId` is just whoever's schedule first materialised the row —
+ * NOT an owner. Any employee scheduled at that store that day may fill it in
+ * (e.g. both PIC 1 and PIC 2 on the morning shift). Returns the acting
+ * employee's own schedule id for that store/day, or null when they have no
+ * schedule there (genuinely not their store → caller should 403).
+ */
+export async function resolveSetoranActorSchedule(
+  userId: string,
+  storeId: number,
+  date: Date,
+): Promise<number | null> {
+  const [row] = await db
+    .select({ id: schedules.id })
+    .from(schedules)
+    .where(and(
+      eq(schedules.userId, userId),
+      eq(schedules.storeId, storeId),
+      eq(schedules.isHoliday, false),
+      gte(schedules.date, startOfDay(date)),
+      lte(schedules.date, endOfDay(date)),
+    ))
+    .limit(1);
+
+  return row?.id ?? null;
 }
 
 function parseAmount(raw: string | number | null | undefined): number {

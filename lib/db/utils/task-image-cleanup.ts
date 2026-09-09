@@ -58,7 +58,7 @@ const SIMPLE_TARGETS: SimpleTarget[] = [
   { table: 'store_front_tasks', dateColumn: 'date', photoColumns: ['storefront_photos', 'rolling_door_closed_photo'] },
   { table: 'setoran_tasks', dateColumn: 'date', photoColumns: ['resi_photo', 'atm_card_selfie_photo'] },
   { table: 'setoran_money_storage', dateColumn: 'date', photoColumns: ['resi_photo', 'atm_card_selfie_photo'] },
-  { table: 'store_closing_tasks', dateColumn: 'date', photoColumns: ['eod_edc_settlement_photo'] },
+  { table: 'store_closing_tasks', dateColumn: 'date', photoColumns: ['eod_edc_settlement_photo', 'storefront_locked_photo'] },
   { table: 'grooming_tasks', dateColumn: 'date', photoColumns: ['selfie_photos'] },
 ];
 

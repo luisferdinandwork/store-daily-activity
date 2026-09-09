@@ -4,19 +4,25 @@
 // Setoran does not enforce location. AccessGuard runs in check-in-only mode
 // (`requireGeo={false}`), and no `geo` is sent on autosave/submit.
 //
-// UI: a single calm column instead of stacked cards —
-//   • two amount inputs
-//   • one summary "table" (label → value rows) for the breakdown
-//   • two slim photo rows
-//   • a collapsible note
+// UI: a single calm column —
+//   • purple summary box: "Total uang Cash Drawer" (uang aktual diterima + sisa
+//     belum disetor) and "Total wajib disetor" (that, rounded DOWN to the
+//     nearest Rp 50.000). Tapping "Total wajib disetor" opens a modal to
+//     override it; a "Hitung otomatis" button in the modal restores the auto value.
+//   • "Uang aktual diterima kemarin" input
+//   • "Kurang" field — the remainder that carries to the next setoran
+//   • two slim photo rows + a note
 // All business logic (autosave, no-geo guard, upload, submit gating) is
 // unchanged from the previous version.
+//
+// Naming ↔ DB: "Total uang Cash Drawer" = expectedAmount + carriedDeficit;
+// "Total wajib disetor" = amount (the deposit); "Kurang" = unpaidAmount.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
-  AlertCircle, AlertTriangle, Camera, Check, CreditCard,
-  Loader2, Receipt, X,
+  AlertCircle, Camera, Check, CreditCard,
+  Loader2, Pencil, Receipt, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -81,6 +87,14 @@ function toNumber(raw: string | null | undefined): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+const SETORAN_STEP = 50_000;
+
+/** Round a cash-drawer total DOWN to the nearest deposit step (kelipatan 50.000). */
+function roundDownToStep(n: number): number {
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.floor(n / SETORAN_STEP) * SETORAN_STEP;
+}
+
 // ─── Page ────────────────────────────────────────────────────────────────────
 
 export default function SetoranTaskPage() {
@@ -97,6 +111,9 @@ export default function SetoranTaskPage() {
 
   const [actualReceivedAmount, setActualReceivedAmount] = useState('');
   const [storedAmount, setStoredAmount] = useState('');
+  // false → "Total wajib disetor" follows the auto kelipatan-50.000 value;
+  // true  → the employee has typed their own amount, leave it alone.
+  const [storedManual, setStoredManual] = useState(false);
   const [resiPhoto, setResiPhoto] = useState<string | null>(null);
   const [atmCardSelfiePhoto, setAtmCardSelfiePhoto] = useState<string | null>(null);
   const [notes, setNotes] = useState('');
@@ -119,7 +136,11 @@ export default function SetoranTaskPage() {
       const d = found.data;
       setTask(d);
       setActualReceivedAmount(String(d.actualReceivedAmount ?? d.expectedAmount ?? ''));
-      setStoredAmount(String(d.storedAmount ?? d.amount ?? ''));
+      const savedStored = d.storedAmount ?? d.amount ?? '';
+      setStoredAmount(String(savedStored));
+      // A previously saved deposit is treated as a manual value so the auto
+      // recompute doesn't clobber it on load.
+      setStoredManual(Boolean(savedStored));
       setResiPhoto(d.resiPhoto ?? null);
       setAtmCardSelfiePhoto(d.atmCardSelfiePhoto ?? null);
       setNotes(d.notes ?? '');
@@ -138,10 +159,23 @@ export default function SetoranTaskPage() {
     [task],
   );
   const actualReceivedNumber = useMemo(() => toNumber(actualReceivedAmount), [actualReceivedAmount]);
-  const requiredStoreAmount = actualReceivedNumber + previousUnpaidAmount;
+
+  // "Total uang Cash Drawer" = uang aktual diterima + sisa belum disetor.
+  const cashDrawerTotal = actualReceivedNumber + previousUnpaidAmount;
+  // Auto-suggested deposit: that total rounded DOWN to the nearest Rp 50.000.
+  const autoStored = roundDownToStep(cashDrawerTotal);
   const storedNumber = toNumber(storedAmount);
-  const unpaidAmount = Math.max(0, requiredStoreAmount - storedNumber);
-  const isOverStored = storedNumber > requiredStoreAmount && requiredStoreAmount > 0;
+  // "Kurang" — the odd remainder that carries into the next setoran.
+  const kurang = Math.max(0, cashDrawerTotal - storedNumber);
+  const isOverStored = storedNumber > cashDrawerTotal && cashDrawerTotal > 0;
+
+  // Keep "Total wajib disetor" tracking the auto value until the employee
+  // overrides it (or presses "Hitung otomatis" to clear the override).
+  useEffect(() => {
+    if (storedManual) return;
+    const next = autoStored > 0 ? String(autoStored) : '';
+    setStoredAmount((prev) => (prev === next ? prev : next));
+  }, [autoStored, storedManual]);
 
   // ─── Render ──────────────────────────────────────────────────────────────
   if (loading) {
@@ -191,10 +225,12 @@ export default function SetoranTaskPage() {
           setAtmCardSelfiePhoto={setAtmCardSelfiePhoto}
           notes={notes}
           setNotes={setNotes}
-          previousUnpaidAmount={previousUnpaidAmount}
-          requiredStoreAmount={requiredStoreAmount}
+          cashDrawerTotal={cashDrawerTotal}
+          autoStored={autoStored}
+          storedManual={storedManual}
+          setStoredManual={setStoredManual}
           storedNumber={storedNumber}
-          unpaidAmount={unpaidAmount}
+          kurang={kurang}
           isOverStored={isOverStored}
           readonly={readonly}
           dis={dis}
@@ -230,10 +266,12 @@ interface BodyProps {
   setAtmCardSelfiePhoto: (v: string | null) => void;
   notes: string;
   setNotes: (v: string) => void;
-  previousUnpaidAmount: number;
-  requiredStoreAmount: number;
+  cashDrawerTotal: number;
+  autoStored: number;
+  storedManual: boolean;
+  setStoredManual: (v: boolean) => void;
   storedNumber: number;
-  unpaidAmount: number;
+  kurang: number;
   isOverStored: boolean;
   readonly: boolean;
   dis: boolean;
@@ -255,12 +293,15 @@ function SetoranPageBody(props: BodyProps) {
   const {
     task, actualReceivedAmount, setActualReceivedAmount, storedAmount, setStoredAmount,
     resiPhoto, setResiPhoto, atmCardSelfiePhoto, setAtmCardSelfiePhoto, notes, setNotes,
-    previousUnpaidAmount, requiredStoreAmount, storedNumber, unpaidAmount, isOverStored,
+    cashDrawerTotal, autoStored, storedManual, setStoredManual,
+    storedNumber, kurang, isOverStored,
     readonly, dis, accessOk, banner, lockedOverlay,
     submitting, setSubmitting, uploading, setUploading,
     submitError, setSubmitError,
     cameraTarget, setCameraTarget, router,
   } = props;
+
+  const [editOpen, setEditOpen] = useState(false);
 
   // ─── Autosave (no geo) ───────────────────────────────────────────────────
   const { status: saveStatus, lastSaved, save: rawAutoSave } = useAutoSave({
@@ -321,11 +362,11 @@ function SetoranPageBody(props: BodyProps) {
     setSubmitError(null);
 
     if (storedNumber <= 0) {
-      setSubmitError('Nominal yang disetor wajib diisi.');
+      setSubmitError('Total wajib disetor belum terisi. Isi uang aktual diterima kemarin terlebih dahulu.');
       return;
     }
-    if (storedNumber > requiredStoreAmount) {
-      setSubmitError('Uang disetor tidak boleh lebih besar dari total wajib disetor.');
+    if (storedNumber > cashDrawerTotal) {
+      setSubmitError('Total wajib disetor tidak boleh lebih besar dari total uang cash drawer.');
       return;
     }
     if (!resiPhoto) {
@@ -368,7 +409,7 @@ function SetoranPageBody(props: BodyProps) {
       setSubmitting(false);
     }
   }, [
-    readonly, storedNumber, requiredStoreAmount, resiPhoto, atmCardSelfiePhoto,
+    readonly, storedNumber, cashDrawerTotal, resiPhoto, atmCardSelfiePhoto,
     task, actualReceivedAmount, storedAmount, notes, router,
     setSubmitError, setSubmitting,
   ]);
@@ -382,8 +423,8 @@ function SetoranPageBody(props: BodyProps) {
   const submitHint = (() => {
     if (readonly) return undefined;
     if (!accessOk) return 'Pastikan kamu sudah absen masuk.';
-    if (storedNumber <= 0) return 'Isi nominal yang disetor terlebih dahulu.';
-    if (isOverStored) return 'Uang disetor melebihi total wajib disetor.';
+    if (storedNumber <= 0) return 'Isi uang aktual diterima kemarin terlebih dahulu.';
+    if (isOverStored) return 'Total wajib disetor melebihi total uang cash drawer.';
     if (!resiPhoto) return 'Foto resi belum diupload.';
     if (!atmCardSelfiePhoto) return 'Foto selfie dengan kartu ATM belum diupload.';
     return undefined;
@@ -428,14 +469,45 @@ function SetoranPageBody(props: BodyProps) {
           {lockedOverlay}
 
           <div className="space-y-5">
-            {previousUnpaidAmount > 0 && (
-              <div className="flex items-start gap-2.5 rounded-xl border border-amber-300 bg-amber-50 px-3.5 py-2.5">
-                <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-700" />
-                <p className="text-xs text-amber-900">
-                  Sisa unpaid sebelumnya <span className="font-bold">{rupiah(previousUnpaidAmount)}</span> ditambahkan ke total hari ini.
+            {/* ─── Summary box ──────────────────────────────────────────────
+                Total uang Cash Drawer  = uang aktual diterima + sisa belum disetor
+                Total wajib disetor     = that, rounded down to kelipatan 50.000.
+                Tap "Total wajib disetor" to override it.  */}
+            <div className="space-y-2.5 rounded-2xl border border-primary/20 bg-primary/5 px-4 py-4">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-primary/80">
+                  Total uang Cash Drawer
+                </p>
+                <p className="mt-0.5 text-2xl font-bold tabular-nums text-foreground">
+                  {rupiah(cashDrawerTotal)}
                 </p>
               </div>
-            )}
+
+              <button
+                type="button"
+                onClick={() => setEditOpen(true)}
+                disabled={dis}
+                className="flex w-full items-center justify-between gap-2 rounded-xl border-t border-primary/15 pt-3 text-left transition-opacity disabled:opacity-100"
+              >
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-primary/80">
+                  Total wajib disetor
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="text-xl font-bold tabular-nums text-primary">
+                    {rupiah(storedNumber)}
+                  </span>
+                  {!dis && <Pencil className="h-3.5 w-3.5 text-primary/60" />}
+                </span>
+              </button>
+
+              {!dis && (
+                <p className="text-[11px] text-primary/60">
+                  {storedManual
+                    ? `Diubah manual · ketuk untuk ubah · otomatis ${rupiah(autoStored)}`
+                    : 'Otomatis kelipatan Rp 50.000 · ketuk untuk ubah'}
+                </p>
+              )}
+            </div>
 
             {/* ─── Inputs ─────────────────────────────────────────────────── */}
             <div className="space-y-3">
@@ -447,31 +519,9 @@ function SetoranPageBody(props: BodyProps) {
                 disabled={dis}
                 placeholder="1.000.000"
               />
-              <AmountField
-                label="Nominal yang disetor"
-                value={storedAmount}
-                onChange={(v) => setStoredAmount(onlyDigits(v))}
-                onBlur={() => autoSave({ storedAmount })}
-                disabled={dis}
-                error={isOverStored ? 'Tidak boleh melebihi total wajib disetor.' : undefined}
-                placeholder="950.000"
-              />
-            </div>
 
-            {/* ─── Breakdown table ────────────────────────────────────────── */}
-            <SummaryTable>
-              <SummaryRow label="Uang diterima" value={rupiah(actualReceivedNumberOf(actualReceivedAmount))} />
-              <SummaryRow label="Unpaid sebelumnya" value={rupiah(previousUnpaidAmount)} muted={previousUnpaidAmount === 0} />
-              <SummaryRow label="Total wajib disetor" value={rupiah(requiredStoreAmount)} strong />
-              <SummaryRow label="Disetor" value={rupiah(storedNumber)} />
-              <SummaryRow
-                label={unpaidAmount === 0 ? 'Status' : 'Sisa belum disetor'}
-                value={unpaidAmount === 0 ? 'Setoran cukup' : rupiah(unpaidAmount)}
-                tone={unpaidAmount === 0 ? 'ok' : 'warn'}
-                strong
-                last
-              />
-            </SummaryTable>
+              <KurangField amount={kurang} isOver={isOverStored} pending={storedNumber <= 0} />
+            </div>
 
             {/* ─── Photos ─────────────────────────────────────────────────── */}
             <div>
@@ -539,17 +589,178 @@ function SetoranPageBody(props: BodyProps) {
         hint={submitHint}
         hidden={readonly}
       />
+
+      {editOpen && (
+        <StoredAmountModal
+          onClose={() => setEditOpen(false)}
+          cashDrawerTotal={cashDrawerTotal}
+          autoStored={autoStored}
+          current={storedAmount}
+          onSave={(value, manual) => {
+            if (manual) {
+              setStoredAmount(value);
+              setStoredManual(true);
+            } else {
+              setStoredManual(false);
+            }
+            setEditOpen(false);
+            autoSave({ storedAmount: manual ? value : String(autoStored) });
+          }}
+        />
+      )}
     </main>
   );
 }
 
-// Small local helper so the table's "Uang diterima" row matches the input live.
-function actualReceivedNumberOf(raw: string): number {
-  const n = Number(raw ?? 0);
-  return Number.isFinite(n) ? n : 0;
+// ─── Local UI pieces ────────────────────────────────────────────────────────
+
+// Read-only "Kurang" field — the odd remainder (Total uang Cash Drawer −
+// Total wajib disetor) that carries into the next setoran.
+function KurangField({
+  amount, isOver, pending,
+}: {
+  amount: number;
+  isOver: boolean;
+  pending: boolean;
+}) {
+  const tone: 'neutral' | 'ok' | 'warn' | 'error' =
+    pending ? 'neutral' : isOver ? 'error' : amount > 0 ? 'warn' : 'ok';
+
+  const box = {
+    neutral: 'border-border bg-secondary text-muted-foreground',
+    ok: 'border-green-200 bg-green-50 text-green-700',
+    warn: 'border-amber-200 bg-amber-50 text-amber-800',
+    error: 'border-red-200 bg-red-50 text-red-700',
+  }[tone];
+
+  const helper = {
+    neutral: 'Isi uang aktual diterima kemarin dulu.',
+    ok: 'Setoran pas.',
+    warn: 'Otomatis ditagihkan di setoran berikutnya.',
+    error: 'Perbaiki nominal Total wajib disetor di atas.',
+  }[tone];
+
+  return (
+    <div className="space-y-1.5">
+      <span className="px-0.5 text-xs font-medium text-muted-foreground">Kurang</span>
+      <div className={cn(
+        'flex h-12 w-full items-center gap-1.5 rounded-xl border px-3.5 text-base font-bold tabular-nums',
+        box,
+      )}>
+        <span className="text-sm font-semibold opacity-70">Rp</span>
+        <span>{Math.max(0, amount).toLocaleString('id-ID')}</span>
+      </div>
+      <p className={cn('px-0.5 text-[11px]', isOver ? 'font-medium text-red-600' : 'text-muted-foreground')}>
+        {helper}
+      </p>
+    </div>
+  );
 }
 
-// ─── Local UI pieces ────────────────────────────────────────────────────────
+// Bottom-sheet modal for overriding "Total wajib disetor". "Hitung otomatis"
+// restores the kelipatan-50.000 value derived from the Cash Drawer total.
+// Mounted only while open (see call site), so `current` seeds the draft once.
+function StoredAmountModal({
+  onClose, cashDrawerTotal, autoStored, current, onSave,
+}: {
+  onClose: () => void;
+  cashDrawerTotal: number;
+  autoStored: number;
+  current: string;
+  onSave: (value: string, manual: boolean) => void;
+}) {
+  const [draft, setDraft] = useState(current);
+  const [useAuto, setUseAuto] = useState(false);
+
+  const draftNum = toNumber(draft);
+  const effective = useAuto ? autoStored : draftNum;
+  const over = effective > cashDrawerTotal && cashDrawerTotal > 0;
+  const previewKurang = Math.max(0, cashDrawerTotal - effective);
+  const canSave = !over && effective > 0;
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-end justify-center bg-black/60 sm:items-center"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+    >
+      <div
+        className="relative mx-2 flex w-full flex-col rounded-t-3xl bg-background shadow-2xl sm:mb-0 sm:max-w-sm sm:rounded-3xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex justify-center pt-3 pb-1 sm:hidden" aria-hidden="true">
+          <div className="h-1 w-10 rounded-full bg-border" />
+        </div>
+
+        <div className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
+          <div className="min-w-0">
+            <h3 className="text-base font-bold text-foreground">Total wajib disetor</h3>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Total uang Cash Drawer {rupiah(cashDrawerTotal)}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-secondary text-muted-foreground"
+            aria-label="Tutup"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="space-y-3 px-5 py-4">
+          <AmountField
+            label="Nominal yang disetor"
+            value={useAuto ? String(autoStored) : draft}
+            onChange={(v) => { setDraft(onlyDigits(v)); setUseAuto(false); }}
+            onBlur={() => {}}
+            error={over ? 'Tidak boleh melebihi total uang cash drawer.' : undefined}
+            placeholder="1.750.000"
+          />
+
+          <button
+            type="button"
+            onClick={() => setUseAuto(true)}
+            className={cn(
+              'flex w-full items-center justify-between gap-2 rounded-xl border px-3.5 py-2.5 text-left text-xs transition-colors',
+              useAuto
+                ? 'border-primary/40 bg-primary/5 text-primary'
+                : 'border-border bg-secondary text-muted-foreground hover:bg-secondary/70',
+            )}
+          >
+            <span className="font-medium">Hitung otomatis · kelipatan Rp 50.000</span>
+            <span className="font-bold tabular-nums">{rupiah(autoStored)}</span>
+          </button>
+
+          <div className="flex items-center justify-between rounded-xl bg-secondary px-3.5 py-2.5 text-xs">
+            <span className="text-muted-foreground">Kurang</span>
+            <span className="font-bold tabular-nums text-foreground">{rupiah(previewKurang)}</span>
+          </div>
+        </div>
+
+        <div className="flex gap-2 border-t border-border px-5 pb-4 pt-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex-1 rounded-xl border border-border bg-card px-4 py-3 text-sm font-semibold text-foreground"
+          >
+            Batal
+          </button>
+          <button
+            type="button"
+            disabled={!canSave}
+            onClick={() => onSave(useAuto ? String(autoStored) : draft, !useAuto)}
+            className="flex-1 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground disabled:opacity-60"
+          >
+            Simpan
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
@@ -560,7 +771,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 }
 
 function AmountField({
-  label, value, onChange, onBlur, disabled, placeholder, error,
+  label, value, onChange, onBlur, disabled, placeholder, error, hint, action,
 }: {
   label: string;
   value: string;
@@ -569,11 +780,24 @@ function AmountField({
   disabled?: boolean;
   placeholder?: string;
   error?: string;
+  hint?: string;
+  action?: { label: string; onClick: () => void };
 }) {
   const formatted = value ? Number(value).toLocaleString('id-ID') : '';
   return (
-    <label className="block space-y-1.5">
-      <span className="px-0.5 text-xs font-medium text-muted-foreground">{label}</span>
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-2 px-0.5">
+        <span className="text-xs font-medium text-muted-foreground">{label}</span>
+        {action && (
+          <button
+            type="button"
+            onClick={action.onClick}
+            className="text-[11px] font-semibold text-primary hover:underline"
+          >
+            {action.label}
+          </button>
+        )}
+      </div>
       <div className="relative">
         <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-semibold text-muted-foreground">
           Rp
@@ -592,55 +816,15 @@ function AmountField({
           )}
         />
       </div>
-      {error && <p className="px-0.5 text-[11px] font-medium text-red-600">{error}</p>}
-    </label>
-  );
-}
-
-// A clean key→value table: one bordered container, hairline-separated rows.
-function SummaryTable({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="overflow-hidden rounded-xl border border-border bg-card">
-      {children}
+      {error
+        ? <p className="px-0.5 text-[11px] font-medium text-red-600">{error}</p>
+        : hint
+          ? <p className="px-0.5 text-[11px] text-muted-foreground">{hint}</p>
+          : null}
     </div>
   );
 }
 
-function SummaryRow({
-  label, value, strong, muted, last, tone,
-}: {
-  label: string;
-  value: string;
-  strong?: boolean;
-  muted?: boolean;
-  last?: boolean;
-  tone?: 'ok' | 'warn';
-}) {
-  const toneClass =
-    tone === 'ok' ? 'text-green-700'
-    : tone === 'warn' ? 'text-amber-700'
-    : 'text-foreground';
-
-  return (
-    <div className={cn(
-      'flex items-center justify-between gap-3 px-3.5 py-2.5',
-      !last && 'border-b border-border',
-      tone === 'ok' && 'bg-green-50',
-      tone === 'warn' && 'bg-amber-50',
-    )}>
-      <span className={cn('text-xs', muted ? 'text-muted-foreground' : 'text-muted-foreground', strong && 'font-semibold text-foreground')}>
-        {label}
-      </span>
-      <span className={cn(
-        'tabular-nums',
-        strong ? 'text-sm font-bold' : 'text-sm font-semibold',
-        toneClass,
-      )}>
-        {value}
-      </span>
-    </div>
-  );
-}
 
 // A single compact photo row — thumbnail/icon, label, and state on the right.
 function PhotoRow({

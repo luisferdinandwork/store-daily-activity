@@ -60,6 +60,7 @@ export interface GeoPoint {
 
 export const STORE_CLOSING_PHOTO_RULES = {
   eodEdcSettlement: { required: true },
+  storefrontLocked: { required: true },
 } as const;
 
 export type StoreClosingOpenStatementDecision = 'post_statement' | 'on_hold';
@@ -78,8 +79,10 @@ export interface SubmitStoreClosingInput {
   edcSummaryDone: boolean;
   edcSummaryNotes?: string;
 
-  /** Required evidence: photo of EOD and EDC settlement side by side. */
+  /** Required evidence: photo of the Z-Report and EDC settlement together. */
   eodEdcSettlementPhoto: string | null;
+  /** Required evidence: photo of the storefront locked (rolling door / pintu). */
+  storefrontLockedPhoto: string | null;
 
   openStatementDecision: StoreClosingOpenStatementDecision;
   openStatementHoldReason?: string;
@@ -93,6 +96,7 @@ export interface AutoSaveStoreClosingPatch {
   edcSummaryDone?: boolean;
   edcSummaryNotes?: string | null;
   eodEdcSettlementPhoto?: string | null;
+  storefrontLockedPhoto?: string | null;
   openStatementDecision?: StoreClosingOpenStatementDecision | null;
   openStatementHoldReason?: string | null;
   notes?: string | null;
@@ -252,7 +256,11 @@ function validateSubmitPayload(input: SubmitStoreClosingInput): string | null {
   }
 
   if (!isFilled(input.eodEdcSettlementPhoto)) {
-    return 'Foto EOD dan EDC settlement berdampingan wajib diupload.';
+    return 'Foto Z-Report dan EDC settlement wajib diupload.';
+  }
+
+  if (!isFilled(input.storefrontLockedPhoto)) {
+    return 'Foto storefront terkunci wajib diupload.';
   }
 
   if (!input.openStatementDecision) {
@@ -277,6 +285,7 @@ async function createOpenStatementHoldIssue(input: {
   userId: string;
   reason: string;
   eodEdcSettlementPhoto: string | null;
+  storefrontLockedPhoto?: string | null;
 }): Promise<Issue> {
   const [store] = await db
     .select({ name: stores.name })
@@ -313,7 +322,9 @@ async function createOpenStatementHoldIssue(input: {
     storeId: input.task.storeId,
     assignedToRoleIds: operationRoleIds,
     status: 'draft',
-    attachmentUrls: input.eodEdcSettlementPhoto ? [input.eodEdcSettlementPhoto] : [],
+    attachmentUrls: [input.eodEdcSettlementPhoto, input.storefrontLockedPhoto].filter(
+      (u): u is string => typeof u === 'string' && u.length > 0,
+    ),
   });
 
   const [issue] = await db
@@ -494,6 +505,12 @@ export async function autoSaveStoreClosing(
       update.eodEdcSettlementPhotoAt = now;
     }
 
+    if ('storefrontLockedPhoto' in input.patch) {
+      update.storefrontLockedPhoto = input.patch.storefrontLockedPhoto ?? null;
+      update.storefrontLockedPhotoBy = input.userId;
+      update.storefrontLockedPhotoAt = now;
+    }
+
     if ('openStatementDecision' in input.patch) {
       update.openStatementDecision = input.patch.openStatementDecision ?? null;
       update.openStatementBy = input.userId;
@@ -610,6 +627,7 @@ export async function submitStoreClosing(
 
     const now = new Date();
     const sideBySidePhoto = input.eodEdcSettlementPhoto?.trim() ?? null;
+    const storefrontLockedPhoto = input.storefrontLockedPhoto?.trim() ?? null;
     const holdReason =
       input.openStatementDecision === 'on_hold'
         ? input.openStatementHoldReason?.trim() || 'Tidak ada alasan tambahan dari employee.'
@@ -638,6 +656,10 @@ export async function submitStoreClosing(
       eodEdcSettlementPhotoBy: input.userId,
       eodEdcSettlementPhotoAt: now,
 
+      storefrontLockedPhoto: storefrontLockedPhoto,
+      storefrontLockedPhotoBy: input.userId,
+      storefrontLockedPhotoAt: now,
+
       openStatementDecision: input.openStatementDecision,
       openStatementHoldReason: holdReason,
       openStatementBy: input.userId,
@@ -657,6 +679,7 @@ export async function submitStoreClosing(
             userId: input.userId,
             reason: input.openStatementHoldReason ?? '',
             eodEdcSettlementPhoto: sideBySidePhoto,
+            storefrontLockedPhoto,
           });
 
       const [row] = await db

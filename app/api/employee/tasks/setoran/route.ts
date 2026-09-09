@@ -6,16 +6,10 @@ import {
   submitSetoran,
   autoSaveSetoran,
   getSetoranById,
+  resolveSetoranActorSchedule,
   type SetoranAutoSavePatch,
 } from '@/lib/db/utils/setoran';
-
-function toInt(val: unknown, field: string): number {
-  const n = parseInt(String(val ?? ''), 10);
-  if (Number.isNaN(n)) {
-    throw new Error(`${field} must be a valid integer, got: ${JSON.stringify(val)}`);
-  }
-  return n;
-}
+import type { SetoranTask } from '@/lib/db/schema';
 
 function tryInt(val: unknown): number | null {
   if (val === undefined || val === null || val === '') return null;
@@ -62,7 +56,12 @@ async function readJson(req: NextRequest): Promise<Record<string, unknown> | Nex
   }
 }
 
-async function resolveTaskFromBody(body: Record<string, unknown>, userId: string) {
+type ResolvedSetoranTask = SetoranTask & { actorScheduleId: number };
+
+async function resolveTaskFromBody(
+  body: Record<string, unknown>,
+  userId: string,
+): Promise<ResolvedSetoranTask | null> {
   const taskId = tryInt(body.taskId);
 
   if (!taskId) return null;
@@ -72,11 +71,18 @@ async function resolveTaskFromBody(body: Record<string, unknown>, userId: string
     throw new Error(`Setoran task ${taskId} not found.`);
   }
 
-  if (task.userId !== userId) {
+  // Setoran is a shared row per store/day — not owned by task.userId. Allow any
+  // employee scheduled at this store that day; reject the rest with 403.
+  const actorScheduleId = await resolveSetoranActorSchedule(
+    userId,
+    task.storeId,
+    task.date,
+  );
+  if (!actorScheduleId) {
     throw new Error('Forbidden');
   }
 
-  return task;
+  return { ...task, actorScheduleId };
 }
 
 export async function POST(req: NextRequest) {
@@ -93,7 +99,7 @@ export async function POST(req: NextRequest) {
   try {
     const task = await resolveTaskFromBody(body, session.user.id);
 
-    const scheduleId = tryInt(body.scheduleId) ?? task?.scheduleId;
+    const scheduleId = task?.actorScheduleId ?? tryInt(body.scheduleId) ?? task?.scheduleId;
     const storeId = tryInt(body.storeId) ?? task?.storeId;
 
     if (!scheduleId) return jsonError('scheduleId is required.');
@@ -139,7 +145,7 @@ export async function PATCH(req: NextRequest) {
 
   try {
     const task = await resolveTaskFromBody(body, session.user.id);
-    const scheduleId = tryInt(body.scheduleId) ?? task?.scheduleId;
+    const scheduleId = task?.actorScheduleId ?? tryInt(body.scheduleId) ?? task?.scheduleId;
 
     if (!scheduleId) {
       return jsonError('scheduleId or taskId is required for Setoran autosave.');

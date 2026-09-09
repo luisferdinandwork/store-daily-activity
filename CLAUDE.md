@@ -18,7 +18,7 @@ Guidance for AI assistants working in this repo. Keep this file short and curren
 
 | Role (`user_roles.code`) | Panel | Notes |
 |---|---|---|
-| `employee` | `/employee` (mobile) | `employee_types.code`: `pic_1`, `pic_2`, `sa`. PIC 1/2 also get `/pic` (schedule + team task progress). |
+| `employee` | `/employee` (mobile) | `employee_types.code`: `pic_1`, `pic_2`, `sa`. PIC 1/2 also get `/pic` (team task progress + **read-only** schedule: they upload the Excel for a month with no schedule yet; editing/creating/deleting is Ops-only, so to fix a mistake Ops removes the month from `/ops/schedules` and the PIC re-uploads). |
 | `ops` | `/ops` | `employee_types.code`: `ops_ho` (all stores) or `ops_area` (own `areaId` only). |
 | `finance` | `/finance` | |
 | `audit` | `/audit` | |
@@ -57,6 +57,7 @@ Guidance for AI assistants working in this repo. Keep this file short and curren
 npm run dev                      # dev server on :3000
 npm run db:generate              # new migration from lib/db/schema changes
 npm run db:migrate               # apply migrations
+npm run db:baseline              # mark already-satisfied migrations as applied (no SQL run); -- --dry to preview
 npm run db:reset                 # DROP everything in public schema
 npm run db:seed                  # seed (see scripts/seed/dataset.ts); -- --list for steps
 npm run db:seed -- --only=tasks,attendance   # opt-in demo activity
@@ -76,3 +77,5 @@ Run seed/migrate/probe scripts as `npx dotenv -e .env.local -- tsx <file>` (`@/l
 - Don't commit or push unless asked. Branch off `main` first if you do.
 - After editing `lib/db/utils/shift-lookup.ts`-cached data (shifts) via a reseed, restart the dev server.
 - The hosted DB in `.env.local` is shared — `db:reset` wipes real data. Confirm before destructive DB ops.
+- **Migration history got reset once** (old files deleted, `0000_lyrical_red_ghost` regenerated as a full baseline). `db:migrate` decides what to run purely by the journal `when` timestamp, so a fresh baseline looks "newer" than the DB and would re-`CREATE TABLE` everything. Fix / normal flow: edit schema → `db:generate` → review the SQL → `db:migrate`. If migration files ever get blown away again: `db:generate` (fresh baseline) → `db:baseline` (stamps every already-satisfied migration as applied without running it) → carry on. `db:baseline` is idempotent and finishes with a **column-drift report** (schema vs live DB).
+- **Column drift** (a table exists but is missing a column the schema declares — e.g. `users.password_changed_at` was in the schema but never migrated, breaking every `SELECT`-whole-row on `users`): `db:generate`/`db:baseline` can't detect it (they diff snapshots, not the live DB). Fix: `npx drizzle-kit generate --custom --name sync_<thing>`, put `ALTER TABLE "x" ADD COLUMN IF NOT EXISTS "y" …` in the generated `.sql`, then `db:migrate`. `db:baseline`'s drift report lists these.

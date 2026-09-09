@@ -7,6 +7,7 @@ import {
   importScheduleFromParsed,
   ScheduleImportValidationError,
 } from '@/lib/schedule-import';
+import { dateToYearMonth, getMonthlySchedule } from '@/lib/schedule-utils';
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -14,11 +15,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
   }
 
-  const user           = session.user as any;
-  const actorId        = user.id           as string;
-  const role           = user.role         as string;
-  const employeeType   = user.employeeType as string | null;
-  const rawActorStoreId = user.homeStoreId as string | number | null | undefined;
+  const actorId         = session.user.id;
+  const role            = session.user.role;
+  const employeeType    = session.user.employeeType;
+  const rawActorStoreId = session.user.homeStoreId;
 
   if (role !== 'ops' && role !== 'it' && employeeType !== 'pic_1' && employeeType !== 'pic_2') {
     return NextResponse.json(
@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'No file uploaded.' }, { status: 400 });
     }
 
-    let storeMap: Record<string, number> = {};
+    const storeMap: Record<string, number> = {};
     if (rawMap) {
       try {
         const parsed = JSON.parse(rawMap) as Record<string, string | number>;
@@ -83,6 +83,26 @@ export async function POST(req: NextRequest) {
         { success: false, error: 'No storeMap provided and actor has no home store.' },
         { status: 400 },
       );
+    }
+
+    // PIC may only upload a month that does NOT already have a schedule.
+    // To replace one, Ops removes it from the Ops panel first. (Ops/IT keep the
+    // replace-on-import behaviour via their own /api/ops/schedules/import.)
+    const isManager = role === 'ops' || role === 'it';
+    if (!isManager && actorStoreId != null) {
+      const yearMonth = dateToYearMonth(parsed.month);
+      const existing = await getMonthlySchedule(actorStoreId, yearMonth);
+      if (existing) {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              `Jadwal untuk ${yearMonth} sudah ada di sistem. Minta Ops menghapus jadwal tersebut ` +
+              `dari Ops Panel terlebih dahulu, lalu upload ulang file Excel yang sudah diperbaiki.`,
+          },
+          { status: 409 },
+        );
+      }
     }
 
     const normalized: Record<string, number> = {};

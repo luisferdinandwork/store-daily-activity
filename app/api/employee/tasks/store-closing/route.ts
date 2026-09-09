@@ -76,6 +76,7 @@ export async function POST(req: NextRequest) {
       // New payload
       eodZReportDone?: boolean;
       eodEdcSettlementPhoto?: string | null;
+      storefrontLockedPhoto?: string | null;
 
       // Backward-compatible payload from the previous Store Closing UI.
       zReportPhotos?: string[];
@@ -128,6 +129,7 @@ export async function POST(req: NextRequest) {
       eodZReportDone: !!body.eodZReportDone,
       eodEdcSettlementPhoto:
         body.eodEdcSettlementPhoto ?? body.zReportPhotos?.[0] ?? null,
+      storefrontLockedPhoto: body.storefrontLockedPhoto ?? null,
       edcSettlementDone: !!body.edcSettlementDone,
       edcSettlementNotes: body.edcSettlementNotes,
       edcSummaryDone: !!body.edcSummaryDone,

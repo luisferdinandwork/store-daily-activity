@@ -653,14 +653,14 @@ function SetoranDetail({ task }: { task: FlatTask }) {
   return (
     <div>
       <div className="space-y-1 divide-y divide-slate-100">
-        <InfoRow label="Uang diterima" value={fmtAmount(actualReceived)} />
+        <InfoRow label="Uang aktual diterima" value={fmtAmount(actualReceived)} />
         {Number(previousUnpaid) > 0 && (
-          <InfoRow label="Sisa kemarin" value={<span className="text-amber-600">{fmtAmount(previousUnpaid)}</span>} />
+          <InfoRow label="Sisa belum disetor" value={<span className="text-amber-600">{fmtAmount(previousUnpaid)}</span>} />
         )}
-        {Boolean(requiredStore) && <InfoRow label="Wajib disetor" value={fmtAmount(requiredStore)} />}
-        <InfoRow label="Disetor" value={fmtAmount(stored)} />
+        {Boolean(requiredStore) && <InfoRow label="Total uang cash drawer" value={fmtAmount(requiredStore)} />}
+        <InfoRow label="Total wajib disetor" value={fmtAmount(stored)} />
         {Number(unpaid) > 0 && (
-          <InfoRow label="Belum lunas" value={<span className="font-bold text-amber-600">{fmtAmount(unpaid)}</span>} />
+          <InfoRow label="Kurang" value={<span className="font-bold text-amber-600">{fmtAmount(unpaid)}</span>} />
         )}
       </div>
       <div className="mt-2 space-y-2">
@@ -895,13 +895,19 @@ function StoreClosingDetail({ task }: { task: FlatTask }) {
         <p className="mt-1 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">{edcSettlementNotes}</p>
       )}
 
-      {/* 4 · Evidence photo (EOD + EDC settlement side by side) */}
-      <div className="mt-3">
+      {/* 4 · Evidence photos */}
+      <div className="mt-3 space-y-2">
         <PhotoGrid
-          label="Foto EOD + EDC Settlement"
+          label="Foto Z-Report & EDC Settlement"
           photos={e.eodEdcSettlementPhoto}
           columns={2}
-          emptyHint="Belum ada foto bukti EOD + EDC Settlement."
+          emptyHint="Belum ada foto Z-Report & EDC Settlement."
+        />
+        <PhotoGrid
+          label="Foto Storefront Dikunci"
+          photos={e.storefrontLockedPhoto}
+          columns={2}
+          emptyHint="Belum ada foto storefront terkunci."
         />
       </div>
 

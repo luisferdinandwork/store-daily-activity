@@ -9,7 +9,7 @@ import {
 } from '@/lib/schedule-utils';
 
 import {
-  canManageSchedule,
+  canEditSchedule,
   parseLocalDate,
   resolveActorCodes,
 } from '../_utils';
@@ -24,15 +24,14 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const user = session.user as any;
-  const actorId = user.id as string;
-  const rawHomeStoreId = user.homeStoreId as string | number | null | undefined;
+  const actorId = session.user.id;
+  const rawHomeStoreId = session.user.homeStoreId;
 
   const { role, empType } = await resolveActorCodes(actorId);
 
-  if (!canManageSchedule(role, empType)) {
+  if (!canEditSchedule(role, empType)) {
     return NextResponse.json(
-      { success: false, error: 'Only OPS or PIC can create schedule entries.' },
+      { success: false, error: 'PIC cannot edit the schedule. Upload a corrected Excel after Ops removes the current one.' },
       { status: 403 },
     );
   }

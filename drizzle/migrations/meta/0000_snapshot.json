@@ -1,5 +1,5 @@
 {
-  "id": "64aa5b9a-06dc-4dd1-a4a1-8ac0cea244cc",
+  "id": "99a2dab4-65f2-4a9e-80dc-aaa0c4132cf6",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -1837,6 +1837,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "password_changed_at": {
+          "name": "password_changed_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
         },
         "role_id": {
           "name": "role_id",

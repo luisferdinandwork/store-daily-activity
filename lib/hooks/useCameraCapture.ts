@@ -74,12 +74,11 @@ export function useCameraCapture() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return Promise.resolve(null);
 
-    // Mirror the preview back for the front camera so the captured photo
-    // matches what the user saw on screen, not a flipped selfie.
-    if (facingMode === 'user') {
-      ctx.translate(canvas.width, 0);
-      ctx.scale(-1, 1);
-    }
+    // Save the TRUE camera frame — never mirrored, even for the front camera.
+    // The live preview is flipped for a natural "selfie mirror" feel, but the
+    // stored photo keeps real orientation so text held up to the front camera
+    // (e.g. an ATM card) stays readable for Ops/Finance review. This matches
+    // the default phone camera behaviour.
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
     return new Promise(resolve => {
@@ -88,7 +87,7 @@ export function useCameraCapture() {
         resolve(new File([blob], `capture-${Date.now()}.jpg`, { type: 'image/jpeg' }));
       }, 'image/jpeg', 0.9);
     });
-  }, [status, facingMode]);
+  }, [status]);
 
   useEffect(() => stop, [stop]);
 

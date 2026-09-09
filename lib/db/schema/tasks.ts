@@ -814,10 +814,16 @@ export const storeClosingTasks = pgTable('store_closing_tasks', {
   eodZReportAt:   timestamp('eod_z_report_at'),
 
   // 2. Required evidence photo
-  // Employee uploads one image showing EOD and EDC settlement side by side.
+  // Employee uploads one image showing the Z-Report and EDC settlement together.
+  // Column name kept for back-compat; user-facing label is "Foto Z-Report & EDC Settlement".
   eodEdcSettlementPhoto:   text('eod_edc_settlement_photo'),
   eodEdcSettlementPhotoBy: text('eod_edc_settlement_photo_by').references(() => users.id),
   eodEdcSettlementPhotoAt: timestamp('eod_edc_settlement_photo_at'),
+
+  // 2b. Required evidence photo — storefront locked (rolling door / pintu terkunci).
+  storefrontLockedPhoto:   text('storefront_locked_photo'),
+  storefrontLockedPhotoBy: text('storefront_locked_photo_by').references(() => users.id),
+  storefrontLockedPhotoAt: timestamp('storefront_locked_photo_at'),
 
   // 3. EDC Settlement
   edcSettlementDone:  boolean('edc_settlement_done').default(false).notNull(),

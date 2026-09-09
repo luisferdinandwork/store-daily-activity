@@ -10,7 +10,7 @@ import {
 } from '@/lib/schedule-utils';
 
 import {
-  canManageSchedule,
+  canEditSchedule,
   resolveActorCodes,
 } from '../_utils';
 
@@ -24,8 +24,7 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const user = session.user as any;
-  const rawHomeStoreId = user.homeStoreId as string | number | null | undefined;
+  const rawHomeStoreId = session.user.homeStoreId;
   const yearMonth = req.nextUrl.searchParams.get('yearMonth');
 
   if (!rawHomeStoreId) {
@@ -60,7 +59,7 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const mappedEntries = rawSchedule.entries.map((entry: any) => ({
+  const mappedEntries = rawSchedule.entries.map((entry) => ({
     id: String(entry.id),
     userId: entry.userId,
     userName: entry.userName,
@@ -101,15 +100,14 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const user = session.user as any;
-  const actorId = user.id as string;
-  const rawHomeStoreId = user.homeStoreId as string | number | null | undefined;
+  const actorId = session.user.id;
+  const rawHomeStoreId = session.user.homeStoreId;
 
   const { role, empType } = await resolveActorCodes(actorId);
 
-  if (!canManageSchedule(role, empType)) {
+  if (!canEditSchedule(role, empType)) {
     return NextResponse.json(
-      { success: false, error: 'Only OPS or PIC can create schedules.' },
+      { success: false, error: 'PIC cannot create schedules from the system. Upload the month\'s Excel instead.' },
       { status: 403 },
     );
   }
@@ -165,16 +163,15 @@ export async function DELETE(req: NextRequest) {
     );
   }
 
-  const user = session.user as any;
-  const actorId = user.id as string;
-  const rawHomeStoreId = user.homeStoreId as string | number | null | undefined;
+  const actorId = session.user.id;
+  const rawHomeStoreId = session.user.homeStoreId;
   const yearMonth = req.nextUrl.searchParams.get('yearMonth');
 
   const { role, empType } = await resolveActorCodes(actorId);
 
-  if (!canManageSchedule(role, empType)) {
+  if (!canEditSchedule(role, empType)) {
     return NextResponse.json(
-      { success: false, error: 'Only OPS or PIC can delete schedules.' },
+      { success: false, error: 'PIC cannot delete schedules. Ask Ops to remove it from the Ops panel.' },
       { status: 403 },
     );
   }

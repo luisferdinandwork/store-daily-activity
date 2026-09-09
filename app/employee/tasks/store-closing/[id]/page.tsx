@@ -4,7 +4,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
-  X, Loader2, AlertCircle, Check, CloudOff, Save,
+  X, AlertCircle, Check, CloudOff, Save,
   Camera, Clock, CreditCard, BarChart3,
   AlertTriangle, CheckCircle2, ChevronDown, ChevronUp,
 } from 'lucide-react';
@@ -36,6 +36,7 @@ interface StoreClosingData {
 
   eodZReportDone:          boolean;
   eodEdcSettlementPhoto:   string | null;
+  storefrontLockedPhoto:   string | null;
   edcSettlementDone:       boolean;
   edcSettlementNotes:      string | null;
   edcSummaryDone:          boolean;
@@ -52,6 +53,7 @@ interface StoreClosingData {
 
 const PHOTO_RULES = {
   eodEdcSettlement: { min: 1, max: 1 },
+  storefrontLocked: { min: 1, max: 1 },
 } as const;
 
 // ─── Section wrapper ──────────────────────────────────────────────────────────
@@ -325,7 +327,7 @@ function OnHoldBanner({ holdReason }: { holdReason: string | null }) {
           Issue terkait sedang ditangani tim. Task akan dibuka kembali setelah issue diselesaikan.
         </p>
         {holdReason && (
-          <p className="mt-2 text-[11px] text-amber-600 italic">"{holdReason}"</p>
+          <p className="mt-2 text-[11px] text-amber-600 italic">&ldquo;{holdReason}&rdquo;</p>
         )}
       </div>
     </div>
@@ -345,10 +347,12 @@ export default function StoreClosingDetailPage() {
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   const [eodEdcSettlementModalOpen, setEodEdcSettlementModalOpen] = useState(false);
+  const [storefrontLockedModalOpen, setStorefrontLockedModalOpen] = useState(false);
 
   // Form state
   const [eodZReportDone,        setEodZReportDone]        = useState(false);
   const [eodEdcSettlementPhoto, setEodEdcSettlementPhoto] = useState<string | null>(null);
+  const [storefrontLockedPhoto, setStorefrontLockedPhoto] = useState<string | null>(null);
   const [edcSettlementDone,     setEdcSettlementDone]     = useState(false);
   const [edcSettlementNotes,    setEdcSettlementNotes]    = useState('');
   const [edcSummaryDone,        setEdcSummaryDone]        = useState(false);
@@ -370,6 +374,7 @@ export default function StoreClosingDetailPage() {
         setTaskData(d);
         setEodZReportDone(!!d.eodZReportDone);
         setEodEdcSettlementPhoto(d.eodEdcSettlementPhoto ?? null);
+        setStorefrontLockedPhoto(d.storefrontLockedPhoto ?? null);
         setEdcSettlementDone(d.edcSettlementDone);
         setEdcSettlementNotes(d.edcSettlementNotes ?? '');
         setEdcSummaryDone(d.edcSummaryDone);
@@ -410,6 +415,12 @@ export default function StoreClosingDetailPage() {
     const next = Array.isArray(photos) && photos.length > 0 ? photos[0] : null;
     setEodEdcSettlementPhoto(next);
     autoSave({ eodEdcSettlementPhoto: next }, { immediate: true });
+  }
+
+  function syncStorefrontLockedPhoto(photos: string[]) {
+    const next = Array.isArray(photos) && photos.length > 0 ? photos[0] : null;
+    setStorefrontLockedPhoto(next);
+    autoSave({ storefrontLockedPhoto: next }, { immediate: true });
   }
 
   function handleEdcSettlementNotes(v: string) {
@@ -457,6 +468,7 @@ export default function StoreClosingDetailPage() {
           geo, skipGeo: false,
           eodZReportDone,
           eodEdcSettlementPhoto,
+          storefrontLockedPhoto,
           edcSettlementDone,
           edcSettlementNotes: edcSettlementNotes || undefined,
           edcSummaryDone,
@@ -511,6 +523,7 @@ export default function StoreClosingDetailPage() {
 
         const zReportSatisfied = eodZReportDone;
         const evidencePhotoSatisfied = !!eodEdcSettlementPhoto;
+        const storefrontLockedSatisfied = !!storefrontLockedPhoto;
         const openStmtSatisfied =
           openStatementDecision === 'post_statement' ||
           openStatementDecision === 'on_hold';
@@ -522,6 +535,7 @@ export default function StoreClosingDetailPage() {
           zReportSatisfied &&
           edcSettlementDone &&
           evidencePhotoSatisfied &&
+          storefrontLockedSatisfied &&
           edcSummaryDone &&
           !!openStatementDecision &&
           openStmtSatisfied;
@@ -530,7 +544,8 @@ export default function StoreClosingDetailPage() {
           if (locked || isOnHold) return '';
           if (!zReportSatisfied) return 'Centang checklist EOD Z-Report.';
           if (!edcSettlementDone) return 'Centang checklist EDC Settlement.';
-          if (!evidencePhotoSatisfied) return 'Upload foto EOD dan EDC Settlement berdampingan.';
+          if (!evidencePhotoSatisfied) return 'Upload foto Z-Report & EDC Settlement.';
+          if (!storefrontLockedSatisfied) return 'Upload foto storefront terkunci.';
           if (!edcSummaryDone)       return 'Centang checklist EDC Summary.';
           if (!openStatementDecision) return 'Pilih status Open Statement.';
           return '';
@@ -689,15 +704,24 @@ export default function StoreClosingDetailPage() {
 
                     
 
-                    {/* ── 4. Foto Bukti EOD + EDC Settlement ─────────────── */}
-                    <Section title="4 · Foto Bukti EOD + EDC Settlement">
+                    {/* ── 4. Foto Bukti ──────────────────────────────────── */}
+                    <Section title="4 · Foto Bukti">
                       <PhotoCheckItem
-                        label="Upload Foto EOD dan EDC Settlement"
-                        description="Satu foto wajib yang menampilkan EOD dan EDC Settlement berdampingan."
+                        label="Foto Z-Report & EDC Settlement"
+                        description="Satu foto wajib yang menampilkan Z-Report dan EDC Settlement."
                         checked={evidencePhotoSatisfied}
                         photoCount={eodEdcSettlementPhoto ? 1 : 0}
                         requiredCount={PHOTO_RULES.eodEdcSettlement.min}
                         onClick={() => setEodEdcSettlementModalOpen(true)}
+                        disabled={dis}
+                      />
+                      <PhotoCheckItem
+                        label="Foto Storefront Dikunci"
+                        description="Foto pintu / rolling door toko dalam keadaan terkunci."
+                        checked={storefrontLockedSatisfied}
+                        photoCount={storefrontLockedPhoto ? 1 : 0}
+                        requiredCount={PHOTO_RULES.storefrontLocked.min}
+                        onClick={() => setStorefrontLockedModalOpen(true)}
                         disabled={dis}
                       />
                     </Section>
@@ -738,12 +762,12 @@ export default function StoreClosingDetailPage() {
               )}
             </div>
 
-            {/* EOD + EDC Settlement side-by-side photo modal */}
+            {/* Z-Report + EDC Settlement photo modal */}
             <ChecklistPhotoModal
               open={eodEdcSettlementModalOpen}
               onClose={() => setEodEdcSettlementModalOpen(false)}
-              title="Foto EOD + EDC Settlement"
-              description={`Upload 1 foto yang menampilkan EOD dan EDC Settlement berdampingan.`}
+              title="Foto Z-Report & EDC Settlement"
+              description={`Upload 1 foto yang menampilkan Z-Report dan EDC Settlement.`}
               photoType="eod_edc_settlement"
               min={PHOTO_RULES.eodEdcSettlement.min}
               max={PHOTO_RULES.eodEdcSettlement.max}
@@ -751,6 +775,22 @@ export default function StoreClosingDetailPage() {
               onConfirm={syncEodEdcSettlementPhoto}
               onChange={syncEodEdcSettlementPhoto}
               onClear={() => syncEodEdcSettlementPhoto([])}
+              disabled={dis}
+            />
+
+            {/* Storefront locked photo modal */}
+            <ChecklistPhotoModal
+              open={storefrontLockedModalOpen}
+              onClose={() => setStorefrontLockedModalOpen(false)}
+              title="Foto Storefront Dikunci"
+              description={`Upload 1 foto pintu / rolling door toko dalam keadaan terkunci.`}
+              photoType="storefront_locked"
+              min={PHOTO_RULES.storefrontLocked.min}
+              max={PHOTO_RULES.storefrontLocked.max}
+              initialPhotos={storefrontLockedPhoto ? [storefrontLockedPhoto] : []}
+              onConfirm={syncStorefrontLockedPhoto}
+              onChange={syncStorefrontLockedPhoto}
+              onClear={() => syncStorefrontLockedPhoto([])}
               disabled={dis}
             />
           </div>

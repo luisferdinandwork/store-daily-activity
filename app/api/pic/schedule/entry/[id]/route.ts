@@ -6,7 +6,7 @@ import { authOptions } from '@/lib/auth';
 import { updateMonthlyScheduleEntry } from '@/lib/schedule-utils';
 
 import {
-  canManageSchedule,
+  canEditSchedule,
   resolveActorCodes,
 } from '../../_utils';
 
@@ -23,14 +23,13 @@ export async function PATCH(
     );
   }
 
-  const user = session.user as any;
-  const actorId = user.id as string;
+  const actorId = session.user.id;
 
   const { role, empType } = await resolveActorCodes(actorId);
 
-  if (!canManageSchedule(role, empType)) {
+  if (!canEditSchedule(role, empType)) {
     return NextResponse.json(
-      { success: false, error: 'Only OPS or PIC can edit schedule entries.' },
+      { success: false, error: 'PIC cannot edit the schedule. Upload a corrected Excel after Ops removes the current one.' },
       { status: 403 },
     );
   }

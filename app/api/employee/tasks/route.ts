@@ -975,19 +975,19 @@ export async function GET(request: NextRequest) {
               resiPhoto: t.resiPhoto,
               atmCardSelfiePhoto: t.atmCardSelfiePhoto,
 
-              actualReceivedAmountBy: (t as any).actualReceivedAmountBy ?? null,
-              actualReceivedAmountAt: toIso((t as any).actualReceivedAmountAt),
-              storedAmountBy: (t as any).storedAmountBy ?? null,
-              storedAmountAt: toIso((t as any).storedAmountAt),
-              resiPhotoBy: (t as any).resiPhotoBy ?? null,
-              resiPhotoAt: toIso((t as any).resiPhotoAt),
-              atmCardSelfiePhotoBy: (t as any).atmCardSelfiePhotoBy ?? null,
-              atmCardSelfiePhotoAt: toIso((t as any).atmCardSelfiePhotoAt),
-              notesBy: (t as any).notesBy ?? null,
-              notesAt: toIso((t as any).notesAt),
-              completedBy: (t as any).completedBy ?? null,
-              completedByScheduleId: (t as any).completedByScheduleId
-                ? String((t as any).completedByScheduleId)
+              actualReceivedAmountBy: t.actualReceivedAmountBy ?? null,
+              actualReceivedAmountAt: toIso(t.actualReceivedAmountAt),
+              storedAmountBy: t.storedAmountBy ?? null,
+              storedAmountAt: toIso(t.storedAmountAt),
+              resiPhotoBy: t.resiPhotoBy ?? null,
+              resiPhotoAt: toIso(t.resiPhotoAt),
+              atmCardSelfiePhotoBy: t.atmCardSelfiePhotoBy ?? null,
+              atmCardSelfiePhotoAt: toIso(t.atmCardSelfiePhotoAt),
+              notesBy: t.notesBy ?? null,
+              notesAt: toIso(t.notesAt),
+              completedBy: t.completedBy ?? null,
+              completedByScheduleId: t.completedByScheduleId
+                ? String(t.completedByScheduleId)
                 : null,
 
               status: t.status,
@@ -1317,6 +1317,10 @@ export async function GET(request: NextRequest) {
               eodEdcSettlementPhoto: t.eodEdcSettlementPhoto,
               eodEdcSettlementPhotoBy: t.eodEdcSettlementPhotoBy,
               eodEdcSettlementPhotoAt: toIso(t.eodEdcSettlementPhotoAt),
+
+              storefrontLockedPhoto: t.storefrontLockedPhoto,
+              storefrontLockedPhotoBy: t.storefrontLockedPhotoBy,
+              storefrontLockedPhotoAt: toIso(t.storefrontLockedPhotoAt),
 
               edcSettlementDone: t.edcSettlementDone,
               edcSettlementNotes: t.edcSettlementNotes,

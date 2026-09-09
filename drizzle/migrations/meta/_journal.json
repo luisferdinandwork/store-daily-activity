@@ -5,15 +5,22 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1788753115834,
-      "tag": "0000_fat_gunslinger",
+      "when": 1788924341333,
+      "tag": "0000_lyrical_red_ghost",
       "breakpoints": true
     },
     {
       "idx": 1,
       "version": "7",
-      "when": 1788754010288,
-      "tag": "0001_quick_sugar_man",
+      "when": 1788925519999,
+      "tag": "0001_absent_zaladane",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788929759214,
+      "tag": "0002_sync_users_password_changed_at",
       "breakpoints": true
     }
   ]

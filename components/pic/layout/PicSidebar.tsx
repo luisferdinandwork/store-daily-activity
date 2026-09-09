@@ -4,7 +4,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { signOut, useSession } from 'next-auth/react';
-import { ClipboardCheck, KeyRound, LogOut, Settings2, Smartphone, Store } from 'lucide-react';
+import { CalendarDays, ClipboardCheck, KeyRound, LogOut, Smartphone, Store } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { setEmployeeViewCookie } from '@/lib/pic-view';
 import {
@@ -16,7 +16,7 @@ import {
 import EmployeeLogoMark from '@/components/employee/EmployeeLogoMark';
 
 const NAV = [
-  { href: '/pic', label: 'Manage Schedule', icon: Settings2, exact: true },
+  { href: '/pic', label: 'Store Schedule', icon: CalendarDays, exact: true },
   { href: '/pic/tasks', label: 'Tasks', icon: ClipboardCheck },
   { href: '/pic/settings', label: 'Settings', icon: KeyRound },
 ];
@@ -46,7 +46,7 @@ export default function PicSidebar({ collapsed = false }: Props) {
   const router = useRouter();
   const { data: session } = useSession();
 
-  const employeeType = (session?.user as any)?.employeeType as string | undefined;
+  const employeeType = session?.user?.employeeType ?? undefined;
   const roleLabel = (employeeType && EMP_TYPE_LABEL[employeeType]) || 'PIC';
 
   const isActive = (href: string, exact?: boolean) =>
@@ -160,7 +160,7 @@ export default function PicSidebar({ collapsed = false }: Props) {
                     {session?.user?.name ?? 'PIC'}
                   </p>
                   <p className="truncate text-[10px] text-muted-foreground">
-                    {(session?.user as any)?.nik ? `NIK ${(session?.user as any).nik}` : roleLabel}
+                    {session?.user?.nik ? `NIK ${session.user.nik}` : roleLabel}
                   </p>
                 </div>
                 <button

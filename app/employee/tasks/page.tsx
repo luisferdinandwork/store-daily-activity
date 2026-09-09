@@ -220,10 +220,15 @@ export interface StoreClosingData extends TaskBase {
   eodZReportBy?: string | null;
   eodZReportAt?: string | null;
 
-  /** Required evidence: photo of EOD and EDC settlement side by side. */
+  /** Required evidence: photo of the Z-Report and EDC settlement together. */
   eodEdcSettlementPhoto: string | null;
   eodEdcSettlementPhotoBy?: string | null;
   eodEdcSettlementPhotoAt?: string | null;
+
+  /** Required evidence: photo of the storefront locked. */
+  storefrontLockedPhoto: string | null;
+  storefrontLockedPhotoBy?: string | null;
+  storefrontLockedPhotoAt?: string | null;
 
   edcSettlementDone: boolean;
   edcSettlementNotes: string | null;
@@ -361,7 +366,7 @@ const TASK_META: Record<
   },
   setoran: {
     title: "Setoran Penjualan",
-    description: "Uang diterima, uang disetor, dan sisa unpaid.",
+    description: "Total uang cash drawer, total wajib disetor, dan bukti setor.",
     Icon: Wallet,
     hasPhoto: true,
   },
@@ -392,7 +397,7 @@ const TASK_META: Record<
   store_closing: {
     title: "Store Closing",
     description:
-      "Checklist EOD Z-Report, EDC settlement, EDC summary, foto EOD+EDC, dan Open Statement.",
+      "Checklist EOD Z-Report, EDC settlement & summary, foto Z-Report + EDC dan storefront terkunci, dan Open Statement.",
     Icon: CreditCard,
     hasPhoto: true,
   },

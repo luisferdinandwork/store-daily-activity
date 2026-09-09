@@ -184,6 +184,7 @@ CREATE TABLE "users" (
 	"nik" text NOT NULL,
 	"name" text NOT NULL,
 	"password" text NOT NULL,
+	"password_changed_at" timestamp DEFAULT now() NOT NULL,
 	"role_id" integer NOT NULL,
 	"employee_type_id" integer,
 	"switched_from_role_id" integer,
