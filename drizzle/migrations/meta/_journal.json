@@ -22,6 +22,27 @@
       "when": 1788929759214,
       "tag": "0002_sync_users_password_changed_at",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788937887657,
+      "tag": "0003_flimsy_tomorrow_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1788943795965,
+      "tag": "0004_cooing_madrox",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1788945614124,
+      "tag": "0005_mute_stone_men",
+      "breakpoints": true
     }
   ]
 }

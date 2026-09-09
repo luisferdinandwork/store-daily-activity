@@ -16,6 +16,7 @@ import { db } from '@/lib/db';
 import { and, eq, inArray, lt, ne } from 'drizzle-orm';
 import { notifications, userRoles, users } from '@/lib/db/schema';
 import { createNotificationsForUsers } from './notifications';
+import { accountPathForRole } from '@/lib/account-paths';
 
 export const PASSWORD_MAX_AGE_DAYS = 90;
 
@@ -26,16 +27,9 @@ export const PASSWORD_EXPIRY_NOTIFICATION_TYPE = 'password_expiry';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Where each role's "change my password" screen lives. */
-const CHANGE_PASSWORD_PATH_BY_ROLE: Record<string, string> = {
-  employee: '/employee/settings',
-  ops: '/ops/settings',
-  finance: '/finance/settings',
-  audit: '/audit/settings',
-};
-
+/** Where each role's "change my password" screen lives (now the account page). */
 export function changePasswordPathForRole(roleCode: string | null | undefined): string {
-  return (roleCode && CHANGE_PASSWORD_PATH_BY_ROLE[roleCode]) || '/employee/settings';
+  return accountPathForRole(roleCode);
 }
 
 export function isRoleExemptFromPasswordPolicy(roleCode: string | null | undefined): boolean {

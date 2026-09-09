@@ -221,6 +221,19 @@ function TaskRow({ task, onSelect }: { task: FlatTask; onSelect: () => void }) {
   const status   = task.status ?? 'not_started';
   const TaskIcon = TASK_ICONS[task.type] ?? ClipboardList;
 
+  // Cek Uang Modal: mark a completed float that's below the daily max or has
+  // denominations left at 0 (employees no longer have to fully stock it).
+  const cekUangModalIncomplete = (() => {
+    if (task.type !== 'cek_uang_modal') return false;
+    if (status !== 'completed' && status !== 'verified') return false;
+    const e = task.extra;
+    const total = Number(e.totalAmount ?? 0);
+    if (total <= 0) return false;
+    const denomCount = Number(e.denominationCount ?? 0);
+    const filled = Number(e.filledDenominationCount ?? 0);
+    return e.isPartial === true || (denomCount > 0 && filled < denomCount);
+  })();
+
   const accentClass =
     status === 'completed'   ? 'bg-emerald-500' :
     status === 'in_progress' ? 'bg-indigo-500' :
@@ -244,11 +257,16 @@ function TaskRow({ task, onSelect }: { task: FlatTask; onSelect: () => void }) {
       <div className="min-w-0 flex-1">
         <div className="flex items-start justify-between gap-2">
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-1.5">
               <p className="text-sm font-bold text-slate-900">{label}</p>
               {task.parentTaskId != null && (
                 <span className="inline-flex items-center gap-0.5 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-indigo-600">
                   <History className="h-2.5 w-2.5" /> Lanjutan
+                </span>
+              )}
+              {cekUangModalIncomplete && (
+                <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700">
+                  <AlertTriangle className="h-2.5 w-2.5" /> Belum lengkap
                 </span>
               )}
             </div>

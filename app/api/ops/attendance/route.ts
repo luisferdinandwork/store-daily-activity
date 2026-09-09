@@ -4,8 +4,9 @@ import { getServerSession }          from 'next-auth';
 import { authOptions }               from '@/lib/auth';
 import { getAttendanceForDate, opsMarkAttendance, autoCheckoutOverdueAttendance, autoMarkAbsentPastSchedules } from '@/lib/schedule-utils';
 import { db }                        from '@/lib/db';
-import { breakSessions, shifts, employeeTypes } from '@/lib/db/schema';
-import { eq }                        from 'drizzle-orm';
+import { breakSessions, shifts, employeeTypes, users } from '@/lib/db/schema';
+import { eq, inArray }               from 'drizzle-orm';
+import { getStoreCashCountForDate }  from '@/lib/db/utils/store-cash-count';
 
 import { assertStoreInActorArea, getOpsActor } from '../tasks/_helpers';
 
@@ -166,7 +167,32 @@ export async function GET(req: NextRequest) {
       }),
     );
 
-    return NextResponse.json({ success: true, data: serialized });
+    // Daily cashier cash-count + buddy selfie for this store/day (read-only).
+    const cashRow = await getStoreCashCountForDate(storeId, date);
+    let cashCount: {
+      totalAmount: number;
+      countedByName: string | null;
+      witnessName: string | null;
+      selfiePhoto: string;
+      completedAt: string | null;
+    } | null = null;
+
+    if (cashRow) {
+      const names = await db
+        .select({ id: users.id, name: users.name })
+        .from(users)
+        .where(inArray(users.id, [cashRow.countedByUserId, cashRow.witnessUserId]));
+      const nameById = new Map(names.map(n => [n.id, n.name]));
+      cashCount = {
+        totalAmount: Number(cashRow.totalAmount),
+        countedByName: nameById.get(cashRow.countedByUserId) ?? null,
+        witnessName: nameById.get(cashRow.witnessUserId) ?? null,
+        selfiePhoto: cashRow.selfiePhoto,
+        completedAt: cashRow.completedAt?.toISOString() ?? null,
+      };
+    }
+
+    return NextResponse.json({ success: true, data: serialized, cashCount });
   } catch (err) {
     console.error('[GET /api/ops/attendance]', err);
     return NextResponse.json({ success: false, error: String(err) }, { status: 500 });

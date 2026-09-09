@@ -67,6 +67,9 @@ export const users = pgTable('users', {
   name:     text('name').notNull(),
   password: text('password').notNull(),
 
+  /** Self-service profile picture (Biznet NOS URL). Null = show initials. */
+  avatarUrl: text('avatar_url'),
+
   /**
    * When the password was last set/changed. Drives the 90-day "please change
    * your password" nudge (notification + banner) for every non-IT role — see
@@ -236,6 +239,36 @@ export const breakSessions = pgTable('break_sessions', {
   updatedAt:    timestamp('updated_at').defaultNow().notNull(),
 });
 
+// ─── Store cash count (daily cashier count + buddy selfie) ────────────────────
+//
+// Once per store per calendar day: an employee counts the total cash in the
+// cashier drawer, picks a colleague also scheduled that day as a witness, and
+// the two take a selfie together. Required before any morning / full_day
+// employee can check out. `date` is the UTC-midnight day bucket, same as
+// attendance/schedules. `shiftId` is the resolved morning shift (provenance).
+export const storeCashCounts = pgTable('store_cash_counts', {
+  id:      serial('id').primaryKey(),
+  storeId: integer('store_id').references(() => stores.id).notNull(),
+  date:    timestamp('date').notNull(),
+  shiftId: integer('shift_id').references(() => shifts.id).notNull(),
+
+  totalAmount: decimal('total_amount', { precision: 12, scale: 2 }).notNull(),
+
+  countedByUserId:     text('counted_by_user_id').references(() => users.id).notNull(),
+  countedByScheduleId: integer('counted_by_schedule_id').references(() => schedules.id, { onDelete: 'set null' }),
+  witnessUserId:       text('witness_user_id').references(() => users.id).notNull(),
+
+  selfiePhoto: text('selfie_photo').notNull(),
+  notes:       text('notes'),
+
+  completedAt: timestamp('completed_at').defaultNow().notNull(),
+  createdAt:   timestamp('created_at').defaultNow().notNull(),
+  updatedAt:   timestamp('updated_at').defaultNow().notNull(),
+}, (t) => ({
+  uniqStoreDate: unique('store_cash_counts_store_date_unique').on(t.storeId, t.date),
+  storeDateIdx:  index('store_cash_counts_store_date_idx').on(t.storeId, t.date),
+}));
+
 // ─── Issues ──────────────────────────────────────────────────────────────────
 
 export const issues = pgTable('issues', {
@@ -319,6 +352,8 @@ export type NewMonthlyScheduleEntry = typeof monthlyScheduleEntries.$inferInsert
 export type Schedule                = typeof schedules.$inferSelect;
 export type Attendance              = typeof attendance.$inferSelect;
 export type BreakSession            = typeof breakSessions.$inferSelect;
+export type StoreCashCount          = typeof storeCashCounts.$inferSelect;
+export type NewStoreCashCount       = typeof storeCashCounts.$inferInsert;
 export type Issue                   = typeof issues.$inferSelect;
 export type NewIssue                = typeof issues.$inferInsert;
 export type IssueRoleAssignment     = typeof issueRoleAssignments.$inferSelect;

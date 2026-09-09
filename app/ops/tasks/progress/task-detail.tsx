@@ -753,9 +753,37 @@ function CekUangModalDetail({ task }: { task: FlatTask }) {
     e.remainingAmount ?? Math.max(0, maxAmount - totalAmount),
   );
   const filledCount = denominations.filter((row) => Number(row.quantity ?? 0) > 0).length;
+  const emptyCount = denominations.length - filledCount;
+  const done = task.status === 'completed' || task.status === 'verified';
+  // "Belum penuh" — total below the daily max (employees no longer have to
+  // reach it). "Pecahan belum terisi" — some denomination left at 0. Either
+  // way the task still completes; these are just marks for Ops.
+  const isPartial = e.isPartial === true
+    || (e.isPartial == null && remainingAmount > 0 && totalAmount > 0);
+  const hasEmptyDenoms = done && emptyCount > 0 && totalAmount > 0;
 
   return (
     <div>
+      {(isPartial || hasEmptyDenoms) && (
+        <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-bold text-amber-800">Uang modal belum lengkap</p>
+            {isPartial && (
+              <p className="mt-0.5 text-[10px] text-amber-700">
+                Kurang {fmtRupiah(remainingAmount)} dari batas harian {fmtRupiah(maxAmount)}.
+              </p>
+            )}
+            {hasEmptyDenoms && (
+              <p className="mt-0.5 text-[10px] text-amber-700">
+                {emptyCount} pecahan belum terisi.
+              </p>
+            )}
+            <p className="mt-0.5 text-[10px] text-amber-700">Task tetap selesai.</p>
+          </div>
+        </div>
+      )}
+
       <div className="space-y-1 divide-y divide-slate-100">
         <InfoRow label="Total Uang Modal" value={<span className="font-bold text-slate-800">{fmtRupiah(totalAmount)}</span>} />
         <InfoRow label="Batas Harian" value={fmtRupiah(maxAmount)} />
@@ -769,8 +797,12 @@ function CekUangModalDetail({ task }: { task: FlatTask }) {
         />
       </div>
 
-      <p className="mb-1 mt-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+      <p className={cn(
+        'mb-1 mt-3 text-[10px] font-bold uppercase tracking-widest',
+        hasEmptyDenoms ? 'text-amber-600' : 'text-slate-400',
+      )}>
         Pecahan terisi {filledCount}/{denominations.length}
+        {hasEmptyDenoms && ` · ${emptyCount} belum terisi`}
       </p>
 
       {denominations.length === 0 ? (
@@ -781,6 +813,7 @@ function CekUangModalDetail({ task }: { task: FlatTask }) {
             const denominationValue = Number(row.denominationValue ?? 0);
             const quantity = Number(row.quantity ?? 0);
             const amount = Number(row.amount ?? denominationValue * quantity);
+            const empty = done && quantity <= 0;
 
             return (
               <div key={String(row.id ?? denominationValue ?? index)} className="flex items-center justify-between gap-3 py-2">
@@ -788,7 +821,13 @@ function CekUangModalDetail({ task }: { task: FlatTask }) {
                   <p className="text-xs font-bold text-slate-700">{fmtRupiah(denominationValue)}</p>
                   <p className="text-[10px] text-slate-400">Qty: {quantity.toLocaleString('id-ID')}</p>
                 </div>
-                <span className="text-xs font-bold text-slate-700">{fmtRupiah(amount)}</span>
+                {empty ? (
+                  <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">
+                    Kosong
+                  </span>
+                ) : (
+                  <span className="text-xs font-bold text-slate-700">{fmtRupiah(amount)}</span>
+                )}
               </div>
             );
           })}

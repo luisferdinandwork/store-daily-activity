@@ -18,6 +18,7 @@ async function loadUserAuthFields(userId: string) {
       id: users.id,
       nik: users.nik,
       name: users.name,
+      avatarUrl: users.avatarUrl,
 
       homeStoreId: users.homeStoreId,
       areaId: users.areaId,
@@ -52,6 +53,7 @@ async function loadUserAuthFields(userId: string) {
     id: row.id,
     nik: row.nik,
     name: row.name,
+    image: row.avatarUrl ?? null,
 
     role,
     roleLabel: row.roleLabel,
@@ -115,6 +117,7 @@ export const authOptions: NextAuthOptions = {
               nik: users.nik,
               name: users.name,
               password: users.password,
+              avatarUrl: users.avatarUrl,
               isActive: users.isActive,
 
               homeStoreId: users.homeStoreId,
@@ -190,6 +193,7 @@ export const authOptions: NextAuthOptions = {
             id: u.id,
             nik: u.nik,
             name: u.name,
+            image: u.avatarUrl ?? null,
 
             role,
             roleLabel: u.roleLabel,
@@ -234,6 +238,7 @@ export const authOptions: NextAuthOptions = {
       if (user) {
         token.id = user.id;
         token.nik = user.nik;
+        token.picture = user.image ?? null;
         token.role = user.role;
         token.roleLabel = user.roleLabel;
 
@@ -258,6 +263,7 @@ export const authOptions: NextAuthOptions = {
       if (trigger === 'update' && token.id) {
         const fresh = await loadUserAuthFields(token.id as string);
         if (fresh) {
+          token.picture = fresh.image ?? null;
           token.role = fresh.role;
           token.roleLabel = fresh.roleLabel;
 
@@ -284,6 +290,7 @@ export const authOptions: NextAuthOptions = {
       if (session.user) {
         session.user.id = token.id;
         session.user.nik = token.nik;
+        session.user.image = (token.picture as string | null | undefined) ?? null;
         session.user.role = token.role;
         session.user.roleLabel = token.roleLabel;
 

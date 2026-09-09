@@ -1187,6 +1187,7 @@ export async function GET(request: NextRequest) {
               totalAmount: t.totalAmount,
               maxAmount: t.maxAmount,
               remainingAmount: t.remainingAmount,
+              isPartial: t.isPartial,
               denominations,
 
               status: t.status,

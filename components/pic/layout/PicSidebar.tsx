@@ -14,6 +14,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import EmployeeLogoMark from '@/components/employee/EmployeeLogoMark';
+import UserAvatar from '@/components/shared/UserAvatar';
 
 const NAV = [
   { href: '/pic', label: 'Store Schedule', icon: CalendarDays, exact: true },
@@ -152,9 +153,12 @@ export default function PicSidebar({ collapsed = false }: Props) {
               </NavTooltip>
             ) : (
               <>
-                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-secondary text-xs font-semibold text-secondary-foreground">
-                  {session?.user?.name?.charAt(0).toUpperCase() ?? 'P'}
-                </div>
+                <UserAvatar
+                  src={session?.user?.image}
+                  name={session?.user?.name ?? 'PIC'}
+                  className="h-7 w-7 shrink-0"
+                  fallbackClassName="text-xs"
+                />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-xs font-medium text-foreground">
                     {session?.user?.name ?? 'PIC'}

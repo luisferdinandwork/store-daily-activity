@@ -33,6 +33,9 @@ type PhotoType =
   // Grooming task
   | 'grooming_selfie'
 
+  // Attendance — daily cashier cash-count buddy selfie
+  | 'cashier_cash_selfie'
+
   // Store Closing task
   | 'eod_edc_settlement_photo'
   | 'storefront_locked'
@@ -66,6 +69,9 @@ const PHOTO_FOLDER: Record<PhotoType, string> = {
   // Grooming task folders
   grooming_selfie: 'grooming/selfie',
 
+  // Attendance cashier cash-count buddy selfie
+  cashier_cash_selfie: 'attendance/cashier-cash-selfie',
+
   // Store Closing task folders
   eod_edc_settlement_photo: 'store-closing/eod-edc-settlement',
   storefront_locked: 'store-closing/storefront-locked',
@@ -94,6 +100,8 @@ const PHOTO_LIMITS: Record<PhotoType, number> = {
   item_dropping_courier_sign: 1,
 
   grooming_selfie: 3,
+
+  cashier_cash_selfie: 1,
 
   // Store Closing only needs 1 required side-by-side image.
   eod_edc_settlement_photo: 1,

@@ -16,6 +16,7 @@ import { ChevronLeft } from 'lucide-react';
 import EmployeeLogoMark from './EmployeeLogoMark';
 import EmployeeNotificationBell from './EmployeeNotificationBell';
 import EmployeeItemTransfersBadge from './EmployeeItemTransfersBadge';
+import HeaderProfileButton from '@/components/shared/HeaderProfileButton';
 
 const ROOT_TABS = new Set([
   '/employee',
@@ -27,7 +28,6 @@ const ROOT_TABS = new Set([
 
 const TITLES: Record<string, string> = {
   '/employee/profile': 'My Profile',
-  '/employee/settings': 'Settings',
   '/employee/knowledge': 'Knowledge Base',
   '/employee/pettycash': 'Petty Cash',
   '/employee/announcements': 'Notifications',
@@ -68,6 +68,11 @@ export default function EmployeeHeader() {
 
       {isRootTab && <EmployeeItemTransfersBadge />}
       <EmployeeNotificationBell />
+      <HeaderProfileButton
+        className="ml-0.5 mr-1.5 h-9 w-9"
+        avatarClassName="h-8 w-8 border-white/30"
+        fallbackClassName="bg-white/15 text-primary-foreground"
+      />
     </header>
   );
 }

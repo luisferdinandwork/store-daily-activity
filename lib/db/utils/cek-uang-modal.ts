@@ -79,6 +79,8 @@ export interface CekUangModalSummary {
   totalAmount: number;
   maxAmount: number;
   remainingAmount: number;
+  /** true when the total is below the daily max — "uang modal belum penuh". */
+  isPartial: boolean;
 }
 
 export interface CekUangModalWithDenominations {
@@ -207,10 +209,12 @@ function totalAmount(rows: Array<{ amount: number }>): number {
 }
 
 function buildSummary(total: number): CekUangModalSummary {
+  const remaining = CEK_UANG_MODAL_MAX_TOTAL - total;
   return {
     totalAmount: total,
     maxAmount: CEK_UANG_MODAL_MAX_TOTAL,
-    remainingAmount: CEK_UANG_MODAL_MAX_TOTAL - total,
+    remainingAmount: remaining,
+    isPartial: remaining > 0,
   };
 }
 
@@ -314,15 +318,18 @@ export async function submitCekUangModal(
 
     const normalized = normalizeDenominations(input.denominations);
 
-    const missing = normalized.filter((row) => row.quantity <= 0);
-    if (missing.length > 0) {
+    const total = totalAmount(normalized);
+
+    // Employees no longer have to stock every denomination. They just need
+    // some cash in the drawer; a total below the daily max is allowed and the
+    // task is flagged `isPartial` for Ops (status still completes normally).
+    if (total <= 0) {
       return {
         success: false,
-        error: `Semua pecahan uang wajib diisi. Pecahan yang masih kosong: ${missing.map((row) => formatRupiah(row.denominationValue)).join(', ')}.`,
+        error: 'Isi minimal satu pecahan uang modal sebelum submit.',
       };
     }
 
-    const total = totalAmount(normalized);
     const summary = assertWithinDailyLimit(total);
 
     const now = new Date();
@@ -382,6 +389,7 @@ export async function submitCekUangModal(
         totalAmount: String(summary.totalAmount),
         maxAmount: String(summary.maxAmount),
         remainingAmount: String(summary.remainingAmount),
+        isPartial: summary.isPartial,
         submittedLat: input.skipGeo ? null : String(input.geo.lat),
         submittedLng: input.skipGeo ? null : String(input.geo.lng),
         notes: input.notes,
@@ -438,7 +446,8 @@ export async function autoSaveCekUangModalById(
       update.totalAmount = String(summary.totalAmount);
       update.maxAmount = String(summary.maxAmount);
       update.remainingAmount = String(summary.remainingAmount);
-      saved.push('denominations', 'totalAmount', 'remainingAmount');
+      update.isPartial = summary.isPartial;
+      saved.push('denominations', 'totalAmount', 'remainingAmount', 'isPartial');
     }
 
     if (existing.status === 'not_started') update.status = 'in_progress';
@@ -567,10 +576,13 @@ export async function getCekUangModalWithDenominations(
   const denominations = await getCekUangModalDenominations(taskId);
   const total = Number(task.totalAmount ?? 0);
   const max = Number(task.maxAmount ?? CEK_UANG_MODAL_MAX_TOTAL);
-  const summary = {
+  const safeMax = Number.isFinite(max) ? max : CEK_UANG_MODAL_MAX_TOTAL;
+  const remaining = Number(task.remainingAmount ?? safeMax - total);
+  const summary: CekUangModalSummary = {
     totalAmount: total,
-    maxAmount: Number.isFinite(max) ? max : CEK_UANG_MODAL_MAX_TOTAL,
-    remainingAmount: Number(task.remainingAmount ?? CEK_UANG_MODAL_MAX_TOTAL - total),
+    maxAmount: safeMax,
+    remainingAmount: remaining,
+    isPartial: task.isPartial ?? remaining > 0,
   };
 
   return { task, denominations, summary };

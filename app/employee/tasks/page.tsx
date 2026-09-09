@@ -198,6 +198,7 @@ export interface VmChecklistData extends TaskBase {
 }
 export interface CekUangModalData extends TaskBase {
   totalAmount: string | null;
+  isPartial?: boolean | null;
   denominations: Array<{
     id: string;
     taskId: string;
@@ -1701,7 +1702,15 @@ function TaskCard({
     const total = Number(d.totalAmount ?? 0);
 
     if (total > 0) {
-      return `Total uang modal: Rp ${total.toLocaleString("id-ID")}`;
+      const base = `Total uang modal: Rp ${total.toLocaleString("id-ID")}`;
+      const done = d.status === "completed" || d.status === "verified";
+      const emptyDenoms = (d.denominations ?? []).filter(
+        (row) => Number(row.quantity ?? 0) <= 0,
+      ).length;
+      const marks: string[] = [];
+      if (d.isPartial) marks.push("belum penuh");
+      if (done && emptyDenoms > 0) marks.push(`${emptyDenoms} pecahan kosong`);
+      return marks.length > 0 ? `${base} · ${marks.join(" · ")}` : base;
     }
 
     return "Isi jumlah lembar/koin untuk setiap pecahan rupiah.";

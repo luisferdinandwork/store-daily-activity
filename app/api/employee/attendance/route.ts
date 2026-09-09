@@ -1,7 +1,7 @@
 // app/api/employee/attendance/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
-import { asc, and, eq, gte, lte } from 'drizzle-orm';
+import { asc, and, eq, gte, lte, inArray } from 'drizzle-orm';
 
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
@@ -10,7 +10,15 @@ import {
   attendance,
   breakSessions,
   shifts,
+  users,
 } from '@/lib/db/schema';
+import {
+  getStoreCashCountForDate,
+  listCoScheduledEmployees,
+  submitStoreCashCount,
+  isCashCountRequiredForShift,
+} from '@/lib/db/utils/store-cash-count';
+import { resolveActorScheduleId, getMorningShiftId } from '@/lib/db/utils/shift-lookup';
 
 import {
   employeeCheckIn,
@@ -189,6 +197,51 @@ async function getTodayScheduleForShift(params: {
   return row ?? null;
 }
 
+// ─── Cashier cash-count payload ───────────────────────────────────────────────
+//
+// Daily "count the cashier cash + selfie with a co-scheduled colleague" step.
+// One shared record per store per day; required before a morning / full_day
+// employee can check out.
+async function buildCashCountPayload(
+  userId: string,
+  storeId: number,
+  today: Date,
+  todayRows: { shiftCode: string }[],
+) {
+  const required = todayRows.some((r) => isCashCountRequiredForShift(r.shiftCode));
+  const existing = await getStoreCashCountForDate(storeId, today);
+
+  let record: {
+    totalAmount: number;
+    countedByName: string | null;
+    witnessName: string | null;
+    selfiePhoto: string;
+    completedAt: string | null;
+  } | null = null;
+
+  if (existing) {
+    const names = await db
+      .select({ id: users.id, name: users.name })
+      .from(users)
+      .where(inArray(users.id, [existing.countedByUserId, existing.witnessUserId]));
+    const nameById = new Map(names.map((n) => [n.id, n.name]));
+    record = {
+      totalAmount: Number(existing.totalAmount),
+      countedByName: nameById.get(existing.countedByUserId) ?? null,
+      witnessName: nameById.get(existing.witnessUserId) ?? null,
+      selfiePhoto: existing.selfiePhoto,
+      completedAt: existing.completedAt?.toISOString() ?? null,
+    };
+  }
+
+  const coScheduledEmployees =
+    !existing && required
+      ? await listCoScheduledEmployees(userId, storeId, today)
+      : [];
+
+  return { required, done: Boolean(existing), record, coScheduledEmployees };
+}
+
 // ─── GET /api/employee/attendance ─────────────────────────────────────────────
 
 export async function GET(_req: NextRequest) {
@@ -202,8 +255,8 @@ export async function GET(_req: NextRequest) {
       );
     }
 
-    const user = session.user as any;
-    const userId = user.id as string;
+    const user = session.user as { id: string; homeStoreId?: string | number };
+    const userId = user.id;
     const homeStoreId =
       user.homeStoreId != null ? Number(user.homeStoreId) : null;
 
@@ -353,9 +406,12 @@ export async function GET(_req: NextRequest) {
       ),
     );
 
+    const cashCount = await buildCashCountPayload(userId, homeStoreId, today, rows);
+
     return NextResponse.json({
       success: true,
       shifts: shiftSlots,
+      cashCount,
     });
   } catch (err) {
     console.error('[GET /api/employee/attendance]', err);
@@ -389,8 +445,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const user = session.user as any;
-    const userId = user.id as string;
+    const user = session.user as { id: string; homeStoreId?: string | number };
+    const userId = user.id;
     const homeStoreId =
       user.homeStoreId != null ? Number(user.homeStoreId) : null;
 
@@ -409,17 +465,71 @@ export async function POST(req: NextRequest) {
       breakType: rawBreakType,
       cashOut: rawCashOut,
       cashIn: rawCashIn,
+      totalAmount: rawTotalAmount,
+      witnessUserId: rawWitnessUserId,
+      selfiePhoto: rawSelfiePhoto,
+      notes: rawNotes,
     } = body as {
       action?: string;
       shift?: string;
       breakType?: string;
       cashOut?: number;
       cashIn?: number;
+      totalAmount?: number;
+      witnessUserId?: string;
+      selfiePhoto?: string;
+      notes?: string;
     };
 
-    if (!action || !shift) {
+    if (!action) {
       return NextResponse.json(
-        { success: false, error: 'action and shift are required.' },
+        { success: false, error: 'action is required.' },
+        { status: 400 },
+      );
+    }
+
+    // ── Daily cashier cash-count + buddy selfie ───────────────────────────────
+    // Not shift-specific — resolve the caller's own morning / full_day
+    // schedule for today and record one shared store-level count.
+    if (action === 'cashcount') {
+      const morningShiftId = await getMorningShiftId();
+      const today = todayInStoreTimezone();
+      const actorScheduleId = await resolveActorScheduleId(
+        userId,
+        homeStoreId,
+        morningShiftId,
+        today,
+      );
+
+      if (!actorScheduleId) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'Hitung kas kasir hanya diisi oleh shift pagi / full day.',
+          },
+          { status: 400 },
+        );
+      }
+
+      const result = await submitStoreCashCount({
+        userId,
+        scheduleId: actorScheduleId,
+        storeId: homeStoreId,
+        totalAmount: Number(rawTotalAmount),
+        witnessUserId: String(rawWitnessUserId ?? ''),
+        selfiePhoto: String(rawSelfiePhoto ?? ''),
+        notes: rawNotes,
+      });
+
+      if (!result.success) {
+        return NextResponse.json(result, { status: 400 });
+      }
+      return NextResponse.json({ success: true, cashCount: result.data });
+    }
+
+    if (!shift) {
+      return NextResponse.json(
+        { success: false, error: 'shift is required.' },
         { status: 400 },
       );
     }
@@ -460,6 +570,25 @@ export async function POST(req: NextRequest) {
       }
 
       case 'checkout': {
+        // Morning / full_day employees can only check out once the daily
+        // cashier cash-count + buddy selfie is recorded for the store.
+        if (isCashCountRequiredForShift(typedShift)) {
+          const cashCount = await getStoreCashCountForDate(
+            homeStoreId,
+            todayInStoreTimezone(),
+          );
+          if (!cashCount) {
+            return NextResponse.json(
+              {
+                success: false,
+                error:
+                  'Hitung kas kasir dan foto bersama rekan terlebih dahulu sebelum absen pulang.',
+              },
+              { status: 400 },
+            );
+          }
+        }
+
         result = await employeeCheckOut(userId, homeStoreId, typedShift);
         break;
       }

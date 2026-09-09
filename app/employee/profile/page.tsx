@@ -1,5 +1,8 @@
 'use client';
 // app/employee/profile/page.tsx
+//
+// Single employee account screen — account info + profile picture + password.
+// (The old /employee/settings now redirects here.)
 
 import { useSession, signOut } from 'next-auth/react';
 import { useEffect, useState } from 'react';
@@ -8,21 +11,27 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import {
-  UserCircle, IdCard, Briefcase, Store,
-  Clock, LogOut, Sun, Moon, Loader2,
+  IdCard, Briefcase, Store, Clock, LogOut, Sun, Moon, Loader2,
 } from 'lucide-react';
+import UserAvatar from '@/components/shared/UserAvatar';
+import ProfilePictureCard from '@/components/shared/ProfilePictureCard';
+import ChangePasswordCard from '@/components/shared/ChangePasswordCard';
 
 interface TodaySchedule {
   shift: 'morning' | 'evening' | null;
   storeName: string | null;
 }
 
+const EMP_TYPE_LABEL: Record<string, string> = {
+  pic_1: 'PIC 1', pic_2: 'PIC 2', so: 'SO', sa: 'SA',
+};
+
 export default function EmployeeProfilePage() {
   const { data: session } = useSession();
-  const user = session?.user as any;
+  const user = session?.user;
 
   const [todayData, setTodayData] = useState<TodaySchedule>({ shift: null, storeName: null });
-  const [loading,   setLoading]   = useState(true);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!user?.homeStoreId) { setLoading(false); return; }
@@ -30,7 +39,7 @@ export default function EmployeeProfilePage() {
       .then(r => r.json())
       .then(data => {
         setTodayData({
-          shift:     data.shift     ?? null,
+          shift: data.shift ?? null,
           storeName: data.storeName ?? null,
         });
       })
@@ -38,31 +47,19 @@ export default function EmployeeProfilePage() {
       .finally(() => setLoading(false));
   }, [user?.homeStoreId]);
 
-  const shift     = todayData.shift;
+  const shift = todayData.shift;
   const isEvening = shift === 'evening';
 
-  const EMP_TYPE_LABEL: Record<string, string> = {
-    pic_1: 'PIC 1', pic_2: 'PIC 2', so: 'SO',
-  };
-
   const infoRows = [
+    { icon: IdCard, label: 'NIK', value: user?.nik ?? '—' },
     {
-      icon:  IdCard,
-      label: 'NIK',
-      value: user?.nik ?? '—',
-    },
-    {
-      icon:  Briefcase,
+      icon: Briefcase,
       label: 'Employee Type',
       value: user?.employeeType ? (EMP_TYPE_LABEL[user.employeeType] ?? user.employeeType) : '—',
     },
+    { icon: Store, label: 'Store', value: loading ? '…' : (todayData.storeName ?? '—') },
     {
-      icon:  Store,
-      label: 'Store',
-      value: loading ? '…' : (todayData.storeName ?? '—'),
-    },
-    {
-      icon:  Clock,
+      icon: Clock,
       label: "Today's Shift",
       value: loading ? '…' : shift ? `${shift.charAt(0).toUpperCase() + shift.slice(1)} shift` : 'No shift today',
     },
@@ -75,10 +72,12 @@ export default function EmployeeProfilePage() {
         <div className="pointer-events-none absolute -left-10 -top-10 h-40 w-40 rounded-full bg-white/5" />
         <div className="pointer-events-none absolute -right-10 top-4 h-28 w-28 rounded-full bg-white/5" />
 
-        {/* Avatar */}
-        <div className="relative mx-auto flex h-20 w-20 items-center justify-center rounded-full border-2 border-white/20 bg-white/10">
-          <UserCircle className="h-10 w-10 text-primary-foreground/80" strokeWidth={1.5} />
-        </div>
+        <UserAvatar
+          src={user?.image}
+          name={user?.name}
+          className="relative mx-auto h-20 w-20 border-2 border-white/25"
+          fallbackClassName="bg-white/10 text-xl text-primary-foreground"
+        />
 
         <h1 className="relative mt-4 text-xl font-bold text-primary-foreground">
           {user?.name ?? '—'}
@@ -87,8 +86,7 @@ export default function EmployeeProfilePage() {
           {user?.role ?? 'Employee'}
         </p>
 
-        {/* Badges */}
-        <div className="relative mt-4 flex justify-center gap-2 flex-wrap">
+        <div className="relative mt-4 flex flex-wrap justify-center gap-2">
           {user?.employeeType && (
             <Badge className="h-6 bg-white/10 px-3 text-[11px] font-bold uppercase text-primary-foreground hover:bg-white/10">
               {EMP_TYPE_LABEL[user.employeeType] ?? user.employeeType}
@@ -108,7 +106,7 @@ export default function EmployeeProfilePage() {
       </div>
 
       {/* ── Body ── */}
-      <div className="space-y-3 p-4">
+      <div className="space-y-4 p-4">
         <Card>
           <CardContent className="p-4">
             <p className="mb-3 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
@@ -130,6 +128,9 @@ export default function EmployeeProfilePage() {
             </div>
           </CardContent>
         </Card>
+
+        <ProfilePictureCard />
+        <ChangePasswordCard />
 
         <Button
           variant="outline"

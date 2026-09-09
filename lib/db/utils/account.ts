@@ -60,3 +60,41 @@ export async function changeOwnPassword(
 
   return { success: true };
 }
+
+// ─── Profile picture ─────────────────────────────────────────────────────────
+// Self-service avatar. Stored as a Biznet NOS URL on users.avatarUrl and
+// surfaced through the session as session.user.image (see lib/auth.ts). Both
+// helpers return the PREVIOUS url so the caller can clean the old object out of
+// storage.
+
+async function readAvatarUrl(userId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ avatarUrl: users.avatarUrl })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  return row?.avatarUrl ?? null;
+}
+
+export async function setOwnAvatar(
+  userId: string,
+  url: string,
+): Promise<{ previousUrl: string | null }> {
+  const previousUrl = await readAvatarUrl(userId);
+  await db
+    .update(users)
+    .set({ avatarUrl: url, updatedAt: new Date() })
+    .where(eq(users.id, userId));
+  return { previousUrl };
+}
+
+export async function clearOwnAvatar(
+  userId: string,
+): Promise<{ previousUrl: string | null }> {
+  const previousUrl = await readAvatarUrl(userId);
+  await db
+    .update(users)
+    .set({ avatarUrl: null, updatedAt: new Date() })
+    .where(eq(users.id, userId));
+  return { previousUrl };
+}

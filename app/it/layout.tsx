@@ -8,6 +8,7 @@ import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import ItSidebar from '@/components/it/layout/ItSidebar';
 import ItNavbar  from '@/components/it/layout/ItNavbar';
+import HeaderProfileButton from '@/components/shared/HeaderProfileButton';
 import RoleSwitchBanner from '@/components/shared/RoleSwitchBanner';
 
 export default function ItLayout({ children }: { children: ReactNode }) {
@@ -35,6 +36,7 @@ export default function ItLayout({ children }: { children: ReactNode }) {
         <ItNavbar
           collapsed={collapsed}
           onToggle={() => setCollapsed((v) => !v)}
+          right={<HeaderProfileButton />}
         />
         <main className="flex-1 overflow-y-auto">
           {children}

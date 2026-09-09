@@ -42,6 +42,7 @@ import {
   Percent,
   Repeat,
   Store,
+  UserCog,
   Users,
   Wallet,
 } from 'lucide-react';
@@ -53,6 +54,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import EmployeeLogoMark from '@/components/employee/EmployeeLogoMark';
+import UserAvatar from '@/components/shared/UserAvatar';
 
 // ─── Nav definition ───────────────────────────────────────────────────────────
 
@@ -80,6 +82,12 @@ const NAV: NavSection[] = [
     section: 'Management',
     items: [
       { href: '/it/users', label: 'Users', icon: Users },
+    ],
+  },
+  {
+    section: 'Akun',
+    items: [
+      { href: '/it/settings', label: 'Profil & Keamanan', icon: UserCog },
     ],
   },
   {
@@ -224,9 +232,12 @@ export default function ItSidebar({ collapsed = false, userName = 'IT' }: Props)
               </NavTooltip>
             ) : (
               <>
-                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-cyan-50 text-xs font-semibold text-cyan-700">
-                  {initial}
-                </div>
+                <UserAvatar
+                  src={session?.user?.image}
+                  name={displayName}
+                  className="h-7 w-7 shrink-0"
+                  fallbackClassName="bg-cyan-50 text-xs text-cyan-700"
+                />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-xs font-medium text-foreground">{displayName}</p>
                   <p className="truncate text-[10px] text-muted-foreground">

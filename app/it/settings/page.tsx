@@ -1,8 +1,7 @@
 'use client';
-// app/audit/settings/page.tsx
+// app/it/settings/page.tsx
 //
-// Audit account settings — currently just self-service password change.
-// Linked from the 90-day password-expiry notification and banner.
+// IT account settings — profile picture + self-service password change.
 
 import { useEffect } from 'react';
 import { useSession } from 'next-auth/react';
@@ -10,7 +9,7 @@ import { useRouter } from 'next/navigation';
 import ChangePasswordCard from '@/components/shared/ChangePasswordCard';
 import ProfilePictureCard from '@/components/shared/ProfilePictureCard';
 
-export default function AuditSettingsPage() {
+export default function ItSettingsPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const role = (session?.user as { role?: string } | undefined)?.role;
@@ -18,7 +17,7 @@ export default function AuditSettingsPage() {
   useEffect(() => {
     if (status === 'loading') return;
     if (!session) { router.replace('/login'); return; }
-    if (role !== 'audit' && role !== 'it') router.replace('/');
+    if (role !== 'it') router.replace('/');
   }, [status, session, role, router]);
 
   return (

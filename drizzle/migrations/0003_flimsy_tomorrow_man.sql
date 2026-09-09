@@ -1,0 +1,1 @@
+ALTER TABLE "cek_uang_modal_tasks" ADD COLUMN "is_partial" boolean DEFAULT false NOT NULL;

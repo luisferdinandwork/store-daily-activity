@@ -379,13 +379,23 @@ export default function StoreAttendanceDetail({
   const [rows,    setRows]    = useState<AttRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [marking, setMarking] = useState<AttRow | null>(null);
+  const [cashCount, setCashCount] = useState<{
+    totalAmount: number;
+    countedByName: string | null;
+    witnessName: string | null;
+    selfiePhoto: string;
+    completedAt: string | null;
+  } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const res  = await fetch(`/api/ops/attendance?storeId=${storeId}&date=${date.toISOString()}`);
       const json = await res.json();
-      if (json.success) setRows(json.data);
+      if (json.success) {
+        setRows(json.data);
+        setCashCount(json.cashCount ?? null);
+      }
     } finally {
       setLoading(false);
     }
@@ -453,6 +463,43 @@ export default function StoreAttendanceDetail({
           </div>
           <Progress value={recordedPct} className="h-1.5" />
         </div>
+      )}
+
+      {/* Daily cashier cash-count + buddy selfie (read-only) */}
+      {!loading && (
+        <Card>
+          <CardContent className="flex items-center gap-3 p-4">
+            {cashCount?.selfiePhoto ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={cashCount.selfiePhoto}
+                alt="Foto hitung kas kasir"
+                className="h-14 w-14 flex-shrink-0 rounded-lg object-cover"
+              />
+            ) : (
+              <div className="flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-lg bg-secondary">
+                <Coffee className="h-6 w-6 text-muted-foreground/40" />
+              </div>
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
+                Kas Kasir Hari Ini
+              </p>
+              {cashCount ? (
+                <>
+                  <p className="text-base font-bold text-foreground">
+                    Rp {cashCount.totalAmount.toLocaleString('id-ID')}
+                  </p>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {cashCount.countedByName ?? '—'} &amp; {cashCount.witnessName ?? '—'}
+                  </p>
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">Belum dihitung</p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {/* Legend + refresh */}

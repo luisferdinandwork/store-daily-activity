@@ -7,6 +7,7 @@
 import { ReactNode, useState } from 'react';
 import PicSidebar from './PicSidebar';
 import PicNavbar from './PicNavbar';
+import HeaderProfileButton from '@/components/shared/HeaderProfileButton';
 import RoleSwitchBanner from '@/components/shared/RoleSwitchBanner';
 import PasswordExpiryBanner from '@/components/shared/PasswordExpiryBanner';
 
@@ -19,7 +20,11 @@ export default function PicShell({ children }: { children: ReactNode }) {
       <div className="flex flex-1 flex-col overflow-hidden">
         <RoleSwitchBanner />
         <PasswordExpiryBanner />
-        <PicNavbar collapsed={collapsed} onToggle={() => setCollapsed((v) => !v)} />
+        <PicNavbar
+          collapsed={collapsed}
+          onToggle={() => setCollapsed((v) => !v)}
+          right={<HeaderProfileButton />}
+        />
         <main className="flex-1 overflow-y-auto">{children}</main>
       </div>
     </div>

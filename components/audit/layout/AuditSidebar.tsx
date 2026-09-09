@@ -28,6 +28,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import EmployeeLogoMark from '@/components/employee/EmployeeLogoMark';
+import UserAvatar from '@/components/shared/UserAvatar';
 
 // ─── Nav definition ───────────────────────────────────────────────────────────
 
@@ -178,9 +179,12 @@ export default function AuditSidebar({ collapsed = false, userName = 'Audit' }: 
               </NavTooltip>
             ) : (
               <>
-                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-amber-50 text-xs font-semibold text-amber-700">
-                  {initial}
-                </div>
+                <UserAvatar
+                  src={session?.user?.image}
+                  name={displayName}
+                  className="h-7 w-7 shrink-0"
+                  fallbackClassName="bg-amber-50 text-xs text-amber-700"
+                />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-xs font-medium text-foreground">{displayName}</p>
                   <p className="truncate text-[10px] text-muted-foreground">

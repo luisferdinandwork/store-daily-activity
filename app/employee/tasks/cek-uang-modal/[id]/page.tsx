@@ -65,6 +65,7 @@ interface CekUangModalData {
   totalAmount: string | null;
   maxAmount?: string | null;
   remainingAmount?: string | null;
+  isPartial?: boolean | null;
   denominations: CekUangModalDenomination[];
 }
 
@@ -395,15 +396,18 @@ function DenominationRow({
   disabled,
   maxQuantity,
   onQuantityChange,
+  markEmpty,
 }: {
   row: CekUangModalDenomination;
   disabled?: boolean;
   maxQuantity: number;
   onQuantityChange: (quantity: number) => void;
+  /** In the completed/read-only view, flag denominations left at 0. */
+  markEmpty?: boolean;
 }) {
   const quantity = toQty(row.quantity);
   const amount = row.denominationValue * quantity;
-  const isEmpty = quantity === 0;
+  const showEmptyMark = markEmpty && quantity === 0;
 
   return (
     <div
@@ -411,8 +415,8 @@ function DenominationRow({
         'rounded-2xl border p-3 transition-colors',
         quantity > 0
           ? 'border-primary/30 bg-primary/5'
-          : !disabled
-            ? 'border-red-200 bg-red-50/50'
+          : showEmptyMark
+            ? 'border-amber-200 bg-amber-50/60'
             : 'border-border bg-card',
       )}
     >
@@ -433,10 +437,8 @@ function DenominationRow({
               Maks qty saat ini: {maxQuantity.toLocaleString('id-ID')}
             </p>
           )}
-          {!disabled && isEmpty && (
-            <p className="mt-0.5 text-[10px] font-semibold text-red-600">
-              Wajib diisi
-            </p>
+          {showEmptyMark && (
+            <p className="mt-0.5 text-[10px] font-semibold text-amber-700">Belum terisi</p>
           )}
         </div>
 
@@ -454,10 +456,7 @@ function DenominationRow({
             disabled={disabled}
             onChange={(e) => onQuantityChange(toQty(e.target.value))}
             placeholder="0"
-            className={cn(
-              'h-10 w-full rounded-xl border bg-secondary px-3 text-right text-sm font-bold focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60',
-              !disabled && isEmpty ? 'border-red-300' : 'border-border',
-            )}
+            className="h-10 w-full rounded-xl border border-border bg-secondary px-3 text-right text-sm font-bold focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
           />
         </div>
       </div>
@@ -555,15 +554,22 @@ export default function CekUangModalDetailPage() {
   const remainingAmount = Math.max(0, maxAmount - totalAmount);
   const totalPct = maxAmount > 0 ? Math.min(100, Math.round((totalAmount / maxAmount) * 100)) : 0;
   const filledRows = rows.filter((row) => toQty(row.quantity) > 0).length;
+  const emptyRows = rows.length - filledRows;
   const isOverLimit = totalAmount > maxAmount;
-  const allDenominationsFilled = rows.every((row) => toQty(row.quantity) > 0);
-  const canSubmit = !locked && allDenominationsFilled && !isOverLimit;
+  const isEmpty = totalAmount <= 0;
+  // Some denominations left at 0 — only a warning once the task is done.
+  const hasEmptyDenoms = readonly && emptyRows > 0 && totalAmount > 0;
+  // "Uang modal belum penuh" — below the daily max. Allowed: the task still
+  // completes, it's just marked for Ops. `taskData.isPartial` is the stored
+  // mark after submit; before that we derive it live from the running total.
+  const isPartial = readonly
+    ? taskData?.isPartial === true
+    : (!isEmpty && !isOverLimit && totalAmount < maxAmount);
+  const canSubmit = !locked && !isEmpty && !isOverLimit;
 
   const submitHint = (() => {
     if (locked) return '';
-    if (!allDenominationsFilled) {
-      return `Semua pecahan uang wajib diisi (${filledRows} dari ${rows.length} terisi).`;
-    }
+    if (isEmpty) return 'Isi minimal satu pecahan uang modal.';
     if (isOverLimit) return `Total uang modal maksimal ${formatRupiah(maxAmount)}.`;
     return '';
   })();
@@ -638,9 +644,13 @@ export default function CekUangModalDetailPage() {
         return;
       }
 
-      toast.success(`Cek Uang Modal selesai · ${formatRupiah(totalAmount)} ✓`, {
-        duration: 4000,
-      });
+      const incompleteAtSubmit = isPartial || emptyRows > 0;
+      toast.success(
+        incompleteAtSubmit
+          ? `Cek Uang Modal selesai · ${formatRupiah(totalAmount)} (belum lengkap) ✓`
+          : `Cek Uang Modal selesai · ${formatRupiah(totalAmount)} ✓`,
+        { duration: 4000 },
+      );
       router.back();
     } catch (e) {
       const msg =
@@ -767,18 +777,18 @@ export default function CekUangModalDetailPage() {
                       <p
                         className={cn(
                           'mt-1 text-[11px] font-medium',
-                          !readonly && !allDenominationsFilled ? 'text-red-600' : 'text-muted-foreground',
+                          hasEmptyDenoms ? 'text-amber-700' : 'text-muted-foreground',
                         )}
                       >
                         {filledRows} dari {rows.length} pecahan terisi
-                        {!readonly && !allDenominationsFilled && ' · semua pecahan wajib diisi'}
+                        {hasEmptyDenoms && ` · ${emptyRows} pecahan belum terisi`}
                       </p>
                       <div className="mt-3 space-y-2">
                         <div className="h-2 overflow-hidden rounded-full bg-secondary">
                           <div
                             className={cn(
                               'h-full rounded-full transition-all',
-                              isOverLimit ? 'bg-red-500' : 'bg-primary',
+                              isOverLimit ? 'bg-red-500' : (isPartial || hasEmptyDenoms) ? 'bg-amber-400' : 'bg-primary',
                             )}
                             style={{ width: `${totalPct}%` }}
                           />
@@ -791,8 +801,13 @@ export default function CekUangModalDetailPage() {
                     </div>
 
                     {readonly && (
-                      <div className="rounded-full bg-green-100 px-2.5 py-1 text-[10px] font-bold text-green-700">
-                        Selesai
+                      <div
+                        className={cn(
+                          'rounded-full px-2.5 py-1 text-[10px] font-bold',
+                          (isPartial || hasEmptyDenoms) ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700',
+                        )}
+                      >
+                        {(isPartial || hasEmptyDenoms) ? 'Belum lengkap' : 'Selesai'}
                       </div>
                     )}
                   </div>
@@ -814,6 +829,29 @@ export default function CekUangModalDetailPage() {
                     </p>
                   </div>
                 )}
+
+                {(isPartial || hasEmptyDenoms) && (
+                  <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+                    <p className="text-xs font-bold text-amber-800">
+                      {hasEmptyDenoms && !isPartial ? 'Pecahan belum lengkap' : 'Uang modal belum lengkap'}
+                    </p>
+                    {isPartial && (
+                      <p className="mt-0.5 text-xs text-amber-700">
+                        Kurang {formatRupiah(remainingAmount)} dari batas harian {formatRupiah(maxAmount)}.
+                      </p>
+                    )}
+                    {hasEmptyDenoms && (
+                      <p className="mt-0.5 text-xs text-amber-700">
+                        {emptyRows} pecahan belum terisi.
+                      </p>
+                    )}
+                    <p className="mt-0.5 text-xs text-amber-700">
+                      {readonly
+                        ? 'Task tetap selesai — ditandai untuk Ops.'
+                        : 'Tidak masalah — task tetap bisa diselesaikan dan akan ditandai.'}
+                    </p>
+                  </div>
+                )}
               </Section>
 
               <Section title="Pecahan Uang">
@@ -823,6 +861,7 @@ export default function CekUangModalDetailPage() {
                       key={row.denominationValue}
                       row={row}
                       disabled={disabled}
+                      markEmpty={readonly}
                       maxQuantity={Math.max(
                         toQty(row.quantity),
                         Math.floor((maxAmount - (totalAmount - row.denominationValue * toQty(row.quantity))) / row.denominationValue),

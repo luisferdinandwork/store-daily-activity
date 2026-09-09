@@ -11,6 +11,7 @@ import { ReactNode, useState } from 'react';
 import OpsSidebar from '@/components/ops/layout/OpsSidebar';
 import OpsNavbar  from '@/components/ops/layout/OpsNavbar';
 import NotificationBell from '@/components/ops/layout/NotificationBell';
+import HeaderProfileButton from '@/components/shared/HeaderProfileButton';
 import RoleSwitchBanner from '@/components/shared/RoleSwitchBanner';
 import PasswordExpiryBanner from '@/components/shared/PasswordExpiryBanner';
 import { useSession } from 'next-auth/react';
@@ -31,7 +32,12 @@ export default function OpsLayout({ children }: { children: ReactNode }) {
         <OpsNavbar
           collapsed={collapsed}
           onToggle={() => setCollapsed((v) => !v)}
-          right={<NotificationBell />}
+          right={
+            <div className="flex items-center gap-1.5">
+              <NotificationBell />
+              <HeaderProfileButton />
+            </div>
+          }
         />
         <main className="flex-1 overflow-y-auto">
           {children}

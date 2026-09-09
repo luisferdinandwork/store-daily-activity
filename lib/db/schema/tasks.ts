@@ -554,6 +554,13 @@ export const cekUangModalTasks = pgTable('cek_uang_modal_tasks', {
   /** maxAmount - totalAmount. Useful for OPS daily/monthly reporting. */
   remainingAmount: decimal('remaining_amount', { precision: 12, scale: 2 }).default('500000').notNull(),
 
+  /**
+   * "Uang modal belum penuh" — set when the submitted total is below maxAmount.
+   * The task still completes normally; this is just a mark for Ops. Employees
+   * are no longer required to stock every denomination.
+   */
+  isPartial: boolean('is_partial').default(false).notNull(),
+
   submittedLat: decimal('submitted_lat', { precision: 10, scale: 7 }),
   submittedLng: decimal('submitted_lng', { precision: 10, scale: 7 }),
 

@@ -40,6 +40,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import EmployeeLogoMark from '@/components/employee/EmployeeLogoMark';
+import UserAvatar from '@/components/shared/UserAvatar';
 
 // ─── Nav definition ───────────────────────────────────────────────────────────
 
@@ -198,9 +199,12 @@ export default function FinanceSidebar({ collapsed = false, userName = 'Finance'
               </NavTooltip>
             ) : (
               <>
-                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-xs font-semibold text-emerald-700">
-                  {initial}
-                </div>
+                <UserAvatar
+                  src={session?.user?.image}
+                  name={displayName}
+                  className="h-7 w-7 shrink-0"
+                  fallbackClassName="bg-emerald-50 text-xs text-emerald-700"
+                />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-xs font-medium text-foreground">{displayName}</p>
                   <p className="truncate text-[10px] text-muted-foreground">

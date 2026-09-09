@@ -11,7 +11,7 @@ import {
   MessageSquare,
   BookOpen,
   Bell,
-  Settings,
+  UserCircle,
   ChevronRight,
   DollarSign,
   LayoutDashboard,
@@ -34,7 +34,7 @@ const MORE_MENU_ITEMS: MenuItem[] = [
   { label: 'Item Transfers', href: '/employee/item-transfers', icon: Truck, color: 'text-sky-500' },
   { label: 'Knowledge Base',   href: '/employee/knowledge', icon: BookOpen,    color: 'text-indigo-500' },
   { label: 'Notifications',    href: '/employee/announcements', icon: Bell,    color: 'text-amber-500' },
-  { label: 'Settings',         href: '/employee/settings', icon: Settings,      color: 'text-muted-foreground' },
+  { label: 'Profile',          href: '/employee/profile', icon: UserCircle,    color: 'text-muted-foreground' },
 ];
 
 // ─── Component ────────────────────────────────────────────────────────────────

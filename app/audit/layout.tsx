@@ -11,6 +11,7 @@ import AuditNavbar  from '@/components/audit/layout/AuditNavbar';
 import RoleSwitchBanner from '@/components/shared/RoleSwitchBanner';
 import PasswordExpiryBanner from '@/components/shared/PasswordExpiryBanner';
 import AccountNotificationBell from '@/components/shared/AccountNotificationBell';
+import HeaderProfileButton from '@/components/shared/HeaderProfileButton';
 
 export default function AuditLayout({ children }: { children: ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -28,7 +29,12 @@ export default function AuditLayout({ children }: { children: ReactNode }) {
         <AuditNavbar
           collapsed={collapsed}
           onToggle={() => setCollapsed((v) => !v)}
-          right={<AccountNotificationBell />}
+          right={
+            <div className="flex items-center gap-1.5">
+              <AccountNotificationBell />
+              <HeaderProfileButton />
+            </div>
+          }
         />
         <main className="flex-1 overflow-y-auto">
           {children}
