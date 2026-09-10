@@ -18,7 +18,7 @@ Guidance for AI assistants working in this repo. Keep this file short and curren
 
 | Role (`user_roles.code`) | Panel | Notes |
 |---|---|---|
-| `employee` | `/employee` (mobile) | `employee_types.code`: `pic_1`, `pic_2`, `sa`. PIC 1/2 also get `/pic` (team task progress + **read-only** schedule: they upload the Excel for a month with no schedule yet; editing/creating/deleting is Ops-only, so to fix a mistake Ops removes the month from `/ops/schedules` and the PIC re-uploads). |
+| `employee` | `/employee` (mobile) | `employee_types.code`: `pic_1`, `pic_2`, `sa`. PIC 1/2 also get `/pic` (manage own store's schedule — Excel import, create/edit/delete — plus team task progress). |
 | `ops` | `/ops` | `employee_types.code`: `ops_ho` (all stores) or `ops_area` (own `areaId` only). |
 | `finance` | `/finance` | |
 | `audit` | `/audit` | |

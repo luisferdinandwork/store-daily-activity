@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
 
   if (!canEditSchedule(role, empType)) {
     return NextResponse.json(
-      { success: false, error: 'PIC cannot edit the schedule. Upload a corrected Excel after Ops removes the current one.' },
+      { success: false, error: 'Only OPS or PIC can create schedule entries.' },
       { status: 403 },
     );
   }

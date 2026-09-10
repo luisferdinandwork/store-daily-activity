@@ -40,17 +40,11 @@ export function canManageSchedule(role: string | null, empType: string | null) {
 
 /**
  * May CHANGE the store schedule from inside the system — create an empty month,
- * edit a day cell, or delete a schedule. PIC is intentionally excluded: they
- * upload a fresh month's Excel and, if it's wrong, Ops removes it from the Ops
- * panel so they can re-upload.
+ * edit a day cell, delete a schedule, or replace it via Excel import. PIC 1/2
+ * manage their own store's schedule; every Ops/IT manager can too.
  */
 export function canEditSchedule(role: string | null, empType: string | null) {
-  return (
-    role === 'it' ||
-    role === 'ops' ||
-    empType === 'ops_area' ||
-    empType === 'ops_ho'
-  );
+  return canManageSchedule(role, empType);
 }
 
 export function parseLocalDate(date: string): Date | null {

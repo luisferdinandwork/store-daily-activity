@@ -7,7 +7,6 @@ import {
   importScheduleFromParsed,
   ScheduleImportValidationError,
 } from '@/lib/schedule-import';
-import { dateToYearMonth, getMonthlySchedule } from '@/lib/schedule-utils';
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
@@ -83,26 +82,6 @@ export async function POST(req: NextRequest) {
         { success: false, error: 'No storeMap provided and actor has no home store.' },
         { status: 400 },
       );
-    }
-
-    // PIC may only upload a month that does NOT already have a schedule.
-    // To replace one, Ops removes it from the Ops panel first. (Ops/IT keep the
-    // replace-on-import behaviour via their own /api/ops/schedules/import.)
-    const isManager = role === 'ops' || role === 'it';
-    if (!isManager && actorStoreId != null) {
-      const yearMonth = dateToYearMonth(parsed.month);
-      const existing = await getMonthlySchedule(actorStoreId, yearMonth);
-      if (existing) {
-        return NextResponse.json(
-          {
-            success: false,
-            error:
-              `Jadwal untuk ${yearMonth} sudah ada di sistem. Minta Ops menghapus jadwal tersebut ` +
-              `dari Ops Panel terlebih dahulu, lalu upload ulang file Excel yang sudah diperbaiki.`,
-          },
-          { status: 409 },
-        );
-      }
     }
 
     const normalized: Record<string, number> = {};

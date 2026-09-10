@@ -107,7 +107,7 @@ export async function POST(req: NextRequest) {
 
   if (!canEditSchedule(role, empType)) {
     return NextResponse.json(
-      { success: false, error: 'PIC cannot create schedules from the system. Upload the month\'s Excel instead.' },
+      { success: false, error: 'Only OPS or PIC can create schedules.' },
       { status: 403 },
     );
   }
@@ -171,7 +171,7 @@ export async function DELETE(req: NextRequest) {
 
   if (!canEditSchedule(role, empType)) {
     return NextResponse.json(
-      { success: false, error: 'PIC cannot delete schedules. Ask Ops to remove it from the Ops panel.' },
+      { success: false, error: 'Only OPS or PIC can delete schedules.' },
       { status: 403 },
     );
   }
