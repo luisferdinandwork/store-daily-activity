@@ -117,14 +117,23 @@ export function EmployeeDetailSheet({ employee, stores, employeeTypes, employeeR
           {/* ── Header ── */}
           <div className="relative shrink-0 overflow-hidden border-b border-slate-200 px-6 pb-5 pt-6 bg-gradient-to-br from-violet-50 to-white">
             <div className="flex items-start gap-4">
-              <div
-                className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full text-base font-semibold text-white shadow-md ring-4 ring-white"
-                style={{
-                  background: `linear-gradient(135deg, hsl(${h} 65% 55%), hsl(${(h + 45) % 360} 70% 45%))`,
-                }}
-              >
-                {initials(employee.name)}
-              </div>
+              {employee.avatarUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={employee.avatarUrl}
+                  alt={employee.name}
+                  className="h-14 w-14 shrink-0 rounded-full object-cover shadow-md ring-4 ring-white"
+                />
+              ) : (
+                <div
+                  className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full text-base font-semibold text-white shadow-md ring-4 ring-white"
+                  style={{
+                    background: `linear-gradient(135deg, hsl(${h} 65% 55%), hsl(${(h + 45) % 360} 70% 45%))`,
+                  }}
+                >
+                  {initials(employee.name)}
+                </div>
+              )}
               <div className="min-w-0 flex-1">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">

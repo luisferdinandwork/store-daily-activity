@@ -31,7 +31,7 @@ interface MenuItem {
 
 const MORE_MENU_ITEMS: MenuItem[] = [
   { label: 'Petty Cash', href: '/employee/pettycash', icon: DollarSign, color: 'text-blue-500' },
-  { label: 'Item Transfers', href: '/employee/item-transfers', icon: Truck, color: 'text-sky-500' },
+  { label: 'Transfer Orders', href: '/employee/item-transfers', icon: Truck, color: 'text-sky-500' },
   { label: 'Knowledge Base',   href: '/employee/knowledge', icon: BookOpen,    color: 'text-indigo-500' },
   { label: 'Notifications',    href: '/employee/announcements', icon: Bell,    color: 'text-amber-500' },
   { label: 'Profile',          href: '/employee/profile', icon: UserCircle,    color: 'text-muted-foreground' },

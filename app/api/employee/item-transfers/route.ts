@@ -21,6 +21,7 @@ import { getOrCreateItemReturnForSchedule } from '@/lib/db/utils/item-return';
 import {
   syncItemDroppingForStore,
   syncItemReturnForStore,
+  syncReceivingStatus,
   getItemDroppingEntriesWithTransferOrder,
   getItemReturnEntriesWithTransferOrder,
 } from '@/lib/db/utils/item-transfers';
@@ -90,6 +91,13 @@ export async function GET() {
 
   const droppingSyncWarning = droppingSync.success ? null : droppingSync.error;
   const returnSyncWarning = returnSync.success ? null : returnSync.error;
+
+  // Close phase 3 for this store's own transfers right away — BC's posted
+  // Warehouse Receipt (store-bound legs) or this store's own just-submitted
+  // Item Return (warehouse-bound legs) can now complete a transfer without
+  // waiting for OPS to happen to open their dashboard. Best-effort: a BC
+  // hiccup here shouldn't block the page from loading.
+  await syncReceivingStatus([schedule.storeId]);
 
   const [droppingRaw, returnRaw] = await Promise.all([
     getItemDroppingEntriesWithTransferOrder(droppingTask.id),

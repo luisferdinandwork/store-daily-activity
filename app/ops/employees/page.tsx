@@ -62,8 +62,14 @@ function hueFromString(s: string) {
   return Math.abs(h) % 360;
 }
 
-function Avatar({ name }: { name: string }) {
+function Avatar({ name, avatarUrl }: { name: string; avatarUrl?: string | null }) {
   const h = hueFromString(name);
+  if (avatarUrl) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img src={avatarUrl} alt={name} className="h-8 w-8 shrink-0 rounded-full object-cover" />
+    );
+  }
   return (
     <div
       className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold text-white"
@@ -459,7 +465,7 @@ export default function OpsEmployeesPage() {
                   >
                     <TableCell className="pl-5 py-2.5">
                       <div className="flex items-center gap-2.5">
-                        <Avatar name={e.name} />
+                        <Avatar name={e.name} avatarUrl={e.avatarUrl} />
                         <div className="min-w-0">
                           <p className="truncate text-sm font-semibold text-slate-900">{e.name}</p>
                           <p className="truncate text-[11px] text-slate-400">NIK {e.nik}</p>

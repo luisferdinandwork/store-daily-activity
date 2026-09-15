@@ -13,31 +13,22 @@ import { desc, eq, inArray } from 'drizzle-orm';
 
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
-import { itemTransferOrders, stores, areas } from '@/lib/db/schema';
-import { syncTransferOrderRegistry, syncReceivingStatus } from '@/lib/db/utils/item-transfers';
+import { itemTransferOrders, itemReturnEntries, itemDroppingEntries, stores, areas } from '@/lib/db/schema';
+import { syncTransferOrderRegistry, syncReceivingStatus, isWarehouseCode } from '@/lib/db/utils/item-transfers';
 import { getOpsActor } from '@/app/api/ops/tasks/_helpers';
 
 type Phase = 'return' | 'shipping' | 'receiving' | 'received' | 'to_warehouse';
 
-// Location codes for Panatrade's central warehouse/distribution locations
-// all start with "DM" (seen so far: DM, DM-RETURN, DM-BAD) — none of them
-// are a real store with a scheduled employee using this app, so neither
-// Item Return nor Item Receiving ever gets a human confirmation on that
-// side of the transfer. `fromStoreId`/`toStoreId` staying null already
-// tells us the code didn't match a registered store; combined with the
-// "DM" prefix that specifically means "warehouse", not "unmatched/unknown".
-function isWarehouseCode(code: string): boolean {
-  return /^dm/i.test(code.trim());
-}
-
 /**
  * A transfer order whose destination is a warehouse code (a store sending
- * stock/returns back to DM, not store-to-store) will never get a
- * droppingSubmittedAt/receivedAt — there's no employee on the other end to
- * confirm receipt or a BC receipt to wait for the way a store-to-store leg
- * has. Once the origin store has submitted its Item Return, the transfer is
- * done from OPS's perspective — resolve it to its own terminal phase instead
- * of leaving it stuck showing "Dalam Perjalanan" forever.
+ * stock/returns back to DM, not store-to-store) gets its receivedAt closed
+ * by syncReceivingStatus as soon as the origin store submits its Item Return
+ * (see lib/db/utils/item-transfers.ts) — there's no employee on the other
+ * end to confirm receipt or a BC receipt to necessarily wait for the way a
+ * store-to-store leg has. `to_warehouse` below is a defensive fallback for
+ * the brief window before that sync has run (receivedAt takes priority the
+ * moment it's set), instead of leaving the row stuck showing "Dalam
+ * Perjalanan" forever.
  */
 function resolvePhase(row: typeof itemTransferOrders.$inferSelect): Phase {
   if (row.receivedAt) return 'received';
@@ -65,10 +56,29 @@ export async function GET() {
     syncReceivingStatus('all'),
   ]);
 
-  const allRows = await db
-    .select()
+  // Left-joined to surface the employee's own confirmation photo/qty — both
+  // transferOrderId FKs are unique, so each TO has at most one return entry
+  // and at most one dropping entry (no row-duplication risk from the join).
+  const joined = await db
+    .select({
+      to: itemTransferOrders,
+      returnPhoto: itemReturnEntries.courierSignPhoto,
+      returnQtyCounted: itemReturnEntries.qtyCounted,
+      droppingPhoto: itemDroppingEntries.courierSignPhoto,
+      droppingQtyCounted: itemDroppingEntries.qtyCounted,
+    })
     .from(itemTransferOrders)
+    .leftJoin(itemReturnEntries, eq(itemReturnEntries.transferOrderId, itemTransferOrders.id))
+    .leftJoin(itemDroppingEntries, eq(itemDroppingEntries.transferOrderId, itemTransferOrders.id))
     .orderBy(desc(itemTransferOrders.updatedAt));
+
+  const allRows = joined.map((j) => ({
+    ...j.to,
+    returnPhoto: j.returnPhoto,
+    returnQtyCounted: j.returnQtyCounted,
+    droppingPhoto: j.droppingPhoto,
+    droppingQtyCounted: j.droppingQtyCounted,
+  }));
 
   // Only transfer orders that actually touch one of our registered stores —
   // transferFromCode/transferToCode get resolved to fromStoreId/toStoreId by
@@ -132,6 +142,10 @@ export async function GET() {
     droppingDetectedAt: r.droppingDetectedAt?.toISOString() ?? null,
     droppingSubmittedAt: r.droppingSubmittedAt?.toISOString() ?? null,
     receivedAt: r.receivedAt?.toISOString() ?? null,
+    returnPhoto: r.returnPhoto ?? null,
+    returnQtyCounted: r.returnQtyCounted ?? null,
+    droppingPhoto: r.droppingPhoto ?? null,
+    droppingQtyCounted: r.droppingQtyCounted ?? null,
   }));
 
   const syncWarnings = [

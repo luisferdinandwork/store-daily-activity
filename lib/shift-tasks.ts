@@ -385,7 +385,7 @@ export function normalizeTaskCodes(
     if (isRemovedTaskType(value)) {
       const hint =
         value === 'item_dropping' || value === 'item_return'
-          ? 'It now lives on the standalone Item Transfers page.'
+          ? 'It now lives on the standalone Transfer Orders page.'
           : 'Use "store_closing" instead.';
       return {
         ok: false,

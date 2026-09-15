@@ -550,6 +550,7 @@ export interface ManageEmployeeRow {
   nik: string;
   name: string;
   isActive: boolean;
+  avatarUrl: string | null;
   employeeTypeId: number | null;
   employeeTypeCode: string | null;
   employeeTypeLabel: string | null;
@@ -630,6 +631,7 @@ export async function listManageData(actorId: string): Promise<TransferResult<{
       nik: users.nik,
       name: users.name,
       isActive: users.isActive,
+      avatarUrl: users.avatarUrl,
       employeeTypeId: users.employeeTypeId,
       employeeTypeCode: employeeTypes.code,
       employeeTypeLabel: employeeTypes.label,
@@ -681,6 +683,7 @@ export async function listManageData(actorId: string): Promise<TransferResult<{
       nik: u.nik,
       name: u.name,
       isActive: u.isActive,
+      avatarUrl: u.avatarUrl,
       employeeTypeId: u.employeeTypeId,
       employeeTypeCode: u.employeeTypeCode,
       employeeTypeLabel: u.employeeTypeLabel,

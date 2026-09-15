@@ -39,7 +39,7 @@ export default function EmployeeItemTransfersBadge() {
   return (
     <Link
       href="/employee/item-transfers"
-      aria-label={count > 0 ? `Item Transfers, ${count} pending` : 'Item Transfers'}
+      aria-label={count > 0 ? `Transfer Orders, ${count} pending` : 'Transfer Orders'}
       className="relative flex h-11 w-11 items-center justify-center rounded-full text-primary-foreground/90 transition-colors hover:bg-white/10 active:scale-95"
     >
       <Truck className="h-[18px] w-[18px]" />

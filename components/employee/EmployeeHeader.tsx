@@ -31,7 +31,7 @@ const TITLES: Record<string, string> = {
   '/employee/knowledge': 'Knowledge Base',
   '/employee/pettycash': 'Petty Cash',
   '/employee/announcements': 'Notifications',
-  '/employee/item-transfers': 'Item Transfers',
+  '/employee/item-transfers': 'Transfer Orders',
 };
 
 const VISIBLE_PATHS = new Set<string>([...ROOT_TABS, ...Object.keys(TITLES)]);

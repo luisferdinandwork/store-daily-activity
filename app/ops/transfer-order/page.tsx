@@ -1,9 +1,10 @@
 'use client';
 
-// app/ops/item-transfers/page.tsx — OPS Item Transfer pipeline dashboard.
+// app/ops/transfer-order/page.tsx — OPS Transfer Order pipeline dashboard.
 //
 // Shows every BC-synced transfer order across its 3 phases (Item Return →
-// Shipping → Item Receiving), sourced live from /api/ops/item-transfers,
+// Shipping → Item Receiving), sourced live from /api/ops/item-transfers
+// (API route path kept as-is — only this page's own route was renamed),
 // which re-syncs Business Central on every load/refresh. Mirrors the
 // app/ops/issues/page.tsx convention: store-filterable card list + a
 // right-side slide-in drawer with the full phase timeline.
@@ -12,12 +13,15 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Package, Truck, PackageCheck, CheckCircle2, Store as StoreIcon,
   MapPin, ChevronDown, Loader2, X, Globe2, Shield, AlertTriangle,
-  Factory, Send, Inbox, Warehouse,
+  Factory, Send, Inbox, Warehouse, Search, ArrowRightLeft,
 } from 'lucide-react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
+import StorePickerCombobox, {
+  type AreaGroupOption, type StoreOption,
+} from '@/components/ops/impact-visits/StorePickerCombobox';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -55,6 +59,10 @@ interface Transfer {
   droppingDetectedAt: string | null;
   droppingSubmittedAt: string | null;
   receivedAt: string | null;
+  returnPhoto: string | null;
+  returnQtyCounted: number | null;
+  droppingPhoto: string | null;
+  droppingQtyCounted: number | null;
 }
 
 // ─── Phase config ─────────────────────────────────────────────────────────────
@@ -375,6 +383,42 @@ function TransferDrawer({ transfer, onClose }: { transfer: Transfer; onClose: ()
             </div>
           </div>
 
+          {(transfer.returnPhoto || transfer.droppingPhoto) && (
+            <div>
+              <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Bukti Foto Karyawan</p>
+              <div className="grid grid-cols-2 gap-3">
+                {transfer.returnPhoto && (
+                  <a href={transfer.returnPhoto} target="_blank" rel="noopener noreferrer" className="block">
+                    <p className="mb-1 text-[10px] font-semibold text-slate-500">Item Return</p>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={transfer.returnPhoto}
+                      alt="Bukti foto Item Return"
+                      className="h-32 w-full rounded-xl border border-slate-200 object-cover"
+                    />
+                    {transfer.returnQtyCounted != null && (
+                      <p className="mt-1 text-[10px] text-slate-400">Qty dihitung: {transfer.returnQtyCounted}</p>
+                    )}
+                  </a>
+                )}
+                {transfer.droppingPhoto && (
+                  <a href={transfer.droppingPhoto} target="_blank" rel="noopener noreferrer" className="block">
+                    <p className="mb-1 text-[10px] font-semibold text-slate-500">Item Receiving</p>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={transfer.droppingPhoto}
+                      alt="Bukti foto Item Receiving"
+                      className="h-32 w-full rounded-xl border border-slate-200 object-cover"
+                    />
+                    {transfer.droppingQtyCounted != null && (
+                      <p className="mt-1 text-[10px] text-slate-400">Qty dihitung: {transfer.droppingQtyCounted}</p>
+                    )}
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
+
           {transfer.whseShipmentNo && (
             <p className="text-[11px] text-slate-400">Whse Shipment: <span className="font-mono">{transfer.whseShipmentNo}</span></p>
           )}
@@ -431,6 +475,12 @@ export default function OpsItemTransfersPage() {
   const [syncWarnings, setSyncWarnings] = useState<string[]>([]);
   const [phaseFilter, setPhaseFilter] = useState<Phase | 'all'>('all');
   const [storeFilter, setStoreFilter] = useState<string>('all');
+  // 'from' = this store is shipping out (Item Return task); 'to' = this
+  // store is receiving (Item Dropping/Receiving task). Independent of
+  // storeFilter — e.g. picking 'from' with "All stores" shows every Item
+  // Return leg system-wide, regardless of which store filter is selected.
+  const [direction, setDirection] = useState<'all' | 'from' | 'to'>('all');
+  const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<Transfer | null>(null);
 
   useEffect(() => {
@@ -456,39 +506,58 @@ export default function OpsItemTransfersPage() {
 
   useEffect(() => { if (isOps) load(); }, [isOps, load]);
 
-  const storesByArea = useMemo(() => {
-    const m = new Map<string, { areaName: string; list: { id: string; name: string }[] }>();
+  // Same StorePickerCombobox used on the Schedules and Impact Visit pages —
+  // a searchable list scales far better than a plain <select> once the
+  // store roster grows past a couple of entries.
+  const storeGroups = useMemo<AreaGroupOption[]>(() => {
+    const m = new Map<string, { id: number; name: string; stores: StoreOption[] }>();
+    let syntheticId = 0;
     for (const t of transfers) {
       for (const store of [t.fromStore, t.toStore]) {
         if (!store) continue;
         const key = store.areaName ?? '—';
-        if (!m.has(key)) m.set(key, { areaName: key, list: [] });
-        const list = m.get(key)!.list;
-        if (!list.some((s) => s.id === store.id)) list.push({ id: store.id, name: store.name });
+        if (!m.has(key)) m.set(key, { id: store.areaId ? Number(store.areaId) : --syntheticId, name: key, stores: [] });
+        const list = m.get(key)!.stores;
+        if (!list.some((s) => s.id === Number(store.id))) {
+          list.push({ id: Number(store.id), storeNo: store.storeNo, name: store.name });
+        }
       }
     }
-    return [...m.values()].sort((a, b) => a.areaName.localeCompare(b.areaName));
+    return [...m.values()].sort((a, b) => a.name.localeCompare(b.name));
   }, [transfers]);
 
-  const storeScoped = useMemo(
-    () => storeFilter === 'all'
-      ? transfers
-      : transfers.filter((t) => t.fromStore?.id === storeFilter || t.toStore?.id === storeFilter),
-    [transfers, storeFilter],
-  );
+  const allStoreOptions = useMemo(() => storeGroups.flatMap((g) => g.stores), [storeGroups]);
+
+  const storeScoped = useMemo(() => transfers.filter((t) => {
+    if (direction === 'from') return storeFilter === 'all' ? !!t.fromStore : t.fromStore?.id === storeFilter;
+    if (direction === 'to') return storeFilter === 'all' ? !!t.toStore : t.toStore?.id === storeFilter;
+    return storeFilter === 'all' || t.fromStore?.id === storeFilter || t.toStore?.id === storeFilter;
+  }), [transfers, storeFilter, direction]);
+
+  const searchScoped = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return storeScoped;
+    return storeScoped.filter((t) =>
+      t.toaNo.toLowerCase().includes(q) ||
+      t.transferFromCode.toLowerCase().includes(q) ||
+      t.transferToCode.toLowerCase().includes(q) ||
+      (t.fromStore?.name.toLowerCase().includes(q) ?? false) ||
+      (t.toStore?.name.toLowerCase().includes(q) ?? false),
+    );
+  }, [storeScoped, search]);
 
   const meta = useMemo(() => ({
-    all: storeScoped.length,
-    return: storeScoped.filter((t) => t.phase === 'return').length,
-    shipping: storeScoped.filter((t) => t.phase === 'shipping').length,
-    receiving: storeScoped.filter((t) => t.phase === 'receiving').length,
-    received: storeScoped.filter((t) => t.phase === 'received').length,
-    to_warehouse: storeScoped.filter((t) => t.phase === 'to_warehouse').length,
-  }), [storeScoped]);
+    all: searchScoped.length,
+    return: searchScoped.filter((t) => t.phase === 'return').length,
+    shipping: searchScoped.filter((t) => t.phase === 'shipping').length,
+    receiving: searchScoped.filter((t) => t.phase === 'receiving').length,
+    received: searchScoped.filter((t) => t.phase === 'received').length,
+    to_warehouse: searchScoped.filter((t) => t.phase === 'to_warehouse').length,
+  }), [searchScoped]);
 
   const visible = useMemo(
-    () => phaseFilter === 'all' ? storeScoped : storeScoped.filter((t) => t.phase === phaseFilter),
-    [storeScoped, phaseFilter],
+    () => phaseFilter === 'all' ? searchScoped : searchScoped.filter((t) => t.phase === phaseFilter),
+    [searchScoped, phaseFilter],
   );
 
   const statCards = [
@@ -516,7 +585,7 @@ export default function OpsItemTransfersPage() {
     <div className="min-h-full bg-slate-50">
       <OpsPageHeader
         scope={scope === 'all_areas' ? 'OPS · Head Office' : 'OPS · Area'}
-        title="Item Transfers"
+        title="Transfer Orders"
         subtitle={
           <span className="inline-flex items-center gap-1.5">
             {scope === 'all_areas' ? (<><Globe2 className="h-3.5 w-3.5" />All areas</>) : (<><MapPin className="h-3.5 w-3.5" />Your area</>)}
@@ -542,28 +611,54 @@ export default function OpsItemTransfersPage() {
           </div>
         )}
 
-        {/* Store filter */}
+        {/* Store filter + search */}
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-wrap items-end gap-4">
-            <div className="min-w-[280px] flex-1">
+            <div className="min-w-[200px] flex-1">
               <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-widest text-slate-400">Store</label>
+              <StorePickerCombobox
+                storeGroups={storeGroups}
+                selectedValue={storeFilter}
+                triggerLabel={storeFilter === 'all' ? 'All stores' : (allStoreOptions.find((s) => String(s.id) === storeFilter)?.name ?? '')}
+                onSelect={(v) => { setStoreFilter(v); setSelected(null); }}
+                extraOption={{ value: 'all', label: 'All stores' }}
+              />
+            </div>
+            <div className="min-w-[200px] flex-1">
+              <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-widest text-slate-400">Direction</label>
               <div className="relative">
-                <StoreIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <ArrowRightLeft className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                 <select
-                  value={storeFilter}
-                  onChange={(e) => { setStoreFilter(e.target.value); setSelected(null); }}
+                  value={direction}
+                  onChange={(e) => { setDirection(e.target.value as typeof direction); setSelected(null); }}
                   className="h-11 w-full appearance-none rounded-xl border border-slate-200 bg-white pl-10 pr-10 text-sm font-semibold text-slate-800 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
                 >
-                  <option value="all">All stores</option>
-                  {storesByArea.length > 1
-                    ? storesByArea.map((g) => (
-                        <optgroup key={g.areaName} label={g.areaName}>
-                          {g.list.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                        </optgroup>
-                      ))
-                    : storesByArea[0]?.list.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  <option value="all">Both directions</option>
+                  <option value="from">Outbound · Item Return</option>
+                  <option value="to">Inbound · Receiving</option>
                 </select>
                 <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              </div>
+            </div>
+            <div className="min-w-[240px] flex-1">
+              <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-widest text-slate-400">Search</label>
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  value={search}
+                  onChange={(e) => { setSearch(e.target.value); setSelected(null); }}
+                  placeholder="TOA no, store name, or code…"
+                  className="h-11 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-9 text-sm font-semibold text-slate-800 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                />
+                {search && (
+                  <button
+                    onClick={() => setSearch('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500"
+                    aria-label="Clear search"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
               </div>
             </div>
             <p className="pb-3 text-xs tabular-nums text-slate-400">

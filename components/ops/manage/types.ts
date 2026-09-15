@@ -5,6 +5,7 @@ export interface ManageEmployee {
   nik: string;
   name: string;
   isActive: boolean;
+  avatarUrl: string | null;
   employeeTypeId: number | null;
   employeeTypeCode: string | null;
   employeeTypeLabel: string | null;

@@ -268,7 +268,7 @@ export function LoginForm() {
               <Alert className="rounded-xl py-2.5">
                 <Clock className="h-4 w-4" />
                 <AlertDescription className="text-xs">
-                  You were signed out after 6 hours of inactivity. Please sign in again.
+                  You were signed out after 15 minutes of inactivity. Please sign in again.
                 </AlertDescription>
               </Alert>
             )}

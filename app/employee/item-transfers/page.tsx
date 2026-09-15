@@ -12,7 +12,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   CheckCircle2, Loader2, AlertCircle,
   LogIn, Navigation, NavigationOff, RefreshCw,
-  Store, Clock, Truck, Package, Inbox,
+  Store, Clock, Truck, Package, Inbox, Search, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -491,7 +491,9 @@ function ConfirmedEntryCard({ kind, entry }: { kind: Kind; entry: EntryData }) {
           <p className={cn('text-[11px] font-semibold', stillAwaitingBcReceive ? 'text-amber-700' : 'text-muted-foreground')}>
             {stillAwaitingBcReceive
               ? `Menunggu BC posting Warehouse Receipt · ${formatElapsedSince(entry.submittedAt)}`
-              : `Diterima BC dalam ${formatDurationBetween(entry.submittedAt, entry.receivedAt)}`}
+              : entry.submittedAt
+                ? `Diterima BC dalam ${formatDurationBetween(entry.submittedAt, entry.receivedAt)}`
+                : 'Selesai otomatis oleh BC — toko tidak perlu konfirmasi'}
           </p>
         </div>
       )}
@@ -510,18 +512,36 @@ function ConfirmedEntryCard({ kind, entry }: { kind: Kind; entry: EntryData }) {
 
 // ─── Flow section (used inside each tab) ───────────────────────────────────────
 
+function matchesSearch(entry: EntryData, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return (
+    entry.toaNo.toLowerCase().includes(q) ||
+    (entry.transferFromCode?.toLowerCase().includes(q) ?? false) ||
+    (entry.transferToCode?.toLowerCase().includes(q) ?? false) ||
+    (entry.fromStore?.name.toLowerCase().includes(q) ?? false) ||
+    (entry.toStore?.name.toLowerCase().includes(q) ?? false)
+  );
+}
+
 function FlowSection({
-  kind, payload, locked, confirmingId, onConfirm,
+  kind, payload, locked, confirmingId, search, onConfirm,
 }: {
   kind: Kind;
   payload: FlowPayload;
   locked: boolean;
   confirmingId: string | null;
+  search: string;
   onConfirm: (kind: Kind, entryId: string, qtyCounted: number, courierSignPhoto: string) => void;
 }) {
   const cfg = KIND_CFG[kind];
-  const openEntries = payload.entries.filter((e) => !e.submittedAt);
-  const confirmedEntries = payload.entries.filter((e) => e.submittedAt);
+  const searched = payload.entries.filter((e) => matchesSearch(e, search));
+  // receivedAt can now close a transfer on its own (BC's Warehouse Receipt
+  // for a store-bound leg, or this store's own Item Return submission for a
+  // warehouse-bound leg) without this entry's own submittedAt ever being
+  // set — treat either as "nothing left to do here".
+  const openEntries = searched.filter((e) => !e.submittedAt && !e.receivedAt);
+  const confirmedEntries = searched.filter((e) => e.submittedAt || e.receivedAt);
 
   return (
     <div className="space-y-3">
@@ -540,6 +560,12 @@ function FlowSection({
           <Inbox className="h-8 w-8 text-muted-foreground/40" />
           <p className="text-sm font-semibold text-foreground">{cfg.emptyTitle}</p>
           <p className="text-xs text-muted-foreground">{cfg.emptyBody}</p>
+        </div>
+      ) : searched.length === 0 ? (
+        <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-slate-200 bg-card px-4 py-10 text-center">
+          <Search className="h-8 w-8 text-muted-foreground/40" />
+          <p className="text-sm font-semibold text-foreground">Tidak ada hasil</p>
+          <p className="text-xs text-muted-foreground">Tidak ada transfer yang cocok dengan pencarian &ldquo;{search}&rdquo;.</p>
         </div>
       ) : (
         <>
@@ -589,6 +615,7 @@ export default function ItemTransfersPage() {
   const [loading, setLoading] = useState(true);
   const [notScheduled, setNotScheduled] = useState(false);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
 
   const { requiresLocation: droppingRequiresLocation } = useTaskLocationSetting('item_dropping');
   const { requiresLocation: returnRequiresLocation } = useTaskLocationSetting('item_return');
@@ -664,12 +691,14 @@ export default function ItemTransfersPage() {
     }
   }, [droppingRequiresLocation, returnRequiresLocation, droppingLocked, returnLocked, geo, load]);
 
+  // Same "still open" predicate as FlowSection's own openEntries split —
+  // this badge and that section must never disagree about what's pending.
   const droppingOpenCount = useMemo(
-    () => dropping.entries.filter((e) => !e.submittedAt).length,
+    () => dropping.entries.filter((e) => !e.submittedAt && !e.receivedAt).length,
     [dropping.entries],
   );
   const returnOpenCount = useMemo(
-    () => returnData.entries.filter((e) => !e.submittedAt).length,
+    () => returnData.entries.filter((e) => !e.submittedAt && !e.receivedAt).length,
     [returnData.entries],
   );
 
@@ -686,7 +715,7 @@ export default function ItemTransfersPage() {
       <div className="flex min-h-[60vh] flex-col items-center justify-center gap-2 bg-slate-50 px-6 text-center">
         <AlertCircle className="h-8 w-8 text-muted-foreground" />
         <p className="text-sm font-semibold text-foreground">Tidak ada jadwal hari ini</p>
-        <p className="text-xs text-muted-foreground">Item Transfers hanya tersedia saat kamu terjadwal di toko.</p>
+        <p className="text-xs text-muted-foreground">Transfer Orders hanya tersedia saat kamu terjadwal di toko.</p>
       </div>
     );
   }
@@ -740,10 +769,32 @@ export default function ItemTransfersPage() {
       </section>
 
       <section className="px-4">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Cari nomor TOA, toko, atau kode…"
+            className="h-11 w-full rounded-xl border border-border bg-card pl-10 pr-9 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/50 hover:text-muted-foreground"
+              aria-label="Hapus pencarian"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+      </section>
+
+      <section className="px-4">
         {tab === 'dropping' ? (
-          <FlowSection kind="dropping" payload={dropping} locked={locked} confirmingId={confirmingId} onConfirm={handleConfirm} />
+          <FlowSection kind="dropping" payload={dropping} locked={locked} confirmingId={confirmingId} search={search} onConfirm={handleConfirm} />
         ) : (
-          <FlowSection kind="return" payload={returnData} locked={locked} confirmingId={confirmingId} onConfirm={handleConfirm} />
+          <FlowSection kind="return" payload={returnData} locked={locked} confirmingId={confirmingId} search={search} onConfirm={handleConfirm} />
         )}
       </section>
     </div>

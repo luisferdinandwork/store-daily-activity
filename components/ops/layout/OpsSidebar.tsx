@@ -54,8 +54,8 @@ const PERFORMANCE_TARGETS_ITEM = {
 
 // Item Return → Shipping → Item Receiving BC pipeline dashboard.
 const ITEM_TRANSFERS_ITEM = {
-  href: '/ops/item-transfers',
-  label: 'Item Transfers',
+  href: '/ops/transfer-order',
+  label: 'Transfer Orders',
   icon: Truck,
   key: 'item-transfers',
 };
