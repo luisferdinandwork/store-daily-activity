@@ -10,6 +10,8 @@
 //
 //   Management
 //     Users                 /it/users            (create/edit accounts, assign roles)
+//     Area Management       /it/areas            (rename areas, assign OPS Area users)
+//     Store Management      /it/stores           (create/edit stores, assign employees/ops)
 //
 //   Configuration (IT-only)
 //     Task Management        /it/task-management
@@ -33,12 +35,14 @@ import { usePathname } from 'next/navigation';
 import { signOut, useSession } from 'next-auth/react';
 import {
   AlertTriangle,
+  Building2,
   ChevronRight,
   ClipboardCheck,
   KeyRound,
   Layers,
   LayoutDashboard,
   LogOut,
+  MapPinned,
   Percent,
   Repeat,
   Store,
@@ -82,6 +86,8 @@ const NAV: NavSection[] = [
     section: 'Management',
     items: [
       { href: '/it/users', label: 'Users', icon: Users },
+      { href: '/it/areas', label: 'Area Management', icon: MapPinned },
+      { href: '/it/stores', label: 'Store Management', icon: Building2 },
     ],
   },
   {

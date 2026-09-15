@@ -738,6 +738,15 @@ export const serahTerimaEntries = pgTable('serah_terima_entries', {
   completedByShiftId:    integer('completed_by_shift_id').references(() => shifts.id),
   completedAt: timestamp('completed_at'),
 
+  // On Hold keeps the item in the active list (isCompleted stays false) but
+  // flags it as blocked, with a follow-up reason anyone on shift can read.
+  // `note` also carries an optional reason when the item is marked Done.
+  isOnHold: boolean('is_on_hold').default(false).notNull(),
+  note:     text('note'),
+  // Optional proof photo attached when resolving (Done or On Hold) — same
+  // camera-only capture pattern as other task photos in the app.
+  photoUrl: text('photo_url'),
+
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (table) => ({

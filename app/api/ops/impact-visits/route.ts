@@ -80,6 +80,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, error: 'A store is required.' }, { status: 400 });
   }
 
+  const visitType = body.visitType === 'virtual' || body.visitType === 'on_location' ? body.visitType : null;
+  if (!visitType) {
+    return NextResponse.json({ success: false, error: 'A visit type (virtual or on_location) is required.' }, { status: 400 });
+  }
+
   const [store] = await db
     .select({ id: stores.id, areaId: stores.areaId })
     .from(stores)
@@ -102,6 +107,7 @@ export async function POST(req: NextRequest) {
       storeId,
       visitedBy: scope.userId,
       visitDate,
+      visitType,
       cashMoneyData: JSON.stringify(emptyCashMoneyData()),
       updatedAt: new Date(),
     })

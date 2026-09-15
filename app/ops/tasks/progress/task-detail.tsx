@@ -435,6 +435,9 @@ export type SerahTerimaEntryView = {
   completedByUserId: string | null;
   completedByName: string | null;
   completedAt: string | null;
+  isOnHold: boolean;
+  note: string | null;
+  photoUrl: string | null;
 };
 
 export type SerahTerimaBoardView = {
@@ -501,9 +504,31 @@ export function SerahTerimaPanel({ board }: { board: SerahTerimaBoardView }) {
       ) : (
         <div className="mt-3 space-y-2">
           {board.active.map((e) => (
-            <div key={e.id} className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
-              <p className="text-xs text-slate-700">{e.message}</p>
-              <p className="mt-1 text-[10px] text-slate-400">{e.createdByName} · {timeAgo(e.createdAt)}</p>
+            <div
+              key={e.id}
+              className={cn(
+                'rounded-lg border px-3 py-2',
+                e.isOnHold ? 'border-amber-200 bg-amber-50' : 'border-slate-100 bg-slate-50',
+              )}
+            >
+              <div className="flex items-center gap-1.5">
+                <p className="text-xs text-slate-700">{e.message}</p>
+                {e.isOnHold && (
+                  <span className="shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold text-amber-700">Ditahan</span>
+                )}
+              </div>
+              {e.isOnHold && e.note && (
+                <p className="mt-1 text-[11px] text-amber-700">Alasan: {e.note}</p>
+              )}
+              <div className="mt-1 flex items-center gap-2">
+                <p className="text-[10px] text-slate-400">{e.createdByName} · {timeAgo(e.createdAt)}</p>
+                {e.photoUrl && (
+                  <a href={e.photoUrl} target="_blank" rel="noopener noreferrer" className="shrink-0">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={e.photoUrl} alt="Bukti foto" className="h-8 w-8 rounded-md border border-slate-200 object-cover" />
+                  </a>
+                )}
+              </div>
             </div>
           ))}
         </div>
@@ -523,9 +548,18 @@ export function SerahTerimaPanel({ board }: { board: SerahTerimaBoardView }) {
               {board.recentCompleted.map((e) => (
                 <div key={e.id} className="rounded-lg border border-slate-100 px-3 py-2">
                   <p className="text-xs text-slate-500 line-through decoration-slate-300">{e.message}</p>
-                  <p className="mt-1 text-[10px] text-slate-400">
-                    {e.createdByName} → {e.completedByName ?? '—'} · {timeAgo(e.completedAt)}
-                  </p>
+                  {e.note && <p className="mt-1 text-[11px] text-slate-500">Catatan: {e.note}</p>}
+                  <div className="mt-1 flex items-center gap-2">
+                    <p className="text-[10px] text-slate-400">
+                      {e.createdByName} → {e.completedByName ?? '—'} · {timeAgo(e.completedAt)}
+                    </p>
+                    {e.photoUrl && (
+                      <a href={e.photoUrl} target="_blank" rel="noopener noreferrer" className="shrink-0">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={e.photoUrl} alt="Bukti foto" className="h-8 w-8 rounded-md border border-slate-200 object-cover" />
+                      </a>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>

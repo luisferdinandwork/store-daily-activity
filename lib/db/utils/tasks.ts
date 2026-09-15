@@ -216,7 +216,7 @@ function endOfDay(d: Date): Date {
   const r = new Date(d); r.setHours(23, 59, 59, 999); return r;
 }
 
-function haversineMetres(a: GeoPoint, b: GeoPoint): number {
+export function haversineMetres(a: GeoPoint, b: GeoPoint): number {
   const R  = 6_371_000;
   const φ1 = (a.lat * Math.PI) / 180;
   const φ2 = (b.lat * Math.PI) / 180;
@@ -247,7 +247,7 @@ async function assertCheckedIn(scheduleId: number): Promise<string | null> {
   return null;
 }
 
-async function assertInGeofence(storeId: number, geo: GeoPoint): Promise<string | null> {
+export async function assertInGeofence(storeId: number, geo: GeoPoint): Promise<string | null> {
   const [store] = await db
     .select({ lat: stores.latitude, lng: stores.longitude, radius: stores.geofenceRadiusM })
     .from(stores)

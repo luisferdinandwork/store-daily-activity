@@ -33,6 +33,7 @@ import {
   Lock,
   Check,
   ListOrdered,
+  PauseCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -57,7 +58,8 @@ export type TaskStatus =
   | "completed"
   | "pending"
   | "verified"
-  | "rejected";
+  | "rejected"
+  | "on_hold";
 
 type ShiftCode = string;
 type ShiftTaskMap = Record<string, TaskType[]>;
@@ -338,10 +340,17 @@ const STATUS_CFG: Record<
     badgeCls: "bg-red-50 text-red-600 hover:bg-red-50",
     accentCls: "bg-red-500",
   },
+  on_hold: {
+    Icon: PauseCircle,
+    label: "Ditahan",
+    badgeCls: "bg-amber-50 text-amber-700 hover:bg-amber-50",
+    accentCls: "bg-amber-400",
+  },
 };
 
 const STATUS_PRIORITY: Record<TaskStatus, number> = {
   pending: 0,
+  on_hold: 0,
   in_progress: 1,
   not_started: 2,
   rejected: 3,

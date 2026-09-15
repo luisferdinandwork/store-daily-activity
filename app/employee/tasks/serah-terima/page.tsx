@@ -17,6 +17,7 @@ import {
   ClipboardList,
   Loader2,
   Lock,
+  PauseCircle,
   Plus,
   RefreshCw,
   Trash2,
@@ -26,6 +27,7 @@ import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { TaskHeader } from '@/components/employee/tasks';
 import AccessGuard from '@/components/employee/tasks/AccessGuard';
+import PhotoUploadGrid from '@/components/shared/PhotoUploadGrid';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -47,6 +49,9 @@ type SerahTerimaEntry = {
   completedByUserId: string | null;
   completedAt: string | null;
   createdAt: string | null;
+  isOnHold: boolean;
+  note: string | null;
+  photoUrl: string | null;
 };
 
 type SerahTerimaTask = {
@@ -54,6 +59,7 @@ type SerahTerimaTask = {
   status: string;
   completedAt: string | null;
   locked: boolean;
+  notes: string | null;
 };
 
 type ApiResponse = {
@@ -114,6 +120,9 @@ function SerahTerimaBoard() {
   const [completingTask, setCompletingTask] = useState(false);
   const [confirmCompleteTask, setConfirmCompleteTask] = useState(false);
   const [completingId, setCompletingId] = useState<string | null>(null);
+  const [confirmEntryAction, setConfirmEntryAction] = useState<{ entryId: string; outcome: 'done' | 'on_hold' } | null>(null);
+  const [entryReason, setEntryReason] = useState('');
+  const [entryPhotoUrl, setEntryPhotoUrl] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
@@ -221,7 +230,25 @@ function SerahTerimaBoard() {
     }
   }
 
-  async function handleComplete(entryId: string, geo: { lat: number; lng: number } | null) {
+  async function handleUploadEntryPhoto(file: File): Promise<string> {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('photoType', 'serah_terima');
+    const res = await fetch('/api/employee/tasks/upload', { method: 'POST', body: form });
+    const data = await res.json();
+    if (!res.ok || !data.url) {
+      throw new Error(data.error ?? 'Upload gagal.');
+    }
+    return data.url as string;
+  }
+
+  async function handleResolveEntry(
+    entryId: string,
+    geo: { lat: number; lng: number } | null,
+    outcome: 'done' | 'on_hold',
+    note: string,
+    photoUrl: string | null,
+  ) {
     if (!geo) {
       toast.error('Lokasi wajib aktif untuk menyelesaikan item serah terima.');
       return;
@@ -233,21 +260,21 @@ function SerahTerimaBoard() {
       const res = await fetch('/api/employee/tasks/serah-terima', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ storeId, entryId, geo }),
+        body: JSON.stringify({ storeId, entryId, geo, outcome, note: note || undefined, photoUrl: photoUrl || undefined }),
       });
 
       const json = (await res.json()) as ApiResponse;
 
       if (!res.ok || !json.success) {
-        throw new Error(json.error ?? 'Gagal menyelesaikan item serah terima.');
+        throw new Error(json.error ?? 'Gagal menyimpan item serah terima.');
       }
 
       setEntries(json.entries ?? []);
       setRecentCompleted(json.recentCompleted ?? []);
       if (json.task) setTask(json.task);
-      toast.success('Item handover selesai.');
+      toast.success(outcome === 'on_hold' ? 'Item ditahan.' : 'Item handover selesai.');
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Gagal menyelesaikan item serah terima.');
+      toast.error(err instanceof Error ? err.message : 'Gagal menyimpan item serah terima.');
     } finally {
       setCompletingId(null);
     }
@@ -337,6 +364,7 @@ function SerahTerimaBoard() {
                   <p className="mt-0.5 text-xs font-semibold">
                     Papan dikunci untuk shift ini hari ini. Bisa dikelola lagi besok.
                   </p>
+                  {task?.notes && <p className="mt-1 text-xs italic">Catatan: {task.notes}</p>}
                 </div>
               </div>
             )}
@@ -390,7 +418,7 @@ function SerahTerimaBoard() {
                       <div>
                         <p className="text-sm font-bold text-foreground">Item aktif</p>
                         <p className="mt-1 text-xs font-semibold text-muted-foreground">
-                          Tap ceklis untuk menyelesaikan item.
+                          Tandai selesai, atau tahan dulu jika masih perlu ditindaklanjuti.
                         </p>
                       </div>
                     </div>
@@ -408,31 +436,61 @@ function SerahTerimaBoard() {
                     </div>
                   ) : (
                     entries.map((entry) => (
-                      <div key={entry.id} className="flex items-start gap-3 p-4">
-                        <button
-                          type="button"
-                          onClick={() => void handleComplete(entry.id, geo)}
-                          disabled={dis || readonly || completingId === entry.id}
-                          className={cn(
-                            'mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border transition',
-                            'border-amber-200 bg-amber-50 text-amber-500 hover:bg-amber-100',
-                            (dis || readonly) && 'opacity-60 cursor-not-allowed',
+                      <div key={entry.id} className="flex flex-col gap-2 p-4">
+                        <div className="flex items-start gap-3">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <p className="text-sm font-semibold leading-relaxed text-foreground">
+                                {entry.message}
+                              </p>
+                              {entry.isOnHold && (
+                                <span className="shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">
+                                  Ditahan
+                                </span>
+                              )}
+                            </div>
+                            {entry.isOnHold && entry.note && (
+                              <p className="mt-1 text-xs font-semibold text-amber-700">Alasan: {entry.note}</p>
+                            )}
+                            <p className="mt-1 text-[11px] font-semibold text-muted-foreground">
+                              Ditambahkan {fmtTime(entry.createdAt)}
+                            </p>
+                          </div>
+                          {entry.photoUrl && (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={entry.photoUrl} alt="Foto" className="h-12 w-12 shrink-0 rounded-lg border border-border object-cover" />
                           )}
-                        >
-                          {completingId === entry.id ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <CheckCircle2 className="h-3.5 w-3.5" />
-                          )}
-                        </button>
+                        </div>
 
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm font-semibold leading-relaxed text-foreground">
-                            {entry.message}
-                          </p>
-                          <p className="mt-1 text-[11px] font-semibold text-muted-foreground">
-                            Ditambahkan {fmtTime(entry.createdAt)}
-                          </p>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => { setEntryReason(entry.note ?? ''); setEntryPhotoUrl(entry.photoUrl); setConfirmEntryAction({ entryId: entry.id, outcome: 'on_hold' }); }}
+                            disabled={dis || readonly || completingId === entry.id}
+                            className={cn(
+                              'flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 text-xs font-bold text-amber-700 transition hover:bg-amber-100',
+                              (dis || readonly) && 'opacity-60 cursor-not-allowed',
+                            )}
+                          >
+                            <PauseCircle className="h-3.5 w-3.5" />
+                            Tahan
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { setEntryReason(''); setEntryPhotoUrl(entry.photoUrl); setConfirmEntryAction({ entryId: entry.id, outcome: 'done' }); }}
+                            disabled={dis || readonly || completingId === entry.id}
+                            className={cn(
+                              'flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-xs font-bold text-emerald-700 transition hover:bg-emerald-100',
+                              (dis || readonly) && 'opacity-60 cursor-not-allowed',
+                            )}
+                          >
+                            {completingId === entry.id ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <CheckCircle2 className="h-3.5 w-3.5" />
+                            )}
+                            Selesai
+                          </button>
                         </div>
                       </div>
                     ))
@@ -468,10 +526,17 @@ function SerahTerimaBoard() {
                             <p className="text-sm font-semibold leading-relaxed text-muted-foreground line-through">
                               {entry.message}
                             </p>
+                            {entry.note && (
+                              <p className="mt-1 text-xs font-semibold text-muted-foreground">Catatan: {entry.note}</p>
+                            )}
                             <p className="mt-1 text-[11px] font-semibold text-emerald-600">
                               Selesai {fmtTime(entry.completedAt)}
                             </p>
                           </div>
+                          {entry.photoUrl && (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={entry.photoUrl} alt="Foto" className="h-12 w-12 shrink-0 rounded-lg border border-border object-cover" />
+                          )}
                           {isPic && (
                             <button
                               type="button"
@@ -565,6 +630,52 @@ function SerahTerimaBoard() {
                   }}
                 >
                   Hapus
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+
+          <AlertDialog open={confirmEntryAction !== null} onOpenChange={(open) => { if (!open) setConfirmEntryAction(null); }}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  {confirmEntryAction?.outcome === 'on_hold' ? 'Tahan item ini?' : 'Selesaikan item ini?'}
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  {confirmEntryAction?.outcome === 'on_hold'
+                    ? 'Item tetap ada di daftar aktif. Jelaskan alasan agar shift lain bisa menindaklanjuti.'
+                    : 'Catatan tambahan bersifat opsional.'}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+
+              <textarea
+                value={entryReason}
+                onChange={(e) => setEntryReason(e.target.value)}
+                rows={3}
+                placeholder={confirmEntryAction?.outcome === 'on_hold' ? 'Alasan ditahan (wajib)…' : 'Catatan tambahan (opsional)…'}
+                className="w-full resize-none rounded-xl border border-border bg-secondary px-4 py-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+              />
+
+              <PhotoUploadGrid
+                label="Foto (opsional)"
+                photos={entryPhotoUrl ? [entryPhotoUrl] : []}
+                onChange={(urls) => setEntryPhotoUrl(urls[0] ?? null)}
+                upload={handleUploadEntryPhoto}
+                max={1}
+              />
+
+              <AlertDialogFooter>
+                <AlertDialogCancel>Batal</AlertDialogCancel>
+                <AlertDialogAction
+                  disabled={confirmEntryAction?.outcome === 'on_hold' && entryReason.trim() === ''}
+                  onClick={() => {
+                    if (!confirmEntryAction) return;
+                    const { entryId, outcome } = confirmEntryAction;
+                    setConfirmEntryAction(null);
+                    void handleResolveEntry(entryId, geo, outcome, entryReason.trim(), entryPhotoUrl);
+                  }}
+                >
+                  {confirmEntryAction?.outcome === 'on_hold' ? 'Tahan' : 'Selesaikan'}
                 </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>

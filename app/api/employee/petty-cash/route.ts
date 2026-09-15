@@ -229,6 +229,12 @@ export async function POST(req: NextRequest) {
       // happening against that envelope (see getActivePeriod), so it must be
       // grouped under that month for Finance's per-month ledger to add up.
       yearMonth: period.yearMonth,
+      // Explicit app-clock timestamp instead of the column's DEFAULT NOW() —
+      // the self-hosted Postgres session's own timezone doesn't necessarily
+      // match the Node process (which runs in UTC in prod), so relying on the
+      // DB default here produced a wrong-looking request time. Matches the
+      // checkInTime convention (lib/schedule-utils.ts) for real timestamps.
+      createdAt: new Date(),
     })
     .returning({
       id: pettyCashTransactions.id,

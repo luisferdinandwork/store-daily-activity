@@ -20,6 +20,7 @@ import { impactVisits, stores, areas } from '@/lib/db/schema';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
 import {
   computeImpactVisitPermissionFlags,
+  computeCashMoneyOk,
   scoreMainChecklist,
   scoreVmChecklist,
   serializeImpactVisit,
@@ -135,17 +136,16 @@ export async function PATCH(
   }
 
   if (body.cashMoneyData !== undefined) {
-    updates.cashMoneyData = JSON.stringify(body.cashMoneyData as CashMoneyData);
+    const cashData = body.cashMoneyData as CashMoneyData;
+    updates.cashMoneyData = JSON.stringify(cashData);
+    updates.cashMoneyOk = computeCashMoneyOk(cashData);
   }
 
   if (typeof body.targetBulanBerjalan === 'string' || body.targetBulanBerjalan === null) {
     updates.targetBulanBerjalan = body.targetBulanBerjalan;
   }
-  if (typeof body.periodeTanggal === 'string' || body.periodeTanggal === null) {
-    updates.periodeTanggal = body.periodeTanggal;
-  }
-  if (body.pencapaianPct !== undefined) {
-    updates.pencapaianPct = body.pencapaianPct === null ? null : String(body.pencapaianPct);
+  if (typeof body.estimasiAchievement === 'string' || body.estimasiAchievement === null) {
+    updates.estimasiAchievement = body.estimasiAchievement;
   }
   if (typeof body.notes === 'string' || body.notes === null) {
     updates.notes = body.notes;
@@ -155,6 +155,25 @@ export async function PATCH(
   }
 
   if (body.status === 'submitted') {
+    // Each visit type has its own proof requirement before it can be locked in.
+    if (found.visit.visitType === 'virtual' && !(updates.screenshotUrl ?? found.visit.screenshotUrl)) {
+      return NextResponse.json(
+        { success: false, error: 'Upload a screenshot before submitting this virtual visit.' },
+        { status: 422 },
+      );
+    }
+    if (found.visit.visitType === 'on_location' && !(found.visit.visitLat && found.visit.visitLng)) {
+      return NextResponse.json(
+        { success: false, error: 'Capture the store location before submitting this on-location visit.' },
+        { status: 422 },
+      );
+    }
+    if (found.visit.visitType === 'on_location' && !found.visit.visitPhotoUrl) {
+      return NextResponse.json(
+        { success: false, error: 'Upload a photo before submitting this on-location visit.' },
+        { status: 422 },
+      );
+    }
     updates.status = 'submitted';
   }
 

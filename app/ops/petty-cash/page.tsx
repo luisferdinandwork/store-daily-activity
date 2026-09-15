@@ -191,15 +191,15 @@ function RejectControl({
         value={reason}
         onChange={(e) => setReason(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' && reason.trim()) onConfirm(reason.trim());
+          if (e.key === 'Enter') onConfirm(reason.trim());
           if (e.key === 'Escape') onCancel();
         }}
-        placeholder="Reason for rejection..."
+        placeholder="Reason for rejection (optional)..."
         className="h-9 w-full min-w-0 rounded-lg border border-rose-200 bg-white px-2.5 text-xs font-semibold text-slate-700 placeholder:font-normal placeholder:text-slate-400 focus:border-rose-400 focus:outline-none focus:ring-2 focus:ring-rose-100 sm:w-44"
       />
       <button
-        onClick={() => reason.trim() && onConfirm(reason.trim())}
-        disabled={busy || !reason.trim()}
+        onClick={() => onConfirm(reason.trim())}
+        disabled={busy}
         aria-label="Confirm rejection"
         className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-rose-600 text-white transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
       >

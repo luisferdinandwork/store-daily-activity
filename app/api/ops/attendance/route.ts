@@ -209,15 +209,18 @@ export async function POST(req: NextRequest) {
 
     const { scheduleId, status, notes } = await req.json();
 
-    if (!scheduleId || !status) {
+    if (!scheduleId) {
       return NextResponse.json(
-        { success: false, error: 'scheduleId and status are required' },
+        { success: false, error: 'scheduleId is required' },
         { status: 400 },
       );
     }
 
+    // status is optional: it's only used the first time attendance is
+    // recorded for a schedule (e.g. Ops manually marking a no-show). Once a
+    // record exists, status is immutable and this call may only update notes.
     const validStatuses = ['present', 'absent', 'late', 'excused'] as const;
-    if (!validStatuses.includes(status)) {
+    if (status !== undefined && !validStatuses.includes(status)) {
       return NextResponse.json(
         { success: false, error: `status must be one of: ${validStatuses.join(', ')}` },
         { status: 400 },

@@ -11,6 +11,9 @@ import {
   IMPACT_CHECKLIST,
   VM_CHECKLIST,
   emptyCashMoneyData,
+  cashRowTotal,
+  UANG_MODAL_TARGET,
+  UANG_PETTY_CASH_TARGET,
   type CashMoneyData,
 } from '@/lib/impact-visit/checklist-config';
 import {
@@ -35,9 +38,14 @@ export interface SerializedImpactVisit {
   visitedBy: string;
   visitDate: string;
 
+  visitType: 'virtual' | 'on_location' | null;
+  screenshotUrl: string | null;
+  visitPhotoUrl: string | null;
+  visitLat: string | null;
+  visitLng: string | null;
+
   targetBulanBerjalan: string | null;
-  periodeTanggal: string | null;
-  pencapaianPct: string | null;
+  estimasiAchievement: string | null;
 
   checklistResponses: ChecklistResponses;
   checklistScore: number;
@@ -45,6 +53,7 @@ export interface SerializedImpactVisit {
   checklistGrade: string | null;
 
   cashMoneyData: CashMoneyData;
+  cashMoneyOk: boolean;
 
   vmChecklistResponses: ChecklistResponses;
   vmChecklistScore: number;
@@ -65,9 +74,14 @@ export function serializeImpactVisit(row: ImpactVisit): SerializedImpactVisit {
     visitedBy: row.visitedBy,
     visitDate: row.visitDate.toISOString(),
 
+    visitType: row.visitType,
+    screenshotUrl: row.screenshotUrl,
+    visitPhotoUrl: row.visitPhotoUrl,
+    visitLat: row.visitLat,
+    visitLng: row.visitLng,
+
     targetBulanBerjalan: row.targetBulanBerjalan,
-    periodeTanggal: row.periodeTanggal,
-    pencapaianPct: row.pencapaianPct,
+    estimasiAchievement: row.estimasiAchievement,
 
     checklistResponses: parseJson<ChecklistResponses>(row.checklistResponses, {}),
     checklistScore: row.checklistScore,
@@ -75,6 +89,7 @@ export function serializeImpactVisit(row: ImpactVisit): SerializedImpactVisit {
     checklistGrade: row.checklistGrade,
 
     cashMoneyData: parseJson<CashMoneyData>(row.cashMoneyData, emptyCashMoneyData()),
+    cashMoneyOk: row.cashMoneyOk,
 
     vmChecklistResponses: parseJson<ChecklistResponses>(row.vmChecklistResponses, {}),
     vmChecklistScore: row.vmChecklistScore,
@@ -87,6 +102,14 @@ export function serializeImpactVisit(row: ImpactVisit): SerializedImpactVisit {
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
+}
+
+/** Recomputes cashMoneyOk from cashMoneyData — used on every PATCH that touches it. */
+export function computeCashMoneyOk(data: CashMoneyData): boolean {
+  return (
+    cashRowTotal(data.uangModal) >= UANG_MODAL_TARGET &&
+    cashRowTotal(data.uangPettyCash) >= UANG_PETTY_CASH_TARGET
+  );
 }
 
 export interface ImpactVisitPermissionFlags {

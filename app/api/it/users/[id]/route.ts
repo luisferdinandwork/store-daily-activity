@@ -11,6 +11,7 @@ import bcrypt from 'bcryptjs';
 import { db } from '@/lib/db';
 import { users, userRoles, employeeTypes, stores } from '@/lib/db/schema';
 import { resolveItScope } from '@/lib/auth/it-scope';
+import { setUserHomeStore } from '@/lib/db/utils/user-store-assignment';
 
 const SALT_ROUNDS = 10;
 
@@ -25,7 +26,7 @@ export async function PATCH(
 
   const { id } = await params;
 
-  const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.id, id)).limit(1);
+  const [existing] = await db.select().from(users).where(eq(users.id, id)).limit(1);
   if (!existing) {
     return NextResponse.json({ success: false, error: 'User not found.' }, { status: 404 });
   }
@@ -43,8 +44,12 @@ export async function PATCH(
     updates.isActive = body.isActive;
   }
 
+  // roleId / employeeTypeId / homeStoreId / areaId are handled together below
+  // so a store/area/role change stays in sync with userStoreAssignments
+  // (the history table other reports read the *active* roster from).
+  let roleId = existing.roleId;
   if ('roleId' in (body ?? {})) {
-    const roleId = Number(body.roleId);
+    roleId = Number(body.roleId);
     if (!Number.isInteger(roleId) || roleId <= 0) {
       return NextResponse.json({ success: false, error: 'Invalid roleId.' }, { status: 400 });
     }
@@ -52,15 +57,15 @@ export async function PATCH(
     if (!role || !role.isActive) {
       return NextResponse.json({ success: false, error: 'Invalid or inactive role.' }, { status: 400 });
     }
-    updates.roleId = roleId;
   }
 
+  let employeeTypeId = existing.employeeTypeId;
   if ('employeeTypeId' in (body ?? {})) {
     const raw = body.employeeTypeId;
     if (raw === null || raw === '') {
-      updates.employeeTypeId = null;
+      employeeTypeId = null;
     } else {
-      const employeeTypeId = Number(raw);
+      employeeTypeId = Number(raw);
       if (!Number.isInteger(employeeTypeId) || employeeTypeId <= 0) {
         return NextResponse.json({ success: false, error: 'Invalid employeeTypeId.' }, { status: 400 });
       }
@@ -68,30 +73,35 @@ export async function PATCH(
       if (!empType || !empType.isActive) {
         return NextResponse.json({ success: false, error: 'Invalid or inactive employee type.' }, { status: 400 });
       }
-      updates.employeeTypeId = employeeTypeId;
     }
   }
 
+  let homeStoreId = existing.homeStoreId;
+  let areaId = existing.areaId;
+  let storeOrAreaChanged = false;
+
   if ('homeStoreId' in (body ?? {})) {
+    storeOrAreaChanged = true;
     const raw = body.homeStoreId;
     if (raw === null || raw === '') {
-      updates.homeStoreId = null;
+      homeStoreId = null;
+      // Unassigning a store doesn't clear the area unless areaId is also sent.
     } else {
-      const homeStoreId = Number(raw);
+      homeStoreId = Number(raw);
       const [store] = await db.select({ id: stores.id, areaId: stores.areaId }).from(stores).where(eq(stores.id, homeStoreId)).limit(1);
       if (!store) {
         return NextResponse.json({ success: false, error: 'Store not found.' }, { status: 400 });
       }
-      updates.homeStoreId = homeStoreId;
       if (!('areaId' in (body ?? {}))) {
-        updates.areaId = store.areaId;
+        areaId = store.areaId;
       }
     }
   }
 
   if ('areaId' in (body ?? {})) {
+    storeOrAreaChanged = true;
     const raw = body.areaId;
-    updates.areaId = raw === null || raw === '' ? null : Number(raw);
+    areaId = raw === null || raw === '' ? null : Number(raw);
   }
 
   if (typeof body?.password === 'string' && body.password.length > 0) {
@@ -101,6 +111,23 @@ export async function PATCH(
     updates.password = await bcrypt.hash(body.password, SALT_ROUNDS);
     // Reset the 90-day password-policy clock — see lib/db/utils/password-policy.ts.
     updates.passwordChangedAt = new Date();
+  }
+
+  const roleOrTypeChanged = ('roleId' in (body ?? {})) || ('employeeTypeId' in (body ?? {}));
+
+  if (storeOrAreaChanged || (roleOrTypeChanged && existing.homeStoreId != null)) {
+    await setUserHomeStore({
+      userId: id,
+      homeStoreId,
+      areaId,
+      roleId,
+      employeeTypeId,
+      assignedBy: scope.userId,
+      notes: 'Updated through IT Users management.',
+    });
+  } else {
+    if ('roleId' in (body ?? {})) updates.roleId = roleId;
+    if ('employeeTypeId' in (body ?? {})) updates.employeeTypeId = employeeTypeId;
   }
 
   const [updated] = await db

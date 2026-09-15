@@ -26,6 +26,7 @@ export const taskStatusEnum = pgEnum('task_status', [
   'in_progress',
   'completed',
   'pending',
+  'on_hold',
 ]);
 
 export const txTypeEnum = pgEnum('tx_type', [

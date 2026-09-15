@@ -11,9 +11,10 @@ import bcrypt from 'bcryptjs';
 
 import { db } from '@/lib/db';
 import {
-  users, userRoles, employeeTypes, stores, areas, userStoreAssignments,
+  users, userRoles, employeeTypes, stores, areas,
 } from '@/lib/db/schema';
 import { resolveItScope } from '@/lib/auth/it-scope';
+import { setUserHomeStore } from '@/lib/db/utils/user-store-assignment';
 
 const SALT_ROUNDS = 10;
 
@@ -158,13 +159,13 @@ export async function POST(req: Request) {
     .returning({ id: users.id, nik: users.nik, name: users.name });
 
   if (homeStoreId) {
-    await db.insert(userStoreAssignments).values({
+    await setUserHomeStore({
       userId: created.id,
-      storeId: homeStoreId,
+      homeStoreId,
       areaId,
       roleId,
       employeeTypeId,
-      isActive: true,
+      assignedBy: scope.userId,
       notes: 'Created through IT Users management.',
     });
   }

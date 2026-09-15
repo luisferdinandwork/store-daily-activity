@@ -433,31 +433,17 @@ function RefillRequestCard({
     );
   }
 
-  if (request?.status === 'approved') {
+  const toppedUp = Boolean(request?.balanceAfter);
+
+  // Once a refill is fully received (both proof photos in), it stops
+  // appearing here at all — the topped-up balance applies to NEXT month, so
+  // there's nothing left to action on this month's view. The request itself
+  // stays intact for Ops/Finance; PIC can fall through to request a fresh one.
+  if (request?.status === 'approved' && !toppedUp) {
     const photoUrls: Record<RefillProofKind, string | null> = {
       drawer: request.drawerPhotoUrl,
       signature: request.signaturePhotoUrl,
     };
-    const toppedUp = Boolean(request.balanceAfter);
-
-    // Once the refill is fully received (both proof photos in), the topped-up
-    // balance applies to NEXT month, not the current one — this month's
-    // balance keeps reflecting what's actually been spent. So there's nothing
-    // left to action here; replace the card with a simple status note instead
-    // of leaving the (now-redundant) approve/photo-capture UI on screen.
-    if (toppedUp) {
-      return (
-        <div className="mx-4 rounded-2xl border border-slate-200 bg-white p-4">
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="h-4 w-4 text-emerald-600" />
-            <p className="text-xs font-bold text-emerald-700">Petty Cash bulan ini sudah di-Refill</p>
-          </div>
-          <p className="mt-1.5 text-[11px] text-slate-500">
-            Refill sudah diterima dan akan menambah saldo bulan depan. Refill berikutnya bisa diajukan mulai bulan depan.
-          </p>
-        </div>
-      );
-    }
 
     return (
       <div className="mx-4 rounded-2xl border border-slate-200 bg-white p-4">

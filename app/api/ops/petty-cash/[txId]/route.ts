@@ -53,12 +53,8 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     );
   }
 
-  if (action === 'reject' && !rejectionReason) {
-    return NextResponse.json(
-      { success: false, error: 'Rejection reason is required.' },
-      { status: 422 },
-    );
-  }
+  // Rejection reason is optional — Ops can reject without explaining, though
+  // giving one helps the employee understand what to fix before resubmitting.
 
   const [requestRow] = await db
     .select({

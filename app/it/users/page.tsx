@@ -1,13 +1,13 @@
 'use client';
 // app/it/users/page.tsx — IT user management (create/edit accounts, assign roles).
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import {
   Loader2, Shield, Search, Plus, Pencil, ChevronDown,
-  UserCircle2, X,
+  UserCircle2, X, Download, Upload, FileSpreadsheet, CheckCircle2, AlertCircle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Sheet, SheetContent, SheetTitle, SheetDescription, SheetHeader, SheetFooter } from '@/components/ui/sheet';
@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import type { UserImportReport } from '@/lib/user-import';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -272,13 +273,183 @@ function UserFormSheet({
   );
 }
 
+// ─── Excel template / export download ─────────────────────────────────────────
+
+async function downloadFile(url: string, fallbackName: string) {
+  const res = await fetch(url);
+  if (!res.ok) {
+    const j = await res.json().catch(() => ({}));
+    throw new Error(j?.error ?? `HTTP ${res.status}`);
+  }
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const filename = res.headers.get('content-disposition')?.match(/filename="(.+)"/)?.[1] ?? fallbackName;
+  const a = document.createElement('a');
+  a.href = objectUrl; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(objectUrl);
+  return filename;
+}
+
+// ─── Import review sheet ("great verification" before anything is written) ──
+
+function ImportReviewSheet({ file, onClose, onImported }: { file: File; onClose: () => void; onImported: () => void }) {
+  const [loading, setLoading] = useState(true);
+  const [committing, setCommitting] = useState(false);
+  const [headerError, setHeaderError] = useState<string | null>(null);
+  const [report, setReport] = useState<UserImportReport | null>(null);
+  const [committed, setCommitted] = useState(false);
+
+  const runImport = useCallback(async (commit: boolean) => {
+    const form = new FormData();
+    form.append('file', file);
+    if (commit) form.append('commit', 'true');
+
+    const res = await fetch('/api/it/users/import', { method: 'POST', body: form });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      throw new Error(data?.error ?? 'Import failed.');
+    }
+    return data.report as UserImportReport;
+  }, [file]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setHeaderError(null);
+    runImport(false)
+      .then((r) => { if (!cancelled) setReport(r); })
+      .catch((err) => { if (!cancelled) setHeaderError(err instanceof Error ? err.message : String(err)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [runImport]);
+
+  async function handleConfirm() {
+    setCommitting(true);
+    try {
+      const r = await runImport(true);
+      setReport(r);
+      setCommitted(true);
+      toast.success(`Imported: ${r.created} created, ${r.updated} updated.${r.failed ? ` ${r.failed} failed to write.` : ''}`);
+      onImported();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Import failed.');
+    } finally {
+      setCommitting(false);
+    }
+  }
+
+  return (
+    <Sheet open onOpenChange={(o) => !o && onClose()}>
+      <SheetContent side="right" className="flex w-full flex-col sm:max-w-2xl">
+        <SheetHeader>
+          <SheetTitle className="flex items-center gap-2">
+            <FileSpreadsheet className="h-4 w-4 text-cyan-600" />
+            Import review — {file.name}
+          </SheetTitle>
+          <SheetDescription>
+            {committed
+              ? 'Import complete.'
+              : 'Nothing has been written yet. Review the rows below, then confirm.'}
+          </SheetDescription>
+        </SheetHeader>
+
+        <div className="flex-1 space-y-3 overflow-y-auto px-4 pb-4">
+          {loading ? (
+            <div className="flex items-center justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-cyan-500" /></div>
+          ) : headerError ? (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+              {headerError}
+            </div>
+          ) : report ? (
+            <>
+              <div className="grid grid-cols-4 gap-2">
+                <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-center">
+                  <p className="text-lg font-bold text-slate-900">{report.totalRows}</p>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Rows</p>
+                </div>
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-center">
+                  <p className="text-lg font-bold text-emerald-700">{committed ? report.created : report.toCreate}</p>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-600">{committed ? 'Created' : 'To create'}</p>
+                </div>
+                <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-center">
+                  <p className="text-lg font-bold text-sky-700">{committed ? report.updated : report.toUpdate}</p>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-sky-600">{committed ? 'Updated' : 'To update'}</p>
+                </div>
+                <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-center">
+                  <p className="text-lg font-bold text-rose-700">{committed ? report.failed : report.invalid}</p>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-rose-600">{committed ? 'Failed' : 'Invalid'}</p>
+                </div>
+              </div>
+
+              <div className="overflow-hidden rounded-xl border border-slate-200">
+                <table className="w-full text-left text-xs">
+                  <thead className="border-b border-slate-100 bg-slate-50 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                    <tr>
+                      <th className="px-3 py-2">Row</th>
+                      <th className="px-3 py-2">NIK</th>
+                      <th className="px-3 py-2">Name</th>
+                      <th className="px-3 py-2">Action</th>
+                      <th className="px-3 py-2">Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {report.rows.map((r) => (
+                      <tr key={r.row} className={cn(r.status === 'error' && 'bg-rose-50/60')}>
+                        <td className="px-3 py-2 tabular-nums text-slate-400">{r.row}</td>
+                        <td className="px-3 py-2 font-mono text-slate-600">{r.nik || '—'}</td>
+                        <td className="px-3 py-2 font-medium text-slate-700">{r.name || '—'}</td>
+                        <td className="px-3 py-2">
+                          <span className={cn(
+                            'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold',
+                            r.status === 'error' ? 'bg-rose-100 text-rose-700'
+                              : r.action === 'create' ? 'bg-emerald-100 text-emerald-700' : 'bg-sky-100 text-sky-700',
+                          )}>
+                            {r.status === 'error' ? <AlertCircle className="h-3 w-3" /> : <CheckCircle2 className="h-3 w-3" />}
+                            {r.status === 'error' ? 'Error' : r.action === 'create' ? 'Create' : 'Update'}
+                            {committed && r.status === 'ok' && (r.committed ? '' : ' · write failed')}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2">
+                          {r.errors.map((e, i) => <p key={i} className="text-rose-600">{e}</p>)}
+                          {r.warnings.map((w, i) => <p key={i} className="text-amber-600">{w}</p>)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          ) : null}
+        </div>
+
+        <SheetFooter className="flex-row gap-2 border-t border-border">
+          <Button type="button" variant="outline" onClick={onClose} className="flex-1">
+            {committed ? 'Close' : 'Cancel'}
+          </Button>
+          {!committed && (
+            <Button
+              type="button"
+              onClick={handleConfirm}
+              disabled={loading || committing || !!headerError || !report || (report.toCreate + report.toUpdate === 0)}
+              className="flex-1 gap-1.5 bg-cyan-600 hover:bg-cyan-700"
+            >
+              {committing && <Loader2 className="h-4 w-4 animate-spin" />}
+              Confirm Import{report ? ` (${report.toCreate + report.toUpdate})` : ''}
+            </Button>
+          )}
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function ItUsersPage() {
   const { data: session, status: authStatus } = useSession();
   const router = useRouter();
-  const role = (session?.user as any)?.role as string | undefined;
-  const isIt = role === 'it';
+  const isIt = session?.user?.role === 'it';
 
   const [rows, setRows] = useState<UserRow[]>([]);
   const [roles, setRoles] = useState<LookupOption[]>([]);
@@ -289,6 +460,9 @@ export default function ItUsersPage() {
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState('all');
   const [editing, setEditing] = useState<EditState | null>(null);
+  const [downloading, setDownloading] = useState<'template' | 'current' | null>(null);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (authStatus === 'loading') return;
@@ -350,10 +524,55 @@ export default function ItUsersPage() {
               {rows.length} account{rows.length !== 1 ? 's' : ''} · {filtered.length} shown
             </p>
           </div>
-          <Button onClick={() => setEditing({ mode: 'create' })} className="gap-1.5 bg-cyan-600 hover:bg-cyan-700">
-            <Plus className="h-4 w-4" />
-            Add User
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              disabled={downloading !== null}
+              onClick={async () => {
+                setDownloading('template');
+                try { await downloadFile('/api/it/users/template', 'users_import_template.xlsx'); }
+                catch (err) { toast.error(err instanceof Error ? err.message : 'Download failed.'); }
+                finally { setDownloading(null); }
+              }}
+              className="gap-1.5"
+            >
+              {downloading === 'template' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+              Template
+            </Button>
+            <Button
+              variant="outline"
+              disabled={downloading !== null}
+              onClick={async () => {
+                setDownloading('current');
+                try { await downloadFile('/api/it/users/template?mode=current', 'users_export.xlsx'); }
+                catch (err) { toast.error(err instanceof Error ? err.message : 'Download failed.'); }
+                finally { setDownloading(null); }
+              }}
+              className="gap-1.5"
+            >
+              {downloading === 'current' ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileSpreadsheet className="h-4 w-4" />}
+              Export Current
+            </Button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".xlsx,.xls"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = '';
+                if (file) setImportFile(file);
+              }}
+            />
+            <Button variant="outline" onClick={() => fileInputRef.current?.click()} className="gap-1.5">
+              <Upload className="h-4 w-4" />
+              Import Excel
+            </Button>
+            <Button onClick={() => setEditing({ mode: 'create' })} className="gap-1.5 bg-cyan-600 hover:bg-cyan-700">
+              <Plus className="h-4 w-4" />
+              Add User
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -459,6 +678,14 @@ export default function ItUsersPage() {
           areas={areas}
           onClose={() => setEditing(null)}
           onSaved={load}
+        />
+      )}
+
+      {importFile && (
+        <ImportReviewSheet
+          file={importFile}
+          onClose={() => setImportFile(null)}
+          onImported={load}
         />
       )}
     </div>

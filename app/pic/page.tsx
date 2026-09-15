@@ -1,29 +1,24 @@
 'use client';
-// app/pic/page.tsx — PIC Panel home: manage the store's schedule.
+// app/pic/page.tsx — PIC Panel home: view the store's schedule and upload one
+// via Excel.
 //
 // Desktop dashboard, not a mobile app screen: sticky header with month nav
 // and actions, stat tiles, and a spreadsheet-style employee × day grid.
-// Click any cell to set/edit that day. Import/download the Excel template
-// from the header toolbar.
+// PIC can only view the grid and import an Excel file when no schedule
+// exists yet for the month — creating/editing/deleting is Ops-only; ask Ops
+// to remove an existing schedule before re-uploading.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSession }  from 'next-auth/react';
 import { useRouter }   from 'next/navigation';
 import {
-  Sun, Moon, Upload, Download, Loader2, Trash2, RefreshCw,
+  Upload, Download, Loader2, RefreshCw,
   Shield, Calendar, ChevronLeft, ChevronRight,
   CheckCircle2, AlertCircle, ChevronDown, ChevronUp,
-  Plus, Clock, Users, X,
+  Users, X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
-} from '@/components/ui/dialog';
-import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -98,11 +93,6 @@ function cellPalette(entry: DayEntry | undefined) {
   return SHIFT_PALETTE[entry.shift] ?? { label: entry.shift.slice(0, 2).toUpperCase(), bg: '#f1f5f9', border: '#e2e8f0', text: '#475569', dot: '#94a3b8' };
 }
 
-function formatTime(t: string | null | undefined): string {
-  if (!t) return '';
-  return t.slice(0, 5);
-}
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function currentYearMonth() {
@@ -117,10 +107,6 @@ function formatYearMonth(ym: string | null | undefined): string {
   return `${MONTHS[m - 1]} ${y}`;
 }
 
-function isoDate(y: number, m: number, d: number): string {
-  return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-}
-
 function daysInMonth(yearMonth: string): number {
   const [y, m] = yearMonth.split('-').map(Number);
   return new Date(y, m, 0).getDate();
@@ -129,145 +115,6 @@ function daysInMonth(yearMonth: string): number {
 function dayOfWeekLabel(yearMonth: string, day: number): string {
   const [y, m] = yearMonth.split('-').map(Number);
   return new Date(y, m - 1, day).toLocaleDateString('en-ID', { weekday: 'short' })[0];
-}
-
-// ─── ShiftPicker ──────────────────────────────────────────────────────────────
-
-function ShiftPicker({ shiftOptions, selected, onSelect }: {
-  shiftOptions: ShiftOption[];
-  selected:     string;
-  onSelect:     (v: string) => void;
-}) {
-  const specials = [
-    { code: 'off',   label: 'Day Off', sub: 'No work today',   accent: '#64748b', icon: <X        className="h-5 w-5" /> },
-    { code: 'leave', label: 'Leave',   sub: 'AL / CU / Sick',  accent: '#4338ca', icon: <Calendar className="h-5 w-5" /> },
-  ];
-
-  const allOptions = [
-    ...shiftOptions.map(s => ({
-      code:   s.code,
-      label:  s.label,
-      sub:    [formatTime(s.startTime), formatTime(s.endTime)].filter(Boolean).join(' – ') || '—',
-      accent: s.code === 'morning' ? '#ea580c' : s.code === 'evening' ? '#7c3aed' : s.code === 'full_day' ? '#15803d' : '#475569',
-      icon:   s.code === 'morning'
-        ? <Sun  className="h-5 w-5" />
-        : s.code === 'evening'
-          ? <Moon className="h-5 w-5" />
-          : s.code === 'full_day'
-            ? <Clock className="h-5 w-5" />
-            : <Calendar className="h-5 w-5" />,
-    })),
-    ...specials,
-  ];
-
-  return (
-    <div className="grid grid-cols-2 gap-2.5">
-      {allOptions.map(opt => {
-        const active = selected === opt.code;
-        return (
-          <button
-            key={opt.code}
-            type="button"
-            onClick={() => onSelect(opt.code)}
-            className="relative flex flex-col items-start gap-1.5 rounded-2xl border-2 px-4 py-3.5 text-left transition-all active:scale-[0.97]"
-            style={{
-              borderColor: active ? opt.accent : '#e2e8f0',
-              background:  active ? `${opt.accent}12` : '#f8fafc',
-              boxShadow:   active ? `0 0 0 3px ${opt.accent}20` : 'none',
-            }}
-          >
-            <span style={{ color: active ? opt.accent : '#94a3b8' }}>{opt.icon}</span>
-            <div>
-              <p className="text-sm font-bold" style={{ color: active ? opt.accent : '#334155' }}>{opt.label}</p>
-              <p className="text-[10px] text-slate-400">{opt.sub}</p>
-            </div>
-            {active && (
-              <span className="absolute right-2.5 top-2.5 flex h-4 w-4 items-center justify-center rounded-full" style={{ background: opt.accent }}>
-                <CheckCircle2 className="h-3 w-3 text-white" />
-              </span>
-            )}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-// ─── SetDayDialog — unified add/edit for one (employee, day) cell ────────────
-
-interface ActiveCell {
-  employee: EmployeeOption;
-  day:      number;
-  entry:    DayEntry | null;
-}
-
-function SetDayDialog({ cell, yearMonth, shiftOptions, onSave, onClose, saving }: {
-  cell:         ActiveCell | null;
-  yearMonth:    string;
-  shiftOptions: ShiftOption[];
-  onSave:       (p: { shift: string | null; isOff: boolean; isLeave: boolean }) => void;
-  onClose:      () => void;
-  saving:       boolean;
-}) {
-  const initialMode = cell?.entry
-    ? (cell.entry.isLeave ? 'leave' : cell.entry.isOff ? 'off' : (cell.entry.shift ?? 'off'))
-    : 'off';
-  // Keyed by the parent (see call site) so this remounts — and re-derives
-  // `mode` fresh from `initialMode` — whenever a different cell is opened,
-  // instead of syncing it back with an effect.
-  const [mode, setMode] = useState(initialMode);
-
-  const [y, m] = yearMonth.split('-').map(Number);
-  const label = cell ? new Date(y, m - 1, cell.day).toLocaleDateString('en-ID', { weekday: 'long', day: 'numeric', month: 'long' }) : '';
-
-  function handleSave() {
-    const isOff   = mode === 'off';
-    const isLeave = mode === 'leave';
-    const shift   = isOff || isLeave ? null : mode;
-    onSave({ shift, isOff, isLeave });
-  }
-
-  return (
-    <Dialog open={!!cell} onOpenChange={(v) => { if (!v) onClose(); }}>
-      <DialogContent className="sm:max-w-md">
-        {cell && (
-          <>
-            <DialogHeader>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{cell.entry ? 'Edit Shift' : 'Set Shift'}</p>
-              <DialogTitle>{cell.employee.name}</DialogTitle>
-              <p className="text-sm text-slate-500">{label}</p>
-            </DialogHeader>
-
-            <div>
-              {shiftOptions.length === 0
-                ? <div className="flex items-center justify-center py-6"><Loader2 className="h-4 w-4 animate-spin text-slate-400" /></div>
-                : <ShiftPicker shiftOptions={shiftOptions} selected={mode} onSelect={setMode} />
-              }
-            </div>
-
-            <DialogFooter>
-              <button
-                type="button"
-                onClick={onClose}
-                className="flex h-11 flex-1 items-center justify-center rounded-xl border border-slate-200 bg-white text-sm font-semibold text-slate-600 hover:bg-slate-50 sm:flex-none sm:px-6"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleSave}
-                disabled={saving}
-                className="flex h-11 flex-[2] items-center justify-center gap-2 rounded-xl text-sm font-bold text-white transition-all disabled:opacity-60 sm:flex-none sm:px-6"
-                style={{ background: 'linear-gradient(135deg, #4f46e5, #7c3aed)' }}
-              >
-                {saving ? <><Loader2 className="h-4 w-4 animate-spin" />Saving…</> : 'Save'}
-              </button>
-            </DialogFooter>
-          </>
-        )}
-      </DialogContent>
-    </Dialog>
-  );
 }
 
 // ─── ImportButton ─────────────────────────────────────────────────────────────
@@ -428,16 +275,10 @@ export default function PicPanelPage() {
   const [selectedMonth, setSelectedMonth] = useState(currentYearMonth());
   const [schedule,      setSchedule]      = useState<MonthlySchedule | null>(null);
   const [loading,       setLoading]       = useState(false);
-  const [deleting,      setDeleting]      = useState(false);
-  const [creating,      setCreating]      = useState(false);
   const [downloading,   setDownloading]   = useState(false);
-  const [showCreateConfirm, setShowCreateConfirm] = useState(false);
 
   const [shiftOptions, setShiftOptions] = useState<ShiftOption[]>([]);
   const [employees,    setEmployees]    = useState<EmployeeOption[]>([]);
-
-  const [activeCell, setActiveCell] = useState<ActiveCell | null>(null);
-  const [savingCell, setSavingCell] = useState(false);
 
   const isPic1 = employeeType === 'pic_1' || employeeType === 'pic_2';
 
@@ -490,43 +331,9 @@ export default function PicPanelPage() {
   function goToMonth(deltaMonths: number) {
     const d = new Date(y, m - 1 + deltaMonths, 1);
     setSelectedMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
-    setActiveCell(null);
   }
 
   // ── Handlers ────────────────────────────────────────────────────────────────
-
-  function handleCreate() {
-    if (schedule) { toast.error('A schedule already exists for this month'); return; }
-    setShowCreateConfirm(true);
-  }
-
-  async function confirmCreate() {
-    setShowCreateConfirm(false);
-    setCreating(true);
-    try {
-      const res  = await fetch('/api/pic/schedule/monthly', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ yearMonth: selectedMonth }) });
-      const json = await res.json();
-      if (!json.success) throw new Error(json.error);
-      toast.success('Empty schedule created — click a cell to assign shifts');
-      loadSchedule(selectedMonth);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Create failed');
-    } finally { setCreating(false); }
-  }
-
-  async function handleDelete() {
-    if (!confirm(`Delete the ${formatYearMonth(selectedMonth)} schedule? Attended days are preserved.`)) return;
-    setDeleting(true);
-    try {
-      const res  = await fetch(`/api/pic/schedule/monthly?yearMonth=${selectedMonth}`, { method: 'DELETE' });
-      const json = await res.json();
-      if (!json.success) throw new Error(json.error);
-      toast.success(json.lockedCount > 0 ? `Cleared — ${json.lockedCount} attended day(s) preserved` : 'Schedule deleted');
-      loadSchedule(selectedMonth);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Delete failed');
-    } finally { setDeleting(false); }
-  }
 
   async function handleDownloadTemplate() {
     setDownloading(true);
@@ -549,31 +356,6 @@ export default function PicPanelPage() {
     } finally {
       setDownloading(false);
     }
-  }
-
-  async function handleSaveCell(patch: { shift: string | null; isOff: boolean; isLeave: boolean }) {
-    if (!activeCell) return;
-    setSavingCell(true);
-    try {
-      let res: Response;
-      if (activeCell.entry) {
-        res = await fetch(`/api/pic/schedule/entry/${activeCell.entry.id}`, {
-          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch),
-        });
-      } else {
-        res = await fetch('/api/pic/schedule/entry', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...patch, userId: activeCell.employee.id, date: isoDate(y, m, activeCell.day) }),
-        });
-      }
-      const json = await res.json();
-      if (!json.success) throw new Error(json.error || `HTTP ${res.status}`);
-      toast.success('Schedule updated');
-      setActiveCell(null);
-      loadSchedule(selectedMonth);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Save failed');
-    } finally { setSavingCell(false); }
   }
 
   // ── Derived table data ──────────────────────────────────────────────────────
@@ -627,10 +409,14 @@ export default function PicPanelPage() {
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-500">PIC Panel</p>
-              <h1 className="mt-0.5 text-2xl font-bold tracking-tight text-slate-900">Manage Schedule</h1>
-              {schedule && (
+              <h1 className="mt-0.5 text-2xl font-bold tracking-tight text-slate-900">Store Schedule</h1>
+              {schedule ? (
                 <p className="mt-1 text-sm text-slate-500">
                   {totalEmployees} staff · {workingDays} work shifts · {leaveDays} leave days
+                </p>
+              ) : (
+                <p className="mt-1 text-sm text-slate-500">
+                  Jika jadwal bulan ini sudah ada, hubungi Ops untuk menghapusnya sebelum upload ulang.
                 </p>
               )}
             </div>
@@ -667,28 +453,6 @@ export default function PicPanelPage() {
                 {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
                 Template
               </button>
-
-              {schedule ? (
-                <button
-                  type="button"
-                  onClick={handleDelete}
-                  disabled={deleting}
-                  className="flex h-10 items-center gap-2 rounded-xl border border-red-200 bg-white px-4 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-60"
-                >
-                  {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                  Delete
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={handleCreate}
-                  disabled={creating}
-                  className="flex h-10 items-center gap-2 rounded-xl bg-indigo-600 px-4 text-sm font-bold text-white hover:bg-indigo-700 disabled:opacity-60"
-                >
-                  {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                  Create Schedule
-                </button>
-              )}
             </div>
           </div>
         </div>
@@ -705,7 +469,7 @@ export default function PicPanelPage() {
             </div>
             <div>
               <p className="text-sm font-bold text-slate-700">No schedule for {formatYearMonth(selectedMonth)}</p>
-              <p className="mt-1 text-xs text-slate-400">Import an Excel file, or create an empty schedule to start filling it in.</p>
+              <p className="mt-1 text-xs text-slate-400">Import an Excel file to create it. Editing and deleting are handled by Ops.</p>
             </div>
           </div>
         ) : (
@@ -744,7 +508,7 @@ export default function PicPanelPage() {
                 Off
               </div>
               <span className="ml-auto flex items-center gap-1.5 text-[11px] font-medium text-slate-400">
-                <Users className="h-3 w-3" /> Click a cell to set or edit a shift
+                <Users className="h-3 w-3" /> View only — Ops manages edits, PIC re-imports via Excel
               </span>
             </div>
 
@@ -787,18 +551,16 @@ export default function PicPanelPage() {
                           const pal = cellPalette(entry);
                           return (
                             <td key={d} className={cn('p-0.5 text-center', d === todayDay && 'bg-indigo-50/40')}>
-                              <button
-                                type="button"
-                                onClick={() => setActiveCell({ employee: emp, day: d, entry: entry ?? null })}
+                              <div
                                 className={cn(
-                                  'mx-auto flex h-7 w-7 items-center justify-center rounded-md text-[9px] font-bold transition-transform hover:scale-110',
-                                  !pal && 'border border-dashed border-slate-200 text-slate-300 hover:border-indigo-300 hover:text-indigo-400',
+                                  'mx-auto flex h-7 w-7 items-center justify-center rounded-md text-[9px] font-bold',
+                                  !pal && 'border border-dashed border-slate-200 text-slate-300',
                                 )}
                                 style={pal ? { background: pal.bg, color: pal.text, border: `1px solid ${pal.border}` } : undefined}
-                                title={pal ? pal.label : 'Set shift'}
+                                title={pal ? pal.label : undefined}
                               >
                                 {pal ? pal.label : ''}
-                              </button>
+                              </div>
                             </td>
                           );
                         })}
@@ -813,34 +575,6 @@ export default function PicPanelPage() {
           </>
         )}
       </div>
-
-      <SetDayDialog
-        key={activeCell ? `${activeCell.employee.id}-${activeCell.day}` : 'none'}
-        cell={activeCell}
-        yearMonth={selectedMonth}
-        shiftOptions={shiftOptions}
-        onSave={handleSaveCell}
-        onClose={() => setActiveCell(null)}
-        saving={savingCell}
-      />
-
-      <AlertDialog open={showCreateConfirm} onOpenChange={setShowCreateConfirm}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Create schedule</AlertDialogTitle>
-            <AlertDialogDescription>
-              Create an empty schedule for {formatYearMonth(selectedMonth)}? You can
-              then click a cell to assign each day.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => void confirmCreate()}>
-              Create
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }

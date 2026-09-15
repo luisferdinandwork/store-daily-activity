@@ -46,6 +46,11 @@ export interface CompleteSerahTerimaEntryInput {
   userId: string;
   shiftId: number;
   geo: GeoPoint;
+  /** 'done' completes the item; 'on_hold' keeps it in the active list with a follow-up note. Defaults to 'done'. */
+  outcome?: 'done' | 'on_hold';
+  note?: string;
+  /** Optional proof photo URL — same for either outcome. */
+  photoUrl?: string;
   skipGeo?: boolean;
 }
 
@@ -401,11 +406,32 @@ export async function completeSerahTerimaEntry(
     }
 
     const now = new Date();
+    const outcome = input.outcome ?? 'done';
+
+    if (outcome === 'on_hold') {
+      // Stays in the active list (isCompleted false) — just flagged, with a
+      // follow-up note anyone on shift can see and act on later.
+      const [entry] = await db
+        .update(serahTerimaEntries)
+        .set({
+          isOnHold: true,
+          note: input.note ?? existing.note,
+          photoUrl: input.photoUrl ?? existing.photoUrl,
+          updatedAt: now,
+        })
+        .where(eq(serahTerimaEntries.id, input.entryId))
+        .returning();
+
+      return { success: true, data: entry };
+    }
 
     const [entry] = await db
       .update(serahTerimaEntries)
       .set({
         isCompleted: true,
+        isOnHold: false,
+        note: input.note ?? existing.note,
+        photoUrl: input.photoUrl ?? existing.photoUrl,
         completedByUserId: input.userId,
         completedByScheduleId: input.scheduleId,
         completedByShiftId: input.shiftId,

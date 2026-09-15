@@ -29,12 +29,18 @@ import {
   text,
   integer,
   decimal,
+  boolean,
   timestamp,
   index,
 } from 'drizzle-orm/pg-core';
 import { stores, users } from './core';
 
 export const impactVisitStatusEnum = pgEnum('impact_visit_status', ['draft', 'submitted']);
+
+// Virtual visits are reviewed remotely (Ops uploads a screenshot as proof
+// after the fact); On Location visits are conducted in person and require a
+// geo-tag of the store, checked against the store's own geofence.
+export const impactVisitTypeEnum = pgEnum('impact_visit_type', ['virtual', 'on_location']);
 
 export const impactVisits = pgTable('impact_visits', {
   id: serial('id').primaryKey(),
@@ -43,10 +49,22 @@ export const impactVisits = pgTable('impact_visits', {
   visitedBy: text('visited_by').references(() => users.id).notNull(),
   visitDate: timestamp('visit_date').notNull(),
 
+  // Nullable at the DB level (any pre-existing visit predates this column),
+  // but required by the create API for every new visit going forward.
+  visitType: impactVisitTypeEnum('visit_type'),
+  // Virtual proof — screenshot of the virtual meeting.
+  screenshotUrl: text('screenshot_url'),
+  // On Location proof — BOTH a photo taken at the store and a geo-tag are
+  // required before an on_location visit can be submitted. Same lat/lng
+  // precision as stores.latitude/longitude.
+  visitPhotoUrl: text('visit_photo_url'),
+  visitLat: decimal('visit_lat', { precision: 10, scale: 7 }),
+  visitLng: decimal('visit_lng', { precision: 10, scale: 7 }),
+
   // Header fields from the paper form.
   targetBulanBerjalan: text('target_bulan_berjalan'),
-  periodeTanggal:      text('periode_tanggal'),
-  pencapaianPct:       decimal('pencapaian_pct', { precision: 5, scale: 2 }),
+  // Free-text achievement estimate — replaces the old "Periode" field.
+  estimasiAchievement: text('estimasi_achievement'),
 
   // 1. Main checklist (sections A-G, 100 pts).
   checklistResponses: text('checklist_responses'),
@@ -54,8 +72,10 @@ export const impactVisits = pgTable('impact_visits', {
   checklistMaxScore:  integer('checklist_max_score').default(100).notNull(),
   checklistGrade:     text('checklist_grade'), // 'A' | 'B'
 
-  // 2. Cash money denomination count.
+  // 2. Cash money denomination count, plus a computed pass/fail (uangModal
+  // and uangPettyCash both meet their targets) used by the monthly report.
   cashMoneyData: text('cash_money_data'),
+  cashMoneyOk:   boolean('cash_money_ok').default(false).notNull(),
 
   // 3. VM checklist (sections A-E, 70 pts).
   vmChecklistResponses: text('vm_checklist_responses'),

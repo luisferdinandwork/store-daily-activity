@@ -127,6 +127,9 @@ export async function createRefillRequest(
       requestedBy: userId,
       notes,
       balanceBefore: period.currentBalance,
+      // Explicit app-clock timestamp — see the same fix/comment in
+      // app/api/employee/petty-cash/route.ts for why DEFAULT NOW() is wrong here.
+      requestedAt: new Date(),
     })
     .returning();
 

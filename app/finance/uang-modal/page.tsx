@@ -103,6 +103,9 @@ const STATUS_META: Record<UangModalStoreEntry['status'], { dot: string; badge: s
   // Day already ended and this store still has no completed submission —
   // this is the "employee didn't do it" case, always shown in red.
   pending:     { dot: 'bg-rose-500',    badge: 'bg-rose-50 text-rose-700 ring-rose-200',          label: 'Belum Lapor' },
+  // Cek Uang Modal never produces this status (it's Serah Terima-only) — kept
+  // only so this map stays exhaustive over the shared task_status enum.
+  on_hold:     { dot: 'bg-amber-400',   badge: 'bg-amber-50 text-amber-700 ring-amber-200',        label: 'Ditahan' },
 };
 
 // ─── Day cell ─────────────────────────────────────────────────────────────────

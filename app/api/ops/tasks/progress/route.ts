@@ -133,6 +133,9 @@ async function serializeSerahTerimaBoard(storeId: number) {
     completedByUserId: e.completedByUserId,
     completedByName: e.completedByUserId ? (nameById.get(e.completedByUserId) ?? e.completedByUserId) : null,
     completedAt: toIso(e.completedAt),
+    isOnHold: e.isOnHold,
+    note: e.note,
+    photoUrl: e.photoUrl,
   });
 
   return {

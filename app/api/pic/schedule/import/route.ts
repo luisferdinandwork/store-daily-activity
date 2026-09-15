@@ -93,7 +93,10 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const result = await importScheduleFromParsed(parsed, normalized, actorId);
+    // Ops/IT importing through this route (e.g. on a PIC's behalf) may still
+    // overwrite; a PIC actor may only upload where no schedule exists yet.
+    const isPicActor = role !== 'ops' && role !== 'it';
+    const result = await importScheduleFromParsed(parsed, normalized, actorId, isPicActor);
 
     return NextResponse.json({
       success:          result.errors.length === 0,

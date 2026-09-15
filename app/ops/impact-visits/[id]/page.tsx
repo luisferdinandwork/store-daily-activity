@@ -10,15 +10,28 @@
 // for instant feedback between saves.
 // Once status === 'submitted' the whole page is read-only.
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import {
-  ArrowLeft, Loader2, Shield, CheckCircle2, XCircle, Circle,
-  ClipboardCheck, Wallet, Sparkles, Send, Trash2, Save, AlertTriangle,
+  ArrowLeft, Loader2, Shield, CheckCircle2, XCircle,
+  ClipboardCheck, Wallet, Sparkles, Send, Trash2, AlertTriangle,
+  Video, Navigation, Upload, MapPin, ImageIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAutoSave } from '@/lib/hooks/useAutoSave';
+import { useGeo } from '@/lib/hooks/useGeo';
+import PhotoUploadGrid from '@/components/shared/PhotoUploadGrid';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import {
   IMPACT_CHECKLIST,
   IMPACT_CHECKLIST_SECTIONS,
@@ -47,9 +60,13 @@ interface Visit {
   id: string;
   storeId: string;
   visitDate: string;
+  visitType: 'virtual' | 'on_location' | null;
+  screenshotUrl: string | null;
+  visitPhotoUrl: string | null;
+  visitLat: string | null;
+  visitLng: string | null;
   targetBulanBerjalan: string | null;
-  periodeTanggal: string | null;
-  pencapaianPct: string | null;
+  estimasiAchievement: string | null;
   checklistResponses: ChecklistResponses;
   checklistScore: number;
   checklistMaxScore: number;
@@ -245,6 +262,19 @@ export default function ImpactVisitDetailPage() {
   const [submitting, setSubmitting] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [confirmSubmit, setConfirmSubmit] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // Switching tabs swaps in a whole new section (often much shorter than the
+  // one being left) — jump back to the top instead of leaving the reader
+  // stranded mid-scroll in the old tab's content. The scroll container here
+  // is the OPS layout's <main>, not window, so scrollIntoView (which walks
+  // up to whichever ancestor actually scrolls) is used instead of
+  // window.scrollTo.
+  const topRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    topRef.current?.scrollIntoView({ block: 'start' });
+  }, [tab]);
 
   useEffect(() => {
     if (authStatus === 'loading') return;
@@ -331,7 +361,7 @@ export default function ImpactVisitDetailPage() {
     });
   }, [save]);
 
-  const setHeaderField = useCallback((field: 'targetBulanBerjalan' | 'periodeTanggal' | 'notes', value: string) => {
+  const setHeaderField = useCallback((field: 'targetBulanBerjalan' | 'estimasiAchievement' | 'notes', value: string) => {
     setVisit((prev) => {
       if (!prev) return prev;
       save({ [field]: value || null });
@@ -339,10 +369,74 @@ export default function ImpactVisitDetailPage() {
     });
   }, [save]);
 
+  // ── Proof: screenshot (virtual) / geo-tag (on location) ─────────────────
+  const [uploadingScreenshot, setUploadingScreenshot] = useState(false);
+  const [capturingGeo, setCapturingGeo] = useState(false);
+  const [proofError, setProofError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const { geo, geoError, refresh: refreshGeo } = useGeo();
+
+  async function handleUploadScreenshot(file: File) {
+    setUploadingScreenshot(true);
+    setProofError(null);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const res = await fetch(`/api/ops/impact-visits/${id}/screenshot`, { method: 'POST', body: form });
+      const data = await res.json();
+      if (!data.success) { setProofError(data.error ?? 'Upload failed.'); return; }
+      setVisit(data.visit);
+    } catch {
+      setProofError('Network error.');
+    } finally {
+      setUploadingScreenshot(false);
+    }
+  }
+
+  async function handleCaptureLocation() {
+    setCapturingGeo(true);
+    setProofError(null);
+    try {
+      if (geoError || !geo) {
+        setProofError(geoError ?? 'Location not available yet — try again.');
+        return;
+      }
+      const res = await fetch(`/api/ops/impact-visits/${id}/geo`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lat: geo.lat, lng: geo.lng }),
+      });
+      const data = await res.json();
+      if (!data.success) { setProofError(data.error ?? 'Failed to capture location.'); return; }
+      setVisit(data.visit);
+    } catch {
+      setProofError('Network error.');
+    } finally {
+      setCapturingGeo(false);
+    }
+  }
+
+  async function handleUploadVisitPhoto(file: File): Promise<string> {
+    setProofError(null);
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch(`/api/ops/impact-visits/${id}/photo`, { method: 'POST', body: form });
+    const data = await res.json();
+    if (!data.success) {
+      setProofError(data.error ?? 'Upload failed.');
+      throw new Error(data.error ?? 'Upload failed.');
+    }
+    setVisit(data.visit);
+    return data.visit.visitPhotoUrl as string;
+  }
+
+  const missingProof = visit
+    ? (visit.visitType === 'virtual' && !visit.screenshotUrl) ||
+      (visit.visitType === 'on_location' && !(visit.visitLat && visit.visitLng && visit.visitPhotoUrl))
+    : false;
+
   async function handleSubmit() {
-    if (!visit) return;
-    const ok = window.confirm('Submit this Impact Visit? It will be locked and can no longer be edited.');
-    if (!ok) return;
+    if (!visit || missingProof) return;
 
     setSubmitting(true);
     setActionError(null);
@@ -363,9 +457,6 @@ export default function ImpactVisitDetailPage() {
   }
 
   async function handleDelete() {
-    const ok = window.confirm('Delete this draft visit? This cannot be undone.');
-    if (!ok) return;
-
     setDeleting(true);
     try {
       const res  = await fetch(`/api/ops/impact-visits/${id}`, { method: 'DELETE' });
@@ -420,7 +511,7 @@ export default function ImpactVisitDetailPage() {
     null;
 
   return (
-    <div className="min-h-full bg-slate-50 pb-16">
+    <div ref={topRef} className="min-h-full bg-slate-50 pb-16">
       {/*
         Everything ops needs while filling this out — identity/status, the
         period fields, the section tabs, and the running score — lives in one
@@ -447,9 +538,18 @@ export default function ImpactVisitDetailPage() {
             )}>
               {visit.status === 'submitted' ? 'Submitted' : 'Draft'}
             </span>
+            {visit.visitType && (
+              <span className={cn(
+                'flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-bold',
+                visit.visitType === 'virtual' ? 'bg-sky-50 text-sky-700' : 'bg-emerald-50 text-emerald-700',
+              )}>
+                {visit.visitType === 'virtual' ? <Video className="h-3 w-3" /> : <Navigation className="h-3 w-3" />}
+                {visit.visitType === 'virtual' ? 'Virtual' : 'On Location'}
+              </span>
+            )}
           </div>
 
-          {/* Period — compact inline fields */}
+          {/* Target / Estimasi Achievement — compact inline fields */}
           <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">
             <label className="flex items-center gap-1.5">
               <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Target</span>
@@ -462,13 +562,13 @@ export default function ImpactVisitDetailPage() {
               />
             </label>
             <label className="flex items-center gap-1.5">
-              <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Periode</span>
+              <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Estimasi Achievement</span>
               <input
                 type="text"
-                value={visit.periodeTanggal ?? ''}
+                value={visit.estimasiAchievement ?? ''}
                 disabled={locked}
-                onChange={(e) => setHeaderField('periodeTanggal', e.target.value)}
-                className="h-7 w-32 rounded-md border border-slate-200 px-2 text-xs focus:border-indigo-300 focus:outline-none disabled:opacity-60"
+                onChange={(e) => setHeaderField('estimasiAchievement', e.target.value)}
+                className="h-7 w-40 rounded-md border border-slate-200 px-2 text-xs focus:border-indigo-300 focus:outline-none disabled:opacity-60"
               />
             </label>
           </div>
@@ -494,6 +594,18 @@ export default function ImpactVisitDetailPage() {
               ))}
             </div>
             {activeScore && <ScorePill {...activeScore} />}
+            {!locked && (
+              <button
+                type="button"
+                disabled={submitting || missingProof}
+                onClick={() => setConfirmSubmit(true)}
+                title={missingProof ? (visit.visitType === 'virtual' ? 'Upload a screenshot first' : 'Capture the store location and photo first') : undefined}
+                className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-indigo-600 px-3 text-xs font-bold text-white transition-all hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                Submit
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -509,6 +621,104 @@ export default function ImpactVisitDetailPage() {
           <p className="text-right text-[11px] text-slate-400">
             {saveStatus === 'saving' ? 'Saving…' : saveStatus === 'saved' ? 'Saved' : saveStatus === 'error' ? 'Save failed — will retry' : ''}
           </p>
+        )}
+
+        {/* Proof — required before this visit can be submitted */}
+        {visit.visitType === 'virtual' && (
+          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="flex items-center gap-2">
+              <ImageIcon className="h-4 w-4 text-sky-600" />
+              <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Bukti Screenshot</p>
+            </div>
+            {visit.screenshotUrl ? (
+              <div className="mt-3 flex items-center gap-3">
+                <img src={visit.screenshotUrl} alt="Visit screenshot" className="h-20 w-20 rounded-lg border border-slate-200 object-cover" />
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-600">
+                  <CheckCircle2 className="h-4 w-4" /> Screenshot uploaded
+                </div>
+              </div>
+            ) : (
+              <p className="mt-1 text-[11px] text-slate-400">Upload a screenshot as proof this virtual visit was conducted.</p>
+            )}
+            {!locked && (
+              <>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  className="hidden"
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleUploadScreenshot(f); e.target.value = ''; }}
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploadingScreenshot}
+                  className="mt-3 flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-60"
+                >
+                  {uploadingScreenshot ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
+                  {visit.screenshotUrl ? 'Replace Screenshot' : 'Upload Screenshot'}
+                </button>
+              </>
+            )}
+            {proofError && <p className="mt-2 text-xs text-rose-600">{proofError}</p>}
+          </div>
+        )}
+
+        {visit.visitType === 'on_location' && (
+          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="flex items-center gap-2">
+              <MapPin className="h-4 w-4 text-emerald-600" />
+              <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Lokasi Toko</p>
+            </div>
+            {visit.visitLat && visit.visitLng ? (
+              <div className="mt-2 flex items-center gap-1.5 text-xs font-semibold text-emerald-600">
+                <CheckCircle2 className="h-4 w-4" /> Lokasi tercatat — dalam radius toko
+              </div>
+            ) : (
+              <p className="mt-1 text-[11px] text-slate-400">Ambil geo-tag lokasi kamu sekarang — harus berada di dalam radius toko.</p>
+            )}
+            {!locked && (
+              <div className="mt-3 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleCaptureLocation}
+                  disabled={capturingGeo}
+                  className="flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600 hover:bg-slate-50 disabled:opacity-60"
+                >
+                  {capturingGeo ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MapPin className="h-3.5 w-3.5" />}
+                  Capture Store Location
+                </button>
+                {(geoError) && (
+                  <button type="button" onClick={refreshGeo} className="text-[11px] font-semibold text-indigo-600 hover:underline">
+                    Retry location
+                  </button>
+                )}
+              </div>
+            )}
+            {proofError && <p className="mt-2 text-xs text-rose-600">{proofError}</p>}
+          </div>
+        )}
+
+        {visit.visitType === 'on_location' && (
+          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="flex items-center gap-2">
+              <ImageIcon className="h-4 w-4 text-emerald-600" />
+              <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Foto Bukti Kunjungan</p>
+            </div>
+            <p className="mt-1 text-[11px] text-slate-400">Ambil foto langsung di toko sebagai bukti kunjungan on-location.</p>
+            <div className="mt-3">
+              <PhotoUploadGrid
+                photos={visit.visitPhotoUrl ? [visit.visitPhotoUrl] : []}
+                onChange={(urls) => setVisit((prev) => (prev ? { ...prev, visitPhotoUrl: urls[0] ?? null } : prev))}
+                upload={handleUploadVisitPhoto}
+                min={1}
+                max={1}
+                disabled={locked}
+                tileSize="lg"
+                cameraTitle="Foto Bukti Kunjungan"
+              />
+            </div>
+          </div>
         )}
 
         {tab === 'checklist' && (
@@ -594,30 +804,64 @@ export default function ImpactVisitDetailPage() {
           />
         </div>
 
-        {/* Actions */}
+        {/* Actions — Submit lives in the sticky header for quick access; only
+            the destructive Delete stays down here. */}
         {!locked && (
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              disabled={!visit.canDelete || deleting}
-              onClick={handleDelete}
-              className="flex h-12 items-center justify-center gap-2 rounded-2xl border border-rose-200 bg-rose-50 text-sm font-bold text-rose-600 transition-all hover:bg-rose-100 disabled:opacity-50"
-            >
-              {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-              Delete Draft
-            </button>
-            <button
-              type="button"
-              disabled={submitting}
-              onClick={handleSubmit}
-              className="flex h-12 items-center justify-center gap-2 rounded-2xl bg-indigo-600 text-sm font-bold text-white transition-all hover:bg-indigo-700 disabled:opacity-50"
-            >
-              {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-              Submit Visit
-            </button>
-          </div>
+          <button
+            type="button"
+            disabled={!visit.canDelete || deleting}
+            onClick={() => setConfirmDelete(true)}
+            className="flex h-12 w-full items-center justify-center gap-2 rounded-2xl border border-rose-200 bg-rose-50 text-sm font-bold text-rose-600 transition-all hover:bg-rose-100 disabled:opacity-50"
+          >
+            {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+            Delete Draft
+          </button>
         )}
       </div>
+
+      <AlertDialog open={confirmSubmit} onOpenChange={setConfirmSubmit}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Submit this Impact Visit?</AlertDialogTitle>
+            <AlertDialogDescription>
+              It will be locked and can no longer be edited.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setConfirmSubmit(false);
+                void handleSubmit();
+              }}
+            >
+              Submit
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this draft visit?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setConfirmDelete(false);
+                void handleDelete();
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

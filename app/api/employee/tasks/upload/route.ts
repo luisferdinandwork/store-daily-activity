@@ -40,6 +40,9 @@ type PhotoType =
   | 'eod_edc_settlement_photo'
   | 'storefront_locked'
 
+  // Serah Terima — optional proof photo when resolving a board item (Done or On Hold)
+  | 'serah_terima'
+
   // Backward-compatible aliases
   | 'eod_edc_settlement'
   | 'z_report';
@@ -76,6 +79,9 @@ const PHOTO_FOLDER: Record<PhotoType, string> = {
   eod_edc_settlement_photo: 'store-closing/eod-edc-settlement',
   storefront_locked: 'store-closing/storefront-locked',
 
+  // Serah Terima proof photo
+  serah_terima: 'serah-terima/proof',
+
   // Backward-compatible aliases
   eod_edc_settlement: 'store-closing/eod-edc-settlement',
   z_report: 'store-closing/eod-edc-settlement',
@@ -106,6 +112,8 @@ const PHOTO_LIMITS: Record<PhotoType, number> = {
   // Store Closing only needs 1 required side-by-side image.
   eod_edc_settlement_photo: 1,
   storefront_locked: 1,
+
+  serah_terima: 1,
 
   // Backward-compatible aliases.
   eod_edc_settlement: 1,

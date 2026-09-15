@@ -90,6 +90,12 @@ export interface CreateMonthlyScheduleInput {
   entries: DayAssignment[];
   note?: string;
   importedBy: string;
+  /**
+   * When true, reject instead of overwriting if a schedule already exists for
+   * this store/month. Used for PIC-initiated imports — PIC can only upload a
+   * schedule where none exists yet; Ops must remove the existing one first.
+   */
+  blockIfExists?: boolean;
 }
 
 export interface MonthlyScheduleWithEntries {
@@ -619,6 +625,13 @@ export async function createOrReplaceMonthlySchedule(
       .limit(1);
 
     let monthlyScheduleId: number;
+
+    if (existing && data.blockIfExists) {
+      return {
+        success: false,
+        error: `A schedule for ${data.yearMonth} already exists. Ask Ops to remove it before re-uploading.`,
+      };
+    }
 
     if (existing) {
       monthlyScheduleId = existing.id;
@@ -1948,7 +1961,7 @@ export async function getAttendanceForDate(storeId: number, date: Date) {
 
 export async function opsMarkAttendance(
   scheduleId: number,
-  status: "present" | "absent" | "late" | "excused",
+  status: "present" | "absent" | "late" | "excused" | undefined,
   actorId: string,
   notes?: string,
 ): Promise<{ success: boolean; attendanceId?: number; error?: string }> {
@@ -1971,12 +1984,18 @@ export async function opsMarkAttendance(
     let attendanceId: number;
 
     if (existing) {
+      // Status is immutable once recorded (e.g. a genuine "late" stays
+      // "late") — Ops can only attach/update a note on an already-recorded
+      // attendance row, never change the status itself.
       await db
         .update(attendance)
-        .set({ status, notes, recordedBy: actorId, updatedAt: new Date() })
+        .set({ notes, recordedBy: actorId, updatedAt: new Date() })
         .where(eq(attendance.id, existing.id));
       attendanceId = existing.id;
     } else {
+      if (!status) {
+        return { success: false, error: "status is required to record initial attendance." };
+      }
       const [att] = await db
         .insert(attendance)
         .values({

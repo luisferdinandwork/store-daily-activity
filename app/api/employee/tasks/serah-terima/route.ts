@@ -55,6 +55,9 @@ function serializeEntry(entry: {
   completedByUserId: string | null;
   completedAt: Date | null;
   createdAt: Date;
+  isOnHold: boolean;
+  note: string | null;
+  photoUrl: string | null;
 }) {
   return {
     id: String(entry.id),
@@ -66,6 +69,9 @@ function serializeEntry(entry: {
     completedByUserId: entry.completedByUserId,
     completedAt: toIso(entry.completedAt),
     createdAt: toIso(entry.createdAt),
+    isOnHold: entry.isOnHold,
+    note: entry.note,
+    photoUrl: entry.photoUrl,
   };
 }
 
@@ -122,6 +128,7 @@ async function boardPayload(
       status: task.status,
       completedAt: toIso(task.completedAt),
       locked: task.status === 'completed',
+      notes: task.notes ?? null,
     },
     entries: board.active.map(serializeEntry),
     recentCompleted: board.recentCompleted.map(serializeEntry),
@@ -223,6 +230,9 @@ export async function PATCH(request: NextRequest) {
   const body = (await request.json().catch(() => ({}))) as {
     storeId?: unknown;
     entryId?: unknown;
+    outcome?: unknown;
+    note?: unknown;
+    photoUrl?: unknown;
     geo?: GeoPoint;
     skipGeo?: boolean;
   };
@@ -243,6 +253,14 @@ export async function PATCH(request: NextRequest) {
     );
   }
 
+  const outcome = body.outcome === 'on_hold' ? 'on_hold' as const : 'done' as const;
+  if (outcome === 'on_hold' && (typeof body.note !== 'string' || body.note.trim() === '')) {
+    return NextResponse.json(
+      { success: false, error: 'Alasan wajib diisi saat menahan item.' },
+      { status: 400 },
+    );
+  }
+
   const ownSchedule = await findOwnScheduleForStore(session.user.id, storeId);
   if (!ownSchedule) {
     return NextResponse.json(
@@ -258,6 +276,9 @@ export async function PATCH(request: NextRequest) {
     userId: session.user.id,
     shiftId: ownSchedule.shiftId,
     geo: body.geo ?? { lat: 0, lng: 0 },
+    outcome,
+    note: typeof body.note === 'string' ? body.note : undefined,
+    photoUrl: typeof body.photoUrl === 'string' ? body.photoUrl : undefined,
     skipGeo: body.skipGeo,
   });
 

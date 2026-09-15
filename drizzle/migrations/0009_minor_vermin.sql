@@ -1,0 +1,1 @@
+ALTER TABLE "serah_terima_entries" ADD COLUMN "photo_url" text;

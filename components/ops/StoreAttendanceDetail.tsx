@@ -146,14 +146,21 @@ function MarkDialog({ row, open, onClose, onSaved }: {
     setNotes(row?.attendance?.notes ?? '');
   }, [row, open]);
 
+  const hasExistingRecord = Boolean(row?.attendance);
+
   const save = async () => {
     if (!row) return;
     setSaving(true);
     try {
+      // Status is immutable once a record exists — only send it when we're
+      // recording attendance for the first time (e.g. marking a no-show).
+      const body = hasExistingRecord
+        ? { scheduleId: row.schedule.id, notes: notes || undefined }
+        : { scheduleId: row.schedule.id, status, notes: notes || undefined };
       const res  = await fetch('/api/ops/attendance', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ scheduleId: row.schedule.id, status, notes: notes || undefined }),
+        body:    JSON.stringify(body),
       });
       const json = await res.json();
       if (!json.success) throw new Error(json.error);
@@ -209,25 +216,35 @@ function MarkDialog({ row, open, onClose, onSaved }: {
 
           <div className="space-y-1.5">
             <Label>Status</Label>
-            <div className="grid grid-cols-2 gap-2">
-              {SETTABLE_STATUSES.map((key) => {
-                const cfg = STATUS[key];
-                return (
-                <button
-                  key={key} type="button" onClick={() => setStatus(key)}
-                  className={cn(
-                    'flex items-center gap-2 rounded-lg border p-3 text-sm font-medium transition-colors text-left',
-                    status === key
-                      ? cfg.chip
-                      : 'border-border bg-background text-muted-foreground hover:bg-secondary',
-                  )}
-                >
-                  <cfg.Icon className="h-4 w-4 flex-shrink-0" />
-                  {cfg.label}
-                </button>
-                );
-              })}
-            </div>
+            {hasExistingRecord ? (
+              <div className="flex items-center gap-2">
+                <Badge variant="outline" className={cn('gap-1.5 text-xs', STATUS[status].chip)}>
+                  {(() => { const Icon = STATUS[status].Icon; return <Icon className="h-3.5 w-3.5" />; })()}
+                  {STATUS[status].label}
+                </Badge>
+                <span className="text-[11px] text-muted-foreground">Status can&apos;t be changed once recorded.</span>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-2">
+                {SETTABLE_STATUSES.map((key) => {
+                  const cfg = STATUS[key];
+                  return (
+                  <button
+                    key={key} type="button" onClick={() => setStatus(key)}
+                    className={cn(
+                      'flex items-center gap-2 rounded-lg border p-3 text-sm font-medium transition-colors text-left',
+                      status === key
+                        ? cfg.chip
+                        : 'border-border bg-background text-muted-foreground hover:bg-secondary',
+                    )}
+                  >
+                    <cfg.Icon className="h-4 w-4 flex-shrink-0" />
+                    {cfg.label}
+                  </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           <div className="space-y-1.5">

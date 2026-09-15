@@ -49,7 +49,7 @@ export interface UangModalStoreEntry {
    * renders in red. 'not_started'/'in_progress' are only used for today,
    * while the day is still ongoing.
    */
-  status: 'not_started' | 'in_progress' | 'completed' | 'pending';
+  status: 'not_started' | 'in_progress' | 'completed' | 'pending' | 'on_hold';
   /** True when no task row exists at all — synthesized purely from the schedule. */
   isMissing: boolean;
 

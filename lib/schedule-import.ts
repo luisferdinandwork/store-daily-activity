@@ -637,6 +637,7 @@ export async function importScheduleFromParsed(
   parsed: ParsedScheduleFile,
   storeMap: Record<string, number>,
   actorId: string,
+  blockIfExists?: boolean,
 ): Promise<ImportResult> {
   let schedulesCreated = 0;
   let entriesCreated = 0;
@@ -727,6 +728,7 @@ export async function importScheduleFromParsed(
       entries: assignments,
       note: `Imported from ${parsed.sheetName}`,
       importedBy: actorId,
+      blockIfExists,
     });
 
     if (!result.success) {

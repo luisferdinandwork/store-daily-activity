@@ -43,6 +43,34 @@
       "when": 1788945614124,
       "tag": "0005_mute_stone_men",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789367515329,
+      "tag": "0006_parched_dreadnoughts",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1789367531985,
+      "tag": "0007_lonely_tiger_shark",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1789368951676,
+      "tag": "0008_last_veda",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1789377533552,
+      "tag": "0009_minor_vermin",
+      "breakpoints": true
     }
   ]
 }
