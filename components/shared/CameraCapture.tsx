@@ -12,7 +12,9 @@
 // Mirroring: the LIVE preview is flipped horizontally whenever the front
 // ("user") camera is active — a natural selfie-mirror feel — and this follows
 // the camera the user actually switched to, not just the initial prop. The
-// SAVED photo is never mirrored (see useCameraCapture.capture()).
+// SAVED photo is flipped the same way for the front camera, so what's stored
+// matches what the user saw on screen (see useCameraCapture.capture()). The
+// back camera is never flipped.
 //
 // Framing: the video uses object-contain (not object-cover), so the full
 // camera frame is always shown letterboxed rather than cropped/zoomed into —
