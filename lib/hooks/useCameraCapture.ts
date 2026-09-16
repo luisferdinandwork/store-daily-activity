@@ -21,19 +21,19 @@ const MAX_FILE_SIZE_BYTES = 1_000_000;
 // turning to mush before file size buys much more headroom.
 const MIN_JPEG_QUALITY = 0.5;
 
-/** Ideal capture resolution matching the device's CURRENT physical
- * orientation (tall when held portrait, wide when held landscape). Most
- * browsers/OSes will then hand back a video stream already rotated to
- * match by the camera stack itself, instead of the sensor's native
- * landscape orientation regardless of how the phone is actually held — the
- * classic cause of a captured photo coming out sideways from what was on
- * screen. This is the standard fix for that class of bug: let the platform
- * do the rotation via a resolution hint, rather than guessing a rotation
- * angle to undo after the fact. */
-function idealDimensionsForOrientation(): { width: number; height: number } {
-  const portrait = typeof window !== 'undefined' && window.matchMedia('(orientation: portrait)').matches;
-  return portrait ? { width: 1080, height: 1920 } : { width: 1920, height: 1080 };
-}
+// A single orientation-independent resolution hint. Earlier this swapped to
+// a tall {1080, 1920} "ideal" whenever the device was held in portrait, on
+// the theory that it would nudge the browser into handing back an
+// already-rotated frame. In practice mobile browsers already rotate the
+// live frame to match how the phone is physically held on their own —
+// requesting a non-native aspect ratio just made some devices satisfy the
+// constraint by digitally cropping into the sensor image instead (the
+// reported "zoom in" behaviour, on both the front and back camera). Letting
+// the platform pick its native aspect for the requested facing mode avoids
+// that crop entirely; the live preview and captured photo are sized to fit
+// whatever the camera actually returns (see CameraCapture's object-contain
+// video/canvas layout).
+const IDEAL_DIMENSIONS = { width: 1920, height: 1080 };
 
 function canvasToBlob(canvas: HTMLCanvasElement, quality: number): Promise<Blob | null> {
   return new Promise((resolve) => canvas.toBlob((b) => resolve(b), 'image/jpeg', quality));
@@ -66,9 +66,12 @@ export function useCameraCapture() {
     }
 
     try {
-      const { width, height } = idealDimensionsForOrientation();
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: mode }, width: { ideal: width }, height: { ideal: height } },
+        video: {
+          facingMode: { ideal: mode },
+          width: { ideal: IDEAL_DIMENSIONS.width },
+          height: { ideal: IDEAL_DIMENSIONS.height },
+        },
         audio: false,
       });
       streamRef.current = stream;
@@ -92,21 +95,6 @@ export function useCameraCapture() {
 
   const switchCamera = useCallback(() => {
     void start(facingMode === 'environment' ? 'user' : 'environment');
-  }, [facingMode, start]);
-
-  // Rotating the phone while the camera is actively open re-requests the
-  // stream with resolution hints matching the new orientation — same as a
-  // native camera app reflowing when you turn it from portrait to
-  // landscape mid-shot, instead of staying locked to whatever orientation
-  // was active when the modal first opened.
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const mq = window.matchMedia('(orientation: portrait)');
-    const handleChange = () => {
-      if (streamRef.current) void start(facingMode);
-    };
-    mq.addEventListener('change', handleChange);
-    return () => mq.removeEventListener('change', handleChange);
   }, [facingMode, start]);
 
   const capture = useCallback((): Promise<File | null> => {

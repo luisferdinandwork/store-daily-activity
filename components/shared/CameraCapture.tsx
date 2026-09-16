@@ -13,6 +13,13 @@
 // ("user") camera is active — a natural selfie-mirror feel — and this follows
 // the camera the user actually switched to, not just the initial prop. The
 // SAVED photo is never mirrored (see useCameraCapture.capture()).
+//
+// Framing: the video uses object-contain (not object-cover), so the full
+// camera frame is always shown letterboxed rather than cropped/zoomed into —
+// true for the front and back camera alike. The header and controls switch
+// from a top/bottom bar to a left/right rail on `landscape:` (Tailwind's
+// built-in orientation variant) so turning the phone sideways gives the
+// video strip more room instead of squeezing it between two full-width bars.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useRef, useState } from 'react';
@@ -150,24 +157,34 @@ export default function CameraCapture({
 
   return (
     <div
-      className="fixed inset-0 z-[70] flex flex-col bg-black"
+      className="fixed inset-0 z-[70] flex flex-col bg-black landscape:flex-row"
       role="dialog"
       aria-modal="true"
       aria-label={title ?? 'Ambil foto'}
     >
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 pb-3 pt-[calc(0.75rem+env(safe-area-inset-top))]">
+      {/* Header — a top bar in portrait, a left rail in landscape so the video keeps the wide space */}
+      <div
+        className={cn(
+          'flex items-center justify-between px-4 pb-3 pt-[calc(0.75rem+env(safe-area-inset-top))]',
+          'landscape:h-full landscape:w-16 landscape:flex-col landscape:justify-start landscape:gap-4',
+          'landscape:px-0 landscape:pb-3 landscape:pt-[calc(0.75rem+env(safe-area-inset-top))] landscape:pl-[env(safe-area-inset-left)]',
+        )}
+      >
         <button
           type="button"
           onClick={handleClose}
           aria-label="Tutup kamera"
-          className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white active:scale-95"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 text-white active:scale-95"
         >
           <X className="h-5 w-5" />
         </button>
-        {title && <p className="max-w-[45%] truncate text-sm font-semibold text-white">{title}</p>}
+        {title && (
+          <p className="max-w-[45%] truncate text-sm font-semibold text-white landscape:max-w-[56px] landscape:text-center landscape:text-[10px] landscape:leading-tight">
+            {title}
+          </p>
+        )}
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 landscape:flex-col">
           {showCameraControls && (
             <button
               type="button"
@@ -209,7 +226,7 @@ export default function CameraCapture({
             autoPlay
             playsInline
             muted
-            className={cn('h-full w-full object-cover', liveFacingMode === 'user' && 'scale-x-[-1]')}
+            className={cn('h-full w-full object-contain', liveFacingMode === 'user' && 'scale-x-[-1]')}
           />
         )}
 
@@ -249,14 +266,20 @@ export default function CameraCapture({
         )}
       </div>
 
-      {/* Controls */}
-      <div className="flex items-center justify-center gap-4 px-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] pt-4">
+      {/* Controls — a bottom bar in portrait, a right rail in landscape */}
+      <div
+        className={cn(
+          'flex items-center justify-center gap-4 px-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] pt-4',
+          'landscape:h-full landscape:w-36 landscape:flex-col landscape:justify-center landscape:gap-3',
+          'landscape:px-3 landscape:py-6 landscape:pr-[calc(0.75rem+env(safe-area-inset-right))]',
+        )}
+      >
         {preview ? (
           <>
             <button
               type="button"
               onClick={handleRetake}
-              className="flex h-12 flex-1 max-w-[160px] items-center justify-center gap-1.5 rounded-full border border-white/30 text-xs font-bold text-white active:scale-[0.98]"
+              className="flex h-12 w-full flex-1 max-w-[160px] items-center justify-center gap-1.5 rounded-full border border-white/30 text-xs font-bold text-white active:scale-[0.98] landscape:max-w-none landscape:flex-none"
             >
               <RotateCcw className="h-4 w-4" />
               Ambil Ulang
@@ -264,7 +287,7 @@ export default function CameraCapture({
             <button
               type="button"
               onClick={handleUsePhoto}
-              className="flex h-12 flex-1 max-w-[200px] items-center justify-center gap-1.5 rounded-full bg-white text-xs font-bold text-black active:scale-[0.98]"
+              className="flex h-12 w-full flex-1 max-w-[200px] items-center justify-center gap-1.5 rounded-full bg-white text-xs font-bold text-black active:scale-[0.98] landscape:max-w-none landscape:flex-none"
             >
               <Check className="h-4 w-4" strokeWidth={3} />
               Gunakan Foto
