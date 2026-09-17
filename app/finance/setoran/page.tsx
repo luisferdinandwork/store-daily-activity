@@ -106,6 +106,7 @@ type UiStatus =
   | 'pending'         // red   — task.status === pending (unresolved discrepancy)
   | 'short'           // amber — stored but gap > ROUNDING_THRESHOLD
   | 'completed'       // green — stored, gap within normal rounding
+  | 'no_setoran'      // slate — store genuinely had no setoran that day (uang diterima = 0)
   | 'in_progress'     // blue  — draft, not yet submitted
   | 'not_started'     // slate — task exists but untouched
   | 'no_data';        // slate — no schedule / no task
@@ -125,6 +126,8 @@ function deriveUiStatus(row: SetoranStoreRow): UiStatus {
 
   // completed — check whether the gap is just normal rounding or a real shortfall
   if (row.status === 'completed') {
+    if (row.isNoSetoran) return 'no_setoran';
+
     const required = Number(row.requiredStoreAmount ?? row.actualReceivedAmount ?? 0);
     const stored   = Number(row.storedAmount ?? 0);
     const gap      = Math.max(0, required - stored);
@@ -141,7 +144,8 @@ const STATUS_META: Record<UiStatus, StatusMeta> = {
   in_progress:   { dot: 'bg-blue-400',    badge: 'bg-blue-50 text-blue-700 ring-blue-200',          label: 'In progress',     priority: 3 },
   not_started:   { dot: 'bg-slate-300',   badge: 'bg-slate-100 text-slate-500 ring-slate-200',      label: 'Not Started',     priority: 4 },
   completed:     { dot: 'bg-emerald-500', badge: 'bg-emerald-50 text-emerald-700 ring-emerald-200', label: 'Selesai',         priority: 5 },
-  no_data:       { dot: 'bg-slate-200',   badge: 'bg-slate-50 text-slate-400 ring-slate-200',       label: 'Tidak ada data',  priority: 6 },
+  no_setoran:    { dot: 'bg-slate-400',   badge: 'bg-slate-100 text-slate-600 ring-slate-200',      label: 'Tidak ada setoran', priority: 6 },
+  no_data:       { dot: 'bg-slate-200',   badge: 'bg-slate-50 text-slate-400 ring-slate-200',       label: 'Tidak ada data',  priority: 7 },
 };
 
 // ─── Lightbox ─────────────────────────────────────────────────────────────────
@@ -478,7 +482,8 @@ function StoreRow({
             {idr(row.storedAmount)}
           </p>
           <p className="text-[10px] text-slate-400">
-            {row.status === 'completed' ? 'disetor' :
+            {uiStatus === 'no_setoran' ? 'tidak ada setoran' :
+             row.status === 'completed' ? 'disetor' :
              row.status === 'in_progress' ? 'draft' : '—'}
           </p>
         </div>
@@ -794,6 +799,7 @@ export default function FinanceSetoranPage() {
             <option value="in_progress">In progress</option>
             <option value="not_started">Not Started</option>
             <option value="completed">Selesai</option>
+            <option value="no_setoran">Tidak ada setoran</option>
             <option value="no_data">Tidak ada data</option>
           </select>
 

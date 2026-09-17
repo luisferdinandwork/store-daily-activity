@@ -379,9 +379,17 @@ function preserveSetoranFieldActors(
 
 function validateSetoranPayload(input: SubmitSetoranInput): string | null {
   const actualReceived = parseAmount(input.actualReceivedAmount ?? input.expectedAmount);
-  if (actualReceived <= 0) return 'Nominal uang aktual diterima hari ini wajib diisi.';
-
   const stored = parseAmount(input.storedAmount ?? input.amount);
+
+  // "Tidak ada setoran" — uang diterima hari ini diisi 0. Tidak ada uang untuk
+  // disetor, jadi nominal disetor dan foto bukti tidak diwajibkan.
+  if (actualReceived === 0) {
+    if (stored > 0) {
+      return 'Uang aktual diterima 0, tapi ada nominal yang disetor. Isi uang aktual diterima jika memang ada setoran.';
+    }
+    return null;
+  }
+
   if (stored <= 0) return 'Nominal uang yang disetor/disimpan wajib diisi.';
 
   if (!input.resiPhoto?.trim()) return 'Foto resi wajib diupload.';
@@ -416,6 +424,7 @@ export async function submitSetoran(
     const previousUnpaid = parseAmount(await getPriorUnpaidForStore(existing.storeId, existing.date));
     const requiredStoreAmount = actualReceived + previousUnpaid;
     const stored = parseAmount(input.storedAmount ?? input.amount);
+    const isNoSetoran = actualReceived === 0;
 
     if (stored > requiredStoreAmount) {
       return {
@@ -426,6 +435,8 @@ export async function submitSetoran(
 
     const unpaid = Math.max(0, requiredStoreAmount - stored);
     const now = new Date();
+    const resiPhoto = isNoSetoran ? (input.resiPhoto?.trim() || null) : input.resiPhoto;
+    const atmCardSelfiePhoto = isNoSetoran ? (input.atmCardSelfiePhoto?.trim() || null) : input.atmCardSelfiePhoto;
 
     const [updated] = await db
       .update(setoranTasks)
@@ -439,8 +450,9 @@ export async function submitSetoran(
         carriedDeficit: money(previousUnpaid),
         carriedDeficitFetchedAt: now,
         unpaidAmount: money(unpaid),
-        resiPhoto: input.resiPhoto,
-        atmCardSelfiePhoto: input.atmCardSelfiePhoto,
+        isNoSetoran,
+        resiPhoto,
+        atmCardSelfiePhoto,
         notes: input.notes,
         ...preserveSetoranFieldActors(existing, input, now),
         completedBy: input.userId,
@@ -466,8 +478,9 @@ export async function submitSetoran(
         requiredStoreAmount: money(requiredStoreAmount),
         storedAmount: money(stored),
         unpaidAmount: money(unpaid),
-        resiPhoto: input.resiPhoto,
-        atmCardSelfiePhoto: input.atmCardSelfiePhoto,
+        isNoSetoran,
+        resiPhoto,
+        atmCardSelfiePhoto,
         notes: input.notes,
         actualReceivedAmountBy: updated.actualReceivedAmountBy,
         actualReceivedAmountAt: updated.actualReceivedAmountAt,
@@ -497,8 +510,9 @@ export async function submitSetoran(
           requiredStoreAmount: money(requiredStoreAmount),
           storedAmount: money(stored),
           unpaidAmount: money(unpaid),
-          resiPhoto: input.resiPhoto,
-          atmCardSelfiePhoto: input.atmCardSelfiePhoto,
+          isNoSetoran,
+          resiPhoto,
+          atmCardSelfiePhoto,
           notes: input.notes,
           actualReceivedAmountBy: updated.actualReceivedAmountBy,
           actualReceivedAmountAt: updated.actualReceivedAmountAt,

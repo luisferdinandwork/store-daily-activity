@@ -72,6 +72,8 @@ export interface SetoranStoreRow {
   storedAmount: string | null;
   /** From setoranMoneyStorage.unpaidAmount, falls back to task.unpaidAmount */
   unpaidAmount: string | null;
+  /** True when the store had no setoran at all that day (uang diterima = 0). */
+  isNoSetoran: boolean;
 
   /**
    * Carry-forward fetched directly via getPriorUnpaidForStore.
@@ -335,6 +337,7 @@ export async function GET(
       const requiredStoreAmount  = fmtMoney(storage?.requiredStoreAmount); // only in storage
       const storedAmount         = fmtMoney(storage?.storedAmount ?? task?.amount);
       const unpaidAmount         = fmtMoney(storage?.unpaidAmount ?? task?.unpaidAmount);
+      const isNoSetoran          = Boolean(storage?.isNoSetoran ?? task?.isNoSetoran);
 
       // Build transaction entries.
       // The current model writes one ledger row per submitted setoran.
@@ -343,7 +346,7 @@ export async function GET(
       if (storage) {
         transactions.push({
           id:                 storage.id,
-          description:        'Setoran harian',
+          description:        isNoSetoran ? 'Tidak ada setoran' : 'Setoran harian',
           submittedBy:        userName(storage.completedBy) ?? '—',
           submittedByUserId:  storage.completedBy ?? '',
           amount:             storage.storedAmount,
@@ -368,6 +371,7 @@ export async function GET(
         requiredStoreAmount,
         storedAmount,
         unpaidAmount,
+        isNoSetoran,
 
         priorCarryForward,
 

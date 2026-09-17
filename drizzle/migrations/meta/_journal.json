@@ -71,6 +71,13 @@
       "when": 1789377533552,
       "tag": "0009_minor_vermin",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1789617729696,
+      "tag": "0010_windy_boom_boom",
+      "breakpoints": true
     }
   ]
 }

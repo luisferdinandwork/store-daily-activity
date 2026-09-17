@@ -684,8 +684,15 @@ function SetoranDetail({ task }: { task: FlatTask }) {
   const requiredStore  = e.requiredStoreAmount;
   const stored         = e.storedAmount ?? e.amount;
   const unpaid         = e.unpaidAmount;
+  const isNoSetoran    = Boolean(e.isNoSetoran);
   return (
     <div>
+      {isNoSetoran && (
+        <div className="mb-2 flex items-center gap-1.5 rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-500">
+          <Wallet className="h-3.5 w-3.5" />
+          Tidak ada setoran hari ini
+        </div>
+      )}
       <div className="space-y-1 divide-y divide-slate-100">
         <InfoRow label="Uang aktual diterima" value={fmtAmount(actualReceived)} />
         {Number(previousUnpaid) > 0 && (
@@ -697,10 +704,16 @@ function SetoranDetail({ task }: { task: FlatTask }) {
           <InfoRow label="Kurang" value={<span className="font-bold text-amber-600">{fmtAmount(unpaid)}</span>} />
         )}
       </div>
-      <div className="mt-2 space-y-2">
-        <PhotoGrid label="Foto Resi" photos={e.resiPhoto} columns={2} emptyHint="Belum ada foto resi." />
-        <PhotoGrid label="Selfie + Kartu ATM" photos={e.atmCardSelfiePhoto} columns={2} />
-      </div>
+      {isNoSetoran ? (
+        <p className="mt-2 text-xs italic text-slate-400">
+          Foto bukti tidak diperlukan karena tidak ada setoran hari ini.
+        </p>
+      ) : (
+        <div className="mt-2 space-y-2">
+          <PhotoGrid label="Foto Resi" photos={e.resiPhoto} columns={2} emptyHint="Belum ada foto resi." />
+          <PhotoGrid label="Selfie + Kartu ATM" photos={e.atmCardSelfiePhoto} columns={2} />
+        </div>
+      )}
       <ActorFooter task={task} />
       <NotesBlock notes={task.notes} />
     </div>

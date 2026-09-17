@@ -182,6 +182,14 @@ export const setoranTasks = pgTable('setoran_tasks', {
   atmCardSelfiePhoto:      text('atm_card_selfie_photo'),
   unpaidAmount:            decimal('unpaid_amount',             { precision: 12, scale: 2 }).default('0').notNull(),
 
+  /**
+   * Set when the store genuinely had no setoran that day (uang diterima = 0).
+   * The task still completes normally with amount/unpaid = 0; resi + ATM
+   * selfie photos are not required in this case. Read by Ops/Finance/PIC to
+   * show "Tidak ada setoran" instead of treating it as missing evidence.
+   */
+  isNoSetoran:             boolean('is_no_setoran').default(false).notNull(),
+
   actualReceivedAmountBy: text('actual_received_amount_by').references(() => users.id),
   actualReceivedAmountAt: timestamp('actual_received_amount_at', { mode: 'date' }),
   storedAmountBy: text('stored_amount_by').references(() => users.id),
@@ -239,6 +247,9 @@ export const setoranMoneyStorage = pgTable('setoran_money_storage', {
 
   // requiredStoreAmount - storedAmount. This becomes the next morning carry-forward.
   unpaidAmount: decimal('unpaid_amount', { precision: 12, scale: 2 }).default('0').notNull(),
+
+  /** Mirrors setoranTasks.isNoSetoran at the time this ledger row was written. */
+  isNoSetoran: boolean('is_no_setoran').default(false).notNull(),
 
   resiPhoto: text('resi_photo'),
   atmCardSelfiePhoto: text('atm_card_selfie_photo'),

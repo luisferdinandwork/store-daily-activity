@@ -1,0 +1,2 @@
+ALTER TABLE "setoran_money_storage" ADD COLUMN "is_no_setoran" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+ALTER TABLE "setoran_tasks" ADD COLUMN "is_no_setoran" boolean DEFAULT false NOT NULL;
