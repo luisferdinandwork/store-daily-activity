@@ -308,6 +308,7 @@ function SetoranPageBody(props: BodyProps) {
   } = props;
 
   const [editOpen, setEditOpen] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   // ─── Autosave (no geo) ───────────────────────────────────────────────────
   const { status: saveStatus, lastSaved, save: rawAutoSave } = useAutoSave({
@@ -363,7 +364,11 @@ function SetoranPageBody(props: BodyProps) {
   }, [dis, autoSave, setResiPhoto, setAtmCardSelfiePhoto, setUploading, setSubmitError]);
 
   // ─── Submit (no geo) ─────────────────────────────────────────────────────
-  const handleSubmit = useCallback(async () => {
+  // Validates, then opens the confirmation modal — the actual network call
+  // happens in `doSubmit` once the employee confirms the values there. Every
+  // submission is reviewed this way; the "no setoran" case gets extra emphasis
+  // in the modal since it skips the usual deposit + photo evidence.
+  const handleSubmit = useCallback(() => {
     if (readonly) return;
     setSubmitError(null);
 
@@ -386,6 +391,13 @@ function SetoranPageBody(props: BodyProps) {
       }
     }
 
+    setConfirmOpen(true);
+  }, [
+    readonly, isNoSetoran, storedNumber, cashDrawerTotal, resiPhoto, atmCardSelfiePhoto,
+    setSubmitError,
+  ]);
+
+  const doSubmit = useCallback(async () => {
     setSubmitting(true);
     try {
       const res = await fetch('/api/employee/tasks/setoran', {
@@ -418,9 +430,10 @@ function SetoranPageBody(props: BodyProps) {
       toast.error(msg);
     } finally {
       setSubmitting(false);
+      setConfirmOpen(false);
     }
   }, [
-    readonly, storedNumber, cashDrawerTotal, resiPhoto, atmCardSelfiePhoto, isNoSetoran,
+    storedNumber, resiPhoto, atmCardSelfiePhoto,
     task, actualReceivedAmount, notes, router,
     setSubmitError, setSubmitting,
   ]);
@@ -624,6 +637,18 @@ function SetoranPageBody(props: BodyProps) {
           }}
         />
       )}
+
+      {confirmOpen && (
+        <ConfirmSubmitModal
+          isNoSetoran={isNoSetoran}
+          actualReceivedNumber={toNumber(actualReceivedAmount)}
+          storedNumber={storedNumber}
+          kurang={kurang}
+          submitting={submitting}
+          onCancel={() => setConfirmOpen(false)}
+          onConfirm={doSubmit}
+        />
+      )}
     </main>
   );
 }
@@ -777,6 +802,97 @@ function StoredAmountModal({
             className="flex-1 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground disabled:opacity-60"
           >
             Simpan
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Final review before the setoran actually gets submitted (locked afterwards).
+// Every submission passes through here so the employee can recheck the
+// numbers; the "no setoran" case gets an extra warning since it skips the
+// usual deposit + photo evidence.
+function ConfirmSubmitModal({
+  isNoSetoran, actualReceivedNumber, storedNumber, kurang, submitting, onCancel, onConfirm,
+}: {
+  isNoSetoran: boolean;
+  actualReceivedNumber: number;
+  storedNumber: number;
+  kurang: number;
+  submitting: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-end justify-center bg-black/60 sm:items-center"
+      onClick={() => { if (!submitting) onCancel(); }}
+      role="dialog"
+      aria-modal="true"
+    >
+      <div
+        className="relative mx-2 flex w-full flex-col rounded-t-3xl bg-background shadow-2xl sm:mb-0 sm:max-w-sm sm:rounded-3xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex justify-center pt-3 pb-1 sm:hidden" aria-hidden="true">
+          <div className="h-1 w-10 rounded-full bg-border" />
+        </div>
+
+        <div className="border-b border-border px-5 py-4">
+          <h3 className="text-base font-bold text-foreground">
+            {isNoSetoran ? 'Konfirmasi: Tidak Ada Setoran' : 'Konfirmasi Setoran'}
+          </h3>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Periksa lagi nominalnya sebelum submit — setoran tidak bisa diubah lagi setelah ini.
+          </p>
+        </div>
+
+        <div className="space-y-3 px-5 py-4">
+          {isNoSetoran && (
+            <div className="flex items-start gap-2.5 rounded-xl border border-amber-300 bg-amber-50 px-3.5 py-3">
+              <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
+              <p className="text-xs font-medium text-amber-800">
+                Uang aktual diterima diisi <span className="font-bold">Rp 0</span> — kamu akan submit
+                bahwa hari ini <span className="font-bold">tidak ada setoran sama sekali</span>, tanpa
+                foto resi maupun selfie ATM. Pastikan ini benar.
+              </p>
+            </div>
+          )}
+
+          <div className="space-y-1.5 rounded-xl bg-secondary px-3.5 py-3 text-sm">
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Uang aktual diterima</span>
+              <span className="font-bold tabular-nums text-foreground">{rupiah(actualReceivedNumber)}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Total wajib disetor</span>
+              <span className="font-bold tabular-nums text-foreground">{rupiah(storedNumber)}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Kurang</span>
+              <span className="font-bold tabular-nums text-foreground">{rupiah(kurang)}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex gap-2 border-t border-border px-5 pb-4 pt-3">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={submitting}
+            className="flex-1 rounded-xl border border-border bg-card px-4 py-3 text-sm font-semibold text-foreground disabled:opacity-60"
+          >
+            Periksa lagi
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={submitting}
+            className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground disabled:opacity-60"
+          >
+            {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            Ya, Submit
           </button>
         </div>
       </div>
