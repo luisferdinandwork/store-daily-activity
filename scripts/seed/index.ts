@@ -28,6 +28,8 @@ import { seedSchedules } from './schedules';
 import { seedTasks } from './tasks';
 import { seedAttendance } from './attendance';
 import { seedPettyCash } from './petty-cash';
+import { seedRosterDemo } from './roster-demo';
+import { seedRosterDemoPerformance } from './roster-demo-performance';
 
 type SeedStep = { name: string; run: () => Promise<void> };
 
@@ -40,6 +42,9 @@ type SeedStep = { name: string; run: () => Promise<void> };
 // of the schedule, which isn't part of the sheet. Re-enable them explicitly
 // when you want a fuller demo world:
 //   npm run db:seed -- --only=tasks,attendance
+// `roster-demo` is separate again: it only touches stores that have NO schedule
+// or attendance data yet (never FF001/FO001) — see scripts/seed/roster-demo.ts.
+// `roster-demo-performance` adds dummy monthly targets for stores that have none.
 const STEPS: SeedStep[] = [
   { name: 'setup', run: seedSetup },
   { name: 'bc-settings', run: seedBusinessCentralSettings },
@@ -53,6 +58,8 @@ const STEPS: SeedStep[] = [
 const OPTIONAL_STEPS: SeedStep[] = [
   { name: 'tasks', run: seedTasks },
   { name: 'attendance', run: seedAttendance },
+  { name: 'roster-demo', run: seedRosterDemo },
+  { name: 'roster-demo-performance', run: seedRosterDemoPerformance },
 ];
 
 const ALL_STEPS: SeedStep[] = [...STEPS, ...OPTIONAL_STEPS];

@@ -49,6 +49,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
+import { OpsList, OpsListRow, OpsListSkeleton } from '@/components/ops/layout/OpsList';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -350,60 +351,58 @@ function ViewPeriodTabs({ value, onChange }: { value: ViewPeriod; onChange: (per
   );
 }
 
-// ─── StoreCard ──────────────────────────────────────────────────────────────
+// ─── StoreListRow ───────────────────────────────────────────────────────────
 //
 // A store in the browsable directory — click to drill into its detail view.
-// Deliberately roomier than the old sidebar row so Ops can scan target +
-// roster status for a whole area at a glance.
+// One row per store, so Ops can scan target + roster status down the page.
 
-function StoreCard({ store, onOpen }: { store: StoreRow; onOpen: () => void }) {
+function StoreListRow({ store, onOpen }: { store: StoreRow; onOpen: () => void }) {
   const hasPlan = store.rollup.storeMonthlyTargetId != null;
   const hasIssue = store.rollup.rosterCount === 0;
   const pct = pctOf(store.rollup.storeActualSales, store.rollup.storeMonthlySalesTarget);
 
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="group flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:border-indigo-300 hover:shadow-md"
-    >
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-500 transition group-hover:bg-indigo-600 group-hover:text-white">
-          <Store className="h-4 w-4" />
+    <OpsListRow onClick={onOpen} className="hover:bg-indigo-50/30">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-500 transition group-hover:bg-indigo-600 group-hover:text-white">
+        <Store className="h-4 w-4" />
+      </div>
+
+      <div className="min-w-0 flex-1 basis-56">
+        <div className="flex items-center gap-1.5">
+          <p className="truncate text-sm font-bold text-slate-900">{store.name}</p>
+          {hasIssue && (
+            <span title="Belum ada karyawan di roster" className="shrink-0">
+              <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+            </span>
+          )}
         </div>
-        {hasIssue && (
-          <span title="Belum ada karyawan di roster">
-            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
+        <p className="truncate text-xs text-slate-400">
+          {store.address}
+          <span className="lg:hidden"> · {store.rollup.rosterCount} karyawan</span>
+        </p>
+        {!hasPlan && (
+          <span className="mt-1 inline-block rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-600">
+            Belum ada target
+          </span>
+        )}
+        {hasPlan && !store.rollup.actualsAvailable && (
+          <span className="mt-1 inline-block rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-bold text-slate-500">
+            Data aktual tidak tersedia
           </span>
         )}
       </div>
 
-      <div className="min-w-0">
-        <p className="truncate text-sm font-bold text-slate-900">{store.name}</p>
-        <p className="truncate text-xs text-slate-400">{store.address}</p>
-      </div>
+      <span className="hidden w-24 shrink-0 text-xs text-slate-500 lg:block">{store.rollup.rosterCount} karyawan</span>
 
-      <div className="flex items-center justify-between text-xs">
-        <span className="text-slate-500">{store.rollup.rosterCount} karyawan</span>
-        <span className="font-black tabular-nums text-slate-900">{fmtCurrencyCompact(store.rollup.storeActualSales)}</span>
-      </div>
-
-      <div className="space-y-1 border-t border-slate-100 pt-3">
-        <PctProgressBar pct={pct} size="md" />
+      <div className="shrink-0 text-left md:w-28 md:text-right">
+        <p className="text-sm font-black tabular-nums text-slate-900">{fmtCurrencyCompact(store.rollup.storeActualSales)}</p>
         <p className="text-[10px] text-slate-400">Target {fmtCurrencyCompact(store.rollup.storeMonthlySalesTarget)}/bln</p>
       </div>
 
-      {!hasPlan && (
-        <span className="inline-block w-fit rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-600">
-          Belum ada target
-        </span>
-      )}
-      {hasPlan && !store.rollup.actualsAvailable && (
-        <span className="inline-block w-fit rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-bold text-slate-500">
-          Data aktual tidak tersedia
-        </span>
-      )}
-    </button>
+      <div className="min-w-[8rem] flex-1 md:w-36 md:flex-none">
+        <PctProgressBar pct={pct} size="md" />
+      </div>
+    </OpsListRow>
   );
 }
 
@@ -426,11 +425,11 @@ function AreaSection({ areaName, stores, onSelectStore }: {
         <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-500">{stores.length} toko</span>
         <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold tabular-nums text-slate-500">{fmtCurrencyCompact(totals)}</span>
       </div>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+      <OpsList>
         {stores.map((store) => (
-          <StoreCard key={store.id} store={store} onOpen={() => onSelectStore(store.id)} />
+          <StoreListRow key={store.id} store={store} onOpen={() => onSelectStore(store.id)} />
         ))}
-      </div>
+      </OpsList>
     </section>
   );
 }
@@ -1474,11 +1473,7 @@ export default function PerformanceTargetsPage() {
             </div>
 
             {loadingOverview ? (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                {Array.from({ length: 8 }).map((_, i) => (
-                  <div key={i} className="h-32 animate-pulse rounded-2xl bg-slate-100" />
-                ))}
-              </div>
+              <OpsListSkeleton rows={8} />
             ) : filteredStores.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-10 text-center">
                 <p className="text-sm font-semibold text-slate-700">Tidak ada toko</p>
@@ -1491,11 +1486,11 @@ export default function PerformanceTargetsPage() {
                 ))}
               </div>
             ) : (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              <OpsList>
                 {filteredStores.map((store) => (
-                  <StoreCard key={store.id} store={store} onOpen={() => handleSelectStore(store.id)} />
+                  <StoreListRow key={store.id} store={store} onOpen={() => handleSelectStore(store.id)} />
                 ))}
-              </div>
+              </OpsList>
             )}
           </div>
         )}

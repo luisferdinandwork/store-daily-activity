@@ -282,7 +282,7 @@ export function ManageWorkspace({ data, onReload }: Props) {
                       </p>
                     </div>
                   ) : (
-                    <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                    <div className="flex flex-col gap-2">
                       {employeesInSelectedStore.map((e) => (
                         <EmployeeCard key={e.id} employee={e} onClick={() => setSelectedEmployee(e)} />
                       ))}

@@ -30,6 +30,7 @@ Guidance for AI assistants working in this repo. Keep this file short and curren
 - `lib/db/schema/*` — Drizzle tables. `lib/db/schema/index.ts` re-exports everything + a `schema` object.
 - `lib/db/utils/*` — per-task business logic (`briefing.ts`, `serah-terima.ts`, `store-opening.ts`, …). Task rows are created lazily via `getOrCreate*ForSchedule` when an employee opens the task — they don't all have to be pre-seeded.
 - `lib/*` — cross-cutting helpers (`schedule-utils.ts`, `shift-tasks.ts`, `schedule-import.ts`, `performance/target-utils.ts`).
+- `lib/user-import.ts` — IT Users bulk Excel import (`/it/users` → Import Excel). Reads the PRISM template **or** an HR roster (Employee No./Zona/Store Code/Organization Unit/Level/Status); unknown areas + stores are created (new stores default to the Daan Mogot placeholder location).
 - `components/<role>/...`, `components/ui/...`.
 - `scripts/seed/*` — the dev/staging seed (see below). `scripts/{generate,migrate,reset}.ts` wrap drizzle-kit.
 
@@ -49,6 +50,7 @@ Guidance for AI assistants working in this repo. Keep this file short and curren
 - Neon-HTTP-safe DB style (a holdover): avoid `db.transaction()`; prefer `onConflictDo*` + batched inserts over SELECT-then-INSERT; keep `IN (...)` lists well under the Postgres 65535-param limit.
 - Money is stored as integer Rupiah in `decimal`/`text` columns; format with `toLocaleString('id-ID')`.
 - User-facing strings are Indonesian. Server/log strings and code are English.
+- Ops pages that browse stores/orders/visits/issues use **list rows** (`components/ops/layout/OpsList.tsx`: `OpsList` + `OpsListRow`), not multi-column card grids. KPI tiles, calendars and form fields stay grids.
 - Route handlers return `{ success: boolean, ... }` JSON; utils return `{ success: true, data } | { success: false, error }`.
 
 ## Commands
@@ -71,6 +73,8 @@ Run seed/migrate/probe scripts as `npx dotenv -e .env.local -- tsx <file>` (`@/l
 ## Seed world
 
 `scripts/seed/dataset.ts` is the single source of truth. Default `npm run db:seed` builds: areas `DKI - BALI` + `DUMMY AREA`; stores `FF001` (Fisik Football - Daan Mogot, 10 staff), `FO001` (Factory Outlet-Daan Mogot, 3 staff), `DUMMY-001` (test store, own area/Ops); back-office accounts `OPS-HO-001`, `A11040401` (Indriawan, DKI-Bali Ops), `OPS-DUMMY-001`, `FIN-001`, `IT-001`, `AUDIT-001`. All passwords `password123`. Sep 2026 targets + schedules from the "Break down target sep 2026" sheets.
+
+Stores/users added later (e.g. via the IT Users import) get demo activity with `npm run db:seed -- --only=roster-demo` (`scripts/seed/roster-demo.ts`): this month's schedule for everyone, attendance + task progress for past days only. It only touches stores with **no** schedule/attendance data and never FF001/FO001; `ROSTER_DEMO_DRY=1` previews, `ROSTER_DEMO_ONLY=FF002,…` limits stores. `--only=roster-demo-performance` adds dummy monthly targets (sized from each store's real Business Central run-rate; actual sales are never stored locally — they're read live from BC by store code + NIK).
 
 ## Working notes
 

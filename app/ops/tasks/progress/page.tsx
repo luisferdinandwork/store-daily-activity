@@ -1,7 +1,7 @@
 'use client';
 // app/ops/tasks/progress/page.tsx
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import {
   AlertCircle,
   AlertTriangle,
@@ -12,12 +12,15 @@ import {
   History,
   Loader2,
   MapPin,
+  PanelLeftClose,
+  PanelLeftOpen,
   Search,
   Store,
   User,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import OpsPageHeader, { type Period } from '@/components/ops/layout/OpsPageHeader';
+import { OpsList, OpsListRow, OpsListSkeleton } from '@/components/ops/layout/OpsList';
 import {
   type FlatTask,
   type TaskStatus,
@@ -30,6 +33,41 @@ import {
   TaskDetailView,
   SerahTerimaPanel,
 } from './task-detail';
+
+// ─── Store/area list: minimize preference ─────────────────────────────────────
+//
+// Lets Ops hide the store & area list and give the whole width to one store's
+// tasks. Remembered per browser; read via useSyncExternalStore (localStorage is
+// external state) so the server-rendered pass never mismatches the client.
+
+const LIST_MINIMIZED_KEY = 'ops-task-progress:list-minimized';
+const listMinimizedListeners = new Set<() => void>();
+
+function readListMinimized(): boolean {
+  try {
+    return window.localStorage.getItem(LIST_MINIMIZED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function subscribeToListMinimized(listener: () => void) {
+  listMinimizedListeners.add(listener);
+  return () => { listMinimizedListeners.delete(listener); };
+}
+
+function useListMinimized() {
+  const minimized = useSyncExternalStore(subscribeToListMinimized, readListMinimized, () => false);
+  const setMinimized = useCallback((next: boolean) => {
+    try {
+      window.localStorage.setItem(LIST_MINIMIZED_KEY, next ? '1' : '0');
+    } catch {
+      // Non-critical — the list still toggles for this visit, it just won't be remembered.
+    }
+    for (const listener of listMinimizedListeners) listener();
+  }, []);
+  return [minimized, setMinimized] as const;
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -567,6 +605,59 @@ function AreaStoreGroup({
   );
 }
 
+// ─── StoreProgressRow ─────────────────────────────────────────────────────────
+//
+// One store in the area / weekly / monthly overview panels — a list row with the
+// store, its completion bar, task counts and any active / pending flags.
+
+function StoreProgressRow({ store, summary, onOpen }: {
+  store: StoreRow;
+  /** Undefined while a range summary hasn't loaded for this store. */
+  summary: StoreSummary | undefined;
+  onOpen: () => void;
+}) {
+  const rate       = summary?.completionRate ?? 0;
+  const inProgress = summary?.inProgress ?? 0;
+  const pending    = summary?.pending ?? 0;
+
+  return (
+    <OpsListRow onClick={onOpen} className="hover:bg-indigo-50/30">
+      <div className="order-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-500 transition group-hover:bg-indigo-100 group-hover:text-indigo-600">
+        <Store className="h-4 w-4" />
+      </div>
+
+      <div className="order-2 min-w-0 flex-1 basis-40">
+        <p className="truncate text-sm font-bold text-slate-900">{store.name}</p>
+        <p className="truncate text-[11px] text-slate-400">{store.address}</p>
+      </div>
+
+      <div className="order-4 min-w-[7rem] flex-1 md:w-36 md:flex-none">
+        <ProgressBar pct={rate} />
+      </div>
+
+      <div className="order-5 flex shrink-0 items-center justify-between gap-2 text-[11px] font-semibold md:w-36">
+        {summary ? (
+          <span className="text-slate-500">{summary.completed}/{summary.total} task</span>
+        ) : (
+          <span className="text-slate-300">—</span>
+        )}
+        <div className="flex items-center gap-2">
+          {inProgress > 0 && <span className="text-indigo-500">{inProgress} aktif</span>}
+          {pending > 0 && (
+            <span className="flex items-center gap-0.5 text-amber-600">
+              <AlertTriangle className="h-3 w-3" />{pending}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="order-3 shrink-0 md:order-6">
+        <ProgressRing pct={rate} size={36} stroke={3} />
+      </div>
+    </OpsListRow>
+  );
+}
+
 // ─── AreaGridPanel (daily HO right panel) ────────────────────────────────────
 
 function AreaGridPanel({ areaName, stores, onSelectStore }: {
@@ -611,40 +702,11 @@ function AreaGridPanel({ areaName, stores, onSelectStore }: {
         {stores.length === 0 ? (
           <div className="p-8 text-center text-sm text-slate-400">Tidak ada toko di area ini.</div>
         ) : (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {stores.map(store => {
-              const rate     = store.summary.completionRate;
-              const hasIssue = store.summary.pending > 0;
-              return (
-                <button key={store.id} type="button" onClick={() => onSelectStore(store.id)}
-                  className="group flex flex-col gap-2 rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-indigo-300 hover:shadow-sm"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500 group-hover:bg-indigo-100 group-hover:text-indigo-600">
-                        <Store className="h-4 w-4" />
-                      </div>
-                      <p className="truncate text-sm font-bold text-slate-900">{store.name}</p>
-                    </div>
-                    <ProgressRing pct={rate} size={36} stroke={3} />
-                  </div>
-                  <p className="truncate text-[11px] text-slate-400">{store.address}</p>
-                  <ProgressBar pct={rate} />
-                  <div className="flex items-center justify-between text-[11px] font-semibold">
-                    <span className="text-slate-500">{store.summary.completed}/{store.summary.total} task</span>
-                    <div className="flex items-center gap-2">
-                      {store.summary.inProgress > 0 && <span className="text-indigo-500">{store.summary.inProgress} aktif</span>}
-                      {hasIssue && (
-                        <span className="flex items-center gap-0.5 text-amber-600">
-                          <AlertTriangle className="h-3 w-3" />{store.summary.pending}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
+          <OpsList className="rounded-xl shadow-none">
+            {stores.map(store => (
+              <StoreProgressRow key={store.id} store={store} summary={store.summary} onOpen={() => onSelectStore(store.id)} />
+            ))}
+          </OpsList>
         )}
       </div>
     </article>
@@ -710,51 +772,15 @@ function RangeOverviewPanel({ stores, rangeOverviewMap, loading, periodLabel, ar
 
       <div className="flex-1 overflow-y-auto p-4">
         {loading ? (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-32 animate-pulse rounded-xl bg-slate-100" />)}
-          </div>
+          <OpsListSkeleton rows={6} />
         ) : stores.length === 0 ? (
           <div className="p-8 text-center text-sm text-slate-400">Tidak ada toko.</div>
         ) : (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {sorted.map(store => {
-              const summary  = rangeOverviewMap[store.id];
-              const rate     = summary?.completionRate ?? 0;
-              const hasIssue = (summary?.pending ?? 0) > 0;
-              return (
-                <button key={store.id} type="button" onClick={() => onSelectStore(store.id)}
-                  className="group flex flex-col gap-2 rounded-xl border border-slate-200 bg-white p-3 text-left transition hover:border-indigo-300 hover:shadow-sm"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500 group-hover:bg-indigo-100 group-hover:text-indigo-600">
-                        <Store className="h-4 w-4" />
-                      </div>
-                      <p className="truncate text-sm font-bold text-slate-900">{store.name}</p>
-                    </div>
-                    <ProgressRing pct={rate} size={36} stroke={3} />
-                  </div>
-                  <p className="truncate text-[11px] text-slate-400">{store.address}</p>
-                  <ProgressBar pct={rate} />
-                  <div className="flex items-center justify-between text-[11px] font-semibold">
-                    {summary ? (
-                      <span className="text-slate-500">{summary.completed}/{summary.total} task</span>
-                    ) : (
-                      <span className="text-slate-300">—</span>
-                    )}
-                    <div className="flex items-center gap-2">
-                      {(summary?.inProgress ?? 0) > 0 && <span className="text-indigo-500">{summary!.inProgress} aktif</span>}
-                      {hasIssue && (
-                        <span className="flex items-center gap-0.5 text-amber-600">
-                          <AlertTriangle className="h-3 w-3" />{summary!.pending}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
+          <OpsList className="rounded-xl shadow-none">
+            {sorted.map(store => (
+              <StoreProgressRow key={store.id} store={store} summary={rangeOverviewMap[store.id]} onOpen={() => onSelectStore(store.id)} />
+            ))}
+          </OpsList>
         )}
       </div>
     </article>
@@ -960,6 +986,7 @@ export default function OpsTaskProgressPage() {
   const [loadingDetail, setLoadingDetail]     = useState(false);
   const [loadingRange, setLoadingRange]       = useState(false);
   const [error, setError]                     = useState<string | null>(null);
+  const [listMinimized, setListMinimized]     = useListMinimized();
 
   const rangeDays = useMemo((): Date[] => {
     if (period === 'daily') return [];
@@ -1129,6 +1156,7 @@ export default function OpsTaskProgressPage() {
   const selectedAreaGroup = useMemo(() => groupedStores.find(g => g.areaId === selectedAreaId) ?? null, [groupedStores, selectedAreaId]);
 
   const headingScope = isHo ? 'All Areas' : (overview?.area?.name ?? 'Area');
+  const selectedStoreName = selectedStoreId ? (overview?.stores.find(s => s.id === selectedStoreId)?.name ?? null) : null;
 
   const headingRangeLabel = useMemo(() => {
     if (period === 'daily') return fmtDateLabel(date);
@@ -1214,15 +1242,43 @@ export default function OpsTaskProgressPage() {
           </div>
         )}
 
-        <div className="grid items-start gap-5 lg:grid-cols-[380px_1fr]">
+        <div className={cn('grid items-start gap-5', listMinimized ? 'lg:grid-cols-[52px_1fr]' : 'lg:grid-cols-[380px_1fr]')}>
+          {listMinimized ? (
+            <aside className="lg:sticky lg:top-[6.5rem]">
+              <button
+                type="button"
+                onClick={() => setListMinimized(false)}
+                aria-expanded={false}
+                aria-label="Tampilkan daftar toko dan area"
+                title="Tampilkan daftar toko & area"
+                className="flex w-full items-center gap-2.5 rounded-2xl border border-slate-200 bg-white px-3 py-2.5 text-left shadow-sm transition-colors hover:border-indigo-300 hover:bg-indigo-50/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200 lg:flex-col lg:gap-3 lg:px-0 lg:py-3"
+              >
+                <PanelLeftOpen className="h-4 w-4 shrink-0 text-slate-500" />
+                <span className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-600 lg:max-h-48 lg:flex-none lg:[writing-mode:vertical-rl]">
+                  {selectedStoreName ?? 'Daftar toko & area'}
+                </span>
+                <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-slate-500">{filteredStores.length}</span>
+              </button>
+            </aside>
+          ) : (
           <aside className="flex max-h-[calc(100vh-9rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm lg:sticky lg:top-[6.5rem]">
-            <div className="shrink-0 border-b border-slate-100 p-3">
-              <label className="relative block">
+            <div className="flex shrink-0 items-center gap-2 border-b border-slate-100 p-3">
+              <label className="relative block min-w-0 flex-1">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                 <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Cari toko…"
                   className="h-9 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3 text-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
                 />
               </label>
+              <button
+                type="button"
+                onClick={() => setListMinimized(true)}
+                aria-expanded={true}
+                aria-label="Sembunyikan daftar toko dan area"
+                title="Sembunyikan daftar"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-200 text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200"
+              >
+                <PanelLeftClose className="h-4 w-4" />
+              </button>
             </div>
 
             <div className="flex shrink-0 items-center gap-3 border-b border-slate-100 px-4 py-2">
@@ -1267,8 +1323,9 @@ export default function OpsTaskProgressPage() {
               }
             </div>
           </aside>
+          )}
 
-          <div className="lg:sticky lg:top-[6.5rem]">
+          <div className="min-w-0 lg:sticky lg:top-[6.5rem]">
             {renderRightPanel()}
           </div>
         </div>

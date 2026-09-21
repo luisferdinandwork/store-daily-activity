@@ -19,6 +19,7 @@ import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
+import { OpsList, OpsListRow } from '@/components/ops/layout/OpsList';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -274,21 +275,18 @@ function IssueDrawer({ issue, onClose, onAdvance, updating }: {
 
 function IssueRow({ issue, onClick }: { issue: OpsIssue; onClick: () => void }) {
   return (
-    <button
-      onClick={onClick}
-      className="group w-full rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition-all hover:border-indigo-200 hover:shadow-md"
-    >
-      <div className="mb-2 flex items-start justify-between gap-3">
-        <p className="line-clamp-1 text-sm font-bold leading-snug text-slate-800">{issue.title}</p>
-        <StatusBadge status={issue.status} />
+    <OpsListRow onClick={onClick} className="hover:bg-indigo-50/30">
+      <div className="min-w-0 flex-1 basis-64">
+        <p className="truncate text-sm font-bold leading-snug text-slate-800">{issue.title}</p>
+        <p className="mt-0.5 line-clamp-1 text-xs leading-relaxed text-slate-500">{issue.description}</p>
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-400">
+          <span className="flex items-center gap-1"><StoreIcon className="h-3 w-3" />{issue.store.name}</span>
+          <span className="flex items-center gap-1"><MapPin className="h-3 w-3" />{issue.store.areaName ?? 'Unknown'}</span>
+          <span className="flex items-center gap-1"><Clock className="h-3 w-3" />{relativeTime(issue.createdAt)}</span>
+        </div>
       </div>
-      <p className="mb-3 line-clamp-2 text-xs leading-relaxed text-slate-500">{issue.description}</p>
-      <div className="flex items-center gap-3 text-[11px] text-slate-400">
-        <span className="flex items-center gap-1"><StoreIcon className="h-3 w-3" />{issue.store.name}</span>
-        <span className="flex items-center gap-1"><MapPin className="h-3 w-3" />{issue.store.areaName ?? 'Unknown'}</span>
-        <span className="ml-auto flex items-center gap-1"><Clock className="h-3 w-3" />{relativeTime(issue.createdAt)}</span>
-      </div>
-    </button>
+      <StatusBadge status={issue.status} />
+    </OpsListRow>
   );
 }
 
@@ -502,11 +500,11 @@ export default function OpsIssuesPage() {
             </div>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+          <OpsList>
             {visible.map(issue => (
               <IssueRow key={issue.id} issue={issue} onClick={() => setSelected(issue)} />
             ))}
-          </div>
+          </OpsList>
         )}
       </div>
 

@@ -15,7 +15,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import type { UserImportReport } from '@/lib/user-import';
+import type { UserImportReport, ImportSheetInfo } from '@/lib/user-import';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -299,10 +299,16 @@ function ImportReviewSheet({ file, onClose, onImported }: { file: File; onClose:
   const [headerError, setHeaderError] = useState<string | null>(null);
   const [report, setReport] = useState<UserImportReport | null>(null);
   const [committed, setCommitted] = useState(false);
+  // A workbook can hold several roster sheets: `requestedSheet` is the admin's
+  // pick (undefined = let the server choose), `activeSheet` what it resolved to.
+  const [sheets, setSheets] = useState<ImportSheetInfo[]>([]);
+  const [requestedSheet, setRequestedSheet] = useState<string | undefined>(undefined);
+  const [activeSheet, setActiveSheet] = useState<string | undefined>(undefined);
 
-  const runImport = useCallback(async (commit: boolean) => {
+  const runImport = useCallback(async (commit: boolean, sheet: string | undefined) => {
     const form = new FormData();
     form.append('file', file);
+    if (sheet) form.append('sheet', sheet);
     if (commit) form.append('commit', 'true');
 
     const res = await fetch('/api/it/users/import', { method: 'POST', body: form });
@@ -310,27 +316,40 @@ function ImportReviewSheet({ file, onClose, onImported }: { file: File; onClose:
     if (!res.ok || !data.success) {
       throw new Error(data?.error ?? 'Import failed.');
     }
-    return data.report as UserImportReport;
+    return data as { report: UserImportReport; sheetName: string; sheets: ImportSheetInfo[] };
   }, [file]);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setHeaderError(null);
-    runImport(false)
-      .then((r) => { if (!cancelled) setReport(r); })
+    runImport(false, requestedSheet)
+      .then((d) => {
+        if (cancelled) return;
+        setReport(d.report);
+        setSheets(d.sheets);
+        setActiveSheet(d.sheetName);
+      })
       .catch((err) => { if (!cancelled) setHeaderError(err instanceof Error ? err.message : String(err)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [runImport]);
+  }, [runImport, requestedSheet]);
 
   async function handleConfirm() {
     setCommitting(true);
     try {
-      const r = await runImport(true);
+      const { report: r } = await runImport(true, activeSheet);
       setReport(r);
       setCommitted(true);
-      toast.success(`Imported: ${r.created} created, ${r.updated} updated.${r.failed ? ` ${r.failed} failed to write.` : ''}`);
+      const extras = [
+        r.areasCreated ? `${r.areasCreated} area${r.areasCreated !== 1 ? 's' : ''}` : '',
+        r.storesCreated ? `${r.storesCreated} store${r.storesCreated !== 1 ? 's' : ''}` : '',
+      ].filter(Boolean);
+      toast.success(
+        `Imported: ${r.created} created, ${r.updated} updated.`
+        + (extras.length ? ` Also created ${extras.join(' and ')}.` : '')
+        + (r.failed ? ` ${r.failed} failed to write.` : ''),
+      );
       onImported();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Import failed.');
@@ -341,7 +360,7 @@ function ImportReviewSheet({ file, onClose, onImported }: { file: File; onClose:
 
   return (
     <Sheet open onOpenChange={(o) => !o && onClose()}>
-      <SheetContent side="right" className="flex w-full flex-col sm:max-w-2xl">
+      <SheetContent side="right" className="flex w-full flex-col sm:max-w-3xl">
         <SheetHeader>
           <SheetTitle className="flex items-center gap-2">
             <FileSpreadsheet className="h-4 w-4 text-cyan-600" />
@@ -355,6 +374,22 @@ function ImportReviewSheet({ file, onClose, onImported }: { file: File; onClose:
         </SheetHeader>
 
         <div className="flex-1 space-y-3 overflow-y-auto px-4 pb-4">
+          {sheets.length > 1 && !committed && (
+            <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2">
+              <label htmlFor="import-sheet" className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Sheet</label>
+              <select
+                id="import-sheet"
+                value={activeSheet ?? ''}
+                disabled={loading || committing}
+                onChange={(e) => setRequestedSheet(e.target.value)}
+                className="h-8 min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+              >
+                {sheets.map((sh) => (
+                  <option key={sh.name} value={sh.name}>{sh.name} — {sh.rowCount} row{sh.rowCount !== 1 ? 's' : ''}</option>
+                ))}
+              </select>
+            </div>
+          )}
           {loading ? (
             <div className="flex items-center justify-center py-16"><Loader2 className="h-6 w-6 animate-spin text-cyan-500" /></div>
           ) : headerError ? (
@@ -363,7 +398,7 @@ function ImportReviewSheet({ file, onClose, onImported }: { file: File; onClose:
             </div>
           ) : report ? (
             <>
-              <div className="grid grid-cols-4 gap-2">
+              <div className="grid grid-cols-5 gap-2">
                 <div className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-center">
                   <p className="text-lg font-bold text-slate-900">{report.totalRows}</p>
                   <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Rows</p>
@@ -376,11 +411,47 @@ function ImportReviewSheet({ file, onClose, onImported }: { file: File; onClose:
                   <p className="text-lg font-bold text-sky-700">{committed ? report.updated : report.toUpdate}</p>
                   <p className="text-[10px] font-semibold uppercase tracking-wide text-sky-600">{committed ? 'Updated' : 'To update'}</p>
                 </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-center">
+                  <p className="text-lg font-bold text-slate-600">{report.unchanged}</p>
+                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Unchanged</p>
+                </div>
                 <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-center">
                   <p className="text-lg font-bold text-rose-700">{committed ? report.failed : report.invalid}</p>
                   <p className="text-[10px] font-semibold uppercase tracking-wide text-rose-600">{committed ? 'Failed' : 'Invalid'}</p>
                 </div>
               </div>
+
+              {(report.newAreas.length > 0 || report.newStores.length > 0) && (
+                <div className="space-y-2 rounded-xl border border-emerald-200 bg-emerald-50/60 px-4 py-3 text-xs">
+                  <p className="font-bold text-emerald-800">
+                    {committed ? 'Also created' : 'Will also create'}{' '}
+                    {committed ? report.areasCreated : report.newAreas.length} area{(committed ? report.areasCreated : report.newAreas.length) !== 1 ? 's' : ''} and{' '}
+                    {committed ? report.storesCreated : report.newStores.length} store{(committed ? report.storesCreated : report.newStores.length) !== 1 ? 's' : ''}
+                  </p>
+                  {report.newAreas.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {report.newAreas.map((a) => (
+                        <span key={a} className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">{a}</span>
+                      ))}
+                    </div>
+                  )}
+                  {report.newStores.length > 0 && (
+                    <ul className="max-h-32 space-y-0.5 overflow-y-auto text-slate-600">
+                      {report.newStores.map((st) => (
+                        <li key={st.storeNo}>
+                          <span className="font-mono font-semibold text-slate-700">{st.storeNo}</span> · {st.name}
+                          <span className="text-slate-400"> · {st.areaName}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {report.newStores.some((st) => st.defaultLocation) && (
+                    <p className="text-amber-700">
+                      Stores with no coordinates in the file are placed at the default placeholder location — set the real one in Store Management.
+                    </p>
+                  )}
+                </div>
+              )}
 
               <div className="overflow-hidden rounded-xl border border-slate-200">
                 <table className="w-full text-left text-xs">
@@ -403,16 +474,18 @@ function ImportReviewSheet({ file, onClose, onImported }: { file: File; onClose:
                           <span className={cn(
                             'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold',
                             r.status === 'error' ? 'bg-rose-100 text-rose-700'
-                              : r.action === 'create' ? 'bg-emerald-100 text-emerald-700' : 'bg-sky-100 text-sky-700',
+                              : r.action === 'create' ? 'bg-emerald-100 text-emerald-700'
+                              : r.action === 'update' ? 'bg-sky-100 text-sky-700' : 'bg-slate-100 text-slate-500',
                           )}>
                             {r.status === 'error' ? <AlertCircle className="h-3 w-3" /> : <CheckCircle2 className="h-3 w-3" />}
-                            {r.status === 'error' ? 'Error' : r.action === 'create' ? 'Create' : 'Update'}
+                            {r.status === 'error' ? 'Error' : r.action === 'create' ? 'Create' : r.action === 'update' ? 'Update' : 'Unchanged'}
                             {committed && r.status === 'ok' && (r.committed ? '' : ' · write failed')}
                           </span>
                         </td>
                         <td className="px-3 py-2">
                           {r.errors.map((e, i) => <p key={i} className="text-rose-600">{e}</p>)}
                           {r.warnings.map((w, i) => <p key={i} className="text-amber-600">{w}</p>)}
+                          {r.notes.map((n, i) => <p key={i} className="text-emerald-700">{n}</p>)}
                         </td>
                       </tr>
                     ))}

@@ -19,6 +19,7 @@ import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
+import { OpsList, OpsListRow } from '@/components/ops/layout/OpsList';
 import StorePickerCombobox, {
   type AreaGroupOption, type StoreOption,
 } from '@/components/ops/impact-visits/StorePickerCombobox';
@@ -435,28 +436,25 @@ function TransferRow({ transfer, onClick }: { transfer: Transfer; onClick: () =>
   const metrics = useMemo(() => buildMetrics(transfer), [transfer]);
 
   return (
-    <button
-      onClick={onClick}
-      className="group w-full rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition-all hover:border-indigo-200 hover:shadow-md"
-    >
-      <div className="mb-2 flex items-start justify-between gap-3">
-        <p className="font-mono text-sm font-bold leading-snug text-slate-800">{transfer.toaNo}</p>
-        <PhaseBadge phase={transfer.phase} />
-      </div>
-      <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
-        <StoreLabel store={transfer.fromStore} code={transfer.transferFromCode} isWarehouse={transfer.fromIsWarehouse} />
-        <span className="text-slate-300">→</span>
-        <StoreLabel store={transfer.toStore} code={transfer.transferToCode} isWarehouse={transfer.toIsWarehouse} />
-      </div>
-      <div className="flex items-center justify-between gap-2">
-        <span className="flex items-center gap-1 text-[11px] text-slate-400">
-          <Package className="h-3 w-3" />Qty {transfer.qtyOrdered}
-        </span>
-        <div className="flex items-center gap-1.5 text-[11px]">
-          {metrics.map((m) => <MetricPill key={m.key} metric={m} />)}
+    <OpsListRow onClick={onClick} className="hover:bg-indigo-50/30">
+      <div className="min-w-0 flex-1 basis-64">
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+          <p className="font-mono text-sm font-bold leading-snug text-slate-800">{transfer.toaNo}</p>
+          <PhaseBadge phase={transfer.phase} />
+        </div>
+        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
+          <StoreLabel store={transfer.fromStore} code={transfer.transferFromCode} isWarehouse={transfer.fromIsWarehouse} />
+          <span className="text-slate-300">→</span>
+          <StoreLabel store={transfer.toStore} code={transfer.transferToCode} isWarehouse={transfer.toIsWarehouse} />
         </div>
       </div>
-    </button>
+      <span className="flex w-20 shrink-0 items-center gap-1 text-[11px] text-slate-400">
+        <Package className="h-3 w-3" />Qty {transfer.qtyOrdered}
+      </span>
+      <div className="flex shrink-0 items-center gap-1.5 text-[11px]">
+        {metrics.map((m) => <MetricPill key={m.key} metric={m} />)}
+      </div>
+    </OpsListRow>
   );
 }
 
@@ -704,11 +702,11 @@ export default function OpsItemTransfersPage() {
             </div>
           </div>
         ) : (
-          <div className={cn('grid grid-cols-1 gap-3 lg:grid-cols-2')}>
+          <OpsList>
             {visible.map((t) => (
               <TransferRow key={t.id} transfer={t} onClick={() => setSelected(t)} />
             ))}
-          </div>
+          </OpsList>
         )}
       </div>
 

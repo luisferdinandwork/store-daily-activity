@@ -152,8 +152,8 @@ function MonitoringView({ groups, loading }: { groups: AreaGroup[]; loading: boo
 
   if (loading) {
     return (
-      <div className="grid gap-3 sm:grid-cols-2">
-        {Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-32 animate-pulse rounded-2xl bg-slate-100" />)}
+      <div className="flex flex-col gap-3">
+        {Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-24 animate-pulse rounded-2xl bg-slate-100" />)}
       </div>
     );
   }
@@ -169,7 +169,7 @@ function MonitoringView({ groups, loading }: { groups: AreaGroup[]; loading: boo
   }
 
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
+    <div className="flex flex-col gap-3">
       {rollups.map((a) => <AreaMonitorCard key={a.id} area={a} />)}
     </div>
   );

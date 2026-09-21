@@ -4,7 +4,8 @@
 // GET /api/it/users/template?mode=current → every existing user, prefilled
 //
 // Both produce the same "Users" sheet layout consumed by
-// POST /api/it/users/import (lib/user-import.ts), plus a "Reference" sheet
+// POST /api/it/users/import (lib/user-import.ts) — one column per
+// USER_IMPORT_COLUMNS entry flagged `inTemplate` — plus a "Reference" sheet
 // listing the valid Role Codes / Employee Type Codes / Store Nos / Area
 // Names live from the DB — this codebase never sets Excel in-cell data
 // validation (`!dataValidations`) anywhere, so a reference sheet + strict
@@ -17,7 +18,7 @@ import XlsxStyle from 'xlsx-js-style';
 import { db } from '@/lib/db';
 import { users, userRoles, employeeTypes, stores, areas } from '@/lib/db/schema';
 import { resolveItScope } from '@/lib/auth/it-scope';
-import { USER_IMPORT_COLUMNS } from '@/lib/user-import';
+import { USER_IMPORT_COLUMNS, EMP_TYPE_ROLE_CODE, DEFAULT_STORE_LOCATION, type UserImportColumnKey } from '@/lib/user-import';
 
 type Style = {
   font?: Record<string, unknown>;
@@ -48,13 +49,20 @@ const INSTRUCTION_STYLE: Style = { font: { name: 'Arial', sz: 8.5, italic: true,
 const EXAMPLE_STYLE: Style = { font: { ...FONT_BASE, italic: true, color: { rgb: '94A3B8' } }, fill: solid('F8FAFC'), alignment: LEFT, border: border() };
 const DATA_STYLE = (alt: boolean): Style => ({ font: { ...FONT_BASE, color: { rgb: '1E293B' } }, fill: solid(alt ? 'F8FAFC' : 'FFFFFF'), alignment: LEFT, border: border() });
 
+const TEMPLATE_COLUMNS = USER_IMPORT_COLUMNS.filter((c) => c.inTemplate);
+
 const INSTRUCTIONS = [
-  'Fill one row per user. Columns marked (required) must always be filled in. See the "Reference" sheet for valid codes/names.',
+  'Fill one row per user. NIK and Name are required; new users also need a Role Code. See the "Reference" sheet for valid codes/names.',
   'On UPDATE rows (NIK already exists): leave Role Code / Employee Type Code / Store No / Area Name blank to keep them unchanged.',
   'Type NONE in Store No or Area Name to clear an existing assignment. Password is optional on update (blank = keep current password).',
+  `Unknown Area Name or Store No are created on import. A new Store No needs Store Name + Area Name; Address and Latitude/Longitude/Geofence are optional (blank coordinates = ${DEFAULT_STORE_LOCATION.latitude}, ${DEFAULT_STORE_LOCATION.longitude}, ${DEFAULT_STORE_LOCATION.geofenceRadiusM} m). These store columns are ignored for stores that already exist.`,
+  'An HR roster (Employee No., Employee Name, Store Code, Organization Unit, ZONA, LEVEL, STATUS) can be uploaded as-is instead: LEVEL = PIC 1 / PIC 2 / SA / Area Manager / OPS HO, STATUS = AKTIF / Resign.',
 ];
 
-const COL_WIDTHS = [{ wch: 14 }, { wch: 22 }, { wch: 14 }, { wch: 18 }, { wch: 12 }, { wch: 16 }, { wch: 14 }, { wch: 9 }];
+const COL_WIDTH: Partial<Record<UserImportColumnKey, number>> = {
+  nik: 14, name: 22, roleCode: 14, employeeTypeCode: 18, storeNo: 12, storeName: 30, areaName: 22,
+  address: 26, latitude: 12, longitude: 12, geofenceRadiusM: 12, password: 14, active: 9,
+};
 
 export async function GET(req: NextRequest) {
   const scope = await resolveItScope();
@@ -78,7 +86,7 @@ export async function GET(req: NextRequest) {
 
   const ws: XlsxStyle.WorkSheet = {};
   const merges: XlsxStyle.Range[] = [];
-  const totalCols = USER_IMPORT_COLUMNS.length;
+  const totalCols = TEMPLATE_COLUMNS.length;
 
   // Title banner
   sc(ws, 0, 0, 'PRISM — Users Import Template', TITLE_STYLE);
@@ -97,7 +105,7 @@ export async function GET(req: NextRequest) {
 
   // Header
   const headerRow = row;
-  USER_IMPORT_COLUMNS.forEach((col, c) => sc(ws, headerRow, c, col.label, HEADER_STYLE));
+  TEMPLATE_COLUMNS.forEach((col, c) => sc(ws, headerRow, c, col.label, HEADER_STYLE));
   row++;
 
   if (mode === 'current') {
@@ -119,14 +127,15 @@ export async function GET(req: NextRequest) {
     userRows.forEach((u, idx) => {
       const r = row + idx;
       const style = DATA_STYLE(idx % 2 === 1);
-      sc(ws, r, 0, u.nik, style);
-      sc(ws, r, 1, u.name, style);
-      sc(ws, r, 2, u.roleCode, style);
-      sc(ws, r, 3, u.employeeTypeCode ?? '', style);
-      sc(ws, r, 4, u.storeNo ?? '', style);
-      sc(ws, r, 5, u.areaId != null ? (areaNameById.get(u.areaId) ?? '') : '', style);
-      sc(ws, r, 6, '', style);
-      sc(ws, r, 7, '', style);
+      const values: Partial<Record<UserImportColumnKey, string>> = {
+        nik: u.nik,
+        name: u.name,
+        roleCode: u.roleCode,
+        employeeTypeCode: u.employeeTypeCode ?? '',
+        storeNo: u.storeNo ?? '',
+        areaName: u.areaId != null ? (areaNameById.get(u.areaId) ?? '') : '',
+      };
+      TEMPLATE_COLUMNS.forEach((col, c) => sc(ws, r, c, values[col.key] ?? '', style));
     });
     row += userRows.length;
   } else {
@@ -136,20 +145,22 @@ export async function GET(req: NextRequest) {
     const exampleStore = storeRows[0];
     const exampleAreaName = exampleStore ? (areaNameById.get(exampleStore.areaId) ?? '') : (areaRows[0]?.name ?? '');
 
-    sc(ws, row, 0, 'EMP-0001', EXAMPLE_STYLE);
-    sc(ws, row, 1, 'Contoh Nama Karyawan', EXAMPLE_STYLE);
-    sc(ws, row, 2, exampleRole?.code ?? '', EXAMPLE_STYLE);
-    sc(ws, row, 3, exampleEmpType?.code ?? '', EXAMPLE_STYLE);
-    sc(ws, row, 4, exampleStore?.storeNo ?? '', EXAMPLE_STYLE);
-    sc(ws, row, 5, exampleAreaName, EXAMPLE_STYLE);
-    sc(ws, row, 6, '', EXAMPLE_STYLE);
-    sc(ws, row, 7, 'TRUE', EXAMPLE_STYLE);
+    const example: Partial<Record<UserImportColumnKey, string>> = {
+      nik: 'EMP-0001',
+      name: 'Contoh Nama Karyawan',
+      roleCode: exampleRole?.code ?? '',
+      employeeTypeCode: exampleEmpType?.code ?? '',
+      storeNo: exampleStore?.storeNo ?? '',
+      areaName: exampleAreaName,
+      active: 'TRUE',
+    };
+    TEMPLATE_COLUMNS.forEach((col, c) => sc(ws, row, c, example[col.key] ?? '', EXAMPLE_STYLE));
     row += 1;
   }
 
   ws['!ref'] = XlsxStyle.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: Math.max(row, headerRow + 1) - 1, c: totalCols - 1 } });
   ws['!merges'] = merges;
-  ws['!cols'] = COL_WIDTHS;
+  ws['!cols'] = TEMPLATE_COLUMNS.map((col) => ({ wch: COL_WIDTH[col.key] ?? 14 }));
   ws['!freeze'] = { xSplit: 0, ySplit: headerRow + 1, topLeftCell: `A${headerRow + 2}` };
 
   // ─── Reference sheet ────────────────────────────────────────────────────────
@@ -169,8 +180,7 @@ export async function GET(req: NextRequest) {
   rr++;
 
   sectionTitle('Employee Type Codes (with the role they belong to)');
-  const EMP_TYPE_ROLE: Record<string, string> = { pic_1: 'employee', pic_2: 'employee', sa: 'employee', ops_ho: 'ops', ops_area: 'ops' };
-  empTypeRows.forEach((t) => { sc(ref, rr, 0, t.code, DATA_STYLE(false)); sc(ref, rr, 1, t.label, DATA_STYLE(false)); sc(ref, rr, 2, EMP_TYPE_ROLE[t.code] ?? '', DATA_STYLE(false)); rr++; });
+  empTypeRows.forEach((t) => { sc(ref, rr, 0, t.code, DATA_STYLE(false)); sc(ref, rr, 1, t.label, DATA_STYLE(false)); sc(ref, rr, 2, EMP_TYPE_ROLE_CODE[t.code] ?? '', DATA_STYLE(false)); rr++; });
   rr++;
 
   sectionTitle('Store No (Store Name — Area)');

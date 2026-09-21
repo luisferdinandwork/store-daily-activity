@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
+import { OpsList, OpsListRow } from '@/components/ops/layout/OpsList';
 import StorePickerCombobox, {
   type AreaGroupOption,
 } from '@/components/ops/impact-visits/StorePickerCombobox';
@@ -293,39 +294,36 @@ export default function ImpactVisitsPage() {
             </div>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+          <OpsList>
             {visits.map((visit) => (
-              <button
+              <OpsListRow
                 key={visit.id}
                 onClick={() => router.push(`/ops/impact-visits/${visit.id}`)}
-                className="group flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition-all hover:border-indigo-200 hover:shadow-md"
+                className="hover:bg-indigo-50/30"
               >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
+                <div className="min-w-0 flex-1 basis-64">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                     <p className="truncate text-sm font-bold text-slate-800">{visit.store.name}</p>
-                    <p className="text-[11px] text-slate-400">{visit.store.storeNo}</p>
-                  </div>
-                  <div className="flex shrink-0 flex-col items-end gap-1">
                     <StatusPill status={visit.status} />
                     <VisitTypeBadge visitType={visit.visitType} />
                   </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-400">
+                    <span className="font-mono">{visit.store.storeNo}</span>
+                    {visit.areaName && <span className="flex items-center gap-1"><MapPin className="h-3 w-3" />{visit.areaName}</span>}
+                    {visit.visitorName && <span className="flex items-center gap-1"><User className="h-3 w-3" />{visit.visitorName}</span>}
+                    <span className="flex items-center gap-1"><Clock className="h-3 w-3" />{relativeTime(visit.visitDate)}</span>
+                  </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-1.5">
+                <div className="flex shrink-0 flex-wrap items-center gap-1.5">
                   <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Checklist</span>
                   <GradeChip grade={visit.checklistGrade} score={visit.checklistScore} max={visit.checklistMaxScore} />
-                  <span className="mx-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">VM</span>
+                  <span className="ml-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">VM</span>
                   <GradeChip grade={visit.vmChecklistGrade} score={visit.vmChecklistScore} max={visit.vmChecklistMaxScore} />
                 </div>
-
-                <div className="flex items-center gap-3 text-[11px] text-slate-400">
-                  {visit.areaName && <span className="flex items-center gap-1"><MapPin className="h-3 w-3" />{visit.areaName}</span>}
-                  {visit.visitorName && <span className="flex items-center gap-1"><User className="h-3 w-3" />{visit.visitorName}</span>}
-                  <span className="ml-auto flex items-center gap-1"><Clock className="h-3 w-3" />{relativeTime(visit.visitDate)}</span>
-                </div>
-              </button>
+              </OpsListRow>
             ))}
-          </div>
+          </OpsList>
         )}
       </div>
     </div>
