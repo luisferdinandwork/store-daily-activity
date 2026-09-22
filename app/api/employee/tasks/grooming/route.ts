@@ -89,7 +89,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(result, { status: result.success ? 200 : 400 });
   } catch (err) {
     console.error('[POST /api/employee/tasks/grooming]', err);
-    return NextResponse.json({ success: false, error: String(err) }, { status: 500 });
+    return NextResponse.json({ success: false, error: 'Internal server error' }, { status: 500 });
   }
 }
 
@@ -138,6 +138,6 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json(result, { status: result.success ? 200 : 400 });
   } catch (err) {
     console.error('[PATCH /api/employee/tasks/grooming]', err);
-    return NextResponse.json({ success: false, error: String(err) }, { status: 500 });
+    return NextResponse.json({ success: false, error: 'Internal server error' }, { status: 500 });
   }
 }

@@ -93,7 +93,7 @@ export async function DELETE(
     console.error('[DELETE /api/ops/schedules/[id]]', err);
 
     return NextResponse.json(
-      { success: false, error: String(err) },
+      { success: false, error: 'Internal server error' },
       { status: 500 },
     );
   }

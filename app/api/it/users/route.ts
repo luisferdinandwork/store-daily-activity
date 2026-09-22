@@ -6,6 +6,7 @@
 // POST — creates a new user account. IT-only.
 
 import { NextResponse } from 'next/server';
+import { validateNewPassword } from '@/lib/auth/password';
 import { asc, eq } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
 
@@ -110,8 +111,9 @@ export async function POST(req: Request) {
 
   if (!nik) return NextResponse.json({ success: false, error: 'NIK is required.' }, { status: 400 });
   if (!name) return NextResponse.json({ success: false, error: 'Name is required.' }, { status: 400 });
-  if (!password || password.length < 6) {
-    return NextResponse.json({ success: false, error: 'Password must be at least 6 characters.' }, { status: 400 });
+  const pwPolicy = validateNewPassword(password, { nik });
+  if (!pwPolicy.ok) {
+    return NextResponse.json({ success: false, error: pwPolicy.error }, { status: 400 });
   }
   if (!Number.isInteger(roleId) || roleId <= 0) {
     return NextResponse.json({ success: false, error: 'A role is required.' }, { status: 400 });

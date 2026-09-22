@@ -3,8 +3,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { uploadToStorage } from '@/lib/storage';
+import { sniffImageOf } from '@/lib/upload-validation';
 
 const ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
+const ALLOWED_EXTS = ['jpg', 'png', 'webp', 'heic', 'heif'] as const;
 const MAX_SIZE_MB = 10;
 
 type PhotoType =
@@ -120,21 +122,6 @@ const PHOTO_LIMITS: Record<PhotoType, number> = {
   z_report: 1,
 };
 
-function sanitizeExtension(fileName: string, mimeType: string): string {
-  const rawExt = fileName.split('.').pop()?.toLowerCase();
-
-  if (rawExt && /^[a-z0-9]+$/.test(rawExt)) {
-    return rawExt;
-  }
-
-  if (mimeType === 'image/png') return 'png';
-  if (mimeType === 'image/webp') return 'webp';
-  if (mimeType === 'image/heic') return 'heic';
-  if (mimeType === 'image/heif') return 'heif';
-
-  return 'jpg';
-}
-
 function normalizePhotoType(value: string): PhotoType | null {
   if (value in PHOTO_FOLDER) return value as PhotoType;
 
@@ -190,15 +177,24 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Trust the bytes, not the client: the stored extension and Content-Type come from the
+    // file signature (the declared type / filename are attacker-controlled).
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const sniffed = sniffImageOf(buffer, ALLOWED_EXTS);
+    if (!sniffed) {
+      return NextResponse.json(
+        { error: 'File is not a valid image (JPEG, PNG, WebP, HEIC)' },
+        { status: 400 },
+      );
+    }
+
     const folder = PHOTO_FOLDER[typedPhotoType];
     const timestamp = Date.now();
     const random = Math.random().toString(36).slice(2, 8);
-    const ext = sanitizeExtension(file.name, file.type);
-    const safeName = `${session.user.id}-${timestamp}-${random}.${ext}`;
+    const safeName = `${session.user.id}-${timestamp}-${random}.${sniffed.ext}`;
     const storagePath = `tasks/${folder}/${safeName}`;
 
-    const buffer = Buffer.from(await file.arrayBuffer());
-    const url = await uploadToStorage(buffer, storagePath, file.type);
+    const url = await uploadToStorage(buffer, storagePath, sniffed.mime);
 
     return NextResponse.json({
       url,

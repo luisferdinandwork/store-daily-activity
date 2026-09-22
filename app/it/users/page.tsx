@@ -77,8 +77,8 @@ function UserFormSheet({
 
     if (!name.trim()) { setError('Name is required.'); return; }
     if (mode === 'create' && !nik.trim()) { setError('NIK is required.'); return; }
-    if (mode === 'create' && (!password || password.length < 6)) {
-      setError('Password must be at least 6 characters.'); return;
+    if (mode === 'create' && (!password || password.length < 8)) {
+      setError('Password must be at least 8 characters.'); return;
     }
     if (!roleId) { setError('Role is required.'); return; }
 
@@ -169,7 +169,7 @@ function UserFormSheet({
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder={mode === 'create' ? 'Min. 6 characters' : 'Leave blank to keep current password'}
+              placeholder={mode === 'create' ? 'Min. 8 characters' : 'Leave blank to keep current password'}
               disabled={saving}
             />
           </div>

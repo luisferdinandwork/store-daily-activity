@@ -1,5 +1,6 @@
 // lib/auth.ts
 import { NextAuthOptions } from 'next-auth';
+import type { JWT } from 'next-auth/jwt';
 import CredentialsProvider from 'next-auth/providers/credentials';
 import { getServerSession } from 'next-auth/next';
 import { eq } from 'drizzle-orm';
@@ -8,8 +9,31 @@ import bcrypt from 'bcryptjs';
 
 import { db } from '@/lib/db';
 import { users, userRoles, employeeTypes } from '@/lib/db/schema';
+import {
+  clearLoginFailures,
+  clientIpFromHeaders,
+  isLoginBlocked,
+  recordLoginFailure,
+} from '@/lib/auth/rate-limit';
 
 const switchedFromRole = alias(userRoles, 'switched_from_role');
+
+/**
+ * A valid bcrypt hash of a random string. Compared against when the NIK doesn't
+ * exist so that "unknown NIK" and "wrong password" take the same time — otherwise
+ * response latency reveals which NIKs are real.
+ */
+const DUMMY_BCRYPT_HASH = '$2b$10$CwTycUXWue0Thq9StjUM0uJ8cIOBWjBHZpdmSGVsn0JZ6aJfL3YLu';
+
+/** bcrypt ignores everything past 72 bytes; refuse absurd inputs instead of hashing them. */
+const MAX_PASSWORD_LENGTH = 200;
+
+/**
+ * How long a session may keep trusting the role/active flags baked into its JWT
+ * before they are re-read from the DB. Bounds how long a deactivated, demoted or
+ * transferred user keeps stale access.
+ */
+const REVALIDATE_AFTER_MS = 30_000;
 
 /** Re-reads a user's current role/employeeType/switch state from the DB. */
 async function loadUserAuthFields(userId: string) {
@@ -19,6 +43,7 @@ async function loadUserAuthFields(userId: string) {
       nik: users.nik,
       name: users.name,
       avatarUrl: users.avatarUrl,
+      isActive: users.isActive,
 
       homeStoreId: users.homeStoreId,
       areaId: users.areaId,
@@ -49,11 +74,20 @@ async function loadUserAuthFields(userId: string) {
   const role = row.roleCode;
   const employeeType = row.employeeTypeCode ?? null;
 
+  // Same conditions authorize() enforces at login — applied again on every
+  // revalidation so a session can't outlive its account.
+  const eligible =
+    row.isActive &&
+    row.roleActive &&
+    !(row.employeeTypeId && !row.employeeTypeActive) &&
+    !(isOpsArea(role, employeeType) && !row.areaId);
+
   return {
     id: row.id,
     nik: row.nik,
     name: row.name,
     image: row.avatarUrl ?? null,
+    eligible,
 
     role,
     roleLabel: row.roleLabel,
@@ -74,6 +108,25 @@ async function loadUserAuthFields(userId: string) {
   };
 }
 
+type FreshAuthFields = NonNullable<Awaited<ReturnType<typeof loadUserAuthFields>>>;
+
+// Tiny per-process cache so a burst of parallel API calls from one page (each of
+// which runs the jwt callback) costs one lookup, not one per request.
+const FRESH_CACHE_TTL_MS = 15_000;
+const freshCache = new Map<string, { at: number; value: FreshAuthFields | null }>();
+
+async function loadFreshAuthFields(userId: string, force: boolean): Promise<FreshAuthFields | null> {
+  const now = Date.now();
+  const hit = freshCache.get(userId);
+  if (!force && hit && now - hit.at < FRESH_CACHE_TTL_MS) return hit.value;
+
+  const value = await loadUserAuthFields(userId);
+
+  if (freshCache.size > 5_000) freshCache.clear(); // hard bound; it's only a cache
+  freshCache.set(userId, { at: now, value });
+  return value;
+}
+
 const isDev = process.env.NODE_ENV === 'development';
 
 const log = (...args: unknown[]) => {
@@ -86,6 +139,45 @@ function normalizeNik(value: string): string {
 
 function hasAllStoreAccess(role: string | null | undefined, employeeType: string | null | undefined) {
   return role === 'it' || employeeType === 'ops_ho';
+}
+
+/** Copies the permission-bearing fields onto the JWT (shared by sign-in and revalidation). */
+function copyAuthFields(
+  token: JWT,
+  src: Pick<
+    FreshAuthFields,
+    | 'image'
+    | 'role'
+    | 'roleLabel'
+    | 'employeeType'
+    | 'employeeTypeLabel'
+    | 'homeStoreId'
+    | 'areaId'
+    | 'canViewAllStores'
+    | 'isOpsHo'
+    | 'isOpsArea'
+    | 'switchedFromRoleId'
+    | 'switchedFromRoleCode'
+    | 'switchedFromRoleLabel'
+  >,
+) {
+  token.picture = src.image ?? null;
+  token.role = src.role;
+  token.roleLabel = src.roleLabel;
+
+  token.employeeType = src.employeeType;
+  token.employeeTypeLabel = src.employeeTypeLabel;
+
+  token.homeStoreId = src.homeStoreId;
+  token.areaId = src.areaId;
+
+  token.canViewAllStores = src.canViewAllStores;
+  token.isOpsHo = src.isOpsHo;
+  token.isOpsArea = src.isOpsArea;
+
+  token.switchedFromRoleId = src.switchedFromRoleId;
+  token.switchedFromRoleCode = src.switchedFromRoleCode;
+  token.switchedFromRoleLabel = src.switchedFromRoleLabel;
 }
 
 function isOpsArea(role: string | null | undefined, employeeType: string | null | undefined) {
@@ -103,12 +195,24 @@ export const authOptions: NextAuthOptions = {
         password: { label: 'Password', type: 'password' },
       },
 
-      async authorize(credentials) {
+      async authorize(credentials, req) {
         try {
           const nik = credentials?.nik ? normalizeNik(credentials.nik) : '';
 
           if (!nik || !credentials?.password) {
             return null;
+          }
+
+          if (nik.length > 64 || credentials.password.length > MAX_PASSWORD_LENGTH) {
+            return null;
+          }
+
+          // Brute-force protection. Thrown (rather than `return null`) so the client
+          // can tell "locked out" apart from "wrong password" — see login-form.tsx.
+          const ip = clientIpFromHeaders(req?.headers as Record<string, unknown> | undefined);
+          if (isLoginBlocked(nik, ip)) {
+            console.warn(`[auth] login throttled for NIK ${nik} from ${ip}`);
+            throw new Error('TooManyAttempts');
           }
 
           const result = await db
@@ -144,32 +248,25 @@ export const authOptions: NextAuthOptions = {
             .where(eq(users.nik, nik))
             .limit(1);
 
-          if (!result.length) {
-            log('❌ No user found for NIK:', nik);
-            return null;
-          }
-
           const u = result[0];
 
-          if (!u.isActive) {
-            log('❌ User disabled for NIK:', nik);
-            return null;
-          }
+          // Always run exactly one bcrypt comparison — against a dummy hash when the NIK
+          // is unknown — and only then look at account state, so neither an unknown NIK
+          // nor a disabled account is distinguishable from a wrong password by timing.
+          const passwordOk = await bcrypt.compare(
+            credentials.password,
+            u?.password ?? DUMMY_BCRYPT_HASH,
+          );
 
-          if (!u.roleActive) {
-            log('❌ Role disabled for NIK:', nik);
-            return null;
-          }
-
-          if (u.employeeTypeId && !u.employeeTypeActive) {
-            log('❌ Employee type disabled for NIK:', nik);
-            return null;
-          }
-
-          const ok = await bcrypt.compare(credentials.password, u.password);
-
-          if (!ok) {
-            log('❌ Invalid password for NIK:', nik);
+          if (
+            !u ||
+            !passwordOk ||
+            !u.isActive ||
+            !u.roleActive ||
+            (u.employeeTypeId && !u.employeeTypeActive)
+          ) {
+            log('❌ Login rejected for NIK:', nik);
+            recordLoginFailure(nik, ip);
             return null;
           }
 
@@ -187,6 +284,7 @@ export const authOptions: NextAuthOptions = {
 
           const canViewAllStores = hasAllStoreAccess(role, employeeType);
 
+          clearLoginFailures(nik, ip);
           log('✅ Login OK for NIK:', nik);
 
           return {
@@ -213,6 +311,8 @@ export const authOptions: NextAuthOptions = {
             switchedFromRoleLabel: u.switchedFromRoleLabel ?? null,
           };
         } catch (error) {
+          // Surface the lockout to the client; every other failure looks like "bad credentials".
+          if (error instanceof Error && error.message === 'TooManyAttempts') throw error;
           console.error('💥 Authorization error:', error);
           return null;
         }
@@ -224,65 +324,59 @@ export const authOptions: NextAuthOptions = {
     strategy: 'jwt',
     // 15-minute idle timeout. The JWT expires 15 min after it was last
     // issued; an active client re-issues it (extending the window) via the
-    // SessionProvider's `refetchInterval` poll + refetch-on-focus, and
-    // `updateAge: 60` lets every such refetch actually roll the token
-    // forward. Once the client stops polling (tab hidden / user gone) the
-    // token lapses after 15 min. `components/idle-logout-watcher.tsx`
-    // enforces the same 15-minute idle cut-off on the client.
+    // SessionProvider's `refetchInterval` poll + refetch-on-focus (every
+    // /api/auth/session read re-encodes the JWT with a fresh expiry). Once the
+    // client stops polling (tab hidden / user gone) the token lapses after
+    // 15 min. `components/idle-logout-watcher.tsx` enforces the same 15-minute
+    // idle cut-off on the client. Because the window slides, the `jwt`
+    // callback below re-validates the account against the DB every
+    // REVALIDATE_AFTER_MS so a stolen/stale cookie can't outlive its account.
     maxAge: 15 * 60,
     updateAge: 60,
   },
 
   callbacks: {
     async jwt({ token, user, trigger }) {
+      // Sign-in: the user object was just built from a fresh DB read in authorize().
       if (user) {
         token.id = user.id;
         token.nik = user.nik;
-        token.picture = user.image ?? null;
-        token.role = user.role;
-        token.roleLabel = user.roleLabel;
-
-        token.employeeType = user.employeeType;
-        token.employeeTypeLabel = user.employeeTypeLabel;
-
-        token.homeStoreId = user.homeStoreId;
-        token.areaId = user.areaId;
-
-        token.canViewAllStores = user.canViewAllStores;
-        token.isOpsHo = user.isOpsHo;
-        token.isOpsArea = user.isOpsArea;
-
-        token.switchedFromRoleId = user.switchedFromRoleId;
-        token.switchedFromRoleCode = user.switchedFromRoleCode;
-        token.switchedFromRoleLabel = user.switchedFromRoleLabel;
+        copyAuthFields(token, user);
+        token.authCheckedAt = Date.now();
+        return token;
       }
 
-      // Triggered by the client calling useSession().update() — used by the
-      // IT role-switch feature to reflect a DB-side role change into the
-      // live session immediately, without a full logout/login.
-      if (trigger === 'update' && token.id) {
-        const fresh = await loadUserAuthFields(token.id as string);
-        if (fresh) {
-          token.picture = fresh.image ?? null;
-          token.role = fresh.role;
-          token.roleLabel = fresh.roleLabel;
+      // A token without an id can't be tied to an account.
+      if (!token.id) throw new Error('SessionRevoked');
 
-          token.employeeType = fresh.employeeType;
-          token.employeeTypeLabel = fresh.employeeTypeLabel;
+      // Re-validate against the DB when (a) the client called useSession().update() —
+      // used by the IT role-switch to reflect a DB-side role change immediately — or
+      // (b) the last check is older than REVALIDATE_AFTER_MS. This is what makes a
+      // deactivated / demoted / transferred user lose (or change) access promptly
+      // instead of keeping a rolling JWT alive indefinitely.
+      const forced = trigger === 'update';
+      const due =
+        forced ||
+        typeof token.authCheckedAt !== 'number' ||
+        Date.now() - token.authCheckedAt > REVALIDATE_AFTER_MS;
+      if (!due) return token;
 
-          token.homeStoreId = fresh.homeStoreId;
-          token.areaId = fresh.areaId;
-
-          token.canViewAllStores = fresh.canViewAllStores;
-          token.isOpsHo = fresh.isOpsHo;
-          token.isOpsArea = fresh.isOpsArea;
-
-          token.switchedFromRoleId = fresh.switchedFromRoleId;
-          token.switchedFromRoleCode = fresh.switchedFromRoleCode;
-          token.switchedFromRoleLabel = fresh.switchedFromRoleLabel;
-        }
+      let fresh: FreshAuthFields | null;
+      try {
+        fresh = await loadFreshAuthFields(token.id, forced);
+      } catch (err) {
+        // Database hiccup: don't sign every user out because Postgres blinked. Handlers
+        // that need the DB fail on their own; we simply retry on the next call.
+        console.error('[auth] session revalidation failed — keeping existing token:', err);
+        return token;
       }
 
+      // Throwing makes NextAuth return "no session" and clear the cookie on the next
+      // /api/auth/session poll. Both client and server code then see a signed-out user.
+      if (!fresh || !fresh.eligible) throw new Error('SessionRevoked');
+
+      copyAuthFields(token, fresh);
+      token.authCheckedAt = Date.now();
       return token;
     },
 

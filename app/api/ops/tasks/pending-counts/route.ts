@@ -79,7 +79,7 @@ export async function GET(req: NextRequest) {
     );
   } catch (error) {
     console.error('[PendingCounts] Failed to fetch:', error);
-    return NextResponse.json({ counts: {}, error: String(error) }, { status: 500 });
+    return NextResponse.json({ counts: {}, error: 'Internal server error' }, { status: 500 });
   }
 }
 

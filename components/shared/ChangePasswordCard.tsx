@@ -53,13 +53,13 @@ export default function ChangePasswordCard() {
 
   const canSubmit =
     currentPassword.length > 0 &&
-    newPassword.length >= 6 &&
+    newPassword.length >= 8 &&
     newPassword === confirmPassword;
 
   async function handleSubmit() {
     if (!canSubmit) {
-      if (newPassword.length > 0 && newPassword.length < 6) {
-        toast.error('Kata sandi baru minimal 6 karakter.');
+      if (newPassword.length > 0 && newPassword.length < 8) {
+        toast.error('Kata sandi baru minimal 8 karakter.');
       } else if (newPassword !== confirmPassword) {
         toast.error('Kata sandi baru dan konfirmasi tidak sama.');
       }
@@ -102,7 +102,7 @@ export default function ChangePasswordCard() {
 
       <div className="space-y-3">
         <PasswordField label="Kata Sandi Saat Ini" value={currentPassword} onChange={setCurrentPassword} />
-        <PasswordField label="Kata Sandi Baru" value={newPassword} onChange={setNewPassword} placeholder="Minimal 6 karakter" />
+        <PasswordField label="Kata Sandi Baru" value={newPassword} onChange={setNewPassword} placeholder="Minimal 8 karakter" />
         <PasswordField label="Konfirmasi Kata Sandi Baru" value={confirmPassword} onChange={setConfirmPassword} />
 
         <button

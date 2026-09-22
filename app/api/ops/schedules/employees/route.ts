@@ -125,7 +125,7 @@ export async function GET(req: NextRequest) {
     console.error('[GET /api/ops/schedules/employees]', err);
 
     return NextResponse.json(
-      { success: false, error: String(err) },
+      { success: false, error: 'Internal server error' },
       { status: 500 },
     );
   }

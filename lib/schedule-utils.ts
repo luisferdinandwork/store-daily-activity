@@ -358,6 +358,7 @@ export async function getStoresForOps(opsUserId: string): Promise<number[]> {
   const [opsUser] = await db
     .select({
       areaId: users.areaId,
+      isActive: users.isActive,
       roleCode: userRoles.code,
       employeeTypeCode: employeeTypes.code,
     })
@@ -367,7 +368,12 @@ export async function getStoresForOps(opsUserId: string): Promise<number[]> {
     .where(eq(users.id, opsUserId))
     .limit(1);
 
-  if (!opsUser) return [];
+  if (!opsUser || !opsUser.isActive) return [];
+
+  // OPS/IT only. Without this an ordinary employee — every employee carries an
+  // areaId — fell through to the area branch below and could read the attendance /
+  // schedule exports for every store in their area.
+  if (opsUser.roleCode !== "it" && opsUser.roleCode !== "ops") return [];
 
   /**
    * IT and OPS HO see every store (they're seeded with areaId = null,

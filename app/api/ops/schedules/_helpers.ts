@@ -1,14 +1,9 @@
 // app/api/ops/schedules/_helpers.ts
-import { and, asc, eq } from 'drizzle-orm';
+import { asc, eq } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
-import {
-  areas,
-  stores,
-  users,
-  userRoles,
-  employeeTypes,
-} from '@/lib/db/schema';
+import { areas, stores } from '@/lib/db/schema';
+import { loadOpsActor } from '@/lib/auth/ops-actor';
 
 export interface OpsActor {
   id: string;
@@ -19,44 +14,19 @@ export interface OpsActor {
 }
 
 /**
- * OPS schedule access:
- * - it role: all stores
- * - ops role: allowed
- * - employeeType ops_ho: all stores
- * - employeeType ops_area: stores inside their area only
- *
- * This intentionally does not require role === "ops" because your app stores
- * OPS access mainly through employeeType in several places.
+ * OPS schedule access — IT (all stores), OPS HO (all stores) or OPS Area (own area).
+ * Single implementation in lib/auth/ops-actor.ts; requires an ACTIVE user with role
+ * "ops" or "it" (the old copy here trusted employeeType alone and ignored isActive).
  */
 export async function getOpsActor(userId: string): Promise<OpsActor | null> {
-  const [row] = await db
-    .select({
-      id: users.id,
-      role: userRoles.code,
-      areaId: users.areaId,
-      employeeType: employeeTypes.code,
-    })
-    .from(users)
-    .leftJoin(userRoles, eq(users.roleId, userRoles.id))
-    .leftJoin(employeeTypes, eq(users.employeeTypeId, employeeTypes.id))
-    .where(eq(users.id, userId))
-    .limit(1);
-
-  if (!row) return null;
-
-  const isAdmin = row.role === 'it';
-  const isOpsRole = row.role === 'ops';
-  const isOpsArea = row.employeeType === 'ops_area';
-  const isOpsHO = row.employeeType === 'ops_ho';
-
-  if (!isAdmin && !isOpsRole && !isOpsArea && !isOpsHO) return null;
-
+  const actor = await loadOpsActor(userId);
+  if (!actor) return null;
   return {
-    id: row.id,
-    role: row.role ?? null,
-    employeeType: row.employeeType ?? null,
-    areaId: row.areaId ?? null,
-    isHO: isAdmin || isOpsHO,
+    id: actor.id,
+    role: actor.role,
+    employeeType: actor.employeeType,
+    areaId: actor.areaId,
+    isHO: actor.isHO,
   };
 }
 

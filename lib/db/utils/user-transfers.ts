@@ -24,6 +24,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import bcrypt from 'bcryptjs';
+import { validateNewPassword } from '@/lib/auth/password';
 import { db } from '@/lib/db';
 import {
   areas,
@@ -926,9 +927,8 @@ export async function createEmployee(
   const name = input.name.trim();
   if (!nik) return { success: false, error: 'NIK is required.' };
   if (!name) return { success: false, error: 'Name is required.' };
-  if (!input.password || input.password.length < 6) {
-    return { success: false, error: 'Password must be at least 6 characters.' };
-  }
+  const pwPolicy = validateNewPassword(input.password, { nik });
+  if (!pwPolicy.ok) return { success: false, error: pwPolicy.error };
 
   const [existing] = await db.select({ id: users.id }).from(users).where(eq(users.nik, nik)).limit(1);
   if (existing) return { success: false, error: 'A user with this NIK already exists.' };
@@ -1031,7 +1031,8 @@ export async function updateEmployeeBasics(
   }
 
   if (input.password !== undefined) {
-    if (input.password.length < 6) return { success: false, error: 'Password must be at least 6 characters.' };
+    const pwPolicy = validateNewPassword(input.password);
+    if (!pwPolicy.ok) return { success: false, error: pwPolicy.error };
     updates.password = await bcrypt.hash(input.password, SALT_ROUNDS);
     // Reset the 90-day password-policy clock — see lib/db/utils/password-policy.ts.
     updates.passwordChangedAt = new Date();

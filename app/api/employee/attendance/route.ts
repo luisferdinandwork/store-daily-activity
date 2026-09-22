@@ -417,7 +417,7 @@ export async function GET(_req: NextRequest) {
     console.error('[GET /api/employee/attendance]', err);
 
     return NextResponse.json(
-      { success: false, error: String(err) },
+      { success: false, error: 'Internal server error' },
       { status: 500 },
     );
   }
@@ -743,7 +743,7 @@ export async function POST(req: NextRequest) {
     console.error('[POST /api/employee/attendance]', err);
 
     return NextResponse.json(
-      { success: false, error: String(err) },
+      { success: false, error: 'Internal server error' },
       { status: 500 },
     );
   }

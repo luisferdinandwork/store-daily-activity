@@ -385,7 +385,7 @@ export async function GET(
   } catch (err) {
     console.error('[GET /api/finance/uang-modal]', err);
     return NextResponse.json(
-      { success: false, error: String(err) },
+      { success: false, error: 'Internal server error' },
       { status: 500 },
     );
   }

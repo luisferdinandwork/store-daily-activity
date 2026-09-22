@@ -15,6 +15,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveItScope } from '@/lib/auth/it-scope';
+import { validateSpreadsheetUpload } from '@/lib/upload-validation';
 import { parseUsersWorkbook, loadUserImportLookups, buildUserImportReport } from '@/lib/user-import';
 
 export async function POST(req: NextRequest) {
@@ -40,6 +41,10 @@ export async function POST(req: NextRequest) {
   }
 
   const buffer = await file.arrayBuffer();
+  const upload = validateSpreadsheetUpload(file, new Uint8Array(buffer));
+  if (!upload.ok) {
+    return NextResponse.json({ success: false, error: upload.error }, { status: upload.status });
+  }
 
   let parsed;
   try {

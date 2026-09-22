@@ -6,6 +6,7 @@ import { getStoresForOps }           from '@/lib/schedule-utils';
 import { db }                        from '@/lib/db';
 import { schedules, attendance, stores } from '@/lib/db/schema';
 import { eq, and, gte, lte, inArray } from 'drizzle-orm';
+import { getOpsActor } from '../../tasks/_helpers';
 
 function startOfDay(d: Date) { const r = new Date(d); r.setHours(0, 0, 0, 0);     return r; }
 function endOfDay(d: Date)   { const r = new Date(d); r.setHours(23, 59, 59, 999); return r; }
@@ -31,6 +32,12 @@ export async function GET(req: NextRequest) {
     }
 
     const userId  = (session.user as any).id as string;
+
+    const actor = await getOpsActor(userId);
+    if (!actor) {
+      return NextResponse.json({ success: false, error: 'OPS only.' }, { status: 403 });
+    }
+
     const dateStr = req.nextUrl.searchParams.get('date');
     if (!dateStr) {
       return NextResponse.json({ success: false, error: 'date is required' }, { status: 400 });
@@ -104,6 +111,6 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ success: true, data: [...summaryMap.values()] });
   } catch (err) {
     console.error('[GET /api/ops/attendance/overview]', err);
-    return NextResponse.json({ success: false, error: String(err) }, { status: 500 });
+    return NextResponse.json({ success: false, error: 'Internal server error' }, { status: 500 });
   }
 }

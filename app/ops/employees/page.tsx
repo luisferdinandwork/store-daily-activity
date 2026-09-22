@@ -116,7 +116,7 @@ function AddEmployeeDialog({
     }
   }, [open]);
 
-  const canSubmit = nik.trim() && name.trim() && password.length >= 6 && employeeTypeId && homeStoreId;
+  const canSubmit = nik.trim() && name.trim() && password.length >= 8 && employeeTypeId && homeStoreId;
 
   async function handleSubmit() {
     if (!canSubmit) return;
@@ -176,7 +176,7 @@ function AddEmployeeDialog({
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="Minimal 6 karakter"
+              placeholder="Minimal 8 karakter"
             />
           </div>
 

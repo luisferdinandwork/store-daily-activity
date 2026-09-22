@@ -1,12 +1,8 @@
 // app/api/ops/tasks/_helpers.ts
 import { db } from '@/lib/db';
-import {
-  users,
-  userRoles,
-  employeeTypes,
-  stores,
-} from '@/lib/db/schema';
-import { and, eq } from 'drizzle-orm';
+import { stores } from '@/lib/db/schema';
+import { loadOpsActor } from '@/lib/auth/ops-actor';
+import { eq } from 'drizzle-orm';
 
 export interface OpsActor {
   id: string;
@@ -17,43 +13,17 @@ export interface OpsActor {
   isOpsArea: boolean;
 }
 
+/** OPS actor lookup — single implementation in lib/auth/ops-actor.ts. */
 export async function getOpsActor(userId: string): Promise<OpsActor | null> {
-  const [row] = await db
-    .select({
-      id: users.id,
-      role: userRoles.code,
-      employeeType: employeeTypes.code,
-      areaId: users.areaId,
-    })
-    .from(users)
-    .leftJoin(userRoles, eq(users.roleId, userRoles.id))
-    .leftJoin(employeeTypes, eq(users.employeeTypeId, employeeTypes.id))
-    .where(and(eq(users.id, userId), eq(users.isActive, true)))
-    .limit(1);
-
-  if (!row) return null;
-
-  const isIt = row.role === 'it';
-
-  if (row.role !== 'ops' && !isIt) return null;
-
-  const isOpsHo = isIt || row.employeeType === 'ops_ho';
-  const isOpsArea = !isIt && row.employeeType === 'ops_area';
-
-  /**
-   * Only allow these 2 OPS types (IT counts as HO-equivalent).
-   * This prevents generic ops users or wrongly configured users
-   * from accessing the OPS task dashboard.
-   */
-  if (!isOpsHo && !isOpsArea) return null;
-
+  const actor = await loadOpsActor(userId);
+  if (!actor) return null;
   return {
-    id: row.id,
-    role: row.role,
-    employeeType: row.employeeType,
-    areaId: row.areaId,
-    isOpsHo,
-    isOpsArea,
+    id: actor.id,
+    role: actor.role,
+    employeeType: actor.employeeType,
+    areaId: actor.areaId,
+    isOpsHo: actor.isOpsHo,
+    isOpsArea: actor.isOpsArea,
   };
 }
 

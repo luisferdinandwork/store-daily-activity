@@ -1,13 +1,11 @@
 // app/pic/layout.tsx
 import { ReactNode } from 'react';
-import { getServerSession } from 'next-auth';
 import { redirect } from 'next/navigation';
-import { authOptions } from '@/lib/auth';
+import { requirePanel } from '@/lib/auth/guards';
 import PicShell from '@/components/pic/layout/PicShell';
 
 export default async function PicLayout({ children }: { children: ReactNode }) {
-  const session = await getServerSession(authOptions);
-  if (!session) redirect('/login');
+  const session = await requirePanel('/pic');
 
   const isPic =
     session.user.employeeType === 'pic_1' || session.user.employeeType === 'pic_2';

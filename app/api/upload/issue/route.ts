@@ -12,6 +12,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { uploadToStorage, storageObjectExists } from '@/lib/storage';
+import { sniffImage } from '@/lib/upload-validation';
+
+const MAX_FILE_BYTES = 10 * 1024 * 1024; // per image
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -33,29 +36,6 @@ function todayStr(): string {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
-}
-
-/** Extracts a safe file extension from a MIME type or original filename. */
-function safeExt(file: File): string {
-  const mimeMap: Record<string, string> = {
-    'image/jpeg': 'jpg',
-    'image/jpg':  'jpg',
-    'image/png':  'png',
-    'image/gif':  'gif',
-    'image/webp': 'webp',
-    'image/heic': 'heic',
-    'image/heif': 'heif',
-  };
-  const fromMime = mimeMap[file.type];
-  if (fromMime) return fromMime;
-
-  // Fallback: pull extension from original filename
-  const parts = file.name.split('.');
-  if (parts.length > 1) {
-    const ext = parts[parts.length - 1].toLowerCase();
-    if (/^[a-z0-9]{2,5}$/.test(ext)) return ext;
-  }
-  return 'jpg';
 }
 
 // ─── POST /api/upload/issue ───────────────────────────────────────────────────
@@ -85,14 +65,26 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Maximum 5 images per issue' }, { status: 400 });
     }
 
-    // Validate every file is an image
+    // Validate EVERYTHING before uploading anything, so a bad 3rd file can't leave the
+    // first two orphaned in the bucket. The stored extension / Content-Type come from
+    // the file signature — `file.type` and the filename are client-controlled.
+    const validated: { buffer: Buffer; ext: string; mime: string }[] = [];
     for (const file of files) {
-      if (!file.type.startsWith('image/')) {
+      if (file.size > MAX_FILE_BYTES) {
         return NextResponse.json(
-          { error: `${file.name} is not an image` },
+          { error: `${file.name} is too large (max 10MB).` },
+          { status: 413 },
+        );
+      }
+      const buffer = Buffer.from(await file.arrayBuffer());
+      const sniffed = sniffImage(buffer);
+      if (!sniffed) {
+        return NextResponse.json(
+          { error: `${file.name} is not a valid image` },
           { status: 415 },
         );
       }
+      validated.push({ buffer, ext: sniffed.ext, mime: sniffed.mime });
     }
 
     const titleSlug = slugify(title ?? 'issue');
@@ -101,15 +93,13 @@ export async function POST(req: NextRequest) {
 
     // ── Upload all files in parallel ──────────────────────────────────────────
     const urls = await Promise.all(
-      files.map(async (file, index) => {
-        const ext      = safeExt(file);
+      validated.map(async ({ buffer, ext, mime }, index) => {
         // Append 1-based index so concurrent files never collide on the same name
         const filename = `${titleSlug}_${storeSlug}_${date}_${index + 1}.${ext}`;
 
         const finalName = await resolveFilename('issue-report', filename);
-        const buffer    = Buffer.from(await file.arrayBuffer());
 
-        return uploadToStorage(buffer, `issue-report/${finalName}`, file.type);
+        return uploadToStorage(buffer, `issue-report/${finalName}`, mime);
       }),
     );
 

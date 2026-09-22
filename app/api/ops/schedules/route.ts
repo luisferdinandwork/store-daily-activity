@@ -69,7 +69,7 @@ export async function POST(req: NextRequest) {
     console.error('[POST /api/ops/schedules]', err);
 
     return NextResponse.json(
-      { success: false, error: String(err) },
+      { success: false, error: 'Internal server error' },
       { status: 500 },
     );
   }

@@ -119,8 +119,9 @@ export async function GET(_req: NextRequest) {
       employees: [...seen.values()],
     });
   } catch (err) {
+    console.error('[GET /api/pic/schedule/employees]', err);
     return NextResponse.json(
-      { success: false, error: String(err) },
+      { success: false, error: 'Internal server error' },
       { status: 500 },
     );
   }

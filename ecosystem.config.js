@@ -15,7 +15,10 @@ module.exports = {
       name: 'store-daily-task',
       // Call Next's binary directly — more reliable under PM2 than an npm script.
       script: 'node_modules/next/dist/bin/next',
-      args: 'start -p 3000',
+      // Bind to loopback only: nginx (127.0.0.1:3000 upstream) is the sole entry point, so
+      // nobody can reach the app directly on :3000 and spoof X-Real-IP / X-Forwarded-*, which
+      // the login throttle (lib/auth/rate-limit.ts) and proxy.ts rely on.
+      args: 'start -p 3000 -H 127.0.0.1',
       cwd: '/home/itdevs/daily-task-store',
 
       // Next's own server is single-process; run one instance in fork mode.

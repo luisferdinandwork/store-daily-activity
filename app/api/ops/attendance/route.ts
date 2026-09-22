@@ -195,7 +195,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ success: true, data: serialized, cashCount });
   } catch (err) {
     console.error('[GET /api/ops/attendance]', err);
-    return NextResponse.json({ success: false, error: String(err) }, { status: 500 });
+    return NextResponse.json({ success: false, error: 'Internal server error' }, { status: 500 });
   }
 }
 
@@ -203,11 +203,17 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session?.user) {
+    if (!session?.user?.id) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const { scheduleId, status, notes } = await req.json();
+    // OPS/IT only. (opsMarkAttendance re-checks store scope; this stops non-OPS roles at the door.)
+    const actor = await getOpsActor(session.user.id);
+    if (!actor) {
+      return NextResponse.json({ success: false, error: 'OPS only.' }, { status: 403 });
+    }
+
+    const { scheduleId, status, notes } = await req.json().catch(() => ({}));
 
     if (!scheduleId) {
       return NextResponse.json(
@@ -242,6 +248,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(result, { status: result.success ? 200 : 400 });
   } catch (err) {
     console.error('[POST /api/ops/attendance]', err);
-    return NextResponse.json({ success: false, error: String(err) }, { status: 500 });
+    return NextResponse.json({ success: false, error: 'Internal server error' }, { status: 500 });
   }
 }

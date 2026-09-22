@@ -68,10 +68,25 @@ export async function GET(
     return NextResponse.json({ success: false, error: 'Briefing task not found.' }, { status: 404 });
   }
 
-  const actorScheduleId =
-    (await resolveActorScheduleId(session.user.id, task.storeId, task.shiftId, task.date)) ?? task.scheduleId;
+  const actorScheduleId = await resolveActorScheduleId(
+    session.user.id,
+    task.storeId,
+    task.shiftId,
+    task.date,
+  );
 
-  return NextResponse.json({ success: true, task: serialize(task, actorScheduleId) });
+  // Ownership: the caller must be scheduled at this task's store/shift, belong to the
+  // store, or be IT/OPS. Previously any signed-in user could read any store's task by id.
+  const role = session.user.role;
+  const isStaffOfStore = session.user.homeStoreId === task.storeId;
+  if (actorScheduleId == null && !isStaffOfStore && role !== 'it' && role !== 'ops') {
+    return NextResponse.json({ success: false, error: 'Briefing task not found.' }, { status: 404 });
+  }
+
+  return NextResponse.json({
+    success: true,
+    task: serialize(task, actorScheduleId ?? task.scheduleId),
+  });
 }
 
 export async function POST(
@@ -114,8 +129,21 @@ export async function POST(
     );
   }
 
-  const actorScheduleId =
-    (await resolveActorScheduleId(session.user.id, task.storeId, task.shiftId, task.date)) ?? task.scheduleId;
+  // The acting employee must have their OWN schedule for this store/shift. The old
+  // `?? task.scheduleId` fallback let anyone complete a briefing against another
+  // employee's schedule (and ride on its attendance gate).
+  const actorScheduleId = await resolveActorScheduleId(
+    session.user.id,
+    task.storeId,
+    task.shiftId,
+    task.date,
+  );
+  if (actorScheduleId == null) {
+    return NextResponse.json(
+      { success: false, error: 'Anda tidak dijadwalkan pada shift ini di toko tersebut.' },
+      { status: 403 },
+    );
+  }
 
   const result = await submitBriefing({
     taskId: id,

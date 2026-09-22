@@ -6,10 +6,10 @@
 // Requires the task to be in 'completed' status and not already verified.
 
 import { NextResponse } from 'next/server';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { setoranTasks } from '@/lib/db/schema';
-import { auth } from '@/lib/auth';
+import { resolveFinanceScope } from '@/lib/finance/scope';
 
 export async function POST(
   request: Request,
@@ -17,11 +17,13 @@ export async function POST(
   { params }: { params: Promise<{ taskId: string }> },
 ) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
+    // Finance/IT only. This used to accept ANY signed-in user, so a store employee
+    // could mark their own store's deposit as verified by Finance.
+    const scope = await resolveFinanceScope();
+    if (!scope.ok) {
       return NextResponse.json(
-        { success: false, error: 'Unauthorized.' },
-        { status: 401 },
+        { success: false, error: scope.error },
+        { status: scope.status },
       );
     }
 
@@ -63,21 +65,35 @@ export async function POST(
 
     const now = new Date();
 
+    // Conditional update: two reviewers clicking at once can't both "win".
     const [updated] = await db
       .update(setoranTasks)
       .set({
-        verifiedBy: session.user.id,
+        verifiedBy: scope.userId,
         verifiedAt: now,
         updatedAt:  now,
       })
-      .where(eq(setoranTasks.id, taskId))
+      .where(
+        and(
+          eq(setoranTasks.id, taskId),
+          eq(setoranTasks.status, 'completed'),
+          isNull(setoranTasks.verifiedAt),
+        ),
+      )
       .returning();
+
+    if (!updated) {
+      return NextResponse.json({
+        success: false,
+        error: 'Setoran ini sudah diverifikasi sebelumnya.',
+      });
+    }
 
     return NextResponse.json({ success: true, data: updated });
   } catch (err) {
     console.error('[POST /api/finance/setoran/[taskId]/verify]', err);
     return NextResponse.json(
-      { success: false, error: String(err) },
+      { success: false, error: 'Internal server error' },
       { status: 500 },
     );
   }

@@ -12,6 +12,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { uploadToStorage, storageObjectExists } from '@/lib/storage';
+import { validateImageOrDocument } from '@/lib/upload-validation';
 
 const MIME_EXT: Record<string, string> = {
   'image/jpeg': 'jpg',
@@ -38,18 +39,6 @@ function slugify(str: string): string {
     .slice(0, 60);
 }
 
-function safeExt(file: File): string {
-  const fromMime = MIME_EXT[file.type];
-  if (fromMime) return fromMime;
-
-  const parts = file.name.split('.');
-  if (parts.length > 1) {
-    const ext = parts[parts.length - 1].toLowerCase();
-    if (/^[a-z0-9]{2,5}$/.test(ext)) return ext;
-  }
-  return 'bin';
-}
-
 async function resolveFilename(prefix: string, filename: string): Promise<string> {
   const dot  = filename.lastIndexOf('.');
   const base = dot !== -1 ? filename.slice(0, dot) : filename;
@@ -73,6 +62,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    // Same rule as POST /api/ops/manuals (requireManualsManager): IT or OPS HO. This
+    // route previously accepted ANY signed-in user, i.e. an open write into the
+    // public manuals/ folder of the bucket.
+    const canManageManuals =
+      session.user.role === 'it' || session.user.employeeType === 'ops_ho';
+    if (!canManageManuals) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+
     const form = await req.formData();
     const file = form.get('file') as File | null;
     const title = form.get('title') as string | null;
@@ -91,14 +89,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'File is too large (max 15MB).' }, { status: 413 });
     }
 
-    const ext      = safeExt(file);
-    const slug     = slugify(title ?? file.name.replace(/\.[^.]+$/, ''));
-    const filename = await resolveFilename('manuals', `${slug}.${ext}`);
-
+    // The bytes must match the declared type; extension + Content-Type come from that check.
     const buffer = Buffer.from(await file.arrayBuffer());
-    const url = await uploadToStorage(buffer, `manuals/${filename}`, file.type);
+    const checked = validateImageOrDocument(buffer, file.type);
+    if (!checked) {
+      return NextResponse.json(
+        { error: 'File content does not match its type.' },
+        { status: 415 },
+      );
+    }
 
-    return NextResponse.json({ url, fileType: ext }, { status: 201 });
+    const slug     = slugify(title ?? file.name.replace(/\.[^.]+$/, ''));
+    const filename = await resolveFilename('manuals', `${slug}.${checked.ext}`);
+    const url = await uploadToStorage(buffer, `manuals/${filename}`, checked.mime);
+
+    return NextResponse.json({ url, fileType: checked.ext }, { status: 201 });
 
   } catch (err) {
     console.error('[POST /api/upload/manual]', err);

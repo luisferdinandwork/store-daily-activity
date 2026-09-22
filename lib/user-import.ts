@@ -33,6 +33,7 @@
 // anything is written), once with commit:true (the confirmed import).
 
 import * as XLSX from 'xlsx';
+import { validateNewPassword } from '@/lib/auth/password';
 import bcrypt from 'bcryptjs';
 import { asc, eq } from 'drizzle-orm';
 
@@ -674,8 +675,9 @@ export async function buildUserImportReport(
     const passwordRaw = raw_.password.trim();
     let passwordToSet: string | undefined;
     if (passwordRaw) {
-      if (passwordRaw.length < 6) {
-        errors.push('Password must be at least 6 characters.');
+      const pwPolicy = validateNewPassword(passwordRaw);
+      if (!pwPolicy.ok) {
+        errors.push(pwPolicy.error);
       } else {
         passwordToSet = passwordRaw;
       }

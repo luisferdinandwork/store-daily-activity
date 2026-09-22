@@ -23,6 +23,7 @@ import {
 } from '@/lib/db/schema';
 import { shifts } from '@/lib/db/schema/lookups';
 import { getPriorUnpaidForStore } from '@/lib/db/utils/setoran';
+import { resolveFinanceScope } from '@/lib/finance/scope';
 
 // ─── Public response types ────────────────────────────────────────────────────
 //
@@ -145,6 +146,16 @@ export async function GET(
   request: Request,
 ): Promise<NextResponse<SetoranDayResponse | SetoranErrorResponse>> {
   try {
+    // Finance/IT only — this response carries every store's money figures, staff
+    // names/ids and the ATM-card-selfie / receipt photo URLs.
+    const scope = await resolveFinanceScope();
+    if (!scope.ok) {
+      return NextResponse.json(
+        { success: false, error: scope.error },
+        { status: scope.status },
+      );
+    }
+
     const { searchParams } = new URL(request.url);
     const dateParam = searchParams.get('date');
 
@@ -417,7 +428,7 @@ export async function GET(
   } catch (err) {
     console.error('[GET /api/finance/setoran]', err);
     return NextResponse.json(
-      { success: false, error: String(err) },
+      { success: false, error: 'Internal server error' },
       { status: 500 },
     );
   }

@@ -259,8 +259,8 @@ function EditForm({
       toast.error('Nama tidak boleh kosong.');
       return;
     }
-    if (newPassword && newPassword.length < 6) {
-      toast.error('Password baru minimal 6 karakter.');
+    if (newPassword && newPassword.length < 8) {
+      toast.error('Password baru minimal 8 karakter.');
       return;
     }
 

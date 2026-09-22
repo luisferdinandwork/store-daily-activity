@@ -8,6 +8,7 @@ import {
 } from '@/lib/db/schema';
 import { eq, and, gte, lte, inArray } from 'drizzle-orm';
 import { getStoresForOps }            from '@/lib/schedule-utils';
+import { getOpsActor }               from '../../tasks/_helpers';
 import * as XLSX                      from 'xlsx';
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
@@ -307,6 +308,11 @@ export async function GET(request: NextRequest) {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const actor = await getOpsActor(session.user.id);
+    if (!actor) {
+      return NextResponse.json({ error: 'OPS only.' }, { status: 403 });
     }
 
     const { searchParams } = new URL(request.url);

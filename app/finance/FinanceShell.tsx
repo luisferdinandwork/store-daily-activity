@@ -1,0 +1,46 @@
+'use client';
+// app/finance/FinanceShell.tsx (client chrome; the server gate is app/finance/layout.tsx)
+//
+// Finance panel layout.
+// Mirrors app/ops/layout.tsx: shared collapsed state wires
+// FinanceSidebar ↔ FinanceNavbar so they stay in sync.
+
+import { ReactNode, useState } from 'react';
+import { useSession } from 'next-auth/react';
+import FinanceSidebar from '@/components/finance/layout/FinanceSidebar';
+import FinanceNavbar  from '@/components/finance/layout/FinanceNavbar';
+import RoleSwitchBanner from '@/components/shared/RoleSwitchBanner';
+import PasswordExpiryBanner from '@/components/shared/PasswordExpiryBanner';
+import AccountNotificationBell from '@/components/shared/AccountNotificationBell';
+import HeaderProfileButton from '@/components/shared/HeaderProfileButton';
+
+export default function FinanceShell({ children }: { children: ReactNode }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const { data: session } = useSession();
+
+  return (
+    <div className="flex h-screen overflow-hidden bg-background">
+      <FinanceSidebar
+        collapsed={collapsed}
+        userName={(session?.user?.name) ?? 'Finance'}
+      />
+      <div className="flex flex-1 flex-col overflow-hidden">
+        <RoleSwitchBanner />
+        <PasswordExpiryBanner />
+        <FinanceNavbar
+          collapsed={collapsed}
+          onToggle={() => setCollapsed((v) => !v)}
+          right={
+            <div className="flex items-center gap-1.5">
+              <AccountNotificationBell />
+              <HeaderProfileButton />
+            </div>
+          }
+        />
+        <main className="flex-1 overflow-y-auto">
+          {children}
+        </main>
+      </div>
+    </div>
+  );
+}

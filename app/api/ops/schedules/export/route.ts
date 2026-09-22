@@ -25,6 +25,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession }          from 'next-auth';
 import { authOptions }               from '@/lib/auth';
+import { getOpsActor }               from '../../tasks/_helpers';
 import { db }                        from '@/lib/db';
 import {
   monthlySchedules, monthlyScheduleEntries,
@@ -157,6 +158,11 @@ export async function GET(request: NextRequest) {
     const session = await getServerSession(authOptions);
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const actor = await getOpsActor(session.user.id);
+    if (!actor) {
+      return NextResponse.json({ error: 'OPS only.' }, { status: 403 });
     }
 
     const { searchParams } = new URL(request.url);

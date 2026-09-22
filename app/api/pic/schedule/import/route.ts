@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession }          from 'next-auth';
 import { authOptions }               from '@/lib/auth';
+import { validateSpreadsheetUpload } from '@/lib/upload-validation';
 import {
   parseScheduleBuffer,
   importScheduleFromParsed,
@@ -59,6 +60,10 @@ export async function POST(req: NextRequest) {
     }
 
     const buffer = await file.arrayBuffer();
+    const upload = validateSpreadsheetUpload(file, new Uint8Array(buffer));
+    if (!upload.ok) {
+      return NextResponse.json({ success: false, error: upload.error }, { status: upload.status });
+    }
 
     let parsed;
     try {

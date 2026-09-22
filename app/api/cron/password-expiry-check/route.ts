@@ -6,16 +6,15 @@
 // blocked — this is a nudge only. See lib/db/utils/password-policy.ts.
 
 import { NextResponse } from 'next/server';
+import { verifyCronRequest } from '@/lib/auth/cron';
 import { notifyUsersWithExpiredPasswords } from '@/lib/db/utils/password-policy';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: Request) {
-  // Vercel Cron / the self-hosted crontab send `Authorization: Bearer <CRON_SECRET>`.
-  const auth = req.headers.get('authorization');
-  if (process.env.CRON_SECRET && auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  }
+  // Fails closed when CRON_SECRET is unset in production (lib/auth/cron.ts).
+  const denied = verifyCronRequest(req);
+  if (denied) return denied;
 
   const result = await notifyUsersWithExpiredPasswords();
   return NextResponse.json(result); // { notified, overdue }

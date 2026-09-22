@@ -10,9 +10,9 @@ import { eq } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { users } from '@/lib/db/schema';
 import { clearPasswordExpiryReminders } from './password-policy';
+import { validateNewPassword } from '@/lib/auth/password';
 
 const SALT_ROUNDS = 10;
-const MIN_PASSWORD_LENGTH = 6;
 
 export type ChangePasswordResult =
   | { success: true }
@@ -26,8 +26,9 @@ export async function changeOwnPassword(
   if (!currentPassword) {
     return { success: false, error: 'Current password is required.', status: 400 };
   }
-  if (newPassword.length < MIN_PASSWORD_LENGTH) {
-    return { success: false, error: `New password must be at least ${MIN_PASSWORD_LENGTH} characters.`, status: 400 };
+  const policy = validateNewPassword(newPassword);
+  if (!policy.ok) {
+    return { success: false, error: `New password: ${policy.error}`, status: 400 };
   }
 
   const [user] = await db

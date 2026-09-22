@@ -1,9 +1,7 @@
 // app/employee/layout.tsx
 import { ReactNode } from 'react';
-import { getServerSession } from 'next-auth';
-import { redirect } from 'next/navigation';
 import { cookies } from 'next/headers';
-import { authOptions } from '@/lib/auth';
+import { requirePanel } from '@/lib/auth/guards';
 import { cn } from '@/lib/utils';
 import { EMPLOYEE_VIEW_COOKIE } from '@/lib/pic-view';
 import EmployeeMobileNav from '@/components/employee/EmployeeMobileNav';
@@ -15,8 +13,9 @@ import RoleSwitchBanner from '@/components/shared/RoleSwitchBanner';
 import PasswordExpiryBanner from '@/components/shared/PasswordExpiryBanner';
 
 export default async function EmployeeLayout({ children }: { children: ReactNode }) {
-  const session = await getServerSession(authOptions);
-  if (!session) redirect('/login');
+  // employee (incl. PIC) or IT only. Previously ANY signed-in role — ops, finance, audit —
+  // could open the employee panel.
+  const session = await requirePanel('/employee');
 
   const isPic =
     session.user.employeeType === 'pic_1' || session.user.employeeType === 'pic_2';

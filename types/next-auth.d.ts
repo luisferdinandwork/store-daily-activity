@@ -87,5 +87,8 @@ declare module 'next-auth/jwt' {
     switchedFromRoleId: number | null;
     switchedFromRoleCode: string | null;
     switchedFromRoleLabel: string | null;
+
+    /** epoch ms of the last DB re-validation of this account — see the jwt callback in lib/auth.ts. */
+    authCheckedAt?: number;
   }
 }

@@ -13,6 +13,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { setOwnAvatar, clearOwnAvatar } from '@/lib/db/utils/account';
 import { uploadToStorage, deleteFromStorage, isStorageUrl } from '@/lib/storage';
+import { sniffImageOf } from '@/lib/upload-validation';
 
 const ALLOWED_MIME: Record<string, string> = {
   'image/jpeg': 'jpg',
@@ -62,9 +63,17 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Verify the bytes really are an accepted image; store using the detected type.
     const buffer = Buffer.from(await file.arrayBuffer());
-    const storagePath = `avatars/${userId}-${Date.now()}.${ext}`;
-    const url = await uploadToStorage(buffer, storagePath, file.type);
+    const sniffed = sniffImageOf(buffer, ['jpg', 'png', 'webp', 'heic', 'heif']);
+    if (!sniffed) {
+      return NextResponse.json(
+        { success: false, error: 'Hanya file gambar (JPEG, PNG, WebP, HEIC).' },
+        { status: 415 },
+      );
+    }
+    const storagePath = `avatars/${userId}-${Date.now()}.${sniffed.ext}`;
+    const url = await uploadToStorage(buffer, storagePath, sniffed.mime);
 
     const { previousUrl } = await setOwnAvatar(userId, url);
     await cleanupPrevious(previousUrl);

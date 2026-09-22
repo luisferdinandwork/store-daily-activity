@@ -70,7 +70,12 @@ export function LoginForm() {
       });
 
       if (result?.error) {
-        setError('Invalid NIK or password. Please try again.');
+        // 'TooManyAttempts' is thrown by authorize() when the login throttle trips (lib/auth.ts).
+        setError(
+          result.error === 'TooManyAttempts'
+            ? 'Too many failed attempts. Please wait about 15 minutes and try again.'
+            : 'Invalid NIK or password. Please try again.',
+        );
       } else {
         router.push('/');
         router.refresh();

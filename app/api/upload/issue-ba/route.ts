@@ -17,6 +17,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { uploadToStorage, storageObjectExists } from '@/lib/storage';
+import { validateImageOrDocument } from '@/lib/upload-validation';
 
 // ─── Allowed types ────────────────────────────────────────────────────────────
 
@@ -57,19 +58,6 @@ function todayStr(): string {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
-}
-
-/** Extracts a safe file extension from a MIME type or original filename. */
-function safeExt(file: File): string {
-  const fromMime = MIME_EXT[file.type];
-  if (fromMime) return fromMime;
-
-  const parts = file.name.split('.');
-  if (parts.length > 1) {
-    const ext = parts[parts.length - 1].toLowerCase();
-    if (/^[a-z0-9]{2,5}$/.test(ext)) return ext;
-  }
-  return 'bin';
 }
 
 async function resolveFilename(prefix: string, filename: string): Promise<string> {
@@ -125,19 +113,32 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Check the actual bytes against the declared type BEFORE uploading anything; the stored
+    // extension / Content-Type then come from that check, never from the client's filename.
+    const validated: { buffer: Buffer; ext: string; mime: string }[] = [];
+    for (const file of files) {
+      const buffer = Buffer.from(await file.arrayBuffer());
+      const checked = validateImageOrDocument(buffer, file.type, { allowHeic: true });
+      if (!checked) {
+        return NextResponse.json(
+          { error: `${file.name}: file content does not match its type.` },
+          { status: 415 },
+        );
+      }
+      validated.push({ buffer, ext: checked.ext, mime: checked.mime });
+    }
+
     const titleSlug = slugify(title ?? 'issue');
     const storeSlug = slugify(storeName ?? 'store');
     const date      = todayStr();
 
     const urls = await Promise.all(
-      files.map(async (file, index) => {
-        const ext      = safeExt(file);
+      validated.map(async ({ buffer, ext, mime }, index) => {
         const filename = `${titleSlug}_${storeSlug}_${date}_ba_${index + 1}.${ext}`;
 
         const finalName = await resolveFilename('issue-ba', filename);
-        const buffer    = Buffer.from(await file.arrayBuffer());
 
-        return uploadToStorage(buffer, `issue-ba/${finalName}`, file.type);
+        return uploadToStorage(buffer, `issue-ba/${finalName}`, mime);
       }),
     );
 

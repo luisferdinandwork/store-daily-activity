@@ -5,6 +5,7 @@
 // immutable (it's the login identifier).
 
 import { NextResponse } from 'next/server';
+import { validateNewPassword } from '@/lib/auth/password';
 import { eq } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
 
@@ -105,8 +106,9 @@ export async function PATCH(
   }
 
   if (typeof body?.password === 'string' && body.password.length > 0) {
-    if (body.password.length < 6) {
-      return NextResponse.json({ success: false, error: 'Password must be at least 6 characters.' }, { status: 400 });
+    const pwPolicy = validateNewPassword(body.password);
+    if (!pwPolicy.ok) {
+      return NextResponse.json({ success: false, error: pwPolicy.error }, { status: 400 });
     }
     updates.password = await bcrypt.hash(body.password, SALT_ROUNDS);
     // Reset the 90-day password-policy clock — see lib/db/utils/password-policy.ts.
