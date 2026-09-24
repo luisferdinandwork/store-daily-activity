@@ -3,16 +3,18 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import {
-  ArrowLeft, AlertCircle, Box, Check, CheckCircle2, ChevronDown,
-  Cloud, CloudOff, Loader2, LogIn, Navigation, NavigationOff,
-  RefreshCw, Save, Search, X,
-} from 'lucide-react';
+import { Box, Check, ChevronDown, RefreshCw, Save, Search, X } from 'lucide-react';
 import { cn }    from '@/lib/utils';
 import { toast } from 'sonner';
 import { useAutoSave } from '@/lib/hooks/useAutoSave';
 import { useTaskLocationSetting } from '@/lib/hooks/useTaskLocationSetting';
-import { TaskHeader, TaskSubmitBar, SaveIndicator } from '@/components/employee/tasks';
+import {
+  AccessBanner, LockedOverlay, TaskHeader, TaskSubmitBar, SaveIndicator, shiftLabel,
+} from '@/components/employee/tasks';
+import {
+  ActionButton, EmptyState, Notice, NotesField, PageBody, Section, SkeletonBlocks,
+  SummaryBox, TaskReviewNotices, inputClass,
+} from '@/components/employee/ui';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -94,100 +96,37 @@ function toNonNegativeInt(v: string) {
   return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
 }
 
-function fmtLong(iso: string | null) {
-  if (!iso) return '–';
-  return new Date(iso).toLocaleString('id-ID', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-}
-
-// ─── Access banner — Store Opening colors ─────────────────────────────────────
-
-function AccessBanner({ accessStatus, accessLoading, geoReady, geo, geoError, onRefreshGeo, onRefreshAccess }: {
-  accessStatus: AccessStatus|null; accessLoading: boolean; geoReady: boolean;
-  geo: {lat:number;lng:number}|null; geoError: string|null;
-  onRefreshGeo: ()=>void; onRefreshAccess: ()=>void;
-}) {
-  if (!geoReady || accessLoading) return (
-    <div className="flex items-center gap-2 rounded-xl border border-border bg-secondary px-4 py-2.5">
-      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-      <p className="text-xs text-muted-foreground">{!geoReady ? 'Mendapatkan lokasi…' : 'Memeriksa akses…'}</p>
-    </div>
-  );
-  if (!accessStatus) return null;
-  if (accessStatus.status === 'not_checked_in') return (
-    <div className="flex items-start gap-3 rounded-xl border border-red-300 bg-red-50 px-4 py-3.5">
-      <LogIn className="mt-0.5 h-5 w-5 flex-shrink-0 text-red-600" />
-      <div className="flex-1 min-w-0"><p className="text-sm font-bold text-red-700">Belum absen masuk</p><p className="mt-0.5 text-xs text-red-600">Kamu harus melakukan absensi masuk terlebih dahulu.</p></div>
-      <button onClick={onRefreshAccess} className="flex-shrink-0 flex items-center gap-1 rounded-lg bg-red-100 px-2.5 py-1.5 text-[11px] font-semibold text-red-700 hover:bg-red-200 transition-colors"><RefreshCw className="h-3 w-3" />Cek ulang</button>
-    </div>
-  );
-  if (accessStatus.status === 'outside_geofence') return (
-    <div className="flex items-start gap-3 rounded-xl border border-orange-300 bg-orange-50 px-4 py-3.5">
-      <NavigationOff className="mt-0.5 h-5 w-5 flex-shrink-0 text-orange-600" />
-      <div className="flex-1 min-w-0"><p className="text-sm font-bold text-orange-700">Di luar area toko</p><p className="mt-0.5 text-xs text-orange-600">Kamu berada {accessStatus.distanceM}m dari toko (batas: {accessStatus.radiusM}m).</p></div>
-      <button onClick={onRefreshGeo} className="flex-shrink-0 flex items-center gap-1 rounded-lg bg-orange-100 px-2.5 py-1.5 text-[11px] font-semibold text-orange-700 hover:bg-orange-200 transition-colors"><RefreshCw className="h-3 w-3" />Perbarui</button>
-    </div>
-  );
-  if (accessStatus.status === 'geo_unavailable') return (
-    <div className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-      <NavigationOff className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
-      <div className="flex-1 min-w-0"><p className="text-xs font-semibold text-amber-800">Lokasi tidak terdeteksi</p><p className="mt-0.5 text-xs text-amber-600">{geoError ?? 'Izin lokasi belum diberikan.'} Task dapat dilanjutkan tanpa rekaman lokasi.</p></div>
-      <button onClick={onRefreshGeo} className="flex-shrink-0 flex items-center gap-1 rounded-lg bg-amber-100 px-2.5 py-1.5 text-[11px] font-semibold text-amber-700 hover:bg-amber-200 transition-colors"><RefreshCw className="h-3 w-3" />Coba lagi</button>
-    </div>
-  );
-  return (
-    <div className="flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-2.5">
-      <Navigation className="h-4 w-4 flex-shrink-0 text-green-600" />
-      <p className="text-xs font-medium text-green-700">Lokasi terdeteksi ({geo?.lat.toFixed(5)}, {geo?.lng.toFixed(5)})</p>
-    </div>
-  );
-}
-
-// ─── Locked overlay ───────────────────────────────────────────────────────────
-
-function LockedOverlay({ accessStatus }: { accessStatus: AccessStatus | null }) {
-  if (!accessStatus || accessStatus.status === 'ok' || accessStatus.status === 'geo_unavailable') return null;
-  const isCheckIn = accessStatus.status === 'not_checked_in';
-  return (
-    <div className="pointer-events-none absolute inset-0 rounded-2xl bg-background/70 backdrop-blur-[2px] flex flex-col items-center justify-center gap-2 z-10">
-      <div className={cn('flex h-12 w-12 items-center justify-center rounded-full', isCheckIn ? 'bg-red-100' : 'bg-orange-100')}>
-        {isCheckIn ? <LogIn className="h-6 w-6 text-red-600" /> : <NavigationOff className="h-6 w-6 text-orange-600" />}
-      </div>
-      <p className={cn('text-sm font-bold', isCheckIn ? 'text-red-700' : 'text-orange-700')}>
-        {isCheckIn ? 'Absen masuk dulu' : 'Kamu di luar area toko'}
-      </p>
-    </div>
-  );
-}
-
-// ─── Section ──────────────────────────────────────────────────────────────────
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="space-y-3">
-      <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">{title}</p>
-      {children}
-    </div>
-  );
-}
-
 // ─── Quantity input ───────────────────────────────────────────────────────────
 
 function QuantityInput({ label, value, onChange, disabled }: {
   label: string; value: number; onChange: (v: number) => void; disabled?: boolean;
 }) {
   return (
-    <label className="block space-y-1">
-      <span className="text-[10px] font-semibold text-muted-foreground">{label}</span>
+    <label className="block min-w-0 space-y-1">
+      <span className="block truncate px-0.5 text-[11px] font-medium text-muted-foreground">{label}</span>
       <input type="number" min="0" inputMode="numeric" value={value} disabled={disabled}
         onChange={e => onChange(toNonNegativeInt(e.target.value))}
-        className="h-11 w-full rounded-xl border border-border bg-secondary px-3 text-sm font-semibold outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
+        className={cn(inputClass, 'h-11 px-3 text-center font-semibold tabular-nums')}
       />
     </label>
   );
 }
 
 // ─── Bin card ─────────────────────────────────────────────────────────────────
-// THE FIX: outer row is <div role="button"> — chevron <button> inside is now valid HTML.
+// Outer row is <div role="button"> so the chevron <button> inside is valid HTML.
+
+function QtyStrip({ items, tone = 'neutral' }: { items: { label: string; val: number }[]; tone?: 'neutral' | 'primary' }) {
+  return (
+    <div className="grid grid-cols-3 divide-x divide-border border-t border-border text-center">
+      {items.map(({ label, val }) => (
+        <div key={label} className={cn('py-2', tone === 'primary' ? 'bg-primary/[0.04]' : 'bg-secondary/50')}>
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
+          <p className="mt-0.5 text-sm font-bold tabular-nums text-foreground">{val}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 function BinCard({ bin, selected, isOpen, disabled, onToggle, onToggleOpen, onUpdate }: {
   bin: BinItem; selected: SelectedBinDraft | undefined;
@@ -199,28 +138,27 @@ function BinCard({ bin, selected, isOpen, disabled, onToggle, onToggleOpen, onUp
 
   return (
     <article className={cn(
-      'overflow-hidden rounded-xl border-2 bg-card transition-colors',
-      isSelected ? 'border-primary/30 bg-primary/5' : 'border-border',
+      'overflow-hidden rounded-xl border bg-card transition-colors',
+      isSelected ? 'border-primary/40' : 'border-border',
     )}>
-
-      {/* ── Header row — <div role="button"> prevents nested-button hydration error ── */}
       <div
         role="button"
         tabIndex={disabled ? -1 : 0}
+        aria-pressed={isSelected}
         onClick={() => !disabled && onToggle()}
         onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && !disabled && onToggle()}
         className={cn(
-          'flex w-full cursor-pointer select-none items-center gap-3 px-4 py-4 text-left',
+          'flex w-full cursor-pointer select-none items-center gap-3 px-3.5 py-3.5 text-left transition active:bg-secondary',
+          isSelected && 'bg-primary/[0.03]',
           disabled && 'cursor-default opacity-60',
         )}
       >
-        {/* Circular checkbox */}
-        <div className={cn(
-          'flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border-2 transition-colors',
-          isSelected ? 'border-primary bg-primary' : 'border-border',
+        <span className={cn(
+          'flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border-2 transition-colors',
+          isSelected ? 'border-primary bg-primary' : 'border-border bg-background',
         )}>
-          {isSelected && <Check className="h-3 w-3 text-primary-foreground" strokeWidth={3} />}
-        </div>
+          {isSelected && <Check className="h-3.5 w-3.5 text-primary-foreground" strokeWidth={3} />}
+        </span>
 
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
@@ -232,47 +170,42 @@ function BinCard({ bin, selected, isOpen, disabled, onToggle, onToggleOpen, onUp
           <p className="mt-0.5 truncate text-xs text-muted-foreground">{bin.nama}</p>
         </div>
 
-        {/* Chevron — <button> is safe here because parent is a <div>, not a <button> */}
         {isSelected && !disabled && (
           <button
             type="button"
             onClick={e => { e.stopPropagation(); onToggleOpen(); }}
-            className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl bg-secondary hover:bg-border transition-colors"
-            aria-label="Toggle detail"
+            className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-secondary transition-colors active:bg-border"
+            aria-label={isOpen ? 'Tutup detail' : 'Buka detail'}
           >
             <ChevronDown className={cn('h-4 w-4 text-muted-foreground transition-transform', isOpen && 'rotate-180')} />
           </button>
         )}
       </div>
 
-      {/* ── Default qty (from master data) ── */}
-      <div className="grid grid-cols-3 border-t border-border text-center">
-        {[
-          { label: 'QTY BC',       val: bin.qtyBc             },
-          { label: 'SESUAI',       val: bin.qtySesuaiBin      },
-          { label: 'TIDAK SESUAI', val: bin.qtyTidakSesuaiBin },
-        ].map(({ label, val }) => (
-          <div key={label} className={cn('py-2.5', isSelected ? 'bg-primary/5' : 'bg-secondary/40')}>
-            <p className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">{label}</p>
-            <p className="mt-0.5 text-xs font-bold text-foreground">{val}</p>
-          </div>
-        ))}
-      </div>
+      {/* Default qty (from master data) */}
+      <QtyStrip
+        tone={isSelected ? 'primary' : 'neutral'}
+        items={[
+          { label: 'Qty BC',       val: bin.qtyBc             },
+          { label: 'Sesuai',       val: bin.qtySesuaiBin      },
+          { label: 'Tidak sesuai', val: bin.qtyTidakSesuaiBin },
+        ]}
+      />
 
-      {/* ── Editable qty inputs (when selected + open) ── */}
+      {/* Editable qty inputs (when selected + open) */}
       {isSelected && isOpen && selected && (
-        <div className="space-y-3 border-t border-border px-4 py-4">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <QuantityInput label="QTY BC"               value={selected.qtyBc}             disabled={disabled} onChange={v => onUpdate({ qtyBc: v })} />
-            <QuantityInput label="QTY SESUAI BIN"       value={selected.qtySesuaiBin}      disabled={disabled} onChange={v => onUpdate({ qtySesuaiBin: v })} />
-            <QuantityInput label="QTY TIDAK SESUAI BIN" value={selected.qtyTidakSesuaiBin} disabled={disabled} onChange={v => onUpdate({ qtyTidakSesuaiBin: v })} />
+        <div className="space-y-3 border-t border-border px-3.5 py-3.5">
+          <div className="grid grid-cols-3 gap-2">
+            <QuantityInput label="Qty BC"       value={selected.qtyBc}             disabled={disabled} onChange={v => onUpdate({ qtyBc: v })} />
+            <QuantityInput label="Sesuai"       value={selected.qtySesuaiBin}      disabled={disabled} onChange={v => onUpdate({ qtySesuaiBin: v })} />
+            <QuantityInput label="Tidak sesuai" value={selected.qtyTidakSesuaiBin} disabled={disabled} onChange={v => onUpdate({ qtyTidakSesuaiBin: v })} />
           </div>
           <label className="block space-y-1">
-            <span className="text-[10px] font-semibold text-muted-foreground">Catatan BIN ini</span>
+            <span className="px-0.5 text-[11px] font-medium text-muted-foreground">Catatan BIN ini</span>
             <textarea value={selected.notes ?? ''} disabled={disabled} rows={2}
               onChange={e => onUpdate({ notes: e.target.value })}
               placeholder="Opsional…"
-              className="w-full resize-none rounded-xl border border-border bg-secondary px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
+              className="w-full resize-none rounded-xl border border-border bg-secondary px-3.5 py-2.5 text-base outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
             />
           </label>
         </div>
@@ -336,7 +269,6 @@ export default function CekBinDetailPage() {
 
   const taskStatus = taskData?.status;
   const readonly   = taskStatus === 'completed' || taskStatus === 'verified';
-  const isRejected = taskStatus === 'rejected';
   const locked     = !readonly && !!accessStatus &&
     (accessStatus.status === 'not_checked_in' || accessStatus.status === 'outside_geofence');
   const dis = readonly || locked;
@@ -413,14 +345,10 @@ export default function CekBinDetailPage() {
     !meetsMin ? `Pilih minimal ${minimumBinsToCheck} BIN dari total ${totalStoreBins} BIN aktif.` : '';
 
   return (
-    <div className="flex min-h-screen flex-col bg-background">
+    <>
       <TaskHeader
         title="Cek BIN"
-        subtitle={
-          taskData
-            ? `${String(taskData.shift).replace('_', ' ')} shift · ${String(taskData.status).replace('_', ' ')}`
-            : undefined
-        }
+        subtitle={shiftLabel(taskData?.shift)}
         status={taskStatus}
         saveIndicator={
           !readonly && !loading && taskData ? (
@@ -429,106 +357,88 @@ export default function CekBinDetailPage() {
         }
       />
 
-      {/* Body */}
-      <main className="flex-1 space-y-5 px-4 py-4 pb-32">
-
+      <PageBody bottomBar={!readonly && !loading && !!taskData}>
         {!readonly && !loading && taskData && (
           <AccessBanner accessStatus={accessStatus} accessLoading={accessLoading} geoReady={geoReady}
-            geo={geo} geoError={geoError} onRefreshGeo={refreshGeo} onRefreshAccess={refreshAccess} />
+            geo={geo} geoError={geoError} onRefreshGeo={refreshGeo} onRefreshAccess={refreshAccess}
+            requireGeo={requiresLocation} allowWithoutGeo />
         )}
 
         {submitError && (
-          <div className="flex items-start gap-2.5 rounded-xl border border-red-300 bg-red-50 px-4 py-3">
-            <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-600" />
-            <div className="min-w-0 flex-1"><p className="text-xs font-bold text-red-700">Submit gagal</p><p className="mt-0.5 text-xs text-red-600 break-words">{submitError}</p></div>
-            <button onClick={() => setSubmitError(null)} className="flex-shrink-0 text-red-400"><X className="h-4 w-4" /></button>
-          </div>
+          <Notice tone="error" title="Submit gagal" onDismiss={() => setSubmitError(null)}>
+            {submitError}
+          </Notice>
         )}
 
-        {isRejected && taskData?.notes && (
-          <div className="flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
-            <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-600" />
-            <div><p className="text-xs font-bold text-red-700">Ditolak oleh OPS</p><p className="mt-0.5 text-xs text-red-600">{taskData.notes}</p><p className="mt-1.5 text-xs font-medium text-red-700">Silakan perbaiki dan submit ulang.</p></div>
-          </div>
-        )}
-
-        {taskStatus === 'verified' && taskData?.verifiedAt && (
-          <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3">
-            <p className="text-xs font-semibold text-green-800">Task telah diverifikasi</p>
-            <p className="mt-0.5 text-xs text-green-600">{fmtLong(taskData.verifiedAt)}</p>
-          </div>
-        )}
+        <TaskReviewNotices status={taskStatus} notes={taskData?.notes} verifiedAt={taskData?.verifiedAt} />
 
         {!readonly && !locked && !loading && taskData && (
-          <div className="flex items-center gap-2 rounded-xl border border-blue-100 bg-blue-50 px-4 py-2.5">
-            <Save className="h-4 w-4 flex-shrink-0 text-blue-500" />
-            <p className="text-xs text-blue-700">Perubahan otomatis tersimpan. Rekan shift lain dapat melanjutkan task ini.</p>
-          </div>
+          <Notice tone="info" icon={Save}>
+            Perubahan otomatis tersimpan. Rekan shift lain dapat melanjutkan task ini.
+          </Notice>
         )}
 
         {loading ? (
-          <div className="space-y-3">{[1,2,3,4].map(i => <div key={i} className="h-24 animate-pulse rounded-xl bg-secondary" />)}</div>
+          <SkeletonBlocks count={4} className="h-24" />
         ) : !taskData ? (
-          <div className="flex flex-col items-center py-20 text-center">
-            <Box className="mb-3 h-8 w-8 text-muted-foreground/30" />
-            <p className="text-sm font-semibold">Task tidak ditemukan</p>
-          </div>
+          <EmptyState icon={Box} title="Task tidak ditemukan" description="Task ini mungkin sudah tidak tersedia untuk jadwalmu hari ini." />
         ) : (
-          <div className="relative space-y-6">
-            <LockedOverlay accessStatus={accessStatus} />
+          <div className="relative space-y-5">
+            {!readonly && <LockedOverlay accessStatus={accessStatus} requireGeo={requiresLocation} allowWithoutGeo />}
 
             {/* Progress */}
-            <Section title="Progress Cek BIN">
-              <div className={cn(
-                'flex items-center justify-between rounded-xl border px-3.5 py-2.5',
-                meetsMin ? 'border-green-200 bg-green-50' : 'border-amber-200 bg-amber-50',
-              )}>
-                <p className={cn('text-xs font-semibold', meetsMin ? 'text-green-700' : 'text-amber-700')}>
-                  {meetsMin ? `${selectedCount} BIN dipilih — syarat terpenuhi ✓` : `Pilih minimal ${minimumBinsToCheck} BIN (30% dari ${totalStoreBins})`}
-                </p>
-                <span className={cn('rounded-full px-2 py-0.5 text-[10px] font-bold',
-                  meetsMin ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700',
-                )}>
-                  {selectedCount}/{minimumBinsToCheck}+
-                </span>
-              </div>
-
+            <SummaryBox>
               <div className="grid grid-cols-3 gap-2 text-center">
-                {[{ label: 'Total BIN', val: totalStoreBins }, { label: 'Minimum', val: minimumBinsToCheck }, { label: 'Dipilih', val: selectedCount }].map(({ label, val }) => (
-                  <div key={label} className="rounded-xl border border-border bg-secondary py-3">
-                    <p className="text-[10px] font-semibold text-muted-foreground">{label}</p>
-                    <p className="mt-0.5 text-lg font-bold text-foreground">{val}</p>
+                {[
+                  { label: 'Total BIN', val: totalStoreBins },
+                  { label: 'Minimum',   val: minimumBinsToCheck },
+                  { label: 'Dipilih',   val: selectedCount },
+                ].map(({ label, val }) => (
+                  <div key={label}>
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-primary/80">{label}</p>
+                    <p className="mt-0.5 text-xl font-bold tabular-nums text-foreground">{val}</p>
                   </div>
                 ))}
               </div>
-            </Section>
+              <p className={cn(
+                'border-t border-primary/15 pt-2.5 text-center text-xs font-semibold',
+                meetsMin ? 'text-green-700' : 'text-amber-700',
+              )}>
+                {meetsMin
+                  ? `${selectedCount} BIN dipilih — syarat terpenuhi ✓`
+                  : `Pilih minimal ${minimumBinsToCheck} BIN (30% dari ${totalStoreBins})`}
+              </p>
+            </SummaryBox>
 
             {/* BIN list */}
-            <Section title="Daftar BIN">
-              <div className="flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2.5">
-                <Search className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
-                <input value={search} onChange={e => setSearch(e.target.value)}
-                  placeholder="Cari BIN atau nama barang…"
-                  className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground" />
-                {search && <button onClick={() => setSearch('')} className="text-muted-foreground"><X className="h-3.5 w-3.5" /></button>}
-              </div>
+            <Section title="Daftar BIN" meta={taskData.availableBins.length ? `${taskData.availableBins.length} BIN` : undefined}>
+              <div className="space-y-2">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <input value={search} onChange={e => setSearch(e.target.value)}
+                    placeholder="Cari BIN atau nama barang…"
+                    className={cn(inputClass, 'h-11 pl-10 pr-10')} />
+                  {search && (
+                    <button onClick={() => setSearch('')} aria-label="Hapus pencarian"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground">
+                      <X className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
 
-              {taskData.availableBins.length === 0 ? (
-                <div className="flex flex-col items-center rounded-xl border border-border bg-secondary px-4 py-10 text-center">
-                  <Box className="mb-2 h-7 w-7 text-muted-foreground/40" />
-                  <p className="text-sm font-semibold text-foreground">Belum ada BIN aktif</p>
-                  <p className="mt-1 max-w-xs text-xs text-muted-foreground">Hubungi admin/OPS untuk mengisi data BIN master store ini.</p>
-                  <button onClick={load} className="mt-4 flex items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-2 text-xs font-semibold hover:bg-secondary transition-colors">
-                    <RefreshCw className="h-3.5 w-3.5" />Muat ulang
-                  </button>
-                </div>
-              ) : filteredBins.length === 0 ? (
-                <div className="rounded-xl border border-border bg-secondary px-4 py-8 text-center text-sm text-muted-foreground">
-                  Tidak ada BIN yang cocok dengan pencarian.
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {filteredBins.map(bin => {
+                {taskData.availableBins.length === 0 ? (
+                  <EmptyState
+                    icon={Box}
+                    title="Belum ada BIN aktif"
+                    description="Hubungi admin/OPS untuk mengisi data BIN master store ini."
+                    action={<ActionButton variant="secondary" icon={RefreshCw} onClick={load}>Muat ulang</ActionButton>}
+                  />
+                ) : filteredBins.length === 0 ? (
+                  <p className="rounded-xl bg-secondary px-4 py-8 text-center text-sm text-muted-foreground">
+                    Tidak ada BIN yang cocok dengan pencarian.
+                  </p>
+                ) : (
+                  filteredBins.map(bin => {
                     const id = Number(bin.id);
                     return (
                       <BinCard key={bin.id} bin={bin}
@@ -540,52 +450,52 @@ export default function CekBinDetailPage() {
                         onUpdate={patch => updateSelectedBin(id, patch)}
                       />
                     );
-                  })}
-                </div>
-              )}
+                  })
+                )}
+              </div>
             </Section>
 
             {/* Read-only: checked bins summary */}
             {readonly && taskData.checkedBins.length > 0 && (
-              <Section title="BIN yang Sudah Dicek">
+              <Section title="BIN yang sudah dicek" meta={`${taskData.checkedBins.length}`}>
                 <div className="space-y-2">
                   {taskData.checkedBins.map(bin => (
-                    <div key={bin.id} className="overflow-hidden rounded-xl border-2 border-primary/30 bg-primary/5">
-                      <div className="flex items-center gap-3 px-4 py-3.5">
-                        <div className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border-2 border-primary bg-primary">
-                          <Check className="h-3 w-3 text-primary-foreground" strokeWidth={3} />
-                        </div>
+                    <div key={bin.id} className="overflow-hidden rounded-xl border border-primary/40 bg-card">
+                      <div className="flex items-center gap-3 px-3.5 py-3.5">
+                        <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border-2 border-primary bg-primary">
+                          <Check className="h-3.5 w-3.5 text-primary-foreground" strokeWidth={3} />
+                        </span>
                         <div className="min-w-0 flex-1">
                           <p className="font-mono text-sm font-bold text-foreground">{bin.bin}</p>
-                          <p className="text-xs text-muted-foreground">{bin.nama}</p>
+                          <p className="truncate text-xs text-muted-foreground">{bin.nama}</p>
                         </div>
                       </div>
-                      <div className="grid grid-cols-3 border-t border-primary/20 text-center">
-                        {[{ label: 'QTY BC', val: bin.qtyBc }, { label: 'SESUAI', val: bin.qtySesuaiBin }, { label: 'TIDAK SESUAI', val: bin.qtyTidakSesuaiBin }].map(({ label, val }) => (
-                          <div key={label} className="bg-primary/5 py-2.5">
-                            <p className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground">{label}</p>
-                            <p className="mt-0.5 text-xs font-bold text-foreground">{val}</p>
-                          </div>
-                        ))}
-                      </div>
-                      {bin.notes && <p className="border-t border-primary/20 px-4 py-2 text-[11px] text-muted-foreground">{bin.notes}</p>}
+                      <QtyStrip
+                        tone="primary"
+                        items={[
+                          { label: 'Qty BC', val: bin.qtyBc },
+                          { label: 'Sesuai', val: bin.qtySesuaiBin },
+                          { label: 'Tidak sesuai', val: bin.qtyTidakSesuaiBin },
+                        ]}
+                      />
+                      {bin.notes && <p className="border-t border-border px-3.5 py-2 text-xs text-muted-foreground">{bin.notes}</p>}
                     </div>
                   ))}
                 </div>
               </Section>
             )}
 
-            {/* Global notes */}
-            <Section title="Catatan Task (opsional)">
-              <textarea value={notes} disabled={dis} rows={3}
-                onChange={e => { setNotes(e.target.value); autoSave({ notes: e.target.value }); }}
-                placeholder="Tambahkan catatan umum jika ada…"
-                className="w-full resize-none rounded-xl border border-border bg-secondary px-4 py-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
-              />
-            </Section>
+            <NotesField
+              label="Catatan task"
+              value={notes}
+              disabled={dis}
+              rows={3}
+              onChange={(v) => { setNotes(v); autoSave({ notes: v }); }}
+              placeholder="Tambahkan catatan umum jika ada…"
+            />
           </div>
         )}
-      </main>
+      </PageBody>
 
       <TaskSubmitBar
         label="Submit Cek BIN"
@@ -595,6 +505,6 @@ export default function CekBinDetailPage() {
         hidden={readonly || loading || !taskData}
         hint={!canSubmit ? submitHint : undefined}
       />
-    </div>
+    </>
   );
 }

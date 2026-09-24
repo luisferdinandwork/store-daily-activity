@@ -11,9 +11,9 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import {
-  AlertCircle,
   CheckCircle2,
   CheckCheck,
+  ChevronDown,
   ClipboardList,
   Loader2,
   Lock,
@@ -25,19 +25,13 @@ import {
 import { toast } from 'sonner';
 
 import { cn } from '@/lib/utils';
-import { TaskHeader } from '@/components/employee/tasks';
+import { TaskHeader, TaskSubmitBar } from '@/components/employee/tasks';
 import AccessGuard from '@/components/employee/tasks/AccessGuard';
 import PhotoUploadGrid from '@/components/shared/PhotoUploadGrid';
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog';
+  ActionButton, BottomSheet, Chip, EmptyState, ListGroup, Notice, PageBody, Section,
+  TaskLoadingScreen, TaskMissingScreen,
+} from '@/components/employee/ui';
 
 type SerahTerimaEntry = {
   id: string;
@@ -83,21 +77,7 @@ function fmtTime(value: string | null) {
 
 export default function SerahTerimaBoardPage() {
   return (
-    <Suspense
-      fallback={
-        <div className="flex min-h-screen flex-col bg-background">
-          <TaskHeader title="Serah Terima" subtitle="Papan handover bersama semua shift." />
-          <div className="flex-1 p-4">
-            <div className="flex min-h-[300px] items-center justify-center rounded-2xl border border-border bg-card">
-              <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Memuat serah terima…
-              </div>
-            </div>
-          </div>
-        </div>
-      }
-    >
+    <Suspense fallback={<TaskLoadingScreen title="Serah Terima" />}>
       <SerahTerimaBoard />
     </Suspense>
   );
@@ -303,31 +283,13 @@ function SerahTerimaBoard() {
     }
   }
 
-  if (loading || !scheduleId) {
+  if (loading) return <TaskLoadingScreen title="Serah Terima" />;
+  if (!scheduleId) {
     return (
-      <div className="flex min-h-screen flex-col bg-background">
-        <TaskHeader title="Serah Terima" subtitle="Papan handover bersama semua shift." />
-        <div className="flex-1 p-4">
-          {loading ? (
-            <div className="flex min-h-[300px] items-center justify-center rounded-2xl border border-border bg-card">
-              <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Memuat serah terima…
-              </div>
-            </div>
-          ) : (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-700">
-              <div className="flex items-start gap-3">
-                <AlertCircle className="mt-0.5 h-4 w-4" />
-                <div>
-                  <p className="font-bold">Tidak bisa memuat papan serah terima</p>
-                  <p className="text-sm">{loadError ?? 'Silakan kembali ke halaman task.'}</p>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
+      <TaskMissingScreen
+        title="Serah Terima"
+        message={loadError ?? 'Tidak bisa memuat papan serah terima. Silakan kembali ke halaman task.'}
+      />
     );
   }
 
@@ -341,118 +303,77 @@ function SerahTerimaBoard() {
       taskType="serah_terima"
     >
       {({ banner, lockedOverlay, dis, geo, readonly }) => (
-        <div className="flex min-h-screen flex-col bg-background">
+        <>
           <TaskHeader
             title="Serah Terima"
             subtitle={
               taskDone
-                ? 'Serah terima shift ini sudah selesai'
+                ? 'Shift ini sudah selesai'
                 : pendingCount > 0
                   ? `${pendingCount} item belum selesai`
                   : 'Papan handover kosong'
             }
           />
 
-          <div className="flex-1 space-y-4 p-4 pb-24">
+          <PageBody bottomBar={!taskDone}>
             {banner}
 
             {taskDone && (
-              <div className="flex items-start gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-emerald-700">
-                <Lock className="mt-0.5 h-4 w-4 shrink-0" />
-                <div>
-                  <p className="text-sm font-bold">Serah terima shift ini selesai</p>
-                  <p className="mt-0.5 text-xs font-semibold">
-                    Papan dikunci untuk shift ini hari ini. Bisa dikelola lagi besok.
-                  </p>
-                  {task?.notes && <p className="mt-1 text-xs italic">Catatan: {task.notes}</p>}
-                </div>
-              </div>
+              <Notice tone="success" icon={Lock} title="Serah terima shift ini selesai">
+                Papan dikunci untuk shift ini hari ini. Bisa dikelola lagi besok.
+                {task?.notes && <p className="mt-1 italic">Catatan: {task.notes}</p>}
+              </Notice>
             )}
 
-            <div className="relative space-y-4">
+            <div className="relative space-y-5">
               {lockedOverlay}
 
               {/* Compose new entry — any shift can add anytime */}
-              <section className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
-                <div className="border-b border-border p-4">
-                  <p className="text-sm font-bold text-foreground">Tambah item baru</p>
-                  <p className="mt-1 text-xs font-semibold text-muted-foreground">
-                    Semua shift bisa menambah dan menyelesaikan item di papan ini.
-                  </p>
-                </div>
-
-                <div className="space-y-3 p-4">
+              <Section title="Tambah item baru">
+                <div className="space-y-2">
                   <textarea
                     value={message}
                     onChange={(e) => setMessage(e.target.value)}
                     disabled={dis || readonly}
                     rows={3}
                     placeholder="Contoh: Follow up customer Activity A"
-                    className="w-full resize-none rounded-xl border border-border bg-secondary px-4 py-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="w-full resize-none rounded-xl border border-border bg-secondary px-3.5 py-2.5 text-base placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-60"
                   />
-
-                  <button
-                    type="button"
+                  <ActionButton
+                    className="w-full"
+                    icon={Plus}
+                    loading={submitting}
                     onClick={() => void handleAdd(geo)}
-                    disabled={dis || readonly || submitting || !canSubmitMessage}
-                    className="flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground transition disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={dis || readonly || !canSubmitMessage}
                   >
-                    {submitting ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Plus className="h-4 w-4" />
-                    )}
                     Tambah Item
-                  </button>
+                  </ActionButton>
+                  <p className="px-0.5 text-[11px] text-muted-foreground">
+                    Semua shift bisa menambah dan menyelesaikan item di papan ini.
+                  </p>
                 </div>
-              </section>
+              </Section>
 
               {/* Active list */}
-              <section className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
-                <div className="border-b border-border p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-start gap-3">
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600">
-                        <ClipboardList className="h-5 w-5" />
-                      </div>
-                      <div>
-                        <p className="text-sm font-bold text-foreground">Item aktif</p>
-                        <p className="mt-1 text-xs font-semibold text-muted-foreground">
-                          Tandai selesai, atau tahan dulu jika masih perlu ditindaklanjuti.
-                        </p>
-                      </div>
-                    </div>
-
-                    <span className="rounded-full bg-secondary px-2.5 py-1 text-xs font-bold text-muted-foreground">
-                      {pendingCount} item
-                    </span>
+              <Section title="Item aktif" meta={`${pendingCount}`}>
+                {entries.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-border">
+                    <EmptyState icon={ClipboardList} title="Belum ada item aktif" description="Tambahkan item di atas untuk diteruskan ke shift lain." className="py-8" />
                   </div>
-                </div>
-
-                <div className="divide-y divide-border">
-                  {entries.length === 0 ? (
-                    <div className="p-4 text-sm font-semibold text-muted-foreground">
-                      Belum ada item serah terima aktif.
-                    </div>
-                  ) : (
-                    entries.map((entry) => (
-                      <div key={entry.id} className="flex flex-col gap-2 p-4">
+                ) : (
+                  <ListGroup>
+                    {entries.map((entry) => (
+                      <div key={entry.id} className="space-y-3 px-3.5 py-3.5">
                         <div className="flex items-start gap-3">
                           <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-1.5">
-                              <p className="text-sm font-semibold leading-relaxed text-foreground">
-                                {entry.message}
-                              </p>
-                              {entry.isOnHold && (
-                                <span className="shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">
-                                  Ditahan
-                                </span>
-                              )}
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <p className="text-sm font-semibold leading-relaxed text-foreground">{entry.message}</p>
+                              {entry.isOnHold && <Chip tone="warning">Ditahan</Chip>}
                             </div>
                             {entry.isOnHold && entry.note && (
-                              <p className="mt-1 text-xs font-semibold text-amber-700">Alasan: {entry.note}</p>
+                              <p className="mt-1 text-xs font-medium text-amber-700">Alasan: {entry.note}</p>
                             )}
-                            <p className="mt-1 text-[11px] font-semibold text-muted-foreground">
+                            <p className="mt-1 text-[11px] text-muted-foreground">
                               Ditambahkan {fmtTime(entry.createdAt)}
                             </p>
                           </div>
@@ -467,69 +388,59 @@ function SerahTerimaBoard() {
                             type="button"
                             onClick={() => { setEntryReason(entry.note ?? ''); setEntryPhotoUrl(entry.photoUrl); setConfirmEntryAction({ entryId: entry.id, outcome: 'on_hold' }); }}
                             disabled={dis || readonly || completingId === entry.id}
-                            className={cn(
-                              'flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 text-xs font-bold text-amber-700 transition hover:bg-amber-100',
-                              (dis || readonly) && 'opacity-60 cursor-not-allowed',
-                            )}
+                            className="flex h-10 flex-1 items-center justify-center gap-1.5 rounded-lg bg-amber-50 text-xs font-bold text-amber-700 transition active:bg-amber-100 disabled:opacity-60"
                           >
-                            <PauseCircle className="h-3.5 w-3.5" />
+                            <PauseCircle className="h-4 w-4" />
                             Tahan
                           </button>
                           <button
                             type="button"
                             onClick={() => { setEntryReason(''); setEntryPhotoUrl(entry.photoUrl); setConfirmEntryAction({ entryId: entry.id, outcome: 'done' }); }}
                             disabled={dis || readonly || completingId === entry.id}
-                            className={cn(
-                              'flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-xs font-bold text-emerald-700 transition hover:bg-emerald-100',
-                              (dis || readonly) && 'opacity-60 cursor-not-allowed',
-                            )}
+                            className="flex h-10 flex-1 items-center justify-center gap-1.5 rounded-lg bg-green-50 text-xs font-bold text-green-700 transition active:bg-green-100 disabled:opacity-60"
                           >
                             {completingId === entry.id ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              <Loader2 className="h-4 w-4 animate-spin" />
                             ) : (
-                              <CheckCircle2 className="h-3.5 w-3.5" />
+                              <CheckCircle2 className="h-4 w-4" />
                             )}
                             Selesai
                           </button>
                         </div>
                       </div>
-                    ))
-                  )}
-                </div>
-              </section>
+                    ))}
+                  </ListGroup>
+                )}
+              </Section>
 
               {/* History — recently completed */}
-              <section className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
-                <button
-                  type="button"
-                  onClick={() => setShowHistory((prev) => !prev)}
-                  className="flex w-full items-center justify-between p-4 text-left"
-                >
-                  <p className="text-sm font-bold text-foreground">
-                    Riwayat selesai ({recentCompleted.length})
-                  </p>
-                  <span className="text-xs font-semibold text-muted-foreground">
-                    {showHistory ? 'Sembunyikan' : 'Tampilkan'}
-                  </span>
-                </button>
+              <Section title="Riwayat selesai" meta={`${recentCompleted.length}`}>
+                <ListGroup>
+                  <button
+                    type="button"
+                    onClick={() => setShowHistory((prev) => !prev)}
+                    className="flex w-full items-center justify-between gap-3 bg-card px-3.5 py-3 text-left transition active:bg-secondary"
+                  >
+                    <span className="text-sm font-semibold text-foreground">
+                      {showHistory ? 'Sembunyikan riwayat' : 'Tampilkan riwayat'}
+                    </span>
+                    <ChevronDown className={cn('h-4 w-4 text-muted-foreground transition-transform', showHistory && 'rotate-180')} />
+                  </button>
 
-                {showHistory && (
-                  <div className="divide-y divide-border border-t border-border">
-                    {recentCompleted.length === 0 ? (
-                      <div className="p-4 text-sm font-semibold text-muted-foreground">
-                        Belum ada item yang diselesaikan.
-                      </div>
+                  {showHistory && (
+                    recentCompleted.length === 0 ? (
+                      <p className="px-3.5 py-4 text-sm text-muted-foreground">Belum ada item yang diselesaikan.</p>
                     ) : (
                       recentCompleted.map((entry) => (
-                        <div key={entry.id} className="flex items-start gap-3 p-4">
+                        <div key={entry.id} className="flex items-start gap-3 px-3.5 py-3">
                           <div className="min-w-0 flex-1">
-                            <p className="text-sm font-semibold leading-relaxed text-muted-foreground line-through">
+                            <p className="text-sm font-medium leading-relaxed text-muted-foreground line-through">
                               {entry.message}
                             </p>
                             {entry.note && (
-                              <p className="mt-1 text-xs font-semibold text-muted-foreground">Catatan: {entry.note}</p>
+                              <p className="mt-1 text-xs text-muted-foreground">Catatan: {entry.note}</p>
                             )}
-                            <p className="mt-1 text-[11px] font-semibold text-emerald-600">
+                            <p className="mt-1 text-[11px] font-semibold text-green-600">
                               Selesai {fmtTime(entry.completedAt)}
                             </p>
                           </div>
@@ -543,130 +454,100 @@ function SerahTerimaBoard() {
                               onClick={() => setConfirmDeleteId(entry.id)}
                               disabled={deletingId === entry.id}
                               aria-label="Hapus riwayat"
-                              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground/60 transition hover:bg-rose-50 hover:text-rose-500 disabled:opacity-60"
+                              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground/70 transition active:bg-red-50 active:text-red-500 disabled:opacity-60"
                             >
                               {deletingId === entry.id ? (
-                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                <Loader2 className="h-4 w-4 animate-spin" />
                               ) : (
-                                <Trash2 className="h-3.5 w-3.5" />
+                                <Trash2 className="h-4 w-4" />
                               )}
                             </button>
                           )}
                         </div>
                       ))
-                    )}
-                  </div>
-                )}
-              </section>
-
-              {!taskDone && (
-                <button
-                  type="button"
-                  onClick={() => setConfirmCompleteTask(true)}
-                  disabled={dis || readonly || completingTask}
-                  className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 text-sm font-bold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {completingTask ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <CheckCheck className="h-4 w-4" />
+                    )
                   )}
-                  Selesaikan Serah Terima Shift Ini
-                </button>
-              )}
+                </ListGroup>
+              </Section>
 
-              <button
-                type="button"
+              <ActionButton
+                variant="secondary"
+                icon={RefreshCw}
+                className="w-full"
                 onClick={() => void load()}
                 disabled={submitting}
-                className="flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-border bg-card px-4 text-sm font-semibold text-muted-foreground transition hover:bg-secondary disabled:opacity-60"
               >
-                <RefreshCw className="h-4 w-4" />
-                Refresh
-              </button>
+                Muat ulang
+              </ActionButton>
             </div>
-          </div>
+          </PageBody>
 
-          <AlertDialog open={confirmCompleteTask} onOpenChange={setConfirmCompleteTask}>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Selesaikan serah terima shift ini?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  {pendingCount > 0
-                    ? `Masih ada ${pendingCount} item aktif di papan. `
-                    : ''}
-                  Setelah diselesaikan, papan serah terima dikunci untuk shift ini
-                  hari ini dan hanya bisa dikelola lagi besok.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Batal</AlertDialogCancel>
-                <AlertDialogAction
+          <TaskSubmitBar
+            label="Selesaikan Serah Terima Shift Ini"
+            icon={<CheckCheck className="h-4 w-4" />}
+            onSubmit={() => setConfirmCompleteTask(true)}
+            submitting={completingTask}
+            disabled={dis || readonly}
+            hidden={taskDone}
+          />
+
+          <BottomSheet
+            open={confirmCompleteTask}
+            onClose={() => setConfirmCompleteTask(false)}
+            title="Selesaikan serah terima shift ini?"
+            description={`${pendingCount > 0 ? `Masih ada ${pendingCount} item aktif di papan. ` : ''}Setelah diselesaikan, papan dikunci untuk shift ini hari ini dan hanya bisa dikelola lagi besok.`}
+            footer={
+              <>
+                <ActionButton variant="secondary" className="flex-1" onClick={() => setConfirmCompleteTask(false)}>Batal</ActionButton>
+                <ActionButton
+                  className="flex-1"
                   onClick={() => {
                     setConfirmCompleteTask(false);
                     void handleCompleteTask(geo);
                   }}
                 >
                   Selesaikan
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
+                </ActionButton>
+              </>
+            }
+          />
 
-          <AlertDialog open={!!confirmDeleteId} onOpenChange={(open) => { if (!open) setConfirmDeleteId(null); }}>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Hapus item riwayat?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  Tindakan ini tidak bisa dibatalkan.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Batal</AlertDialogCancel>
-                <AlertDialogAction
+          <BottomSheet
+            open={!!confirmDeleteId}
+            onClose={() => setConfirmDeleteId(null)}
+            title="Hapus item riwayat?"
+            description="Tindakan ini tidak bisa dibatalkan."
+            footer={
+              <>
+                <ActionButton variant="secondary" className="flex-1" onClick={() => setConfirmDeleteId(null)}>Batal</ActionButton>
+                <ActionButton
+                  variant="danger"
+                  className="flex-1"
                   onClick={() => {
                     if (confirmDeleteId) void handleDeleteHistory(confirmDeleteId);
                     setConfirmDeleteId(null);
                   }}
                 >
                   Hapus
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
+                </ActionButton>
+              </>
+            }
+          />
 
-          <AlertDialog open={confirmEntryAction !== null} onOpenChange={(open) => { if (!open) setConfirmEntryAction(null); }}>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>
-                  {confirmEntryAction?.outcome === 'on_hold' ? 'Tahan item ini?' : 'Selesaikan item ini?'}
-                </AlertDialogTitle>
-                <AlertDialogDescription>
-                  {confirmEntryAction?.outcome === 'on_hold'
-                    ? 'Item tetap ada di daftar aktif. Jelaskan alasan agar shift lain bisa menindaklanjuti.'
-                    : 'Catatan tambahan bersifat opsional.'}
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-
-              <textarea
-                value={entryReason}
-                onChange={(e) => setEntryReason(e.target.value)}
-                rows={3}
-                placeholder={confirmEntryAction?.outcome === 'on_hold' ? 'Alasan ditahan (wajib)…' : 'Catatan tambahan (opsional)…'}
-                className="w-full resize-none rounded-xl border border-border bg-secondary px-4 py-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
-              />
-
-              <PhotoUploadGrid
-                label="Foto (opsional)"
-                photos={entryPhotoUrl ? [entryPhotoUrl] : []}
-                onChange={(urls) => setEntryPhotoUrl(urls[0] ?? null)}
-                upload={handleUploadEntryPhoto}
-                max={1}
-              />
-
-              <AlertDialogFooter>
-                <AlertDialogCancel>Batal</AlertDialogCancel>
-                <AlertDialogAction
+          <BottomSheet
+            open={confirmEntryAction !== null}
+            onClose={() => setConfirmEntryAction(null)}
+            title={confirmEntryAction?.outcome === 'on_hold' ? 'Tahan item ini?' : 'Selesaikan item ini?'}
+            description={
+              confirmEntryAction?.outcome === 'on_hold'
+                ? 'Item tetap ada di daftar aktif. Jelaskan alasan agar shift lain bisa menindaklanjuti.'
+                : 'Catatan tambahan bersifat opsional.'
+            }
+            footer={
+              <>
+                <ActionButton variant="secondary" className="flex-1" onClick={() => setConfirmEntryAction(null)}>Batal</ActionButton>
+                <ActionButton
+                  className="flex-1"
                   disabled={confirmEntryAction?.outcome === 'on_hold' && entryReason.trim() === ''}
                   onClick={() => {
                     if (!confirmEntryAction) return;
@@ -676,11 +557,27 @@ function SerahTerimaBoard() {
                   }}
                 >
                   {confirmEntryAction?.outcome === 'on_hold' ? 'Tahan' : 'Selesaikan'}
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        </div>
+                </ActionButton>
+              </>
+            }
+          >
+            <textarea
+              value={entryReason}
+              onChange={(e) => setEntryReason(e.target.value)}
+              rows={3}
+              placeholder={confirmEntryAction?.outcome === 'on_hold' ? 'Alasan ditahan (wajib)…' : 'Catatan tambahan (opsional)…'}
+              className="w-full resize-none rounded-xl border border-border bg-secondary px-3.5 py-2.5 text-base placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+            />
+
+            <PhotoUploadGrid
+              label="Foto (opsional)"
+              photos={entryPhotoUrl ? [entryPhotoUrl] : []}
+              onChange={(urls) => setEntryPhotoUrl(urls[0] ?? null)}
+              upload={handleUploadEntryPhoto}
+              max={1}
+            />
+          </BottomSheet>
+        </>
       )}
     </AccessGuard>
   );

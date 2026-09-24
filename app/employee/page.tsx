@@ -4,11 +4,9 @@
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import {
-  CheckSquare,
   ChevronRight,
+  ListChecks,
   UserCircle,
   Sun,
   Moon,
@@ -24,6 +22,8 @@ import {
   CircleDollarSign,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { shiftLabel } from "@/components/employee/tasks";
+import { Chip, ListGroup, NavRow, SectionLabel, SkeletonBlocks } from "@/components/employee/ui";
 
 import { EmployeeTargetGauge } from "@/components/employee/EmployeeTargetGauge";
 import { StoreContributionPie } from "@/components/employee/StoreContributionPie";
@@ -255,10 +255,10 @@ function PeriodToggle({
   onChange: (v: "daily" | "monthly") => void;
 }) {
   return (
-    <div className="relative flex h-9 w-[200px] shrink-0 overflow-hidden rounded-full border border-slate-200 bg-slate-100 p-1">
+    <div className="relative flex h-9 w-[184px] shrink-0 overflow-hidden rounded-full bg-secondary p-1">
       {/* Sliding pill */}
       <span
-        className="pointer-events-none absolute top-1 bottom-1 w-[calc(50%-4px)] rounded-full bg-white shadow-sm transition-transform duration-300 ease-out"
+        className="pointer-events-none absolute top-1 bottom-1 w-[calc(50%-4px)] rounded-full bg-card shadow-sm transition-transform duration-300 ease-out"
         style={{
           transform:
             value === "monthly"
@@ -272,10 +272,10 @@ function PeriodToggle({
           type="button"
           onClick={() => onChange(v)}
           className={cn(
-            "relative z-10 flex flex-1 items-center justify-center text-[11px] font-bold uppercase tracking-widest transition-colors",
+            "relative z-10 flex flex-1 items-center justify-center text-[11px] font-semibold transition-colors",
             value === v
-              ? "text-violet-700"
-              : "text-slate-400 hover:text-slate-600",
+              ? "text-primary"
+              : "text-muted-foreground hover:text-foreground",
           )}
         >
           {v === "daily" ? "Hari ini" : "Bulan ini"}
@@ -305,23 +305,23 @@ function StatTile({
   pct?: number | null;
 }) {
   return (
-    <div className="flex-1 rounded-2xl border border-slate-200 bg-white p-3.5 shadow-sm">
+    <div className="min-w-0 flex-1 rounded-2xl border border-border bg-card p-3.5">
       <div className={cn("flex h-8 w-8 items-center justify-center rounded-xl", iconBg)}>
         <Icon className={cn("h-4 w-4", iconColor)} strokeWidth={2.2} />
       </div>
-      <p className="mt-2.5 text-lg font-bold leading-none text-slate-900 tabular-nums">
+      <p className="mt-2.5 truncate text-lg font-bold leading-none text-foreground tabular-nums">
         {value}
       </p>
-      <p className="mt-1 text-[10px] font-bold uppercase tracking-wide text-slate-400">
+      <p className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         {label}
       </p>
-      {sub && <p className="mt-0.5 text-[10px] text-slate-400">{sub}</p>}
+      {sub && <p className="mt-0.5 text-[11px] text-muted-foreground">{sub}</p>}
       {pct != null && (
-        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100">
+        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-secondary">
           <div
             className={cn(
               "h-full rounded-full transition-all",
-              pct >= 100 ? "bg-emerald-500" : "bg-violet-500",
+              pct >= 100 ? "bg-emerald-500" : "bg-primary",
             )}
             style={{ width: `${Math.max(0, Math.min(100, pct))}%` }}
           />
@@ -422,12 +422,12 @@ export default function EmployeeDashboard() {
   return (
     <div className="flex flex-col">
       {/* ── Hero — greeting + shift status only ────────────────────────── */}
-      <div className="relative overflow-hidden bg-primary px-6 pb-7 pt-6">
+      <div className="relative overflow-hidden bg-primary px-5 pb-7 pt-5">
         {/* Decorative atmosphere */}
         <div className="pointer-events-none absolute -right-16 -top-16 h-56 w-56 rounded-full bg-white/5 blur-2xl" />
         <div className="pointer-events-none absolute -left-10 top-32 h-40 w-40 rounded-full bg-amber-300/5 blur-3xl" />
 
-        <div className="relative space-y-4">
+        <div className="relative mx-auto max-w-md space-y-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-widest text-primary-foreground/60">
               {greeting()}
@@ -446,11 +446,7 @@ export default function EmployeeDashboard() {
               {primaryShift === "morning" && <Sun className="h-3 w-3" />}
               {primaryShift === "evening" && <Moon className="h-3 w-3" />}
               {primaryShift === "full_day" && <Zap className="h-3 w-3" />}
-              {primaryShift === "morning"
-                ? "Morning shift"
-                : primaryShift === "evening"
-                  ? "Evening shift"
-                  : "Full Day shift"}
+              {shiftLabel(primaryShift) ?? "Shift"}
             </div>
 
             {/* Attendance pill */}
@@ -523,29 +519,26 @@ export default function EmployeeDashboard() {
       </div>
 
       {/* ── Performance — target gauge + store contribution pie ──────────── */}
-      <div className="bg-slate-50 px-4 pt-5 pb-2">
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <p className="text-[11px] font-bold uppercase tracking-widest text-slate-400">
-            Performance
-          </p>
-          {hasPerf && <PeriodToggle value={period} onChange={setPeriod} />}
-        </div>
+      <div className="mx-auto w-full max-w-md px-4 pt-5 pb-2">
+        <SectionLabel
+          className="mb-3"
+          action={hasPerf ? <PeriodToggle value={period} onChange={setPeriod} /> : undefined}
+        >
+          Performance
+        </SectionLabel>
 
         {loading ? (
-          <div className="space-y-3">
-            <div className="h-64 animate-pulse rounded-3xl bg-slate-200/60" />
-            <div className="h-64 animate-pulse rounded-3xl bg-slate-200/60" />
-          </div>
+          <SkeletonBlocks count={2} className="h-64 rounded-3xl" />
         ) : notScheduledToday ? (
-          <div className="flex items-center gap-3 rounded-3xl border border-dashed border-slate-200 bg-white px-4 py-6">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-100">
-              <CalendarOff className="h-4 w-4 text-slate-400" />
+          <div className="flex items-center gap-3 rounded-2xl border border-dashed border-border bg-card px-4 py-6">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-secondary">
+              <CalendarOff className="h-4 w-4 text-muted-foreground" />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-xs font-bold text-slate-600">
+              <p className="text-xs font-bold text-foreground">
                 Tidak ada jadwal hari ini
               </p>
-              <p className="mt-0.5 text-[11px] text-slate-400">
+              <p className="mt-0.5 text-[11px] text-muted-foreground">
                 Kontribusi harian butuh jadwal kerja hari itu — lihat
                 kontribusi bulanan di tab &quot;Bulan ini&quot; di atas.
               </p>
@@ -594,8 +587,8 @@ export default function EmployeeDashboard() {
             </div>
           </div>
         ) : (
-          <div className="rounded-3xl border border-dashed border-slate-200 bg-white px-5 py-8 text-center">
-            <p className="text-xs font-medium text-slate-400">
+          <div className="rounded-2xl border border-dashed border-border bg-card px-5 py-8 text-center">
+            <p className="text-xs font-medium text-muted-foreground">
               Data performa belum tersedia.
             </p>
           </div>
@@ -603,94 +596,46 @@ export default function EmployeeDashboard() {
       </div>
 
       {/* ── Quick actions ─────────────────────────────────────────────────── */}
-      <div className="bg-slate-50 px-4 pt-5 pb-8">
-        <p className="mb-3 text-[11px] font-bold uppercase tracking-widest text-slate-400">
-          Quick Actions
-        </p>
+      <div className="mx-auto w-full max-w-md px-4 pt-5 pb-8">
+        <SectionLabel>Quick Actions</SectionLabel>
 
-        <div className="space-y-2.5">
-          <Link href="/employee/tasks">
-            <Card className="cursor-pointer border-border shadow-sm transition-all hover:border-primary/25 hover:shadow-md active:scale-[0.98]">
-              <CardContent className="flex items-center gap-3 p-4">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10">
-                  <CheckSquare className="h-5 w-5 text-primary" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-foreground">
-                    My Tasks
-                  </p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">
-                    View and complete today's shift tasks
-                  </p>
-                </div>
-                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-              </CardContent>
-            </Card>
-          </Link>
-
-          <Link href="/employee/attendance">
-            <Card className="cursor-pointer border-border shadow-sm transition-all hover:border-primary/25 hover:shadow-md active:scale-[0.98]">
-              <CardContent className="flex items-center gap-3 p-4">
-                <div
-                  className={cn(
-                    "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl",
-                    primaryAtt && !isOnBreak ? "bg-green-100" : "bg-amber-50",
-                  )}
-                >
-                  <CalendarDays
-                    className={cn(
-                      "h-5 w-5",
-                      primaryAtt && !isOnBreak
-                        ? "text-green-600"
-                        : "text-amber-600",
-                    )}
-                  />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-foreground">
-                    Attendance
-                  </p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">
-                    {loading
-                      ? "Loading…"
-                      : isOnBreak
-                        ? "Currently on break"
-                        : primaryAtt
-                          ? `${attCfg?.label} · ${primaryAtt.checkOutTime ? "Shift complete" : "Check-out when done"}`
-                          : attSlots.length > 0
-                            ? "Tap to check in for your shift"
-                            : "No shift scheduled today"}
-                  </p>
-                </div>
-                {!primaryAtt && !loading && attSlots.length > 0 && (
-                  <Badge className="shrink-0 bg-amber-100 text-amber-700 hover:bg-amber-100 text-[10px]">
-                    Action needed
-                  </Badge>
-                )}
-                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-              </CardContent>
-            </Card>
-          </Link>
-
-          <Link href="/employee/profile">
-            <Card className="cursor-pointer border-border shadow-sm transition-all hover:border-primary/25 hover:shadow-md active:scale-[0.98]">
-              <CardContent className="flex items-center gap-3 p-4">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-secondary">
-                  <UserCircle className="h-5 w-5 text-muted-foreground" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-foreground">
-                    My Profile
-                  </p>
-                  <p className="mt-0.5 text-xs text-muted-foreground">
-                    View schedule &amp; account info
-                  </p>
-                </div>
-                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-              </CardContent>
-            </Card>
-          </Link>
-        </div>
+        <ListGroup>
+          <NavRow
+            href="/employee/tasks"
+            icon={ListChecks}
+            title="My Tasks"
+            description="Lihat dan selesaikan task shift hari ini"
+          />
+          <NavRow
+            href="/employee/attendance"
+            icon={CalendarDays}
+            iconClassName={primaryAtt && !isOnBreak ? "bg-green-50 text-green-600" : "bg-amber-50 text-amber-600"}
+            title="Attendance"
+            description={
+              loading
+                ? "Memuat…"
+                : isOnBreak
+                  ? "Sedang istirahat"
+                  : primaryAtt
+                    ? `${attCfg?.label} · ${primaryAtt.checkOutTime ? "Shift selesai" : "Absen pulang setelah selesai"}`
+                    : attSlots.length > 0
+                      ? "Ketuk untuk absen masuk"
+                      : "Tidak ada shift hari ini"
+            }
+            trailing={
+              !primaryAtt && !loading && attSlots.length > 0
+                ? <Chip tone="warning">Perlu aksi</Chip>
+                : undefined
+            }
+          />
+          <NavRow
+            href="/employee/profile"
+            icon={UserCircle}
+            iconClassName="bg-secondary text-muted-foreground"
+            title="My Profile"
+            description="Akun, foto profil & password"
+          />
+        </ListGroup>
       </div>
     </div>
   );

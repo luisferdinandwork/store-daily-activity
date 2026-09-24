@@ -1,5 +1,7 @@
 'use client';
 // components/employee/tasks/SaveIndicator.tsx
+//
+// Autosave state, sized to sit on the purple app bar's meta line (TaskHeader).
 
 import { Cloud, CloudOff, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -15,12 +17,10 @@ export function SaveIndicator({ status, lastSaved }: SaveIndicatorProps) {
   if (status === 'idle') return null;
 
   return (
-    <div
+    <span
       className={cn(
-        'flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold',
-        status === 'saving' && 'bg-blue-50 text-blue-600',
-        status === 'saved' && 'bg-green-50 text-green-700',
-        status === 'error' && 'bg-red-50 text-red-600',
+        'inline-flex shrink-0 items-center gap-1 text-[10px] font-semibold',
+        status === 'error' ? 'rounded-full bg-red-400 px-1.5 py-px text-white' : 'text-primary-foreground/80',
       )}
     >
       {status === 'saving' && (
@@ -33,21 +33,18 @@ export function SaveIndicator({ status, lastSaved }: SaveIndicatorProps) {
       {status === 'saved' && (
         <>
           <Cloud className="h-3 w-3" />
-          Tersimpan
-          {lastSaved &&
-            ` ${new Date(lastSaved).toLocaleTimeString('id-ID', {
-              hour: '2-digit',
-              minute: '2-digit',
-            })}`}
+          {lastSaved
+            ? new Date(lastSaved).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
+            : 'Tersimpan'}
         </>
       )}
 
       {status === 'error' && (
         <>
           <CloudOff className="h-3 w-3" />
-          Simpan gagal
+          Gagal simpan
         </>
       )}
-    </div>
+    </span>
   );
 }

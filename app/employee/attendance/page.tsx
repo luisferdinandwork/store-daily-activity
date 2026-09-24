@@ -24,6 +24,7 @@ import {
 import { cn, formatRupiah } from '@/lib/utils';
 import { toast } from 'sonner';
 import CashCountCard, { type CashCountPayload } from '@/components/employee/CashCountCard';
+import { EmptyState, Notice, PageBody, Section, SkeletonBlocks } from '@/components/employee/ui';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -179,8 +180,8 @@ function CashInput({
 
   return (
     <div className="space-y-1.5">
-      <label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</label>
-      <div className="flex items-center overflow-hidden rounded-xl border border-border bg-background focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/15">
+      <label className="px-0.5 text-xs font-medium text-muted-foreground">{label}</label>
+      <div className="flex items-center overflow-hidden rounded-xl border border-border bg-background transition-colors focus-within:border-primary">
         <span className="pl-3 pr-1 text-sm font-semibold text-muted-foreground">Rp</span>
         <input
           type="text"
@@ -190,7 +191,7 @@ function CashInput({
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           onChange={e => onChange(e.target.value.replace(/\D/g, ''))}
-          className="w-full bg-transparent py-2.5 pr-3 text-sm font-bold tabular-nums text-foreground outline-none"
+          className="h-11 w-full bg-transparent pr-3 text-base font-bold tabular-nums text-foreground outline-none"
           disabled={disabled}
         />
       </div>
@@ -250,7 +251,7 @@ function ShiftCard({ slot, cashCountBlocking, onAction }: {
     : (cfg?.label ?? '');
 
   return (
-    <Card className="gap-0 overflow-hidden py-0 shadow-sm">
+    <Card className="gap-0 overflow-hidden rounded-2xl py-0 shadow-none">
       {/* Accent bar */}
       <div className={cn('h-1', accent.bar)} />
 
@@ -277,7 +278,7 @@ function ShiftCard({ slot, cashCountBlocking, onAction }: {
 
         {/* ── Not yet checked in ───────────────────────────────────────────── */}
         {!att && (
-          <div className="space-y-3 rounded-xl bg-slate-50 p-3">
+          <div className="space-y-3 rounded-xl bg-secondary p-3">
             <div className="flex items-center gap-2.5">
               <LogIn className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
               <p className="text-xs text-muted-foreground">
@@ -294,7 +295,7 @@ function ShiftCard({ slot, cashCountBlocking, onAction }: {
               </div>
             )}
 
-            <Button className="h-11 w-full gap-2 text-sm font-bold" onClick={() => act('checkin')} disabled={acting !== null}>
+            <Button className="h-12 w-full gap-2 rounded-xl text-sm font-bold" onClick={() => act('checkin')} disabled={acting !== null}>
               {acting === 'checkin' ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
               {acting === 'checkin' ? 'Checking in…' : 'Check In Now'}
             </Button>
@@ -305,7 +306,7 @@ function ShiftCard({ slot, cashCountBlocking, onAction }: {
         {att && cfg && (
           <>
             {/* Status strip */}
-            <div className="flex items-center gap-3 rounded-xl bg-slate-50 p-3">
+            <div className="flex items-center gap-3 rounded-xl bg-secondary p-3">
               <div className={cn('flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl', statusTile)}>
                 <StatusIcon className={cn('h-5 w-5', statusText)} strokeWidth={2.2} />
               </div>
@@ -329,7 +330,7 @@ function ShiftCard({ slot, cashCountBlocking, onAction }: {
                 </div>
                 <CashInput label="Cash brought back" value={cashInInput} onChange={setCashInInput} disabled={acting !== null} />
                 <Button
-                  className="h-11 w-full gap-2 bg-amber-500 text-sm font-bold text-white hover:bg-amber-600"
+                  className="h-11 w-full gap-2 rounded-xl bg-amber-500 text-sm font-bold text-white hover:bg-amber-600"
                   onClick={() => { act('endbreak', undefined, undefined, cashInNum); setCashInInput(''); }}
                   disabled={acting !== null || !cashInValid}
                 >
@@ -342,7 +343,7 @@ function ShiftCard({ slot, cashCountBlocking, onAction }: {
             {/* Break history */}
             {(att.breaks ?? []).length > 0 && (
               <div className="rounded-xl border border-border p-3">
-                <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Break Record</p>
+                <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Break Record</p>
                 <div className="divide-y divide-border">
                   {att.breaks.map(b => (
                     <div key={b.id} className="flex items-center justify-between gap-2 py-1.5 text-xs">
@@ -391,7 +392,7 @@ function ShiftCard({ slot, cashCountBlocking, onAction }: {
                       />
                       <Button
                         variant="outline"
-                        className="h-10 w-full gap-2 text-sm font-semibold"
+                        className="h-11 w-full gap-2 rounded-xl text-sm font-semibold"
                         onClick={() => { act('startbreak', bc.type, cashOutNum, undefined); setCashOutInputs(prev => ({ ...prev, [bc.type]: '' })); }}
                         disabled={acting !== null || !isValid}
                       >
@@ -404,7 +405,7 @@ function ShiftCard({ slot, cashCountBlocking, onAction }: {
 
                 <Button
                   variant="outline"
-                  className="h-11 w-full gap-2 border-border text-sm font-semibold"
+                  className="h-12 w-full gap-2 rounded-xl border-border text-sm font-semibold"
                   onClick={() => act('checkout')}
                   disabled={acting !== null || onBreak}
                 >
@@ -514,9 +515,9 @@ export default function EmployeeAttendancePage() {
 
   if (sessionStatus === 'loading') {
     return (
-      <div className="space-y-3 p-4">
-        {[1, 2].map(i => <div key={i} className="h-36 animate-pulse rounded-2xl bg-slate-200/60" />)}
-      </div>
+      <PageBody>
+        <SkeletonBlocks count={2} className="h-36" />
+      </PageBody>
     );
   }
 
@@ -526,11 +527,11 @@ export default function EmployeeAttendancePage() {
   return (
     <div className="flex flex-col">
       {/* Hero */}
-      <div className="relative overflow-hidden bg-primary px-6 pb-7 pt-6">
+      <div className="relative overflow-hidden bg-primary px-5 pb-7 pt-5">
         <div className="pointer-events-none absolute -right-16 -top-16 h-56 w-56 rounded-full bg-white/5 blur-2xl" />
         <div className="pointer-events-none absolute -left-10 top-24 h-40 w-40 rounded-full bg-amber-300/5 blur-3xl" />
 
-        <div className="relative">
+        <div className="relative mx-auto max-w-md">
           <p className="text-xs font-semibold uppercase tracking-widest text-primary-foreground/60">Attendance</p>
           <h1 className="mt-0.5 text-2xl font-bold text-primary-foreground">Today</h1>
           <p className="mt-1 text-xs text-primary-foreground/50">{todayFull()}</p>
@@ -565,29 +566,18 @@ export default function EmployeeAttendancePage() {
       </div>
 
       {/* Body */}
-      <div className="space-y-4 bg-slate-50 p-4 pb-10">
-        {loading && (
-          <div className="space-y-3">
-            {[1, 2].map(i => <div key={i} className="h-36 animate-pulse rounded-2xl bg-slate-200/60" />)}
-          </div>
-        )}
+      <PageBody className="space-y-4">
+        {loading && <SkeletonBlocks count={2} className="h-36" />}
 
         {!loading && slots.length === 0 && (
-          <Card className="shadow-sm">
-            <CardContent className="flex flex-col items-center py-12 text-center">
-              <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-secondary">
-                <CalendarX className="h-7 w-7 text-muted-foreground/40" />
-              </div>
-              <p className="text-base font-bold text-foreground">Not scheduled today</p>
-              <p className="mt-1.5 max-w-xs text-sm text-muted-foreground">
-                You don&apos;t have a shift assigned for today. Contact your OPS manager if this looks wrong.
-              </p>
-              <div className="mt-4 flex items-center gap-2 rounded-xl bg-amber-50 px-3.5 py-2.5 text-[11px] font-medium text-amber-700">
-                <Info className="h-3.5 w-3.5 shrink-0" />
-                Check-in is only available on scheduled shift days
-              </div>
-            </CardContent>
-          </Card>
+          <EmptyState
+            icon={CalendarX}
+            title="Tidak ada jadwal hari ini"
+            description="Kamu tidak punya shift hari ini. Hubungi OPS jika ini terlihat salah."
+            action={
+              <Notice tone="warning" icon={Info}>Absen masuk hanya tersedia di hari yang ada jadwal shift.</Notice>
+            }
+          />
         )}
 
         {/* Attendance first */}
@@ -606,12 +596,11 @@ export default function EmployeeAttendancePage() {
 
         {/* Cashier cash-count — kept below the shift cards */}
         {!loading && showCashCount && cashCount && (
-          <div className="space-y-2">
-            <p className="px-1 text-[11px] font-bold uppercase tracking-widest text-slate-400">Kas Kasir</p>
+          <Section title="Kas Kasir">
             <CashCountCard cashCount={cashCount} onDone={load} />
-          </div>
+          </Section>
         )}
-      </div>
+      </PageBody>
     </div>
   );
 }

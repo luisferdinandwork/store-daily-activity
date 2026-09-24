@@ -3,16 +3,17 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import {
-  ArrowLeft, CheckCircle2, Loader2, AlertCircle,
-  Check, Cloud, CloudOff, Save,
-  LogIn, Navigation, NavigationOff, RefreshCw,
-} from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { CloudOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAutoSave } from '@/lib/hooks/useAutoSave';
 import { useTaskLocationSetting } from '@/lib/hooks/useTaskLocationSetting';
-import { TaskHeader, TaskSubmitBar, SaveIndicator } from '@/components/employee/tasks';
+import {
+  AccessBanner, LockedOverlay, TaskHeader, TaskSubmitBar, SaveIndicator, shiftLabel,
+} from '@/components/employee/tasks';
+import {
+  CheckRow, EmptyState, ListGroup, Notice, NotesField, PageBody, Section,
+  SkeletonBlocks, TaskReviewNotices,
+} from '@/components/employee/ui';
 
 type TaskStatus = 'not_started' | 'in_progress' | 'completed' | 'verified' | 'rejected';
 
@@ -143,158 +144,6 @@ function useAccessStatus(
   return { accessStatus, accessLoading, refreshAccess: fetch_ };
 }
 
-function AccessBanner({
-  accessStatus, accessLoading, geoReady, geo, geoError,
-  onRefreshGeo, onRefreshAccess,
-}: {
-  accessStatus: AccessStatus | null;
-  accessLoading: boolean;
-  geoReady: boolean;
-  geo: { lat: number; lng: number } | null;
-  geoError: string | null;
-  onRefreshGeo: () => void;
-  onRefreshAccess: () => void;
-}) {
-  if (!geoReady || accessLoading) {
-    return (
-      <div className="flex items-center gap-2 rounded-xl border border-border bg-secondary px-4 py-2.5">
-        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-        <p className="text-xs text-muted-foreground">
-          {!geoReady ? 'Mendapatkan lokasi…' : 'Memeriksa akses…'}
-        </p>
-      </div>
-    );
-  }
-
-  if (!accessStatus) return null;
-
-  if (accessStatus.status === 'not_checked_in') {
-    return (
-      <div className="flex items-start gap-3 rounded-xl border border-red-300 bg-red-50 px-4 py-3.5">
-        <LogIn className="mt-0.5 h-5 w-5 flex-shrink-0 text-red-600" />
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-bold text-red-700">Belum absen masuk</p>
-          <p className="mt-0.5 text-xs text-red-600">Kamu harus melakukan absensi masuk terlebih dahulu.</p>
-        </div>
-        <button
-          onClick={onRefreshAccess}
-          className="flex-shrink-0 flex items-center gap-1 rounded-lg bg-red-100 px-2.5 py-1.5 text-[11px] font-semibold text-red-700 hover:bg-red-200 transition-colors"
-        >
-          <RefreshCw className="h-3 w-3" />Cek ulang
-        </button>
-      </div>
-    );
-  }
-
-  if (accessStatus.status === 'outside_geofence') {
-    return (
-      <div className="flex items-start gap-3 rounded-xl border border-orange-300 bg-orange-50 px-4 py-3.5">
-        <NavigationOff className="mt-0.5 h-5 w-5 flex-shrink-0 text-orange-600" />
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-bold text-orange-700">Di luar area toko</p>
-          <p className="mt-0.5 text-xs text-orange-600">
-            Kamu berada {accessStatus.distanceM}m dari toko (batas: {accessStatus.radiusM}m).
-          </p>
-        </div>
-        <button
-          onClick={onRefreshGeo}
-          className="flex-shrink-0 flex items-center gap-1 rounded-lg bg-orange-100 px-2.5 py-1.5 text-[11px] font-semibold text-orange-700 hover:bg-orange-200 transition-colors"
-        >
-          <RefreshCw className="h-3 w-3" />Perbarui
-        </button>
-      </div>
-    );
-  }
-
-  if (accessStatus.status === 'geo_unavailable') {
-    return (
-      <div className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-        <NavigationOff className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
-        <div className="flex-1 min-w-0">
-          <p className="text-xs font-semibold text-amber-800">Lokasi tidak terdeteksi</p>
-          <p className="mt-0.5 text-xs text-amber-600">
-            {geoError ?? 'Izin lokasi belum diberikan.'} Task dapat dilanjutkan tanpa rekaman lokasi.
-          </p>
-        </div>
-        <button
-          onClick={onRefreshGeo}
-          className="flex-shrink-0 flex items-center gap-1 rounded-lg bg-amber-100 px-2.5 py-1.5 text-[11px] font-semibold text-amber-700 hover:bg-amber-200 transition-colors"
-        >
-          <RefreshCw className="h-3 w-3" />Coba lagi
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-2.5">
-      <Navigation className="h-4 w-4 flex-shrink-0 text-green-600" />
-      <p className="text-xs font-medium text-green-700">
-        Lokasi terdeteksi ({geo?.lat.toFixed(5)}, {geo?.lng.toFixed(5)})
-      </p>
-    </div>
-  );
-}
-
-function SimpleCheckItem({
-  label, checked, onChange, disabled,
-}: {
-  label: string;
-  checked: boolean;
-  onChange: (v: boolean) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={() => !disabled && onChange(!checked)}
-      className={cn(
-        'flex w-full items-center gap-3 rounded-xl border-2 px-4 py-3.5 text-left transition-all',
-        checked ? 'border-primary/30 bg-primary/5' : 'border-border bg-card hover:border-primary/20',
-        disabled && 'cursor-default opacity-60',
-      )}
-    >
-      <div className={cn(
-        'flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border-2 transition-colors',
-        checked ? 'border-primary bg-primary' : 'border-border',
-      )}>
-        {checked && <Check className="h-3 w-3 text-primary-foreground" strokeWidth={3} />}
-      </div>
-      <span className={cn('text-sm font-medium', checked ? 'text-foreground' : 'text-muted-foreground')}>
-        {label}
-      </span>
-    </button>
-  );
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="space-y-3">
-      <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">{title}</p>
-      {children}
-    </div>
-  );
-}
-
-function LockedOverlay({ accessStatus }: { accessStatus: AccessStatus | null }) {
-  if (!accessStatus || accessStatus.status === 'ok' || accessStatus.status === 'geo_unavailable') return null;
-
-  const isCheckIn = accessStatus.status === 'not_checked_in';
-
-  return (
-    <div className="pointer-events-none absolute inset-0 rounded-2xl bg-background/70 backdrop-blur-[2px] flex flex-col items-center justify-center gap-2 z-10">
-      <div className={cn('flex h-12 w-12 items-center justify-center rounded-full', isCheckIn ? 'bg-red-100' : 'bg-orange-100')}>
-        {isCheckIn
-          ? <LogIn className="h-6 w-6 text-red-600" />
-          : <NavigationOff className="h-6 w-6 text-orange-600" />}
-      </div>
-      <p className={cn('text-sm font-bold', isCheckIn ? 'text-red-700' : 'text-orange-700')}>
-        {isCheckIn ? 'Absen masuk dulu' : 'Kamu di luar area toko'}
-      </p>
-    </div>
-  );
-}
-
 export default function MarketingCheckDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -376,7 +225,6 @@ export default function MarketingCheckDetailPage() {
 
   const taskStatus = taskData?.status;
   const readonly = taskStatus === 'completed' || taskStatus === 'verified';
-  const isRejected = taskStatus === 'rejected';
   const locked =
     !readonly &&
     !!accessStatus &&
@@ -468,47 +316,44 @@ export default function MarketingCheckDetailPage() {
     }
   }
 
+  const groups = [
+    {
+      title: 'Cek promo berjalan',
+      items: [
+        { label: 'Nama promo',      checked: promoName,      toggle: setChk('promoName', setPromoName) },
+        { label: 'Periode promo',   checked: promoPeriod,    toggle: setChk('promoPeriod', setPromoPeriod) },
+        { label: 'Mekanisme promo', checked: promoMechanism, toggle: setChk('promoMechanism', setPromoMechanism) },
+      ],
+    },
+    {
+      title: 'Random checking',
+      items: [
+        { label: '5 item sepatu',     checked: randomShoeItems,    toggle: setChk('randomShoeItems', setRandomShoeItems) },
+        { label: '5 item non-sepatu', checked: randomNonShoeItems, toggle: setChk('randomNonShoeItems', setRandomNonShoeItems) },
+      ],
+    },
+    {
+      title: 'Sell tag',
+      items: [
+        { label: 'Sell tag', checked: sellTag, toggle: setChk('sellTag', setSellTag) },
+      ],
+    },
+  ];
+
   return (
-    <div className="flex min-h-screen flex-col bg-background">
-      <div className="sticky top-0 z-20 flex items-center gap-2 border-b border-border bg-card px-4 py-3">
-        <button
-          onClick={() => router.back()}
-          className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-secondary text-foreground"
-        >
-          <ArrowLeft className="h-4 w-4" />
-        </button>
+    <>
+      <TaskHeader
+        title="Marketing Check"
+        subtitle={shiftLabel(taskData?.shift)}
+        status={taskStatus}
+        saveIndicator={
+          !readonly && !loading && taskData ? (
+            <SaveIndicator status={saveStatus} lastSaved={lastSaved} />
+          ) : null
+        }
+      />
 
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-bold text-foreground">Marketing Check</p>
-          {taskData && (
-            <p className="text-[10px] capitalize text-muted-foreground">
-              {taskData.shift.replace('_', ' ')} shift · {taskData.status.replace('_', ' ')}
-            </p>
-          )}
-        </div>
-
-        {!readonly && !loading && taskData && (
-          <SaveIndicator status={saveStatus} lastSaved={lastSaved} />
-        )}
-
-        {taskStatus === 'completed' && (
-          <span className="flex items-center gap-1 rounded-full bg-green-100 px-2.5 py-1 text-[10px] font-bold text-green-700">
-            <CheckCircle2 className="h-3 w-3" />Selesai
-          </span>
-        )}
-        {taskStatus === 'verified' && (
-          <span className="flex items-center gap-1 rounded-full bg-green-200 px-2.5 py-1 text-[10px] font-bold text-green-800">
-            <CheckCircle2 className="h-3 w-3" />Terverifikasi
-          </span>
-        )}
-        {taskStatus === 'rejected' && (
-          <span className="flex items-center gap-1 rounded-full bg-red-100 px-2.5 py-1 text-[10px] font-bold text-red-700">
-            <AlertCircle className="h-3 w-3" />Ditolak
-          </span>
-        )}
-      </div>
-
-      <div className="flex-1 space-y-4 p-4 pb-10">
+      <PageBody bottomBar={!readonly && !!taskData}>
         {!readonly && !loading && taskData && (
           <AccessBanner
             accessStatus={accessStatus}
@@ -518,111 +363,72 @@ export default function MarketingCheckDetailPage() {
             geoError={geoError}
             onRefreshGeo={refreshGeo}
             onRefreshAccess={refreshAccess}
+            requireGeo={requiresLocation}
+            allowWithoutGeo
           />
         )}
 
         {submitError && (
-          <div className="flex items-start gap-2.5 rounded-xl border border-red-300 bg-red-50 px-4 py-3">
-            <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-600" />
-            <div className="min-w-0 flex-1">
-              <p className="text-xs font-bold text-red-700">Submit gagal</p>
-              <p className="mt-0.5 text-xs text-red-600 break-words">{submitError}</p>
-            </div>
-          </div>
+          <Notice tone="error" title="Submit gagal" onDismiss={() => setSubmitError(null)}>
+            {submitError}
+          </Notice>
         )}
 
         {saveError && !readonly && (
-          <div className="flex items-center gap-2 rounded-xl border border-orange-200 bg-orange-50 px-4 py-2.5">
-            <CloudOff className="h-4 w-4 flex-shrink-0 text-orange-600" />
-            <p className="text-xs text-orange-700">Auto-save gagal: {saveError}</p>
-          </div>
+          <Notice tone="warning" icon={CloudOff}>Auto-save gagal: {saveError}</Notice>
         )}
 
-        {isRejected && taskData?.notes && (
-          <div className="flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
-            <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-600" />
-            <div>
-              <p className="text-xs font-bold text-red-700">Ditolak oleh OPS</p>
-              <p className="mt-0.5 text-xs text-red-600">{taskData.notes}</p>
-              <p className="mt-1.5 text-xs font-medium text-red-700">Silakan perbaiki dan submit ulang.</p>
-            </div>
-          </div>
-        )}
-
-        {taskStatus === 'verified' && taskData?.verifiedAt && (
-          <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3">
-            <p className="text-xs font-semibold text-green-800">Task telah diverifikasi</p>
-            <p className="mt-0.5 text-xs text-green-600">
-              {new Date(taskData.verifiedAt).toLocaleString('id-ID', {
-                day: 'numeric',
-                month: 'long',
-                year: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit',
-              })}
-            </p>
-          </div>
-        )}
+        <TaskReviewNotices status={taskStatus} notes={taskData?.notes} verifiedAt={taskData?.verifiedAt} />
 
         {loading ? (
-          <div className="space-y-3">
-            {[1, 2, 3, 4].map(i => <div key={i} className="h-14 animate-pulse rounded-xl bg-secondary" />)}
-          </div>
+          <SkeletonBlocks count={4} className="h-14" />
         ) : !taskData ? (
-          <div className="flex flex-col items-center py-20 text-center">
-            <AlertCircle className="mb-3 h-8 w-8 text-muted-foreground/40" />
-            <p className="text-sm font-semibold">Task tidak ditemukan</p>
-          </div>
+          <EmptyState title="Task tidak ditemukan" description="Task ini mungkin sudah tidak tersedia untuk jadwalmu hari ini." />
         ) : (
           <div className="relative">
-            <LockedOverlay accessStatus={accessStatus} />
+            {!readonly && <LockedOverlay accessStatus={accessStatus} requireGeo={requiresLocation} allowWithoutGeo />}
 
-            <div className="space-y-6">
-              <Section title="Cek Promo Berjalan">
-                <div className="space-y-2">
-                  <SimpleCheckItem label="Nama promo" checked={promoName} onChange={setChk('promoName', setPromoName)} disabled={dis} />
-                  <SimpleCheckItem label="Periode promo" checked={promoPeriod} onChange={setChk('promoPeriod', setPromoPeriod)} disabled={dis} />
-                  <SimpleCheckItem label="Mekanisme promo" checked={promoMechanism} onChange={setChk('promoMechanism', setPromoMechanism)} disabled={dis} />
-                </div>
-              </Section>
+            <div className="space-y-5">
+              {groups.map(g => (
+                <Section key={g.title} title={g.title} meta={`${g.items.filter(i => i.checked).length}/${g.items.length}`}>
+                  <ListGroup>
+                    {g.items.map(i => (
+                      <CheckRow
+                        key={i.label}
+                        label={i.label}
+                        checked={i.checked}
+                        onToggle={() => i.toggle(!i.checked)}
+                        disabled={dis}
+                      />
+                    ))}
+                  </ListGroup>
+                </Section>
+              ))}
 
-              <Section title="Random Checking">
-                <div className="space-y-2">
-                  <SimpleCheckItem label="5 item sepatu" checked={randomShoeItems} onChange={setChk('randomShoeItems', setRandomShoeItems)} disabled={dis} />
-                  <SimpleCheckItem label="5 item non-sepatu" checked={randomNonShoeItems} onChange={setChk('randomNonShoeItems', setRandomNonShoeItems)} disabled={dis} />
-                </div>
-              </Section>
-
-              <Section title="Sell Tag">
-                <SimpleCheckItem label="Sell tag" checked={sellTag} onChange={setChk('sellTag', setSellTag)} disabled={dis} />
-              </Section>
-
-              <Section title="Catatan (opsional)">
-                <textarea
-                  value={notes}
-                  onChange={(e) => {
-                    setNotes(e.target.value);
-                    autoSave(makeAutoSaveBody({ notes: e.target.value }));
-                  }}
-                  disabled={dis}
-                  rows={3}
-                  placeholder="Tambahkan catatan jika ada…"
-                  className="w-full resize-none rounded-xl border border-border bg-secondary px-4 py-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
-                />
-              </Section>
-
-              <TaskSubmitBar
-                  label="Submit Marketing Check"
-                  onSubmit={handleSubmit}
-                  submitting={submitting}
-                  disabled={!canSubmit}
-                  hidden={readonly}
-                  hint={!canSubmit ? submitHint : undefined}
-                />
+              <NotesField
+                value={notes}
+                onChange={(v) => {
+                  setNotes(v);
+                  autoSave(makeAutoSaveBody({ notes: v }));
+                }}
+                disabled={dis}
+                rows={3}
+              />
             </div>
           </div>
         )}
-      </div>
-    </div>
+      </PageBody>
+
+      {taskData && (
+        <TaskSubmitBar
+          label="Submit Marketing Check"
+          onSubmit={handleSubmit}
+          submitting={submitting}
+          disabled={!canSubmit}
+          hidden={readonly}
+          hint={!canSubmit ? submitHint : undefined}
+        />
+      )}
+    </>
   );
 }

@@ -30,6 +30,7 @@ import {
   Loader2, LogIn, Navigation, NavigationOff, RefreshCw,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { Notice } from '@/components/employee/ui';
 import { useGeo, type GeoPoint } from '@/lib/hooks/useGeo';
 import { useAccessStatus, type AccessStatus } from '@/lib/hooks/useAccessStatus';
 import { useTaskLocationSetting } from '@/lib/hooks/useTaskLocationSetting';
@@ -178,10 +179,12 @@ function AccessGuardNoGeo({
 }
 
 // ─── Banner ─────────────────────────────────────────────────────────────────
+// Exported so pages that run their own access hooks (store-opening) render the
+// exact same states as AccessGuard pages.
 
-function AccessBanner({
+export function AccessBanner({
   accessStatus, accessLoading, geoReady, geo, geoError,
-  onRefreshGeo, onRefreshAccess, requireGeo,
+  onRefreshGeo, onRefreshAccess, requireGeo = true, allowWithoutGeo = false,
 }: {
   accessStatus: AccessStatus | null;
   accessLoading: boolean;
@@ -190,121 +193,100 @@ function AccessBanner({
   geoError: string | null;
   onRefreshGeo: () => void;
   onRefreshAccess: () => void;
-  requireGeo: boolean;
+  requireGeo?: boolean;
+  /** Geo is checked when available, but a missing fix doesn't block (store-front). */
+  allowWithoutGeo?: boolean;
 }) {
   if (!geoReady || accessLoading) {
     return (
-      <div className="flex items-center gap-2 rounded-xl border border-border bg-secondary px-4 py-2.5">
-        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-        <p className="text-xs text-muted-foreground">
-          {!geoReady ? 'Mendapatkan lokasi…' : 'Memeriksa akses…'}
-        </p>
-      </div>
+      <Notice tone="neutral" icon={SpinnerIcon}>
+        {!geoReady ? 'Mendapatkan lokasi…' : 'Memeriksa akses…'}
+      </Notice>
     );
   }
   if (!accessStatus) return null;
 
   if (accessStatus.status === 'not_checked_in') {
     return (
-      <div className="flex items-start gap-3 rounded-xl border border-red-300 bg-red-50 px-4 py-3.5">
-        <LogIn className="mt-0.5 h-5 w-5 flex-shrink-0 text-red-600" />
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-bold text-red-700">Belum absen masuk</p>
-          <p className="mt-0.5 text-xs text-red-600">Kamu harus melakukan absensi masuk terlebih dahulu.</p>
-        </div>
-        <button
-          onClick={onRefreshAccess}
-          className="flex flex-shrink-0 items-center gap-1 rounded-lg bg-red-100 px-2.5 py-1.5 text-[11px] font-semibold text-red-700 transition-colors hover:bg-red-200"
-        >
-          <RefreshCw className="h-3 w-3" />Cek ulang
-        </button>
-      </div>
+      <Notice
+        tone="error"
+        icon={LogIn}
+        title="Belum absen masuk"
+        action={{ label: 'Cek ulang', onClick: onRefreshAccess, icon: RefreshCw }}
+      >
+        Lakukan absen masuk dulu di halaman Attendance.
+      </Notice>
     );
   }
 
   // Geo-only states — only meaningful when requireGeo is true.
   if (requireGeo && accessStatus.status === 'outside_geofence') {
     return (
-      <div className="flex items-start gap-3 rounded-xl border border-orange-300 bg-orange-50 px-4 py-3.5">
-        <NavigationOff className="mt-0.5 h-5 w-5 flex-shrink-0 text-orange-600" />
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-bold text-orange-700">Di luar area toko</p>
-          <p className="mt-0.5 text-xs text-orange-600">
-            Kamu berada {accessStatus.distanceM}m dari toko (batas: {accessStatus.radiusM}m).
-          </p>
-        </div>
-        <button
-          onClick={onRefreshGeo}
-          className="flex flex-shrink-0 items-center gap-1 rounded-lg bg-orange-100 px-2.5 py-1.5 text-[11px] font-semibold text-orange-700 transition-colors hover:bg-orange-200"
-        >
-          <RefreshCw className="h-3 w-3" />Perbarui
-        </button>
-      </div>
+      <Notice
+        tone="warning"
+        icon={NavigationOff}
+        title="Di luar area toko"
+        action={{ label: 'Perbarui', onClick: onRefreshGeo, icon: RefreshCw }}
+      >
+        Kamu berada {accessStatus.distanceM}m dari toko (batas {accessStatus.radiusM}m).
+      </Notice>
     );
   }
   if (requireGeo && accessStatus.status === 'geo_unavailable') {
     return (
-      <div className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-        <NavigationOff className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
-        <div className="flex-1 min-w-0">
-          <p className="text-xs font-semibold text-amber-800">Lokasi tidak terdeteksi</p>
-          <p className="mt-0.5 text-xs text-amber-600">
-            {geoError ?? 'Izin lokasi belum diberikan.'} Lokasi wajib aktif.
-          </p>
-        </div>
-        <button
-          onClick={onRefreshGeo}
-          className="flex flex-shrink-0 items-center gap-1 rounded-lg bg-amber-100 px-2.5 py-1.5 text-[11px] font-semibold text-amber-700 transition-colors hover:bg-amber-200"
-        >
-          <RefreshCw className="h-3 w-3" />Coba lagi
-        </button>
-      </div>
+      <Notice
+        tone="warning"
+        icon={NavigationOff}
+        title="Lokasi tidak terdeteksi"
+        action={{ label: 'Coba lagi', onClick: onRefreshGeo, icon: RefreshCw }}
+      >
+        {geoError ?? 'Izin lokasi belum diberikan.'}{' '}
+        {allowWithoutGeo ? 'Task tetap bisa dilanjutkan tanpa rekaman lokasi.' : 'Lokasi wajib aktif.'}
+      </Notice>
     );
   }
 
-  // OK state — short and friendly. Coordinates only shown when geo is required.
+  // OK state — short and friendly.
   return (
-    <div className="flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-2.5">
-      <Navigation className="h-4 w-4 flex-shrink-0 text-green-600" />
-      <p className="text-xs font-medium text-green-700">
-        {requireGeo && geo
-          ? `Lokasi terdeteksi (${geo.lat.toFixed(5)}, ${geo.lng.toFixed(5)})`
-          : 'Sudah absen masuk · siap mengerjakan task'}
-      </p>
-    </div>
+    <Notice tone="success" icon={Navigation}>
+      {requireGeo && geo ? 'Lokasi terdeteksi · kamu di area toko' : 'Sudah absen masuk · siap mengerjakan task'}
+    </Notice>
   );
+}
+
+function SpinnerIcon({ className }: { className?: string }) {
+  return <Loader2 className={cn(className, 'animate-spin')} />;
 }
 
 // ─── Locked overlay ─────────────────────────────────────────────────────────
 
-function LockedOverlay({
-  accessStatus, requireGeo = true,
+export function LockedOverlay({
+  accessStatus, requireGeo = true, allowWithoutGeo = false,
 }: {
   accessStatus: AccessStatus | null;
   requireGeo?: boolean;
+  /** A missing location fix doesn't lock the page (store-front). */
+  allowWithoutGeo?: boolean;
 }) {
   if (!accessStatus || accessStatus.status === 'ok') return null;
+  if (allowWithoutGeo && accessStatus.status === 'geo_unavailable') return null;
 
   // In no-geo mode, only not_checked_in lockouts make sense.
   if (!requireGeo && accessStatus.status !== 'not_checked_in') return null;
 
   const isCheckIn = accessStatus.status === 'not_checked_in';
-  const isGeoUnavailable = accessStatus.status === 'geo_unavailable';
   return (
-    <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 rounded-2xl bg-background/70 backdrop-blur-[2px]">
+    <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-start gap-2 rounded-2xl bg-background/75 pt-16 backdrop-blur-[2px]">
       <div className={cn(
-        'flex h-12 w-12 items-center justify-center rounded-full',
-        isCheckIn ? 'bg-red-100' : isGeoUnavailable ? 'bg-amber-100' : 'bg-orange-100',
+        'flex h-12 w-12 items-center justify-center rounded-2xl',
+        isCheckIn ? 'bg-red-100 text-red-600' : 'bg-amber-100 text-amber-600',
       )}>
-        {isCheckIn
-          ? <LogIn className="h-6 w-6 text-red-600" />
-          : <NavigationOff className={cn('h-6 w-6', isGeoUnavailable ? 'text-amber-600' : 'text-orange-600')} />}
+        {isCheckIn ? <LogIn className="h-6 w-6" /> : <NavigationOff className="h-6 w-6" />}
       </div>
-      <p className={cn(
-        'text-sm font-bold',
-        isCheckIn ? 'text-red-700' : isGeoUnavailable ? 'text-amber-700' : 'text-orange-700',
-      )}>
-        {isCheckIn ? 'Absen masuk dulu' : isGeoUnavailable ? 'Lokasi wajib aktif' : 'Kamu di luar area toko'}
+      <p className={cn('text-sm font-bold', isCheckIn ? 'text-red-700' : 'text-amber-800')}>
+        {isCheckIn
+          ? 'Absen masuk dulu'
+          : accessStatus.status === 'geo_unavailable' ? 'Lokasi wajib aktif' : 'Kamu di luar area toko'}
       </p>
     </div>
   );

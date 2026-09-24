@@ -1,5 +1,6 @@
 // app/employee/layout.tsx
 import { ReactNode } from 'react';
+import type { Viewport } from 'next';
 import { cookies } from 'next/headers';
 import { requirePanel } from '@/lib/auth/guards';
 import { cn } from '@/lib/utils';
@@ -11,6 +12,14 @@ import FloatingMenu from '@/components/employee/FloatingMenu';
 import EmployeeHeader from '@/components/employee/EmployeeHeader';
 import RoleSwitchBanner from '@/components/shared/RoleSwitchBanner';
 import PasswordExpiryBanner from '@/components/shared/PasswordExpiryBanner';
+
+// Mobile app chrome: purple status bar to match the app bar, and content drawn
+// under the iPhone notch / home indicator so env(safe-area-inset-*) is non-zero
+// (the header, bottom nav and sheets pad themselves with it).
+export const viewport: Viewport = {
+  themeColor: '#7A5AF8',
+  viewportFit: 'cover',
+};
 
 export default async function EmployeeLayout({ children }: { children: ReactNode }) {
   // employee (incl. PIC) or IT only. Previously ANY signed-in role — ops, finance, audit —
@@ -33,16 +42,16 @@ export default async function EmployeeLayout({ children }: { children: ReactNode
 
       {/* Mobile shell — hidden on md+ so the guard takes over, unless PIC opted
           into forceEmployeeView, in which case it stays visible on desktop too. */}
-      <div className={cn('flex min-h-dvh flex-col bg-secondary', !forceEmployeeView && 'md:hidden')}>
+      <div className={cn('flex min-h-dvh flex-col bg-background', !forceEmployeeView && 'md:hidden')}>
         <RoleSwitchBanner />
         <PasswordExpiryBanner />
         <EmployeeHeader />
-        <main className="flex-1 overflow-x-hidden pb-16">{children}</main>
+        {/* Bottom padding tracks the nav's live height (+ home indicator). */}
+        <main className="flex flex-1 flex-col overflow-x-clip" style={{ paddingBottom: 'var(--emp-bottom)' }}>
+          {children}
+        </main>
 
-        {/* Existing Bottom Navigation */}
         <EmployeeMobileNav />
-
-        {/* New Floating Menu */}
         <FloatingMenu />
       </div>
     </>

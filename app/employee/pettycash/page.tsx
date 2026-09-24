@@ -5,10 +5,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import {
-  AlertTriangle,
   Banknote,
   Camera,
-  CheckCircle2,
   Clock3,
   Info,
   Loader2,
@@ -22,6 +20,7 @@ import {
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import { EmptyState, Notice, SectionLabel, SkeletonBlocks } from '@/components/employee/ui';
 import CameraCapture from '@/components/shared/CameraCapture';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -254,8 +253,8 @@ function BalanceCard({
     <div className={cn('mx-4 rounded-2xl bg-gradient-to-br p-5 shadow-sm', balanceBg(balance))}>
       <div className="mb-1 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <Wallet className="h-4 w-4 text-slate-500" />
-          <p className="text-xs font-semibold text-slate-500">
+          <Wallet className="h-4 w-4 text-muted-foreground" />
+          <p className="text-xs font-semibold text-muted-foreground">
             {storeName} · {monthLabel(month)}
           </p>
         </div>
@@ -268,7 +267,7 @@ function BalanceCard({
         {idr(balance)}
       </p>
 
-      <p className="mt-0.5 text-[11px] text-slate-400">
+      <p className="mt-0.5 text-[11px] text-muted-foreground">
         Sisa saldo setelah jumlah terpakai dikonfirmasi
       </p>
 
@@ -282,7 +281,7 @@ function BalanceCard({
         />
       </div>
 
-      <div className="mt-1.5 flex items-center justify-between text-[10px] text-slate-400">
+      <div className="mt-1.5 flex items-center justify-between text-[10px] text-muted-foreground">
         <span>{pct}% tersisa dari Rp 1.000.000</span>
         <span>Pengeluaran disetujui {idr(totalApprovedSpend)}</span>
       </div>
@@ -298,7 +297,7 @@ function BalanceCard({
           <p className="text-[11px] font-semibold text-sky-700">
             Request menunggu OPS: {idr(pendingAmount)}
           </p>
-          <p className="mt-0.5 text-[10px] text-slate-500">
+          <p className="mt-0.5 text-[10px] text-muted-foreground">
             Jumlah ini belum dipotong sampai disetujui OPS.
           </p>
         </div>
@@ -309,7 +308,7 @@ function BalanceCard({
           <p className="text-[11px] font-semibold text-indigo-700">
             OPS sudah menyetujui, menunggu konfirmasi kamu: {idr(awaitingConfirmAmount)}
           </p>
-          <p className="mt-0.5 text-[10px] text-slate-500">
+          <p className="mt-0.5 text-[10px] text-muted-foreground">
             Ini masih perkiraan awal — belum dipotong sampai kamu konfirmasi jumlah yang benar-benar terpakai.
           </p>
         </div>
@@ -355,25 +354,25 @@ function RefillProofCapture({
   const [cameraOpen, setCameraOpen] = useState(false);
 
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-slate-100 bg-white p-2.5">
+    <div className="flex items-center gap-3 rounded-xl border border-border bg-card p-2.5">
       {imageUrl ? (
         <button
           type="button"
           onClick={() => onView(imageUrl)}
-          className="h-11 w-11 shrink-0 overflow-hidden rounded-lg border border-slate-100"
+          className="h-11 w-11 shrink-0 overflow-hidden rounded-lg border border-border"
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={imageUrl} alt="" className="h-full w-full object-cover" />
         </button>
       ) : (
-        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50">
-          <Camera className="h-4 w-4 text-slate-300" />
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-dashed border-border bg-secondary">
+          <Camera className="h-4 w-4 text-muted-foreground/50" />
         </div>
       )}
 
       <div className="min-w-0 flex-1">
-        <p className="text-xs font-bold text-slate-700">{label}</p>
-        <p className={cn('text-[10px] font-semibold', imageUrl ? 'text-emerald-600' : 'text-slate-400')}>
+        <p className="text-xs font-bold text-foreground">{label}</p>
+        <p className={cn('text-[10px] font-semibold', imageUrl ? 'text-emerald-600' : 'text-muted-foreground')}>
           {imageUrl ? 'Sudah diunggah' : 'Belum diunggah'}
         </p>
       </div>
@@ -384,7 +383,7 @@ function RefillProofCapture({
         disabled={uploading}
         className={cn(
           'flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-[11px] font-bold transition active:scale-[0.98] disabled:opacity-60',
-          imageUrl ? 'border border-slate-200 text-slate-500' : 'bg-indigo-600 text-white',
+          imageUrl ? 'border border-border text-muted-foreground' : 'bg-indigo-600 text-white',
         )}
       >
         {uploading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Camera className="h-3 w-3" />}
@@ -418,13 +417,13 @@ function RefillRequestCard({
   onUploadProof: (kind: RefillProofKind, file: File) => void;
   onViewImage: (url: string) => void;
 }) {
-  // Card shells are neutral now (white / slate-200) — status still reads
+  // Card shells are neutral now (card / border) — status still reads
   // clearly from the icon + heading color and, for "approved", from the
   // action itself (proof capture rows). Colored fills stayed only in the
   // small elements whose entire job is to signal status.
   if (request?.status === 'pending') {
     return (
-      <div className="mx-4 rounded-2xl border border-slate-200 bg-white p-4">
+      <div className="mx-4 rounded-2xl border border-border bg-card p-4">
         <div className="flex items-center gap-2">
           <Clock3 className="h-4 w-4 text-sky-600" />
           <p className="text-xs font-bold text-sky-700">Request Refill menunggu persetujuan OPS</p>
@@ -446,7 +445,7 @@ function RefillRequestCard({
     };
 
     return (
-      <div className="mx-4 rounded-2xl border border-slate-200 bg-white p-4">
+      <div className="mx-4 rounded-2xl border border-border bg-card p-4">
         <div className="flex items-center gap-2">
           <Banknote className="h-4 w-4 text-indigo-600" />
           <p className="text-xs font-bold text-indigo-700">
@@ -479,14 +478,14 @@ function RefillRequestCard({
   }
 
   return (
-    <div className="mx-4 rounded-2xl border border-dashed border-slate-200 bg-white p-4">
+    <div className="mx-4 rounded-2xl border border-dashed border-border bg-card p-4">
       <div className="flex items-start gap-3">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-50">
           <Banknote className="h-4 w-4 text-indigo-600" />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-xs font-bold text-slate-800">Saldo keseluruhan mulai menipis?</p>
-          <p className="mt-0.5 text-[11px] text-slate-500">
+          <p className="text-xs font-bold text-foreground">Saldo keseluruhan mulai menipis?</p>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
             Refill mengembalikan seluruh petty cash toko ke Rp 1.000.000.
             Ini terpisah dari Request penggunaan — ditinjau dan disetujui oleh OPS.
           </p>
@@ -503,7 +502,7 @@ function RefillRequestCard({
         type="button"
         onClick={onRequest}
         disabled={requesting}
-        className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-indigo-200 bg-white text-xs font-bold text-indigo-700 transition active:scale-[0.99] disabled:opacity-60"
+        className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-indigo-200 bg-card text-xs font-bold text-indigo-700 transition active:scale-[0.99] disabled:opacity-60"
       >
         {requesting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Banknote className="h-3.5 w-3.5" />}
         Ajukan Refill
@@ -569,7 +568,7 @@ function NeedsReceiptCard({
   onUpload: (tx: TxRow, file: File) => void;
 }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+    <div className="rounded-2xl border border-border bg-card p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <span className="inline-flex items-center gap-1 rounded-full bg-indigo-600 px-2 py-0.5 text-[10px] font-bold text-white">
@@ -577,11 +576,11 @@ function NeedsReceiptCard({
             Perlu Tindakan
           </span>
 
-          <p className="mt-2 truncate text-sm font-semibold text-slate-800">
+          <p className="mt-2 truncate text-sm font-semibold text-foreground">
             {tx.description}
           </p>
 
-          <p className="mt-0.5 text-[11px] text-slate-400">
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
             Disetujui {fmtDate(tx.createdAt)}
           </p>
         </div>
@@ -622,7 +621,7 @@ function ConfirmAmountCard({
   const amountNum = Number(amount.replace(/[^0-9]/g, ''));
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+    <div className="rounded-2xl border border-border bg-card p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <span className="inline-flex items-center gap-1 rounded-full bg-indigo-600 px-2 py-0.5 text-[10px] font-bold text-white">
@@ -630,11 +629,11 @@ function ConfirmAmountCard({
             Perlu Tindakan
           </span>
 
-          <p className="mt-2 truncate text-sm font-semibold text-slate-800">
+          <p className="mt-2 truncate text-sm font-semibold text-foreground">
             {tx.description}
           </p>
 
-          <p className="mt-0.5 text-[11px] text-slate-400">
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
             Diminta {idr(tx.amount)} · Disetujui {fmtDate(tx.createdAt)}
           </p>
         </div>
@@ -677,15 +676,15 @@ function ConfirmAmountCard({
         Konfirmasi & Potong {amountNum ? idr(amountNum) : ''}
       </button>
 
-      <div className="mt-3 border-t border-slate-100 pt-3">
-        <p className="mb-1.5 text-[11px] font-semibold text-slate-500">
+      <div className="mt-3 border-t border-border pt-3">
+        <p className="mb-1.5 text-[11px] font-semibold text-muted-foreground">
           Foto struk {tx.imageUrl ? '(sudah diunggah)' : '(opsional, untuk arsip)'}
         </p>
         {tx.imageUrl ? (
           <button
             type="button"
             onClick={() => onViewImage(tx.imageUrl!)}
-            className="h-11 w-11 overflow-hidden rounded-lg border border-slate-100"
+            className="h-11 w-11 overflow-hidden rounded-lg border border-border"
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={tx.imageUrl} alt="" className="h-full w-full object-cover" />
@@ -711,13 +710,13 @@ function TxItem({
   const Icon = meta.icon;
 
   return (
-    <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+    <div className="rounded-2xl border border-border bg-card p-4 shadow-sm">
       <div className="flex items-start gap-3">
         {tx.imageUrl ? (
           <button
             type="button"
             onClick={() => onViewImage(tx.imageUrl!)}
-            className="group relative h-14 w-14 shrink-0 overflow-hidden rounded-xl border border-slate-100"
+            className="group relative h-14 w-14 shrink-0 overflow-hidden rounded-xl border border-border"
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={tx.imageUrl} alt="" className="h-full w-full object-cover" />
@@ -726,8 +725,8 @@ function TxItem({
             </div>
           </button>
         ) : (
-          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50">
-            <ReceiptText className="h-5 w-5 text-slate-300" />
+          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl border border-dashed border-border bg-secondary">
+            <ReceiptText className="h-5 w-5 text-muted-foreground/50" />
           </div>
         )}
 
@@ -744,18 +743,18 @@ function TxItem({
             </span>
           </div>
 
-          <p className="mt-2 truncate text-sm font-semibold text-slate-800">
+          <p className="mt-2 truncate text-sm font-semibold text-foreground">
             {tx.description}
           </p>
 
-          <p className="mt-0.5 text-[11px] text-slate-400">
+          <p className="mt-0.5 text-[11px] text-muted-foreground">
             {fmtDate(tx.createdAt)}
           </p>
 
           <p
             className={cn(
               'mt-1 text-[11px] font-medium',
-              tx.status === 'ops_rejected' ? 'text-rose-600' : 'text-slate-500',
+              tx.status === 'ops_rejected' ? 'text-rose-600' : 'text-muted-foreground',
             )}
           >
             {meta.note}
@@ -765,7 +764,7 @@ function TxItem({
         <span
           className={cn(
             'shrink-0 text-sm font-bold',
-            tx.status === 'ops_rejected' ? 'text-slate-400 line-through' : 'text-rose-500',
+            tx.status === 'ops_rejected' ? 'text-muted-foreground line-through' : 'text-rose-500',
           )}
         >
           −{idr(tx.actualAmount ?? tx.amount)}
@@ -1108,55 +1107,41 @@ export default function EmployeePettyCashPage() {
   }, [transactions, needsActualAmountTxs, needsReceiptTxs]);
 
   return (
-    <>
+    <div className="mx-auto w-full max-w-md">
       {lightboxSrc && (
         <Lightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
       )}
 
-      <div className="px-4 pt-5">
-        <p className="text-xs font-semibold text-muted-foreground">
+      <div className="px-4 pt-4">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
           Request Petty Cash
         </p>
-        <p className="text-sm font-bold leading-none text-foreground">
+        <p className="mt-0.5 text-base font-bold leading-tight text-foreground">
           {data?.storeName ?? '…'}
         </p>
       </div>
 
       {showInfo && (
-        <div className="mx-4 mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3.5">
-          <div className="flex items-start gap-2.5">
-            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400" />
-            <div className="min-w-0 flex-1 space-y-1.5">
-              <p className="text-[11px] leading-snug text-slate-600">
-                <span className="font-bold text-slate-800">Request</span> — pakai
-                uang untuk keperluan tertentu. Diajukan ke OPS untuk disetujui.
-              </p>
-              <p className="text-[11px] leading-snug text-slate-600">
-                <span className="font-bold text-slate-800">Refill</span> — mengembalikan
-                seluruh saldo ke Rp 1.000.000 saat mulai menipis. Diajukan ke OPS
-                untuk disetujui.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setShowInfo(false)}
-              className="shrink-0 rounded-lg p-1 text-slate-400 transition hover:bg-slate-200/60"
-              aria-label="Tutup"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          </div>
+        <div className="mx-4 mt-4">
+          <Notice tone="neutral" icon={Info} onDismiss={() => setShowInfo(false)}>
+            <p>
+              <span className="font-bold text-foreground">Request</span> — pakai
+              uang untuk keperluan tertentu. Diajukan ke OPS untuk disetujui.
+            </p>
+            <p className="mt-1">
+              <span className="font-bold text-foreground">Refill</span> — mengembalikan
+              seluruh saldo ke Rp 1.000.000 saat mulai menipis. Diajukan ke OPS
+              untuk disetujui.
+            </p>
+          </Notice>
         </div>
       )}
 
-      <div className="space-y-5 py-5">
+      <div className="space-y-5 pb-8 pt-5">
         {loading ? (
-          <div className="mx-4 h-36 animate-pulse rounded-2xl bg-slate-100" />
+          <div className="px-4"><SkeletonBlocks count={1} className="h-36" /></div>
         ) : loadError ? (
-          <div className="mx-4 flex items-center gap-3 rounded-2xl border border-rose-200 bg-rose-50 p-4">
-            <AlertTriangle className="h-5 w-5 shrink-0 text-rose-500" />
-            <p className="text-sm font-medium text-rose-700">{loadError}</p>
-          </div>
+          <div className="px-4"><Notice tone="error">{loadError}</Notice></div>
         ) : (
           <BalanceCard
             balance={balance}
@@ -1183,8 +1168,8 @@ export default function EmployeePettyCashPage() {
 
         {!loading && !loadError && (
           <section className="grid grid-cols-4 gap-2 px-4">
-            <div className="rounded-2xl border border-slate-200 bg-white p-3">
-              <p className="text-[10px] font-bold uppercase tracking-wide text-sky-600">
+            <div className="min-w-0 rounded-2xl border border-border bg-card px-2 py-3 text-center">
+              <p className="truncate text-[10px] font-bold uppercase tracking-wide text-sky-600">
                 OPS
               </p>
               <p className="mt-1 text-xl font-black text-sky-700">
@@ -1192,8 +1177,8 @@ export default function EmployeePettyCashPage() {
               </p>
             </div>
 
-            <div className="rounded-2xl border border-slate-200 bg-white p-3">
-              <p className="text-[10px] font-bold uppercase tracking-wide text-indigo-600">
+            <div className="min-w-0 rounded-2xl border border-border bg-card px-2 py-3 text-center">
+              <p className="truncate text-[10px] font-bold uppercase tracking-wide text-indigo-600">
                 Konfirmasi
               </p>
               <p className="mt-1 text-xl font-black text-indigo-700">
@@ -1201,8 +1186,8 @@ export default function EmployeePettyCashPage() {
               </p>
             </div>
 
-            <div className="rounded-2xl border border-slate-200 bg-white p-3">
-              <p className="text-[10px] font-bold uppercase tracking-wide text-indigo-600">
+            <div className="min-w-0 rounded-2xl border border-border bg-card px-2 py-3 text-center">
+              <p className="truncate text-[10px] font-bold uppercase tracking-wide text-indigo-600">
                 Struk
               </p>
               <p className="mt-1 text-xl font-black text-indigo-700">
@@ -1210,8 +1195,8 @@ export default function EmployeePettyCashPage() {
               </p>
             </div>
 
-            <div className="rounded-2xl border border-slate-200 bg-white p-3">
-              <p className="text-[10px] font-bold uppercase tracking-wide text-emerald-600">
+            <div className="min-w-0 rounded-2xl border border-border bg-card px-2 py-3 text-center">
+              <p className="truncate text-[10px] font-bold uppercase tracking-wide text-emerald-600">
                 Selesai
               </p>
               <p className="mt-1 text-xl font-black text-emerald-700">
@@ -1223,32 +1208,21 @@ export default function EmployeePettyCashPage() {
 
         {!loading && !loadError && actionError && (
           <section className="px-4">
-            <div className="flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3">
-              <AlertTriangle className="h-4 w-4 shrink-0 text-rose-500" />
-              <p className="text-sm text-rose-700">{actionError}</p>
-            </div>
+            <Notice tone="error" onDismiss={() => setActionError(null)}>{actionError}</Notice>
           </section>
         )}
 
         {!loading && !loadError && successMessage && (
           <section className="px-4">
-            <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
-              <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
-              <p className="text-sm font-medium text-emerald-700">{successMessage}</p>
-            </div>
+            <Notice tone="success">{successMessage}</Notice>
           </section>
         )}
 
         {!loading && !loadError && isPic && (needsActualAmountTxs.length > 0 || needsReceiptTxs.length > 0) && (
           <section className="px-4">
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-bold text-foreground">
-                Perlu Tindakan Kamu
-              </h2>
-              <span className="text-xs text-muted-foreground">
-                {needsActualAmountTxs.length + needsReceiptTxs.length} request
-              </span>
-            </div>
+            <SectionLabel meta={`${needsActualAmountTxs.length + needsReceiptTxs.length} request`}>
+              Perlu tindakan kamu
+            </SectionLabel>
 
             <div className="space-y-2.5">
               {needsActualAmountTxs.map((tx) => (
@@ -1276,31 +1250,21 @@ export default function EmployeePettyCashPage() {
 
         {!loading && !loadError && !isPic && (
           <section className="px-4">
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-secondary/30 p-4">
-              <p className="text-xs font-bold text-slate-700">Hanya PIC yang bisa mengirim Request Petty Cash</p>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">
-                Kamu bisa melihat status Request di sini. Minta PIC toko untuk mengirim Request baru.
-              </p>
-            </div>
+            <Notice tone="neutral" title="Hanya PIC yang bisa mengirim Request Petty Cash">
+              Kamu bisa melihat status Request di sini. Minta PIC toko untuk mengirim Request baru.
+            </Notice>
           </section>
         )}
 
         {!loading && !loadError && isPic && (
           <section className="px-4">
-            <h2 className="mb-3 text-sm font-bold text-foreground">
-              Request Petty Cash Baru
-            </h2>
+            <SectionLabel>Request petty cash baru</SectionLabel>
 
             <form onSubmit={handleSubmit} className="space-y-4">
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                <p className="text-xs font-bold text-slate-700">
-                  Foto struk belum diperlukan sekarang.
-                </p>
-                <p className="mt-1 text-[11px] text-slate-500">
-                  Kirim Request terlebih dahulu. Setelah disetujui OPS, kamu akan
-                  melihatnya di &quot;Perlu Tindakan Kamu&quot; untuk mengunggah struk.
-                </p>
-              </div>
+              <Notice tone="info" title="Foto struk belum diperlukan sekarang.">
+                Kirim Request terlebih dahulu. Setelah disetujui OPS, kamu akan
+                melihatnya di &quot;Perlu Tindakan Kamu&quot; untuk mengunggah struk.
+              </Notice>
 
               <div>
                 <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">
@@ -1318,7 +1282,7 @@ export default function EmployeePettyCashPage() {
                     value={amount ? Number(amount).toLocaleString('id-ID') : ''}
                     onChange={(e) => setAmount(e.target.value.replace(/[^0-9]/g, ''))}
                     placeholder="0"
-                    className="h-12 w-full rounded-xl border border-border bg-secondary/40 pl-10 pr-4 text-right text-lg font-bold tabular-nums text-foreground placeholder-muted-foreground/40 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    className="h-12 w-full rounded-xl border border-border bg-background pl-10 pr-4 text-right text-lg font-bold tabular-nums text-foreground placeholder:text-muted-foreground/50 focus:border-primary focus:outline-none"
                   />
                 </div>
 
@@ -1346,16 +1310,11 @@ export default function EmployeePettyCashPage() {
                   rows={2}
                   maxLength={200}
                   placeholder="Request ini untuk apa? misal: alat kebersihan, tinta printer…"
-                  className="w-full resize-none rounded-xl border border-border bg-secondary/40 px-4 py-3 text-sm text-foreground placeholder-muted-foreground/40 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  className="w-full resize-none rounded-xl border border-border bg-background px-3.5 py-2.5 text-base text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
                 />
               </div>
 
-              {formError && (
-                <div className="flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3">
-                  <AlertTriangle className="h-4 w-4 shrink-0 text-rose-500" />
-                  <p className="text-sm text-rose-700">{formError}</p>
-                </div>
-              )}
+              {formError && <Notice tone="error">{formError}</Notice>}
 
               <button
                 type="submit"
@@ -1390,15 +1349,7 @@ export default function EmployeePettyCashPage() {
 
         {!loading && !loadError && historyTxs.length > 0 && (
           <section className="px-4">
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-bold text-foreground">
-                Request Bulan Ini
-              </h2>
-
-              <span className="text-xs text-muted-foreground">
-                {historyTxs.length} data
-              </span>
-            </div>
+            <SectionLabel meta={`${historyTxs.length} data`}>Request bulan ini</SectionLabel>
 
             <div className="space-y-2.5">
               {historyTxs.map((tx) => (
@@ -1414,18 +1365,17 @@ export default function EmployeePettyCashPage() {
 
         {!loading && !loadError && transactions.length === 0 && (
           <section className="px-4">
-            <div className="rounded-2xl border border-dashed border-border bg-secondary/30 py-10 text-center">
-              <ReceiptText className="mx-auto mb-2 h-9 w-9 text-muted-foreground/30" />
-              <p className="text-sm font-medium text-muted-foreground">
-                Belum ada Request Petty Cash bulan ini
-              </p>
-              <p className="mt-0.5 text-xs text-muted-foreground/60">
-                Isi formulir di atas untuk mengirim Request pertamamu ke OPS.
-              </p>
+            <div className="rounded-2xl border border-dashed border-border">
+              <EmptyState
+                icon={ReceiptText}
+                title="Belum ada Request Petty Cash bulan ini"
+                description={isPic ? 'Isi formulir di atas untuk mengirim Request pertamamu ke OPS.' : undefined}
+                className="py-8"
+              />
             </div>
           </section>
         )}
       </div>
-    </>
+    </div>
   );
 }

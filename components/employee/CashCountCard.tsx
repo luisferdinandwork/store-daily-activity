@@ -59,7 +59,7 @@ function AmountInput({
         onBlur={() => setFocused(false)}
         onChange={(e) => onChange(e.target.value.replace(/\D/g, ''))}
         disabled={disabled}
-        className="w-full bg-transparent py-2.5 pr-3 text-sm font-bold tabular-nums text-foreground outline-none"
+        className="h-11 w-full bg-transparent pr-3 text-base font-bold tabular-nums text-foreground outline-none"
       />
     </div>
   );
@@ -83,7 +83,7 @@ export default function CashCountCard({
   if (cashCount.done && cashCount.record) {
     const r = cashCount.record;
     return (
-      <Card className="gap-0 overflow-hidden py-0 shadow-sm">
+      <Card className="gap-0 overflow-hidden rounded-2xl py-0 shadow-none">
         <div className="h-1 bg-emerald-500" />
         <CardContent className="flex items-center gap-3 p-3.5">
           {r.selfiePhoto ? (
@@ -159,7 +159,7 @@ export default function CashCountCard({
   }
 
   return (
-    <Card className="gap-0 overflow-hidden py-0 shadow-sm">
+    <Card className="gap-0 overflow-hidden rounded-2xl py-0 shadow-none">
       <div className="h-1 bg-sky-500" />
       <CardContent className="space-y-3.5 p-3.5">
         <div className="flex items-center gap-3">
@@ -194,7 +194,7 @@ export default function CashCountCard({
               value={witnessId}
               onChange={(e) => setWitnessId(e.target.value)}
               disabled={submitting}
-              className="w-full rounded-xl border border-border bg-background px-3 py-2.5 text-sm text-foreground outline-none focus:border-primary/40 focus:ring-2 focus:ring-primary/15"
+              className="h-12 w-full rounded-xl border border-border bg-background px-3.5 text-base text-foreground outline-none transition-colors focus:border-primary"
             >
               <option value="">Pilih rekan…</option>
               {cashCount.coScheduledEmployees.map((e) => (

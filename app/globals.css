@@ -48,6 +48,19 @@
   }
 }
 
+/* Employee mobile shell — one source of truth for the fixed chrome so sticky
+   bars, the submit bar and the floating menu never overlap each other.
+   --emp-nav-h is updated live by EmployeeMobileNav when it compacts on scroll.
+   Lives in @layer base: Tailwind v4 drops unlayered :root custom properties
+   it can't see used in a class, and these are mostly read from inline styles. */
+@layer base {
+  :root {
+    --emp-header-h: calc(3.5rem + env(safe-area-inset-top, 0px));
+    --emp-nav-h: 4rem;
+    --emp-bottom: calc(var(--emp-nav-h) + env(safe-area-inset-bottom, 0px));
+  }
+}
+
 /* Mobile-only styles for employee views */
 @media (min-width: 768px) {
   .mobile-only {

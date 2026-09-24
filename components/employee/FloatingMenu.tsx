@@ -8,7 +8,6 @@ import Link from 'next/link';
 import {
   Menu,
   X,
-  MessageSquare,
   BookOpen,
   Bell,
   UserCircle,
@@ -19,6 +18,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { EMPLOYEE_VIEW_COOKIE } from '@/lib/pic-view';
+import { isTaskDetailPath } from './EmployeeHeader';
 
 // ─── Menu Configuration (Easy to add more later) ──────────────────────────────
 
@@ -74,36 +74,43 @@ export default function FloatingMenu() {
     };
   }, [isOpen]);
 
+  // Task detail pages have a full-width submit bar right above the nav — the
+  // FAB would sit on top of the submit button, so it's hidden there.
+  const hideFab = isTaskDetailPath(pathname);
+
   return (
     <>
       {/* ── Floating Action Button (FAB) ── */}
-      <button
-        onClick={() => setIsOpen(true)}
-        className={cn(
-          'fixed right-4 z-40 flex h-14 w-14 items-center justify-center rounded-full shadow-lg transition-all active:scale-95 md:hidden',
-          'bg-primary text-primary-foreground hover:bg-primary/90'
-        )}
-        style={{ bottom: '5.5rem' }} // Positioned safely above the bottom nav
-        aria-label="Open more menu"
-      >
-        <Menu className="h-6 w-6" />
-      </button>
+      {!hideFab && (
+        <button
+          onClick={() => setIsOpen(true)}
+          className={cn(
+            'fixed right-4 z-40 flex h-14 w-14 items-center justify-center rounded-full shadow-lg shadow-primary/30 transition-all duration-300 ease-out active:scale-95',
+            'bg-primary text-primary-foreground hover:bg-primary/90'
+          )}
+          style={{ bottom: 'calc(var(--emp-bottom) + 1rem)' }}
+          aria-label="Menu lainnya"
+        >
+          <Menu className="h-6 w-6" />
+        </button>
+      )}
 
       {/* ── Overlay & Slide-up Menu ── */}
       {isOpen && (
         <>
           {/* Transparent Black Overlay */}
-          <div 
-            className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm transition-opacity md:hidden"
+          <div
+            className="fixed inset-0 z-[55] bg-black/60 backdrop-blur-sm transition-opacity"
             onClick={() => setIsOpen(false)}
           />
 
           {/* Menu Container */}
-          <div 
+          <div
             ref={menuRef}
-            className="fixed inset-x-0 bottom-0 z-50 transform transition-transform duration-300 ease-out md:hidden"
+            className="fixed inset-x-0 z-[60] transform transition-transform duration-300 ease-out"
+            style={{ bottom: 'calc(var(--emp-bottom) + 0.75rem)' }}
           >
-            <div className="mx-4 mb-20 overflow-hidden rounded-2xl border border-border bg-card shadow-2xl">
+            <div className="mx-auto w-[calc(100%-2rem)] max-w-md overflow-hidden rounded-2xl border border-border bg-card shadow-2xl">
               {/* Header */}
               <div className="flex items-center justify-between border-b border-border px-5 py-4">
                 <h2 className="text-base font-bold text-foreground">More</h2>

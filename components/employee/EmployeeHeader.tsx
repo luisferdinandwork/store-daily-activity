@@ -1,22 +1,14 @@
 'use client';
 // components/employee/EmployeeHeader.tsx
 //
-// Single top app-bar shared by every top-level employee page — rendered once
-// from app/employee/layout.tsx instead of each page pasting its own
-// bg-primary hero logo or its own neutral "back + title" sticky bar. Carries
-// brand (logo on root tabs), navigation (back button on drill-in pages) and
-// the notification bell, consistently, everywhere.
-//
-// Multi-step task-taking flows (/employee/tasks/<type>/<id>, serah-terima,
-// etc.) keep their own contextual step header — this bar renders nothing
-// there, see VISIBLE_PATHS below.
+// Layout-level top bar for every employee page that isn't a task detail page.
+// Root tabs get the logo; everything else (profile, petty cash, transfer
+// orders, unknown URLs…) gets back + title. Task detail pages
+// (/employee/tasks/<type>/…) render the same EmployeeAppBar themselves via
+// TaskHeader, because they add shift / status / autosave info to it.
 
-import { usePathname, useRouter } from 'next/navigation';
-import { ChevronLeft } from 'lucide-react';
-import EmployeeLogoMark from './EmployeeLogoMark';
-import EmployeeNotificationBell from './EmployeeNotificationBell';
-import EmployeeItemTransfersBadge from './EmployeeItemTransfersBadge';
-import HeaderProfileButton from '@/components/shared/HeaderProfileButton';
+import { usePathname } from 'next/navigation';
+import EmployeeAppBar from './EmployeeAppBar';
 
 const ROOT_TABS = new Set([
   '/employee',
@@ -34,45 +26,20 @@ const TITLES: Record<string, string> = {
   '/employee/item-transfers': 'Transfer Orders',
 };
 
-const VISIBLE_PATHS = new Set<string>([...ROOT_TABS, ...Object.keys(TITLES)]);
+/** Task detail pages own their header (TaskHeader → EmployeeAppBar). */
+export function isTaskDetailPath(pathname: string): boolean {
+  return pathname.startsWith('/employee/tasks/');
+}
 
 export default function EmployeeHeader() {
   const pathname = usePathname();
-  const router = useRouter();
 
-  if (!VISIBLE_PATHS.has(pathname)) return null;
+  if (isTaskDetailPath(pathname)) return null;
 
-  const isRootTab = ROOT_TABS.has(pathname);
+  const title = TITLES[pathname];
+  // Root tabs and URLs we have no title for (e.g. the not-found page) show
+  // the branded root bar rather than a back button with an empty title.
+  if (ROOT_TABS.has(pathname) || !title) return <EmployeeAppBar root />;
 
-  return (
-    <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-1 bg-primary px-2">
-      {isRootTab ? (
-        <EmployeeLogoMark variant="white" className="ml-2 w-24" />
-      ) : (
-        <>
-          <button
-            type="button"
-            onClick={() => router.back()}
-            aria-label="Go back"
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-primary-foreground/90 transition-colors hover:bg-white/10 active:scale-95"
-          >
-            <ChevronLeft className="h-5 w-5" />
-          </button>
-          <p className="flex-1 truncate text-sm font-bold text-primary-foreground">
-            {TITLES[pathname]}
-          </p>
-        </>
-      )}
-
-      {isRootTab && <div className="flex-1" />}
-
-      {isRootTab && <EmployeeItemTransfersBadge />}
-      <EmployeeNotificationBell />
-      <HeaderProfileButton
-        className="ml-0.5 mr-1.5 h-9 w-9"
-        avatarClassName="h-8 w-8 border-white/30"
-        fallbackClassName="bg-white/15 text-primary-foreground"
-      />
-    </header>
-  );
+  return <EmployeeAppBar title={title} />;
 }

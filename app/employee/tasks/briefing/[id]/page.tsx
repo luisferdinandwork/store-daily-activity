@@ -3,20 +3,15 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import {
-  AlertCircle,
-  ArrowLeft,
-  CheckCircle2,
-  ClipboardCheck,
-  Loader2,
-  RefreshCw,
-  Save,
-} from 'lucide-react';
+import { CheckCircle2, ClipboardCheck, RefreshCw, Save } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { cn } from '@/lib/utils';
 import { TaskHeader, TaskSubmitBar, SaveIndicator } from '@/components/employee/tasks';
 import AccessGuard from '@/components/employee/tasks/AccessGuard';
+import {
+  ActionButton, NotesField, PageBody, SummaryBox, TaskLoadingScreen, TaskMissingScreen,
+} from '@/components/employee/ui';
 
 type BriefingTask = {
   id: string;
@@ -122,34 +117,8 @@ export default function BriefingTaskPage() {
     }
   }
 
-  // Loading state — render minimally before we have task data
-  if (loading || !task) {
-    return (
-      <div className="flex min-h-screen flex-col bg-background">
-        <TaskHeader title="Briefing" subtitle="Simple complete-finish task" />
-        <div className="flex-1 p-4">
-          {loading ? (
-            <div className="flex min-h-[300px] items-center justify-center rounded-2xl border border-border bg-card">
-              <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Memuat briefing…
-              </div>
-            </div>
-          ) : (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-700">
-              <div className="flex items-start gap-3">
-                <AlertCircle className="mt-0.5 h-4 w-4" />
-                <div>
-                  <p className="font-bold">Task tidak ditemukan</p>
-                  <p className="text-sm">Silakan kembali ke halaman task.</p>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
+  if (loading) return <TaskLoadingScreen title="Briefing" />;
+  if (!task) return <TaskMissingScreen title="Briefing" />;
 
   return (
     <AccessGuard
@@ -162,21 +131,13 @@ export default function BriefingTaskPage() {
         const canSubmit =
           !locked && !!geo && !submitting && task.status !== 'completed';
 
-        const submitHint = (() => {
-          if (locked) return '';
-          if (task.status === 'completed') return '';
-          return '';
-        })();
+        const done = task.status === 'completed';
 
         return (
-          <div className="flex min-h-screen flex-col bg-background">
+          <>
             <TaskHeader
               title="Briefing"
-              subtitle={
-                task.status === 'completed'
-                  ? `Selesai ${fmtTime(task.completedAt)}`
-                  : 'Simple complete-finish task untuk morning dan night shift.'
-              }
+              subtitle={done ? `Selesai ${fmtTime(task.completedAt)}` : undefined}
               status={task.status}
               saveIndicator={
                 !readonly ? (
@@ -185,89 +146,59 @@ export default function BriefingTaskPage() {
               }
             />
 
-            <div className="flex-1 space-y-4 p-4 pb-24">
+            <PageBody bottomBar={!readonly}>
               {banner}
 
-              <div className="relative">
+              <div className="relative space-y-5">
                 {lockedOverlay}
 
-                <section className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
-                  <div className="border-b border-border p-4">
-                    <div className="flex items-start gap-3">
-                      <div className={cn(
-                        'flex h-10 w-10 shrink-0 items-center justify-center rounded-xl',
-                        task.status === 'completed'
-                          ? 'bg-emerald-50 text-emerald-600'
-                          : 'bg-indigo-50 text-indigo-600',
-                      )}>
-                        {task.status === 'completed'
-                          ? <CheckCircle2 className="h-5 w-5" />
-                          : <ClipboardCheck className="h-5 w-5" />}
-                      </div>
-
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-bold text-foreground">
-                          Status Briefing
-                        </p>
-                        <p className="mt-1 text-xs font-semibold text-muted-foreground">
-                          {task.status === 'completed'
-                            ? `Selesai ${fmtTime(task.completedAt)}`
-                            : 'Belum selesai'}
-                        </p>
-                      </div>
-
-                      <span className={cn(
-                        'rounded-full border px-2.5 py-1 text-xs font-bold',
-                        task.status === 'completed'
-                          ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                          : 'border-amber-200 bg-amber-50 text-amber-700',
-                      )}>
-                        {task.status === 'completed' ? 'Selesai' : 'Not Started'}
-                      </span>
-                    </div>
+                <SummaryBox className="flex items-center gap-3 space-y-0">
+                  <div className={cn(
+                    'flex h-11 w-11 shrink-0 items-center justify-center rounded-xl',
+                    done ? 'bg-green-100 text-green-600' : 'bg-primary/10 text-primary',
+                  )}>
+                    {done ? <CheckCircle2 className="h-5 w-5" /> : <ClipboardCheck className="h-5 w-5" />}
                   </div>
-
-                  <div className="space-y-3 p-4">
-                    <label className="block">
-                      <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-                        Notes / Catatan briefing
-                      </span>
-                      <textarea
-                        value={notes}
-                        onChange={(e) => setNotes(e.target.value)}
-                        disabled={dis}
-                        rows={5}
-                        placeholder="Contoh: Briefing promo hari ini sudah dilakukan, target harian sudah dibagikan..."
-                        className="mt-2 w-full resize-none rounded-xl border border-border bg-secondary px-4 py-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:cursor-not-allowed disabled:opacity-60"
-                      />
-                    </label>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-primary/80">Status briefing</p>
+                    <p className="mt-0.5 text-base font-bold text-foreground">
+                      {done ? `Selesai ${fmtTime(task.completedAt)}` : 'Belum selesai'}
+                    </p>
                   </div>
-                </section>
+                </SummaryBox>
 
-                <button
-                  type="button"
+                <NotesField
+                  label="Catatan briefing"
+                  value={notes}
+                  onChange={setNotes}
+                  disabled={dis}
+                  rows={5}
+                  placeholder="Contoh: Briefing promo hari ini sudah dilakukan, target harian sudah dibagikan…"
+                />
+
+                <ActionButton
+                  variant="secondary"
+                  icon={RefreshCw}
+                  className="w-full"
                   onClick={() => void loadTask()}
                   disabled={submitting}
-                  className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-border bg-card px-4 text-sm font-semibold text-muted-foreground transition hover:bg-secondary disabled:opacity-60"
                 >
-                  <RefreshCw className="h-4 w-4" />
-                  Refresh
-                </button>
+                  Muat ulang
+                </ActionButton>
               </div>
-            </div>
+            </PageBody>
 
             <TaskSubmitBar
-              label={task.status === 'completed' ? 'Briefing Sudah Selesai' : 'Selesaikan Briefing'}
-              icon={task.status === 'completed'
+              label={done ? 'Briefing Sudah Selesai' : 'Selesaikan Briefing'}
+              icon={done
                 ? <CheckCircle2 className="h-4 w-4" />
                 : <Save className="h-4 w-4" />}
               onSubmit={() => void handleSubmit(geo)}
               submitting={submitting}
               disabled={!canSubmit}
               hidden={readonly}
-              hint={!canSubmit && !submitting ? submitHint : undefined}
             />
-          </div>
+          </>
         );
       }}
     </AccessGuard>

@@ -3,24 +3,18 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import {
-  AlertCircle,
-  CheckCircle2,
-  CloudOff,
-  Loader2,
-  LogIn,
-  Navigation,
-  NavigationOff,
-  RefreshCw,
-  Save,
-  Wallet,
-  X,
-} from 'lucide-react';
+import { CheckCircle2, CloudOff, Save } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { useAutoSave } from '@/lib/hooks/useAutoSave';
 import { useTaskLocationSetting } from '@/lib/hooks/useTaskLocationSetting';
-import { TaskHeader, TaskSubmitBar, SaveIndicator } from '@/components/employee/tasks';
+import {
+  AccessBanner, LockedOverlay, TaskHeader, TaskSubmitBar, SaveIndicator, shiftLabel,
+} from '@/components/employee/tasks';
+import {
+  Chip, EmptyState, ListGroup, Notice, NotesField, PageBody, Section, SkeletonBlocks,
+  SummaryBox, TaskReviewNotices, inputClass,
+} from '@/components/employee/ui';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -249,148 +243,6 @@ function useAccessStatus(
 
 // ─── Small UI components ──────────────────────────────────────────────────────
 
-function AccessBanner({
-  accessStatus,
-  accessLoading,
-  geoReady,
-  geo,
-  geoError,
-  onRefreshGeo,
-  onRefreshAccess,
-}: {
-  accessStatus: AccessStatus | null;
-  accessLoading: boolean;
-  geoReady: boolean;
-  geo: { lat: number; lng: number } | null;
-  geoError: string | null;
-  onRefreshGeo: () => void;
-  onRefreshAccess: () => void;
-}) {
-  if (!geoReady || accessLoading) {
-    return (
-      <div className="flex items-center gap-2 rounded-xl border border-border bg-secondary px-4 py-2.5">
-        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-        <p className="text-xs text-muted-foreground">
-          {!geoReady ? 'Mendapatkan lokasi…' : 'Memeriksa akses…'}
-        </p>
-      </div>
-    );
-  }
-
-  if (!accessStatus) return null;
-
-  if (accessStatus.status === 'not_checked_in') {
-    return (
-      <div className="flex items-start gap-3 rounded-xl border border-red-300 bg-red-50 px-4 py-3.5">
-        <LogIn className="mt-0.5 h-5 w-5 flex-shrink-0 text-red-600" />
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-bold text-red-700">Belum absen masuk</p>
-          <p className="mt-0.5 text-xs text-red-600">
-            Lakukan absensi masuk terlebih dahulu.
-          </p>
-        </div>
-        <button
-          onClick={onRefreshAccess}
-          className="flex shrink-0 items-center gap-1 rounded-lg bg-red-100 px-2.5 py-1.5 text-[11px] font-semibold text-red-700 hover:bg-red-200"
-        >
-          <RefreshCw className="h-3 w-3" />
-          Cek ulang
-        </button>
-      </div>
-    );
-  }
-
-  if (accessStatus.status === 'outside_geofence') {
-    return (
-      <div className="flex items-start gap-3 rounded-xl border border-orange-300 bg-orange-50 px-4 py-3.5">
-        <NavigationOff className="mt-0.5 h-5 w-5 flex-shrink-0 text-orange-600" />
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-bold text-orange-700">Di luar area toko</p>
-          <p className="mt-0.5 text-xs text-orange-600">
-            Kamu berada {accessStatus.distanceM}m dari toko (batas: {accessStatus.radiusM}m).
-          </p>
-        </div>
-        <button
-          onClick={onRefreshGeo}
-          className="flex shrink-0 items-center gap-1 rounded-lg bg-orange-100 px-2.5 py-1.5 text-[11px] font-semibold text-orange-700 hover:bg-orange-200"
-        >
-          <RefreshCw className="h-3 w-3" />
-          Perbarui
-        </button>
-      </div>
-    );
-  }
-
-  if (accessStatus.status === 'geo_unavailable') {
-    return (
-      <div className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-        <NavigationOff className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
-        <div className="min-w-0 flex-1">
-          <p className="text-xs font-semibold text-amber-800">Lokasi tidak terdeteksi</p>
-          <p className="mt-0.5 text-xs text-amber-600">
-            {geoError ?? 'Izin lokasi belum diberikan.'} Task dapat dilanjutkan tanpa rekam lokasi.
-          </p>
-        </div>
-        <button
-          onClick={onRefreshGeo}
-          className="flex shrink-0 items-center gap-1 rounded-lg bg-amber-100 px-2.5 py-1.5 text-[11px] font-semibold text-amber-700 hover:bg-amber-200"
-        >
-          <RefreshCw className="h-3 w-3" />
-          Coba lagi
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex items-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-2.5">
-      <Navigation className="h-4 w-4 flex-shrink-0 text-green-600" />
-      <p className="text-xs font-medium text-green-700">
-        Lokasi terdeteksi ({geo?.lat.toFixed(5)}, {geo?.lng.toFixed(5)})
-      </p>
-    </div>
-  );
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="space-y-3">
-      <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-        {title}
-      </p>
-      {children}
-    </div>
-  );
-}
-
-function LockedOverlay({ accessStatus }: { accessStatus: AccessStatus | null }) {
-  if (!accessStatus || accessStatus.status === 'ok' || accessStatus.status === 'geo_unavailable') {
-    return null;
-  }
-
-  const isCheckIn = accessStatus.status === 'not_checked_in';
-
-  return (
-    <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 rounded-2xl bg-background/70 backdrop-blur-[2px]">
-      <div
-        className={cn(
-          'flex h-12 w-12 items-center justify-center rounded-full',
-          isCheckIn ? 'bg-red-100' : 'bg-orange-100',
-        )}
-      >
-        {isCheckIn ? (
-          <LogIn className="h-6 w-6 text-red-600" />
-        ) : (
-          <NavigationOff className="h-6 w-6 text-orange-600" />
-        )}
-      </div>
-      <p className={cn('text-sm font-bold', isCheckIn ? 'text-red-700' : 'text-orange-700')}>
-        {isCheckIn ? 'Absen masuk dulu' : 'Kamu di luar area toko'}
-      </p>
-    </div>
-  );
-}
-
 function DenominationRow({
   row,
   disabled,
@@ -412,53 +264,38 @@ function DenominationRow({
   return (
     <div
       className={cn(
-        'rounded-2xl border p-3 transition-colors',
-        quantity > 0
-          ? 'border-primary/30 bg-primary/5'
-          : showEmptyMark
-            ? 'border-amber-200 bg-amber-50/60'
-            : 'border-border bg-card',
+        'flex items-center gap-3 px-3.5 py-3 transition-colors',
+        quantity > 0 ? 'bg-primary/[0.03]' : showEmptyMark ? 'bg-amber-50' : 'bg-card',
       )}
     >
-      <div className="flex items-center gap-3">
-        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-secondary">
-          <Wallet className="h-5 w-5 text-foreground" />
-        </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-bold tabular-nums text-foreground">
+          {formatRupiah(row.denominationValue)}
+        </p>
+        <p className={cn('mt-0.5 text-xs tabular-nums', showEmptyMark ? 'font-semibold text-amber-700' : 'text-muted-foreground')}>
+          {showEmptyMark
+            ? 'Belum terisi'
+            : quantity > 0
+              ? `= ${formatRupiah(amount)}`
+              : !disabled ? `maks ${maxQuantity.toLocaleString('id-ID')} lembar/keping` : '–'}
+        </p>
+      </div>
 
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-bold text-foreground">
-            {formatRupiah(row.denominationValue)}
-          </p>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">
-            Subtotal: {formatRupiah(amount)}
-          </p>
-          {!disabled && (
-            <p className="mt-0.5 text-[10px] text-muted-foreground">
-              Maks qty saat ini: {maxQuantity.toLocaleString('id-ID')}
-            </p>
-          )}
-          {showEmptyMark && (
-            <p className="mt-0.5 text-[10px] font-semibold text-amber-700">Belum terisi</p>
-          )}
-        </div>
-
-        <div className="w-24 shrink-0">
-          <label className="mb-1 block text-right text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-            Qty
-          </label>
-          <input
-            type="number"
-            inputMode="numeric"
-            min="0"
-            max={maxQuantity}
-            step="1"
-            value={quantity === 0 ? '' : quantity}
-            disabled={disabled}
-            onChange={(e) => onQuantityChange(toQty(e.target.value))}
-            placeholder="0"
-            className="h-10 w-full rounded-xl border border-border bg-secondary px-3 text-right text-sm font-bold focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
-          />
-        </div>
+      <div className="flex items-center gap-1.5">
+        <span className="text-xs font-medium text-muted-foreground">×</span>
+        <input
+          type="number"
+          inputMode="numeric"
+          min="0"
+          max={maxQuantity}
+          step="1"
+          aria-label={`Jumlah ${formatRupiah(row.denominationValue)}`}
+          value={quantity === 0 ? '' : quantity}
+          disabled={disabled}
+          onChange={(e) => onQuantityChange(toQty(e.target.value))}
+          placeholder="0"
+          className={cn(inputClass, 'h-11 w-20 px-3 text-right font-bold tabular-nums')}
+        />
       </div>
     </div>
   );
@@ -541,7 +378,6 @@ export default function CekUangModalDetailPage() {
 
   const taskStatus = taskData?.status;
   const readonly = taskStatus === 'completed' || taskStatus === 'verified';
-  const isRejected = taskStatus === 'rejected';
   const locked =
     !readonly &&
     !!accessStatus &&
@@ -665,14 +501,10 @@ export default function CekUangModalDetailPage() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-background">
+    <>
       <TaskHeader
         title="Cek Uang Modal"
-        subtitle={
-          taskData
-            ? `${String(taskData.shift).replace('_', ' ')} shift · ${String(taskData.status).replace('_', ' ')}`
-            : undefined
-        }
+        subtitle={shiftLabel(taskData?.shift)}
         status={taskStatus}
         saveIndicator={
           !readonly && !loading && taskData ? (
@@ -681,7 +513,7 @@ export default function CekUangModalDetailPage() {
         }
       />
 
-      <div className="flex-1 space-y-4 p-4 pb-10">
+      <PageBody bottomBar={!readonly && !!taskData}>
         {!readonly && !loading && taskData && (
           <AccessBanner
             accessStatus={accessStatus}
@@ -691,171 +523,98 @@ export default function CekUangModalDetailPage() {
             geoError={geoError}
             onRefreshGeo={refreshGeo}
             onRefreshAccess={refreshAccess}
+            requireGeo={requiresLocation}
+            allowWithoutGeo
           />
         )}
 
         {submitError && (
-          <div className="flex items-start gap-2.5 rounded-xl border border-red-300 bg-red-50 px-4 py-3">
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
-            <div className="min-w-0 flex-1">
-              <p className="text-xs font-bold text-red-700">Submit gagal</p>
-              <p className="mt-0.5 break-words text-xs text-red-600">{submitError}</p>
-            </div>
-            <button
-              onClick={() => setSubmitError(null)}
-              className="shrink-0 text-red-400 hover:text-red-600"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
+          <Notice tone="error" title="Submit gagal" onDismiss={() => setSubmitError(null)}>
+            {submitError}
+          </Notice>
         )}
 
         {saveError && !readonly && (
-          <div className="flex items-center gap-2 rounded-xl border border-orange-200 bg-orange-50 px-4 py-2.5">
-            <CloudOff className="h-4 w-4 shrink-0 text-orange-600" />
-            <p className="text-xs text-orange-700">Auto-save gagal: {saveError}</p>
-          </div>
+          <Notice tone="warning" icon={CloudOff}>Auto-save gagal: {saveError}</Notice>
         )}
 
-        {isRejected && taskData?.notes && (
-          <div className="flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
-            <div>
-              <p className="text-xs font-bold text-red-700">Ditolak oleh OPS</p>
-              <p className="mt-0.5 text-xs text-red-600">{taskData.notes}</p>
-              <p className="mt-1.5 text-xs font-medium text-red-700">
-                Silakan perbaiki dan submit ulang.
-              </p>
-            </div>
-          </div>
-        )}
-
-        {taskStatus === 'verified' && taskData?.verifiedAt && (
-          <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3">
-            <p className="text-xs font-semibold text-green-800">Task telah diverifikasi</p>
-            <p className="mt-0.5 text-xs text-green-600">{fmt(taskData.verifiedAt)}</p>
-          </div>
-        )}
+        <TaskReviewNotices status={taskStatus} notes={taskData?.notes} verifiedAt={taskData?.verifiedAt} />
 
         {!readonly && !locked && !loading && taskData && (
-          <div className="flex items-center gap-2 rounded-xl border border-blue-100 bg-blue-50 px-4 py-2.5">
-            <Save className="h-4 w-4 shrink-0 text-blue-500" />
-            <p className="text-xs text-blue-700">Perubahan otomatis tersimpan.</p>
-          </div>
+          <Notice tone="info" icon={Save}>Perubahan otomatis tersimpan.</Notice>
         )}
 
         {loading ? (
-          <div className="space-y-3">
-            {[1, 2, 3, 4].map((i) => (
-              <div key={i} className="h-20 animate-pulse rounded-2xl bg-secondary" />
-            ))}
-          </div>
+          <SkeletonBlocks count={4} />
         ) : !taskData ? (
-          <div className="flex flex-col items-center py-20 text-center">
-            <AlertCircle className="mb-3 h-8 w-8 text-muted-foreground/40" />
-            <p className="text-sm font-semibold">Task tidak ditemukan</p>
-          </div>
+          <EmptyState title="Task tidak ditemukan" description="Task ini mungkin sudah tidak tersedia untuk jadwalmu hari ini." />
         ) : (
           <div className="relative">
-            <LockedOverlay accessStatus={accessStatus} />
+            {!readonly && <LockedOverlay accessStatus={accessStatus} requireGeo={requiresLocation} allowWithoutGeo />}
 
-            <div className="space-y-6">
-              <Section title="Ringkasan Uang Modal">
-                <div className="rounded-3xl border border-border bg-card p-4 shadow-sm">
-                  <div className="flex items-start gap-3">
-                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-primary/10">
-                      <Wallet className="h-6 w-6 text-primary" />
-                    </div>
-
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold text-muted-foreground">
-                        Total uang modal siap di kasir
+            <div className="space-y-5">
+              {/* ─── Summary ─────────────────────────────────────────────── */}
+              <div className="space-y-3">
+                <SummaryBox>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-primary/80">
+                        Total uang modal di kasir
                       </p>
-                      <p className="mt-1 text-2xl font-black tracking-tight text-foreground">
+                      <p className="mt-0.5 text-2xl font-bold tabular-nums text-foreground">
                         {formatRupiah(totalAmount)}
                       </p>
-                      <p
-                        className={cn(
-                          'mt-1 text-[11px] font-medium',
-                          hasEmptyDenoms ? 'text-amber-700' : 'text-muted-foreground',
-                        )}
-                      >
-                        {filledRows} dari {rows.length} pecahan terisi
-                        {hasEmptyDenoms && ` · ${emptyRows} pecahan belum terisi`}
-                      </p>
-                      <div className="mt-3 space-y-2">
-                        <div className="h-2 overflow-hidden rounded-full bg-secondary">
-                          <div
-                            className={cn(
-                              'h-full rounded-full transition-all',
-                              isOverLimit ? 'bg-red-500' : (isPartial || hasEmptyDenoms) ? 'bg-amber-400' : 'bg-primary',
-                            )}
-                            style={{ width: `${totalPct}%` }}
-                          />
-                        </div>
-                        <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-                          <span>Limit harian: {formatRupiah(maxAmount)}</span>
-                          <span>Sisa: {formatRupiah(remainingAmount)}</span>
-                        </div>
-                      </div>
                     </div>
-
                     {readonly && (
+                      <Chip tone={(isPartial || hasEmptyDenoms) ? 'warning' : 'success'}>
+                        {(isPartial || hasEmptyDenoms) ? 'Belum lengkap' : 'Selesai'}
+                      </Chip>
+                    )}
+                  </div>
+
+                  <div className="space-y-1.5 border-t border-primary/15 pt-3">
+                    <div className="h-2 overflow-hidden rounded-full bg-primary/10">
                       <div
                         className={cn(
-                          'rounded-full px-2.5 py-1 text-[10px] font-bold',
-                          (isPartial || hasEmptyDenoms) ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700',
+                          'h-full rounded-full transition-all',
+                          isOverLimit ? 'bg-red-500' : (isPartial || hasEmptyDenoms) ? 'bg-amber-400' : 'bg-primary',
                         )}
-                      >
-                        {(isPartial || hasEmptyDenoms) ? 'Belum lengkap' : 'Selesai'}
-                      </div>
-                    )}
+                        style={{ width: `${totalPct}%` }}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between gap-2 text-[11px] text-primary/70">
+                      <span>Limit {formatRupiah(maxAmount)}</span>
+                      <span>Sisa {formatRupiah(remainingAmount)}</span>
+                    </div>
                   </div>
 
                   {taskData.completedAt && (
-                    <div className="mt-4 border-t border-border pt-3">
-                      <p className="text-[10px] text-muted-foreground">
-                        Selesai: {fmt(taskData.completedAt)}
-                      </p>
-                    </div>
+                    <p className="text-[11px] text-primary/70">Selesai: {fmt(taskData.completedAt)}</p>
                   )}
-                </div>
+                </SummaryBox>
 
                 {isOverLimit && (
-                  <div className="mt-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3">
-                    <p className="text-xs font-bold text-red-700">Melebihi limit uang modal</p>
-                    <p className="mt-0.5 text-xs text-red-600">
-                      Total maksimal {formatRupiah(maxAmount)}. Kurangi pecahan sebelum submit.
-                    </p>
-                  </div>
+                  <Notice tone="error" title="Melebihi limit uang modal">
+                    Total maksimal {formatRupiah(maxAmount)}. Kurangi pecahan sebelum submit.
+                  </Notice>
                 )}
 
                 {(isPartial || hasEmptyDenoms) && (
-                  <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
-                    <p className="text-xs font-bold text-amber-800">
-                      {hasEmptyDenoms && !isPartial ? 'Pecahan belum lengkap' : 'Uang modal belum lengkap'}
-                    </p>
-                    {isPartial && (
-                      <p className="mt-0.5 text-xs text-amber-700">
-                        Kurang {formatRupiah(remainingAmount)} dari batas harian {formatRupiah(maxAmount)}.
-                      </p>
-                    )}
-                    {hasEmptyDenoms && (
-                      <p className="mt-0.5 text-xs text-amber-700">
-                        {emptyRows} pecahan belum terisi.
-                      </p>
-                    )}
-                    <p className="mt-0.5 text-xs text-amber-700">
+                  <Notice tone="warning" title={hasEmptyDenoms && !isPartial ? 'Pecahan belum lengkap' : 'Uang modal belum lengkap'}>
+                    {isPartial && <p>Kurang {formatRupiah(remainingAmount)} dari batas harian {formatRupiah(maxAmount)}.</p>}
+                    {hasEmptyDenoms && <p>{emptyRows} pecahan belum terisi.</p>}
+                    <p>
                       {readonly
                         ? 'Task tetap selesai — ditandai untuk Ops.'
                         : 'Tidak masalah — task tetap bisa diselesaikan dan akan ditandai.'}
                     </p>
-                  </div>
+                  </Notice>
                 )}
-              </Section>
+              </div>
 
-              <Section title="Pecahan Uang">
-                <div className="space-y-2.5">
+              {/* ─── Denominations ───────────────────────────────────────── */}
+              <Section title="Pecahan uang" meta={`${filledRows}/${rows.length} terisi`}>
+                <ListGroup>
                   {rows.map((row) => (
                     <DenominationRow
                       key={row.denominationValue}
@@ -871,56 +630,42 @@ export default function CekUangModalDetailPage() {
                       }
                     />
                   ))}
-                </div>
+                </ListGroup>
               </Section>
 
-              <Section title="Catatan (opsional)">
-                <textarea
-                  value={notes}
-                  disabled={disabled}
-                  rows={3}
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    setNotes(value);
-                    autoSave({
-                      denominations: payloadRows(rows),
-                      notes: value || undefined,
-                    });
-                  }}
-                  placeholder="Tambahkan catatan jika ada…"
-                  className="w-full resize-none rounded-xl border border-border bg-secondary px-4 py-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
-                />
-              </Section>
-
-              <TaskSubmitBar
-                label="Submit Cek Uang Modal"
-                onSubmit={handleSubmit}
-                submitting={submitting}
-                disabled={!canSubmit}
-                hidden={readonly}
-                hint={!canSubmit ? submitHint : undefined}
+              <NotesField
+                value={notes}
+                disabled={disabled}
+                rows={3}
+                onChange={(value) => {
+                  setNotes(value);
+                  autoSave({
+                    denominations: payloadRows(rows),
+                    notes: value || undefined,
+                  });
+                }}
               />
 
-              {readonly && taskData.notes && (
-                <Section title="Catatan">
-                  <div className="rounded-2xl border border-border bg-card p-4">
-                    <p className="text-xs text-foreground">{taskData.notes}</p>
-                  </div>
-                </Section>
-              )}
-
               {readonly && (
-                <div className="flex items-center justify-center gap-2 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-green-700">
-                  <CheckCircle2 className="h-4 w-4" />
-                  <p className="text-xs font-semibold">
-                    Data pecahan uang modal sudah tersimpan.
-                  </p>
-                </div>
+                <Notice tone="success" icon={CheckCircle2}>
+                  Data pecahan uang modal sudah tersimpan.
+                </Notice>
               )}
             </div>
           </div>
         )}
-      </div>
-    </div>
+      </PageBody>
+
+      {taskData && (
+        <TaskSubmitBar
+          label="Submit Cek Uang Modal"
+          onSubmit={handleSubmit}
+          submitting={submitting}
+          disabled={!canSubmit}
+          hidden={readonly}
+          hint={!canSubmit ? submitHint : undefined}
+        />
+      )}
+    </>
   );
 }

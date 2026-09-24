@@ -20,10 +20,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import {
-  AlertCircle, Camera, Check, CreditCard,
-  Loader2, Pencil, Receipt, X,
-} from 'lucide-react';
+import { AlertCircle, CreditCard, Pencil, Receipt } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { useAutoSave } from '@/lib/hooks/useAutoSave';
@@ -32,7 +29,13 @@ import {
   TaskHeader,
   TaskSubmitBar,
   SaveIndicator,
+  shiftLabel,
 } from '@/components/employee/tasks';
+import {
+  ActionButton, AmountField, BottomSheet, FieldLabel, InfoRow, ListGroup, Notice,
+  NotesField, PageBody, PhotoRow, Section, TaskLoadingScreen, TaskMissingScreen,
+  TaskReviewNotices,
+} from '@/components/employee/ui';
 import CameraCapture from '@/components/shared/CameraCapture';
 import { uploadTaskPhoto } from '@/lib/tasks-upload';
 
@@ -76,10 +79,6 @@ function rupiah(value: string | number | null | undefined): string {
   const n = Number(value ?? 0);
   if (!Number.isFinite(n)) return 'Rp 0';
   return `Rp ${n.toLocaleString('id-ID')}`;
-}
-
-function onlyDigits(raw: string): string {
-  return raw.replace(/[^0-9]/g, '');
 }
 
 function toNumber(raw: string | null | undefined): number {
@@ -182,31 +181,8 @@ export default function SetoranTaskPage() {
   }, [autoStored, storedManual, isNoSetoran]);
 
   // ─── Render ──────────────────────────────────────────────────────────────
-  if (loading) {
-    return (
-      <main className="min-h-screen bg-background">
-        <TaskHeader title="Setoran" />
-        <div className="space-y-3 p-4">
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="h-20 animate-pulse rounded-2xl bg-secondary" />
-          ))}
-        </div>
-      </main>
-    );
-  }
-
-  if (!task) {
-    return (
-      <main className="min-h-screen bg-background">
-        <TaskHeader title="Setoran" />
-        <div className="p-4">
-          <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-            {submitError ?? 'Setoran task tidak ditemukan.'}
-          </div>
-        </div>
-      </main>
-    );
-  }
+  if (loading) return <TaskLoadingScreen title="Setoran" />;
+  if (!task) return <TaskMissingScreen title="Setoran" message={submitError} />;
 
   return (
     <AccessGuard
@@ -457,37 +433,22 @@ function SetoranPageBody(props: BodyProps) {
   const photosDone = (resiPhoto ? 1 : 0) + (atmCardSelfiePhoto ? 1 : 0);
 
   return (
-    <main className="flex min-h-screen flex-col bg-background">
+    <>
       <TaskHeader
         title="Setoran"
-        subtitle={`${task.shift} shift · ${task.status.replace('_', ' ')}`}
+        subtitle={shiftLabel(task.shift)}
         status={task.status}
         saveIndicator={!readonly ? <SaveIndicator status={saveStatus} lastSaved={lastSaved} /> : null}
       />
 
-      <div className="flex-1 space-y-4 p-4 pb-28">
+      <PageBody bottomBar={!readonly}>
         {banner}
 
         {submitError && (
-          <div className="flex items-start gap-2.5 rounded-xl border border-red-300 bg-red-50 px-4 py-3">
-            <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-600" />
-            <p className="min-w-0 flex-1 text-xs text-red-700 break-words">{submitError}</p>
-            <button onClick={() => setSubmitError(null)} className="flex-shrink-0 text-red-400 hover:text-red-600" aria-label="Tutup">
-              <X className="h-4 w-4" />
-            </button>
-          </div>
+          <Notice tone="error" onDismiss={() => setSubmitError(null)}>{submitError}</Notice>
         )}
 
-        {task.status === 'rejected' && task.notes && (
-          <div className="flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
-            <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-600" />
-            <div>
-              <p className="text-xs font-bold text-red-700">Ditolak oleh OPS</p>
-              <p className="mt-0.5 text-xs text-red-600">{task.notes}</p>
-              <p className="mt-1.5 text-xs font-medium text-red-700">Perbaiki dan submit ulang.</p>
-            </div>
-          </div>
-        )}
+        <TaskReviewNotices status={task.status} notes={task.notes} verifiedAt={task.verifiedAt} />
 
         <div className="relative">
           {lockedOverlay}
@@ -540,7 +501,7 @@ function SetoranPageBody(props: BodyProps) {
               <AmountField
                 label="Uang aktual diterima kemarin"
                 value={actualReceivedAmount}
-                onChange={(v) => setActualReceivedAmount(onlyDigits(v))}
+                onChange={setActualReceivedAmount}
                 onBlur={() => autoSave({ actualReceivedAmount })}
                 disabled={dis}
                 placeholder="1.000.000"
@@ -551,14 +512,8 @@ function SetoranPageBody(props: BodyProps) {
             </div>
 
             {/* ─── Photos ─────────────────────────────────────────────────── */}
-            <div>
-              <SectionLabel>
-                Foto bukti
-                <span className="ml-1 font-normal text-muted-foreground">
-                  {isNoSetoran ? 'opsional — tidak ada setoran' : `${photosDone}/2`}
-                </span>
-              </SectionLabel>
-              <div className="overflow-hidden rounded-xl border border-border">
+            <Section title="Foto bukti" meta={isNoSetoran ? 'opsional — tidak ada setoran' : `${photosDone}/2`}>
+              <ListGroup>
                 <PhotoRow
                   title="Foto Resi"
                   hint="Bukti resi setoran"
@@ -568,7 +523,6 @@ function SetoranPageBody(props: BodyProps) {
                   onClick={() => setCameraTarget('resi')}
                   icon={<Receipt className="h-4 w-4" />}
                 />
-                <div className="h-px bg-border" />
                 <PhotoRow
                   title="Selfie + Kartu ATM"
                   hint="Wajah memegang kartu ATM"
@@ -578,7 +532,7 @@ function SetoranPageBody(props: BodyProps) {
                   onClick={() => setCameraTarget('atm_card_selfie')}
                   icon={<CreditCard className="h-4 w-4" />}
                 />
-              </div>
+              </ListGroup>
 
               <CameraCapture
                 open={cameraTarget !== null}
@@ -591,24 +545,18 @@ function SetoranPageBody(props: BodyProps) {
                 title={cameraTarget === 'atm_card_selfie' ? 'Selfie + Kartu ATM' : 'Foto Resi'}
                 facingMode={cameraTarget === 'atm_card_selfie' ? 'user' : 'environment'}
               />
-            </div>
+            </Section>
 
             {/* ─── Notes ──────────────────────────────────────────────────── */}
-            <div>
-              <SectionLabel>Catatan <span className="font-normal text-muted-foreground">opsional</span></SectionLabel>
-              <textarea
-                disabled={dis}
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                onBlur={() => autoSave({ notes })}
-                placeholder="Tambahkan catatan jika ada…"
-                rows={2}
-                className="w-full resize-none rounded-xl border border-border bg-secondary px-3.5 py-2.5 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
-              />
-            </div>
+            <NotesField
+              value={notes}
+              onChange={setNotes}
+              onBlur={() => autoSave({ notes })}
+              disabled={dis}
+            />
           </div>
         </div>
-      </div>
+      </PageBody>
 
       <TaskSubmitBar
         label="Submit Setoran"
@@ -649,7 +597,7 @@ function SetoranPageBody(props: BodyProps) {
           onConfirm={doSubmit}
         />
       )}
-    </main>
+    </>
   );
 }
 
@@ -689,7 +637,7 @@ function KurangField({
 
   return (
     <div className="space-y-1.5">
-      <span className="px-0.5 text-xs font-medium text-muted-foreground">Kurang</span>
+      <FieldLabel>Kurang</FieldLabel>
       <div className={cn(
         'flex h-12 w-full items-center gap-1.5 rounded-xl border px-3.5 text-base font-bold tabular-nums',
         box,
@@ -726,86 +674,51 @@ function StoredAmountModal({
   const canSave = !over && effective > 0;
 
   return (
-    <div
-      className="fixed inset-0 z-[60] flex items-end justify-center bg-black/60 sm:items-center"
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-    >
-      <div
-        className="relative mx-2 flex w-full flex-col rounded-t-3xl bg-background shadow-2xl sm:mb-0 sm:max-w-sm sm:rounded-3xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex justify-center pt-3 pb-1 sm:hidden" aria-hidden="true">
-          <div className="h-1 w-10 rounded-full bg-border" />
-        </div>
-
-        <div className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
-          <div className="min-w-0">
-            <h3 className="text-base font-bold text-foreground">Total wajib disetor</h3>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              Total uang Cash Drawer {rupiah(cashDrawerTotal)}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-secondary text-muted-foreground"
-            aria-label="Tutup"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        <div className="space-y-3 px-5 py-4">
-          <AmountField
-            label="Nominal yang disetor"
-            value={useAuto ? String(autoStored) : draft}
-            onChange={(v) => { setDraft(onlyDigits(v)); setUseAuto(false); }}
-            onBlur={() => {}}
-            error={over ? 'Tidak boleh melebihi total uang cash drawer.' : undefined}
-            placeholder="1.750.000"
-          />
-
-          <button
-            type="button"
-            onClick={() => setUseAuto(true)}
-            className={cn(
-              'flex w-full items-center justify-between gap-2 rounded-xl border px-3.5 py-2.5 text-left text-xs transition-colors',
-              useAuto
-                ? 'border-primary/40 bg-primary/5 text-primary'
-                : 'border-border bg-secondary text-muted-foreground hover:bg-secondary/70',
-            )}
-          >
-            <span className="font-medium">Hitung otomatis · kelipatan Rp 50.000</span>
-            <span className="font-bold tabular-nums">{rupiah(autoStored)}</span>
-          </button>
-
-          <div className="flex items-center justify-between rounded-xl bg-secondary px-3.5 py-2.5 text-xs">
-            <span className="text-muted-foreground">Kurang</span>
-            <span className="font-bold tabular-nums text-foreground">{rupiah(previewKurang)}</span>
-          </div>
-        </div>
-
-        <div className="flex gap-2 border-t border-border px-5 pb-4 pt-3">
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex-1 rounded-xl border border-border bg-card px-4 py-3 text-sm font-semibold text-foreground"
-          >
-            Batal
-          </button>
-          <button
-            type="button"
+    <BottomSheet
+      open
+      onClose={onClose}
+      title="Total wajib disetor"
+      description={`Total uang Cash Drawer ${rupiah(cashDrawerTotal)}`}
+      footer={
+        <>
+          <ActionButton variant="secondary" className="flex-1" onClick={onClose}>Batal</ActionButton>
+          <ActionButton
+            className="flex-1"
             disabled={!canSave}
             onClick={() => onSave(useAuto ? String(autoStored) : draft, !useAuto)}
-            className="flex-1 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground disabled:opacity-60"
           >
             Simpan
-          </button>
-        </div>
+          </ActionButton>
+        </>
+      }
+    >
+      <AmountField
+        label="Nominal yang disetor"
+        value={useAuto ? String(autoStored) : draft}
+        onChange={(v) => { setDraft(v); setUseAuto(false); }}
+        error={over ? 'Tidak boleh melebihi total uang cash drawer.' : undefined}
+        placeholder="1.750.000"
+      />
+
+      <button
+        type="button"
+        onClick={() => setUseAuto(true)}
+        className={cn(
+          'flex w-full items-center justify-between gap-2 rounded-xl border px-3.5 py-2.5 text-left text-xs transition-colors',
+          useAuto
+            ? 'border-primary/40 bg-primary/5 text-primary'
+            : 'border-border bg-secondary text-muted-foreground hover:bg-secondary/70',
+        )}
+      >
+        <span className="font-medium">Hitung otomatis · kelipatan Rp 50.000</span>
+        <span className="font-bold tabular-nums">{rupiah(autoStored)}</span>
+      </button>
+
+      <div className="flex items-center justify-between rounded-xl bg-secondary px-3.5 py-2.5 text-xs">
+        <span className="text-muted-foreground">Kurang</span>
+        <span className="font-bold tabular-nums text-foreground">{rupiah(previewKurang)}</span>
       </div>
-    </div>
+    </BottomSheet>
   );
 }
 
@@ -825,189 +738,36 @@ function ConfirmSubmitModal({
   onConfirm: () => void;
 }) {
   return (
-    <div
-      className="fixed inset-0 z-[60] flex items-end justify-center bg-black/60 sm:items-center"
-      onClick={() => { if (!submitting) onCancel(); }}
-      role="dialog"
-      aria-modal="true"
-    >
-      <div
-        className="relative mx-2 flex w-full flex-col rounded-t-3xl bg-background shadow-2xl sm:mb-0 sm:max-w-sm sm:rounded-3xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex justify-center pt-3 pb-1 sm:hidden" aria-hidden="true">
-          <div className="h-1 w-10 rounded-full bg-border" />
-        </div>
-
-        <div className="border-b border-border px-5 py-4">
-          <h3 className="text-base font-bold text-foreground">
-            {isNoSetoran ? 'Konfirmasi: Tidak Ada Setoran' : 'Konfirmasi Setoran'}
-          </h3>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Periksa lagi nominalnya sebelum submit — setoran tidak bisa diubah lagi setelah ini.
-          </p>
-        </div>
-
-        <div className="space-y-3 px-5 py-4">
-          {isNoSetoran && (
-            <div className="flex items-start gap-2.5 rounded-xl border border-amber-300 bg-amber-50 px-3.5 py-3">
-              <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
-              <p className="text-xs font-medium text-amber-800">
-                Uang aktual diterima diisi <span className="font-bold">Rp 0</span> — kamu akan submit
-                bahwa hari ini <span className="font-bold">tidak ada setoran sama sekali</span>, tanpa
-                foto resi maupun selfie ATM. Pastikan ini benar.
-              </p>
-            </div>
-          )}
-
-          <div className="space-y-1.5 rounded-xl bg-secondary px-3.5 py-3 text-sm">
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Uang aktual diterima</span>
-              <span className="font-bold tabular-nums text-foreground">{rupiah(actualReceivedNumber)}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Total wajib disetor</span>
-              <span className="font-bold tabular-nums text-foreground">{rupiah(storedNumber)}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-muted-foreground">Kurang</span>
-              <span className="font-bold tabular-nums text-foreground">{rupiah(kurang)}</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex gap-2 border-t border-border px-5 pb-4 pt-3">
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={submitting}
-            className="flex-1 rounded-xl border border-border bg-card px-4 py-3 text-sm font-semibold text-foreground disabled:opacity-60"
-          >
+    <BottomSheet
+      open
+      onClose={onCancel}
+      dismissible={!submitting}
+      title={isNoSetoran ? 'Konfirmasi: Tidak Ada Setoran' : 'Konfirmasi Setoran'}
+      description="Periksa lagi nominalnya sebelum submit — setoran tidak bisa diubah lagi setelah ini."
+      footer={
+        <>
+          <ActionButton variant="secondary" className="flex-1" onClick={onCancel} disabled={submitting}>
             Periksa lagi
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={submitting}
-            className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-bold text-primary-foreground disabled:opacity-60"
-          >
-            {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          </ActionButton>
+          <ActionButton className="flex-1" onClick={onConfirm} loading={submitting}>
             Ya, Submit
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <p className="mb-1.5 px-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-      {children}
-    </p>
-  );
-}
-
-function AmountField({
-  label, value, onChange, onBlur, disabled, placeholder, error, hint, action,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  onBlur: () => void;
-  disabled?: boolean;
-  placeholder?: string;
-  error?: string;
-  hint?: string;
-  action?: { label: string; onClick: () => void };
-}) {
-  const formatted = value ? Number(value).toLocaleString('id-ID') : '';
-  return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between gap-2 px-0.5">
-        <span className="text-xs font-medium text-muted-foreground">{label}</span>
-        {action && (
-          <button
-            type="button"
-            onClick={action.onClick}
-            className="text-[11px] font-semibold text-primary hover:underline"
-          >
-            {action.label}
-          </button>
-        )}
-      </div>
-      <div className="relative">
-        <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-semibold text-muted-foreground">
-          Rp
-        </span>
-        <input
-          inputMode="numeric"
-          disabled={disabled}
-          value={formatted}
-          onChange={(e) => onChange(e.target.value)}
-          onBlur={onBlur}
-          placeholder={placeholder}
-          className={cn(
-            'h-12 w-full rounded-xl border bg-background pl-10 pr-3 text-base font-semibold tabular-nums outline-none transition-colors',
-            'focus:border-primary disabled:opacity-60',
-            error ? 'border-red-400 focus:border-red-500' : 'border-border',
-          )}
-        />
-      </div>
-      {error
-        ? <p className="px-0.5 text-[11px] font-medium text-red-600">{error}</p>
-        : hint
-          ? <p className="px-0.5 text-[11px] text-muted-foreground">{hint}</p>
-          : null}
-    </div>
-  );
-}
-
-
-// A single compact photo row — thumbnail/icon, label, and state on the right.
-function PhotoRow({
-  title, hint, photo, onClick, disabled, loading, icon,
-}: {
-  title: string;
-  hint: string;
-  photo: string | null;
-  onClick: () => void;
-  disabled?: boolean;
-  loading?: boolean;
-  icon: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className="flex w-full items-center gap-3 bg-card px-3.5 py-3 text-left transition active:bg-secondary disabled:opacity-60"
+          </ActionButton>
+        </>
+      }
     >
-      {photo ? (
-        <div className="h-11 w-11 flex-shrink-0 overflow-hidden rounded-lg border border-border bg-background">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={photo} alt={title} className="h-full w-full object-cover" />
-        </div>
-      ) : (
-        <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-lg bg-secondary text-violet-700">
-          {loading ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : icon}
-        </div>
+      {isNoSetoran && (
+        <Notice tone="warning" icon={AlertCircle}>
+          Uang aktual diterima diisi <span className="font-bold">Rp 0</span> — kamu akan submit
+          bahwa hari ini <span className="font-bold">tidak ada setoran sama sekali</span>, tanpa
+          foto resi maupun selfie ATM. Pastikan ini benar.
+        </Notice>
       )}
 
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-semibold text-foreground">{title}</p>
-        <p className="mt-0.5 text-xs text-muted-foreground">{photo ? 'Tap untuk ganti' : hint}</p>
-      </div>
-
-      {photo ? (
-        <span className="flex flex-shrink-0 items-center gap-1 rounded-full bg-green-50 px-2 py-0.5 text-[11px] font-semibold text-green-700">
-          <Check className="h-3 w-3" /> Ada
-        </span>
-      ) : (
-        <span className="flex flex-shrink-0 items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-semibold text-violet-700">
-          <Camera className="h-3 w-3" /> Foto
-        </span>
-      )}
-    </button>
+      <ListGroup>
+        <InfoRow label="Uang aktual diterima" value={rupiah(actualReceivedNumber)} />
+        <InfoRow label="Total wajib disetor" value={rupiah(storedNumber)} />
+        <InfoRow label="Kurang" value={rupiah(kurang)} />
+      </ListGroup>
+    </BottomSheet>
   );
 }

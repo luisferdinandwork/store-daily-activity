@@ -1,7 +1,8 @@
 // app/api/cron/auto-checkout/route.ts
 //
-// Daily safety net for autoCheckoutOverdueAttendance() — closes out attendance
-// left checked-in more than 30 minutes past shift end, system-wide. The
+// Daily safety net for autoCheckoutOverdueAttendance() — once a calendar day
+// (Asia/Jakarta) is over, closes out attendance that never got a check-out,
+// at the shift's scheduled end time, system-wide. The
 // employee and ops attendance GET routes already run the same scoped check
 // on every load; this cron just guarantees it eventually runs even for
 // stores/employees nobody happens to view that day.

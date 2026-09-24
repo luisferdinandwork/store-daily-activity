@@ -46,6 +46,9 @@ import {
 import type { LucideIcon } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import {
+  ActionButton, BottomSheet, EmptyState, Notice, SkeletonBlocks, inputClass,
+} from '@/components/employee/ui';
 import CameraCapture from '@/components/shared/CameraCapture';
 import {
   type Issue,
@@ -292,14 +295,14 @@ function RolePicker({
 }) {
   return (
     <div className="flex flex-col gap-2">
-      <label className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+      <label className="px-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         Send to <span className="text-destructive">*</span>
       </label>
 
       {rolesLoading ? (
         <div className="grid grid-cols-2 gap-2">
           {[0, 1].map((i) => (
-            <div key={i} className="h-16 animate-pulse rounded-2xl bg-muted" />
+            <div key={i} className="h-16 animate-pulse rounded-xl bg-secondary" />
           ))}
         </div>
       ) : (
@@ -314,8 +317,8 @@ function RolePicker({
                 type="button"
                 onClick={() => onToggle(role.id)}
                 className={cn(
-                  'flex items-center gap-3 rounded-2xl border-2 px-3 py-3 text-left transition-all active:scale-[0.98]',
-                  active ? 'border-primary bg-primary/5' : 'border-border bg-muted/40 hover:border-primary/30',
+                  'flex min-w-0 items-center gap-2.5 rounded-xl border px-3 py-3 text-left transition-all active:scale-[0.98]',
+                  active ? 'border-primary bg-primary/5' : 'border-border bg-card hover:border-primary/30',
                 )}
               >
                 <div className={cn(
@@ -336,6 +339,34 @@ function RolePicker({
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Sub-header ───────────────────────────────────────────────────────────────
+// The form / detail views sit under the layout's app bar, so they get a slim
+// sticky sub-bar (back + title) instead of a second full header.
+
+function SubHeader({ title, subtitle, onBack }: { title: string; subtitle?: string; onBack: () => void }) {
+  return (
+    <div
+      className="sticky z-20 border-b border-border bg-background/95 backdrop-blur"
+      style={{ top: 'var(--emp-header-h)' }}
+    >
+      <div className="mx-auto flex max-w-md items-center gap-2 px-2 py-2">
+        <button
+          type="button"
+          onClick={onBack}
+          aria-label="Kembali"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-foreground transition-colors active:bg-secondary"
+        >
+          <ArrowLeft className="h-5 w-5" />
+        </button>
+        <div className="min-w-0 flex-1">
+          <h2 className="truncate text-sm font-bold text-foreground">{title}</h2>
+          {subtitle && <p className="truncate text-xs text-muted-foreground">{subtitle}</p>}
+        </div>
+      </div>
     </div>
   );
 }
@@ -471,29 +502,11 @@ function IssueForm({
   const subtitleText = mode === 'edit' ? 'Update draft before sending to OPS' : 'Pick who should handle it';
 
   return (
-    <div className="flex h-full flex-col">
-      {/* Header */}
-      <div className="flex items-center gap-3 border-b border-border px-4 py-4">
-        <button
-          type="button"
-          onClick={onCancel}
-          className="flex h-8 w-8 items-center justify-center rounded-full bg-muted text-muted-foreground transition-colors hover:bg-muted/80"
-        >
-          <ArrowLeft className="h-4 w-4" />
-        </button>
-        <div>
-          <h2 className="font-semibold text-foreground">{titleText}</h2>
-          <p className="text-xs text-muted-foreground">{subtitleText}</p>
-        </div>
-      </div>
+    <div className="flex flex-col">
+      <SubHeader title={titleText} subtitle={subtitleText} onBack={onCancel} />
 
-      <form className="flex flex-1 flex-col gap-5 overflow-y-auto px-4 py-5" onSubmit={(event) => event.preventDefault()}>
-        {error && (
-          <div className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-            {error}
-          </div>
-        )}
+      <form className="mx-auto flex w-full max-w-md flex-col gap-5 px-4 pb-8 pt-4" onSubmit={(event) => event.preventDefault()}>
+        {error && <Notice tone="error">{error}</Notice>}
 
         <RolePicker
           roles={roles}
@@ -504,7 +517,7 @@ function IssueForm({
 
         {/* Title */}
         <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+          <label className="px-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             Issue Title <span className="text-destructive">*</span>
           </label>
           <input
@@ -512,14 +525,14 @@ function IssueForm({
             onChange={(event) => setTitle(event.target.value)}
             placeholder="e.g. Broken AC unit in back room"
             maxLength={120}
-            className="w-full rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/60 transition-all focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-primary/20"
+            className={inputClass}
           />
           <span className="self-end text-[11px] text-muted-foreground">{title.length}/120</span>
         </div>
 
         {/* Description */}
         <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+          <label className="px-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             Description <span className="text-destructive">*</span>
           </label>
           <textarea
@@ -528,14 +541,14 @@ function IssueForm({
             placeholder="Describe the issue clearly — what happened, when, and any relevant context..."
             rows={5}
             maxLength={2000}
-            className="w-full resize-none rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground/60 transition-all focus:border-primary/60 focus:outline-none focus:ring-2 focus:ring-primary/20"
+            className="w-full resize-none rounded-xl border border-border bg-background px-3.5 py-2.5 text-base text-foreground placeholder:text-muted-foreground transition-colors focus:border-primary focus:outline-none"
           />
           <span className="self-end text-[11px] text-muted-foreground">{description.length}/2000</span>
         </div>
 
         {/* Images */}
         <div className="flex flex-col gap-2">
-          <label className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+          <label className="px-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             Photos <span className="font-normal normal-case tracking-normal text-muted-foreground/50">(optional, up to 5)</span>
           </label>
           <div className="flex flex-wrap gap-2">
@@ -595,28 +608,13 @@ function IssueForm({
           />
         </div>
 
-        <div className="flex-1" />
-
-        <div className="grid grid-cols-2 gap-2">
-          <button
-            type="button"
-            disabled={loading || rolesLoading}
-            onClick={() => submit('draft')}
-            className="flex w-full items-center justify-center gap-2 rounded-2xl border border-border bg-card py-3.5 font-semibold text-foreground transition-all hover:bg-muted active:scale-[0.98] disabled:opacity-60"
-          >
-            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+        <div className="grid grid-cols-2 gap-2 pt-1">
+          <ActionButton variant="secondary" icon={Save} loading={loading} disabled={rolesLoading} onClick={() => submit('draft')}>
             Draft
-          </button>
-
-          <button
-            type="button"
-            disabled={loading || rolesLoading}
-            onClick={() => submit('reported')}
-            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-primary py-3.5 font-semibold text-primary-foreground transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-60"
-          >
-            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+          </ActionButton>
+          <ActionButton icon={Send} loading={loading} disabled={rolesLoading} onClick={() => submit('reported')}>
             Send
-          </button>
+          </ActionButton>
         </div>
       </form>
     </div>
@@ -640,6 +638,7 @@ function IssueDetail({
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [baCameraOpen, setBaCameraOpen] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [baFiles, setBaFiles] = useState<File[]>([]);
   const [baUploading, setBaUploading] = useState(false);
   const baFileInputRef = useRef<HTMLInputElement>(null);
@@ -706,9 +705,7 @@ function IssueDetail({
   const handleDelete = async () => {
     setActionError(null);
 
-    const ok = window.confirm('Delete this draft issue?');
-    if (!ok) return;
-
+    setConfirmDelete(false);
     setActionLoading(true);
 
     try {
@@ -736,31 +733,16 @@ function IssueDetail({
   }
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center gap-3 border-b border-border px-4 py-4">
-        <button type="button" onClick={onBack} className="flex h-8 w-8 items-center justify-center rounded-full bg-muted text-muted-foreground">
-          <ArrowLeft className="h-4 w-4" />
-        </button>
-        <div className="min-w-0 flex-1">
-          <h2 className="truncate font-semibold text-foreground">{issue.title}</h2>
-        </div>
-      </div>
+    <div className="flex flex-col">
+      <SubHeader title={issue.title} subtitle={`Ref ${issue.id.padStart(6, '0')}`} onBack={onBack} />
 
-      <div className="flex flex-1 flex-col gap-5 overflow-y-auto px-4 py-5">
-        {actionError && (
-          <div className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-            {actionError}
-          </div>
-        )}
+      <div className="mx-auto flex w-full max-w-md flex-col gap-5 px-4 pb-8 pt-4">
+        {actionError && <Notice tone="error">{actionError}</Notice>}
 
         {issue.status === 'draft' && issue.isOwner !== false && (
-          <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
-            <p className="text-sm font-semibold text-amber-600 dark:text-amber-400">Draft issue</p>
-            <p className="mt-1 text-xs leading-relaxed text-amber-700/80 dark:text-amber-300/80">
-              This issue is still editable by store employee. Send it to OPS when the details are ready.
-            </p>
-          </div>
+          <Notice tone="warning" title="Draft issue">
+            This issue is still editable by store employee. Send it to OPS when the details are ready.
+          </Notice>
         )}
 
         <div className="flex flex-wrap items-center gap-2">
@@ -794,8 +776,8 @@ function IssueDetail({
 
         {/* Destination */}
         {getIssueRoles(issue).length > 0 && (
-          <div className="rounded-2xl border border-border bg-muted/30 p-4">
-            <p className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">Sent to</p>
+          <div className="rounded-2xl border border-border bg-card p-4">
+            <p className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Sent to</p>
             <div className="flex flex-col gap-2">
               {getIssueRoles(issue).map((role) => {
                 const Icon = roleIcon(role.code);
@@ -812,15 +794,15 @@ function IssueDetail({
         )}
 
         {/* Description */}
-        <div className="rounded-2xl border border-border bg-muted/30 p-4">
-          <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-muted-foreground">Description</p>
+        <div className="rounded-2xl border border-border bg-card p-4">
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Description</p>
           <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">{issue.description}</p>
         </div>
 
         {/* Photos */}
         {issue.attachmentUrls.length > 0 && (
           <div>
-            <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+            <p className="mb-2 px-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
               Photos ({issue.attachmentUrls.length})
             </p>
             <div className="flex flex-wrap gap-2">
@@ -841,8 +823,8 @@ function IssueDetail({
         )}
 
         {/* Berita Acara — uploadable at any status, including draft */}
-        <div className="rounded-2xl border border-violet-500/20 bg-violet-500/5 p-4">
-            <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-widest text-violet-600 dark:text-violet-400">
+        <div className="rounded-2xl border border-primary/20 bg-primary/5 p-4">
+            <p className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-primary">
               <ClipboardCheck className="h-3.5 w-3.5" />
               Berita Acara
             </p>
@@ -863,7 +845,7 @@ function IssueDetail({
             ) : canUploadBa ? (
               <>
                 <p className="mb-2 text-[11px] text-muted-foreground">
-                  Photos, PDF, Word, or Excel — one-time upload, up to 5 files. Can't be changed once submitted.
+                  Photos, PDF, Word, or Excel — one-time upload, up to 5 files. Can&apos;t be changed once submitted.
                 </p>
                 <div className="flex flex-wrap gap-2">
                   {baFiles.map((file, index) => (
@@ -934,67 +916,52 @@ function IssueDetail({
           </div>
 
         {issue.solvedAt && (
-          <div className="flex items-center gap-2 rounded-xl border border-violet-500/20 bg-violet-500/5 px-4 py-3">
-            <ShieldCheck className="h-4 w-4 shrink-0 text-violet-500" />
-            <p className="text-xs text-violet-600 dark:text-violet-400">Marked solved {formatRelativeTime(issue.solvedAt)}</p>
-          </div>
+          <Notice tone="info" icon={ShieldCheck}>Marked solved {formatRelativeTime(issue.solvedAt)}</Notice>
         )}
 
         {issue.reviewedAt && (
-          <div className="flex items-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3">
-            <Eye className="h-4 w-4 shrink-0 text-emerald-500" />
-            <p className="text-xs text-emerald-600 dark:text-emerald-400">Reviewed {formatRelativeTime(issue.reviewedAt)}</p>
-          </div>
+          <Notice tone="success" icon={Eye}>Reviewed {formatRelativeTime(issue.reviewedAt)}</Notice>
         )}
 
         {canMarkSolved && (
-          <button
-            type="button"
-            disabled={actionLoading}
-            onClick={handleMarkSolved}
-            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-violet-600 py-3.5 font-semibold text-white transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-60"
-          >
-            {actionLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
+          <ActionButton icon={ShieldCheck} loading={actionLoading} onClick={handleMarkSolved}>
             Mark as Solved
-          </button>
+          </ActionButton>
         )}
 
         {(canEditDraft || canSendDraft || canDeleteDraft) && (
           <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              disabled={actionLoading || !canEditDraft}
-              onClick={() => setEditing(true)}
-              className="flex w-full items-center justify-center gap-2 rounded-2xl border border-border bg-card py-3.5 font-semibold text-foreground transition-all hover:bg-muted active:scale-[0.98] disabled:opacity-60"
-            >
-              <Pencil className="h-4 w-4" />
+            <ActionButton variant="secondary" icon={Pencil} disabled={actionLoading || !canEditDraft} onClick={() => setEditing(true)}>
               Edit
-            </button>
-
-            <button
-              type="button"
-              disabled={actionLoading || !canSendDraft}
-              onClick={handleSendDraft}
-              className="flex w-full items-center justify-center gap-2 rounded-2xl bg-primary py-3.5 font-semibold text-primary-foreground transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-60"
-            >
-              {actionLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+            </ActionButton>
+            <ActionButton icon={Send} loading={actionLoading} disabled={!canSendDraft} onClick={handleSendDraft}>
               Send to OPS
-            </button>
-
+            </ActionButton>
             <button
               type="button"
               disabled={actionLoading || !canDeleteDraft}
-              onClick={handleDelete}
-              className="col-span-2 flex w-full items-center justify-center gap-2 rounded-2xl border border-destructive/30 bg-destructive/10 py-3.5 font-semibold text-destructive transition-all hover:bg-destructive/15 active:scale-[0.98] disabled:opacity-60"
+              onClick={() => setConfirmDelete(true)}
+              className="col-span-2 flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-red-50 text-sm font-semibold text-red-600 transition-all active:scale-[0.98] disabled:opacity-60"
             >
               <Trash2 className="h-4 w-4" />
               Delete Draft
             </button>
           </div>
         )}
-
-        <p className="text-center text-[11px] text-muted-foreground/50">Ref: {issue.id.padStart(6, '0')}</p>
       </div>
+
+      <BottomSheet
+        open={confirmDelete}
+        onClose={() => setConfirmDelete(false)}
+        title="Delete this draft issue?"
+        description="The draft and its photos will be removed. This can't be undone."
+        footer={
+          <>
+            <ActionButton variant="secondary" className="flex-1" onClick={() => setConfirmDelete(false)}>Cancel</ActionButton>
+            <ActionButton variant="danger" className="flex-1" onClick={handleDelete}>Delete</ActionButton>
+          </>
+        }
+      />
     </div>
   );
 }
@@ -1087,33 +1054,29 @@ export default function IssuesPage() {
 
   if (view === 'new') {
     return (
-      <div className="flex h-full flex-col bg-background pb-16">
-        <IssueForm mode="create" onSuccess={handleCreated} onCancel={() => setView('list')} />
-      </div>
+      <IssueForm mode="create" onSuccess={handleCreated} onCancel={() => setView('list')} />
     );
   }
 
   if (view === 'detail' && selected) {
     return (
-      <div className="flex h-full flex-col bg-background pb-16">
-        <IssueDetail
-          issue={selected}
-          onBack={() => setView('list')}
-          onIssueUpdated={handleUpdated}
-          onIssueDeleted={handleDeleted}
-        />
-      </div>
+      <IssueDetail
+        issue={selected}
+        onBack={() => setView('list')}
+        onIssueUpdated={handleUpdated}
+        onIssueDeleted={handleDeleted}
+      />
     );
   }
 
   return (
-    <div className="flex h-full flex-col bg-background pb-16">
+    <div className="flex flex-col">
       {/* Header */}
-      <div className="relative overflow-hidden bg-primary px-6 pb-6 pt-6 mb-2">
+      <div className="relative overflow-hidden bg-primary px-5 pb-6 pt-5">
         <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-white/5" />
         <div className="pointer-events-none absolute -right-4 bottom-0 h-24 w-24 rounded-full bg-white/5" />
 
-        <div className="relative flex items-start justify-between gap-4">
+        <div className="relative mx-auto flex max-w-md items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
             <p className="text-xs font-semibold uppercase tracking-widest text-primary-foreground/60">
               Store Issues
@@ -1136,7 +1099,7 @@ export default function IssuesPage() {
         </div>
 
         {!loading && issuesList.length > 0 && (
-          <div className="relative mt-3 flex flex-wrap gap-2">
+          <div className="relative mx-auto mt-3 flex max-w-md flex-wrap gap-2">
             {[
               { label: 'Reported', value: stats.reported, color: 'bg-amber-400/25 text-amber-200' },
               { label: 'In Review', value: stats.inReview, color: 'bg-white/20 text-white' },
@@ -1158,51 +1121,45 @@ export default function IssuesPage() {
         )}
       </div>
 
-      {showSuccess && (
-        <div className="mx-4 mb-2 flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3">
-          <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
-          <p className="text-sm font-medium text-emerald-600 dark:text-emerald-400">{successText}</p>
-        </div>
-      )}
-
-      {/* Filter tabs */}
-      <div className="scrollbar-none flex gap-2 overflow-x-auto px-4 pb-3">
+      {/* Filter tabs — sticky under the app bar, like the Tasks filter */}
+      <div
+        className="sticky z-20 border-b border-border bg-background/95 px-4 py-2.5 backdrop-blur"
+        style={{ top: 'var(--emp-header-h)' }}
+      >
+      <div className="no-scrollbar mx-auto flex max-w-md gap-1.5 overflow-x-auto">
         {FILTERS.map((filterOption) => (
           <button
             key={filterOption.value}
             onClick={() => setFilter(filterOption.value)}
             className={cn(
-              'shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold transition-colors',
+              'shrink-0 rounded-full px-3.5 py-1.5 text-xs font-semibold transition-colors',
               filter === filterOption.value
-                ? 'bg-primary text-primary-foreground'
-                : 'bg-muted text-muted-foreground hover:bg-muted/80',
+                ? 'bg-primary text-primary-foreground shadow-sm'
+                : 'bg-secondary text-muted-foreground hover:bg-border',
             )}
           >
             {filterOption.label}
           </button>
         ))}
       </div>
+      </div>
 
       {/* List */}
-      <div className="flex flex-1 flex-col gap-2.5 overflow-y-auto px-4 py-1">
+      <div className="mx-auto flex w-full max-w-md flex-col gap-2.5 px-4 pb-8 pt-4">
+        {showSuccess && <Notice tone="success">{successText}</Notice>}
+
         {loading ? (
-          <div className="flex flex-1 items-center justify-center py-16">
-            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-          </div>
+          <SkeletonBlocks count={4} className="h-24" />
         ) : visibleIssues.length === 0 ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-3 py-16 text-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-muted">
-              <AlertTriangle className="h-6 w-6 text-muted-foreground/50" />
-            </div>
-            <div>
-              <p className="text-sm font-semibold text-foreground">No issues found</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {filter === 'all'
-                  ? 'Tap "New Report" to report a problem.'
-                  : `No issues with status "${STATUS_LABELS[filter as IssueStatus]}".`}
-              </p>
-            </div>
-          </div>
+          <EmptyState
+            icon={AlertTriangle}
+            title="No issues found"
+            description={
+              filter === 'all'
+                ? 'Tap "New Report" to report a problem.'
+                : `No issues with status "${STATUS_LABELS[filter as IssueStatus]}".`
+            }
+          />
         ) : (
           visibleIssues.map((issue) => (
             <IssueCard

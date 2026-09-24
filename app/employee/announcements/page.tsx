@@ -7,8 +7,9 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Bell, CheckCheck, Loader2 } from 'lucide-react';
+import { Bell, CheckCheck } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { EmptyState, SkeletonBlocks } from '@/components/employee/ui';
 
 interface NotificationRow {
   id: number;
@@ -74,9 +75,9 @@ export default function AnnouncementsPage() {
   }
 
   return (
-    <div className="flex min-h-full flex-col bg-slate-50 pb-16">
-      <div className="flex items-center justify-between px-4 pt-5">
-        <p className="text-xs font-semibold text-muted-foreground">
+    <div className="mx-auto w-full max-w-md">
+      <div className="flex items-center justify-between px-4 pt-4">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
           {unreadCount > 0 ? `${unreadCount} unread` : 'All caught up'}
         </p>
         {unreadCount > 0 && (
@@ -91,21 +92,15 @@ export default function AnnouncementsPage() {
         )}
       </div>
 
-      <div className="flex-1 space-y-2 px-4 py-4">
+      <div className="space-y-2 px-4 pb-8 pt-3">
         {loading ? (
-          <div className="flex items-center justify-center py-16">
-            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-          </div>
+          <SkeletonBlocks count={4} className="h-[72px]" />
         ) : items.length === 0 ? (
-          <div className="flex flex-col items-center gap-2 py-16 text-center">
-            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-secondary">
-              <Bell className="h-5 w-5 text-muted-foreground" />
-            </div>
-            <p className="text-sm font-semibold text-foreground">No notifications yet</p>
-            <p className="max-w-[220px] text-xs text-muted-foreground">
-              You&apos;ll see updates about your tasks and reports here.
-            </p>
-          </div>
+          <EmptyState
+            icon={Bell}
+            title="No notifications yet"
+            description="You'll see updates about your tasks and reports here."
+          />
         ) : (
           items.map((item) => (
             <button
@@ -113,7 +108,7 @@ export default function AnnouncementsPage() {
               type="button"
               onClick={() => handleSelect(item)}
               className={cn(
-                'flex w-full flex-col items-start gap-1 rounded-2xl border border-border bg-card p-4 text-left shadow-sm transition-all active:scale-[0.99]',
+                'flex w-full flex-col items-start gap-1 rounded-2xl border border-border bg-card p-4 text-left transition-all active:scale-[0.99]',
                 !item.isRead && 'border-primary/20 bg-primary/[0.03]',
               )}
             >

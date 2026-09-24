@@ -11,11 +11,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   CheckCircle2, Loader2, AlertCircle,
-  LogIn, Navigation, NavigationOff, RefreshCw,
   Store, Clock, Truck, Package, Inbox, Search, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { AccessBanner } from '@/components/employee/tasks';
+import {
+  ActionButton, EmptyState, Notice, PageBody, Segmented, SkeletonBlocks, inputClass,
+} from '@/components/employee/ui';
 import { useTaskLocationSetting } from '@/lib/hooks/useTaskLocationSetting';
 import PhotoUploadGrid from '@/components/shared/PhotoUploadGrid';
 import { uploadTaskPhoto } from '@/lib/tasks-upload';
@@ -195,78 +198,6 @@ function useAccessStatus(
   return { accessStatus, accessLoading, refreshAccess: fetchAccess };
 }
 
-// ─── Access banner ────────────────────────────────────────────────────────────
-
-function AccessBanner({
-  accessStatus, accessLoading, geoReady, geo, geoError, onRefreshGeo, onRefreshAccess,
-}: {
-  accessStatus: AccessStatus | null; accessLoading: boolean; geoReady: boolean;
-  geo: { lat: number; lng: number } | null; geoError: string | null;
-  onRefreshGeo: () => void; onRefreshAccess: () => void;
-}) {
-  if (!geoReady || accessLoading) {
-    return (
-      <div className="flex items-center gap-2 rounded-2xl border border-border bg-card px-4 py-2.5">
-        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-        <p className="text-xs text-muted-foreground">{!geoReady ? 'Mendapatkan lokasi…' : 'Memeriksa akses…'}</p>
-      </div>
-    );
-  }
-  if (!accessStatus) return null;
-  if (accessStatus.status === 'not_checked_in') {
-    return (
-      <div className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 px-4 py-3.5">
-        <LogIn className="mt-0.5 h-5 w-5 flex-shrink-0 text-red-600" />
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-bold text-red-700">Belum absen masuk</p>
-          <p className="mt-0.5 text-xs text-red-600">Lakukan absensi masuk terlebih dahulu.</p>
-        </div>
-        <button onClick={onRefreshAccess} className="flex-shrink-0 flex items-center gap-1 rounded-lg bg-red-100 px-2.5 py-1.5 text-[11px] font-semibold text-red-700 hover:bg-red-200 transition-colors">
-          <RefreshCw className="h-3 w-3" />Cek ulang
-        </button>
-      </div>
-    );
-  }
-  if (accessStatus.status === 'outside_geofence') {
-    return (
-      <div className="flex items-start gap-3 rounded-2xl border border-orange-200 bg-orange-50 px-4 py-3.5">
-        <NavigationOff className="mt-0.5 h-5 w-5 flex-shrink-0 text-orange-600" />
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-bold text-orange-700">Di luar area toko</p>
-          <p className="mt-0.5 text-xs text-orange-600">
-            Kamu berada {accessStatus.distanceM}m dari toko (batas: {accessStatus.radiusM}m).
-          </p>
-        </div>
-        <button onClick={onRefreshGeo} className="flex-shrink-0 flex items-center gap-1 rounded-lg bg-orange-100 px-2.5 py-1.5 text-[11px] font-semibold text-orange-700 hover:bg-orange-200 transition-colors">
-          <RefreshCw className="h-3 w-3" />Perbarui
-        </button>
-      </div>
-    );
-  }
-  if (accessStatus.status === 'geo_unavailable') {
-    return (
-      <div className="flex items-start gap-2.5 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
-        <NavigationOff className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
-        <div className="flex-1 min-w-0">
-          <p className="text-xs font-semibold text-amber-800">Lokasi tidak terdeteksi</p>
-          <p className="mt-0.5 text-xs text-amber-600">{geoError ?? 'Izin lokasi belum diberikan.'}</p>
-        </div>
-        <button onClick={onRefreshGeo} className="flex-shrink-0 flex items-center gap-1 rounded-lg bg-amber-100 px-2.5 py-1.5 text-[11px] font-semibold text-amber-700 hover:bg-amber-200">
-          <RefreshCw className="h-3 w-3" />Coba lagi
-        </button>
-      </div>
-    );
-  }
-  return (
-    <div className="flex items-center gap-2 rounded-2xl border border-green-200 bg-green-50 px-4 py-2.5">
-      <Navigation className="h-4 w-4 flex-shrink-0 text-green-600" />
-      <p className="text-xs font-medium text-green-700">
-        Lokasi terdeteksi ({geo?.lat.toFixed(5)}, {geo?.lng.toFixed(5)})
-      </p>
-    </div>
-  );
-}
-
 // ─── Elapsed time ─────────────────────────────────────────────────────────────
 
 function useTicking(intervalMs: number | undefined | false = 30_000) {
@@ -337,11 +268,12 @@ function OpenEntryCard({
   const notYetShipped = kind === 'dropping' && !since;
 
   return (
-    <div className={cn('overflow-hidden rounded-2xl border bg-card shadow-sm', cfg.accentBorder)}>
+    <div className={cn('overflow-hidden rounded-2xl border bg-card', cfg.accentBorder)}>
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-center gap-3 px-4 py-3.5 text-left"
+        className="flex w-full items-center gap-3 px-4 py-3.5 text-left transition active:bg-secondary"
+        aria-expanded={expanded}
       >
         <div className={cn('flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl', cfg.accentIconBg, cfg.accentIconText)}>
           <cfg.Icon className="h-5 w-5" />
@@ -373,7 +305,7 @@ function OpenEntryCard({
         <div className="space-y-3 border-t border-border px-4 py-3.5">
           {kind === 'dropping' && entry.whseShipmentLines && entry.whseShipmentLines.length > 0 && (
             <div className="rounded-xl border border-border bg-secondary/50 px-3 py-2.5">
-              <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Isi kiriman</p>
+              <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Isi kiriman</p>
               <ul className="space-y-1">
                 {entry.whseShipmentLines.map((line, i) => (
                   <li key={i} className="flex items-center justify-between text-[11px]">
@@ -389,7 +321,7 @@ function OpenEntryCard({
           )}
 
           <div>
-            <label className="text-xs font-semibold text-foreground">Jumlah dihitung</label>
+            <label className="px-0.5 text-xs font-medium text-muted-foreground">Jumlah dihitung</label>
             <input
               type="number"
               min={0}
@@ -397,7 +329,7 @@ function OpenEntryCard({
               value={qtyCounted}
               onChange={(e) => setQtyCounted(e.target.value)}
               disabled={disabled}
-              className="mt-1 h-10 w-full rounded-xl border border-border bg-background px-3 text-sm"
+              className={cn(inputClass, 'mt-1 h-11 tabular-nums')}
             />
           </div>
 
@@ -412,15 +344,15 @@ function OpenEntryCard({
             upload={(file) => uploadTaskPhoto(file, cfg.uploadKind)}
           />
 
-          <button
-            type="button"
-            disabled={disabled || !canConfirm || confirming}
+          <ActionButton
+            className="w-full"
+            icon={CheckCircle2}
+            loading={confirming}
+            disabled={disabled || !canConfirm}
             onClick={() => onConfirm(entry.id, Number(qtyCounted), photos[0])}
-            className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-primary text-sm font-bold text-primary-foreground transition-all active:scale-[0.98] disabled:opacity-40"
           >
-            {confirming ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
             {cfg.confirmCta}
-          </button>
+          </ActionButton>
         </div>
       )}
     </div>
@@ -451,7 +383,7 @@ function ConfirmedEntryCard({ kind, entry }: { kind: Kind; entry: EntryData }) {
   const cfg = KIND_CFG[kind];
 
   return (
-    <div className="rounded-2xl border border-green-200 bg-card px-4 py-3.5 shadow-sm">
+    <div className="rounded-2xl border border-green-200 bg-card px-4 py-3.5">
       <div className="flex items-center gap-3">
         <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-green-100 text-green-600">
           <CheckCircle2 className="h-5 w-5" />
@@ -546,32 +478,27 @@ function FlowSection({
   return (
     <div className="space-y-3">
       {payload.syncWarning && (
-        <div className="flex items-start gap-2.5 rounded-2xl border border-red-200 bg-red-50 px-4 py-3">
-          <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-600" />
-          <div className="min-w-0 flex-1">
-            <p className="text-xs font-semibold text-red-700">Gagal sinkronisasi dengan Business Central</p>
-            <p className="mt-0.5 text-[11px] text-red-600">{payload.syncWarning}</p>
-          </div>
-        </div>
+        <Notice tone="error" title="Gagal sinkronisasi dengan Business Central">{payload.syncWarning}</Notice>
       )}
 
       {payload.entries.length === 0 ? (
-        <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-slate-200 bg-card px-4 py-10 text-center">
-          <Inbox className="h-8 w-8 text-muted-foreground/40" />
-          <p className="text-sm font-semibold text-foreground">{cfg.emptyTitle}</p>
-          <p className="text-xs text-muted-foreground">{cfg.emptyBody}</p>
+        <div className="rounded-2xl border border-dashed border-border">
+          <EmptyState icon={Inbox} title={cfg.emptyTitle} description={cfg.emptyBody} className="py-10" />
         </div>
       ) : searched.length === 0 ? (
-        <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-slate-200 bg-card px-4 py-10 text-center">
-          <Search className="h-8 w-8 text-muted-foreground/40" />
-          <p className="text-sm font-semibold text-foreground">Tidak ada hasil</p>
-          <p className="text-xs text-muted-foreground">Tidak ada transfer yang cocok dengan pencarian &ldquo;{search}&rdquo;.</p>
+        <div className="rounded-2xl border border-dashed border-border">
+          <EmptyState
+            icon={Search}
+            title="Tidak ada hasil"
+            description={<>Tidak ada transfer yang cocok dengan pencarian &ldquo;{search}&rdquo;.</>}
+            className="py-10"
+          />
         </div>
       ) : (
         <>
           {openEntries.length > 0 && (
             <section className="space-y-2.5">
-              <p className={cn('text-[10px] font-bold uppercase tracking-widest', cfg.accentText)}>
+              <p className={cn('px-0.5 text-[11px] font-semibold uppercase tracking-wide', cfg.accentText)}>
                 {cfg.openSectionLabel} · {openEntries.length}
               </p>
               {openEntries.map((entry) => (
@@ -589,7 +516,7 @@ function FlowSection({
 
           {confirmedEntries.length > 0 && (
             <section className="space-y-2.5">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+              <p className="px-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                 Sudah dikonfirmasi · {confirmedEntries.length}
               </p>
               {confirmedEntries.map((entry) => (
@@ -704,78 +631,65 @@ export default function ItemTransfersPage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-[60vh] items-center justify-center bg-slate-50">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-      </div>
+      <PageBody>
+        <SkeletonBlocks count={4} />
+      </PageBody>
     );
   }
 
   if (notScheduled) {
     return (
-      <div className="flex min-h-[60vh] flex-col items-center justify-center gap-2 bg-slate-50 px-6 text-center">
-        <AlertCircle className="h-8 w-8 text-muted-foreground" />
-        <p className="text-sm font-semibold text-foreground">Tidak ada jadwal hari ini</p>
-        <p className="text-xs text-muted-foreground">Transfer Orders hanya tersedia saat kamu terjadwal di toko.</p>
-      </div>
+      <PageBody>
+        <EmptyState
+          icon={AlertCircle}
+          title="Tidak ada jadwal hari ini"
+          description="Transfer Orders hanya tersedia saat kamu terjadwal di toko."
+        />
+      </PageBody>
     );
   }
 
   const locked = tab === 'dropping' ? droppingLocked : returnLocked;
 
   return (
-    <div className="min-h-[calc(100dvh-3.5rem)] space-y-4 bg-slate-50 pb-24 pt-4">
-      <section className="px-4">
-        <AccessBanner
-          accessStatus={accessStatus}
-          accessLoading={accessLoading}
-          geoReady={geoReady}
-          geo={geo}
-          geoError={geoError}
-          onRefreshGeo={refreshGeo}
-          onRefreshAccess={refreshAccess}
-        />
-      </section>
+    <PageBody className="space-y-4">
+      <AccessBanner
+        accessStatus={accessStatus}
+        accessLoading={accessLoading}
+        geoReady={geoReady}
+        geo={geo}
+        geoError={geoError}
+        onRefreshGeo={refreshGeo}
+        onRefreshAccess={refreshAccess}
+        requireGeo={requiresLocationAny}
+      />
 
-      <section className="px-4">
-        <div className="flex gap-1.5 rounded-2xl border border-border bg-secondary p-1.5">
-          {(Object.keys(KIND_CFG) as Kind[]).map((k) => {
-            const cfg = KIND_CFG[k];
-            const count = k === 'dropping' ? droppingOpenCount : returnOpenCount;
-            const active = tab === k;
-            return (
-              <button
-                key={k}
-                type="button"
-                onClick={() => setTab(k)}
-                className={cn(
-                  'flex flex-1 items-center justify-center gap-1.5 rounded-xl py-2.5 text-xs font-bold transition-all',
-                  active ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
-                )}
-              >
+      <Segmented<Kind>
+        value={tab}
+        onChange={setTab}
+        options={(Object.keys(KIND_CFG) as Kind[]).map((k) => {
+          const cfg = KIND_CFG[k];
+          return {
+            value: k,
+            count: k === 'dropping' ? droppingOpenCount : returnOpenCount,
+            label: (
+              <span className="flex items-center gap-1.5">
                 <cfg.Icon className="h-4 w-4" />
                 {cfg.label}
-                {count > 0 && (
-                  <span className={cn(
-                    'flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold leading-none',
-                    active ? 'bg-primary text-primary-foreground' : 'bg-muted-foreground/20 text-foreground',
-                  )}>
-                    {count}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-      </section>
+              </span>
+            ),
+          };
+        })}
+      />
 
-      <section className="px-4">
+      <section>
         <div className="relative">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Cari nomor TOA, toko, atau kode…"
-            className="h-11 w-full rounded-xl border border-border bg-card pl-10 pr-9 text-sm focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+            className={cn(inputClass, 'h-11 pl-10 pr-10')}
           />
           {search && (
             <button
@@ -790,13 +704,13 @@ export default function ItemTransfersPage() {
         </div>
       </section>
 
-      <section className="px-4">
+      <section>
         {tab === 'dropping' ? (
           <FlowSection kind="dropping" payload={dropping} locked={locked} confirmingId={confirmingId} search={search} onConfirm={handleConfirm} />
         ) : (
           <FlowSection kind="return" payload={returnData} locked={locked} confirmingId={confirmingId} search={search} onConfirm={handleConfirm} />
         )}
       </section>
-    </div>
+    </PageBody>
   );
 }

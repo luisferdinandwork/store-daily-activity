@@ -1,25 +1,26 @@
 // components/employee/EmployeeMobileNav.tsx
 'use client';
 
+// Bottom tab bar of the employee app.
+//   • Active tab: a soft pill grows in behind its icon; label turns primary.
+//   • Scrolling down compacts the bar (labels fold away), scrolling up restores
+//     it; while scrolling it turns more translucent.
+//   • Swipe left/right across the bar to move between tabs.
+// Its live height is published as --emp-nav-h so everything pinned above it
+// (TaskSubmitBar, FloatingMenu) follows — see --emp-bottom in app/globals.css.
+
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type TouchEvent,
-} from 'react';
-import { Home, CheckSquare, CalendarDays, LayoutGrid, AlertTriangle } from 'lucide-react';
+import { useEffect, useRef, useState, type TouchEvent } from 'react';
+import { Home, ListChecks, CalendarCheck2, CalendarDays, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const NAV_ITEMS = [
-  { href: '/employee',            label: 'Home',       Icon: Home         },
-  { href: '/employee/tasks',      label: 'Tasks',      Icon: CheckSquare  },
-  { href: '/employee/attendance', label: 'Attendance', Icon: CalendarDays },
-  { href: '/employee/schedule',   label: 'Schedule',   Icon: LayoutGrid   },
-  { href: '/employee/issues',     label: 'Issues',     Icon: AlertTriangle },
+  { href: '/employee',            label: 'Home',       Icon: Home           },
+  { href: '/employee/tasks',      label: 'Tasks',      Icon: ListChecks     },
+  { href: '/employee/attendance', label: 'Attendance', Icon: CalendarCheck2 },
+  { href: '/employee/schedule',   label: 'Schedule',   Icon: CalendarDays   },
+  { href: '/employee/issues',     label: 'Issues',     Icon: AlertTriangle  },
 ];
 
 // ── Tuning knobs ────────────────────────────────────────────────────────────
@@ -31,13 +32,11 @@ export default function EmployeeMobileNav() {
   const pathname = usePathname();
   const router = useRouter();
 
-  const navItems = NAV_ITEMS;
-
-  const activeIndex = navItems.findIndex(({ href }) =>
+  const activeIndex = NAV_ITEMS.findIndex(({ href }) =>
     href === '/employee' ? pathname === href : pathname.startsWith(href),
   );
 
-  // ── 1 & 2: scroll-driven compact size + frosted translucency ─────────────
+  // ── scroll-driven compact size + frosted translucency ────────────────────
   const [compact, setCompact] = useState(false);
   const [isScrolling, setIsScrolling] = useState(false);
   const lastScrollY = useRef(0);
@@ -76,26 +75,14 @@ export default function EmployeeMobileNav() {
     };
   }, []);
 
-  // ── 3: sliding active-tab pill ────────────────────────────────────────────
-  const itemRefs = useRef<Array<HTMLAnchorElement | null>>([]);
-  const [indicator, setIndicator] = useState({ left: 0, width: 0 });
-  const [indicatorReady, setIndicatorReady] = useState(false);
-
-  const measureIndicator = useCallback(() => {
-    const el = itemRefs.current[activeIndex];
-    if (!el) return;
-    setIndicator({ left: el.offsetLeft, width: el.offsetWidth });
-    setIndicatorReady(true);
-  }, [activeIndex]);
-
-  useLayoutEffect(() => {
-    measureIndicator();
-  }, [measureIndicator, compact, navItems.length]);
-
+  // Publish the live bar height (see file header).
   useEffect(() => {
-    window.addEventListener('resize', measureIndicator);
-    return () => window.removeEventListener('resize', measureIndicator);
-  }, [measureIndicator]);
+    document.documentElement.style.setProperty('--emp-nav-h', compact ? '3.5rem' : '4rem');
+  }, [compact]);
+
+  useEffect(() => () => {
+    document.documentElement.style.removeProperty('--emp-nav-h');
+  }, []);
 
   // ── swipe across the bar to change tabs ───────────────────────────────────
   const touchStart = useRef<{ x: number; y: number } | null>(null);
@@ -113,10 +100,10 @@ export default function EmployeeMobileNav() {
     if (Math.abs(dx) < SWIPE_THRESHOLD || Math.abs(dx) < Math.abs(dy)) return;
 
     const dir = dx < 0 ? 1 : -1; // swipe left → next tab, swipe right → previous tab
-    const nextIndex = Math.min(navItems.length - 1, Math.max(0, activeIndex + dir));
+    const nextIndex = Math.min(NAV_ITEMS.length - 1, Math.max(0, activeIndex + dir));
     if (nextIndex !== activeIndex) {
       swiped.current = true;
-      router.push(navItems[nextIndex].href);
+      router.push(NAV_ITEMS[nextIndex].href);
     }
   };
 
@@ -126,56 +113,55 @@ export default function EmployeeMobileNav() {
 
   return (
     <nav
+      aria-label="Menu utama"
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
       className={cn(
-        'fixed bottom-0 left-0 right-0 z-50 flex items-stretch border-t border-border/60 md:hidden',
-        'backdrop-blur-xl transition-all duration-300 ease-out',
-        compact ? 'h-14' : 'h-16',
-        isScrolling ? 'bg-card/60' : 'bg-card/95',
+        'fixed inset-x-0 bottom-0 z-50 border-t border-border/70',
+        'shadow-[0_-8px_24px_-16px_rgba(30,27,75,0.25)] backdrop-blur-xl',
+        'transition-[height,background-color] duration-300 ease-out',
+        isScrolling ? 'bg-card/70' : 'bg-card/95',
       )}
+      style={{ height: 'var(--emp-bottom)', paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
     >
-      {/* Sliding active-tab indicator */}
-      <span
-        className={cn(
-          'pointer-events-none absolute top-1.5 bottom-1.5 rounded-2xl bg-primary/10',
-          'transition-[left,width,opacity] duration-300 ease-[cubic-bezier(0.34,1.3,0.64,1)]',
-          indicatorReady ? 'opacity-100' : 'opacity-0',
-        )}
-        style={{ left: indicator.left, width: indicator.width }}
-      />
-
-      {navItems.map(({ href, label, Icon }, i) => {
-        const active = i === activeIndex;
-        return (
-          <Link
-            key={href}
-            href={href}
-            ref={(el) => { itemRefs.current[i] = el; }}
-            className={cn(
-              'relative z-10 flex flex-1 flex-col items-center justify-center gap-1 text-[10px] font-semibold uppercase tracking-widest transition-colors',
-              active ? 'text-primary' : 'text-muted-foreground hover:text-foreground',
-            )}
-          >
-            <Icon
+      <div className="mx-auto flex h-full max-w-md items-stretch px-1">
+        {NAV_ITEMS.map(({ href, label, Icon }, i) => {
+          const active = i === activeIndex;
+          return (
+            <Link
+              key={href}
+              href={href}
+              aria-current={active ? 'page' : undefined}
               className={cn(
-                'transition-all duration-300 ease-out',
-                compact ? 'h-[18px] w-[18px]' : 'h-5 w-5',
-              )}
-              strokeWidth={active ? 2.5 : 1.75}
-            />
-            <span
-              className={cn(
-                'overflow-hidden transition-all duration-300 ease-out',
-                compact ? 'max-h-0 scale-90 opacity-0' : 'max-h-3 scale-100 opacity-100',
+                'flex min-w-0 flex-1 flex-col items-center justify-center gap-1 transition-colors active:scale-95',
+                active ? 'text-primary' : 'text-muted-foreground',
               )}
             >
-              {label}
-            </span>
-          </Link>
-        );
-      })}
+              <span className="relative flex h-8 w-14 items-center justify-center">
+                {/* Active pill — grows out from the icon's centre */}
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    'absolute inset-0 rounded-full bg-primary/12 transition-all duration-300 ease-out',
+                    active ? 'scale-100 opacity-100' : 'scale-50 opacity-0',
+                  )}
+                />
+                <Icon className="relative h-[22px] w-[22px]" strokeWidth={active ? 2.3 : 1.8} />
+              </span>
+              <span
+                className={cn(
+                  'max-w-full truncate px-0.5 text-[11px] leading-none transition-all duration-300 ease-out',
+                  active ? 'font-semibold' : 'font-medium',
+                  compact ? 'max-h-0 opacity-0' : 'max-h-3 opacity-100',
+                )}
+              >
+                {label}
+              </span>
+            </Link>
+          );
+        })}
+      </div>
     </nav>
   );
 }

@@ -49,13 +49,13 @@ const FALLBACK_PIC_SHARE_PCT = 10;
 const MIN_MTD_SALES = 5_000_000;
 const MIN_DAY_FOR_RUN_RATE = 3;
 
-const ROLE_BY_TYPE: Record<string, 'PIC1' | 'PIC2' | 'SA'> = { pic_1: 'PIC1', pic_2: 'PIC2', sa: 'SA' };
+export const ROLE_BY_TYPE: Record<string, 'PIC1' | 'PIC2' | 'SA'> = { pic_1: 'PIC1', pic_2: 'PIC2', sa: 'SA' };
 
 const roundTo = (n: number, step: number) => Math.round(n / step) * step;
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
 const rp = (n: number) => `Rp ${n.toLocaleString('id-ID')}`;
 
-interface Candidate {
+export interface Candidate {
   store: { id: number; storeNo: string; name: string };
   employees: Array<{ id: string; nik: string; name: string; role: 'PIC1' | 'PIC2' | 'SA' }>;
 }
@@ -97,7 +97,7 @@ interface Plan {
   basis: string;
 }
 
-async function planStore(c: Candidate): Promise<Plan> {
+export async function planStore(c: Candidate): Promise<Plan> {
   const rng = makeRng(`roster-demo-performance|${CAL.yearMonth}|${c.store.storeNo}`);
   const factor = rng.range(0.85, 1.2); // some stores ahead of target, some behind
   const brand = c.store.storeNo.replace(/\d+$/, '');
@@ -130,7 +130,7 @@ async function rollback(storeId: number) {
   await db.delete(storeMonthlyTargets).where(and(eq(storeMonthlyTargets.storeId, storeId), eq(storeMonthlyTargets.yearMonth, CAL.yearMonth)));
 }
 
-async function writeStore(c: Candidate, plan: Plan) {
+export async function writeStore(c: Candidate, plan: Plan) {
   const [target] = await db
     .insert(storeMonthlyTargets)
     .values({

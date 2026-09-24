@@ -6,16 +6,15 @@
 
 import { useSession, signOut } from 'next-auth/react';
 import { useEffect, useState } from 'react';
-import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Separator } from '@/components/ui/separator';
 import {
   IdCard, Briefcase, Store, Clock, LogOut, Sun, Moon, Loader2,
 } from 'lucide-react';
 import UserAvatar from '@/components/shared/UserAvatar';
 import ProfilePictureCard from '@/components/shared/ProfilePictureCard';
 import ChangePasswordCard from '@/components/shared/ChangePasswordCard';
+import { InfoRow, ListGroup, Section } from '@/components/employee/ui';
 
 interface TodaySchedule {
   shift: 'morning' | 'evening' | null;
@@ -106,35 +105,30 @@ export default function EmployeeProfilePage() {
       </div>
 
       {/* ── Body ── */}
-      <div className="space-y-4 p-4">
-        <Card>
-          <CardContent className="p-4">
-            <p className="mb-3 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
-              Account Information
-            </p>
-            <div className="space-y-0">
-              {infoRows.map(({ icon: Icon, label, value }, i) => (
-                <div key={label}>
-                  <div className="flex items-center justify-between py-3">
-                    <div className="flex items-center gap-2.5 text-muted-foreground">
-                      <Icon className="h-4 w-4 shrink-0" strokeWidth={1.75} />
-                      <span className="text-sm">{label}</span>
-                    </div>
-                    <span className="text-sm font-medium text-foreground">{value}</span>
-                  </div>
-                  {i < infoRows.length - 1 && <Separator />}
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+      <div className="mx-auto w-full max-w-md space-y-5 px-4 pb-8 pt-4">
+        <Section title="Account Information">
+          <ListGroup>
+            {infoRows.map(({ icon: Icon, label, value }) => (
+              <InfoRow
+                key={label}
+                label={
+                  <span className="flex items-center gap-2.5">
+                    <Icon className="h-4 w-4 shrink-0" strokeWidth={1.75} />
+                    {label}
+                  </span>
+                }
+                value={value}
+              />
+            ))}
+          </ListGroup>
+        </Section>
 
         <ProfilePictureCard />
         <ChangePasswordCard />
 
         <Button
           variant="outline"
-          className="h-12 w-full gap-2 border-border text-sm font-semibold text-muted-foreground hover:border-destructive hover:text-destructive"
+          className="h-12 w-full gap-2 rounded-xl border-border text-sm font-semibold text-muted-foreground hover:border-destructive hover:text-destructive"
           onClick={() => signOut({ callbackUrl: '/login' })}
         >
           <LogOut className="h-4 w-4" />

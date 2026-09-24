@@ -89,7 +89,7 @@ type Half = 'morning' | 'evening';
 type GridCode = 'E' | 'L' | 'F' | 'X' | 'A';
 type TaskStatus = 'completed' | 'in_progress' | 'not_started';
 
-const CODE_TO_SHIFT: Record<'E' | 'L' | 'F', ShiftCode> = { E: 'morning', L: 'evening', F: 'full_day' };
+export const CODE_TO_SHIFT: Record<'E' | 'L' | 'F', ShiftCode> = { E: 'morning', L: 'evening', F: 'full_day' };
 
 const BREAKS: Record<ShiftCode, Array<{ type: 'lunch' | 'dinner' | 'full_day_lunch' | 'full_day_dinner'; hour: number; durMin: number; durMax: number }>> = {
   morning: [{ type: 'lunch', hour: 12, durMin: 25, durMax: 45 }],
@@ -156,7 +156,7 @@ export const CAL = (() => {
 const dayBucket = (day: number) => new Date(Date.UTC(CAL.year, CAL.monthIndex, day));
 /** The instant a given Jakarta wall-clock time (minutes from midnight) falls on. */
 const wib = (day: number, minutes: number) => new Date(Date.UTC(CAL.year, CAL.monthIndex, day, 0, minutes - WIB_OFFSET_MIN, 0));
-const hhmmToMin = (t: string) => {
+export const hhmmToMin = (t: string) => {
   const [h, m] = t.split(':').map(Number);
   return h * 60 + m;
 };
@@ -261,7 +261,7 @@ async function loadPhotoPools() {
 
 // ─── Schedule grid ───────────────────────────────────────────────────────────
 
-function buildGrid(rng: Rng): GridCode[] {
+export function buildGrid(rng: Rng): GridCode[] {
   const offset = rng.int(0, 6);
   const leaveDay = CAL.day > 4 && rng.chance(0.35) ? rng.int(3, Math.min(15, CAL.day - 1)) : null;
   const grid: GridCode[] = [];

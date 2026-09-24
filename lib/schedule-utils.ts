@@ -1555,24 +1555,37 @@ export async function employeeCheckOut(
 
 // ─── Auto checkout (overdue attendance) ─────────────────────────────────────
 //
-// Employees who forget to check out get closed out automatically once their
-// shift has been over for AUTO_CHECKOUT_GRACE_MINUTES. Runs lazily (called
-// from the employee + ops attendance GET routes, scoped to what's being
-// viewed) and from a daily cron (app/api/cron/auto-checkout) as a system-wide
-// safety net — same pattern as autoRevertExpiredTransfers above.
+// An open attendance row stays open for the whole calendar day (Asia/Jakarta),
+// so an employee who works overtime can still check out at the real time —
+// even hours after the shift ended. Only once that day is over is a row that
+// never got a check-out closed at the shift's scheduled end time (they forgot).
+// Runs lazily (called from the employee + ops attendance GET routes, scoped
+// to what's being viewed) and from a daily cron (app/api/cron/auto-checkout)
+// as a system-wide safety net — same pattern as autoRevertExpiredTransfers above.
 
-const AUTO_CHECKOUT_GRACE_MINUTES = 30;
 /** Bounds the scan so it never has to walk the whole attendance table. */
 const AUTO_CHECKOUT_LOOKBACK_DAYS = 3;
+const STORE_UTC_OFFSET_MINUTES = 7 * 60; // Asia/Jakarta, no DST
 
-/** Combines a day (from `schedules`/`attendance`.date) with a "HH:MM:SS"
- *  wall-clock time, same local-time convention employeeCheckIn already uses
- *  for its "late" cutoff (`shiftStart.setHours(...)`). */
-function dateWithTime(day: Date, time: string): Date {
+/**
+ * The real instant of a store wall-clock time ("HH:MM[:SS]", Asia/Jakarta) on
+ * the calendar day of a day bucket — independent of the server's timezone.
+ * Buckets are UTC midnight (prod) but older rows written on a UTC+7 machine
+ * sit at 17:00 UTC the day before; rounding to the nearest UTC day handles both.
+ */
+function storeWallClock(day: Date, time: string): Date {
+  const bucket = new Date(day.getTime() + 12 * 3_600_000);
   const [h, m, s] = time.split(":").map(Number);
-  const d = new Date(day);
-  d.setHours(h || 0, m || 0, s || 0, 0);
-  return d;
+  return new Date(Date.UTC(
+    bucket.getUTCFullYear(), bucket.getUTCMonth(), bucket.getUTCDate(),
+    h || 0, (m || 0) - STORE_UTC_OFFSET_MINUTES, s || 0,
+  ));
+}
+
+/** The first store-timezone midnight strictly after `instant`. */
+function storeMidnightAfter(instant: Date): Date {
+  const wall = new Date(instant.getTime() + STORE_UTC_OFFSET_MINUTES * 60_000); // UTC fields = Jakarta wall clock
+  return new Date(Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate() + 1, 0, -STORE_UTC_OFFSET_MINUTES));
 }
 
 export interface AutoCheckoutFilter {
@@ -1582,11 +1595,12 @@ export interface AutoCheckoutFilter {
 
 /**
  * Finds still-open attendance rows (checked in, never checked out) whose
- * shift ended more than AUTO_CHECKOUT_GRACE_MINUTES ago and closes them out:
- * checkOutTime is set to the shift's scheduled end time (not "now" — that's
- * when the system happened to notice, not when the shift actually ended),
- * any dangling open break is ended at the same moment, and a note is
- * appended so it's clear on the ops side this wasn't a manual check-out.
+ * calendar day is over and closes them out: checkOutTime is set to the
+ * shift's scheduled end time (not "now" — that's when the system happened to
+ * notice, not when the shift actually ended), any dangling open break is ended
+ * at the same moment, and a note is appended so it's clear on the ops side
+ * this wasn't a manual check-out. A manual check-out — however late in the
+ * day — is never touched.
  */
 export async function autoCheckoutOverdueAttendance(
   filter: AutoCheckoutFilter = {},
@@ -1609,6 +1623,8 @@ export async function autoCheckoutOverdueAttendance(
       date: attendance.date,
       onBreak: attendance.onBreak,
       notes: attendance.notes,
+      checkInTime: attendance.checkInTime,
+      startTime: shifts.startTime,
       endTime: shifts.endTime,
     })
     .from(attendance)
@@ -1620,30 +1636,38 @@ export async function autoCheckoutOverdueAttendance(
   for (const row of rows) {
     if (!row.endTime) continue;
 
-    const shiftEnd = dateWithTime(row.date, row.endTime);
-    const deadline = new Date(shiftEnd.getTime() + AUTO_CHECKOUT_GRACE_MINUTES * 60_000);
+    let shiftEnd = storeWallClock(row.date, row.endTime);
+    // A shift ending past midnight ends on the next calendar day.
+    if (row.startTime && row.endTime < row.startTime) shiftEnd = new Date(shiftEnd.getTime() + 86_400_000);
+
+    // Open until the end of the (store-timezone) day the shift ends on.
+    const deadline = storeMidnightAfter(shiftEnd);
     if (now < deadline) continue;
+
+    // Never close a row before its own check-in (someone who checked in after the shift ended).
+    let closeAt = row.checkInTime && row.checkInTime > shiftEnd ? row.checkInTime : shiftEnd;
 
     if (row.onBreak) {
       const [openBreak] = await db
-        .select({ id: breakSessions.id })
+        .select({ id: breakSessions.id, breakOutTime: breakSessions.breakOutTime })
         .from(breakSessions)
         .where(and(eq(breakSessions.attendanceId, row.id), isNull(breakSessions.returnTime)))
         .limit(1);
 
       if (openBreak) {
+        if (openBreak.breakOutTime > closeAt) closeAt = openBreak.breakOutTime;
         await db
           .update(breakSessions)
-          .set({ returnTime: shiftEnd, updatedAt: new Date() })
+          .set({ returnTime: closeAt, updatedAt: new Date() })
           .where(eq(breakSessions.id, openBreak.id));
       }
     }
 
-    const note = "Auto checked-out by system (no manual check-out after shift end).";
+    const note = "Auto checked-out by system at shift end (no check-out that day).";
     await db
       .update(attendance)
       .set({
-        checkOutTime: shiftEnd,
+        checkOutTime: closeAt,
         onBreak: false,
         notes: row.notes ? `${row.notes} ${note}` : note,
         updatedAt: new Date(),

@@ -14,7 +14,6 @@ import {
   FileSpreadsheet,
   FileText,
   Image as ImageIcon,
-  Loader2,
 } from 'lucide-react';
 import {
   ExcelViewerOverlay,
@@ -23,6 +22,7 @@ import {
   SHEET_EXTS,
   PDF_EXTS,
 } from '@/components/manuals/ManualPreviewOverlay';
+import { EmptyState, Notice, SkeletonBlocks } from '@/components/employee/ui';
 
 type ManualRow = {
   id: string;
@@ -67,26 +67,18 @@ export default function KnowledgeManualPage() {
   }, []);
 
   return (
-    <div className="flex h-full flex-col bg-background pb-16">
-      <div className="flex-1 space-y-2.5 overflow-y-auto px-4 py-4">
+    <div className="mx-auto w-full max-w-md">
+      <div className="space-y-2.5 px-4 pb-8 pt-4">
         {loading ? (
-          <div className="flex flex-1 items-center justify-center py-16">
-            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-          </div>
+          <SkeletonBlocks count={4} className="h-[72px]" />
         ) : error ? (
-          <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
-            <p className="text-sm font-medium text-rose-500">{error}</p>
-          </div>
+          <Notice tone="error">{error}</Notice>
         ) : manuals.length === 0 ? (
-          <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-muted">
-              <BookOpen className="h-6 w-6 text-muted-foreground/50" />
-            </div>
-            <div>
-              <p className="text-sm font-semibold text-foreground">No manuals yet</p>
-              <p className="mt-1 text-xs text-muted-foreground">Store manuals will appear here once uploaded.</p>
-            </div>
-          </div>
+          <EmptyState
+            icon={BookOpen}
+            title="No manuals yet"
+            description="Store manuals will appear here once uploaded."
+          />
         ) : (
           manuals.map((m) => {
             const { Icon, color, bg } = fileIcon(m.fileType);
@@ -120,7 +112,7 @@ export default function KnowledgeManualPage() {
                 <button
                   key={m.id}
                   onClick={() => (isPdf ? setViewingPdf(m) : setViewing(m))}
-                  className="flex w-full items-center gap-3 rounded-2xl border border-border bg-card p-3.5 text-left shadow-sm transition-colors hover:bg-secondary/60 active:scale-[0.99]"
+                  className="flex w-full items-center gap-3 rounded-2xl border border-border bg-card p-3.5 text-left transition-colors hover:bg-secondary/60 active:scale-[0.99]"
                 >
                   {cardInner}
                 </button>
@@ -133,7 +125,7 @@ export default function KnowledgeManualPage() {
                 href={m.fileUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-3 rounded-2xl border border-border bg-card p-3.5 shadow-sm transition-colors hover:bg-secondary/60 active:scale-[0.99]"
+                className="flex items-center gap-3 rounded-2xl border border-border bg-card p-3.5 transition-colors hover:bg-secondary/60 active:scale-[0.99]"
               >
                 {cardInner}
               </a>

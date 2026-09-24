@@ -4,14 +4,17 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
-  X, AlertCircle, Check, CloudOff, Save,
-  Camera, Clock, CreditCard, BarChart3,
-  AlertTriangle, CheckCircle2, ChevronDown, ChevronUp,
+  Check, CloudOff, Save, Clock, Lock, Receipt,
+  AlertTriangle, CheckCircle2, ChevronDown, StickyNote,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { useAutoSave } from '@/lib/hooks/useAutoSave';
-import { TaskHeader, TaskSubmitBar, SaveIndicator } from '@/components/employee/tasks';
+import { TaskHeader, TaskSubmitBar, SaveIndicator, shiftLabel } from '@/components/employee/tasks';
+import {
+  CheckRow, EmptyState, ListGroup, Notice, NotesField, PageBody, PhotoRow, Section,
+  SkeletonBlocks, TaskReviewNotices,
+} from '@/components/employee/ui';
 import ChecklistPhotoModal from '@/components/tasks/ChecklistPhotoModal';
 import AccessGuard from '@/components/employee/tasks/AccessGuard';
 
@@ -56,110 +59,7 @@ const PHOTO_RULES = {
   storefrontLocked: { min: 1, max: 1 },
 } as const;
 
-// ─── Section wrapper ──────────────────────────────────────────────────────────
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="space-y-3">
-      <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">{title}</p>
-      {children}
-    </div>
-  );
-}
-
-// ─── Photo checklist item ─────────────────────────────────────────────────────
-
-function PhotoCheckItem({
-  label, description, checked, photoCount, requiredCount, onClick, disabled,
-}: {
-  label:         string;
-  description:   string;
-  checked:       boolean;
-  photoCount:    number;
-  requiredCount: number;
-  onClick:       () => void;
-  disabled?:     boolean;
-}) {
-  const needsMore = photoCount < requiredCount;
-  return (
-    <button type="button" onClick={() => !disabled && onClick()}
-      className={cn(
-        'flex w-full items-start gap-3 rounded-xl border-2 px-4 py-3.5 text-left transition-all',
-        checked && !needsMore && 'border-primary/30 bg-primary/5',
-        !checked               && 'border-border bg-card hover:border-primary/20',
-        photoCount > 0 && needsMore && 'border-amber-400 bg-amber-50',
-        disabled && 'cursor-default opacity-60',
-      )}>
-      <div className={cn(
-        'mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border-2 transition-colors',
-        checked && !needsMore ? 'border-primary bg-primary' : 'border-border',
-      )}>
-        {checked && !needsMore && <Check className="h-3 w-3 text-primary-foreground" strokeWidth={3} />}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center justify-between gap-2">
-          <span className={cn('text-sm font-medium', checked && !needsMore ? 'text-foreground' : 'text-muted-foreground')}>
-            {label}
-          </span>
-          <span className={cn(
-            'flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold',
-            photoCount === 0
-              ? 'bg-secondary text-muted-foreground'
-              : !needsMore
-                ? 'bg-green-100 text-green-700'
-                : 'bg-amber-100 text-amber-700',
-          )}>
-            <Camera className="h-2.5 w-2.5" />
-            {photoCount}/{requiredCount}
-          </span>
-        </div>
-        <p className={cn('mt-0.5 text-[10px]', photoCount > 0 && needsMore ? 'font-semibold text-amber-700' : 'text-muted-foreground')}>
-          {description}
-        </p>
-      </div>
-    </button>
-  );
-}
-
-// ─── Simple checklist item ────────────────────────────────────────────────────
-
-function SimpleCheckItem({
-  label, description, checked, onChange, disabled, icon,
-}: {
-  label:        string;
-  description?: string;
-  checked:      boolean;
-  onChange:     (v: boolean) => void;
-  disabled?:    boolean;
-  icon?:        React.ReactNode;
-}) {
-  return (
-    <button type="button" onClick={() => !disabled && onChange(!checked)}
-      className={cn(
-        'flex w-full items-start gap-3 rounded-xl border-2 px-4 py-3.5 text-left transition-all',
-        checked ? 'border-primary/30 bg-primary/5' : 'border-border bg-card hover:border-primary/20',
-        disabled && 'cursor-default opacity-60',
-      )}>
-      <div className={cn(
-        'mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border-2 transition-colors',
-        checked ? 'border-primary bg-primary' : 'border-border',
-      )}>
-        {checked && <Check className="h-3 w-3 text-primary-foreground" strokeWidth={3} />}
-      </div>
-      <div className="min-w-0 flex-1">
-        <span className={cn('text-sm font-medium', checked ? 'text-foreground' : 'text-muted-foreground')}>
-          {label}
-        </span>
-        {description && (
-          <p className="mt-0.5 text-[10px] text-muted-foreground">{description}</p>
-        )}
-      </div>
-      {icon && <div className="mt-0.5 flex-shrink-0 text-muted-foreground">{icon}</div>}
-    </button>
-  );
-}
-
-// ─── Collapsible notes input ──────────────────────────────────────────────────
+// ─── Collapsible notes row (sits inside a ListGroup under its checklist row) ─
 
 function NotesInput({
   label, value, onChange, disabled, placeholder,
@@ -173,28 +73,28 @@ function NotesInput({
   const [open, setOpen] = useState(!!value);
 
   return (
-    <div className="rounded-xl border border-border bg-card overflow-hidden">
+    <div className="bg-card">
       <button
         type="button"
         onClick={() => setOpen(p => !p)}
-        disabled={disabled}
-        className="flex w-full items-center justify-between px-4 py-3 text-left"
+        disabled={disabled && !value}
+        className="flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition active:bg-secondary disabled:opacity-60"
       >
-        <span className="text-xs font-semibold text-muted-foreground">{label}</span>
-        {open
-          ? <ChevronUp className="h-3.5 w-3.5 text-muted-foreground" />
-          : <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-        }
+        <StickyNote className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground">
+          {value && !open ? value : label}
+        </span>
+        <ChevronDown className={cn('h-4 w-4 flex-shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')} />
       </button>
       {open && (
-        <div className="px-4 pb-3 pt-0">
+        <div className="px-3.5 pb-3">
           <textarea
             value={value}
             onChange={e => onChange(e.target.value)}
             disabled={disabled}
             rows={2}
             placeholder={placeholder ?? 'Tambahkan catatan…'}
-            className="w-full resize-none rounded-lg border border-border bg-secondary px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
+            className="w-full resize-none rounded-xl border border-border bg-secondary px-3.5 py-2.5 text-base placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
           />
         </div>
       )}
@@ -213,89 +113,64 @@ function OpenStatementSelector({
   onHoldReasonChange: (v: string) => void;
   disabled?:          boolean;
 }) {
-  const options: {
-    value:       OpenStatementDecision;
-    label:       string;
-    description: string;
-    icon:        React.ReactNode;
-    color:       'green' | 'amber';
-  }[] = [
+  const options = [
     {
-      value:       'post_statement',
+      value:       'post_statement' as const,
       label:       'Post Statement',
       description: 'Saldo akhir sesuai, open statement bisa diposting.',
-      icon:        <CheckCircle2 className="h-5 w-5" />,
-      color:       'green',
+      Icon:        CheckCircle2,
+      selected:    'bg-green-50',
+      tint:        'text-green-600',
+      dot:         'border-green-500 bg-green-500',
     },
     {
-      value:       'on_hold',
+      value:       'on_hold' as const,
       label:       'On Hold',
       description: 'Ada selisih atau masalah, perlu dicek lebih lanjut.',
-      icon:        <AlertTriangle className="h-5 w-5" />,
-      color:       'amber',
+      Icon:        AlertTriangle,
+      selected:    'bg-amber-50',
+      tint:        'text-amber-600',
+      dot:         'border-amber-500 bg-amber-500',
     },
   ];
 
   return (
-    <div className="space-y-2">
-      {options.map(opt => {
-        const isSelected = value === opt.value;
-        const isGreen    = opt.color === 'green';
-        return (
-          <button
-            key={opt.value}
-            type="button"
-            onClick={() => !disabled && onChange(opt.value)}
-            disabled={disabled}
-            className={cn(
-              'flex w-full items-start gap-3 rounded-xl border-2 px-4 py-3.5 text-left transition-all',
-              isSelected && isGreen  && 'border-green-400 bg-green-50',
-              isSelected && !isGreen && 'border-amber-400 bg-amber-50',
-              !isSelected            && 'border-border bg-card hover:border-primary/20',
-              disabled               && 'cursor-default opacity-60',
-            )}
-          >
-            <div className={cn(
-              'mt-0.5 flex-shrink-0 transition-colors',
-              isSelected && isGreen  && 'text-green-600',
-              isSelected && !isGreen && 'text-amber-600',
-              !isSelected            && 'text-muted-foreground',
-            )}>
-              {opt.icon}
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className={cn(
-                'text-sm font-semibold',
-                isSelected && isGreen  && 'text-green-800',
-                isSelected && !isGreen && 'text-amber-800',
-                !isSelected            && 'text-foreground',
+    <div className="space-y-3">
+      <ListGroup>
+        {options.map(opt => {
+          const isSelected = value === opt.value;
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              role="radio"
+              aria-checked={isSelected}
+              onClick={() => !disabled && onChange(opt.value)}
+              disabled={disabled}
+              className={cn(
+                'flex w-full items-center gap-3 px-3.5 py-3.5 text-left transition active:bg-secondary disabled:opacity-60',
+                isSelected ? opt.selected : 'bg-card',
+              )}
+            >
+              <opt.Icon className={cn('h-5 w-5 flex-shrink-0', isSelected ? opt.tint : 'text-muted-foreground')} />
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-semibold text-foreground">{opt.label}</span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">{opt.description}</span>
+              </span>
+              <span className={cn(
+                'flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border-2 transition-colors',
+                isSelected ? opt.dot : 'border-border bg-background',
               )}>
-                {opt.label}
-              </p>
-              <p className={cn(
-                'mt-0.5 text-[10px]',
-                isSelected && isGreen  && 'text-green-700',
-                isSelected && !isGreen && 'text-amber-700',
-                !isSelected            && 'text-muted-foreground',
-              )}>
-                {opt.description}
-              </p>
-            </div>
-            <div className={cn(
-              'mt-0.5 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border-2 transition-colors',
-              isSelected && isGreen  && 'border-green-500 bg-green-500',
-              isSelected && !isGreen && 'border-amber-500 bg-amber-500',
-              !isSelected            && 'border-border',
-            )}>
-              {isSelected && <Check className="h-3 w-3 text-white" strokeWidth={3} />}
-            </div>
-          </button>
-        );
-      })}
+                {isSelected && <Check className="h-3.5 w-3.5 text-white" strokeWidth={3} />}
+              </span>
+            </button>
+          );
+        })}
+      </ListGroup>
 
       {value === 'on_hold' && (
-        <div className="rounded-xl border-2 border-amber-300 bg-amber-50 px-4 py-3 space-y-2">
-          <p className="text-xs font-semibold text-amber-800">
+        <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3">
+          <p className="text-xs font-bold text-amber-800">
             Alasan On Hold <span className="text-amber-600">*</span>
           </p>
           <textarea
@@ -304,32 +179,13 @@ function OpenStatementSelector({
             disabled={disabled}
             rows={3}
             placeholder="Jelaskan alasan mengapa open statement tidak bisa diposting sekarang…"
-            className="w-full resize-none rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm placeholder:text-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-300 disabled:opacity-60"
+            className="w-full resize-none rounded-xl border border-amber-200 bg-white px-3.5 py-2.5 text-base placeholder:text-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-300 disabled:opacity-60"
           />
-          <p className="text-[10px] text-amber-700">
+          <p className="text-[11px] text-amber-700">
             Issue akan dibuat secara otomatis dan dikirim ke tim terkait untuk ditindaklanjuti.
           </p>
         </div>
       )}
-    </div>
-  );
-}
-
-// ─── On Hold banner ───────────────────────────────────────────────────────────
-
-function OnHoldBanner({ holdReason }: { holdReason: string | null }) {
-  return (
-    <div className="flex items-start gap-3 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3.5">
-      <Clock className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600" />
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-bold text-amber-800">Task sedang On Hold</p>
-        <p className="mt-0.5 text-xs text-amber-700">
-          Issue terkait sedang ditangani tim. Task akan dibuka kembali setelah issue diselesaikan.
-        </p>
-        {holdReason && (
-          <p className="mt-2 text-[11px] text-amber-600 italic">&ldquo;{holdReason}&rdquo;</p>
-        )}
-      </div>
     </div>
   );
 }
@@ -552,14 +408,10 @@ export default function StoreClosingDetailPage() {
         })();
 
         return (
-          <div className="flex min-h-screen flex-col bg-background">
+          <>
             <TaskHeader
               title="Store Closing"
-              subtitle={
-                taskData
-                  ? `${String(taskData.shift).replace('_', ' ')} shift · ${String(taskData.status).replace('_', ' ')}`
-                  : undefined
-              }
+              subtitle={shiftLabel(taskData?.shift)}
               status={taskData?.status}
               saveIndicator={
                 !readonly && !loading && taskData ? (
@@ -568,165 +420,116 @@ export default function StoreClosingDetailPage() {
               }
             />
 
-            <div className="flex-1 space-y-4 p-4 pb-10">
-
+            <PageBody bottomBar={!readonly && !isOnHold && !!taskData}>
               {/* Access banner — hidden while loading or on-hold */}
               {!readonly && !isOnHold && !loading && taskData && banner}
 
-              {/* On Hold banner */}
               {isOnHold && (
-                <OnHoldBanner holdReason={taskData?.openStatementHoldReason ?? null} />
+                <Notice tone="warning" icon={Clock} title="Task sedang On Hold">
+                  Issue terkait sedang ditangani tim. Task akan dibuka kembali setelah issue diselesaikan.
+                  {taskData?.openStatementHoldReason && (
+                    <p className="mt-1.5 italic">&ldquo;{taskData.openStatementHoldReason}&rdquo;</p>
+                  )}
+                </Notice>
               )}
 
-              {/* Submit error */}
               {submitError && (
-                <div className="flex items-start gap-2.5 rounded-xl border border-red-300 bg-red-50 px-4 py-3">
-                  <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-600" />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-xs font-bold text-red-700">Submit gagal</p>
-                    <p className="mt-0.5 text-xs text-red-600 break-words">{submitError}</p>
-                  </div>
-                  <button onClick={() => setSubmitError(null)} className="flex-shrink-0 text-red-400 hover:text-red-600">
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
+                <Notice tone="error" title="Submit gagal" onDismiss={() => setSubmitError(null)}>
+                  {submitError}
+                </Notice>
               )}
 
-              {/* Auto-save error */}
               {saveError && !readonly && (
-                <div className="flex items-center gap-2 rounded-xl border border-orange-200 bg-orange-50 px-4 py-2.5">
-                  <CloudOff className="h-4 w-4 flex-shrink-0 text-orange-600" />
-                  <p className="text-xs text-orange-700">Auto-save gagal: {saveError}</p>
-                </div>
+                <Notice tone="warning" icon={CloudOff}>Auto-save gagal: {saveError}</Notice>
               )}
 
-              {/* Rejected note */}
-              {taskData?.status === 'rejected' && taskData.notes && (
-                <div className="flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
-                  <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-600" />
-                  <div>
-                    <p className="text-xs font-bold text-red-700">Ditolak oleh OPS</p>
-                    <p className="mt-0.5 text-xs text-red-600">{taskData.notes}</p>
-                    <p className="mt-1.5 text-xs font-medium text-red-700">Silakan perbaiki dan submit ulang.</p>
-                  </div>
-                </div>
-              )}
+              <TaskReviewNotices status={taskData?.status} notes={taskData?.notes} verifiedAt={taskData?.verifiedAt} />
 
-              {/* Verified */}
-              {taskData?.status === 'verified' && taskData.verifiedAt && (
-                <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3">
-                  <p className="text-xs font-semibold text-green-800">Task telah diverifikasi</p>
-                  <p className="mt-0.5 text-xs text-green-600">
-                    {new Date(taskData.verifiedAt).toLocaleString('id-ID', {
-                      day: 'numeric', month: 'long', year: 'numeric',
-                      hour: '2-digit', minute: '2-digit',
-                    })}
-                  </p>
-                </div>
-              )}
-
-              {/* Auto-save hint */}
               {!readonly && !isOnHold && !locked && !loading && taskData && (
-                <div className="flex items-center gap-2 rounded-xl border border-blue-100 bg-blue-50 px-4 py-2.5">
-                  <Save className="h-4 w-4 flex-shrink-0 text-blue-500" />
-                  <p className="text-xs text-blue-700">Perubahan otomatis tersimpan.</p>
-                </div>
+                <Notice tone="info" icon={Save}>Perubahan otomatis tersimpan.</Notice>
               )}
 
-              {/* Content */}
               {loading ? (
-                <div className="space-y-3">
-                  {[1,2,3,4].map(i => (
-                    <div key={i} className="h-14 animate-pulse rounded-xl bg-secondary" />
-                  ))}
-                </div>
+                <SkeletonBlocks count={4} className="h-14" />
               ) : !taskData ? (
-                <div className="flex flex-col items-center py-20 text-center">
-                  <AlertCircle className="mb-3 h-8 w-8 text-muted-foreground/40" />
-                  <p className="text-sm font-semibold">Task tidak ditemukan</p>
-                </div>
+                <EmptyState title="Task tidak ditemukan" description="Task ini mungkin sudah tidak tersedia untuk jadwalmu hari ini." />
               ) : (
                 <div className="relative">
                   {/* AccessGuard's lockedOverlay handles the blur/lock UI */}
                   {!isOnHold && lockedOverlay}
 
-                  <div className="space-y-6">
-
-                    {/* ── 1. EOD Z-Report ─────────────────────────────────── */}
+                  <div className="space-y-5">
                     <Section title="1 · EOD Z-Report">
-                      <SimpleCheckItem
-                        label="EOD Z-Report selesai"
-                        description="Konfirmasi Z-Report EOD sudah dicetak/diperiksa."
-                        checked={eodZReportDone}
-                        onChange={v => { setEodZReportDone(v); autoSave({ eodZReportDone: v }); }}
-                        disabled={dis}
-                        icon={<Clock className="h-4 w-4" />}
-                      />
+                      <ListGroup>
+                        <CheckRow
+                          label="EOD Z-Report selesai"
+                          hint="Z-Report EOD sudah dicetak/diperiksa."
+                          checked={eodZReportDone}
+                          onToggle={() => { const v = !eodZReportDone; setEodZReportDone(v); autoSave({ eodZReportDone: v }); }}
+                          disabled={dis}
+                        />
+                      </ListGroup>
                     </Section>
 
-                    {/* ── 2. EDC Summary ──────────────────────────────────── */}
                     <Section title="2 · EDC Summary">
-                      <SimpleCheckItem
-                        label="EDC Summary selesai"
-                        description="Konfirmasi laporan summary EDC sudah dicetak/dicatat."
-                        checked={edcSummaryDone}
-                        onChange={v => { setEdcSummaryDone(v); autoSave({ edcSummaryDone: v }); }}
-                        disabled={dis}
-                        icon={<BarChart3 className="h-4 w-4" />}
-                      />
-                      <NotesInput
-                        label="Catatan EDC Summary (opsional)"
-                        value={edcSummaryNotes}
-                        onChange={handleEdcSummaryNotes}
-                        disabled={dis}
-                        placeholder="Tambahkan catatan summary jika ada…"
-                      />
+                      <ListGroup>
+                        <CheckRow
+                          label="EDC Summary selesai"
+                          hint="Laporan summary EDC sudah dicetak/dicatat."
+                          checked={edcSummaryDone}
+                          onToggle={() => { const v = !edcSummaryDone; setEdcSummaryDone(v); autoSave({ edcSummaryDone: v }); }}
+                          disabled={dis}
+                        />
+                        <NotesInput
+                          label="Catatan EDC Summary (opsional)"
+                          value={edcSummaryNotes}
+                          onChange={handleEdcSummaryNotes}
+                          disabled={dis}
+                          placeholder="Tambahkan catatan summary jika ada…"
+                        />
+                      </ListGroup>
                     </Section>
 
-                    {/* ── 3. EDC Settlement ───────────────────────────────── */}
                     <Section title="3 · EDC Settlement">
-                      <SimpleCheckItem
-                        label="EDC Settlement selesai"
-                        description="Konfirmasi proses settlement EDC sudah dilakukan."
-                        checked={edcSettlementDone}
-                        onChange={v => { setEdcSettlementDone(v); autoSave({ edcSettlementDone: v }); }}
-                        disabled={dis}
-                        icon={<CreditCard className="h-4 w-4" />}
-                      />
-                      <NotesInput
-                        label="Catatan EDC Settlement (opsional)"
-                        value={edcSettlementNotes}
-                        onChange={handleEdcSettlementNotes}
-                        disabled={dis}
-                        placeholder="Tambahkan catatan settlement jika ada…"
-                      />
+                      <ListGroup>
+                        <CheckRow
+                          label="EDC Settlement selesai"
+                          hint="Proses settlement EDC sudah dilakukan."
+                          checked={edcSettlementDone}
+                          onToggle={() => { const v = !edcSettlementDone; setEdcSettlementDone(v); autoSave({ edcSettlementDone: v }); }}
+                          disabled={dis}
+                        />
+                        <NotesInput
+                          label="Catatan EDC Settlement (opsional)"
+                          value={edcSettlementNotes}
+                          onChange={handleEdcSettlementNotes}
+                          disabled={dis}
+                          placeholder="Tambahkan catatan settlement jika ada…"
+                        />
+                      </ListGroup>
                     </Section>
 
-                    
-
-                    {/* ── 4. Foto Bukti ──────────────────────────────────── */}
-                    <Section title="4 · Foto Bukti">
-                      <PhotoCheckItem
-                        label="Foto Z-Report & EDC Settlement"
-                        description="Satu foto wajib yang menampilkan Z-Report dan EDC Settlement."
-                        checked={evidencePhotoSatisfied}
-                        photoCount={eodEdcSettlementPhoto ? 1 : 0}
-                        requiredCount={PHOTO_RULES.eodEdcSettlement.min}
-                        onClick={() => setEodEdcSettlementModalOpen(true)}
-                        disabled={dis}
-                      />
-                      <PhotoCheckItem
-                        label="Foto Storefront Dikunci"
-                        description="Foto pintu / rolling door toko dalam keadaan terkunci."
-                        checked={storefrontLockedSatisfied}
-                        photoCount={storefrontLockedPhoto ? 1 : 0}
-                        requiredCount={PHOTO_RULES.storefrontLocked.min}
-                        onClick={() => setStorefrontLockedModalOpen(true)}
-                        disabled={dis}
-                      />
+                    <Section title="4 · Foto bukti" meta={`${(evidencePhotoSatisfied ? 1 : 0) + (storefrontLockedSatisfied ? 1 : 0)}/2`}>
+                      <ListGroup>
+                        <PhotoRow
+                          title="Z-Report & EDC Settlement"
+                          hint="Satu foto yang menampilkan keduanya"
+                          photo={eodEdcSettlementPhoto}
+                          onClick={() => setEodEdcSettlementModalOpen(true)}
+                          disabled={dis}
+                          icon={<Receipt className="h-4 w-4" />}
+                        />
+                        <PhotoRow
+                          title="Storefront Dikunci"
+                          hint="Pintu / rolling door terkunci"
+                          photo={storefrontLockedPhoto}
+                          onClick={() => setStorefrontLockedModalOpen(true)}
+                          disabled={dis}
+                          icon={<Lock className="h-4 w-4" />}
+                        />
+                      </ListGroup>
                     </Section>
 
-                    {/* ── 5. Open Statement ───────────────────────────────── */}
                     <Section title="5 · Open Statement">
                       <OpenStatementSelector
                         value={openStatementDecision}
@@ -737,30 +540,29 @@ export default function StoreClosingDetailPage() {
                       />
                     </Section>
 
-                    {/* ── Notes ───────────────────────────────────────────── */}
-                    <Section title="Catatan Umum (opsional)">
-                      <textarea
-                        value={notes}
-                        onChange={e => { setNotes(e.target.value); autoSave({ notes: e.target.value }); }}
-                        disabled={dis}
-                        rows={3}
-                        placeholder="Tambahkan catatan penutupan toko jika ada…"
-                        className="w-full resize-none rounded-xl border border-border bg-secondary px-4 py-3 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-60"
-                      />
-                    </Section>
-
-                    <TaskSubmitBar
-                      label={openStatementDecision === 'on_hold' ? 'Submit — On Hold' : 'Submit Store Closing'}
-                      onSubmit={() => handleSubmit(geo)}
-                      submitting={submitting}
-                      disabled={!canSubmit}
-                      hidden={readonly || isOnHold}
-                      hint={!canSubmit ? submitHint : undefined}
+                    <NotesField
+                      label="Catatan umum"
+                      value={notes}
+                      onChange={(v) => { setNotes(v); autoSave({ notes: v }); }}
+                      disabled={dis}
+                      rows={3}
+                      placeholder="Tambahkan catatan penutupan toko jika ada…"
                     />
                   </div>
                 </div>
               )}
-            </div>
+            </PageBody>
+
+            {taskData && (
+              <TaskSubmitBar
+                label={openStatementDecision === 'on_hold' ? 'Submit — On Hold' : 'Submit Store Closing'}
+                onSubmit={() => handleSubmit(geo)}
+                submitting={submitting}
+                disabled={!canSubmit}
+                hidden={readonly || isOnHold}
+                hint={!canSubmit ? submitHint : undefined}
+              />
+            )}
 
             {/* Z-Report + EDC Settlement photo modal */}
             <ChecklistPhotoModal
@@ -793,7 +595,7 @@ export default function StoreClosingDetailPage() {
               onClear={() => syncStorefrontLockedPhoto([])}
               disabled={dis}
             />
-          </div>
+          </>
         );
       }}
     </AccessGuard>

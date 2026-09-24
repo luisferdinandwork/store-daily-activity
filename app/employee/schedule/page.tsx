@@ -14,6 +14,7 @@ import {
   LogIn, LogOut, Clock, CircleAlert, CircleCheck, CalendarOff, CalendarDays,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { EmptyState } from '@/components/employee/ui';
 import { toast } from 'sonner';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -182,14 +183,14 @@ function DayRow({
     <div
       ref={innerRef}
       className={cn(
-        'group flex items-center gap-3 rounded-2xl border bg-white px-3 py-3 shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition-all duration-200',
-        isToday ? 'border-primary/30 bg-primary/[0.03]' : 'border-slate-200 hover:border-slate-300 hover:shadow-[0_2px_10px_rgba(15,23,42,0.06)]',
+        'group flex scroll-mt-40 items-center gap-3 rounded-2xl border bg-card px-3 py-3 transition-all duration-200',
+        isToday ? 'border-primary/30 bg-primary/[0.03]' : 'border-border hover:border-primary/20',
       )}
     >
       <div
         className={cn(
           'relative flex w-11 shrink-0 flex-col items-center justify-center rounded-xl py-1.5',
-          isToday ? 'bg-primary' : 'bg-slate-100',
+          isToday ? 'bg-primary' : 'bg-secondary',
         )}
       >
         <span
@@ -208,7 +209,7 @@ function DayRow({
           <p className="truncate text-sm font-bold tracking-tight" style={{ color: isOff && !isLeave ? '#94a3b8' : textColor }}>{title}</p>
           {isToday && <span className="shrink-0 rounded-full bg-primary/10 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide text-primary">Today</span>}
         </div>
-        {timeRange && <p className="text-[11px] font-medium tabular-nums text-slate-400">{timeRange}</p>}
+        {timeRange && <p className="text-[11px] font-medium tabular-nums text-muted-foreground">{timeRange}</p>}
 
         {badge && (
           <div className="mt-1.5 flex items-center gap-1.5 rounded-lg px-2 py-1" style={{ background: badge.bg }}>
@@ -221,7 +222,7 @@ function DayRow({
       </div>
 
       {short && (
-        <div className="shrink-0 rounded-lg bg-slate-100 px-2 py-1 text-[10px] font-extrabold tracking-wide text-slate-500 transition-transform duration-200 group-hover:scale-105">
+        <div className="shrink-0 rounded-lg bg-secondary px-2 py-1 text-[10px] font-extrabold tracking-wide text-muted-foreground transition-transform duration-200 group-hover:scale-105">
           {short}
         </div>
       )}
@@ -234,8 +235,8 @@ function DayRow({
 function WeekDivider({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-2 px-1 pb-0.5 pt-3 first:pt-0">
-      <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{label}</span>
-      <div className="h-px flex-1 bg-slate-200" />
+      <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</span>
+      <div className="h-px flex-1 bg-border" />
     </div>
   );
 }
@@ -276,7 +277,7 @@ function DateStrip({
             onClick={() => onSelect(dateKey)}
             className={cn(
               'flex w-10 shrink-0 flex-col items-center gap-1 rounded-xl py-1.5 transition-colors',
-              isToday ? 'bg-primary' : isActive ? 'bg-primary/10' : 'bg-white hover:bg-slate-100',
+              isToday ? 'bg-primary' : isActive ? 'bg-primary/10' : 'bg-card hover:bg-secondary',
             )}
             style={!isToday ? { border: isActive ? '1px solid transparent' : '1px solid #e2e8f0' } : undefined}
           >
@@ -311,20 +312,20 @@ function MonthYearPicker({
   const [viewYear, setViewYear] = useState(year);
 
   return (
-    <div className="absolute left-1/2 top-full z-30 mt-2 w-64 -translate-x-1/2 rounded-2xl border border-slate-200 bg-white p-3 text-left shadow-xl shadow-slate-900/10">
+    <div className="absolute left-1/2 top-full z-30 mt-2 w-64 -translate-x-1/2 rounded-2xl border border-border bg-card p-3 text-left shadow-xl shadow-black/10">
       <div className="flex items-center justify-between pb-2">
         <button
           type="button"
           onClick={() => setViewYear((y) => y - 1)}
-          className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+          className="flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
         >
           <ChevronLeft className="h-4 w-4" />
         </button>
-        <span className="text-sm font-bold text-slate-700">{viewYear}</span>
+        <span className="text-sm font-bold text-foreground">{viewYear}</span>
         <button
           type="button"
           onClick={() => setViewYear((y) => y + 1)}
-          className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+          className="flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
         >
           <ChevronRight className="h-4 w-4" />
         </button>
@@ -339,7 +340,7 @@ function MonthYearPicker({
               onClick={() => onSelect(viewYear, idx + 1)}
               className={cn(
                 'rounded-lg py-1.5 text-xs font-semibold transition-colors',
-                isSelected ? 'bg-primary text-primary-foreground' : 'text-slate-600 hover:bg-slate-100',
+                isSelected ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-secondary',
               )}
             >
               {label.slice(0, 3)}
@@ -511,23 +512,23 @@ export default function SchedulePage() {
 
   // ── Auth loading ───────────────────────────────────────────────────────────
   if (authStatus === 'loading' || !session) return (
-    <div className="flex min-h-screen items-center justify-center bg-white">
-      <Loader2 className="h-6 w-6 animate-spin text-indigo-400" />
+    <div className="flex flex-1 items-center justify-center py-24">
+      <Loader2 className="h-6 w-6 animate-spin text-primary/60" />
     </div>
   );
 
   return (
-    <div className="flex min-h-screen flex-col bg-slate-50">
+    <div className="flex flex-col">
 
       {/* Header */}
       <div className="relative overflow-hidden bg-primary px-5 pb-4 pt-6">
         <div className="pointer-events-none absolute -right-10 -top-10 h-44 w-44 rounded-full bg-white/5" />
         <div className="pointer-events-none absolute -left-6 bottom-0 h-28 w-28 rounded-full bg-white/5" />
 
-        <div className="relative flex items-start justify-between">
+        <div className="relative mx-auto flex max-w-md items-start justify-between">
           <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-primary-foreground/60">My Schedule</p>
-            <h1 className="mt-0.5 text-2xl font-bold tracking-tight text-primary-foreground">This Month's Shifts</h1>
+            <p className="text-xs font-semibold uppercase tracking-widest text-primary-foreground/60">My Schedule</p>
+            <h1 className="mt-0.5 text-2xl font-bold tracking-tight text-primary-foreground">This Month&apos;s Shifts</h1>
           </div>
           <div className="mt-1 flex items-center gap-2">
             {/* Always-available shortcut back to the current month + today,
@@ -553,7 +554,7 @@ export default function SchedulePage() {
 
         {/* Month navigator — chevrons for one-step moves, or tap the month
             name to jump straight to any month/year via the picker. */}
-        <div ref={pickerWrapRef} className="relative mt-5 flex items-center justify-between">
+        <div ref={pickerWrapRef} className="relative mx-auto mt-5 flex max-w-md items-center justify-between">
           <button onClick={() => { const d = new Date(y, m - 2, 1); handleMonthChange(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2,'0')}`); }} className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-white/70 transition-colors hover:bg-white/20 active:scale-95">
             <ChevronLeft className="h-5 w-5" />
           </button>
@@ -578,7 +579,7 @@ export default function SchedulePage() {
 
         {/* Monthly summary strip */}
         {!loading && schedule && (
-          <div className="relative mt-5 grid grid-cols-3 gap-2">
+          <div className="relative mx-auto mt-5 grid max-w-md grid-cols-3 gap-2">
             <div className="rounded-xl bg-white/10 px-2.5 py-2 backdrop-blur-sm">
               <div className="flex items-center gap-1 text-green-300"><CircleCheck className="h-3 w-3" /><span className="text-[9px] font-bold uppercase tracking-wide">Completed</span></div>
               <p className="mt-0.5 text-lg font-extrabold tabular-nums text-primary-foreground">{summary.completed}</p>
@@ -588,7 +589,7 @@ export default function SchedulePage() {
               <p className="mt-0.5 text-lg font-extrabold tabular-nums text-primary-foreground">{summary.upcoming}</p>
             </div>
             <div className="rounded-xl bg-white/10 px-2.5 py-2 backdrop-blur-sm">
-              <div className="flex items-center gap-1 text-slate-300"><CalendarOff className="h-3 w-3" /><span className="text-[9px] font-bold uppercase tracking-wide">Off / Leave</span></div>
+              <div className="flex items-center gap-1 text-white/70"><CalendarOff className="h-3 w-3" /><span className="text-[9px] font-bold uppercase tracking-wide">Off / Leave</span></div>
               <p className="mt-0.5 text-lg font-extrabold tabular-nums text-primary-foreground">{summary.off}</p>
             </div>
           </div>
@@ -597,13 +598,16 @@ export default function SchedulePage() {
 
       {/* Date strip — jump straight to any day in the month being viewed */}
       {schedule && days.length > 0 && (
-        <div className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50/95 backdrop-blur-sm">
+        <div
+          className="sticky z-20 border-b border-border bg-background/95 backdrop-blur"
+          style={{ top: 'var(--emp-header-h)' }}
+        >
           <DateStrip days={days} todayKey={todayKey} activeKey={null} onSelect={(dateKey) => scrollToDay(dateKey)} />
         </div>
       )}
 
       {/* Body */}
-      <div className="flex-1 space-y-2 p-4 pb-24">
+      <div className="mx-auto w-full max-w-md flex-1 space-y-2 px-4 pb-20 pt-4">
 
         {/* Skeleton only for the very first load — once a schedule is on
             screen, a background refresh (e.g. a session refetch) keeps the
@@ -612,7 +616,7 @@ export default function SchedulePage() {
         {loading && !schedule && (
           <div className="space-y-2">
             {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="h-[64px] animate-pulse rounded-2xl border border-slate-100 bg-white" style={{ animationDelay: `${i * 60}ms` }} />
+              <div key={i} className="h-[64px] animate-pulse rounded-2xl border border-border bg-card" style={{ animationDelay: `${i * 60}ms` }} />
             ))}
           </div>
         )}
@@ -645,22 +649,18 @@ export default function SchedulePage() {
 
             {schedule.note && (
               <div className="mt-3 rounded-xl border border-primary/20 border-dashed bg-primary/5 px-3 py-2">
-                <p className="text-[11px] italic text-primary">Note: "{schedule.note}"</p>
+                <p className="text-[11px] italic text-primary">Note: &ldquo;{schedule.note}&rdquo;</p>
               </div>
             )}
           </div>
         )}
 
         {!loading && !schedule && (
-          <div className="flex flex-col items-center gap-4 rounded-2xl border border-dashed border-slate-200 bg-white py-16 text-center">
-            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10">
-              <Calendar className="h-8 w-8 text-primary/60" />
-            </div>
-            <div>
-              <p className="text-sm font-bold text-slate-700">No schedule for {formatYearMonth(selectedMonth)}</p>
-              <p className="mt-1 text-xs text-slate-400">Ask your PIC or Ops team to set up this month's schedule.</p>
-            </div>
-          </div>
+          <EmptyState
+            icon={Calendar}
+            title={`Belum ada jadwal ${formatYearMonth(selectedMonth)}`}
+            description="Minta PIC atau tim OPS untuk menyiapkan jadwal bulan ini."
+          />
         )}
       </div>
 
@@ -670,7 +670,8 @@ export default function SchedulePage() {
       {!todayVisible && (
         <button
           onClick={goToToday}
-          className="fixed bottom-24 left-4 z-40 flex items-center gap-1.5 rounded-full bg-primary px-3.5 py-2.5 text-primary-foreground shadow-lg shadow-primary/30 transition-transform active:scale-95 md:bottom-6"
+          className="fixed left-4 z-40 flex h-12 items-center gap-1.5 rounded-full bg-primary px-4 text-primary-foreground shadow-lg shadow-primary/25 transition-[transform,bottom] duration-300 ease-out active:scale-95"
+          style={{ bottom: 'calc(var(--emp-bottom) + 1rem)' }}
         >
           <Calendar className="h-4 w-4" />
           <span className="text-xs font-bold">{isCurrentMonth ? 'Jump to Today' : 'Jump to This Month'}</span>

@@ -36,6 +36,8 @@ import {
   PauseCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { shiftLabel } from "@/components/employee/tasks";
+import { EmptyState, Notice, SkeletonBlocks } from "@/components/employee/ui";
 
 // ─── Task types ────────────────────────────────────────────────────────────────
 
@@ -875,53 +877,29 @@ function AttendanceCheckCard({
 }) {
   if (loading) {
     return (
-      <div className="flex items-center gap-3 rounded-2xl border border-border bg-card px-4 py-3 shadow-sm">
-        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-        <div>
-          <p className="text-sm font-bold text-foreground">Mengecek absensi…</p>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Task akan aktif setelah status absensi terbaca.
-          </p>
-        </div>
-      </div>
+      <Notice tone="neutral" icon={Spinner} title="Mengecek absensi…">
+        Task akan aktif setelah status absensi terbaca.
+      </Notice>
     );
   }
 
   if (!attendance) {
     return (
-      <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-700 shadow-sm">
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-bold">Status absensi belum terbaca</p>
-          <p className="mt-0.5 text-xs">
-            Cek ulang absensi sebelum membuka task.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={onRefresh}
-          className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-amber-100 px-2.5 py-1.5 text-[11px] font-bold text-amber-700 hover:bg-amber-200"
-        >
-          <RefreshCw className="h-3 w-3" />
-          Cek ulang
-        </button>
-      </div>
+      <Notice
+        tone="warning"
+        title="Status absensi belum terbaca"
+        action={{ label: 'Cek ulang', onClick: onRefresh, icon: RefreshCw }}
+      >
+        Cek ulang absensi sebelum membuka task.
+      </Notice>
     );
   }
 
   if (!attendance.hasSchedule) {
     return (
-      <div className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-card px-4 py-3 shadow-sm">
-        <Inbox className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-bold text-foreground">
-            Tidak ada jadwal hari ini
-          </p>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Kamu tidak memiliki shift yang perlu dikerjakan hari ini.
-          </p>
-        </div>
-      </div>
+      <Notice tone="neutral" icon={Inbox} title="Tidak ada jadwal hari ini">
+        Kamu tidak memiliki shift yang perlu dikerjakan hari ini.
+      </Notice>
     );
   }
 
@@ -935,24 +913,20 @@ function AttendanceCheckCard({
 
   if (attendance.checkedOut) {
     return (
-      <div className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-card px-4 py-3 shadow-sm">
-        <LogOut className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-bold text-foreground">
-            Sudah absen pulang
-          </p>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Check-in {fmtAttendanceTime(attendance.checkInAt)} · Check-out{" "}
-            {fmtAttendanceTime(attendance.checkOutAt)}
-          </p>
-        </div>
-      </div>
+      <Notice tone="neutral" icon={LogOut} title="Sudah absen pulang">
+        Check-in {fmtAttendanceTime(attendance.checkInAt)} · Check-out{" "}
+        {fmtAttendanceTime(attendance.checkOutAt)}
+      </Notice>
     );
   }
 
   // Checked-in-and-ready is the normal state — no banner needed above the
   // task list once attendance is confirmed.
   return null;
+}
+
+function Spinner({ className }: { className?: string }) {
+  return <Loader2 className={cn(className, "animate-spin")} />;
 }
 
 function RingProgress({ pct }: { pct: number }) {
@@ -1313,13 +1287,13 @@ export default function EmployeeTasksPage() {
     stats.total > 0 ? Math.round((stats.completed / stats.total) * 100) : 0;
 
   return (
-    <div className="flex flex-col min-h-screen bg-background">
+    <div className="flex flex-col">
       {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <div className="relative overflow-hidden bg-primary px-6 pb-6 pt-6">
+      <div className="relative overflow-hidden bg-primary px-5 pb-6 pt-5">
         <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-white/5" />
         <div className="pointer-events-none absolute -right-4 bottom-0 h-24 w-24 rounded-full bg-white/5" />
 
-        <div className="relative flex items-end justify-between gap-4">
+        <div className="relative mx-auto flex max-w-md items-end justify-between gap-4">
           {/* Left: title + date + shift pill */}
           <div className="flex-1 min-w-0">
             <p className="text-xs font-semibold uppercase tracking-widest text-primary-foreground/60">
@@ -1348,13 +1322,7 @@ export default function EmployeeTasksPage() {
                   <Zap className="h-3.5 w-3.5 text-orange-300" />
                 )}
                 <span className="text-xs font-semibold capitalize text-primary-foreground">
-                  {shift === "morning"
-                    ? "Morning Shift"
-                    : shift === "evening"
-                      ? "Evening Shift"
-                      : shift === "full_day"
-                        ? "Full Day Shift"
-                        : `${shift.replaceAll("_", " ")} Shift`}
+                  {shiftLabel(shift) ?? shift}
                 </span>
               </div>
             )}
@@ -1410,8 +1378,11 @@ export default function EmployeeTasksPage() {
       </div>
 
       {/* ── Filter bar ───────────────────────────────────────────────────── */}
-      <div className="sticky top-0 z-10 border-b border-border bg-card px-4 py-2.5">
-        <div className="flex gap-1.5 overflow-x-auto pb-0.5 scrollbar-none">
+      <div
+        className="sticky z-20 border-b border-border bg-background/95 px-4 py-2.5 backdrop-blur"
+        style={{ top: "var(--emp-header-h)" }}
+      >
+        <div className="no-scrollbar mx-auto flex max-w-md gap-1.5 overflow-x-auto">
           {FILTERS.map(({ key, label }) => (
             <button
               key={key}
@@ -1440,7 +1411,7 @@ export default function EmployeeTasksPage() {
       </div>
 
       {/* ── Attendance check ───────────────────────────────────────────── */}
-      <div className="px-4 pt-4">
+      <div className="mx-auto w-full max-w-md px-4 pt-4 empty:hidden">
         <AttendanceCheckCard
           attendance={attendance}
           loading={attendanceLoading}
@@ -1451,44 +1422,27 @@ export default function EmployeeTasksPage() {
       </div>
 
       {/* ── Task sections ────────────────────────────────────────────────── */}
-      <div className="flex-1 p-4 space-y-6">
+      <div className="mx-auto w-full max-w-md flex-1 space-y-6 px-4 pb-8 pt-4">
         {loading ? (
-          <div className="space-y-2.5">
-            {Array.from({ length: 5 }).map((_, i) => (
-              <div
-                key={i}
-                className="h-24 animate-pulse rounded-xl bg-secondary"
-              />
-            ))}
-          </div>
+          <SkeletonBlocks count={5} className="h-24" />
         ) : noSchedule ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center">
-            <Inbox className="mb-3 h-10 w-10 text-muted-foreground/40" />
-            <p className="text-sm font-semibold text-foreground">
-              No shift today
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              You are not scheduled for any shift today.
-            </p>
-          </div>
+          <EmptyState
+            icon={Inbox}
+            title="Tidak ada shift hari ini"
+            description="Kamu tidak dijadwalkan untuk shift apa pun hari ini."
+          />
         ) : noVisibleTasks ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center">
-            <Inbox className="mb-3 h-10 w-10 text-muted-foreground/40" />
-            <p className="text-sm font-semibold text-foreground">
-              No tasks today
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              There are no tasks available for your scheduled shift.
-            </p>
-          </div>
+          <EmptyState
+            icon={Inbox}
+            title="Belum ada task hari ini"
+            description="Tidak ada task untuk shift kamu hari ini."
+          />
         ) : filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center">
-            <CheckCircle2 className="mb-3 h-10 w-10 text-green-400" />
-            <p className="text-sm font-semibold text-foreground">All clear!</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              No tasks in this category.
-            </p>
-          </div>
+          <EmptyState
+            icon={CheckCircle2}
+            title="Semua beres!"
+            description="Tidak ada task di kategori ini."
+          />
         ) : (
           <>
             {orderedShiftSections.map(([shiftCode, items]) => {
@@ -1510,8 +1464,8 @@ export default function EmployeeTasksPage() {
                     ) : (
                       <Sun className="h-4 w-4 text-amber-500" />
                     )}
-                    <h2 className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
-                      {shiftCode.replaceAll("_", " ")} Shift
+                    <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      {shiftLabel(shiftCode)}
                     </h2>
                     <div className="h-px flex-1 bg-border" />
                     <span className="text-[10px] font-semibold text-muted-foreground">
@@ -1522,7 +1476,7 @@ export default function EmployeeTasksPage() {
                   {priorityItems.length > 0 && (
                     <div className={cn(otherItems.length > 0 && "mb-4")}>
                       {otherItems.length > 0 && (
-                        <p className="mb-2 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest text-primary">
+                        <p className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-primary">
                           <ListOrdered className="h-3 w-3" />
                           Prioritas — kerjakan berurutan
                         </p>
@@ -1564,7 +1518,7 @@ export default function EmployeeTasksPage() {
                   {otherItems.length > 0 && (
                     <div>
                       {priorityItems.length > 0 && (
-                        <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                        <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                           Lainnya — bisa dikerjakan kapan saja
                         </p>
                       )}
@@ -1787,7 +1741,7 @@ function TaskCard({
   return (
     <Card
       className={cn(
-        "relative overflow-hidden border-border shadow-sm transition-all active:scale-[0.99]",
+        "relative overflow-hidden rounded-2xl border-border py-0 shadow-none transition-all active:scale-[0.99]",
         locked ? "cursor-not-allowed opacity-60" : "cursor-pointer",
         isTerminal && "opacity-75",
         isRejected && "border-red-200",
@@ -1883,7 +1837,7 @@ function TaskCard({
               {!required && (
                 <Badge
                   variant="outline"
-                  className="h-[18px] px-1.5 text-[10px] text-slate-500 border-slate-200"
+                  className="h-[18px] px-1.5 text-[10px] text-muted-foreground border-border"
                 >
                   Optional
                 </Badge>

@@ -109,7 +109,9 @@ export default function EmployeeNotificationBell() {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-12 z-50 w-[calc(100vw-2rem)] max-w-80 overflow-hidden rounded-2xl border border-border bg-card text-left shadow-xl">
+        // Pinned to the viewport (not the bell) so it never spills off-screen,
+        // whatever sits to the bell's right in the app bar.
+        <div className="fixed inset-x-3 top-[calc(var(--emp-header-h)+0.25rem)] z-50 mx-auto max-w-sm overflow-hidden rounded-2xl border border-border bg-card text-left text-foreground shadow-xl">
           <div className="flex items-center justify-between border-b border-border px-3.5 py-2.5">
             <p className="text-xs font-bold text-foreground">Notifications</p>
             {unreadCount > 0 && (
