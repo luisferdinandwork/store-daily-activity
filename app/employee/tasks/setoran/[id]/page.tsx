@@ -12,6 +12,10 @@
 //   • "Uang aktual diterima kemarin" input
 //   • "Kurang" field — the remainder that carries to the next setoran
 //   • two slim photo rows + a note
+//
+// Small setoran: uang aktual diterima between Rp 0 and Rp 49.999 → nothing is
+// deposited (Total wajib disetor fixed at 0, everything carries over as
+// "Kurang"); resi + ATM selfie are replaced by a single "Foto Kasir".
 // All business logic (autosave, no-geo guard, upload, submit gating) is
 // unchanged from the previous version.
 //
@@ -20,7 +24,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { AlertCircle, CreditCard, Pencil, Receipt } from 'lucide-react';
+import { AlertCircle, CreditCard, Monitor, Pencil, Receipt } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { useAutoSave } from '@/lib/hooks/useAutoSave';
@@ -69,7 +73,10 @@ type SetoranTaskData = {
 
   resiPhoto: string | null;
   atmCardSelfiePhoto: string | null;
+  cashierPhoto?: string | null;
 };
+
+type SetoranPhotoType = 'resi' | 'atm_card_selfie' | 'setoran_cashier';
 
 type TaskItem = { type: string; data: SetoranTaskData };
 
@@ -87,6 +94,8 @@ function toNumber(raw: string | null | undefined): number {
 }
 
 const SETORAN_STEP = 50_000;
+/** Mirrors SETORAN_SMALL_THRESHOLD in lib/db/utils/setoran.ts. */
+const SMALL_SETORAN_THRESHOLD = 50_000;
 
 /** Round a cash-drawer total DOWN to the nearest deposit step (kelipatan 50.000). */
 function roundDownToStep(n: number): number {
@@ -104,8 +113,8 @@ export default function SetoranTaskPage() {
   const [task, setTask] = useState<SetoranTaskData | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [uploading, setUploading] = useState<'resi' | 'atm_card_selfie' | null>(null);
-  const [cameraTarget, setCameraTarget] = useState<'resi' | 'atm_card_selfie' | null>(null);
+  const [uploading, setUploading] = useState<SetoranPhotoType | null>(null);
+  const [cameraTarget, setCameraTarget] = useState<SetoranPhotoType | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   const [actualReceivedAmount, setActualReceivedAmount] = useState('');
@@ -115,6 +124,7 @@ export default function SetoranTaskPage() {
   const [storedManual, setStoredManual] = useState(false);
   const [resiPhoto, setResiPhoto] = useState<string | null>(null);
   const [atmCardSelfiePhoto, setAtmCardSelfiePhoto] = useState<string | null>(null);
+  const [cashierPhoto, setCashierPhoto] = useState<string | null>(null);
   const [notes, setNotes] = useState('');
 
   // ─── Load ────────────────────────────────────────────────────────────────
@@ -142,6 +152,7 @@ export default function SetoranTaskPage() {
       setStoredManual(Boolean(savedStored));
       setResiPhoto(d.resiPhoto ?? null);
       setAtmCardSelfiePhoto(d.atmCardSelfiePhoto ?? null);
+      setCashierPhoto(d.cashierPhoto ?? null);
       setNotes(d.notes ?? '');
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : String(err));
@@ -162,23 +173,28 @@ export default function SetoranTaskPage() {
   // "Tidak ada setoran" — employee explicitly typed 0 for uang aktual diterima.
   // No money to deposit, so nominal disetor and photos are not required.
   const isNoSetoran = actualReceivedAmount.trim() !== '' && actualReceivedNumber === 0;
+  // "Setoran kecil" — under Rp 50.000 received (0 included). Nothing is
+  // deposited; a cashier photo replaces the resi + ATM selfie.
+  const isSmallSetoran =
+    actualReceivedAmount.trim() !== '' && actualReceivedNumber < SMALL_SETORAN_THRESHOLD;
+  const noDeposit = isSmallSetoran;
 
   // "Total uang Cash Drawer" = uang aktual diterima + sisa belum disetor.
   const cashDrawerTotal = actualReceivedNumber + previousUnpaidAmount;
   // Auto-suggested deposit: that total rounded DOWN to the nearest Rp 50.000.
-  const autoStored = isNoSetoran ? 0 : roundDownToStep(cashDrawerTotal);
-  const storedNumber = isNoSetoran ? 0 : toNumber(storedAmount);
+  const autoStored = noDeposit ? 0 : roundDownToStep(cashDrawerTotal);
+  const storedNumber = noDeposit ? 0 : toNumber(storedAmount);
   // "Kurang" — the odd remainder that carries into the next setoran.
-  const kurang = isNoSetoran ? cashDrawerTotal : Math.max(0, cashDrawerTotal - storedNumber);
-  const isOverStored = !isNoSetoran && storedNumber > cashDrawerTotal && cashDrawerTotal > 0;
+  const kurang = noDeposit ? cashDrawerTotal : Math.max(0, cashDrawerTotal - storedNumber);
+  const isOverStored = !noDeposit && storedNumber > cashDrawerTotal && cashDrawerTotal > 0;
 
   // Keep "Total wajib disetor" tracking the auto value until the employee
   // overrides it (or presses "Hitung otomatis" to clear the override).
   useEffect(() => {
-    if (storedManual || isNoSetoran) return;
+    if (storedManual || noDeposit) return;
     const next = autoStored > 0 ? String(autoStored) : '';
     setStoredAmount((prev) => (prev === next ? prev : next));
-  }, [autoStored, storedManual, isNoSetoran]);
+  }, [autoStored, storedManual, noDeposit]);
 
   // ─── Render ──────────────────────────────────────────────────────────────
   if (loading) return <TaskLoadingScreen title="Setoran" />;
@@ -203,6 +219,8 @@ export default function SetoranTaskPage() {
           setResiPhoto={setResiPhoto}
           atmCardSelfiePhoto={atmCardSelfiePhoto}
           setAtmCardSelfiePhoto={setAtmCardSelfiePhoto}
+          cashierPhoto={cashierPhoto}
+          setCashierPhoto={setCashierPhoto}
           notes={notes}
           setNotes={setNotes}
           cashDrawerTotal={cashDrawerTotal}
@@ -213,6 +231,7 @@ export default function SetoranTaskPage() {
           kurang={kurang}
           isOverStored={isOverStored}
           isNoSetoran={isNoSetoran}
+          isSmallSetoran={isSmallSetoran}
           readonly={readonly}
           dis={dis}
           accessOk={!locked}
@@ -245,6 +264,8 @@ interface BodyProps {
   setResiPhoto: (v: string | null) => void;
   atmCardSelfiePhoto: string | null;
   setAtmCardSelfiePhoto: (v: string | null) => void;
+  cashierPhoto: string | null;
+  setCashierPhoto: (v: string | null) => void;
   notes: string;
   setNotes: (v: string) => void;
   cashDrawerTotal: number;
@@ -255,6 +276,7 @@ interface BodyProps {
   kurang: number;
   isOverStored: boolean;
   isNoSetoran: boolean;
+  isSmallSetoran: boolean;
   readonly: boolean;
   dis: boolean;
   accessOk: boolean;
@@ -262,21 +284,22 @@ interface BodyProps {
   lockedOverlay: React.ReactNode;
   submitting: boolean;
   setSubmitting: (v: boolean) => void;
-  uploading: 'resi' | 'atm_card_selfie' | null;
-  setUploading: (v: 'resi' | 'atm_card_selfie' | null) => void;
+  uploading: SetoranPhotoType | null;
+  setUploading: (v: SetoranPhotoType | null) => void;
   submitError: string | null;
   setSubmitError: (v: string | null) => void;
-  cameraTarget: 'resi' | 'atm_card_selfie' | null;
-  setCameraTarget: (v: 'resi' | 'atm_card_selfie' | null) => void;
+  cameraTarget: SetoranPhotoType | null;
+  setCameraTarget: (v: SetoranPhotoType | null) => void;
   router: ReturnType<typeof useRouter>;
 }
 
 function SetoranPageBody(props: BodyProps) {
   const {
     task, actualReceivedAmount, setActualReceivedAmount, storedAmount, setStoredAmount,
-    resiPhoto, setResiPhoto, atmCardSelfiePhoto, setAtmCardSelfiePhoto, notes, setNotes,
+    resiPhoto, setResiPhoto, atmCardSelfiePhoto, setAtmCardSelfiePhoto,
+    cashierPhoto, setCashierPhoto, notes, setNotes,
     cashDrawerTotal, autoStored, storedManual, setStoredManual,
-    storedNumber, kurang, isOverStored, isNoSetoran,
+    storedNumber, kurang, isOverStored, isNoSetoran, isSmallSetoran,
     readonly, dis, accessOk, banner, lockedOverlay,
     submitting, setSubmitting, uploading, setUploading,
     submitError, setSubmitError,
@@ -285,6 +308,7 @@ function SetoranPageBody(props: BodyProps) {
 
   const [editOpen, setEditOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const noDeposit = isSmallSetoran;
 
   // ─── Autosave (no geo) ───────────────────────────────────────────────────
   const { status: saveStatus, lastSaved, save: rawAutoSave } = useAutoSave({
@@ -307,16 +331,17 @@ function SetoranPageBody(props: BodyProps) {
       storedAmount,
       resiPhoto,
       atmCardSelfiePhoto,
+      cashierPhoto,
       notes,
       ...patch,
     });
   }, [
     readonly, rawAutoSave, task,
-    actualReceivedAmount, storedAmount, resiPhoto, atmCardSelfiePhoto, notes,
+    actualReceivedAmount, storedAmount, resiPhoto, atmCardSelfiePhoto, cashierPhoto, notes,
   ]);
 
   // ─── Photo upload ────────────────────────────────────────────────────────
-  const uploadPhoto = useCallback(async (file: File, photoType: 'resi' | 'atm_card_selfie') => {
+  const uploadPhoto = useCallback(async (file: File, photoType: SetoranPhotoType) => {
     if (dis) return;
     setUploading(photoType);
     setSubmitError(null);
@@ -326,6 +351,9 @@ function SetoranPageBody(props: BodyProps) {
       if (photoType === 'resi') {
         setResiPhoto(url);
         autoSave({ resiPhoto: url });
+      } else if (photoType === 'setoran_cashier') {
+        setCashierPhoto(url);
+        autoSave({ cashierPhoto: url });
       } else {
         setAtmCardSelfiePhoto(url);
         autoSave({ atmCardSelfiePhoto: url });
@@ -337,7 +365,7 @@ function SetoranPageBody(props: BodyProps) {
     } finally {
       setUploading(null);
     }
-  }, [dis, autoSave, setResiPhoto, setAtmCardSelfiePhoto, setUploading, setSubmitError]);
+  }, [dis, autoSave, setResiPhoto, setAtmCardSelfiePhoto, setCashierPhoto, setUploading, setSubmitError]);
 
   // ─── Submit (no geo) ─────────────────────────────────────────────────────
   // Validates, then opens the confirmation modal — the actual network call
@@ -348,7 +376,12 @@ function SetoranPageBody(props: BodyProps) {
     if (readonly) return;
     setSubmitError(null);
 
-    if (!isNoSetoran) {
+    if (isSmallSetoran) {
+      if (!cashierPhoto) {
+        setSubmitError('Foto kasir wajib diupload.');
+        return;
+      }
+    } else {
       if (storedNumber <= 0) {
         setSubmitError('Total wajib disetor belum terisi. Isi uang aktual diterima kemarin terlebih dahulu.');
         return;
@@ -369,8 +402,8 @@ function SetoranPageBody(props: BodyProps) {
 
     setConfirmOpen(true);
   }, [
-    readonly, isNoSetoran, storedNumber, cashDrawerTotal, resiPhoto, atmCardSelfiePhoto,
-    setSubmitError,
+    readonly, isSmallSetoran, storedNumber, cashDrawerTotal,
+    resiPhoto, atmCardSelfiePhoto, cashierPhoto, setSubmitError,
   ]);
 
   const doSubmit = useCallback(async () => {
@@ -390,6 +423,7 @@ function SetoranPageBody(props: BodyProps) {
           storedAmount: String(storedNumber),
           resiPhoto,
           atmCardSelfiePhoto,
+          cashierPhoto,
           notes,
         }),
       });
@@ -409,7 +443,7 @@ function SetoranPageBody(props: BodyProps) {
       setConfirmOpen(false);
     }
   }, [
-    storedNumber, resiPhoto, atmCardSelfiePhoto,
+    storedNumber, resiPhoto, atmCardSelfiePhoto, cashierPhoto,
     task, actualReceivedAmount, notes, router,
     setSubmitError, setSubmitting,
   ]);
@@ -417,12 +451,13 @@ function SetoranPageBody(props: BodyProps) {
   // ─── Submit gating ───────────────────────────────────────────────────────
   const canSubmit =
     !readonly && accessOk &&
-    (isNoSetoran || (storedNumber > 0 && !isOverStored && !!resiPhoto && !!atmCardSelfiePhoto));
+    ((isSmallSetoran && !!cashierPhoto) ||
+      (!isSmallSetoran && storedNumber > 0 && !isOverStored && !!resiPhoto && !!atmCardSelfiePhoto));
 
   const submitHint = (() => {
     if (readonly) return undefined;
     if (!accessOk) return 'Pastikan kamu sudah absen masuk.';
-    if (isNoSetoran) return undefined;
+    if (isSmallSetoran) return cashierPhoto ? undefined : 'Foto kasir belum diupload.';
     if (storedNumber <= 0) return 'Isi uang aktual diterima kemarin terlebih dahulu.';
     if (isOverStored) return 'Total wajib disetor melebihi total uang cash drawer.';
     if (!resiPhoto) return 'Foto resi belum diupload.';
@@ -471,7 +506,7 @@ function SetoranPageBody(props: BodyProps) {
               <button
                 type="button"
                 onClick={() => setEditOpen(true)}
-                disabled={dis || isNoSetoran}
+                disabled={dis || noDeposit}
                 className="flex w-full items-center justify-between gap-2 rounded-xl border-t border-primary/15 pt-3 text-left transition-opacity disabled:opacity-100"
               >
                 <span className="text-[11px] font-semibold uppercase tracking-wide text-primary/80">
@@ -481,7 +516,7 @@ function SetoranPageBody(props: BodyProps) {
                   <span className="text-xl font-bold tabular-nums text-primary">
                     {rupiah(storedNumber)}
                   </span>
-                  {!dis && !isNoSetoran && <Pencil className="h-3.5 w-3.5 text-primary/60" />}
+                  {!dis && !noDeposit && <Pencil className="h-3.5 w-3.5 text-primary/60" />}
                 </span>
               </button>
 
@@ -489,7 +524,9 @@ function SetoranPageBody(props: BodyProps) {
                 <p className="text-[11px] text-primary/60">
                   {isNoSetoran
                     ? 'Tidak ada setoran hari ini.'
-                    : storedManual
+                    : isSmallSetoran
+                      ? `Di bawah ${rupiah(SMALL_SETORAN_THRESHOLD)} — tidak perlu disetor hari ini.`
+                      : storedManual
                       ? `Diubah manual · ketuk untuk ubah · otomatis ${rupiah(autoStored)}`
                       : 'Otomatis kelipatan Rp 50.000 · ketuk untuk ubah'}
                 </p>
@@ -505,14 +542,44 @@ function SetoranPageBody(props: BodyProps) {
                 onBlur={() => autoSave({ actualReceivedAmount })}
                 disabled={dis}
                 placeholder="1.000.000"
-                hint={isNoSetoran ? 'Isi 0 jika hari ini tidak ada setoran sama sekali.' : undefined}
+                hint={
+                  isNoSetoran
+                    ? 'Tidak ada setoran hari ini — tetap wajib foto kasir.'
+                    : isSmallSetoran
+                      ? `Di bawah ${rupiah(SMALL_SETORAN_THRESHOLD)}: tidak perlu resi & selfie ATM, cukup foto kasir.`
+                      : undefined
+                }
               />
 
-              <KurangField amount={kurang} isOver={isOverStored} pending={!isNoSetoran && storedNumber <= 0} isNoSetoran={isNoSetoran} />
+              <KurangField
+                amount={kurang}
+                isOver={isOverStored}
+                pending={!noDeposit && storedNumber <= 0}
+                isNoSetoran={isNoSetoran}
+                isSmallSetoran={isSmallSetoran}
+              />
             </div>
 
             {/* ─── Photos ─────────────────────────────────────────────────── */}
-            <Section title="Foto bukti" meta={isNoSetoran ? 'opsional — tidak ada setoran' : `${photosDone}/2`}>
+            <Section
+              title="Foto bukti"
+              meta={
+                isSmallSetoran ? `${cashierPhoto ? 1 : 0}/1` : `${photosDone}/2`
+              }
+            >
+              {isSmallSetoran ? (
+                <ListGroup>
+                  <PhotoRow
+                    title="Foto Kasir"
+                    hint="Foto area kasir / cash drawer"
+                    photo={cashierPhoto}
+                    disabled={dis || uploading !== null}
+                    loading={uploading === 'setoran_cashier'}
+                    onClick={() => setCameraTarget('setoran_cashier')}
+                    icon={<Monitor className="h-4 w-4" />}
+                  />
+                </ListGroup>
+              ) : (
               <ListGroup>
                 <PhotoRow
                   title="Foto Resi"
@@ -533,6 +600,7 @@ function SetoranPageBody(props: BodyProps) {
                   icon={<CreditCard className="h-4 w-4" />}
                 />
               </ListGroup>
+              )}
 
               <CameraCapture
                 open={cameraTarget !== null}
@@ -542,7 +610,11 @@ function SetoranPageBody(props: BodyProps) {
                   setCameraTarget(null);
                   if (target) void uploadPhoto(file, target);
                 }}
-                title={cameraTarget === 'atm_card_selfie' ? 'Selfie + Kartu ATM' : 'Foto Resi'}
+                title={
+                  cameraTarget === 'atm_card_selfie' ? 'Selfie + Kartu ATM'
+                    : cameraTarget === 'setoran_cashier' ? 'Foto Kasir'
+                    : 'Foto Resi'
+                }
                 facingMode={cameraTarget === 'atm_card_selfie' ? 'user' : 'environment'}
               />
             </Section>
@@ -589,6 +661,7 @@ function SetoranPageBody(props: BodyProps) {
       {confirmOpen && (
         <ConfirmSubmitModal
           isNoSetoran={isNoSetoran}
+          isSmallSetoran={isSmallSetoran}
           actualReceivedNumber={toNumber(actualReceivedAmount)}
           storedNumber={storedNumber}
           kurang={kurang}
@@ -606,22 +679,25 @@ function SetoranPageBody(props: BodyProps) {
 // Read-only "Kurang" field — the odd remainder (Total uang Cash Drawer −
 // Total wajib disetor) that carries into the next setoran.
 function KurangField({
-  amount, isOver, pending, isNoSetoran,
+  amount, isOver, pending, isNoSetoran, isSmallSetoran,
 }: {
   amount: number;
   isOver: boolean;
   pending: boolean;
   isNoSetoran?: boolean;
+  isSmallSetoran?: boolean;
 }) {
   const tone: 'neutral' | 'ok' | 'warn' | 'error' =
-    isNoSetoran ? (amount > 0 ? 'warn' : 'ok') :
+    isNoSetoran || isSmallSetoran ? (amount > 0 ? 'warn' : 'ok') :
     pending ? 'neutral' : isOver ? 'error' : amount > 0 ? 'warn' : 'ok';
 
   const helper = isNoSetoran
     ? (amount > 0
         ? 'Tidak ada setoran hari ini — sisa kemarin tetap dibawa ke setoran berikutnya.'
         : 'Tidak ada setoran hari ini.')
-    : {
+    : isSmallSetoran
+      ? `Di bawah ${rupiah(SMALL_SETORAN_THRESHOLD)} — seluruhnya dibawa ke setoran berikutnya.`
+      : {
         neutral: 'Isi uang aktual diterima kemarin dulu.',
         ok: 'Setoran pas.',
         warn: 'Otomatis ditagihkan di setoran berikutnya.',
@@ -727,9 +803,10 @@ function StoredAmountModal({
 // numbers; the "no setoran" case gets an extra warning since it skips the
 // usual deposit + photo evidence.
 function ConfirmSubmitModal({
-  isNoSetoran, actualReceivedNumber, storedNumber, kurang, submitting, onCancel, onConfirm,
+  isNoSetoran, isSmallSetoran, actualReceivedNumber, storedNumber, kurang, submitting, onCancel, onConfirm,
 }: {
   isNoSetoran: boolean;
+  isSmallSetoran: boolean;
   actualReceivedNumber: number;
   storedNumber: number;
   kurang: number;
@@ -758,8 +835,16 @@ function ConfirmSubmitModal({
       {isNoSetoran && (
         <Notice tone="warning" icon={AlertCircle}>
           Uang aktual diterima diisi <span className="font-bold">Rp 0</span> — kamu akan submit
-          bahwa hari ini <span className="font-bold">tidak ada setoran sama sekali</span>, tanpa
-          foto resi maupun selfie ATM. Pastikan ini benar.
+          bahwa hari ini <span className="font-bold">tidak ada setoran sama sekali</span>, cukup
+          dengan foto kasir. Pastikan ini benar.
+        </Notice>
+      )}
+
+      {isSmallSetoran && !isNoSetoran && (
+        <Notice tone="warning" icon={AlertCircle}>
+          Uang aktual diterima di bawah <span className="font-bold">{rupiah(SMALL_SETORAN_THRESHOLD)}</span> —
+          hari ini <span className="font-bold">tidak disetor</span>, cukup dengan foto kasir. Seluruh
+          uang dibawa ke setoran berikutnya.
         </Notice>
       )}
 

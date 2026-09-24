@@ -7,6 +7,10 @@
 // requiredStoreAmount  = actualReceivedAmount + previousUnpaidAmount
 // unpaidAmount         = requiredStoreAmount - storedAmount
 //
+// Small setoran: 0 <= actualReceivedAmount < SETORAN_SMALL_THRESHOLD → nothing is
+// deposited (storedAmount = 0, everything carries over), resi + ATM selfie are
+// not required, but a cashier photo is.
+//
 // Backward compatibility:
 // - expectedAmount is accepted as actualReceivedAmount
 // - amount is accepted as storedAmount
@@ -22,6 +26,13 @@ import {
   type SetoranTask,
   type SetoranMoneyStorage,
 } from '@/lib/db/schema';
+
+/** Below this "uang aktual diterima", no bank deposit — only a cashier photo. */
+export const SETORAN_SMALL_THRESHOLD = 50_000;
+
+export function isSmallSetoranAmount(actualReceived: number): boolean {
+  return actualReceived >= 0 && actualReceived < SETORAN_SMALL_THRESHOLD;
+}
 
 export type TaskResult<T = void> =
   | { success: true; data: T }
@@ -40,6 +51,7 @@ export interface SubmitSetoranInput {
 
   resiPhoto: string;
   atmCardSelfiePhoto: string;
+  cashierPhoto?: string;
   notes?: string;
 }
 
@@ -55,6 +67,7 @@ export interface SetoranAutoSavePatch {
   amount?: string | null;
   resiPhoto?: string | null;
   atmCardSelfiePhoto?: string | null;
+  cashierPhoto?: string | null;
   notes?: string;
 }
 
@@ -334,6 +347,11 @@ function actorFieldsForPatch(
     update.atmCardSelfiePhotoAt = now;
   }
 
+  if ('cashierPhoto' in patch) {
+    update.cashierPhotoBy = actor.userId;
+    update.cashierPhotoAt = now;
+  }
+
   if ('notes' in patch) {
     update.notesBy = actor.userId;
     update.notesAt = now;
@@ -359,14 +377,19 @@ function preserveSetoranFieldActors(
     values.storedAmountAt = now;
   }
 
-  if (!existing.resiPhotoBy) {
+  if (input.resiPhoto?.trim() && !existing.resiPhotoBy) {
     values.resiPhotoBy = input.userId;
     values.resiPhotoAt = now;
   }
 
-  if (!existing.atmCardSelfiePhotoBy) {
+  if (input.atmCardSelfiePhoto?.trim() && !existing.atmCardSelfiePhotoBy) {
     values.atmCardSelfiePhotoBy = input.userId;
     values.atmCardSelfiePhotoAt = now;
+  }
+
+  if (input.cashierPhoto?.trim() && !existing.cashierPhotoBy) {
+    values.cashierPhotoBy = input.userId;
+    values.cashierPhotoAt = now;
   }
 
   if (input.notes !== undefined && !existing.notesBy) {
@@ -381,12 +404,13 @@ function validateSetoranPayload(input: SubmitSetoranInput): string | null {
   const actualReceived = parseAmount(input.actualReceivedAmount ?? input.expectedAmount);
   const stored = parseAmount(input.storedAmount ?? input.amount);
 
-  // "Tidak ada setoran" — uang diterima hari ini diisi 0. Tidak ada uang untuk
-  // disetor, jadi nominal disetor dan foto bukti tidak diwajibkan.
-  if (actualReceived === 0) {
+  // Setoran kecil (< Rp 50.000, termasuk 0 / "tidak ada setoran") — tidak
+  // disetor ke bank, tanpa resi + selfie ATM, cukup foto kasir.
+  if (isSmallSetoranAmount(actualReceived)) {
     if (stored > 0) {
-      return 'Uang aktual diterima 0, tapi ada nominal yang disetor. Isi uang aktual diterima jika memang ada setoran.';
+      return `Uang aktual diterima di bawah Rp ${SETORAN_SMALL_THRESHOLD.toLocaleString('id-ID')} tidak perlu disetor. Nominal disetor harus 0.`;
     }
+    if (!input.cashierPhoto?.trim()) return 'Foto kasir wajib diupload.';
     return null;
   }
 
@@ -425,6 +449,7 @@ export async function submitSetoran(
     const requiredStoreAmount = actualReceived + previousUnpaid;
     const stored = parseAmount(input.storedAmount ?? input.amount);
     const isNoSetoran = actualReceived === 0;
+    const isSmallSetoran = isSmallSetoranAmount(actualReceived);
 
     if (stored > requiredStoreAmount) {
       return {
@@ -435,8 +460,11 @@ export async function submitSetoran(
 
     const unpaid = Math.max(0, requiredStoreAmount - stored);
     const now = new Date();
-    const resiPhoto = isNoSetoran ? (input.resiPhoto?.trim() || null) : input.resiPhoto;
-    const atmCardSelfiePhoto = isNoSetoran ? (input.atmCardSelfiePhoto?.trim() || null) : input.atmCardSelfiePhoto;
+    // A small setoran (incl. 0) has no deposit evidence and a normal one has no
+    // cashier photo — drop leftovers from a draft that switched modes.
+    const resiPhoto = isSmallSetoran ? null : input.resiPhoto;
+    const atmCardSelfiePhoto = isSmallSetoran ? null : input.atmCardSelfiePhoto;
+    const cashierPhoto = isSmallSetoran ? (input.cashierPhoto?.trim() || null) : null;
 
     const [updated] = await db
       .update(setoranTasks)
@@ -453,6 +481,7 @@ export async function submitSetoran(
         isNoSetoran,
         resiPhoto,
         atmCardSelfiePhoto,
+        cashierPhoto,
         notes: input.notes,
         ...preserveSetoranFieldActors(existing, input, now),
         completedBy: input.userId,
@@ -481,6 +510,7 @@ export async function submitSetoran(
         isNoSetoran,
         resiPhoto,
         atmCardSelfiePhoto,
+        cashierPhoto,
         notes: input.notes,
         actualReceivedAmountBy: updated.actualReceivedAmountBy,
         actualReceivedAmountAt: updated.actualReceivedAmountAt,
@@ -490,6 +520,8 @@ export async function submitSetoran(
         resiPhotoAt: updated.resiPhotoAt,
         atmCardSelfiePhotoBy: updated.atmCardSelfiePhotoBy,
         atmCardSelfiePhotoAt: updated.atmCardSelfiePhotoAt,
+        cashierPhotoBy: updated.cashierPhotoBy,
+        cashierPhotoAt: updated.cashierPhotoAt,
         notesBy: updated.notesBy,
         notesAt: updated.notesAt,
         completedBy: input.userId,
@@ -513,6 +545,7 @@ export async function submitSetoran(
           isNoSetoran,
           resiPhoto,
           atmCardSelfiePhoto,
+          cashierPhoto,
           notes: input.notes,
           actualReceivedAmountBy: updated.actualReceivedAmountBy,
           actualReceivedAmountAt: updated.actualReceivedAmountAt,
@@ -522,6 +555,8 @@ export async function submitSetoran(
           resiPhotoAt: updated.resiPhotoAt,
           atmCardSelfiePhotoBy: updated.atmCardSelfiePhotoBy,
           atmCardSelfiePhotoAt: updated.atmCardSelfiePhotoAt,
+          cashierPhotoBy: updated.cashierPhotoBy,
+          cashierPhotoAt: updated.cashierPhotoAt,
           notesBy: updated.notesBy,
           notesAt: updated.notesAt,
           completedBy: input.userId,
@@ -567,6 +602,7 @@ export async function autoSaveSetoran(
     if ('amount' in patch) update.amount = patch.amount;
     if ('resiPhoto' in patch) update.resiPhoto = patch.resiPhoto ?? null;
     if ('atmCardSelfiePhoto' in patch) update.atmCardSelfiePhoto = patch.atmCardSelfiePhoto ?? null;
+    if ('cashierPhoto' in patch) update.cashierPhoto = patch.cashierPhoto ?? null;
     if ('notes' in patch) update.notes = patch.notes;
 
     if (existing.status === 'not_started') update.status = 'in_progress';

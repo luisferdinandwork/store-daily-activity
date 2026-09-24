@@ -87,6 +87,8 @@ export interface SetoranStoreRow {
   // ── Evidence photos ───────────────────────────────────────────────────────
   resiPhoto: string | null;
   atmCardSelfiePhoto: string | null;
+  /** Cashier photo — replaces resi + ATM selfie when uang diterima < Rp 50.000. */
+  cashierPhoto: string | null;
 
   // ── Submission actor trail ────────────────────────────────────────────────
   /** Display name of task.completedBy user */
@@ -264,6 +266,7 @@ export async function GET(
             t.storedAmountBy,
             t.resiPhotoBy,
             t.atmCardSelfiePhotoBy,
+            t.cashierPhotoBy,
           ]),
           ...storageRows.map((s) => s.completedBy),
         ].filter((id): id is string => typeof id === 'string' && !userNameMap.has(id)),
@@ -388,6 +391,7 @@ export async function GET(
 
         resiPhoto:          task?.resiPhoto          ?? null,
         atmCardSelfiePhoto: task?.atmCardSelfiePhoto  ?? null,
+        cashierPhoto:       task?.cashierPhoto        ?? null,
 
         submittedBy:       userName(task?.completedBy),
         submittedByUserId: task?.completedBy ?? null,

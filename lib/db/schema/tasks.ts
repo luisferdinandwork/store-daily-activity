@@ -190,6 +190,13 @@ export const setoranTasks = pgTable('setoran_tasks', {
    */
   isNoSetoran:             boolean('is_no_setoran').default(false).notNull(),
 
+  /**
+   * Photo of the cashier / cash drawer. Required instead of resi + ATM selfie
+   * when uang aktual diterima is below Rp 50.000 (SETORAN_SMALL_THRESHOLD in
+   * lib/db/utils/setoran.ts) — the deposit stays 0 and the money carries over.
+   */
+  cashierPhoto:            text('cashier_photo'),
+
   actualReceivedAmountBy: text('actual_received_amount_by').references(() => users.id),
   actualReceivedAmountAt: timestamp('actual_received_amount_at', { mode: 'date' }),
   storedAmountBy: text('stored_amount_by').references(() => users.id),
@@ -198,6 +205,8 @@ export const setoranTasks = pgTable('setoran_tasks', {
   resiPhotoAt: timestamp('resi_photo_at', { mode: 'date' }),
   atmCardSelfiePhotoBy: text('atm_card_selfie_photo_by').references(() => users.id),
   atmCardSelfiePhotoAt: timestamp('atm_card_selfie_photo_at', { mode: 'date' }),
+  cashierPhotoBy: text('cashier_photo_by').references(() => users.id),
+  cashierPhotoAt: timestamp('cashier_photo_at', { mode: 'date' }),
   notesBy: text('notes_by').references(() => users.id),
   notesAt: timestamp('notes_at', { mode: 'date' }),
   completedBy: text('completed_by').references(() => users.id),
@@ -253,6 +262,7 @@ export const setoranMoneyStorage = pgTable('setoran_money_storage', {
 
   resiPhoto: text('resi_photo'),
   atmCardSelfiePhoto: text('atm_card_selfie_photo'),
+  cashierPhoto: text('cashier_photo'),
   notes: text('notes'),
   
   actualReceivedAmountBy: text('actual_received_amount_by').references(() => users.id),
@@ -263,6 +273,8 @@ export const setoranMoneyStorage = pgTable('setoran_money_storage', {
   resiPhotoAt: timestamp('resi_photo_at', { mode: 'date' }),
   atmCardSelfiePhotoBy: text('atm_card_selfie_photo_by').references(() => users.id),
   atmCardSelfiePhotoAt: timestamp('atm_card_selfie_photo_at', { mode: 'date' }),
+  cashierPhotoBy: text('cashier_photo_by').references(() => users.id),
+  cashierPhotoAt: timestamp('cashier_photo_at', { mode: 'date' }),
   notesBy: text('notes_by').references(() => users.id),
   notesAt: timestamp('notes_at', { mode: 'date' }),
   completedBy: text('completed_by').references(() => users.id),
