@@ -18,6 +18,7 @@ import {
   getMorningShiftId,
   getEveningShiftId,
   getFullDayShiftId,
+  taskShiftIdFor,
   startOfDay,
   endOfDay,
 } from '@/lib/db/utils/shift-lookup';
@@ -202,8 +203,9 @@ export async function getOrCreateBriefingForSchedule(
     const eveningShiftId = await getEveningShiftId();
     const fullDayShiftId = await getFullDayShiftId();
 
+    const baseShiftId = await taskShiftIdFor(shiftId);
     const targetShiftIds =
-      shiftId === fullDayShiftId ? [morningShiftId, eveningShiftId] : [shiftId];
+      baseShiftId === fullDayShiftId ? [morningShiftId, eveningShiftId] : [baseShiftId];
 
     const rows: BriefingTask[] = [];
     for (const targetShiftId of targetShiftIds) {

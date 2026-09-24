@@ -113,18 +113,71 @@ export function normalizeShiftBreaks(
 
 // ─── Shift codes ──────────────────────────────────────────────────────────────
 
-export const SHIFT_CODES = ['morning', 'evening', 'full_day'] as const;
+export const SHIFT_CODES = [
+  'morning',
+  'evening',
+  'full_day',
+  'middle',
+  'jkp_morning',
+  'jkp_evening',
+] as const;
 export type ShiftCode = typeof SHIFT_CODES[number];
 
 export const SHIFT_LABELS: Record<ShiftCode, string> = {
   morning: 'Morning',
   evening: 'Evening',
   full_day: 'Full Day',
+  middle: 'Middle',
+  jkp_morning: 'JKP Pagi',
+  jkp_evening: 'JKP Siang',
 };
 
 export function isShiftCode(value: unknown): value is ShiftCode {
   return typeof value === 'string' && (SHIFT_CODES as readonly string[]).includes(value);
 }
+
+/** Roster/Excel code per shift — what PIC & Ops type into the schedule sheet. */
+export const SHIFT_ROSTER_CODE: Record<ShiftCode, string> = {
+  morning: 'E',
+  middle: 'M',
+  evening: 'L',
+  full_day: 'F',
+  jkp_morning: 'JP',
+  jkp_evening: 'JS',
+};
+
+// ─── Shift families ───────────────────────────────────────────────────────────
+// JKP (Jam Kerja Pendek) shifts are short-hours variants of morning/evening:
+// JP opens the store exactly like morning, JS closes it exactly like evening.
+// They keep their own hours (attendance, breaks) but share the base shift's
+// store-level task rows and gates — so wherever the code asks "is this the
+// morning/evening shift?", ask it of baseShiftCode(code) instead.
+// Middle has no base: it's a plain shift with its own briefing/grooming/
+// serah terima, configured purely through shift_tasks.
+export const SHIFT_BASE_CODE: Readonly<Record<string, 'morning' | 'evening'>> = {
+  jkp_morning: 'morning',
+  jkp_evening: 'evening',
+};
+
+export function baseShiftCode(code: string | null | undefined): string {
+  if (!code) return '';
+  return SHIFT_BASE_CODE[code] ?? code;
+}
+
+/** Shifts that own the store-opening tasks (morning, JP, full day). */
+export function isOpeningShift(code: string | null | undefined): boolean {
+  const base = baseShiftCode(code);
+  return base === 'morning' || base === 'full_day';
+}
+
+/** Shifts that own the store-closing tasks (evening, JS, full day). */
+export function isClosingShift(code: string | null | undefined): boolean {
+  const base = baseShiftCode(code);
+  return base === 'evening' || base === 'full_day';
+}
+
+/** Seeded shift codes that open the store — for `IN (...)` filters. */
+export const OPENING_SHIFT_CODES: readonly ShiftCode[] = SHIFT_CODES.filter(isOpeningShift);
 
 // ─── Task catalog ─────────────────────────────────────────────────────────────
 
@@ -370,6 +423,17 @@ export const DEFAULT_SEQUENCED_TASK_TYPES: Record<ShiftCode, TaskType[]> = {
     'serah_terima',
   ],
   evening: [],
+  jkp_morning: [
+    'store_front',
+    'setoran',
+    'store_opening',
+    'cek_uang_modal',
+    'grooming',
+    'briefing',
+    'serah_terima',
+  ],
+  jkp_evening: [],
+  middle: [],
 };
 
 export function normalizeTaskCodes(
@@ -451,6 +515,34 @@ export const SHIFT_TASK_MAP: Record<ShiftCode, TaskType[]> = {
     'marketing_check',
     'store_closing',
   ],
+
+  // JKP Pagi / JKP Siang carry the same tasks as morning / evening.
+  jkp_morning: [
+    'store_front',
+    'setoran',
+    'store_opening',
+    'cek_uang_modal',
+    'grooming',
+    'briefing',
+    'serah_terima',
+    'cek_bin',
+    'vm_checklist',
+    'marketing_check',
+  ],
+
+  jkp_evening: [
+    'grooming',
+    'briefing',
+    'serah_terima',
+    'store_closing',
+  ],
+
+  // Middle (12.00–20.00) only joins the people-side tasks.
+  middle: [
+    'grooming',
+    'briefing',
+    'serah_terima',
+  ],
 };
 
 export function getDefaultTasksForShift(shiftCode: ShiftCode): TaskType[] {
@@ -473,7 +565,7 @@ export const SHIFT_ICON_NAMES = [
 export type ShiftIconName = typeof SHIFT_ICON_NAMES[number];
 
 // ─── Custom shift code helpers ────────────────────────────────────────────────
-// SHIFT_CODES above are the three seeded shifts. OPS can also create NEW shifts
+// SHIFT_CODES above are the seeded shifts. OPS can also create NEW shifts
 // from the UI; these keep a hand-entered code slug-safe + stable.
 
 export function normalizeShiftCode(input: string): string {

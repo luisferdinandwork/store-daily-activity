@@ -5,6 +5,7 @@
 // also scheduled that day as a witness, and the two take a selfie together.
 // Required before any morning / full_day employee can check out.
 import { db } from '@/lib/db';
+import { isOpeningShift } from '@/lib/shift-tasks';
 import { and, eq, gte, lte, ne } from 'drizzle-orm';
 import {
   storeCashCounts,
@@ -38,7 +39,7 @@ export interface SubmitStoreCashCountInput {
 
 /** Cashier count is only required for shifts that open the store. */
 export function isCashCountRequiredForShift(shiftCode: string): boolean {
-  return shiftCode === 'morning' || shiftCode === 'full_day';
+  return isOpeningShift(shiftCode);
 }
 
 export async function getStoreCashCountForDate(

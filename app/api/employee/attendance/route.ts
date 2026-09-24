@@ -20,6 +20,7 @@ import {
   isCashCountRequiredForShift,
 } from '@/lib/db/utils/store-cash-count';
 import { resolveActorScheduleId, getMorningShiftId } from '@/lib/db/utils/shift-lookup';
+import { baseShiftCode } from '@/lib/shift-tasks';
 import { assertInGeofence, DEFAULT_GEOFENCE_RADIUS_M } from '@/lib/db/utils/tasks';
 import { parseGeoPoint } from '@/lib/geo';
 
@@ -144,7 +145,8 @@ function humanizeBreakType(type: BreakType) {
  * This keeps attendance working even when old shift rows do not have
  * shifts.breaks populated yet.
  */
-function fallbackBreaksForShiftCode(shiftCode: string): ShiftBreakDef[] {
+function fallbackBreaksForShiftCode(code: string): ShiftBreakDef[] {
+  const shiftCode = baseShiftCode(code);
   if (shiftCode === 'morning') {
     return [{ type: 'lunch', label: 'Lunch' }];
   }

@@ -252,7 +252,8 @@ export async function seedLookups(): Promise<SeedLookupIds> {
   // Insert sequentially, not via Promise.all: several server modules cache the
   // shift id per code (lib/db/utils/shift-lookup.ts, store-opening.ts, tasks.ts),
   // and racing the inserts makes the id→code mapping non-deterministic between
-  // seed runs. Sequential inserts keep morning=1, evening=2, full_day=3.
+  // seed runs. Sequential inserts keep morning=1, evening=2, full_day=3, and
+  // the later additions (middle, JKP Pagi, JKP Siang) after them.
   const insertedShifts = [
     await getOrCreateShift({
       code: 'morning',
@@ -297,6 +298,42 @@ export async function seedLookups(): Promise<SeedLookupIds> {
         },
       ],
       sortOrder: 30,
+    }),
+    // Middle (M) — only briefing, grooming and serah terima.
+    await getOrCreateShift({
+      code: 'middle',
+      label: 'Middle',
+      description: 'Middle shift 12.00–20.00 (briefing, grooming, serah terima)',
+      startTime: '12:00:00',
+      endTime: '20:00:00',
+      accent: 'emerald',
+      icon: 'clock',
+      breaks: [{ type: 'lunch', label: 'Lunch', accent: 'emerald' }],
+      sortOrder: 15,
+    }),
+    // Jam Kerja Pendek — short-hours variants that do the morning / evening
+    // tasks (see SHIFT_BASE_CODE in lib/shift-tasks.ts).
+    await getOrCreateShift({
+      code: 'jkp_morning',
+      label: 'JKP Pagi',
+      description: 'Jam Kerja Pendek pagi 08.30–14.30 (tasks shift pagi)',
+      startTime: '08:30:00',
+      endTime: '14:30:00',
+      accent: 'amber',
+      icon: 'sunrise',
+      breaks: [{ type: 'lunch', label: 'Lunch', accent: 'amber' }],
+      sortOrder: 40,
+    }),
+    await getOrCreateShift({
+      code: 'jkp_evening',
+      label: 'JKP Siang',
+      description: 'Jam Kerja Pendek siang 16.00–22.00 (tasks shift siang)',
+      startTime: '16:00:00',
+      endTime: '22:00:00',
+      accent: 'violet',
+      icon: 'coffee',
+      breaks: [{ type: 'dinner', label: 'Dinner', accent: 'violet' }],
+      sortOrder: 50,
     }),
   ];
 

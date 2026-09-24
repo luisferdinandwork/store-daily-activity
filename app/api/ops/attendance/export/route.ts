@@ -10,6 +10,8 @@ import { eq, and, gte, lte, inArray } from 'drizzle-orm';
 import { getStoresForOps }            from '@/lib/schedule-utils';
 import { getOpsActor }               from '../../tasks/_helpers';
 import * as XLSX                      from 'xlsx';
+import { isShiftCode, SHIFT_LABELS } from '@/lib/shift-tasks';
+import { attendanceStatusLabel, isLeaveAttendanceStatus, isNoWorkStatus } from '@/lib/attendance-status';
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
 
@@ -35,11 +37,20 @@ function fmtDateLong(iso: string): string {
   });
 }
 
+// Check-in after this (local time) counts as late.
+const LATE_AFTER: Record<string, [number, number]> = {
+  morning: [8, 30],
+  jkp_morning: [8, 30],
+  middle: [12, 0],
+  jkp_evening: [16, 0],
+};
+
 function lateMinutes(checkInIso: string | null | undefined, shiftCode: string | null): number {
   if (!checkInIso || !shiftCode) return 0;
   const dt = new Date(checkInIso);
   const threshold = new Date(dt);
-  threshold.setHours(shiftCode === 'morning' ? 8 : 13, 30, 0, 0);
+  const [h, m] = LATE_AFTER[shiftCode] ?? [13, 30];
+  threshold.setHours(h, m, 0, 0);
   const diff = Math.floor((dt.getTime() - threshold.getTime()) / 60000);
   return diff > 0 ? diff : 0;
 }
@@ -187,11 +198,9 @@ function buildLogSheet(
     const r       = 4 + idx;
     const status  = row.status;
     const late    = lateMinutes(row.checkInTime, row.shift);
-    const shiftL  = row.shift === 'morning' ? 'Morning'
-                  : row.shift === 'evening' ? 'Evening'
-                  : (row.shift ?? '—');
-    const statusL = status ? status.charAt(0).toUpperCase() + status.slice(1) : '—';
-    const noWork  = status === 'absent' || status === 'excused';
+    const shiftL  = row.shift && isShiftCode(row.shift) ? SHIFT_LABELS[row.shift] : (row.shift ?? '—');
+    const statusL = attendanceStatusLabel(status);
+    const noWork  = isNoWorkStatus(status);
 
     const values: (string | number | null)[] = [
       idx + 1,
@@ -222,6 +231,7 @@ function buildLogSheet(
   const nLate    = rows.filter(r => r.status === 'late').length;
   const nAbsent  = rows.filter(r => r.status === 'absent').length;
   const nExcused = rows.filter(r => r.status === 'excused').length;
+  const nLeave   = rows.filter(r => isLeaveAttendanceStatus(r.status)).length;
 
   cell(ws, C(sr,0), 'SUMMARY', STYLES.summaryLabel);
   merges.push({ s: { r:sr, c:0 }, e: { r:sr, c:3 } });
@@ -231,6 +241,7 @@ function buildLogSheet(
   cell(ws, C(sr,6), `Absent: ${nAbsent}`,    STYLES.summaryVal);
   cell(ws, C(sr,7), `Excused: ${nExcused}`,  STYLES.summaryVal);
   cell(ws, C(sr,8), `Total: ${rows.length}`, STYLES.summaryVal);
+  cell(ws, C(sr,9), `Dinas/Cuti/Sakit: ${nLeave}`, STYLES.summaryVal);
   merges.push({ s: { r:sr, c:9 }, e: { r:sr, c:11 } });
   ws['!rows']![sr] = { hpt: 22 };
 
@@ -259,7 +270,7 @@ function buildEmployeeSheet(ws: XLSX.WorkSheet, rows: ExportRow[]) {
   ws['!rows'][0] = { hpt: 26 };
   ws['!rows'][1] = { hpt: 5 };
 
-  const HEADERS2 = ['Employee','Store','Total Days','Present','Late','Absent','Excused','Late %'];
+  const HEADERS2 = ['Employee','Store','Total Days','Present','Late','Absent','Excused / D / C / Sakit','Late %'];
   HEADERS2.forEach((h, i) => cell(ws, C(2, i), h, STYLES.tableHeader));
   ws['!rows'][2] = { hpt: 22 };
 
@@ -270,7 +281,9 @@ function buildEmployeeSheet(ws: XLSX.WorkSheet, rows: ExportRow[]) {
       name: row.userName, store: row.storeName,
       present: 0, late: 0, absent: 0, excused: 0,
     };
-    const s = (row.status ?? 'absent') as keyof Pick<EmpStat,'present'|'late'|'absent'|'excused'>;
+    // Dinas / Cuti / Sakit are justified absences — tallied with excused here.
+    const raw = row.status ?? 'absent';
+    const s = (isLeaveAttendanceStatus(raw) ? 'excused' : raw) as keyof Pick<EmpStat,'present'|'late'|'absent'|'excused'>;
     if (s in prev) (prev[s] as number)++;
     empMap.set(key, prev);
   }

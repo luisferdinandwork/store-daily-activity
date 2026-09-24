@@ -17,12 +17,18 @@ import {
 import {
   CheckCircle2, XCircle, Clock, AlertCircle, HelpCircle, Sun, Moon, Zap,
   RefreshCw, UserCircle, Pencil, CalendarDays, Coffee, LogIn, LogOut,
+  Briefcase, Palmtree, Thermometer, Stethoscope, Sunrise,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
+import {
+  attendanceStatusLabel,
+  isLeaveAttendanceStatus,
+  type AttendanceStatus,
+} from '@/lib/attendance-status';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-type AttStatus = 'present' | 'absent' | 'late' | 'excused';
+type AttStatus = AttendanceStatus;
 type RowStatus = AttStatus | 'pending';
 
 interface BreakSession {
@@ -65,12 +71,15 @@ interface AttRow {
 // later via the shifts lookup table), so the icon/color/time range are
 // driven by whatever the API reports for that schedule — not a hardcoded
 // two-shift assumption. Falls back gracefully for any shift not in the map.
-const SHIFT_ICONS: Record<string, React.ElementType> = { sun: Sun, moon: Moon, zap: Zap };
+const SHIFT_ICONS: Record<string, React.ElementType> = {
+  sun: Sun, moon: Moon, zap: Zap, sunrise: Sunrise, coffee: Coffee, clock: Clock,
+};
 
 const SHIFT_ACCENTS: Record<string, { icon: string; border: string; bg: string; text: string }> = {
   amber:  { icon: 'text-amber-500',  border: 'border-amber-200',  bg: 'bg-amber-50',  text: 'text-amber-800'  },
   violet: { icon: 'text-violet-500', border: 'border-violet-200', bg: 'bg-violet-50', text: 'text-violet-800' },
   sky:    { icon: 'text-sky-500',    border: 'border-sky-200',    bg: 'bg-sky-50',    text: 'text-sky-800'    },
+  emerald:{ icon: 'text-emerald-500', border: 'border-emerald-200', bg: 'bg-emerald-50', text: 'text-emerald-800' },
 };
 const DEFAULT_ACCENT = { icon: 'text-muted-foreground', border: 'border-border', bg: 'bg-secondary', text: 'text-foreground' };
 
@@ -90,6 +99,10 @@ const STATUS: Record<RowStatus, { label: string; Icon: React.ElementType; chip: 
   late:    { label: 'Late',    Icon: Clock,        chip: 'border-amber-200 bg-amber-50 text-amber-700',       dot: 'bg-amber-400'   },
   absent:  { label: 'Absent',  Icon: XCircle,      chip: 'border-red-200 bg-red-50 text-red-700',             dot: 'bg-red-500'     },
   excused: { label: 'Excused', Icon: AlertCircle,  chip: 'border-border bg-secondary text-muted-foreground',  dot: 'bg-slate-400'   },
+  dinas:              { label: attendanceStatusLabel('dinas'),              Icon: Briefcase,   chip: 'border-indigo-200 bg-indigo-50 text-indigo-700', dot: 'bg-indigo-500' },
+  cuti:               { label: attendanceStatusLabel('cuti'),               Icon: Palmtree,    chip: 'border-violet-200 bg-violet-50 text-violet-700', dot: 'bg-violet-500' },
+  sakit_tanpa_surat:  { label: attendanceStatusLabel('sakit_tanpa_surat'),  Icon: Thermometer, chip: 'border-orange-200 bg-orange-50 text-orange-700', dot: 'bg-orange-500' },
+  sakit_dengan_surat: { label: attendanceStatusLabel('sakit_dengan_surat'), Icon: Stethoscope, chip: 'border-teal-200 bg-teal-50 text-teal-700',       dot: 'bg-teal-500'   },
   pending: { label: 'Pending', Icon: HelpCircle,    chip: 'border-sky-200 bg-sky-50 text-sky-700',             dot: 'bg-sky-400'     },
 };
 
@@ -100,6 +113,8 @@ function rowStatus(att: AttendanceData | null): RowStatus {
 // Settable statuses for the mark dialog — 'pending' isn't a real status, it's
 // just how the table renders "no attendance record yet".
 const SETTABLE_STATUSES: AttStatus[] = ['present', 'late', 'absent', 'excused'];
+// Justified absences (D / C / STD / SD) — shown as their own group.
+const LEAVE_STATUSES: AttStatus[] = ['dinas', 'cuti', 'sakit_tanpa_surat', 'sakit_dengan_surat'];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function fmtTime(iso: string | null) {
@@ -147,16 +162,18 @@ function MarkDialog({ row, open, onClose, onSaved }: {
   }, [row, open]);
 
   const hasExistingRecord = Boolean(row?.attendance);
+  // Once the employee has checked in the status is locked. Without a check-in
+  // (not recorded yet, or auto-marked absent) Ops can set / re-classify it,
+  // e.g. Absent → Cuti or Sakit dengan surat dokter.
+  const canChangeStatus = !row?.attendance?.checkInTime;
 
   const save = async () => {
     if (!row) return;
     setSaving(true);
     try {
-      // Status is immutable once a record exists — only send it when we're
-      // recording attendance for the first time (e.g. marking a no-show).
-      const body = hasExistingRecord
-        ? { scheduleId: row.schedule.id, notes: notes || undefined }
-        : { scheduleId: row.schedule.id, status, notes: notes || undefined };
+      const body = canChangeStatus
+        ? { scheduleId: row.schedule.id, status, notes: notes || undefined }
+        : { scheduleId: row.schedule.id, notes: notes || undefined };
       const res  = await fetch('/api/ops/attendance', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -216,33 +233,49 @@ function MarkDialog({ row, open, onClose, onSaved }: {
 
           <div className="space-y-1.5">
             <Label>Status</Label>
-            {hasExistingRecord ? (
+            {!canChangeStatus ? (
               <div className="flex items-center gap-2">
                 <Badge variant="outline" className={cn('gap-1.5 text-xs', STATUS[status].chip)}>
                   {(() => { const Icon = STATUS[status].Icon; return <Icon className="h-3.5 w-3.5" />; })()}
                   {STATUS[status].label}
                 </Badge>
-                <span className="text-[11px] text-muted-foreground">Status can&apos;t be changed once recorded.</span>
+                <span className="text-[11px] text-muted-foreground">Checked in — status can&apos;t be changed.</span>
               </div>
             ) : (
-              <div className="grid grid-cols-2 gap-2">
-                {SETTABLE_STATUSES.map((key) => {
-                  const cfg = STATUS[key];
-                  return (
-                  <button
-                    key={key} type="button" onClick={() => setStatus(key)}
-                    className={cn(
-                      'flex items-center gap-2 rounded-lg border p-3 text-sm font-medium transition-colors text-left',
-                      status === key
-                        ? cfg.chip
-                        : 'border-border bg-background text-muted-foreground hover:bg-secondary',
+              <div className="space-y-3">
+                {hasExistingRecord && (
+                  <p className="text-[11px] text-muted-foreground">
+                    No check-in recorded — you can change the status (e.g. Absent → Cuti / Sakit).
+                  </p>
+                )}
+                {[SETTABLE_STATUSES, LEAVE_STATUSES].map((group, gi) => (
+                  <div key={gi} className="space-y-1.5">
+                    {gi === 1 && (
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        Dinas / Cuti / Sakit
+                      </p>
                     )}
-                  >
-                    <cfg.Icon className="h-4 w-4 flex-shrink-0" />
-                    {cfg.label}
-                  </button>
-                  );
-                })}
+                    <div className="grid grid-cols-2 gap-2">
+                      {group.map((key) => {
+                        const cfg = STATUS[key];
+                        return (
+                        <button
+                          key={key} type="button" onClick={() => setStatus(key)}
+                          className={cn(
+                            'flex items-center gap-2 rounded-lg border p-3 text-sm font-medium transition-colors text-left',
+                            status === key
+                              ? cfg.chip
+                              : 'border-border bg-background text-muted-foreground hover:bg-secondary',
+                          )}
+                        >
+                          <cfg.Icon className="h-4 w-4 flex-shrink-0" />
+                          {cfg.label}
+                        </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>
@@ -447,6 +480,7 @@ export default function StoreAttendanceDetail({
   const present     = rows.filter((r) => r.attendance?.status === 'present').length;
   const late        = rows.filter((r) => r.attendance?.status === 'late').length;
   const absent      = rows.filter((r) => r.attendance?.status === 'absent').length;
+  const onLeave     = rows.filter((r) => isLeaveAttendanceStatus(r.attendance?.status)).length;
   const onBreak     = rows.filter((r) => r.attendance?.onBreak).length;
   const unset       = rows.filter((r) => !r.attendance).length;
   const recordedPct = total > 0 ? Math.round(((total - unset) / total) * 100) : 0;
@@ -454,12 +488,13 @@ export default function StoreAttendanceDetail({
   return (
     <div className="space-y-5">
       {/* Stats */}
-      <div className="grid grid-cols-3 gap-3 sm:grid-cols-6">
+      <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-7">
         {[
           { label: 'Scheduled', value: total,   color: 'text-foreground'   },
           { label: 'Present',   value: present, color: 'text-emerald-600'  },
           { label: 'Late',      value: late,     color: 'text-amber-600'   },
           { label: 'Absent',    value: absent,  color: 'text-red-600'      },
+          { label: 'Dinas / Cuti / Sakit', value: onLeave, color: 'text-violet-600' },
           { label: 'Pending',   value: unset,    color: 'text-sky-600'     },
           { label: 'On Break',  value: onBreak,  color: 'text-amber-600'   },
         ].map(({ label, value, color }) => (
@@ -522,7 +557,7 @@ export default function StoreAttendanceDetail({
       {/* Legend + refresh */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-          {(['present', 'late', 'absent', 'pending'] as const).map((s) => (
+          {(['present', 'late', 'absent', 'dinas', 'cuti', 'sakit_tanpa_surat', 'sakit_dengan_surat', 'pending'] as const).map((s) => (
             <span key={s} className="flex items-center gap-1">
               <span className={cn('h-2 w-2 rounded-full', STATUS[s].dot)} />
               {STATUS[s].label}

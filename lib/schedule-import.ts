@@ -28,11 +28,14 @@
  * fatal, so a multi-store sheet imported for one store just fills that store.
  *
  * Shift codes (per day cell, case-insensitive):
- *   E / M / P / PG / PAGI / MORNING       → morning
- *   L / S / SG / SIANG / EVENING          → evening
- *   F / FD / FULL / FULLDAY / D           → full day
- *   AL / A / C / CT / CU / CUTI / I /
- *     S? (only when unambiguous) / SICK / SAKIT / IZIN → leave
+ *   E / P / PG / PAGI / MORNING           → morning      (Early · Pagi)
+ *   M / MID / MIDDLE                      → middle       (Middle · 12.00–20.00)
+ *   L / S / SG / SIANG / EVENING          → evening      (Last · Siang)
+ *   F / FD / FULL / FULLDAY               → full day     (Full · Lembur)
+ *   JP                                    → jkp_morning  (JKP Pagi · 08.30–14.30)
+ *   JS                                    → jkp_evening  (JKP Siang · 16.00–22.00)
+ *   AL / A / C / CT / CU / CUTI / I / IZIN / SICK / SAKIT /
+ *     D (Dinas) / STD / SD (Sakit)        → leave
  *   X / O / OFF / LIBUR / "-" / (blank)   → day off
  */
 
@@ -49,7 +52,15 @@ import { and, eq } from 'drizzle-orm';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type ImportShift = 'morning' | 'evening' | 'full' | 'off' | 'leave';
+export type ImportShift =
+  | 'morning'
+  | 'evening'
+  | 'full'
+  | 'middle'
+  | 'jkp_morning'
+  | 'jkp_evening'
+  | 'off'
+  | 'leave';
 
 export interface DayEntry {
   date: Date;
@@ -549,10 +560,16 @@ function parseMonthLoose(raw: string): Date | null {
 function codeToShift(codeRaw: string): ImportShift {
   const code = codeRaw.trim().toUpperCase().replace(/[^A-Z]/g, '');
   if (code === '') return 'off';
-  if (['E', 'M', 'P', 'PG', 'PAGI', 'MORNING', 'MRN'].includes(code)) return 'morning';
+  if (['E', 'P', 'PG', 'PAGI', 'MORNING', 'MRN'].includes(code)) return 'morning';
+  if (['M', 'MID', 'MIDDLE'].includes(code)) return 'middle';
   if (['L', 'S', 'SG', 'SIANG', 'EVENING', 'EVE', 'CLOSING'].includes(code)) return 'evening';
-  if (['F', 'FD', 'FULL', 'FULLDAY', 'D'].includes(code)) return 'full';
-  if (['AL', 'A', 'C', 'CT', 'CU', 'CUTI', 'I', 'IZIN', 'SICK', 'SAKIT', 'CTI'].includes(code)) return 'leave';
+  if (['F', 'FD', 'FULL', 'FULLDAY'].includes(code)) return 'full';
+  if (code === 'JP') return 'jkp_morning';
+  if (code === 'JS') return 'jkp_evening';
+  if ([
+    'AL', 'A', 'C', 'CT', 'CU', 'CUTI', 'I', 'IZIN', 'SICK', 'SAKIT', 'CTI',
+    'D', 'STD', 'SD',
+  ].includes(code)) return 'leave';
   return 'off'; // X / O / OFF / LIBUR / "-" / anything unrecognised
 }
 
@@ -704,7 +721,13 @@ export async function importScheduleFromParsed(
         seenDayKeys.add(dayKey);
 
         const base = { userId, storeId, date: day.date };
-        if (day.shift === 'morning' || day.shift === 'evening') {
+        if (
+          day.shift === 'morning' ||
+          day.shift === 'evening' ||
+          day.shift === 'middle' ||
+          day.shift === 'jkp_morning' ||
+          day.shift === 'jkp_evening'
+        ) {
           assignments.push({ ...base, shift: day.shift, isOff: false, isLeave: false });
         } else if (day.shift === 'full') {
           assignments.push({ ...base, shift: 'full_day', isOff: false, isLeave: false });

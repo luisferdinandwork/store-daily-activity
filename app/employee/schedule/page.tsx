@@ -13,6 +13,8 @@ import {
   Loader2, Calendar, ChevronLeft, ChevronRight, RefreshCw,
   LogIn, LogOut, Clock, CircleAlert, CircleCheck, CalendarOff, CalendarDays,
 } from 'lucide-react';
+import { attendanceStatusLabel, isLeaveAttendanceStatus } from '@/lib/attendance-status';
+import { SHIFT_ROSTER_CODE } from '@/lib/shift-tasks';
 import { cn } from '@/lib/utils';
 import { EmptyState } from '@/components/employee/ui';
 import { toast } from 'sonner';
@@ -62,11 +64,15 @@ const SHIFT_TEXT_COLOR: Record<string, string> = {
   morning:  '#b45309',
   evening:  '#1d4ed8',
   full_day: '#c2410c',
+  middle:      '#047857',
+  jkp_morning: '#b45309',
+  jkp_evening: '#1d4ed8',
   leave:    '#5b3fd6',
   off:      '#94a3b8',
 };
 
-const SHIFT_SHORT: Record<string, string> = { morning: 'E', evening: 'L', full_day: 'FD' };
+// Same codes PIC & Ops use in the roster sheet (E / M / L / F / JP / JS).
+const SHIFT_SHORT: Record<string, string> = SHIFT_ROSTER_CODE;
 
 function shiftTextColor(shift: ShiftCode | null, isOff: boolean, isLeave: boolean) {
   if (isLeave) return SHIFT_TEXT_COLOR.leave;
@@ -136,6 +142,9 @@ function attendanceBadge(entry: DayEntry, dateKey: string, todayKey: string): At
       sub:   `${formatClock(att.checkInTime)}${att.onBreak ? ' · on break' : ' · not checked out yet'}`,
       color: '#c2410c', bg: '#fff7ed', Icon: LogIn,
     };
+  }
+  if (isLeaveAttendanceStatus(att?.status)) {
+    return { label: attendanceStatusLabel(att?.status), sub: 'Recorded by Ops.', color: '#6d28d9', bg: '#f5f3ff', Icon: Clock };
   }
   if (att?.status === 'excused') {
     return { label: 'Excused', sub: 'Marked excused by Ops.', color: '#1d4ed8', bg: '#eff6ff', Icon: Clock };

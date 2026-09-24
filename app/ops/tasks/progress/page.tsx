@@ -874,11 +874,14 @@ function StoreDetailPanel({ detail, loading, emptyMessage, onSelectTask }: {
 }) {
   const groupedTasks = useMemo(() => {
     const groups: Record<string, { regular: FlatTask[]; grooming: FlatTask[] }> = {
-      morning: { regular: [], grooming: [] }, full_day: { regular: [], grooming: [] },
-      evening: { regular: [], grooming: [] }, other: { regular: [], grooming: [] },
+      morning: { regular: [], grooming: [] }, middle: { regular: [], grooming: [] },
+      full_day: { regular: [], grooming: [] }, evening: { regular: [], grooming: [] },
+      other: { regular: [], grooming: [] },
     };
     for (const task of detail?.tasks ?? []) {
-      const k = task.shift === 'morning' ? 'morning' : task.shift === 'full_day' ? 'full_day' : task.shift === 'evening' ? 'evening' : 'other';
+      // JKP rows already arrive under their base shift (getFlatTasksForStoreDate).
+      const s = task.shift as string | null;
+      const k = s === 'morning' || s === 'middle' || s === 'full_day' || s === 'evening' ? s : 'other';
       if (task.type === 'grooming') groups[k].grooming.push(task);
       else groups[k].regular.push(task);
     }
@@ -911,6 +914,7 @@ function StoreDetailPanel({ detail, loading, emptyMessage, onSelectTask }: {
 
   const shiftSections = [
     { key: 'morning',  label: 'Morning Shift' },
+    { key: 'middle',   label: 'Middle Shift' },
     { key: 'full_day', label: 'Full Day Shift' },
     { key: 'evening',  label: 'Evening Shift' },
     { key: 'other',    label: 'Other' },

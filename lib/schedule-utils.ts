@@ -11,6 +11,8 @@
  */
 
 import { db } from "@/lib/db";
+import { baseShiftCode, isOpeningShift } from "@/lib/shift-tasks";
+import type { AttendanceStatus } from "@/lib/attendance-status";
 import {
   areas,
   users,
@@ -248,9 +250,10 @@ function getLegacyBreakConfig(shiftCode: string): {
   breakTypes: BreakType[];
   maxBreaks: number;
 } {
-  if (shiftCode === "morning") return SHIFT_CONFIG.morning;
-  if (shiftCode === "evening") return SHIFT_CONFIG.evening;
-  if (shiftCode === "full_day") return SHIFT_CONFIG.full_day;
+  const base = baseShiftCode(shiftCode);
+  if (base === "morning") return SHIFT_CONFIG.morning;
+  if (base === "evening") return SHIFT_CONFIG.evening;
+  if (base === "full_day") return SHIFT_CONFIG.full_day;
 
   // Custom shifts are dynamic. The API should send an allowed break type based
   // on shifts.breaks. The util keeps a safe default so direct callers still work.
@@ -1991,7 +1994,7 @@ export async function getAttendanceForDate(storeId: number, date: Date) {
 
 export async function opsMarkAttendance(
   scheduleId: number,
-  status: "present" | "absent" | "late" | "excused" | undefined,
+  status: AttendanceStatus | undefined,
   actorId: string,
   notes?: string,
 ): Promise<{ success: boolean; attendanceId?: number; error?: string }> {
@@ -2014,12 +2017,25 @@ export async function opsMarkAttendance(
     let attendanceId: number;
 
     if (existing) {
-      // Status is immutable once recorded (e.g. a genuine "late" stays
-      // "late") — Ops can only attach/update a note on an already-recorded
-      // attendance row, never change the status itself.
+      // A record the employee actually checked in on is immutable (a genuine
+      // "late" stays "late") — Ops may only attach/update a note. A record
+      // with no check-in (auto-marked absent, or marked by Ops) can be
+      // re-classified, e.g. absent → Cuti / Dinas / Sakit.
+      const canChangeStatus = !existing.checkInTime;
+      if (status && status !== existing.status && !canChangeStatus) {
+        return {
+          success: false,
+          error: "Status can't be changed after the employee checked in.",
+        };
+      }
       await db
         .update(attendance)
-        .set({ notes, recordedBy: actorId, updatedAt: new Date() })
+        .set({
+          ...(status && canChangeStatus ? { status } : {}),
+          notes,
+          recordedBy: actorId,
+          updatedAt: new Date(),
+        })
         .where(eq(attendance.id, existing.id));
       attendanceId = existing.id;
     } else {
@@ -2059,10 +2075,10 @@ export async function resolveNextScheduleForStore(
   afterDate: Date,
 ): Promise<NextScheduleResult | null> {
   const shiftMap = await getShiftIdMap(false);
-  const morningShiftId = shiftMap.morning;
-  const fullDayShiftId = shiftMap.full_day;
-
-  const eligibleShiftIds = [morningShiftId, fullDayShiftId].filter(
+  const eligibleShiftIds = Object.entries(shiftMap)
+    .filter(([code]) => isOpeningShift(code))
+    .map(([, id]) => id)
+    .filter(
     (id): id is number => Boolean(id),
   );
   if (eligibleShiftIds.length === 0) return null;

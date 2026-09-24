@@ -11,7 +11,7 @@
 //   1   : "MONTH :" label + "May-2026" value
 //   2   : Column headers — No / Role / Name / SUN / MON / … (weekday per date)
 //   3   : Date numbers — 1, 2, 3, … , daysInMonth
-//   4+  : Employee rows — No / Role / Name / E | L | F | AL | OFF per day
+//   4+  : Employee rows — No / Role / Name / E | M | L | F | JP | JS | AL | OFF per day
 //         ("Role" = the employee_type: PIC 1 / PIC 2 / SA)
 //   last: Summary rows — MORNING / EVENING / FULL DAY / OFF/CUTI counts
 //
@@ -46,9 +46,12 @@ const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct
 function toExcelCode(shiftCode: string | null, isOff: boolean, isLeave: boolean): string {
   if (isLeave)                  return 'AL';
   if (isOff || !shiftCode)      return 'OFF';
-  if (shiftCode === 'morning')  return 'E';
-  if (shiftCode === 'evening')  return 'L';
-  if (shiftCode === 'full_day') return 'F';
+  if (shiftCode === 'morning')     return 'E';
+  if (shiftCode === 'middle')      return 'M';
+  if (shiftCode === 'evening')     return 'L';
+  if (shiftCode === 'full_day')    return 'F';
+  if (shiftCode === 'jkp_morning') return 'JP';
+  if (shiftCode === 'jkp_evening') return 'JS';
   return 'OFF';
 }
 
@@ -380,9 +383,12 @@ export async function GET(request: NextRequest) {
     for (let c = 0; c < totalCols; c++) sc(ws, summaryRow, c, '', separatorStyle);
 
     const SUMMARY_DEF = [
-      { label: 'MORNING',  code: 'E',   bg: 'FFF7ED', text: 'C2410C', countBg: 'FED7AA' },
-      { label: 'EVENING',  code: 'L',   bg: 'F5F3FF', text: '6D28D9', countBg: 'DDD6FE' },
-      { label: 'FULL DAY', code: 'F',   bg: 'F0FDF4', text: '15803D', countBg: 'BBF7D0' },
+      { label: 'MORNING',   code: 'E',   bg: 'FFF7ED', text: 'C2410C', countBg: 'FED7AA' },
+      { label: 'MIDDLE',    code: 'M',   bg: 'F0F9FF', text: '0369A1', countBg: 'BAE6FD' },
+      { label: 'EVENING',   code: 'L',   bg: 'F5F3FF', text: '6D28D9', countBg: 'DDD6FE' },
+      { label: 'FULL DAY',  code: 'F',   bg: 'F0FDF4', text: '15803D', countBg: 'BBF7D0' },
+      { label: 'JKP PAGI',  code: 'JP',  bg: 'FFFBEB', text: 'B45309', countBg: 'FDE68A' },
+      { label: 'JKP SIANG', code: 'JS',  bg: 'FFF1F2', text: 'BE123C', countBg: 'FECDD3' },
       { label: 'OFF/CUTI', code: 'OFF', bg: 'F8FAFC', text: '94A3B8', countBg: 'E2E8F0' },
     ];
 
@@ -427,7 +433,7 @@ export async function GET(request: NextRequest) {
       alignment: LEFT,
       border:    { bottom: { style: 'thin', color: { rgb: 'E2E8F0' } } },
     };
-    sc(ws, legendRow, 0, 'E = Morning  |  L = Evening  |  F = Full Day  |  AL = Leave  |  OFF = Day Off', legendStyle);
+    sc(ws, legendRow, 0, 'E = Early (Pagi)  |  M = Middle  |  L = Last (Siang)  |  F = Full (Lembur)  |  JP = JKP Pagi  |  JS = JKP Siang  |  AL = Leave  |  OFF = Day Off', legendStyle);
     for (let c = 1; c < totalCols; c++) sc(ws, legendRow, c, '', legendStyle);
     merges.push({ s: { r: legendRow, c: 0 }, e: { r: legendRow, c: totalCols - 1 } });
 

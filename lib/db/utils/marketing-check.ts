@@ -2,6 +2,8 @@
 import { and, eq, gte, lte } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
+import { isOpeningShift } from '@/lib/shift-tasks';
+import { taskShiftIdFor } from '@/lib/db/utils/shift-lookup';
 import {
   attendance,
   marketingCheckTasks,
@@ -170,7 +172,7 @@ async function assertMorningSchedule(scheduleId: number): Promise<string | null>
     .limit(1);
 
   if (!row) return 'Schedule tidak ditemukan.';
-  if (row.shiftCode !== 'morning' && row.shiftCode !== 'full_day') {
+  if (!isOpeningShift(row.shiftCode)) {
     return 'Marketing Check hanya tersedia untuk shift morning.';
   }
 
@@ -279,9 +281,11 @@ export async function getOrCreateMarketingCheckForSchedule(
   scheduleId: number,
   userId: string,
   storeId: number,
-  shiftId: number,
+  rawShiftId: number,
   date: Date,
 ): Promise<TaskResult<MarketingCheckTask>> {
+  // JKP shifts work their base shift's store-level row (JP → morning, JS → evening).
+  const shiftId = await taskShiftIdFor(rawShiftId);
   try {
     const existing = await findByScheduleId(scheduleId) ?? await findByStoreDate(storeId, date);
     if (existing) return { success: true, data: existing };

@@ -178,7 +178,7 @@ export async function GET(req: NextRequest) {
     font: { name: 'Arial', sz: 8, italic: true, color: { rgb: '94A3B8' } },
     fill: solid('FFFFFF'), alignment: LEFT, border: { bottom: { style: 'thin', color: { rgb: 'E2E8F0' } } },
   };
-  sc(ws, legendRow, 0, 'Fill in: E = Morning  |  L = Evening  |  F = Full Day  |  AL = Leave  |  leave blank = Day Off', legendStyle);
+  sc(ws, legendRow, 0, 'Fill in: E = Early (Pagi)  |  M = Middle  |  L = Last (Siang)  |  F = Full (Lembur)  |  JP = JKP Pagi  |  JS = JKP Siang  |  X = Off (Libur)  |  C = Cuti  |  leave blank = Day Off', legendStyle);
   for (let c = 1; c < totalCols; c++) sc(ws, legendRow, c, '', legendStyle);
   merges.push({ s: { r: legendRow, c: 0 }, e: { r: legendRow, c: totalCols - 1 } });
 

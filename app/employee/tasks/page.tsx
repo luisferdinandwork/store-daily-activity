@@ -37,6 +37,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { shiftLabel } from "@/components/employee/tasks";
+import { baseShiftCode } from "@/lib/shift-tasks";
 import { EmptyState, Notice, SkeletonBlocks } from "@/components/employee/ui";
 
 // ─── Task types ────────────────────────────────────────────────────────────────
@@ -651,7 +652,9 @@ function getDisplayShift(task: TaskItem): ShiftCode {
   // full_day and any custom shift).
   if (task.shift === "full_day") return "morning";
 
-  return task.shift || "morning";
+  // JKP Pagi / JKP Siang share the morning / evening store tasks — keep them
+  // in the same section rather than splitting one shift across two headings.
+  return baseShiftCode(task.shift) || "morning";
 }
 
 // ─── Task ordering + sequential gating ─────────────────────────────────────
@@ -1255,7 +1258,7 @@ export default function EmployeeTasksPage() {
     tasksByDisplayShift.set(displayShift, bucket);
   }
 
-  const shiftSectionOrder = ["morning", "full_day", "evening"];
+  const shiftSectionOrder = ["morning", "middle", "full_day", "evening"];
   const orderedShiftSections = Array.from(tasksByDisplayShift.entries()).sort(
     (a, b) => {
       const ai = shiftSectionOrder.indexOf(a[0]);

@@ -39,6 +39,7 @@ import { getOrCreateCekUangModalForSchedule } from "@/lib/db/utils/cek-uang-moda
 import { getOrCreateGroomingForSchedule } from "@/lib/db/utils/grooming";
 import { getOrCreateBriefingForSchedule } from "@/lib/db/utils/briefing";
 import { getOrCreateSerahTerimaTaskForShift } from "@/lib/db/utils/serah-terima";
+import { baseShiftCode, isClosingShift, isOpeningShift } from "@/lib/shift-tasks";
 import {
   getOrCreateStoreClosingForSchedule,
   getVisibleStoreClosingTasksForStores,
@@ -262,9 +263,10 @@ function taskAllowedForEmployeeShift(
 
     if (!SHIFT_SCOPED_TASK_TYPES.has(taskType)) return true;
 
-    // Shift-scoped types: only the matching row, or full_day (which sees both
-    // the morning and evening rows it was materialized for).
-    if (taskShift === shiftCode) return true;
+    // Shift-scoped types: only the matching row (a JKP shift works its base
+    // shift's row), or full_day (which sees both the morning and evening rows
+    // it was materialized for).
+    if (baseShiftCode(taskShift) === baseShiftCode(shiftCode)) return true;
     if (shiftCode === "full_day") return true;
 
     return false;
@@ -362,18 +364,19 @@ export async function GET(request: NextRequest) {
 
     const morningScheduleByStoreId = buildPreferredScheduleByStoreId([
       "morning",
+      "jkp_morning",
       "full_day",
     ]);
 
     const closingScheduleByStoreId = buildPreferredScheduleByStoreId([
       "evening",
+      "jkp_evening",
       "full_day",
     ]);
 
-    const morningSchedules = todaySchedules.filter((s) => {
-      const code = shiftCodeMap[s.shiftId];
-      return code === "morning" || code === "full_day";
-    });
+    const morningSchedules = todaySchedules.filter((s) =>
+      isOpeningShift(shiftCodeMap[s.shiftId]),
+    );
 
     const [
       openingRows,
@@ -606,10 +609,9 @@ export async function GET(request: NextRequest) {
 
       shouldLoadTask("store_closing")
         ? (async () => {
-            const closingSchedules = todaySchedules.filter((s) => {
-              const code = shiftCodeMap[s.shiftId];
-              return code === "evening" || code === "full_day";
-            });
+            const closingSchedules = todaySchedules.filter((s) =>
+              isClosingShift(shiftCodeMap[s.shiftId]),
+            );
 
             await Promise.all(
               closingSchedules.map((s) =>
@@ -1422,8 +1424,11 @@ export async function GET(request: NextRequest) {
 
     const SHIFT_ORDER: Record<string, number> = {
       morning: 0,
+      jkp_morning: 0,
+      middle: 1,
       full_day: 1,
       evening: 2,
+      jkp_evening: 2,
     };
 
     visibleTasks.sort((a, b) => {

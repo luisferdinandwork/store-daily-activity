@@ -324,6 +324,10 @@ export default function AttendanceExportModal({ open, onClose, stores = [] }: Pr
                     <SelectItem value="late">Late</SelectItem>
                     <SelectItem value="absent">Absent</SelectItem>
                     <SelectItem value="excused">Excused</SelectItem>
+                    <SelectItem value="dinas">Dinas (D)</SelectItem>
+                    <SelectItem value="cuti">Cuti (C)</SelectItem>
+                    <SelectItem value="sakit_tanpa_surat">Sakit tanpa surat dokter (STD)</SelectItem>
+                    <SelectItem value="sakit_dengan_surat">Sakit dengan surat dokter (SD)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

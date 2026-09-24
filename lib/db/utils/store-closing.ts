@@ -19,6 +19,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { db } from '@/lib/db';
+import { isClosingShift } from '@/lib/shift-tasks';
+import { taskShiftIdFor } from '@/lib/db/utils/shift-lookup';
 import {
   and,
   desc,
@@ -342,9 +344,11 @@ export async function getOrCreateStoreClosingForSchedule(
   scheduleId: number,
   userId: string,
   storeId: number,
-  shiftId: number,
+  rawShiftId: number,
   date: Date = new Date(),
 ): Promise<TaskResult<StoreClosingTask>> {
+  // JKP shifts work their base shift's store-level row (JP → morning, JS → evening).
+  const shiftId = await taskShiftIdFor(rawShiftId);
   try {
     await syncResolvedStoreClosingHoldsForStores([storeId]);
 
@@ -618,7 +622,7 @@ export async function submitStoreClosing(
     }
 
     const shiftCode = await getShiftCode(existing.shiftId);
-    if (shiftCode !== 'evening' && shiftCode !== 'full_day') {
+    if (!isClosingShift(shiftCode)) {
       return {
         success: false,
         error: 'Store Closing hanya bisa disubmit pada shift evening atau full_day.',

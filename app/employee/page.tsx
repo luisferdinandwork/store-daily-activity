@@ -21,6 +21,7 @@ import {
   Receipt,
   CircleDollarSign,
 } from "lucide-react";
+import { attendanceStatusLabel, type AttendanceStatus } from "@/lib/attendance-status";
 import { cn } from "@/lib/utils";
 import { shiftLabel } from "@/components/employee/tasks";
 import { Chip, ListGroup, NavRow, SectionLabel, SkeletonBlocks } from "@/components/employee/ui";
@@ -36,7 +37,7 @@ interface AttSlot {
     startTime?: string | null;
   };
   attendance: {
-    status: "present" | "late" | "absent" | "excused";
+    status: AttendanceStatus;
     checkInTime: string | null;
     checkOutTime: string | null;
     onBreak: boolean;
@@ -243,7 +244,31 @@ const ATT_CFG = {
     textClass: "text-white/60",
     bg: "bg-white/10",
   },
-};
+  dinas: {
+    Icon: AlertCircle,
+    label: attendanceStatusLabel("dinas"),
+    textClass: "text-white/60",
+    bg: "bg-white/10",
+  },
+  cuti: {
+    Icon: AlertCircle,
+    label: attendanceStatusLabel("cuti"),
+    textClass: "text-white/60",
+    bg: "bg-white/10",
+  },
+  sakit_tanpa_surat: {
+    Icon: AlertCircle,
+    label: attendanceStatusLabel("sakit_tanpa_surat"),
+    textClass: "text-white/60",
+    bg: "bg-white/10",
+  },
+  sakit_dengan_surat: {
+    Icon: AlertCircle,
+    label: attendanceStatusLabel("sakit_dengan_surat"),
+    textClass: "text-white/60",
+    bg: "bg-white/10",
+  },
+} satisfies Record<AttendanceStatus, unknown>;
 
 // ─── PeriodToggle ─────────────────────────────────────────────────────────────
 

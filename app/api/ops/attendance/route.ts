@@ -7,6 +7,7 @@ import { db }                        from '@/lib/db';
 import { breakSessions, shifts, employeeTypes, users } from '@/lib/db/schema';
 import { eq, inArray }               from 'drizzle-orm';
 import { getStoreCashCountForDate }  from '@/lib/db/utils/store-cash-count';
+import { ATTENDANCE_STATUSES, isAttendanceStatus } from '@/lib/attendance-status';
 
 import { assertStoreInActorArea, getOpsActor } from '../tasks/_helpers';
 
@@ -222,13 +223,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // status is optional: it's only used the first time attendance is
-    // recorded for a schedule (e.g. Ops manually marking a no-show). Once a
-    // record exists, status is immutable and this call may only update notes.
-    const validStatuses = ['present', 'absent', 'late', 'excused'] as const;
-    if (status !== undefined && !validStatuses.includes(status)) {
+    // status is optional. It sets the status the first time attendance is
+    // recorded for a schedule (e.g. Ops marking a no-show or Cuti), and can
+    // re-classify a record the employee never checked in on (e.g. auto-marked
+    // absent → Sakit dengan surat dokter). A checked-in record keeps its
+    // status; only notes change (see opsMarkAttendance).
+    if (status !== undefined && !isAttendanceStatus(status)) {
       return NextResponse.json(
-        { success: false, error: `status must be one of: ${validStatuses.join(', ')}` },
+        { success: false, error: `status must be one of: ${ATTENDANCE_STATUSES.join(', ')}` },
         { status: 400 },
       );
     }

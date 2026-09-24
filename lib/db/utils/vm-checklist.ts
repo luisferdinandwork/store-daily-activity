@@ -1,5 +1,6 @@
 // lib/db/utils/vm-checklist.ts
 import { db } from '@/lib/db';
+import { taskShiftIdFor } from '@/lib/db/utils/shift-lookup';
 import { eq, and, gte, lte } from 'drizzle-orm';
 import {
   attendance,
@@ -161,9 +162,11 @@ export async function getOrCreateVmChecklistForSchedule(
   scheduleId: number,
   userId: string,
   storeId: number,
-  shiftId: number,
+  rawShiftId: number,
   date: Date,
 ): Promise<TaskResult<VmChecklistTask>> {
+  // JKP shifts work their base shift's store-level row (JP → morning, JS → evening).
+  const shiftId = await taskShiftIdFor(rawShiftId);
   try {
     const dayStart = startOfDay(date);
     const dayEnd = endOfDay(date);

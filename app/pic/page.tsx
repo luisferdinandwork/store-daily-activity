@@ -81,7 +81,10 @@ const EMP_LABEL: Record<string, string> = { pic_1: 'PIC 1', pic_2: 'PIC 2', sa: 
 const SHIFT_PALETTE: Record<string, { label: string; bg: string; border: string; text: string; dot: string }> = {
   morning:  { label: 'E',  bg: '#fff7ed', border: '#fed7aa', text: '#c2410c', dot: '#fb923c' },
   evening:  { label: 'L',  bg: '#f5f3ff', border: '#ddd6fe', text: '#6d28d9', dot: '#a78bfa' },
-  full_day: { label: 'FD', bg: '#f0fdf4', border: '#bbf7d0', text: '#15803d', dot: '#4ade80' },
+  full_day: { label: 'F',  bg: '#f0fdf4', border: '#bbf7d0', text: '#15803d', dot: '#4ade80' },
+  middle:      { label: 'M',  bg: '#f0f9ff', border: '#bae6fd', text: '#0369a1', dot: '#38bdf8' },
+  jkp_morning: { label: 'JP', bg: '#fffbeb', border: '#fde68a', text: '#b45309', dot: '#fbbf24' },
+  jkp_evening: { label: 'JS', bg: '#fff1f2', border: '#fecdd3', text: '#be123c', dot: '#fb7185' },
   leave:    { label: 'AL', bg: '#eef2ff', border: '#c7d2fe', text: '#3730a3', dot: '#818cf8' },
   off:      { label: 'OFF', bg: '#f8fafc', border: '#e2e8f0', text: '#94a3b8', dot: '#cbd5e1' },
 };

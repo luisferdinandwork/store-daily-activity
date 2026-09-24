@@ -14,11 +14,18 @@ export const reportStatusEnum = pgEnum('report_status', [
   'submitted',
 ]);
 
+// Keep in sync with lib/attendance-status.ts. The last four are justified
+// absences Ops records on a scheduled day: Dinas (D), Cuti (C), Sakit tanpa
+// surat dokter (STD), Sakit dengan surat dokter (SD).
 export const attendanceStatusEnum = pgEnum('attendance_status', [
   'present',
   'absent',
   'late',
   'excused',
+  'dinas',
+  'cuti',
+  'sakit_tanpa_surat',
+  'sakit_dengan_surat',
 ]);
 
 export const taskStatusEnum = pgEnum('task_status', [

@@ -39,7 +39,7 @@ import {
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
-import { paletteOf } from '@/lib/shift-tasks';
+import { isShiftCode, paletteOf, SHIFT_ROSTER_CODE } from '@/lib/shift-tasks';
 import { Button } from '@/components/ui/button';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -200,7 +200,7 @@ function formatTime(v: string | null | undefined): string {
 }
 
 function shiftInitial(code: string, label?: string | null): string {
-  if (code === 'full_day') return 'FD';
+  if (isShiftCode(code)) return SHIFT_ROSTER_CODE[code];
   const source = label || code;
   return source.split(/[\s_-]+/).filter(Boolean).map(p => p[0]).join('').slice(0, 2).toUpperCase();
 }

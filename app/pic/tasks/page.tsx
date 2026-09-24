@@ -322,9 +322,11 @@ export default function PicTasksPage() {
   useEffect(() => { setSelectedKey(null); }, [date, period]);
 
   const groupedTasks = useMemo(() => {
-    const groups: Record<string, FlatTask[]> = { morning: [], evening: [], full_day: [], other: [] };
+    const groups: Record<string, FlatTask[]> = { morning: [], middle: [], evening: [], full_day: [], other: [] };
     for (const task of data?.tasks ?? []) {
-      const shift = task.shift === 'morning' || task.shift === 'evening' || task.shift === 'full_day' ? task.shift : 'other';
+      // JKP rows already arrive under their base shift (getFlatTasksForStoreDate).
+      const s = task.shift as string | null;
+      const shift = s === 'morning' || s === 'middle' || s === 'evening' || s === 'full_day' ? s : 'other';
       groups[shift].push(task);
     }
     return groups;
@@ -334,6 +336,7 @@ export default function PicTasksPage() {
 
   const shiftSections = [
     { key: 'morning', label: 'Morning Shift' },
+    { key: 'middle', label: 'Middle Shift' },
     { key: 'full_day', label: 'Full Day Shift' },
     { key: 'evening', label: 'Evening Shift' },
     { key: 'other', label: 'Other' },

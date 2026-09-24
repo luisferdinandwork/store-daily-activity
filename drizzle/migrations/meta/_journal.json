@@ -85,6 +85,20 @@
       "when": 1790219532274,
       "tag": "0011_misty_slapstick",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1790224427952,
+      "tag": "0012_attendance_leave_statuses",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1790224439728,
+      "tag": "0013_add_middle_jkp_shifts",
+      "breakpoints": true
     }
   ]
 }

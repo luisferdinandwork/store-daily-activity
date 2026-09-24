@@ -103,7 +103,13 @@ export async function GET(req: NextRequest) {
         case 'present': s.present++; break;
         case 'absent':  s.absent++;  break;
         case 'late':    s.late++;    break;
-        case 'excused': s.excused++; break;
+        // Dinas / Cuti / Sakit are justified absences — count as excused.
+        case 'excused':
+        case 'dinas':
+        case 'cuti':
+        case 'sakit_tanpa_surat':
+        case 'sakit_dengan_surat':
+          s.excused++; break;
       }
       if (att.onBreak) s.onBreak++;
     }

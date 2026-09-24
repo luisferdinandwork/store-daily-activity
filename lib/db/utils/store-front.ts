@@ -2,6 +2,7 @@
 // Full replacement focused on correct actor tracking for shared store/day Store Front tasks.
 
 import { db } from '@/lib/db';
+import { taskShiftIdFor } from '@/lib/db/utils/shift-lookup';
 import { eq, and, gte, lte } from 'drizzle-orm';
 import {
   attendance,
@@ -166,9 +167,11 @@ export async function getOrCreateStoreFrontForSchedule(
   scheduleId: number,
   userId: string,
   storeId: number,
-  shiftId: number,
+  rawShiftId: number,
   date: Date,
 ): Promise<TaskResult<StoreFrontTask>> {
+  // JKP shifts work their base shift's store-level row (JP → morning, JS → evening).
+  const shiftId = await taskShiftIdFor(rawShiftId);
   try {
     const dayStart = startOfDay(date);
     const existing = await findStoreFrontForStoreDate(storeId, date);

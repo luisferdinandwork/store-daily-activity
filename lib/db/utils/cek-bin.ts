@@ -1,5 +1,6 @@
 // lib/db/utils/cek-bin.ts
 import { db } from '@/lib/db';
+import { taskShiftIdFor } from '@/lib/db/utils/shift-lookup';
 import { and, eq, gte, lte, sql } from 'drizzle-orm';
 import {
   attendance,
@@ -266,9 +267,11 @@ export async function getOrCreateCekBinForSchedule(
   scheduleId: number,
   userId: string,
   storeId: number,
-  shiftId: number,
+  rawShiftId: number,
   date: Date,
 ): Promise<TaskResult<CekBinWithBins>> {
+  // JKP shifts work their base shift's store-level row (JP → morning, JS → evening).
+  const shiftId = await taskShiftIdFor(rawShiftId);
   try {
     const activeBins = await getActiveStoreBins(storeId);
     const min = minimumBinsToCheck(activeBins.length);

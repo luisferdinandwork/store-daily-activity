@@ -16,6 +16,7 @@
 // - amount is accepted as storedAmount
 
 import { db } from '@/lib/db';
+import { isOpeningShift } from '@/lib/shift-tasks';
 import { and, desc, eq, gte, lt, lte } from 'drizzle-orm';
 import {
   setoranTasks,
@@ -168,8 +169,8 @@ async function assertMorningSchedule(scheduleId: number): Promise<string | null>
   const shiftMap = await getShiftCodeById();
   const code = shiftMap[sched.shiftId];
 
-  // If you want STRICT morning only, remove `full_day` here.
-  if (code !== 'morning' && code !== 'full_day') {
+  // Opening shifts only: morning, JKP Pagi, full_day.
+  if (!isOpeningShift(code)) {
     return 'Setoran hanya tersedia untuk shift morning.';
   }
 

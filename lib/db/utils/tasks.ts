@@ -1,5 +1,6 @@
 // lib/db/utils/tasks.ts
 import { db }                                          from '@/lib/db';
+import { baseShiftCode, isClosingShift, isOpeningShift } from '@/lib/shift-tasks';
 import { eq, and, gte, lte, inArray, sql, isNull, or } from 'drizzle-orm';
 import {
   schedules, stores, shifts, attendance,
@@ -190,7 +191,7 @@ export interface FlatTask {
   verifiedByName:  string | null;
   verifiedAt:      string | null;
   storeId:         number;
-  shift:           'morning' | 'evening' | 'full_day' | null;
+  shift:           string | null; // base shift code (JKP rows report as morning/evening)
   date:            string;
   status:          string | null;
   notes:           string | null;
@@ -489,8 +490,8 @@ export async function materialiseTasksForSchedule(
   const shiftCode = idToCode[sched.shiftId];
   if (!shiftCode) { errors.push(`Schedule ${scheduleId} has invalid shiftId ${sched.shiftId}.`); return { created, skipped, errors }; }
 
-  const isMorning = shiftCode === 'morning' || shiftCode === 'full_day';
-  const isEvening = shiftCode === 'evening' || shiftCode === 'full_day';
+  const isMorning = isOpeningShift(shiftCode);
+  const isEvening = isClosingShift(shiftCode);
   const dayStart  = startOfDay(sched.date);
   const morningId = shiftMap['morning'] ?? sched.shiftId;
   const eveningId = shiftMap['evening'] ?? sched.shiftId;
@@ -1295,8 +1296,9 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
   const dayEnd = endOfDay(date);
 
   const shiftRows = await db.select({ id: shifts.id, code: shifts.code }).from(shifts);
-  const shiftCodeById = new Map<number, 'morning' | 'evening' | 'full_day'>(
-    shiftRows.map((s) => [s.id, s.code as 'morning' | 'evening' | 'full_day']),
+  // JKP rows (e.g. a JP employee's grooming) group under their base shift.
+  const shiftCodeById = new Map<number, string>(
+    shiftRows.map((s) => [s.id, baseShiftCode(s.code)]),
   );
 
   async function loadTable(table: any, type: string, photoFields: string[]): Promise<FlatTask[]> {

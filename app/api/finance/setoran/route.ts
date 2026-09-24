@@ -12,6 +12,7 @@
 
 import { NextResponse } from 'next/server';
 import { and, eq, inArray } from 'drizzle-orm';
+import { OPENING_SHIFT_CODES } from '@/lib/shift-tasks';
 import { db } from '@/lib/db';
 import {
   schedules,
@@ -176,7 +177,8 @@ export async function GET(
     // ── 1. Find morning/full_day schedules for this day ───────────────────────
     //
     // We join schedules → shifts so we can filter by shift.code without a
-    // separate lookup. Only 'morning' and 'full_day' shifts own a setoran task.
+    // separate lookup. Only opening shifts (morning, JKP Pagi, full_day) own a
+    // setoran task.
 
     const morningScheduleRows = await db
       .select({
@@ -190,7 +192,7 @@ export async function GET(
       .where(
         and(
           eq(schedules.date, dayStart),
-          inArray(shifts.code, ['morning', 'full_day']),
+          inArray(shifts.code, [...OPENING_SHIFT_CODES]),
         ),
       );
 

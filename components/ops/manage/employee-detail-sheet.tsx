@@ -830,6 +830,9 @@ function SchedulePreview({ schedule, loading }: { schedule: ScheduleDay[]; loadi
     if (d.shiftCode === 'morning') return { label: 'Pagi', cls: 'bg-orange-100 text-orange-700' };
     if (d.shiftCode === 'evening') return { label: 'Sore', cls: 'bg-violet-100 text-violet-700' };
     if (d.shiftCode === 'full_day') return { label: 'Full', cls: 'bg-emerald-100 text-emerald-700' };
+    if (d.shiftCode === 'middle') return { label: 'Middle', cls: 'bg-sky-100 text-sky-700' };
+    if (d.shiftCode === 'jkp_morning') return { label: 'JKP Pagi', cls: 'bg-amber-100 text-amber-700' };
+    if (d.shiftCode === 'jkp_evening') return { label: 'JKP Siang', cls: 'bg-rose-100 text-rose-700' };
     return { label: '—', cls: 'bg-slate-100 text-slate-500' };
   }
 

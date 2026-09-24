@@ -17,7 +17,7 @@ import ChangePasswordCard from '@/components/shared/ChangePasswordCard';
 import { InfoRow, ListGroup, Section } from '@/components/employee/ui';
 
 interface TodaySchedule {
-  shift: 'morning' | 'evening' | null;
+  shift: string | null;
   storeName: string | null;
 }
 
@@ -47,7 +47,7 @@ export default function EmployeeProfilePage() {
   }, [user?.homeStoreId]);
 
   const shift = todayData.shift;
-  const isEvening = shift === 'evening';
+  const isEvening = shift === 'evening' || shift === 'jkp_evening';
 
   const infoRows = [
     { icon: IdCard, label: 'NIK', value: user?.nik ?? '—' },

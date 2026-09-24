@@ -5,6 +5,7 @@ import { and, eq, gte, lte } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import { schedules, shifts } from '@/lib/db/schema';
+import { SHIFT_BASE_CODE } from '@/lib/shift-tasks';
 
 type ShiftCode = 'morning' | 'evening' | 'full_day';
 
@@ -28,6 +29,35 @@ async function getShiftIdByCode(code: ShiftCode): Promise<number> {
 export const getMorningShiftId  = () => getShiftIdByCode('morning');
 export const getEveningShiftId  = () => getShiftIdByCode('evening');
 export const getFullDayShiftId  = () => getShiftIdByCode('full_day');
+
+let shiftCodeByIdCache: Map<number, string> | null = null;
+
+/** shifts.id → shifts.code, cached (shift rows only change via seed/IT page). */
+export async function getShiftCodeById(): Promise<Map<number, string>> {
+  if (shiftCodeByIdCache) return shiftCodeByIdCache;
+  const rows = await db.select({ id: shifts.id, code: shifts.code }).from(shifts);
+  shiftCodeByIdCache = new Map(rows.map((r) => [r.id, r.code]));
+  return shiftCodeByIdCache;
+}
+
+/**
+ * The shift whose store-level task rows a schedule's shift works on:
+ * JKP Pagi → morning, JKP Siang → evening (see SHIFT_BASE_CODE); every other
+ * shift is its own. Normalise a schedule's shiftId through this before
+ * comparing it to the morning/evening/full_day ids or keying a task row by
+ * it, so a JP employee and a morning employee share one Store Opening, one
+ * briefing, etc.
+ */
+export async function taskShiftIdFor(shiftId: number): Promise<number> {
+  const code = (await getShiftCodeById()).get(shiftId);
+  const base = code ? SHIFT_BASE_CODE[code] : undefined;
+  if (!base) return shiftId;
+  try {
+    return await getShiftIdByCode(base);
+  } catch {
+    return shiftId;
+  }
+}
 
 export function startOfDay(d: Date): Date {
   const r = new Date(d);
@@ -53,8 +83,9 @@ export function addDays(d: Date, n: number): Date {
  * `scheduleId` only reflects whoever happened to create it first — it must
  * NOT be used for the check-in gate. This resolves the CURRENT user's own
  * schedule for that store/day that actually matches the row's shift
- * (exact match, or a full_day schedule which covers both morning and
- * evening rows), so AccessGuard checks the right attendance record.
+ * (exact match, a JKP schedule on its base shift's row, or a full_day
+ * schedule which covers both morning and evening rows), so AccessGuard checks
+ * the right attendance record.
  *
  * Returns null if the user has no schedule at that store/day at all.
  */
@@ -83,6 +114,11 @@ export async function resolveActorScheduleId(
 
   const exact = candidates.find((c) => c.shiftId === targetShiftId);
   if (exact) return exact.id;
+
+  // A JKP schedule works its base shift's rows (JP → morning, JS → evening).
+  for (const c of candidates) {
+    if ((await taskShiftIdFor(c.shiftId)) === targetShiftId) return c.id;
+  }
 
   const fullDay = candidates.find((c) => c.shiftId === fullDayShiftId);
   if (fullDay) return fullDay.id;

@@ -18,13 +18,14 @@ import {
   cekUangModalTasks,
   cekUangModalDenominations,
   schedules,
+  shifts,
   stores,
   areas,
   users,
   type CekUangModalTask,
 } from '@/lib/db/schema';
 import { CEK_UANG_MODAL_MAX_TOTAL } from '@/lib/db/utils/cek-uang-modal';
-import { getMorningShiftId, getFullDayShiftId } from '@/lib/db/utils/shift-lookup';
+import { OPENING_SHIFT_CODES } from '@/lib/shift-tasks';
 import { resolveFinanceScope } from '@/lib/finance/scope';
 
 // ─── Response types ───────────────────────────────────────────────────────────
@@ -184,8 +185,13 @@ export async function GET(
     // created (see getOrCreateCekUangModalForSchedule). Without this, a store
     // that never opened the task at all (no row ever created) would be
     // invisible instead of flagged as not done.
-    const morningShiftId  = await getMorningShiftId();
-    const fullDayShiftId  = await getFullDayShiftId();
+    // Opening shifts: morning, JKP Pagi, full day.
+    const openingShiftIds = (
+      await db
+        .select({ id: shifts.id })
+        .from(shifts)
+        .where(inArray(shifts.code, [...OPENING_SHIFT_CODES]))
+    ).map((r) => r.id);
 
     const scheduleRows = await db
       .select({ storeId: schedules.storeId, date: schedules.date })
@@ -194,7 +200,7 @@ export async function GET(
         and(
           gte(schedules.date, start),
           lt(schedules.date, end),
-          inArray(schedules.shiftId, [morningShiftId, fullDayShiftId]),
+          inArray(schedules.shiftId, openingShiftIds),
           eq(schedules.isHoliday, false),
           storeIdParam ? eq(schedules.storeId, Number(storeIdParam)) : undefined,
         ),

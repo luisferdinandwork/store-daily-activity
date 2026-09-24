@@ -31,6 +31,9 @@ const SHIFT_LABELS: Record<string, string> = {
   morning: 'Shift Pagi',
   evening: 'Shift Sore',
   full_day: 'Full Day',
+  middle: 'Shift Middle',
+  jkp_morning: 'JKP Pagi',
+  jkp_evening: 'JKP Siang',
 };
 
 /** "morning" → "Shift Pagi" — the subtitle every task page shows. */

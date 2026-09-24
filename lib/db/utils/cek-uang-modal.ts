@@ -16,6 +16,7 @@ import {
   getFullDayShiftId,
   startOfDay,
   endOfDay,
+  taskShiftIdFor,
 } from '@/lib/db/utils/shift-lookup';
 
 export const DEFAULT_GEOFENCE_RADIUS_M = 100;
@@ -353,9 +354,10 @@ export async function submitCekUangModal(
 
       const taskDate = schedule?.date ?? now;
       const fullDayShiftId = await getFullDayShiftId();
-      const targetShiftId = schedule?.shiftId === fullDayShiftId || !schedule
+      const scheduleShiftId = schedule ? await taskShiftIdFor(schedule.shiftId) : null;
+      const targetShiftId = scheduleShiftId === fullDayShiftId || scheduleShiftId == null
         ? await getMorningShiftId()
-        : schedule.shiftId;
+        : scheduleShiftId;
 
       existing = (await getActiveCekUangModalTask(input.storeId, targetShiftId, taskDate)) ?? undefined;
 
@@ -473,9 +475,10 @@ export async function autoSaveCekUangModal(
   if (!schedule) return { success: false, error: 'Schedule not found.' };
 
   const fullDayShiftId = await getFullDayShiftId();
-  const targetShiftId = schedule.shiftId === fullDayShiftId
+  const scheduleShiftId = await taskShiftIdFor(schedule.shiftId);
+  const targetShiftId = scheduleShiftId === fullDayShiftId
     ? await getMorningShiftId()
-    : schedule.shiftId;
+    : scheduleShiftId;
 
   const existing = await getActiveCekUangModalTask(schedule.storeId, targetShiftId, schedule.date);
 
@@ -534,10 +537,11 @@ export async function getOrCreateCekUangModalForSchedule(
   const morningShiftId = await getMorningShiftId();
   const eveningShiftId = await getEveningShiftId();
   const fullDayShiftId = await getFullDayShiftId();
+  const baseShiftId = await taskShiftIdFor(shiftId);
 
-  if (shiftId === eveningShiftId) return [];
+  if (baseShiftId === eveningShiftId) return [];
 
-  const targetShiftId = shiftId === fullDayShiftId ? morningShiftId : shiftId;
+  const targetShiftId = baseShiftId === fullDayShiftId ? morningShiftId : baseShiftId;
 
   return [
     await getOrCreateSingleCekUangModalRow(scheduleId, userId, storeId, targetShiftId, date),
@@ -554,9 +558,10 @@ export async function getCekUangModalBySchedule(scheduleId: number): Promise<Cek
   if (!schedule) return null;
 
   const fullDayShiftId = await getFullDayShiftId();
-  const targetShiftId = schedule.shiftId === fullDayShiftId
+  const scheduleShiftId = await taskShiftIdFor(schedule.shiftId);
+  const targetShiftId = scheduleShiftId === fullDayShiftId
     ? await getMorningShiftId()
-    : schedule.shiftId;
+    : scheduleShiftId;
 
   return getActiveCekUangModalTask(schedule.storeId, targetShiftId, schedule.date);
 }

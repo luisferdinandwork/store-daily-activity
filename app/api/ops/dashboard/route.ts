@@ -182,7 +182,12 @@ export async function GET(req: NextRequest) {
           bucket.absent++;
           attendanceTotal.absent++;
           break;
+        // Dinas / Cuti / Sakit are justified absences — count as excused.
         case 'excused':
+        case 'dinas':
+        case 'cuti':
+        case 'sakit_tanpa_surat':
+        case 'sakit_dengan_surat':
           bucket.excused++;
           attendanceTotal.excused++;
           break;
