@@ -11,6 +11,12 @@
 // Visual language matches the employee dashboard: a `bg-primary` hero with soft
 // decorative blur, then compact white cards on `bg-slate-50` with soft-tinted
 // icon tiles (amber/violet/emerald 50-bg, 600-icon) and slim accent bars.
+//
+// Check-in is location-gated: while any shift still needs a check-in the page
+// reads the browser location, shows the distance to the store's geofence
+// (`geofence` from the GET) and keeps Check In disabled until the employee is
+// inside it. Tapping Check In takes a fresh fix and sends it; the API
+// re-validates with the same haversine + radius, so this UI is only a preview.
 
 import { useState, useEffect, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
@@ -20,11 +26,14 @@ import {
   CheckCircle2, Clock, LogIn, LogOut, Sun, Moon, Sunrise,
   AlertCircle, Loader2, XCircle, CalendarX, Info,
   Coffee, UtensilsCrossed, RotateCcw, Zap, AlertTriangle,
+  Navigation, NavigationOff, RefreshCw,
 } from 'lucide-react';
 import { cn, formatRupiah } from '@/lib/utils';
 import { toast } from 'sonner';
 import CashCountCard, { type CashCountPayload } from '@/components/employee/CashCountCard';
 import { EmptyState, Notice, PageBody, Section, SkeletonBlocks } from '@/components/employee/ui';
+import { useGeo } from '@/lib/hooks/useGeo';
+import { haversineMetres, type GeoPoint } from '@/lib/geo';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -73,11 +82,25 @@ interface ShiftSlot {
   attendance: AttRecord | null;
 }
 
+interface Geofence {
+  lat:     number;
+  lng:     number;
+  radiusM: number;
+}
+
 interface AttResponse {
   success:   boolean;
   shifts:    ShiftSlot[];
   cashCount?: CashCountPayload;
+  /** Null when the store has no coordinates — then only a location fix is required. */
+  geofence?: Geofence | null;
 }
+
+type LocationCheck =
+  | { state: 'locating' }
+  | { state: 'unavailable'; message: string }
+  | { state: 'outside'; distanceM: number; radiusM: number }
+  | { state: 'inside'; distanceM: number | null };
 
 // ─── Shift glyph + soft accent ────────────────────────────────────────────────
 
@@ -157,6 +180,68 @@ function getMinutesElapsedSince(timeStr: string | null): number | null {
   return Math.floor((now.getTime() - start.getTime()) / 60000);
 }
 
+function checkLocation(
+  geo:      GeoPoint | null,
+  geoError: string | null,
+  geoReady: boolean,
+  geofence: Geofence | null,
+): LocationCheck {
+  if (!geoReady) return { state: 'locating' };
+  if (geoError || !geo) return { state: 'unavailable', message: geoError ?? 'Izin lokasi belum diberikan.' };
+  if (!geofence) return { state: 'inside', distanceM: null };
+  const distanceM = Math.round(haversineMetres(geo, geofence));
+  return distanceM > geofence.radiusM
+    ? { state: 'outside', distanceM, radiusM: geofence.radiusM }
+    : { state: 'inside', distanceM };
+}
+
+function fmtDistance(m: number): string {
+  return m >= 1000 ? `${(m / 1000).toLocaleString('id-ID', { maximumFractionDigits: 1 })} km` : `${m} m`;
+}
+
+function SpinnerIcon({ className }: { className?: string }) {
+  return <Loader2 className={cn(className, 'animate-spin')} />;
+}
+
+// ─── Location gate (shown above Check In) ─────────────────────────────────────
+
+function LocationNotice({ location, onRefresh }: { location: LocationCheck; onRefresh: () => void }) {
+  switch (location.state) {
+    case 'locating':
+      return <Notice tone="neutral" icon={SpinnerIcon}>Memeriksa lokasi…</Notice>;
+    case 'unavailable':
+      return (
+        <Notice
+          tone="warning"
+          icon={NavigationOff}
+          title="Lokasi tidak terdeteksi"
+          action={{ label: 'Coba lagi', onClick: onRefresh, icon: RefreshCw }}
+        >
+          {location.message} Aktifkan izin lokasi untuk absen masuk.
+        </Notice>
+      );
+    case 'outside':
+      return (
+        <Notice
+          tone="warning"
+          icon={NavigationOff}
+          title="Di luar area toko"
+          action={{ label: 'Perbarui', onClick: onRefresh, icon: RefreshCw }}
+        >
+          Kamu berada {fmtDistance(location.distanceM)} dari toko (batas {fmtDistance(location.radiusM)}). Absen masuk hanya bisa dilakukan di toko.
+        </Notice>
+      );
+    case 'inside':
+      return (
+        <Notice tone="success" icon={Navigation}>
+          {location.distanceM != null
+            ? <>Lokasi terverifikasi · {fmtDistance(location.distanceM)} dari toko</>
+            : 'Lokasi terdeteksi'}
+        </Notice>
+      );
+  }
+}
+
 // ─── Cash input field ─────────────────────────────────────────────────────────
 // Compact bordered row: label + "Rp" prefix + number field. Raw digits while
 // focused, thousand-separated on blur.
@@ -201,9 +286,11 @@ function CashInput({
 
 // ─── Per-shift card ───────────────────────────────────────────────────────────
 
-function ShiftCard({ slot, cashCountBlocking, onAction }: {
+function ShiftCard({ slot, cashCountBlocking, location, onRefreshLocation, onAction }: {
   slot:              ShiftSlot;
   cashCountBlocking: boolean;
+  location:          LocationCheck;
+  onRefreshLocation: () => void;
   onAction: (
     action:    string,
     shift:     ShiftCode,
@@ -295,7 +382,13 @@ function ShiftCard({ slot, cashCountBlocking, onAction }: {
               </div>
             )}
 
-            <Button className="h-12 w-full gap-2 rounded-xl text-sm font-bold" onClick={() => act('checkin')} disabled={acting !== null}>
+            <LocationNotice location={location} onRefresh={onRefreshLocation} />
+
+            <Button
+              className="h-12 w-full gap-2 rounded-xl text-sm font-bold"
+              onClick={() => act('checkin')}
+              disabled={acting !== null || location.state !== 'inside'}
+            >
               {acting === 'checkin' ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogIn className="h-4 w-4" />}
               {acting === 'checkin' ? 'Checking in…' : 'Check In Now'}
             </Button>
@@ -443,10 +536,16 @@ export default function EmployeeAttendancePage() {
 
   const [slots,     setSlots]     = useState<ShiftSlot[]>([]);
   const [cashCount, setCashCount] = useState<CashCountPayload | null>(null);
+  const [geofence,  setGeofence]  = useState<Geofence | null>(null);
   const [loading,   setLoading]   = useState(true);
 
   const user        = session?.user as { homeStoreId?: string | number } | undefined;
   const homeStoreId = user?.homeStoreId != null ? Number(user.homeStoreId) : null;
+
+  // Only ask for location while there's still a shift to check into.
+  const needsCheckIn = slots.some(s => !s.attendance);
+  const { geo, geoError, geoReady, refresh: refreshGeo } = useGeo(needsCheckIn);
+  const location = checkLocation(geo, geoError, geoReady, geofence);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -456,6 +555,7 @@ export default function EmployeeAttendancePage() {
       const json: AttResponse = await res.json();
       setSlots(json.shifts ?? []);
       setCashCount(json.cashCount ?? null);
+      setGeofence(json.geofence ?? null);
     } catch (err) {
       console.error('[attendance load]', err);
       toast.error('Failed to load attendance data');
@@ -485,6 +585,15 @@ export default function EmployeeAttendancePage() {
       if (breakType)        body.breakType = breakType;
       if (cashOut != null)  body.cashOut   = cashOut;
       if (cashIn  != null)  body.cashIn    = cashIn;
+
+      // Take a fresh fix at the moment of check-in rather than trusting the
+      // one read when the page opened (the employee may have moved since).
+      if (action === 'checkin') {
+        const fix = await refreshGeo();
+        if (!fix) throw new Error('Lokasi tidak dapat diperoleh. Aktifkan izin lokasi lalu coba lagi.');
+        body.lat = fix.lat;
+        body.lng = fix.lng;
+      }
 
       const res  = await fetch('/api/employee/attendance', {
         method:  'POST',
@@ -588,6 +697,8 @@ export default function EmployeeAttendancePage() {
                 key={slot.schedule.scheduleId}
                 slot={slot}
                 cashCountBlocking={cashCountBlocking}
+                location={location}
+                onRefreshLocation={refreshGeo}
                 onAction={handleAction}
               />
             ))}

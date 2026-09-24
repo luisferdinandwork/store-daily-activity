@@ -10,6 +10,7 @@ import {
   attendance,
   breakSessions,
   shifts,
+  stores,
   users,
 } from '@/lib/db/schema';
 import {
@@ -19,6 +20,8 @@ import {
   isCashCountRequiredForShift,
 } from '@/lib/db/utils/store-cash-count';
 import { resolveActorScheduleId, getMorningShiftId } from '@/lib/db/utils/shift-lookup';
+import { assertInGeofence, DEFAULT_GEOFENCE_RADIUS_M } from '@/lib/db/utils/tasks';
+import { parseGeoPoint } from '@/lib/geo';
 
 import {
   employeeCheckIn,
@@ -242,6 +245,27 @@ async function buildCashCountPayload(
   return { required, done: Boolean(existing), record, coScheduledEmployees };
 }
 
+// ─── Store geofence ───────────────────────────────────────────────────────────
+//
+// Sent to the page so it can show the live distance and disable Check In while
+// the employee is outside. The POST check-in re-validates server-side via
+// assertInGeofence — this is only the preview. Null = store has no
+// coordinates, in which case (as for tasks) only a location fix is required.
+async function getStoreGeofence(storeId: number) {
+  const [store] = await db
+    .select({ lat: stores.latitude, lng: stores.longitude, radius: stores.geofenceRadiusM })
+    .from(stores)
+    .where(eq(stores.id, storeId))
+    .limit(1);
+
+  if (!store?.lat || !store?.lng) return null;
+  return {
+    lat: parseFloat(store.lat),
+    lng: parseFloat(store.lng),
+    radiusM: store.radius ? parseFloat(store.radius) : DEFAULT_GEOFENCE_RADIUS_M,
+  };
+}
+
 // ─── GET /api/employee/attendance ─────────────────────────────────────────────
 
 export async function GET(_req: NextRequest) {
@@ -406,12 +430,16 @@ export async function GET(_req: NextRequest) {
       ),
     );
 
-    const cashCount = await buildCashCountPayload(userId, homeStoreId, today, rows);
+    const [cashCount, geofence] = await Promise.all([
+      buildCashCountPayload(userId, homeStoreId, today, rows),
+      getStoreGeofence(homeStoreId),
+    ]);
 
     return NextResponse.json({
       success: true,
       shifts: shiftSlots,
       cashCount,
+      geofence,
     });
   } catch (err) {
     console.error('[GET /api/employee/attendance]', err);
@@ -427,6 +455,10 @@ export async function GET(_req: NextRequest) {
 //
 // Body:
 //   { action: 'checkin'|'checkout'|'startbreak'|'endbreak', shift: string }
+//
+// checkin:
+//   { action: 'checkin', shift: string, lat: number, lng: number }
+//   Location is mandatory and must be inside the home store's geofence.
 //
 // startbreak:
 //   { action: 'startbreak', shift: string, breakType?: string, cashOut: number }
@@ -469,6 +501,8 @@ export async function POST(req: NextRequest) {
       witnessUserId: rawWitnessUserId,
       selfiePhoto: rawSelfiePhoto,
       notes: rawNotes,
+      lat: rawLat,
+      lng: rawLng,
     } = body as {
       action?: string;
       shift?: string;
@@ -479,6 +513,8 @@ export async function POST(req: NextRequest) {
       witnessUserId?: string;
       selfiePhoto?: string;
       notes?: string;
+      lat?: unknown;
+      lng?: unknown;
     };
 
     if (!action) {
@@ -565,6 +601,27 @@ export async function POST(req: NextRequest) {
 
     switch (action) {
       case 'checkin': {
+        // Check-in must happen at the store: a location fix is required, and
+        // it has to fall inside the home store's geofence.
+        const geo = parseGeoPoint(rawLat, rawLng);
+        if (!geo) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: 'Lokasi wajib aktif untuk absen masuk. Izinkan akses lokasi lalu coba lagi.',
+            },
+            { status: 400 },
+          );
+        }
+
+        const geoErr = await assertInGeofence(homeStoreId, geo);
+        if (geoErr) {
+          return NextResponse.json(
+            { success: false, error: geoErr },
+            { status: 400 },
+          );
+        }
+
         result = await employeeCheckIn(userId, homeStoreId, typedShift);
         break;
       }

@@ -30,6 +30,7 @@ import {
 } from '@/lib/db/schema';
 import { users, areas }      from '@/lib/db/schema';
 import { getOrCreateMarketingCheckForSchedule } from '@/lib/db/utils/marketing-check';
+import { haversineMetres } from '@/lib/geo';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -214,16 +215,6 @@ function startOfDay(d: Date): Date {
 }
 function endOfDay(d: Date): Date {
   const r = new Date(d); r.setHours(23, 59, 59, 999); return r;
-}
-
-export function haversineMetres(a: GeoPoint, b: GeoPoint): number {
-  const R  = 6_371_000;
-  const φ1 = (a.lat * Math.PI) / 180;
-  const φ2 = (b.lat * Math.PI) / 180;
-  const Δφ = ((b.lat - a.lat) * Math.PI) / 180;
-  const Δλ = ((b.lng - a.lng) * Math.PI) / 180;
-  const h  = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
 
 let shiftIdCache: Record<string, number> | null = null;
