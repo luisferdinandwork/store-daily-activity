@@ -18,6 +18,7 @@
 //     Shift & Tasks           /it/shift-tasks
 //     BC Credentials           /it/bc-credentials
 //     Performance Target Defaults /it/target-allocation (PIC1/PIC2/SA % grid)
+//     Petty Cash Categories   /it/petty-cash-categories
 //
 //   Other Panels (IT keeps its role — a "Back to IT" banner shows on the way)
 //     Ops Panel             /ops
@@ -46,6 +47,7 @@ import {
   Percent,
   Repeat,
   Store,
+  Tags,
   UserCog,
   Users,
   Wallet,
@@ -103,6 +105,7 @@ const NAV: NavSection[] = [
       { href: '/it/shift-tasks', label: 'Shift & Tasks', icon: Layers },
       { href: '/it/bc-credentials', label: 'BC Credentials', icon: KeyRound },
       { href: '/it/target-allocation', label: 'Performance Target Defaults', icon: Percent },
+      { href: '/it/petty-cash-categories', label: 'Petty Cash Categories', icon: Tags },
     ],
   },
   {
