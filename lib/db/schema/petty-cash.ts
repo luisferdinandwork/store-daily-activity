@@ -18,8 +18,8 @@ export const PETTY_CASH_MAX_BALANCE = 1_000_000;
 
 // ─── Request categories ───────────────────────────────────────────────────────
 //
-// What a PIC picks when requesting petty cash (Galon, ATK, …), managed by OPS
-// HO / IT at /ops/petty-cash/categories. Picking one pre-fills the request's
+// What a PIC picks when requesting petty cash (Galon, ATK, …), managed by IT
+// at /it/petty-cash-categories. Picking one pre-fills the request's
 // Keterangan with `defaultReason` (still editable); a `requiresCustomReason`
 // category (Lain-Lain) has no default and the PIC must write their own.
 // Requests keep a name snapshot, so renaming/deleting a category never

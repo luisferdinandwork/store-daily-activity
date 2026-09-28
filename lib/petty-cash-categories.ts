@@ -1,7 +1,7 @@
 // lib/petty-cash-categories.ts
 // Petty cash request categories — shared rules + the starting set (client-safe,
 // no DB imports). The live list is the petty_cash_categories table, managed by
-// OPS HO / IT at /ops/petty-cash/categories; this starter set is what migration
+// IT at /it/petty-cash-categories; this starter set is what migration
 // 0015 inserts and the seed re-applies (idempotently, by name).
 
 /** Max length of a request's Keterangan / a category's default reason. */

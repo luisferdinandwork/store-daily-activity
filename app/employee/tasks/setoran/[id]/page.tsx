@@ -15,7 +15,8 @@
 //
 // Small setoran: uang aktual diterima between Rp 0 and Rp 49.999 → nothing is
 // deposited (Total wajib disetor fixed at 0, everything carries over as
-// "Kurang"); resi + ATM selfie are replaced by a single "Foto Kasir".
+// "Kurang"); resi + ATM selfie are replaced by two photos: "Foto Sisa Setoran"
+// (cashierPhoto) and "Foto Kartu ATM" (atmCardPhoto).
 // All business logic (autosave, no-geo guard, upload, submit gating) is
 // unchanged from the previous version.
 //
@@ -74,9 +75,10 @@ type SetoranTaskData = {
   resiPhoto: string | null;
   atmCardSelfiePhoto: string | null;
   cashierPhoto?: string | null;
+  atmCardPhoto?: string | null;
 };
 
-type SetoranPhotoType = 'resi' | 'atm_card_selfie' | 'setoran_cashier';
+type SetoranPhotoType = 'resi' | 'atm_card_selfie' | 'setoran_cashier' | 'setoran_atm_card';
 
 type TaskItem = { type: string; data: SetoranTaskData };
 
@@ -125,6 +127,7 @@ export default function SetoranTaskPage() {
   const [resiPhoto, setResiPhoto] = useState<string | null>(null);
   const [atmCardSelfiePhoto, setAtmCardSelfiePhoto] = useState<string | null>(null);
   const [cashierPhoto, setCashierPhoto] = useState<string | null>(null);
+  const [atmCardPhoto, setAtmCardPhoto] = useState<string | null>(null);
   const [notes, setNotes] = useState('');
 
   // ─── Load ────────────────────────────────────────────────────────────────
@@ -153,6 +156,7 @@ export default function SetoranTaskPage() {
       setResiPhoto(d.resiPhoto ?? null);
       setAtmCardSelfiePhoto(d.atmCardSelfiePhoto ?? null);
       setCashierPhoto(d.cashierPhoto ?? null);
+      setAtmCardPhoto(d.atmCardPhoto ?? null);
       setNotes(d.notes ?? '');
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : String(err));
@@ -221,6 +225,8 @@ export default function SetoranTaskPage() {
           setAtmCardSelfiePhoto={setAtmCardSelfiePhoto}
           cashierPhoto={cashierPhoto}
           setCashierPhoto={setCashierPhoto}
+          atmCardPhoto={atmCardPhoto}
+          setAtmCardPhoto={setAtmCardPhoto}
           notes={notes}
           setNotes={setNotes}
           cashDrawerTotal={cashDrawerTotal}
@@ -266,6 +272,8 @@ interface BodyProps {
   setAtmCardSelfiePhoto: (v: string | null) => void;
   cashierPhoto: string | null;
   setCashierPhoto: (v: string | null) => void;
+  atmCardPhoto: string | null;
+  setAtmCardPhoto: (v: string | null) => void;
   notes: string;
   setNotes: (v: string) => void;
   cashDrawerTotal: number;
@@ -297,7 +305,7 @@ function SetoranPageBody(props: BodyProps) {
   const {
     task, actualReceivedAmount, setActualReceivedAmount, storedAmount, setStoredAmount,
     resiPhoto, setResiPhoto, atmCardSelfiePhoto, setAtmCardSelfiePhoto,
-    cashierPhoto, setCashierPhoto, notes, setNotes,
+    cashierPhoto, setCashierPhoto, atmCardPhoto, setAtmCardPhoto, notes, setNotes,
     cashDrawerTotal, autoStored, storedManual, setStoredManual,
     storedNumber, kurang, isOverStored, isNoSetoran, isSmallSetoran,
     readonly, dis, accessOk, banner, lockedOverlay,
@@ -332,12 +340,13 @@ function SetoranPageBody(props: BodyProps) {
       resiPhoto,
       atmCardSelfiePhoto,
       cashierPhoto,
+      atmCardPhoto,
       notes,
       ...patch,
     });
   }, [
     readonly, rawAutoSave, task,
-    actualReceivedAmount, storedAmount, resiPhoto, atmCardSelfiePhoto, cashierPhoto, notes,
+    actualReceivedAmount, storedAmount, resiPhoto, atmCardSelfiePhoto, cashierPhoto, atmCardPhoto, notes,
   ]);
 
   // ─── Photo upload ────────────────────────────────────────────────────────
@@ -354,6 +363,9 @@ function SetoranPageBody(props: BodyProps) {
       } else if (photoType === 'setoran_cashier') {
         setCashierPhoto(url);
         autoSave({ cashierPhoto: url });
+      } else if (photoType === 'setoran_atm_card') {
+        setAtmCardPhoto(url);
+        autoSave({ atmCardPhoto: url });
       } else {
         setAtmCardSelfiePhoto(url);
         autoSave({ atmCardSelfiePhoto: url });
@@ -365,7 +377,7 @@ function SetoranPageBody(props: BodyProps) {
     } finally {
       setUploading(null);
     }
-  }, [dis, autoSave, setResiPhoto, setAtmCardSelfiePhoto, setCashierPhoto, setUploading, setSubmitError]);
+  }, [dis, autoSave, setResiPhoto, setAtmCardSelfiePhoto, setCashierPhoto, setAtmCardPhoto, setUploading, setSubmitError]);
 
   // ─── Submit (no geo) ─────────────────────────────────────────────────────
   // Validates, then opens the confirmation modal — the actual network call
@@ -378,7 +390,11 @@ function SetoranPageBody(props: BodyProps) {
 
     if (isSmallSetoran) {
       if (!cashierPhoto) {
-        setSubmitError('Foto kasir wajib diupload.');
+        setSubmitError('Foto sisa setoran wajib diupload.');
+        return;
+      }
+      if (!atmCardPhoto) {
+        setSubmitError('Foto kartu ATM wajib diupload.');
         return;
       }
     } else {
@@ -403,7 +419,7 @@ function SetoranPageBody(props: BodyProps) {
     setConfirmOpen(true);
   }, [
     readonly, isSmallSetoran, storedNumber, cashDrawerTotal,
-    resiPhoto, atmCardSelfiePhoto, cashierPhoto, setSubmitError,
+    resiPhoto, atmCardSelfiePhoto, cashierPhoto, atmCardPhoto, setSubmitError,
   ]);
 
   const doSubmit = useCallback(async () => {
@@ -424,6 +440,7 @@ function SetoranPageBody(props: BodyProps) {
           resiPhoto,
           atmCardSelfiePhoto,
           cashierPhoto,
+          atmCardPhoto,
           notes,
         }),
       });
@@ -443,7 +460,7 @@ function SetoranPageBody(props: BodyProps) {
       setConfirmOpen(false);
     }
   }, [
-    storedNumber, resiPhoto, atmCardSelfiePhoto, cashierPhoto,
+    storedNumber, resiPhoto, atmCardSelfiePhoto, cashierPhoto, atmCardPhoto,
     task, actualReceivedAmount, notes, router,
     setSubmitError, setSubmitting,
   ]);
@@ -451,13 +468,17 @@ function SetoranPageBody(props: BodyProps) {
   // ─── Submit gating ───────────────────────────────────────────────────────
   const canSubmit =
     !readonly && accessOk &&
-    ((isSmallSetoran && !!cashierPhoto) ||
+    ((isSmallSetoran && !!cashierPhoto && !!atmCardPhoto) ||
       (!isSmallSetoran && storedNumber > 0 && !isOverStored && !!resiPhoto && !!atmCardSelfiePhoto));
 
   const submitHint = (() => {
     if (readonly) return undefined;
     if (!accessOk) return 'Pastikan kamu sudah absen masuk.';
-    if (isSmallSetoran) return cashierPhoto ? undefined : 'Foto kasir belum diupload.';
+    if (isSmallSetoran) {
+      if (!cashierPhoto) return 'Foto sisa setoran belum diupload.';
+      if (!atmCardPhoto) return 'Foto kartu ATM belum diupload.';
+      return undefined;
+    }
     if (storedNumber <= 0) return 'Isi uang aktual diterima kemarin terlebih dahulu.';
     if (isOverStored) return 'Total wajib disetor melebihi total uang cash drawer.';
     if (!resiPhoto) return 'Foto resi belum diupload.';
@@ -465,7 +486,9 @@ function SetoranPageBody(props: BodyProps) {
     return undefined;
   })();
 
-  const photosDone = (resiPhoto ? 1 : 0) + (atmCardSelfiePhoto ? 1 : 0);
+  const photosDone = isSmallSetoran
+    ? (cashierPhoto ? 1 : 0) + (atmCardPhoto ? 1 : 0)
+    : (resiPhoto ? 1 : 0) + (atmCardSelfiePhoto ? 1 : 0);
 
   return (
     <>
@@ -544,9 +567,9 @@ function SetoranPageBody(props: BodyProps) {
                 placeholder="1.000.000"
                 hint={
                   isNoSetoran
-                    ? 'Tidak ada setoran hari ini — tetap wajib foto kasir.'
+                    ? 'Tidak ada setoran hari ini — tetap wajib foto sisa setoran & foto kartu ATM.'
                     : isSmallSetoran
-                      ? `Di bawah ${rupiah(SMALL_SETORAN_THRESHOLD)}: tidak perlu resi & selfie ATM, cukup foto kasir.`
+                      ? `Di bawah ${rupiah(SMALL_SETORAN_THRESHOLD)}: tidak perlu resi & selfie ATM, cukup foto sisa setoran & foto kartu ATM.`
                       : undefined
                 }
               />
@@ -563,20 +586,27 @@ function SetoranPageBody(props: BodyProps) {
             {/* ─── Photos ─────────────────────────────────────────────────── */}
             <Section
               title="Foto bukti"
-              meta={
-                isSmallSetoran ? `${cashierPhoto ? 1 : 0}/1` : `${photosDone}/2`
-              }
+              meta={`${photosDone}/2`}
             >
               {isSmallSetoran ? (
                 <ListGroup>
                   <PhotoRow
-                    title="Foto Kasir"
-                    hint="Foto area kasir / cash drawer"
+                    title="Foto Sisa Setoran"
+                    hint="Foto sisa uang setoran yang belum disetor"
                     photo={cashierPhoto}
                     disabled={dis || uploading !== null}
                     loading={uploading === 'setoran_cashier'}
                     onClick={() => setCameraTarget('setoran_cashier')}
                     icon={<Monitor className="h-4 w-4" />}
+                  />
+                  <PhotoRow
+                    title="Foto Kartu ATM"
+                    hint="Foto kartu ATM/debit yang dipakai setoran"
+                    photo={atmCardPhoto}
+                    disabled={dis || uploading !== null}
+                    loading={uploading === 'setoran_atm_card'}
+                    onClick={() => setCameraTarget('setoran_atm_card')}
+                    icon={<CreditCard className="h-4 w-4" />}
                   />
                 </ListGroup>
               ) : (
@@ -612,7 +642,8 @@ function SetoranPageBody(props: BodyProps) {
                 }}
                 title={
                   cameraTarget === 'atm_card_selfie' ? 'Selfie + Kartu ATM'
-                    : cameraTarget === 'setoran_cashier' ? 'Foto Kasir'
+                    : cameraTarget === 'setoran_cashier' ? 'Foto Sisa Setoran'
+                    : cameraTarget === 'setoran_atm_card' ? 'Foto Kartu ATM'
                     : 'Foto Resi'
                 }
                 facingMode={cameraTarget === 'atm_card_selfie' ? 'user' : 'environment'}
@@ -836,15 +867,15 @@ function ConfirmSubmitModal({
         <Notice tone="warning" icon={AlertCircle}>
           Uang aktual diterima diisi <span className="font-bold">Rp 0</span> — kamu akan submit
           bahwa hari ini <span className="font-bold">tidak ada setoran sama sekali</span>, cukup
-          dengan foto kasir. Pastikan ini benar.
+          dengan foto sisa setoran dan foto kartu ATM. Pastikan ini benar.
         </Notice>
       )}
 
       {isSmallSetoran && !isNoSetoran && (
         <Notice tone="warning" icon={AlertCircle}>
           Uang aktual diterima di bawah <span className="font-bold">{rupiah(SMALL_SETORAN_THRESHOLD)}</span> —
-          hari ini <span className="font-bold">tidak disetor</span>, cukup dengan foto kasir. Seluruh
-          uang dibawa ke setoran berikutnya.
+          hari ini <span className="font-bold">tidak disetor</span>, cukup dengan foto sisa setoran dan
+          foto kartu ATM. Seluruh uang dibawa ke setoran berikutnya.
         </Notice>
       )}
 

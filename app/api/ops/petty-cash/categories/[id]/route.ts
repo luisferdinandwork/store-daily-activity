@@ -3,7 +3,7 @@
 // PATCH  — edit name / default reason / "PIC writes own reason" / active.
 // DELETE — remove; past requests keep their category name snapshot.
 //
-// OPS HO / IT only (see ../_auth.ts).
+// IT only (see ../_auth.ts).
 
 import { NextRequest, NextResponse } from 'next/server';
 

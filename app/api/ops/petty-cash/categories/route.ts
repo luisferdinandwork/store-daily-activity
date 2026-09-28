@@ -4,7 +4,7 @@
 // POST — create a category.
 // PUT  — reorder: { ids: number[] } in the new display order.
 //
-// OPS HO / IT only (see _auth.ts). PATCH / DELETE live at ./[id].
+// IT only (see _auth.ts). PATCH / DELETE live at ./[id].
 
 import { NextRequest, NextResponse } from 'next/server';
 

@@ -1,5 +1,5 @@
 'use client';
-// app/ops/petty-cash/categories/page.tsx — OPS HO / IT only.
+// app/it/petty-cash-categories/page.tsx — IT only.
 //
 // Manage the categories a PIC picks when requesting petty cash (Galon, ATK, …,
 // Lain-Lain): add, edit the default reason that pre-fills the request's
@@ -17,7 +17,6 @@ import {
 import { toast } from 'sonner';
 
 import { cn } from '@/lib/utils';
-import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
 import { OpsList } from '@/components/ops/layout/OpsList';
 import { ConfirmDialog } from '@/components/shared/ConfirmDialog';
 import {
@@ -132,7 +131,7 @@ function CategoryDialog({
               maxLength={PETTY_CASH_CATEGORY_NAME_MAX}
               onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
               placeholder="mis. Galon"
-              className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm focus:border-indigo-400 focus:outline-none"
+              className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm focus:border-cyan-400 focus:outline-none"
             />
           </label>
 
@@ -141,7 +140,7 @@ function CategoryDialog({
               type="checkbox"
               checked={draft.requiresCustomReason}
               onChange={(e) => setDraft((d) => ({ ...d, requiresCustomReason: e.target.checked }))}
-              className="mt-0.5 h-4 w-4 accent-indigo-600"
+              className="mt-0.5 h-4 w-4 accent-cyan-600"
             />
             <span>
               <span className="block text-sm font-semibold text-slate-800">PIC menulis alasan sendiri</span>
@@ -165,7 +164,7 @@ function CategoryDialog({
                 onChange={(e) => setDraft((d) => ({ ...d, defaultReason: e.target.value }))}
                 rows={4}
                 placeholder="Mengisi Keterangan otomatis saat PIC memilih kategori ini."
-                className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none"
+                className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-cyan-400 focus:outline-none"
               />
               <span className="block text-[11px] text-slate-400">
                 PIC tetap bisa mengubah atau menambah detail sebelum mengirim.
@@ -186,7 +185,7 @@ function CategoryDialog({
             type="button"
             disabled={!canSave}
             onClick={save}
-            className="flex h-9 items-center gap-1.5 rounded-lg bg-indigo-600 px-3 text-xs font-bold text-white disabled:opacity-50"
+            className="flex h-9 items-center gap-1.5 rounded-lg bg-cyan-600 px-3 text-xs font-bold text-white disabled:opacity-50"
           >
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
             Simpan
@@ -295,7 +294,7 @@ function CategoryItem({
       </p>
 
       <div className="flex shrink-0 items-center gap-1">
-        <IconButton label="Edit" onClick={onEdit} disabled={busy} className="bg-indigo-50 text-indigo-600">
+        <IconButton label="Edit" onClick={onEdit} disabled={busy} className="bg-cyan-50 text-cyan-600">
           <Pencil className="h-3.5 w-3.5" />
         </IconButton>
         <IconButton
@@ -316,10 +315,10 @@ function CategoryItem({
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
-export default function OpsPettyCashCategoriesPage() {
+export default function ItPettyCashCategoriesPage() {
   const { status: authStatus, data: session } = useSession();
   const router = useRouter();
-  const isHo = session?.user?.isOpsHo === true || session?.user?.role === 'it';
+  const isIt = session?.user?.role === 'it';
 
   const [categories, setCategories] = useState<CategoryRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -332,8 +331,8 @@ export default function OpsPettyCashCategoriesPage() {
   useEffect(() => {
     if (authStatus === 'loading') return;
     if (!session) { router.replace('/login'); return; }
-    if (!isHo) router.replace('/ops/petty-cash');
-  }, [authStatus, session, isHo, router]);
+    if (!isIt) router.replace('/it');
+  }, [authStatus, session, isIt, router]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -347,7 +346,7 @@ export default function OpsPettyCashCategoriesPage() {
     }
   }, []);
 
-  useEffect(() => { if (isHo) void load(); }, [isHo, load]);
+  useEffect(() => { if (isIt) void load(); }, [isIt, load]);
 
   async function run(id: number, fn: () => Promise<void>) {
     setBusyId(id);
@@ -419,15 +418,15 @@ export default function OpsPettyCashCategoriesPage() {
 
   if (authStatus === 'loading' || !session) return (
     <div className="flex min-h-full items-center justify-center bg-slate-50">
-      <Loader2 className="h-6 w-6 animate-spin text-indigo-400" />
+      <Loader2 className="h-6 w-6 animate-spin text-cyan-400" />
     </div>
   );
 
-  if (!isHo) return (
+  if (!isIt) return (
     <div className="flex min-h-full flex-col items-center justify-center gap-4 bg-slate-50 p-8 text-center">
       <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-red-50"><Shield className="h-8 w-8 text-red-500" /></div>
       <p className="text-base font-bold text-slate-800">Access Restricted</p>
-      <p className="text-sm text-slate-500">Only OPS HO can manage petty cash categories.</p>
+      <p className="text-sm text-slate-500">Only IT can manage petty cash categories.</p>
     </div>
   );
 
@@ -435,22 +434,24 @@ export default function OpsPettyCashCategoriesPage() {
 
   return (
     <div className="min-h-full bg-slate-50">
-      <OpsPageHeader
-        scope="OPS · Head Office"
-        title="Kategori Petty Cash"
-        subtitle={`${categories.length} kategori · ${activeCount} tampil di form Request PIC`}
-        onRefresh={() => void load()}
-        refreshing={loading}
-        actions={
+      <div className="border-b border-slate-200 bg-white px-6 py-5 lg:px-8">
+        <div className="mx-auto flex max-w-4xl items-center justify-between">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-widest text-cyan-600">IT</p>
+            <h1 className="text-xl font-bold text-slate-900">Kategori Petty Cash</h1>
+            <p className="mt-0.5 text-xs text-slate-400">
+              {categories.length} kategori · {activeCount} tampil di form Request PIC
+            </p>
+          </div>
           <Link
-            href="/ops/petty-cash"
+            href="/it"
             className="flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-600 hover:bg-slate-50"
           >
             <ArrowLeft className="h-4 w-4" />
-            Petty Cash
+            Dashboard
           </Link>
-        }
-      />
+        </div>
+      </div>
 
       <div className="mx-auto max-w-4xl space-y-3 px-4 py-5 sm:px-6 lg:px-8">
         <p className="text-xs text-slate-500">

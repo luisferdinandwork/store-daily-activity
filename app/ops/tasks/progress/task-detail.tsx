@@ -685,7 +685,7 @@ function SetoranDetail({ task }: { task: FlatTask }) {
   const stored         = e.storedAmount ?? e.amount;
   const unpaid         = e.unpaidAmount;
   const isNoSetoran    = Boolean(e.isNoSetoran);
-  const hasCashier     = Boolean(e.cashierPhoto);
+  const hasSmallSetoranPhotos = Boolean(e.cashierPhoto) || Boolean(e.atmCardPhoto);
   return (
     <div>
       {isNoSetoran && (
@@ -705,14 +705,15 @@ function SetoranDetail({ task }: { task: FlatTask }) {
           <InfoRow label="Sisa Setoran" value={<span className="font-bold text-amber-600">{fmtAmount(unpaid)}</span>} />
         )}
       </div>
-      {hasCashier ? (
+      {hasSmallSetoranPhotos ? (
         <div className="mt-2 space-y-2">
           <p className="text-xs italic text-slate-400">
             {isNoSetoran
-              ? 'Tidak ada setoran hari ini — cukup foto kasir.'
-              : 'Uang diterima di bawah Rp 50.000 — tidak disetor, cukup foto kasir.'}
+              ? 'Tidak ada setoran hari ini — cukup foto sisa setoran dan foto kartu ATM.'
+              : 'Uang diterima di bawah Rp 50.000 — tidak disetor, cukup foto sisa setoran dan foto kartu ATM.'}
           </p>
-          <PhotoGrid label="Foto Kasir" photos={e.cashierPhoto} columns={2} />
+          <PhotoGrid label="Foto Sisa Setoran" photos={e.cashierPhoto} columns={2} />
+          <PhotoGrid label="Foto Kartu ATM" photos={e.atmCardPhoto} columns={2} />
         </div>
       ) : isNoSetoran ? (
         <p className="mt-2 text-xs italic text-slate-400">

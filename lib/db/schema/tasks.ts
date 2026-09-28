@@ -191,11 +191,16 @@ export const setoranTasks = pgTable('setoran_tasks', {
   isNoSetoran:             boolean('is_no_setoran').default(false).notNull(),
 
   /**
-   * Photo of the cashier / cash drawer. Required instead of resi + ATM selfie
-   * when uang aktual diterima is below Rp 50.000 (SETORAN_SMALL_THRESHOLD in
+   * Photo of the remaining/uncollected setoran cash ("Foto sisa setoran").
+   * Required together with atmCardPhoto instead of resi + ATM selfie when
+   * uang aktual diterima is below Rp 50.000 (SETORAN_SMALL_THRESHOLD in
    * lib/db/utils/setoran.ts) — the deposit stays 0 and the money carries over.
+   * Column kept as cashier_photo (pre-dates the "sisa setoran" wording).
    */
   cashierPhoto:            text('cashier_photo'),
+
+  /** Photo of the ATM/debit card — paired with cashierPhoto for small setoran. */
+  atmCardPhoto:            text('atm_card_photo'),
 
   actualReceivedAmountBy: text('actual_received_amount_by').references(() => users.id),
   actualReceivedAmountAt: timestamp('actual_received_amount_at', { mode: 'date' }),
@@ -207,6 +212,8 @@ export const setoranTasks = pgTable('setoran_tasks', {
   atmCardSelfiePhotoAt: timestamp('atm_card_selfie_photo_at', { mode: 'date' }),
   cashierPhotoBy: text('cashier_photo_by').references(() => users.id),
   cashierPhotoAt: timestamp('cashier_photo_at', { mode: 'date' }),
+  atmCardPhotoBy: text('atm_card_photo_by').references(() => users.id),
+  atmCardPhotoAt: timestamp('atm_card_photo_at', { mode: 'date' }),
   notesBy: text('notes_by').references(() => users.id),
   notesAt: timestamp('notes_at', { mode: 'date' }),
   completedBy: text('completed_by').references(() => users.id),
@@ -263,8 +270,9 @@ export const setoranMoneyStorage = pgTable('setoran_money_storage', {
   resiPhoto: text('resi_photo'),
   atmCardSelfiePhoto: text('atm_card_selfie_photo'),
   cashierPhoto: text('cashier_photo'),
+  atmCardPhoto: text('atm_card_photo'),
   notes: text('notes'),
-  
+
   actualReceivedAmountBy: text('actual_received_amount_by').references(() => users.id),
   actualReceivedAmountAt: timestamp('actual_received_amount_at', { mode: 'date' }),
   storedAmountBy: text('stored_amount_by').references(() => users.id),
@@ -275,6 +283,8 @@ export const setoranMoneyStorage = pgTable('setoran_money_storage', {
   atmCardSelfiePhotoAt: timestamp('atm_card_selfie_photo_at', { mode: 'date' }),
   cashierPhotoBy: text('cashier_photo_by').references(() => users.id),
   cashierPhotoAt: timestamp('cashier_photo_at', { mode: 'date' }),
+  atmCardPhotoBy: text('atm_card_photo_by').references(() => users.id),
+  atmCardPhotoAt: timestamp('atm_card_photo_at', { mode: 'date' }),
   notesBy: text('notes_by').references(() => users.id),
   notesAt: timestamp('notes_at', { mode: 'date' }),
   completedBy: text('completed_by').references(() => users.id),

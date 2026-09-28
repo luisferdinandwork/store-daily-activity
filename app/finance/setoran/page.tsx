@@ -521,12 +521,19 @@ function StoreRow({
           onClick={(e) => e.stopPropagation()}
           onKeyDown={(e) => e.stopPropagation()}
         >
-          {row.cashierPhoto ? (
-            <PhotoThumb
-              url={row.cashierPhoto}
-              label="Foto kasir"
-              onView={(src, lbl) => setLightbox({ src, label: lbl })}
-            />
+          {row.cashierPhoto || row.atmCardPhoto ? (
+            <>
+              <PhotoThumb
+                url={row.cashierPhoto}
+                label="Foto sisa setoran"
+                onView={(src, lbl) => setLightbox({ src, label: lbl })}
+              />
+              <PhotoThumb
+                url={row.atmCardPhoto}
+                label="Foto kartu ATM"
+                onView={(src, lbl) => setLightbox({ src, label: lbl })}
+              />
+            </>
           ) : (
             <>
               <PhotoThumb

@@ -977,6 +977,7 @@ export async function GET(request: NextRequest) {
               resiPhoto: t.resiPhoto,
               atmCardSelfiePhoto: t.atmCardSelfiePhoto,
               cashierPhoto: t.cashierPhoto,
+              atmCardPhoto: t.atmCardPhoto,
 
               actualReceivedAmountBy: t.actualReceivedAmountBy ?? null,
               actualReceivedAmountAt: toIso(t.actualReceivedAmountAt),

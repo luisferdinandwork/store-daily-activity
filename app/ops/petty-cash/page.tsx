@@ -3,7 +3,6 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
 import {
   AlertCircle,
   ArrowUpDown,
@@ -14,7 +13,6 @@ import {
   Loader2,
   MapPin,
   Search,
-  Tags,
   Wallet,
   X,
   XCircle,
@@ -750,18 +748,6 @@ export default function OpsPettyCashPage() {
         periodProps={{ period, date, onDateChange: setDate }}
         onRefresh={() => void load()}
         refreshing={loading}
-        actions={
-          // Categories apply to every store — head office (OPS HO / IT) manages them.
-          isHoScope ? (
-            <Link
-              href="/ops/petty-cash/categories"
-              className="flex h-10 items-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-4 text-sm font-semibold text-indigo-700 hover:bg-indigo-100"
-            >
-              <Tags className="h-4 w-4" />
-              Categories
-            </Link>
-          ) : undefined
-        }
       />
 
       <div className="mx-auto space-y-5 px-4 py-5 sm:px-6 lg:px-8">

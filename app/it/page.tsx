@@ -7,7 +7,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
   ArrowRight, KeyRound, ClipboardCheck, Layers, Store, Users, Wallet, Percent,
-  AlertTriangle, Repeat, Loader2, Shield, AlertCircle, Eye, CheckCircle2,
+  AlertTriangle, Repeat, Loader2, Shield, AlertCircle, Eye, CheckCircle2, Tags,
 } from 'lucide-react';
 
 type IssueStatus = 'reported' | 'in_review' | 'solved' | 'completed';
@@ -82,6 +82,7 @@ export default function ItDashboardPage() {
     { href: '/it/shift-tasks', label: 'Shift & Tasks', desc: 'Configure shifts and their task assignments.', Icon: Layers },
     { href: '/it/bc-credentials', label: 'BC Credentials', desc: 'Manage Business Central API credentials.', Icon: KeyRound },
     { href: '/it/target-allocation', label: 'Performance Target Defaults', desc: 'PIC1 / PIC2 / SA target split percentages.', Icon: Percent },
+    { href: '/it/petty-cash-categories', label: 'Petty Cash Categories', desc: 'Manage categories PIC picks when requesting petty cash.', Icon: Tags },
   ];
 
   const panelLinks = [
