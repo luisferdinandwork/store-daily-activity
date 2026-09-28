@@ -12,7 +12,10 @@
 
 import { db } from "@/lib/db";
 import { baseShiftCode, isOpeningShift } from "@/lib/shift-tasks";
-import type { AttendanceStatus } from "@/lib/attendance-status";
+import {
+  isLeaveAttendanceStatus,
+  type LeaveAttendanceStatus,
+} from "@/lib/attendance-status";
 import {
   areas,
   users,
@@ -1992,12 +1995,23 @@ export async function getAttendanceForDate(storeId: number, date: Date) {
     .orderBy(schedules.shiftId, users.name);
 }
 
+/**
+ * Ops records a justified absence — Dinas / Cuti / STD / SD — on a scheduled
+ * day, from whatever the status was (not recorded yet, auto-marked absent,
+ * or even a checked-in present / late). Ops never sets present / late /
+ * absent / excused: present & late only come from the employee's own
+ * check-in, absent from autoMarkAbsentPastSchedules. With no `status` this
+ * only updates the note on an existing record.
+ */
 export async function opsMarkAttendance(
   scheduleId: number,
-  status: AttendanceStatus | undefined,
+  status: LeaveAttendanceStatus | undefined,
   actorId: string,
   notes?: string,
 ): Promise<{ success: boolean; attendanceId?: number; error?: string }> {
+  if (status !== undefined && !isLeaveAttendanceStatus(status)) {
+    return { success: false, error: "Ops can only set Dinas, Cuti, STD or SD." };
+  }
   try {
     const [sched] = await db
       .select()
@@ -2017,21 +2031,12 @@ export async function opsMarkAttendance(
     let attendanceId: number;
 
     if (existing) {
-      // A record the employee actually checked in on is immutable (a genuine
-      // "late" stays "late") — Ops may only attach/update a note. A record
-      // with no check-in (auto-marked absent, or marked by Ops) can be
-      // re-classified, e.g. absent → Cuti / Dinas / Sakit.
-      const canChangeStatus = !existing.checkInTime;
-      if (status && status !== existing.status && !canChangeStatus) {
-        return {
-          success: false,
-          error: "Status can't be changed after the employee checked in.",
-        };
-      }
+      // Re-classify to a leave status from anything (check-in times, if
+      // any, are kept as-is), or just update the note.
       await db
         .update(attendance)
         .set({
-          ...(status && canChangeStatus ? { status } : {}),
+          ...(status ? { status } : {}),
           notes,
           recordedBy: actorId,
           updatedAt: new Date(),
@@ -2040,7 +2045,7 @@ export async function opsMarkAttendance(
       attendanceId = existing.id;
     } else {
       if (!status) {
-        return { success: false, error: "status is required to record initial attendance." };
+        return { success: false, error: "Choose Dinas, Cuti, STD or SD to record attendance." };
       }
       const [att] = await db
         .insert(attendance)

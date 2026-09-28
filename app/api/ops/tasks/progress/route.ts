@@ -206,6 +206,7 @@ export async function GET(req: NextRequest) {
       .select({
         id: stores.id,
         name: stores.name,
+        storeNo: stores.storeNo,
         address: stores.address,
         areaId: stores.areaId,
       })
@@ -235,6 +236,7 @@ export async function GET(req: NextRequest) {
       store: {
         id: String(storeRow.id),
         name: storeRow.name,
+        storeNo: storeRow.storeNo,
         address: storeRow.address,
         areaId: storeRow.areaId === null ? null : String(storeRow.areaId),
       },
@@ -275,6 +277,7 @@ export async function GET(req: NextRequest) {
     stores: overview.stores.map((store) => ({
       id: String(store.id),
       name: store.name,
+      storeNo: store.storeNo,
       address: store.address,
       areaId:
         'areaId' in store && store.areaId !== null && store.areaId !== undefined

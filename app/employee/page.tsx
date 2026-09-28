@@ -1,7 +1,8 @@
 "use client";
 // app/employee/page.tsx
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useApi } from "@/lib/client/use-api";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
 import {
@@ -361,33 +362,22 @@ function StatTile({
 export default function EmployeeDashboard() {
   const { data: session, status: sessionStatus } = useSession();
 
-  const [attSlots, setAttSlots] = useState<AttSlot[]>([]);
-  const [perf, setPerf] = useState<PerformanceData | null>(null);
-  const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState<"daily" | "monthly">("daily");
 
   const user = session?.user as any;
   const firstName = user?.name?.split(" ")[0] ?? "there";
 
-  useEffect(() => {
-    if (sessionStatus === "loading") return;
-    if (sessionStatus === "unauthenticated") {
-      setLoading(false);
-      return;
-    }
+  // Fetched independently (and cached across visits — lib/client/use-api.ts):
+  // attendance is a fast DB read, performance waits on Business Central, so
+  // the header/attendance no longer sit behind the slow sales call.
+  const signedIn = sessionStatus === "authenticated";
+  const att = useApi<{ success?: boolean; shifts?: AttSlot[] }>(signedIn ? "/api/employee/attendance" : null);
+  const perfRes = useApi<PerformanceData>(signedIn ? "/api/employee/performance" : null);
 
-    Promise.all([
-      fetch("/api/employee/attendance").then((r) => r.json()),
-      fetch("/api/employee/performance").then((r) => r.json()),
-    ])
-      .then(([attData, perfData]) => {
-        if (attData.success && Array.isArray(attData.shifts))
-          setAttSlots(attData.shifts);
-        if (perfData.success) setPerf(perfData as PerformanceData);
-      })
-      .catch(console.error)
-      .finally(() => setLoading(false));
-  }, [sessionStatus]);
+  const attSlots: AttSlot[] = att.data?.success && Array.isArray(att.data.shifts) ? att.data.shifts : [];
+  const perf: PerformanceData | null = perfRes.data?.success ? perfRes.data : null;
+  const loading = att.loading || sessionStatus === "loading";
+  const perfLoading = perfRes.loading || sessionStatus === "loading";
 
   const primaryShift = attSlots[0]?.schedule.shift ?? "morning";
   const primaryAtt = attSlots[0]?.attendance ?? null;
@@ -532,7 +522,7 @@ export default function EmployeeDashboard() {
           {/* Warning banner — always shown when the API sends one (roster/
               target/schedule gaps), regardless of whether performance data
               below can still render. */}
-          {!loading && perf?.warning && (
+          {perf?.warning && (
             <div className="flex items-start gap-2 rounded-2xl border border-amber-400/30 bg-amber-500/10 px-3.5 py-2.5">
               <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-200" />
               <p className="text-xs font-medium leading-snug text-amber-100">
@@ -552,7 +542,7 @@ export default function EmployeeDashboard() {
           Performance
         </SectionLabel>
 
-        {loading ? (
+        {perfLoading ? (
           <SkeletonBlocks count={2} className="h-64 rounded-3xl" />
         ) : notScheduledToday ? (
           <div className="flex items-center gap-3 rounded-2xl border border-dashed border-border bg-card px-4 py-6">

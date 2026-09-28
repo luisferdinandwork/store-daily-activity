@@ -99,6 +99,34 @@
       "when": 1790224439728,
       "tag": "0013_add_middle_jkp_shifts",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1790225966182,
+      "tag": "0014_cash_count_sessions",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1790231347251,
+      "tag": "0015_petty_cash_categories",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1790240244811,
+      "tag": "0016_light_norman_osborn",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1790328425881,
+      "tag": "0017_nebulous_squirrel_girl",
+      "breakpoints": true
     }
   ]
 }

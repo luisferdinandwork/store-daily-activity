@@ -2,10 +2,14 @@
 import { ReactNode } from 'react';
 import { redirect } from 'next/navigation';
 import { requirePanel } from '@/lib/auth/guards';
+import { ensurePreviewSchedule } from '@/lib/role-preview';
 import PicShell from '@/components/pic/layout/PicShell';
 
 export default async function PicLayout({ children }: { children: ReactNode }) {
   const session = await requirePanel('/pic');
+
+  // IT previewing an employee role: keep its daily preview schedule topped up.
+  if (session.user.switchedFromRoleId) await ensurePreviewSchedule(session.user.id);
 
   const isPic =
     session.user.employeeType === 'pic_1' || session.user.employeeType === 'pic_2';

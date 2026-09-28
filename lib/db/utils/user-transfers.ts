@@ -567,6 +567,7 @@ export interface ManageEmployeeRow {
 
 export interface ManageStoreRow {
   id: number;
+  storeNo: string | null;
   name: string;
   address: string;
   areaId: number;
@@ -610,6 +611,7 @@ export async function listManageData(actorId: string): Promise<TransferResult<{
     ? await db
         .select({
           id: stores.id,
+          storeNo: stores.storeNo,
           name: stores.name,
           address: stores.address,
           areaId: stores.areaId,
@@ -706,6 +708,7 @@ export async function listManageData(actorId: string): Promise<TransferResult<{
 
   const storeOut: ManageStoreRow[] = storeRows.map((s) => ({
     id: s.id,
+    storeNo: s.storeNo ?? null,
     name: s.name,
     address: s.address,
     areaId: s.areaId,

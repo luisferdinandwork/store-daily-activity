@@ -85,6 +85,7 @@ type StoreSummary = {
 type StoreRow = {
   id: string;
   name: string;
+  storeNo: string;
   address: string;
   areaId?: string | null;
   areaName?: string | null;
@@ -108,7 +109,7 @@ type DetailResponse = {
   mode?: 'detail';
   scope?: 'area' | 'all_areas';
   date: string;
-  store: { id: string; name: string; address: string; areaId?: string | null };
+  store: { id: string; name: string; storeNo: string; address: string; areaId?: string | null };
   summary: StoreSummary;
   tasks: FlatTask[];
   serahTerima: SerahTerimaBoardView;
@@ -131,7 +132,7 @@ type RangeResponse = {
   error?: string;
   startDate: string;
   endDate: string;
-  stores: { id: string; name: string; address: string; areaId: string | null; areaName: string | null }[];
+  stores: { id: string; name: string; storeNo: string; address: string; areaId: string | null; areaName: string | null }[];
   summaries: RangeSummaryRow[];
 };
 
@@ -482,6 +483,7 @@ function StoreProgressCard({ store, active, onOpen, rangeSummary, loadingRange }
             <span className={cn('shrink-0 text-xs font-black tabular-nums', progressTextClass(rate))}>{rate}%</span>
           )}
         </div>
+        <p className={cn('truncate font-mono text-[10px] font-semibold', active ? 'text-indigo-500' : 'text-slate-400')}>{store.storeNo}</p>
 
         {loadingRange ? (
           <div className="mt-1.5 h-1.5 w-full animate-pulse rounded-full bg-slate-100" />
@@ -628,7 +630,10 @@ function StoreProgressRow({ store, summary, onOpen }: {
 
       <div className="order-2 min-w-0 flex-1 basis-40">
         <p className="truncate text-sm font-bold text-slate-900">{store.name}</p>
-        <p className="truncate text-[11px] text-slate-400">{store.address}</p>
+        <p className="truncate text-[11px] text-slate-400">
+          <span className="font-mono font-semibold text-slate-500">{store.storeNo}</span>
+          {store.address && ` · ${store.address}`}
+        </p>
       </div>
 
       <div className="order-4 min-w-[7rem] flex-1 md:w-36 md:flex-none">
@@ -789,8 +794,9 @@ function RangeOverviewPanel({ stores, rangeOverviewMap, loading, periodLabel, ar
 
 // ─── StoreRangeMatrixPanel ────────────────────────────────────────────────────
 
-function StoreRangeMatrixPanel({ storeName, storeAddress, rows, loading, periodLabel }: {
+function StoreRangeMatrixPanel({ storeName, storeNo, storeAddress, rows, loading, periodLabel }: {
   storeName: string;
+  storeNo: string;
   storeAddress: string;
   rows: DayMatrixRow[];
   loading: boolean;
@@ -811,7 +817,11 @@ function StoreRangeMatrixPanel({ storeName, storeAddress, rows, loading, periodL
           <div className="min-w-0 flex-1">
             <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-500">{periodLabel}</p>
             <h2 className="mt-0.5 truncate text-lg font-bold text-slate-900">{storeName}</h2>
-            <p className="mt-0.5 text-xs text-slate-500">{storeAddress}</p>
+            <p className="mt-0.5 text-xs text-slate-500">
+              {storeNo && <span className="font-mono font-semibold text-slate-600">{storeNo}</span>}
+              {storeNo && storeAddress && ' · '}
+              {storeAddress}
+            </p>
             <p className="mt-1.5 text-xs font-semibold text-slate-600">
               <span className="text-emerald-600">{aggregate.completed} task selesai</span>
               <span className="text-slate-300"> dari </span>
@@ -927,7 +937,10 @@ function StoreDetailPanel({ detail, loading, emptyMessage, onSelectTask }: {
           <ProgressRing pct={detail.summary.completionRate} size={64} stroke={6} />
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-lg font-bold text-slate-900">{detail.store.name}</h2>
-            <p className="mt-0.5 text-xs text-slate-500">{detail.store.address}</p>
+            <p className="mt-0.5 text-xs text-slate-500">
+              <span className="font-mono font-semibold text-slate-600">{detail.store.storeNo}</span>
+              {detail.store.address && ` · ${detail.store.address}`}
+            </p>
             <p className="mt-1.5 text-xs font-semibold text-slate-600">
               <span className="text-emerald-600">{detail.summary.completed} selesai</span>
               <span className="text-slate-300"> · </span>
@@ -1137,7 +1150,11 @@ export default function OpsTaskProgressPage() {
   const filteredStores = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return overview?.stores ?? [];
-    return (overview?.stores ?? []).filter(s => s.name.toLowerCase().includes(q) || s.address.toLowerCase().includes(q));
+    return (overview?.stores ?? []).filter(s =>
+      s.name.toLowerCase().includes(q) ||
+      s.storeNo.toLowerCase().includes(q) ||
+      s.address.toLowerCase().includes(q),
+    );
   }, [overview?.stores, search]);
 
   const groupedStores = useMemo(() => {
@@ -1160,7 +1177,8 @@ export default function OpsTaskProgressPage() {
   const selectedAreaGroup = useMemo(() => groupedStores.find(g => g.areaId === selectedAreaId) ?? null, [groupedStores, selectedAreaId]);
 
   const headingScope = isHo ? 'All Areas' : (overview?.area?.name ?? 'Area');
-  const selectedStoreName = selectedStoreId ? (overview?.stores.find(s => s.id === selectedStoreId)?.name ?? null) : null;
+  const selectedStoreRow  = selectedStoreId ? overview?.stores.find(s => s.id === selectedStoreId) : undefined;
+  const selectedStoreName = selectedStoreRow ? `${selectedStoreRow.storeNo} · ${selectedStoreRow.name}` : null;
 
   const headingRangeLabel = useMemo(() => {
     if (period === 'daily') return fmtDateLabel(date);
@@ -1185,6 +1203,7 @@ export default function OpsTaskProgressPage() {
       return (
         <StoreRangeMatrixPanel
           storeName={selectedStore?.name ?? '—'}
+          storeNo={selectedStore?.storeNo ?? ''}
           storeAddress={selectedStore?.address ?? ''}
           rows={rangeMatrixRows}
           loading={loadingRange}
@@ -1269,7 +1288,7 @@ export default function OpsTaskProgressPage() {
             <div className="flex shrink-0 items-center gap-2 border-b border-slate-100 p-3">
               <label className="relative block min-w-0 flex-1">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Cari toko…"
+                <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Cari nama / kode toko…"
                   className="h-9 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3 text-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
                 />
               </label>

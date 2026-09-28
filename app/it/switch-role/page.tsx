@@ -19,6 +19,7 @@ import {
   Wallet,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { invalidateApi } from '@/lib/client/use-api';
 import { cn } from '@/lib/utils';
 
 interface RoleOption {
@@ -26,6 +27,12 @@ interface RoleOption {
   code: string;
   label: string;
 }
+
+interface AreaOption { id: number; name: string }
+interface StoreOption { id: number; storeNo: string; name: string; areaId: number }
+interface ShiftOption { id: number; code: string; label: string; startTime: string | null; endTime: string | null }
+
+const hhmm = (t: string | null) => (t ? t.slice(0, 5) : '');
 
 const ROLE_META: Record<string, { icon: typeof Users; description: string; accent: string }> = {
   employee: {
@@ -80,6 +87,12 @@ export default function SwitchRolePage() {
   const [employeeTypes, setEmployeeTypes] = useState<RoleOption[]>([]);
   const [selectedRole, setSelectedRole] = useState('');
   const [selectedEmpType, setSelectedEmpType] = useState('');
+  const [areas, setAreas] = useState<AreaOption[]>([]);
+  const [stores, setStores] = useState<StoreOption[]>([]);
+  const [shifts, setShifts] = useState<ShiftOption[]>([]);
+  const [selectedAreaId, setSelectedAreaId] = useState('');
+  const [selectedStoreId, setSelectedStoreId] = useState('');
+  const [selectedShiftId, setSelectedShiftId] = useState('');
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
@@ -97,6 +110,13 @@ export default function SwitchRolePage() {
       if (data.success) {
         setRoles(data.roles ?? []);
         setEmployeeTypes(data.employeeTypes ?? []);
+        setAreas(data.areas ?? []);
+        setStores(data.stores ?? []);
+        setShifts(data.shifts ?? []);
+        // Sensible defaults: the test store if it exists, and the first shift.
+        const dummy = (data.stores ?? []).find((st: StoreOption) => st.storeNo === 'DUMMY-001');
+        if (dummy) setSelectedStoreId(String(dummy.id));
+        if (data.shifts?.[0]) setSelectedShiftId(String(data.shifts[0].id));
       }
     } catch {
       // silent
@@ -118,11 +138,24 @@ export default function SwitchRolePage() {
 
   function pickRole(code: string) {
     setSelectedRole(code);
-    setSelectedEmpType('');
+    // Every ops / employee preview needs a type — default to the broadest one.
+    if (code === 'ops') setSelectedEmpType(employeeTypes.some((t) => t.code === 'ops_ho') ? 'ops_ho' : '');
+    else if (code === 'employee') setSelectedEmpType(employeeTypes.some((t) => t.code === 'sa') ? 'sa' : '');
+    else setSelectedEmpType('');
   }
 
+  const needsArea = selectedRole === 'ops' && selectedEmpType === 'ops_area';
+  const needsStore = selectedRole === 'employee';
+  const selectedStore = stores.find((st) => String(st.id) === selectedStoreId);
+  const selectedShift = shifts.find((sh) => String(sh.id) === selectedShiftId);
+  const selectedArea = areas.find((a) => String(a.id) === selectedAreaId);
+  const canSubmit =
+    !!selectedRole &&
+    (!needsArea || !!selectedAreaId) &&
+    (!needsStore || (!!selectedStoreId && !!selectedShiftId));
+
   async function handleSwitch() {
-    if (!selectedRole) return;
+    if (!canSubmit) return;
     setSubmitting(true);
     try {
       const res = await fetch('/api/it/switch-role', {
@@ -132,12 +165,16 @@ export default function SwitchRolePage() {
           action: 'switch',
           roleCode: selectedRole,
           employeeTypeCode: selectedEmpType || undefined,
+          areaId: needsArea ? Number(selectedAreaId) : undefined,
+          storeId: needsStore ? Number(selectedStoreId) : undefined,
+          shiftId: needsStore ? Number(selectedShiftId) : undefined,
         }),
       });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error ?? 'Failed to switch role.');
 
       await update();
+      invalidateApi();
       toast.success(`Now previewing as ${roles.find((r) => r.code === selectedRole)?.label ?? selectedRole}.`);
       router.push(data.redirectTo ?? '/');
     } catch (err) {
@@ -159,6 +196,7 @@ export default function SwitchRolePage() {
       if (!res.ok || !data.success) throw new Error(data.error ?? 'Failed to return to IT.');
 
       await update();
+      invalidateApi();
       toast.success('Back to IT.');
       router.push(data.redirectTo ?? '/it');
     } catch (err) {
@@ -279,19 +317,9 @@ export default function SwitchRolePage() {
             {selectedRole && relevantEmpTypes.length > 0 && (
               <div>
                 <p className="mb-2.5 text-xs font-bold uppercase tracking-widest text-slate-400">
-                  2. Employee type <span className="normal-case text-slate-400">(optional)</span>
+                  2. Employee type
                 </p>
                 <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setSelectedEmpType('')}
-                    className={cn(
-                      'rounded-xl border-2 px-3.5 py-2.5 text-left text-xs font-semibold transition-colors',
-                      selectedEmpType === '' ? 'border-cyan-400 bg-cyan-50 text-cyan-700' : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300',
-                    )}
-                  >
-                    None
-                  </button>
                   {relevantEmpTypes.map((t) => {
                     const meta = EMPLOYEE_TYPE_META[t.code] ?? { icon: Users, description: '' };
                     const Icon = meta.icon;
@@ -318,6 +346,72 @@ export default function SwitchRolePage() {
               </div>
             )}
 
+            {/* Step 3 — context the preview needs */}
+            {needsArea && (
+              <div>
+                <p className="mb-2.5 text-xs font-bold uppercase tracking-widest text-slate-400">3. Area</p>
+                <select
+                  value={selectedAreaId}
+                  onChange={(e) => setSelectedAreaId(e.target.value)}
+                  className="h-11 w-full rounded-xl border-2 border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-cyan-400"
+                >
+                  <option value="">Pilih area…</option>
+                  {areas.map((a) => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {needsStore && (
+              <div className="space-y-4">
+                <div>
+                  <p className="mb-2.5 text-xs font-bold uppercase tracking-widest text-slate-400">3. Store</p>
+                  <select
+                    value={selectedStoreId}
+                    onChange={(e) => setSelectedStoreId(e.target.value)}
+                    className="h-11 w-full rounded-xl border-2 border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-cyan-400"
+                  >
+                    <option value="">Pilih toko…</option>
+                    {stores.map((st) => (
+                      <option key={st.id} value={st.id}>{st.storeNo} — {st.name}</option>
+                    ))}
+                  </select>
+                  <p className="mt-1.5 text-[11px] text-slate-400">
+                    You&apos;ll appear on this store&apos;s schedule while previewing — prefer the test store (DUMMY-001).
+                  </p>
+                </div>
+
+                <div>
+                  <p className="mb-2.5 text-xs font-bold uppercase tracking-widest text-slate-400">4. Shift</p>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                    {shifts.map((sh) => {
+                      const active = selectedShiftId === String(sh.id);
+                      return (
+                        <button
+                          key={sh.id}
+                          type="button"
+                          onClick={() => setSelectedShiftId(String(sh.id))}
+                          className={cn(
+                            'rounded-xl border-2 px-3 py-2.5 text-left transition-colors',
+                            active ? 'border-cyan-400 bg-cyan-50' : 'border-slate-200 bg-white hover:border-slate-300',
+                          )}
+                        >
+                          <p className={cn('text-xs font-bold', active ? 'text-cyan-700' : 'text-slate-700')}>{sh.label}</p>
+                          {sh.startTime && (
+                            <p className="text-[10px] tabular-nums text-slate-400">{hhmm(sh.startTime)}–{hhmm(sh.endTime)}</p>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-1.5 text-[11px] text-slate-400">
+                    A schedule on this shift is created for every day from today to month end, and topped up each new month.
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* Submit */}
             <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
               <p className="text-xs text-slate-500">
@@ -328,13 +422,16 @@ export default function SwitchRolePage() {
                       {selectedEmpType && (
                         <> · <span className="font-bold text-slate-800">{employeeTypes.find((t) => t.code === selectedEmpType)?.label}</span></>
                       )}
+                      {needsArea && selectedArea && <> · <span className="font-bold text-slate-800">{selectedArea.name}</span></>}
+                      {needsStore && selectedStore && <> · <span className="font-bold text-slate-800">{selectedStore.storeNo}</span></>}
+                      {needsStore && selectedShift && <> · <span className="font-bold text-slate-800">{selectedShift.label}</span></>}
                     </>
                   )
                   : 'Pick a role above to continue.'}
               </p>
               <button
                 onClick={handleSwitch}
-                disabled={submitting || !selectedRole}
+                disabled={submitting || !canSubmit}
                 className="flex h-11 shrink-0 items-center justify-center gap-2 rounded-xl bg-cyan-600 px-5 text-sm font-bold text-white transition-colors hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Repeat className="h-4 w-4" />}

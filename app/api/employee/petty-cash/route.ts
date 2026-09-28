@@ -8,8 +8,13 @@ import { db } from '@/lib/db';
 import { authOptions } from '@/lib/auth';
 import { stores, users } from '@/lib/db/schema/core';
 import { pettyCashTransactions } from '@/lib/db/schema/petty-cash';
-import { isPicType } from '@/lib/db/utils/petty-cash-refill';
+import { isPettyCashHolder } from '@/lib/db/utils/petty-cash-refill';
 import { getActivePeriod } from '@/lib/db/utils/petty-cash-period';
+import {
+  getPettyCashCategory,
+  listPettyCashCategories,
+} from '@/lib/db/utils/petty-cash-categories';
+import { PETTY_CASH_REASON_MAX } from '@/lib/petty-cash-categories';
 
 function currentYearMonth() {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -22,6 +27,10 @@ function currentYearMonth() {
   const month = parts.find((p) => p.type === 'month')?.value;
 
   return `${year}-${month}`;
+}
+
+function sessionEmployeeType(session: unknown): string | null | undefined {
+  return (session as { user?: { employeeType?: string | null } } | null)?.user?.employeeType;
 }
 
 async function getEmployeeStore(userId: string) {
@@ -99,12 +108,15 @@ export async function GET() {
   // calendar to catch up. See getActivePeriod in petty-cash-period.ts.
   const activeMonth = period.yearMonth;
 
+  const categories = await listPettyCashCategories({ activeOnly: true });
+
   const txList = await db
     .select({
       id: pettyCashTransactions.id,
       amount: pettyCashTransactions.amount,
       actualAmount: pettyCashTransactions.actualAmount,
       description: pettyCashTransactions.description,
+      categoryName: pettyCashTransactions.categoryName,
       status: pettyCashTransactions.status,
       imageUrl: pettyCashTransactions.imageUrl,
       approvedAt: pettyCashTransactions.approvedAt,
@@ -128,12 +140,23 @@ export async function GET() {
     openingBalance: period.openingBalance,
     closingBalance: period.closingBalance,
     periodStatus: period.status,
+    // The period's own month (the money in use) vs today's calendar month —
+    // they differ when the balance carries over or a refill started next month.
     month: activeMonth,
+    currentMonth: month,
+    // Active request categories for the "new request" form, in display order.
+    categories: categories.map((c) => ({
+      id: c.id,
+      name: c.name,
+      defaultReason: c.defaultReason,
+      requiresCustomReason: c.requiresCustomReason,
+    })),
     transactions: txList.map((t) => ({
       id: t.id,
       amount: t.amount,
       actualAmount: t.actualAmount,
       description: t.description,
+      categoryName: t.categoryName,
       status: t.status,
       imageUrl: t.imageUrl,
       approvedAt: t.approvedAt ? new Date(t.approvedAt).toISOString() : null,
@@ -152,16 +175,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const employeeType = (session?.user as { employeeType?: string | null } | undefined)?.employeeType;
-  if (!isPicType(employeeType)) {
+  if (!isPettyCashHolder(sessionEmployeeType(session))) {
     return NextResponse.json(
-      { error: 'Only PIC can request petty cash.' },
+      { error: 'Hanya PIC 1 yang bisa mengirim Request Petty Cash.' },
       { status: 403 },
     );
   }
 
   let body: {
     amount?: unknown;
+    categoryId?: unknown;
     description?: unknown;
   };
 
@@ -172,8 +195,6 @@ export async function POST(req: NextRequest) {
   }
 
   const amount = Number(body.amount);
-  const description =
-    typeof body.description === 'string' ? body.description.trim() : '';
 
   if (!Number.isFinite(amount) || amount <= 0) {
     return NextResponse.json(
@@ -182,9 +203,34 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Every request is filed under an active category. Its default reason
+  // fills in the Keterangan when the PIC leaves it blank; a custom-reason
+  // category (Lain-Lain) has none, so the PIC must write their own.
+  const categoryId = Number(body.categoryId);
+  const category = Number.isInteger(categoryId) ? await getPettyCashCategory(categoryId) : null;
+
+  if (!category || !category.isActive) {
+    return NextResponse.json(
+      { error: 'Pilih kategori petty cash.' },
+      { status: 422 },
+    );
+  }
+
+  const typedReason =
+    typeof body.description === 'string' ? body.description.trim() : '';
+  const description =
+    typedReason || (category.requiresCustomReason ? '' : (category.defaultReason ?? ''));
+
   if (!description) {
     return NextResponse.json(
-      { error: 'Description is required.' },
+      { error: `Keterangan wajib diisi untuk kategori ${category.name}.` },
+      { status: 422 },
+    );
+  }
+
+  if (description.length > PETTY_CASH_REASON_MAX) {
+    return NextResponse.json(
+      { error: `Keterangan maksimal ${PETTY_CASH_REASON_MAX} karakter.` },
       { status: 422 },
     );
   }
@@ -221,6 +267,8 @@ export async function POST(req: NextRequest) {
       storeId,
       amount: amount.toFixed(2),
       description,
+      categoryId: category.id,
+      categoryName: category.name,
       status: 'pending_ops',
       imageUrl: null,
       imageKey: null,
@@ -259,6 +307,22 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  // Confirming the actual amount and uploading the receipt are PIC 1's job —
+  // any PIC 1 of the request's store (not only whoever submitted it), so a
+  // request isn't stranded when the PIC 1 changes. Everyone else only views.
+  if (!isPettyCashHolder(sessionEmployeeType(session))) {
+    return NextResponse.json(
+      { error: 'Hanya PIC 1 yang bisa mengonfirmasi jumlah terpakai dan mengunggah struk.' },
+      { status: 403 },
+    );
+  }
+
+  const storeId = await getEmployeeStore(userId);
+
+  if (!storeId) {
+    return NextResponse.json({ error: 'No store assigned.' }, { status: 403 });
+  }
+
   let body: {
     txId?: unknown;
     imageUrl?: unknown;
@@ -286,10 +350,9 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid txId.' }, { status: 400 });
   }
 
-  // Confirming the actual amount used — only the PIC who submitted the
-  // request can do this, and only once OPS has approved it. This is what
-  // finally cuts the money from the store's ready petty cash, since the
-  // originally requested amount was just an estimate.
+  // Confirming the actual amount used — PIC 1 only, and only once OPS has
+  // approved it. This is what finally cuts the money from the store's ready
+  // petty cash, since the originally requested amount was just an estimate.
   if (body.actualAmount !== undefined) {
     const actualAmount = Number(body.actualAmount);
 
@@ -305,7 +368,7 @@ export async function PATCH(req: NextRequest) {
         SELECT id, period_id
         FROM petty_cash_transactions
         WHERE id = ${txId}
-          AND user_id = ${userId}
+          AND store_id = ${storeId}
           AND status = 'ops_approved'
       ),
 
@@ -373,7 +436,7 @@ export async function PATCH(req: NextRequest) {
       image_key = ${imageKey},
       updated_at = NOW()
     WHERE id = ${txId}
-      AND user_id = ${userId}
+      AND store_id = ${storeId}
       AND status IN ('ops_approved', 'completed')
     RETURNING id::int
   `);

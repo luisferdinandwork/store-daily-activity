@@ -9,10 +9,12 @@ import {
   unique,
   serial,
   index,
+  jsonb,
 } from 'drizzle-orm/pg-core';
 import {
   attendanceStatusEnum,
   breakTypeEnum,
+  cashCountSessionEnum,
   issueStatusEnum,
 } from './enums';
 import { userRoles, employeeTypes, shifts } from './lookups';
@@ -56,6 +58,13 @@ export const stores = pgTable('stores', {
   areaIdx:       index('stores_area_idx').on(t.areaId),
 }));
 
+/** See users.switchContext. */
+export type SwitchContext = {
+  originalHomeStoreId: number | null;
+  originalAreaId: number | null;
+  previewShiftId: number | null;
+};
+
 // ─── User ─────────────────────────────────────────────────────────────────────
 
 export const users = pgTable('users', {
@@ -89,6 +98,12 @@ export const users = pgTable('users', {
    */
   switchedFromRoleId:         integer('switched_from_role_id').references(() => userRoles.id),
   switchedFromEmployeeTypeId: integer('switched_from_employee_type_id').references(() => employeeTypes.id),
+  /**
+   * Preview context for that switch: the real homeStoreId/areaId to restore on
+   * return, plus the shift an employee-preview works (drives the auto-created
+   * daily schedule — lib/role-preview.ts). Null when not previewing.
+   */
+  switchContext: jsonb('switch_context').$type<SwitchContext | null>(),
 
   homeStoreId: integer('home_store_id').references(() => stores.id),
   areaId:      integer('area_id').references(() => areas.id),
@@ -239,17 +254,21 @@ export const breakSessions = pgTable('break_sessions', {
   updatedAt:    timestamp('updated_at').defaultNow().notNull(),
 });
 
-// ─── Store cash count (daily cashier count + buddy selfie) ────────────────────
+// ─── Store cash count (cashier count + buddy selfie) ──────────────────────────
 //
-// Once per store per calendar day: an employee counts the total cash in the
-// cashier drawer, picks a colleague also scheduled that day as a witness, and
-// the two take a selfie together. Required before any morning / full_day
-// employee can check out. `date` is the UTC-midnight day bucket, same as
-// attendance/schedules. `shiftId` is the resolved morning shift (provenance).
+// Once per store per calendar day per SOP session (lib/cash-count-sessions.ts:
+// Pagi, Siang 1, Siang 2, Sore, Malam): an employee counts the total cash in
+// the cashier drawer, picks a colleague also scheduled that day as a witness,
+// and the two take a selfie together. All five are mandatory, enforced at
+// checkout (requiredCashCountSessionsForShift). `date` is the UTC-midnight day bucket,
+// same as attendance/schedules. `shiftId` is the counter's shift (provenance).
 export const storeCashCounts = pgTable('store_cash_counts', {
   id:      serial('id').primaryKey(),
   storeId: integer('store_id').references(() => stores.id).notNull(),
   date:    timestamp('date').notNull(),
+  // Default only for rows from builds before sessions existed (their single
+  // daily count = Pagi); submitStoreCashCount always sets it explicitly.
+  session: cashCountSessionEnum('session').default('pagi').notNull(),
   shiftId: integer('shift_id').references(() => shifts.id).notNull(),
 
   totalAmount: decimal('total_amount', { precision: 12, scale: 2 }).notNull(),
@@ -265,7 +284,7 @@ export const storeCashCounts = pgTable('store_cash_counts', {
   createdAt:   timestamp('created_at').defaultNow().notNull(),
   updatedAt:   timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
-  uniqStoreDate: unique('store_cash_counts_store_date_unique').on(t.storeId, t.date),
+  uniqStoreDateSession: unique('store_cash_counts_store_date_session_unique').on(t.storeId, t.date, t.session),
   storeDateIdx:  index('store_cash_counts_store_date_idx').on(t.storeId, t.date),
 }));
 

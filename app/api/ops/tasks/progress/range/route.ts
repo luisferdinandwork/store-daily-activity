@@ -67,7 +67,7 @@ export async function GET(req: NextRequest) {
   // Fetch store metadata + range summaries in parallel
   const [storeRows, summaries] = await Promise.all([
     db
-      .select({ id: stores.id, name: stores.name, address: stores.address, areaId: stores.areaId, areaName: areas.name })
+      .select({ id: stores.id, name: stores.name, storeNo: stores.storeNo, address: stores.address, areaId: stores.areaId, areaName: areas.name })
       .from(stores)
       .leftJoin(areas, eq(stores.areaId, areas.id))
       .where(inArray(stores.id, allowedStoreIds)),
@@ -81,6 +81,7 @@ export async function GET(req: NextRequest) {
     stores: storeRows.map(s => ({
       id:       String(s.id),
       name:     s.name,
+      storeNo:  s.storeNo,
       address:  s.address,
       areaId:   s.areaId   != null ? String(s.areaId)   : null,
       areaName: s.areaName ?? null,

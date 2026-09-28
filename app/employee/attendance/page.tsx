@@ -18,7 +18,8 @@
 // inside it. Tapping Check In takes a fresh fix and sends it; the API
 // re-validates with the same haversine + radius, so this UI is only a preview.
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
+import { useApi } from '@/lib/client/use-api';
 import { useSession } from 'next-auth/react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -32,6 +33,11 @@ import { attendanceStatusLabel, type AttendanceStatus } from '@/lib/attendance-s
 import { cn, formatRupiah } from '@/lib/utils';
 import { toast } from 'sonner';
 import CashCountCard, { type CashCountPayload } from '@/components/employee/CashCountCard';
+import {
+  cashCountSessionLabels,
+  missingCashCountSessionsForShift,
+  type CashCountSession,
+} from '@/lib/cash-count-sessions';
 import { EmptyState, Notice, PageBody, Section, SkeletonBlocks } from '@/components/employee/ui';
 import { useGeo } from '@/lib/hooks/useGeo';
 import { haversineMetres, type GeoPoint } from '@/lib/geo';
@@ -291,9 +297,10 @@ function CashInput({
 
 // ─── Per-shift card ───────────────────────────────────────────────────────────
 
-function ShiftCard({ slot, cashCountBlocking, location, onRefreshLocation, onAction }: {
+function ShiftCard({ slot, cashCountMissing, location, onRefreshLocation, onAction }: {
   slot:              ShiftSlot;
-  cashCountBlocking: boolean;
+  /** Cash-count sessions this shift still needs on record before checkout. */
+  cashCountMissing:  CashCountSession[];
   location:          LocationCheck;
   onRefreshLocation: () => void;
   onAction: (
@@ -512,9 +519,10 @@ function ShiftCard({ slot, cashCountBlocking, location, onRefreshLocation, onAct
                 </Button>
 
                 {onBreak && <p className="text-center text-[11px] text-muted-foreground">Return from break first to check out</p>}
-                {!onBreak && cashCountBlocking && (
+                {!onBreak && cashCountMissing.length > 0 && (
                   <p className="flex items-center justify-center gap-1 text-center text-[11px] font-medium text-amber-600">
-                    <AlertTriangle className="h-3 w-3" /> Selesaikan Hitung Kas Kasir untuk absen pulang
+                    <AlertTriangle className="h-3 w-3 flex-shrink-0" />
+                    Selesaikan Hitung Kas Kasir sesi {cashCountSessionLabels(cashCountMissing)} untuk absen pulang
                   </p>
                 )}
               </div>
@@ -539,44 +547,27 @@ function ShiftCard({ slot, cashCountBlocking, location, onRefreshLocation, onAct
 export default function EmployeeAttendancePage() {
   const { data: session, status: sessionStatus } = useSession();
 
-  const [slots,     setSlots]     = useState<ShiftSlot[]>([]);
-  const [cashCount, setCashCount] = useState<CashCountPayload | null>(null);
-  const [geofence,  setGeofence]  = useState<Geofence | null>(null);
-  const [loading,   setLoading]   = useState(true);
-
   const user        = session?.user as { homeStoreId?: string | number } | undefined;
   const homeStoreId = user?.homeStoreId != null ? Number(user.homeStoreId) : null;
+
+  // Cached + revalidated (lib/client/use-api.ts): shares the response the
+  // dashboard just loaded, so this page renders instantly when opened from it.
+  const canLoad = sessionStatus === 'authenticated' && homeStoreId != null && !isNaN(homeStoreId);
+  const att = useApi<AttResponse>(canLoad ? '/api/employee/attendance' : null);
+  const slots: ShiftSlot[] = att.data?.shifts ?? [];
+  const cashCount: CashCountPayload | null = att.data?.cashCount ?? null;
+  const geofence: Geofence | null = att.data?.geofence ?? null;
+  const loading = sessionStatus === 'loading' || att.loading;
+  const load = att.refresh;
+
+  useEffect(() => {
+    if (att.error) toast.error('Failed to load attendance data');
+  }, [att.error]);
 
   // Only ask for location while there's still a shift to check into.
   const needsCheckIn = slots.some(s => !s.attendance);
   const { geo, geoError, geoReady, refresh: refreshGeo } = useGeo(needsCheckIn);
   const location = checkLocation(geo, geoError, geoReady, geofence);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await fetch('/api/employee/attendance');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json: AttResponse = await res.json();
-      setSlots(json.shifts ?? []);
-      setCashCount(json.cashCount ?? null);
-      setGeofence(json.geofence ?? null);
-    } catch (err) {
-      console.error('[attendance load]', err);
-      toast.error('Failed to load attendance data');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (sessionStatus === 'loading') return;
-    if (sessionStatus === 'unauthenticated' || homeStoreId == null || isNaN(homeStoreId)) {
-      setLoading(false);
-      return;
-    }
-    load();
-  }, [sessionStatus, homeStoreId, load]);
 
   async function handleAction(
     action:     string,
@@ -635,8 +626,8 @@ export default function EmployeeAttendancePage() {
     );
   }
 
-  const cashCountBlocking = Boolean(cashCount?.required && !cashCount?.done);
-  const showCashCount = Boolean(cashCount && (cashCount.required || cashCount.done));
+  const countedSessions = (cashCount?.sessions ?? []).filter(s => s.record).map(s => s.session);
+  const showCashCount = Boolean(cashCount && (cashCount.canSubmit || countedSessions.length > 0));
 
   return (
     <div className="flex flex-col">
@@ -701,7 +692,7 @@ export default function EmployeeAttendancePage() {
               <ShiftCard
                 key={slot.schedule.scheduleId}
                 slot={slot}
-                cashCountBlocking={cashCountBlocking}
+                cashCountMissing={missingCashCountSessionsForShift(slot.schedule.shift, countedSessions)}
                 location={location}
                 onRefreshLocation={refreshGeo}
                 onAction={handleAction}

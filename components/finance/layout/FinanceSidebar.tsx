@@ -7,10 +7,13 @@
 //   Overview
 //     Dashboard         /finance
 //
+//   Petty Cash
+//     Monitoring        /finance/petty-cash           (balances, spend, refill requests)
+//     Report            /finance/petty-cash/report    (usage + refill bank account, Excel)
+//
 //   Cash & Reports
-//     Petty Cash        /finance/petty-cash          (approve/review transactions)
-//     Daily Reports     /finance/daily-reports        (setoran, EOD verification)
 //     Setoran Review    /finance/setoran              (money-storage discrepancy review)
+//     Uang Modal Harian /finance/uang-modal           (daily opening-float check)
 //
 //   Issues
 //     Issues            /finance/issues               (issues routed to Finance role)
@@ -24,7 +27,7 @@ import { signOut, useSession } from 'next-auth/react';
 import {
   AlertTriangle,
   ChevronRight,
-  FileText,
+  FileSpreadsheet,
   KeyRound,
   LayoutDashboard,
   LogOut,
@@ -64,11 +67,17 @@ const NAV: NavSection[] = [
     ],
   },
   {
+    section: 'Petty Cash',
+    items: [
+      { href: '/finance/petty-cash',        label: 'Monitoring', icon: Wallet, exact: true },
+      { href: '/finance/petty-cash/report', label: 'Report',     icon: FileSpreadsheet },
+    ],
+  },
+  {
     section: 'Cash & Reports',
     items: [
-      { href: '/finance/petty-cash',    label: 'Petty Cash',     icon: Wallet },
-      { href: '/finance/setoran',       label: 'Setoran Review', icon: WalletCards },
-      { href: '/finance/uang-modal',       label: 'Uang Modal Harian', icon: PocketKnife },
+      { href: '/finance/setoran',    label: 'Setoran Review',    icon: WalletCards },
+      { href: '/finance/uang-modal', label: 'Uang Modal Harian', icon: PocketKnife },
     ],
   },
   {

@@ -32,6 +32,8 @@ export interface PeriodProps {
   /** Currently selected period. Omit onPeriodChange to hide period tabs. */
   period?: Period;
   onPeriodChange?: (period: Period) => void;
+  /** Which period tabs to offer (default: all three). */
+  periods?: Period[];
   /** YYYY-MM-DD anchor date. Weekly snaps to Monday; monthly snaps to date 01. */
   date?: string;
   onDateChange?: (dateKey: string) => void;
@@ -100,10 +102,15 @@ const PERIOD_TABS: { id: Period; label: string; icon: ElementType }[] = [
   { id: 'monthly', label: 'Bulanan', icon: LayoutGrid },
 ];
 
-function PeriodTabs({ value, onChange }: { value: Period; onChange: (period: Period) => void }) {
+function PeriodTabs({ value, onChange, periods }: {
+  value: Period;
+  onChange: (period: Period) => void;
+  periods?: Period[];
+}) {
+  const tabs = periods ? PERIOD_TABS.filter((t) => periods.includes(t.id)) : PERIOD_TABS;
   return (
     <div className="inline-flex h-10 items-center gap-0.5 rounded-xl border border-slate-200 bg-white p-0.5">
-      {PERIOD_TABS.map((tab) => {
+      {tabs.map((tab) => {
         const active = tab.id === value;
         const Icon = tab.icon;
 
@@ -122,6 +129,91 @@ function PeriodTabs({ value, onChange }: { value: Period; onChange: (period: Per
           </button>
         );
       })}
+    </div>
+  );
+}
+
+// ─── Month picker ─────────────────────────────────────────────────────────────
+// Monthly mode picks a month straight from a 12-month grid (with year arrows)
+// instead of making Ops click some day inside a day calendar.
+
+const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+
+function MonthPicker({
+  value,
+  onSelect,
+}: {
+  value: Date;
+  onSelect: (monthStart: Date) => void;
+}) {
+  const [viewYear, setViewYear] = useState(value.getFullYear());
+  const today = new Date();
+  const thisMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+  const nextMonth = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+
+  return (
+    <div className="w-64">
+      <div className="mb-2 flex items-center justify-between">
+        <button
+          type="button"
+          aria-label="Tahun sebelumnya"
+          onClick={() => setViewYear((y) => y - 1)}
+          className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100"
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </button>
+        <span className="text-sm font-bold tabular-nums text-slate-800">{viewYear}</span>
+        <button
+          type="button"
+          aria-label="Tahun berikutnya"
+          onClick={() => setViewYear((y) => y + 1)}
+          className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100"
+        >
+          <ChevronRight className="h-4 w-4" />
+        </button>
+      </div>
+
+      <div className="grid grid-cols-3 gap-1.5">
+        {MONTH_SHORT.map((name, m) => {
+          const selected = value.getFullYear() === viewYear && value.getMonth() === m;
+          const isCurrent = today.getFullYear() === viewYear && today.getMonth() === m;
+          return (
+            <button
+              key={name}
+              type="button"
+              onClick={() => onSelect(new Date(viewYear, m, 1))}
+              aria-pressed={selected}
+              className={cn(
+                'h-9 rounded-lg text-xs font-bold transition',
+                selected
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : isCurrent
+                    ? 'text-indigo-600 ring-1 ring-inset ring-indigo-200 hover:bg-indigo-50'
+                    : 'text-slate-600 hover:bg-slate-100',
+              )}
+            >
+              {name}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-1.5 border-t border-slate-100 pt-3">
+        <button
+          type="button"
+          onClick={() => onSelect(thisMonth)}
+          className="h-8 rounded-lg bg-slate-100 text-[11px] font-bold text-slate-600 hover:bg-slate-200"
+        >
+          Bulan ini
+        </button>
+        <button
+          type="button"
+          onClick={() => onSelect(nextMonth)}
+          className="h-8 rounded-lg bg-indigo-50 text-[11px] font-bold text-indigo-700 hover:bg-indigo-100"
+        >
+          Bulan depan · {MONTH_SHORT[nextMonth.getMonth()]}
+        </button>
+      </div>
     </div>
   );
 }
@@ -199,6 +291,7 @@ function RangeNavigator({
   };
 
   const calendarValue = keyToCalendarDate(date, period);
+  const todayLabel = period === 'monthly' ? 'Bulan ini' : period === 'weekly' ? 'Minggu ini' : 'Hari ini';
 
   return (
     <div className="inline-flex h-10 items-center rounded-xl border border-slate-200 bg-white">
@@ -230,19 +323,16 @@ function RangeNavigator({
                 {period === 'weekly' && 'Pilih minggu'}
                 {period === 'monthly' && 'Pilih bulan'}
               </p>
-              <Calendar
-                mode="single"
-                selected={calendarValue}
-                onSelect={handleCalendarSelect}
-                className="rounded-lg"
-                {...(period === 'monthly'
-                  ? {
-                      captionLayout: 'dropdown' as const,
-                      startMonth: new Date(2020, 0),
-                      endMonth: new Date(2030, 11),
-                    }
-                  : {})}
-              />
+              {period === 'monthly' ? (
+                <MonthPicker value={calendarValue} onSelect={handleCalendarSelect} />
+              ) : (
+                <Calendar
+                  mode="single"
+                  selected={calendarValue}
+                  onSelect={handleCalendarSelect}
+                  className="rounded-lg"
+                />
+              )}
             </div>
           </PopoverContent>
         </Popover>
@@ -250,9 +340,9 @@ function RangeNavigator({
         <button
           type="button"
           onClick={goToday}
-          className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-500 transition hover:bg-slate-200"
+          className="whitespace-nowrap rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-500 transition hover:bg-slate-200"
         >
-          Hari ini
+          {todayLabel}
         </button>
       </div>
 
@@ -311,7 +401,7 @@ export function OpsPageHeader({
           {(hasPeriod || onRefresh || actions) && (
             <div className="flex flex-wrap items-center gap-2">
               {hasPeriod && periodProps?.onPeriodChange && (
-                <PeriodTabs value={period} onChange={periodProps.onPeriodChange} />
+                <PeriodTabs value={period} onChange={periodProps.onPeriodChange} periods={periodProps.periods} />
               )}
 
               {hasPeriod && (

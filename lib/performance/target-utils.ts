@@ -31,6 +31,7 @@ import { and, asc, eq, gte, lt } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   employeeMonthlyTargets,
+  employeeTypes,
   schedules,
   storeMonthlyTargets,
   targetAllocationTemplates,
@@ -598,6 +599,108 @@ export async function syncRosterPercentages(params: {
   return { headcount, usedFallbackEqualSplit };
 }
 
+/**
+ * "Apply to all staff": put every active employee of the store (the same set
+ * the one-by-one picker offers) on the month's roster in one go, then let
+ * syncRosterPercentages() split the % by the default allocation template for
+ * the new headcount. Position follows the employee type — pic_1 → PIC1,
+ * pic_2 → PIC2, everyone else → SA (numbered after any existing SAs, by
+ * name). A PIC slot that's already taken falls back to SA. Employees already
+ * on the roster are left untouched, including any Ops-overridden %.
+ */
+export async function addAllStoreStaffToRoster(params: {
+  storeId: number;
+  yearMonth: string;
+  createdBy?: string | null;
+}): Promise<{ added: number; alreadyOnRoster: number; meta: RosterMeta }> {
+  const [staff, existing] = await Promise.all([
+    db
+      .select({ id: users.id, name: users.name, typeCode: employeeTypes.code })
+      .from(users)
+      .leftJoin(employeeTypes, eq(employeeTypes.id, users.employeeTypeId))
+      .where(and(eq(users.homeStoreId, params.storeId), eq(users.isActive, true))),
+    db
+      .select({
+        userId: employeeMonthlyTargets.userId,
+        targetRoleCode: employeeMonthlyTargets.targetRoleCode,
+        sortOrder: employeeMonthlyTargets.sortOrder,
+        isActive: employeeMonthlyTargets.isActive,
+      })
+      .from(employeeMonthlyTargets)
+      .where(
+        and(
+          eq(employeeMonthlyTargets.storeId, params.storeId),
+          eq(employeeMonthlyTargets.yearMonth, params.yearMonth),
+        ),
+      ),
+  ]);
+
+  // Any existing row (even inactive) holds the user/store/month unique key.
+  const onRoster = new Set(existing.map((r) => r.userId));
+  const active = existing.filter((r) => r.isActive);
+  const takenPicSlots = new Set(
+    active.map((r) => r.targetRoleCode).filter((code) => PIC_SLOT_CODES.has(code)),
+  );
+  let nextSaOrder =
+    Math.max(0, ...active.filter((r) => !PIC_SLOT_CODES.has(r.targetRoleCode)).map((r) => r.sortOrder)) + 1;
+
+  const TYPE_ORDER: Record<string, number> = { pic_1: 0, pic_2: 1 };
+  const toAdd = staff
+    .filter((s) => !onRoster.has(s.id))
+    .sort(
+      (a, b) =>
+        (TYPE_ORDER[a.typeCode ?? ""] ?? 2) - (TYPE_ORDER[b.typeCode ?? ""] ?? 2) ||
+        a.name.localeCompare(b.name),
+    );
+
+  let added = 0;
+  if (toAdd.length > 0) {
+    const planId = await ensureStoreMonthlyTargetPlan({
+      storeId: params.storeId,
+      yearMonth: params.yearMonth,
+      createdBy: params.createdBy,
+    });
+
+    const values = toAdd.map((s) => {
+      let role = s.typeCode === "pic_1" ? "PIC1" : s.typeCode === "pic_2" ? "PIC2" : "SA";
+      if (role !== "SA" && takenPicSlots.has(role)) role = "SA";
+      if (role !== "SA") takenPicSlots.add(role);
+      return {
+        storeMonthlyTargetId: planId,
+        userId: s.id,
+        storeId: params.storeId,
+        yearMonth: params.yearMonth,
+        targetRoleCode: role,
+        sortOrder: role === "SA" ? nextSaOrder++ : 0,
+        isActive: true,
+        createdBy: params.createdBy ?? undefined,
+        updatedBy: params.createdBy ?? undefined,
+      };
+    });
+
+    const inserted = await db
+      .insert(employeeMonthlyTargets)
+      .values(values)
+      .onConflictDoNothing({
+        target: [
+          employeeMonthlyTargets.userId,
+          employeeMonthlyTargets.storeId,
+          employeeMonthlyTargets.yearMonth,
+        ],
+      })
+      .returning({ id: employeeMonthlyTargets.id });
+    added = inserted.length;
+  }
+
+  const meta = await syncRosterPercentages({
+    storeId: params.storeId,
+    yearMonth: params.yearMonth,
+    updatedBy: params.createdBy,
+  });
+
+  return { added, alreadyOnRoster: staff.length - added, meta };
+}
+
 export async function setEmployeeMonthlyPercentage(params: {
   employeeMonthlyTargetId: number;
   percentage: number;
@@ -612,7 +715,7 @@ export async function setEmployeeMonthlyPercentage(params: {
     .limit(1);
 
   if (!row) {
-    throw new Error("Roster row not found.");
+    throw new Error("Anggota Team tidak ditemukan.");
   }
 
   await db
@@ -643,7 +746,7 @@ export async function resetEmployeeMonthlyPercentageToDefault(params: {
     .limit(1);
 
   if (!row) {
-    throw new Error("Roster row not found.");
+    throw new Error("Anggota Team tidak ditemukan.");
   }
 
   await db

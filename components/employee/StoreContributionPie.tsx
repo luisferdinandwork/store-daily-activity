@@ -164,7 +164,7 @@ export function StoreContributionPie({ employeeContributions, periodLabel }: Pro
           </p>
         </div>
         <p className="mt-3 text-sm font-medium text-slate-500">
-          No roster data available for this period yet.
+          No team data available for this period yet.
         </p>
       </div>
     );

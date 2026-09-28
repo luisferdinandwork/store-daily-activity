@@ -1499,7 +1499,7 @@ export async function getAreaTaskOverview(opsUserId: string, date: Date) {
   const [area] = await db.select({ id: areas.id, name: areas.name }).from(areas)
     .where(eq(areas.id, opsUser.areaId)).limit(1);
 
-  const areaStores = await db.select({ id: stores.id, name: stores.name, address: stores.address })
+  const areaStores = await db.select({ id: stores.id, name: stores.name, storeNo: stores.storeNo, address: stores.address })
     .from(stores).where(eq(stores.areaId, opsUser.areaId)).orderBy(stores.name);
 
   const results = await Promise.all(areaStores.map(async (s) => {
@@ -1529,6 +1529,7 @@ export async function getAllTaskOverview(date: Date) {
     .select({
       id: stores.id,
       name: stores.name,
+      storeNo: stores.storeNo,
       address: stores.address,
       areaId: stores.areaId,
       areaName: areas.name,
@@ -1565,6 +1566,7 @@ export async function getAllTaskOverview(date: Date) {
       return {
         id: s.id,
         name: s.name,
+        storeNo: s.storeNo,
         address: s.address,
         areaId: s.areaId,
         areaName: s.areaName,

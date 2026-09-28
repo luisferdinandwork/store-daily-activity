@@ -34,6 +34,7 @@ export type PettyCashTxRow = {
   amount: string;
   actualAmount: string | null;
   description: string;
+  categoryName: string | null;
   status: string;
   imageUrl: string | null;
   submittedBy: string;
@@ -132,6 +133,7 @@ export async function GET(
       amount: pettyCashTransactions.amount,
       actualAmount: pettyCashTransactions.actualAmount,
       description: pettyCashTransactions.description,
+      categoryName: pettyCashTransactions.categoryName,
       status: pettyCashTransactions.status,
       imageUrl: pettyCashTransactions.imageUrl,
       approvedAt: pettyCashTransactions.approvedAt,
@@ -219,6 +221,7 @@ export async function GET(
         amount: tx.amount,
         actualAmount: tx.actualAmount,
         description: tx.description,
+        categoryName: tx.categoryName,
         status: tx.status,
         imageUrl: tx.imageUrl,
         submittedBy: tx.submitterName,

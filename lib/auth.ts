@@ -15,6 +15,7 @@ import {
   isLoginBlocked,
   recordLoginFailure,
 } from '@/lib/auth/rate-limit';
+import { restoreRealRole } from '@/lib/role-preview';
 
 const switchedFromRole = alias(userRoles, 'switched_from_role');
 
@@ -127,6 +128,42 @@ async function loadFreshAuthFields(userId: string, force: boolean): Promise<Fres
   return value;
 }
 
+/** The login row for a NIK: credentials + account state + role fields. */
+function selectLoginRow(nik: string) {
+  return db
+    .select({
+      id: users.id,
+      nik: users.nik,
+      name: users.name,
+      password: users.password,
+      avatarUrl: users.avatarUrl,
+      isActive: users.isActive,
+
+      homeStoreId: users.homeStoreId,
+      areaId: users.areaId,
+
+      roleId: users.roleId,
+      roleCode: userRoles.code,
+      roleLabel: userRoles.label,
+      roleActive: userRoles.isActive,
+
+      employeeTypeId: users.employeeTypeId,
+      employeeTypeCode: employeeTypes.code,
+      employeeTypeLabel: employeeTypes.label,
+      employeeTypeActive: employeeTypes.isActive,
+
+      switchedFromRoleId: users.switchedFromRoleId,
+      switchedFromRoleCode: switchedFromRole.code,
+      switchedFromRoleLabel: switchedFromRole.label,
+    })
+    .from(users)
+    .innerJoin(userRoles, eq(userRoles.id, users.roleId))
+    .leftJoin(employeeTypes, eq(employeeTypes.id, users.employeeTypeId))
+    .leftJoin(switchedFromRole, eq(switchedFromRole.id, users.switchedFromRoleId))
+    .where(eq(users.nik, nik))
+    .limit(1);
+}
+
 const isDev = process.env.NODE_ENV === 'development';
 
 const log = (...args: unknown[]) => {
@@ -215,40 +252,7 @@ export const authOptions: NextAuthOptions = {
             throw new Error('TooManyAttempts');
           }
 
-          const result = await db
-            .select({
-              id: users.id,
-              nik: users.nik,
-              name: users.name,
-              password: users.password,
-              avatarUrl: users.avatarUrl,
-              isActive: users.isActive,
-
-              homeStoreId: users.homeStoreId,
-              areaId: users.areaId,
-
-              roleId: users.roleId,
-              roleCode: userRoles.code,
-              roleLabel: userRoles.label,
-              roleActive: userRoles.isActive,
-
-              employeeTypeId: users.employeeTypeId,
-              employeeTypeCode: employeeTypes.code,
-              employeeTypeLabel: employeeTypes.label,
-              employeeTypeActive: employeeTypes.isActive,
-
-              switchedFromRoleId: users.switchedFromRoleId,
-              switchedFromRoleCode: switchedFromRole.code,
-              switchedFromRoleLabel: switchedFromRole.label,
-            })
-            .from(users)
-            .innerJoin(userRoles, eq(userRoles.id, users.roleId))
-            .leftJoin(employeeTypes, eq(employeeTypes.id, users.employeeTypeId))
-            .leftJoin(switchedFromRole, eq(switchedFromRole.id, users.switchedFromRoleId))
-            .where(eq(users.nik, nik))
-            .limit(1);
-
-          const u = result[0];
+          let [u] = await selectLoginRow(nik);
 
           // Always run exactly one bcrypt comparison — against a dummy hash when the NIK
           // is unknown — and only then look at account state, so neither an unknown NIK
@@ -268,6 +272,23 @@ export const authOptions: NextAuthOptions = {
             log('❌ Login rejected for NIK:', nik);
             recordLoginFailure(nik, ip);
             return null;
+          }
+
+          // An IT account left mid role-preview (e.g. its session expired while
+          // switched) signs back in as itself: restore the real role first so a
+          // preview can never lock the account out.
+          if (u.switchedFromRoleId) {
+            try {
+              await restoreRealRole(u.id);
+              [u] = await selectLoginRow(nik);
+              log('↩️ Restored real role on login for NIK:', nik);
+            } catch (err) {
+              console.error('[auth] restoring real role on login failed:', err);
+            }
+            if (!u || !u.isActive || !u.roleActive) {
+              recordLoginFailure(nik, ip);
+              return null;
+            }
           }
 
           const role = u.roleCode;

@@ -24,12 +24,27 @@ import { toast } from 'sonner';
 import {
   attendanceStatusLabel,
   isLeaveAttendanceStatus,
+  LEAVE_ATTENDANCE_STATUSES,
   type AttendanceStatus,
+  type LeaveAttendanceStatus,
 } from '@/lib/attendance-status';
+import { CASH_COUNT_SESSION_INFO, type CashCountSession } from '@/lib/cash-count-sessions';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type AttStatus = AttendanceStatus;
 type RowStatus = AttStatus | 'pending';
+
+/** One SOP cash-count session for the store/day; record null = not counted. */
+interface CashCountEntry {
+  session: CashCountSession;
+  record: {
+    totalAmount: number;
+    countedByName: string | null;
+    witnessName: string | null;
+    selfiePhoto: string;
+    completedAt: string | null;
+  } | null;
+}
 
 interface BreakSession {
   id:           string;
@@ -110,11 +125,10 @@ function rowStatus(att: AttendanceData | null): RowStatus {
   return att?.status ?? 'pending';
 }
 
-// Settable statuses for the mark dialog — 'pending' isn't a real status, it's
-// just how the table renders "no attendance record yet".
-const SETTABLE_STATUSES: AttStatus[] = ['present', 'late', 'absent', 'excused'];
-// Justified absences (D / C / STD / SD) — shown as their own group.
-const LEAVE_STATUSES: AttStatus[] = ['dinas', 'cuti', 'sakit_tanpa_surat', 'sakit_dengan_surat'];
+// The only statuses Ops can set: justified absences (D / C / STD / SD), from
+// any current status. Present / late come from the employee's own check-in,
+// absent from the auto no-show job — never from this dialog.
+const OPS_SETTABLE_STATUSES = LEAVE_ATTENDANCE_STATUSES;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function fmtTime(iso: string | null) {
@@ -149,31 +163,32 @@ function BreakPill({ b }: { b: BreakSession }) {
 }
 
 // ─── Mark attendance dialog ───────────────────────────────────────────────────
+// Remounted per row (`key` = schedule id), so state starts from that row.
 function MarkDialog({ row, open, onClose, onSaved }: {
   row: AttRow | null; open: boolean; onClose: () => void; onSaved: () => void;
 }) {
-  const [status, setStatus] = useState<AttStatus>('present');
-  const [notes,  setNotes]  = useState('');
+  const currentStatus = rowStatus(row?.attendance ?? null);
+  const [status, setStatus] = useState<LeaveAttendanceStatus | null>(() => {
+    const s = row?.attendance?.status;
+    return isLeaveAttendanceStatus(s) ? s : null;
+  });
+  const [notes,  setNotes]  = useState(row?.attendance?.notes ?? '');
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    setStatus(row?.attendance?.status ?? 'present');
-    setNotes(row?.attendance?.notes ?? '');
-  }, [row, open]);
-
   const hasExistingRecord = Boolean(row?.attendance);
-  // Once the employee has checked in the status is locked. Without a check-in
-  // (not recorded yet, or auto-marked absent) Ops can set / re-classify it,
-  // e.g. Absent → Cuti or Sakit dengan surat dokter.
-  const canChangeStatus = !row?.attendance?.checkInTime;
+  const statusChanged = status !== null && status !== row?.attendance?.status;
+  // A brand-new record needs a status; an existing one can save just a note.
+  const canSave = !saving && (statusChanged || hasExistingRecord);
 
   const save = async () => {
-    if (!row) return;
+    if (!row || !canSave) return;
     setSaving(true);
     try {
-      const body = canChangeStatus
-        ? { scheduleId: row.schedule.id, status, notes: notes || undefined }
-        : { scheduleId: row.schedule.id, notes: notes || undefined };
+      const body = {
+        scheduleId: row.schedule.id,
+        ...(statusChanged ? { status } : {}),
+        notes: notes || undefined,
+      };
       const res  = await fetch('/api/ops/attendance', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -232,52 +247,45 @@ function MarkDialog({ row, open, onClose, onSaved }: {
           </div>
 
           <div className="space-y-1.5">
-            <Label>Status</Label>
-            {!canChangeStatus ? (
-              <div className="flex items-center gap-2">
-                <Badge variant="outline" className={cn('gap-1.5 text-xs', STATUS[status].chip)}>
-                  {(() => { const Icon = STATUS[status].Icon; return <Icon className="h-3.5 w-3.5" />; })()}
-                  {STATUS[status].label}
-                </Badge>
-                <span className="text-[11px] text-muted-foreground">Checked in — status can&apos;t be changed.</span>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {hasExistingRecord && (
-                  <p className="text-[11px] text-muted-foreground">
-                    No check-in recorded — you can change the status (e.g. Absent → Cuti / Sakit).
-                  </p>
-                )}
-                {[SETTABLE_STATUSES, LEAVE_STATUSES].map((group, gi) => (
-                  <div key={gi} className="space-y-1.5">
-                    {gi === 1 && (
-                      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                        Dinas / Cuti / Sakit
-                      </p>
+            <Label>Current status</Label>
+            <div>
+              <Badge variant="outline" className={cn('gap-1.5 text-xs', STATUS[currentStatus].chip)}>
+                {(() => { const Icon = STATUS[currentStatus].Icon; return <Icon className="h-3.5 w-3.5" />; })()}
+                {STATUS[currentStatus].label}
+              </Badge>
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Change to</Label>
+            <div className="grid grid-cols-2 gap-2">
+              {OPS_SETTABLE_STATUSES.map((key) => {
+                const cfg = STATUS[key];
+                const selected = status === key;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    aria-pressed={selected}
+                    // Tap again to deselect (keep the current status, edit the note only).
+                    onClick={() => setStatus(selected ? null : key)}
+                    className={cn(
+                      'flex items-center gap-2 rounded-lg border p-3 text-left text-sm font-medium transition-colors',
+                      selected
+                        ? cfg.chip
+                        : 'border-border bg-background text-muted-foreground hover:bg-secondary',
                     )}
-                    <div className="grid grid-cols-2 gap-2">
-                      {group.map((key) => {
-                        const cfg = STATUS[key];
-                        return (
-                        <button
-                          key={key} type="button" onClick={() => setStatus(key)}
-                          className={cn(
-                            'flex items-center gap-2 rounded-lg border p-3 text-sm font-medium transition-colors text-left',
-                            status === key
-                              ? cfg.chip
-                              : 'border-border bg-background text-muted-foreground hover:bg-secondary',
-                          )}
-                        >
-                          <cfg.Icon className="h-4 w-4 flex-shrink-0" />
-                          {cfg.label}
-                        </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+                  >
+                    <cfg.Icon className="h-4 w-4 flex-shrink-0" />
+                    {cfg.label}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              Present and Late come from the employee&apos;s own check-in, and Absent is marked
+              automatically — only Dinas, Cuti or Sakit can be set here.
+            </p>
           </div>
 
           <div className="space-y-1.5">
@@ -293,7 +301,7 @@ function MarkDialog({ row, open, onClose, onSaved }: {
 
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
+          <Button onClick={save} disabled={!canSave}>{saving ? 'Saving…' : 'Save'}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -429,13 +437,7 @@ export default function StoreAttendanceDetail({
   const [rows,    setRows]    = useState<AttRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [marking, setMarking] = useState<AttRow | null>(null);
-  const [cashCount, setCashCount] = useState<{
-    totalAmount: number;
-    countedByName: string | null;
-    witnessName: string | null;
-    selfiePhoto: string;
-    completedAt: string | null;
-  } | null>(null);
+  const [cashCounts, setCashCounts] = useState<CashCountEntry[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -444,7 +446,7 @@ export default function StoreAttendanceDetail({
       const json = await res.json();
       if (json.success) {
         setRows(json.data);
-        setCashCount(json.cashCount ?? null);
+        setCashCounts(json.cashCounts ?? []);
       }
     } finally {
       setLoading(false);
@@ -517,38 +519,63 @@ export default function StoreAttendanceDetail({
         </div>
       )}
 
-      {/* Daily cashier cash-count + buddy selfie (read-only) */}
-      {!loading && (
+      {/* Cashier cash-count + buddy selfie — five SOP sessions (read-only) */}
+      {!loading && cashCounts.length > 0 && (
         <Card>
-          <CardContent className="flex items-center gap-3 p-4">
-            {cashCount?.selfiePhoto ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={cashCount.selfiePhoto}
-                alt="Foto hitung kas kasir"
-                className="h-14 w-14 flex-shrink-0 rounded-lg object-cover"
-              />
-            ) : (
-              <div className="flex h-14 w-14 flex-shrink-0 items-center justify-center rounded-lg bg-secondary">
-                <Coffee className="h-6 w-6 text-muted-foreground/40" />
-              </div>
-            )}
-            <div className="min-w-0 flex-1">
+          <CardContent className="space-y-2 p-4">
+            <div className="flex items-center justify-between gap-2">
               <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
                 Kas Kasir Hari Ini
               </p>
-              {cashCount ? (
-                <>
-                  <p className="text-base font-bold text-foreground">
-                    Rp {cashCount.totalAmount.toLocaleString('id-ID')}
-                  </p>
-                  <p className="truncate text-xs text-muted-foreground">
-                    {cashCount.countedByName ?? '—'} &amp; {cashCount.witnessName ?? '—'}
-                  </p>
-                </>
-              ) : (
-                <p className="text-sm text-muted-foreground">Belum dihitung</p>
-              )}
+              <Badge
+                variant="outline"
+                className={cn(
+                  'text-xs',
+                  cashCounts.every((c) => c.record)
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                    : 'border-amber-200 bg-amber-50 text-amber-700',
+                )}
+              >
+                {cashCounts.filter((c) => c.record).length}/{cashCounts.length} sesi
+              </Badge>
+            </div>
+            <div className="divide-y divide-border">
+              {cashCounts.map(({ session, record }) => {
+                const info = CASH_COUNT_SESSION_INFO[session];
+                return (
+                  <div key={session} className="flex items-center gap-3 py-2">
+                    {record?.selfiePhoto ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={record.selfiePhoto}
+                        alt={`Foto hitung kas sesi ${info.label}`}
+                        className="h-10 w-10 flex-shrink-0 rounded-lg object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-secondary text-sm font-bold text-muted-foreground">
+                        {info.step}
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-foreground">
+                        {info.label} <span className="font-normal text-muted-foreground">· {info.moment}</span>
+                      </p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {record
+                          ? `${record.countedByName ?? '—'} & ${record.witnessName ?? '—'} · ${fmtTime(record.completedAt)}`
+                          : `Dihitung oleh ${info.counter.toLowerCase()}`}
+                      </p>
+                    </div>
+                    {record ? (
+                      <p className="flex-shrink-0 text-sm font-bold tabular-nums text-foreground">
+                        Rp {record.totalAmount.toLocaleString('id-ID')}
+                      </p>
+                    ) : (
+                      <span className="flex-shrink-0 text-xs text-muted-foreground">Belum dihitung</span>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </CardContent>
         </Card>
@@ -609,6 +636,7 @@ export default function StoreAttendanceDetail({
       )}
 
       <MarkDialog
+        key={marking?.schedule.id ?? 'closed'}
         row={marking}
         open={!!marking}
         onClose={() => setMarking(null)}

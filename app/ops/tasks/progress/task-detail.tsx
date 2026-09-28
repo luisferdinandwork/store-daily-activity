@@ -702,7 +702,7 @@ function SetoranDetail({ task }: { task: FlatTask }) {
         {Boolean(requiredStore) && <InfoRow label="Total uang cash drawer" value={fmtAmount(requiredStore)} />}
         <InfoRow label="Total wajib disetor" value={fmtAmount(stored)} />
         {Number(unpaid) > 0 && (
-          <InfoRow label="Kurang" value={<span className="font-bold text-amber-600">{fmtAmount(unpaid)}</span>} />
+          <InfoRow label="Sisa Setoran" value={<span className="font-bold text-amber-600">{fmtAmount(unpaid)}</span>} />
         )}
       </div>
       {hasCashier ? (

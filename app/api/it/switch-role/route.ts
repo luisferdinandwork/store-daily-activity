@@ -2,15 +2,17 @@
 //
 // POST — lets an IT user temporarily preview the app as another role.
 //
-//   { action: 'switch', roleCode: string, employeeTypeCode?: string }
+//   { action: 'switch', roleCode, employeeTypeCode?, areaId?, storeId?, shiftId? }
 //     → only the LIVE 'it' role may initiate; rejects if already switched
 //       (must 'return' first). Snapshots the real IT role into
-//       users.switchedFromRoleId/switchedFromEmployeeTypeId so it can be
-//       restored, then reassigns roleId/employeeTypeId to the target.
+//       users.switchedFromRoleId/switchedFromEmployeeTypeId (+ real store/area
+//       in switchContext), then reassigns roleId/employeeTypeId to the target.
+//       ops_area needs `areaId`; employee needs `storeId` + `shiftId` — the
+//       preview then gets a daily schedule (lib/role-preview.ts).
 //
 //   { action: 'return' }
-//     → restores roleId/employeeTypeId from switchedFromRoleId/
-//       switchedFromEmployeeTypeId and clears both.
+//     → restoreRealRole(): real role/type/store/area back, preview's future
+//       schedule days removed.
 //
 // Both responses include `redirectTo`, the resolved home path for the
 // user's new effective role, computed the same way app/page.tsx does.
@@ -24,7 +26,8 @@ import { asc, eq } from 'drizzle-orm';
 
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
-import { employeeTypes, userRoles, users } from '@/lib/db/schema';
+import { areas, employeeTypes, shifts, stores, userRoles, users } from '@/lib/db/schema';
+import { fillPreviewSchedule, restoreRealRole } from '@/lib/role-preview';
 
 // GET — lists active roles (and employee types) the switch-role picker can
 // target. IT-only.
@@ -34,7 +37,7 @@ export async function GET() {
     return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403 });
   }
 
-  const [roles, empTypes] = await Promise.all([
+  const [roles, empTypes, areaRows, storeRows, shiftRows] = await Promise.all([
     db
       .select({ id: userRoles.id, code: userRoles.code, label: userRoles.label })
       .from(userRoles)
@@ -45,12 +48,31 @@ export async function GET() {
       .from(employeeTypes)
       .where(eq(employeeTypes.isActive, true))
       .orderBy(asc(employeeTypes.sortOrder), asc(employeeTypes.id)),
+    db.select({ id: areas.id, name: areas.name }).from(areas).orderBy(asc(areas.name)),
+    db
+      .select({ id: stores.id, storeNo: stores.storeNo, name: stores.name, areaId: stores.areaId })
+      .from(stores)
+      .orderBy(asc(stores.storeNo)),
+    db
+      .select({
+        id: shifts.id,
+        code: shifts.code,
+        label: shifts.label,
+        startTime: shifts.startTime,
+        endTime: shifts.endTime,
+      })
+      .from(shifts)
+      .where(eq(shifts.isActive, true))
+      .orderBy(asc(shifts.sortOrder), asc(shifts.id)),
   ]);
 
   return NextResponse.json({
     success: true,
     roles: roles.filter((r) => r.code !== 'it'),
     employeeTypes: empTypes,
+    areas: areaRows,
+    stores: storeRows,
+    shifts: shiftRows,
   });
 }
 
@@ -80,8 +102,9 @@ export async function POST(req: Request) {
         roleId: users.roleId,
         employeeTypeId: users.employeeTypeId,
         roleCode: userRoles.code,
+        homeStoreId: users.homeStoreId,
+        areaId: users.areaId,
         switchedFromRoleId: users.switchedFromRoleId,
-        switchedFromEmployeeTypeId: users.switchedFromEmployeeTypeId,
       })
       .from(users)
       .innerJoin(userRoles, eq(userRoles.id, users.roleId))
@@ -142,16 +165,67 @@ export async function POST(req: Request) {
         targetEmployeeTypeCode = empType.code;
       }
 
+      // Context the target role needs to be a valid, usable session.
+      let targetAreaId: number | null = null;
+      let targetStoreId: number | null = null;
+      let targetShiftId: number | null = null;
+
+      if (targetRole.code === 'ops' && targetEmployeeTypeCode === 'ops_area') {
+        const areaId = Number(body?.areaId);
+        const [area] = Number.isInteger(areaId)
+          ? await db.select({ id: areas.id }).from(areas).where(eq(areas.id, areaId)).limit(1)
+          : [];
+        if (!area) {
+          return NextResponse.json({ success: false, error: 'Pick an area for OPS Area.' }, { status: 400 });
+        }
+        targetAreaId = area.id;
+      }
+
+      if (targetRole.code === 'employee') {
+        const storeId = Number(body?.storeId);
+        const shiftId = Number(body?.shiftId);
+        const [store] = Number.isInteger(storeId)
+          ? await db.select({ id: stores.id, areaId: stores.areaId }).from(stores).where(eq(stores.id, storeId)).limit(1)
+          : [];
+        const [shift] = Number.isInteger(shiftId)
+          ? await db.select({ id: shifts.id, isActive: shifts.isActive }).from(shifts).where(eq(shifts.id, shiftId)).limit(1)
+          : [];
+        if (!store) {
+          return NextResponse.json({ success: false, error: 'Pick a store for the employee preview.' }, { status: 400 });
+        }
+        if (!shift || !shift.isActive) {
+          return NextResponse.json({ success: false, error: 'Pick a shift for the employee preview.' }, { status: 400 });
+        }
+        targetStoreId = store.id;
+        targetAreaId = store.areaId;
+        targetShiftId = shift.id;
+      }
+
       await db
         .update(users)
         .set({
           roleId: targetRole.id,
           employeeTypeId: targetEmployeeTypeId,
+          homeStoreId: targetStoreId,
+          areaId: targetAreaId,
           switchedFromRoleId: actor.roleId,
           switchedFromEmployeeTypeId: actor.employeeTypeId,
+          switchContext: {
+            originalHomeStoreId: actor.homeStoreId ?? null,
+            originalAreaId: actor.areaId ?? null,
+            previewShiftId: targetShiftId,
+          },
           updatedAt: new Date(),
         })
         .where(eq(users.id, userId));
+
+      if (targetStoreId && targetShiftId) {
+        try {
+          await fillPreviewSchedule(userId, targetStoreId, targetShiftId);
+        } catch (err) {
+          console.error('[switch-role] preview schedule failed:', err);
+        }
+      }
 
       return NextResponse.json({
         success: true,
@@ -160,47 +234,17 @@ export async function POST(req: Request) {
     }
 
     if (action === 'return') {
-      if (!actor.switchedFromRoleId) {
+      const restored = await restoreRealRole(userId);
+      if (!restored) {
         return NextResponse.json(
           { success: false, error: 'Not currently previewing another role.' },
           { status: 409 },
         );
       }
 
-      const [realRole] = await db
-        .select({ id: userRoles.id, code: userRoles.code })
-        .from(userRoles)
-        .where(eq(userRoles.id, actor.switchedFromRoleId))
-        .limit(1);
-
-      if (!realRole) {
-        return NextResponse.json({ success: false, error: 'Original role no longer exists.' }, { status: 500 });
-      }
-
-      let realEmployeeTypeCode: string | null = null;
-      if (actor.switchedFromEmployeeTypeId) {
-        const [empType] = await db
-          .select({ code: employeeTypes.code })
-          .from(employeeTypes)
-          .where(eq(employeeTypes.id, actor.switchedFromEmployeeTypeId))
-          .limit(1);
-        realEmployeeTypeCode = empType?.code ?? null;
-      }
-
-      await db
-        .update(users)
-        .set({
-          roleId: realRole.id,
-          employeeTypeId: actor.switchedFromEmployeeTypeId,
-          switchedFromRoleId: null,
-          switchedFromEmployeeTypeId: null,
-          updatedAt: new Date(),
-        })
-        .where(eq(users.id, userId));
-
       return NextResponse.json({
         success: true,
-        redirectTo: resolveHomePath(realRole.code, realEmployeeTypeCode),
+        redirectTo: resolveHomePath(restored.roleCode, restored.employeeTypeCode),
       });
     }
 

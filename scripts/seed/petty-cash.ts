@@ -6,8 +6,10 @@ config({ path: '.env' });
 import { and, eq } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
+import { DEFAULT_PETTY_CASH_CATEGORIES } from '@/lib/petty-cash-categories';
 import {
   PETTY_CASH_MAX_BALANCE,
+  pettyCashCategories,
   pettyCashPeriods,
   pettyCashRefills,
   pettyCashTransactions,
@@ -184,6 +186,13 @@ export async function seedPettyCash() {
   console.log(`   seed sample transactions: ${SEED_TRANSACTIONS ? 'yes' : 'no'}`);
   if (SEED_TRANSACTIONS) console.log(`   include pending: ${INCLUDE_PENDING ? 'yes' : 'no'}`);
   console.log(`   seed as closed/refilled: ${SEED_AS_CLOSED ? 'yes' : 'no'}`);
+
+  // Request categories — migration 0015 inserts these too; by name, so any
+  // category OPS already edited is left alone.
+  await db
+    .insert(pettyCashCategories)
+    .values(DEFAULT_PETTY_CASH_CATEGORIES)
+    .onConflictDoNothing({ target: pettyCashCategories.name });
 
   const financeUser = await getFinanceUser();
 

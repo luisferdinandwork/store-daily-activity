@@ -28,6 +28,16 @@ export const attendanceStatusEnum = pgEnum('attendance_status', [
   'sakit_dengan_surat',
 ]);
 
+// Keep in sync with lib/cash-count-sessions.ts — the five SOP moments the
+// cashier cash is counted (store_cash_counts.session).
+export const cashCountSessionEnum = pgEnum('cash_count_session', [
+  'pagi',
+  'siang_1',
+  'siang_2',
+  'sore',
+  'malam',
+]);
+
 export const taskStatusEnum = pgEnum('task_status', [
   'not_started',
   'in_progress',

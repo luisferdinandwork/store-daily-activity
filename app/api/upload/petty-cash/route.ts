@@ -18,6 +18,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { uploadToStorage, storageObjectExists } from '@/lib/storage';
 import { sniffImage } from '@/lib/upload-validation';
+import { isPettyCashHolder } from '@/lib/db/utils/petty-cash-refill';
 
 // ─── Helpers (identical pattern to /api/upload/issue) ────────────────────────
 
@@ -56,6 +57,14 @@ export async function POST(req: NextRequest) {
     const session = await getServerSession(authOptions);
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    // Receipts and refill proof photos are PIC 1's to upload (the only
+    // caller is the employee petty cash page).
+    if (!isPettyCashHolder(session.user.employeeType)) {
+      return NextResponse.json(
+        { error: 'Hanya PIC 1 yang bisa mengunggah foto petty cash.' },
+        { status: 403 },
+      );
     }
 
     const form      = await req.formData();

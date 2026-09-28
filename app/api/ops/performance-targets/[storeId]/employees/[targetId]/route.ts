@@ -73,7 +73,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 
   const existing = await loadTargetInScope(storeId, targetId, scope);
   if (!existing) {
-    return NextResponse.json({ success: false, error: 'Roster row not found or out of scope.' }, { status: 404 });
+    return NextResponse.json({ success: false, error: 'Anggota Team tidak ditemukan atau di luar area Anda.' }, { status: 404 });
   }
 
   const body = await req.json().catch(() => null);
@@ -183,7 +183,7 @@ export async function DELETE(_req: NextRequest, { params }: Params) {
 
   const existing = await loadTargetInScope(storeId, targetId, scope);
   if (!existing) {
-    return NextResponse.json({ success: false, error: 'Roster row not found or out of scope.' }, { status: 404 });
+    return NextResponse.json({ success: false, error: 'Anggota Team tidak ditemukan atau di luar area Anda.' }, { status: 404 });
   }
 
   await db.delete(employeeMonthlyTargets).where(eq(employeeMonthlyTargets.id, targetId));

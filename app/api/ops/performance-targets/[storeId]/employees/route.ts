@@ -217,7 +217,7 @@ export async function POST(req: NextRequest, { params }: Params) {
     return NextResponse.json({ success: true, target: refreshed ?? created });
   } catch (err) {
     return NextResponse.json(
-      { success: false, error: 'This employee already has a roster row for this store and month.' },
+      { success: false, error: 'Karyawan ini sudah ada di Team bulan ini.' },
       { status: 409 },
     );
   }

@@ -20,6 +20,7 @@ export interface ManageEmployee {
 
 export interface ManageStore {
   id: number;
+  storeNo: string | null;
   name: string;
   address: string;
   areaId: number;

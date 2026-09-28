@@ -6,9 +6,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import {
   Banknote,
+  CalendarDays,
   Camera,
   Clock3,
-  Info,
+  Landmark,
   Loader2,
   ReceiptText,
   ShieldCheck,
@@ -20,6 +21,19 @@ import {
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import {
+  PETTY_CASH_REASON_MAX,
+  type PettyCashCategoryOption,
+} from '@/lib/petty-cash-categories';
+import {
+  PETTY_CASH_ACCOUNT_HOLDER_MAX,
+  PETTY_CASH_ACCOUNT_NUMBER_MAX,
+  PETTY_CASH_BANKS,
+  PETTY_CASH_BANK_NAME_MAX,
+  PETTY_CASH_BANK_OTHER,
+  normalizeBankDetails,
+  type BankDetails,
+} from '@/lib/petty-cash-bank';
 import { EmptyState, Notice, SectionLabel, SkeletonBlocks } from '@/components/employee/ui';
 import CameraCapture from '@/components/shared/CameraCapture';
 
@@ -32,6 +46,7 @@ type TxRow = {
   amount: string;
   actualAmount: string | null;
   description: string;
+  categoryName: string | null;
   status: PettyCashStatus | string;
   imageUrl: string | null;
   approvedAt: string | null;
@@ -46,7 +61,11 @@ type PageData = {
   openingBalance?: string;
   closingBalance?: string | null;
   periodStatus?: 'open' | 'closed' | string;
+  /** The petty cash period in use (YYYY-MM). */
   month: string;
+  /** Today's calendar month (YYYY-MM). */
+  currentMonth?: string;
+  categories: PettyCashCategoryOption[];
   transactions: TxRow[];
 };
 
@@ -78,31 +97,31 @@ function balanceBg(balance: number) {
   return 'from-emerald-50 to-teal-50';
 }
 
-function balanceHealth(balance: number, isPic: boolean) {
+function balanceHealth(balance: number, isHolder: boolean) {
   if (balance <= 0) {
     return {
       label: 'Habis',
-      detail: isPic
+      detail: isHolder
         ? 'Ajukan Refill sebelum mengirim Request baru.'
-        : 'Minta PIC untuk mengajukan Refill.',
+        : 'Minta PIC 1 untuk mengajukan Refill.',
       textClass: 'text-rose-600',
     };
   }
   if (balance < 250_000) {
     return {
       label: 'Kritis',
-      detail: isPic
+      detail: isHolder
         ? 'Saldo sangat menipis — ajukan Refill sekarang.'
-        : 'Saldo sangat menipis — minta PIC untuk mengajukan Refill.',
+        : 'Saldo sangat menipis — minta PIC 1 untuk mengajukan Refill.',
       textClass: 'text-rose-600',
     };
   }
   if (balance < 500_000) {
     return {
       label: 'Mulai Menipis',
-      detail: isPic
+      detail: isHolder
         ? 'Pertimbangkan untuk mengajukan Refill.'
-        : 'PIC mungkin perlu mengajukan Refill segera.',
+        : 'PIC 1 mungkin perlu mengajukan Refill segera.',
       textClass: 'text-amber-600',
     };
   }
@@ -144,13 +163,17 @@ function needsReceipt(tx: TxRow) {
 //   indigo = action needed from you
 //   emerald = done / approved
 //   rose   = rejected / problem
-function statusMeta(tx: TxRow) {
+// `isHolder` = the viewer is PIC 1 (the one who acts); everyone else reads a
+// status line about PIC 1 instead of an instruction.
+function statusMeta(tx: TxRow, isHolder: boolean) {
   if (tx.status === 'pending_ops') {
     return {
       label: 'Menunggu Persetujuan OPS',
       icon: Clock3,
       className: 'bg-sky-50 text-sky-700 ring-sky-200',
-      note: 'Request kamu sudah dikirim ke OPS untuk disetujui.',
+      note: isHolder
+        ? 'Request kamu sudah dikirim ke OPS untuk disetujui.'
+        : 'Request PIC 1 sedang menunggu persetujuan OPS.',
     };
   }
 
@@ -168,7 +191,9 @@ function statusMeta(tx: TxRow) {
       label: 'Konfirmasi Jumlah Terpakai',
       icon: UploadCloud,
       className: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
-      note: 'OPS sudah menyetujui request ini. Konfirmasi jumlah uang yang benar-benar terpakai untuk dipotong dari saldo.',
+      note: isHolder
+        ? 'OPS sudah menyetujui request ini. Konfirmasi jumlah uang yang benar-benar terpakai untuk dipotong dari saldo.'
+        : 'OPS sudah menyetujui — menunggu PIC 1 mengonfirmasi jumlah yang terpakai.',
     };
   }
 
@@ -177,7 +202,7 @@ function statusMeta(tx: TxRow) {
       label: 'Unggah Struk',
       icon: UploadCloud,
       className: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
-      note: 'Unggah foto struk untuk arsip.',
+      note: isHolder ? 'Unggah foto struk untuk arsip.' : 'Menunggu PIC 1 mengunggah foto struk.',
     };
   }
 
@@ -236,29 +261,53 @@ function BalanceCard({
   pendingAmount,
   awaitingConfirmAmount,
   month,
-  isPic,
+  currentMonth,
+  isHolder,
 }: {
   balance: number;
   storeName: string;
   totalApprovedSpend: number;
   pendingAmount: number;
   awaitingConfirmAmount: number;
+  /** The petty cash period in use (YYYY-MM). */
   month: string;
-  isPic: boolean;
+  /** Today's calendar month (YYYY-MM), to flag a carried-over / next period. */
+  currentMonth?: string;
+  isHolder: boolean;
 }) {
   const pct = Math.min(100, Math.round((balance / 1_000_000) * 100));
-  const health = balanceHealth(balance, isPic);
+  const health = balanceHealth(balance, isHolder);
+
+  // The period isn't always this calendar month: an unrefilled balance keeps
+  // carrying forward, and a received refill already opens next month's.
+  const periodNote =
+    currentMonth && month && month !== currentMonth
+      ? month < currentMonth
+        ? `Masih memakai saldo ${monthLabel(month)} — belum ada Refill sejak itu.`
+        : `Saldo ${monthLabel(month)} sudah aktif setelah Refill diterima.`
+      : null;
 
   return (
     <div className={cn('mx-4 rounded-2xl bg-gradient-to-br p-5 shadow-sm', balanceBg(balance))}>
-      <div className="mb-1 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <Wallet className="h-4 w-4 text-muted-foreground" />
-          <p className="text-xs font-semibold text-muted-foreground">
-            {storeName} · {monthLabel(month)}
-          </p>
+      <div className="mb-3 flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5">
+            <Wallet className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <p className="truncate text-xs font-semibold text-muted-foreground">{storeName}</p>
+          </div>
+
+          {/* The month whose petty cash is in use — highlighted on purpose. */}
+          <div className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-white/80 px-3 py-1 shadow-sm ring-1 ring-black/5">
+            <CalendarDays className="h-3.5 w-3.5 text-foreground/70" />
+            <span className="text-[11px] font-medium text-muted-foreground">Saldo bulan</span>
+            <span className="text-xs font-bold text-foreground">{monthLabel(month)}</span>
+          </div>
+
+          {periodNote && (
+            <p className="mt-1.5 text-[10px] font-medium text-muted-foreground">{periodNote}</p>
+          )}
         </div>
-        <span className={cn('text-[10px] font-bold uppercase tracking-wide', health.textClass)}>
+        <span className={cn('shrink-0 text-[10px] font-bold uppercase tracking-wide', health.textClass)}>
           {health.label}
         </span>
       </div>
@@ -306,10 +355,10 @@ function BalanceCard({
       {awaitingConfirmAmount > 0 && (
         <div className="mt-3 rounded-xl bg-white/60 px-3 py-2">
           <p className="text-[11px] font-semibold text-indigo-700">
-            OPS sudah menyetujui, menunggu konfirmasi kamu: {idr(awaitingConfirmAmount)}
+            OPS sudah menyetujui, menunggu konfirmasi {isHolder ? 'kamu' : 'PIC 1'}: {idr(awaitingConfirmAmount)}
           </p>
           <p className="mt-0.5 text-[10px] text-muted-foreground">
-            Ini masih perkiraan awal — belum dipotong sampai kamu konfirmasi jumlah yang benar-benar terpakai.
+            Ini masih perkiraan awal — belum dipotong sampai {isHolder ? 'kamu' : 'PIC 1'} konfirmasi jumlah yang benar-benar terpakai.
           </p>
         </div>
       )}
@@ -331,7 +380,27 @@ type RefillRequestRow = {
   rejectionReason: string | null;
   drawerPhotoUrl: string | null;
   signaturePhotoUrl: string | null;
+  // Null on requests made before bank details were required.
+  bankName: string | null;
+  accountNumber: string | null;
+  accountHolderName: string | null;
 };
+
+/** The account the request asked Finance to pay — so PIC 1 can spot a typo. */
+function RefillBankLine({ request }: { request: RefillRequestRow }) {
+  if (!request.bankName || !request.accountNumber) return null;
+
+  return (
+    <p className="mt-1.5 flex items-start gap-1.5 text-[11px] text-muted-foreground">
+      <Landmark className="mt-px h-3 w-3 shrink-0" />
+      <span>
+        Rekening tujuan: <span className="font-semibold text-foreground">{request.bankName}</span>{' '}
+        <span className="font-mono tabular-nums">{request.accountNumber}</span>
+        {request.accountHolderName && <> a.n. {request.accountHolderName}</>}
+      </span>
+    </p>
+  );
+}
 
 const PROOF_STEPS: { kind: RefillProofKind; label: string }[] = [
   { kind: 'drawer', label: 'Laci Petty Cash' },
@@ -342,12 +411,15 @@ function RefillProofCapture({
   label,
   imageUrl,
   uploading,
+  readOnly,
   onConfirm,
   onView,
 }: {
   label: string;
   imageUrl: string | null;
   uploading: boolean;
+  /** Not PIC 1 — show the photo status only, no camera. */
+  readOnly: boolean;
   onConfirm: (file: File) => void;
   onView: (url: string) => void;
 }) {
@@ -377,6 +449,8 @@ function RefillProofCapture({
         </p>
       </div>
 
+      {!readOnly && (
+      <>
       <button
         type="button"
         onClick={() => setCameraOpen(true)}
@@ -396,23 +470,173 @@ function RefillProofCapture({
         onCapture={(file) => { setCameraOpen(false); onConfirm(file); }}
         title={label}
       />
+      </>
+      )}
+    </div>
+  );
+}
+
+// ─── Bank details PIC 1 gives with a Refill request ─────────────────────────
+// Finance sends the cash to this account, so it's required up front — and
+// pre-filled from the PIC's last request so it isn't retyped every month.
+
+function RefillBankForm({
+  lastBank,
+  requesting,
+  onSubmit,
+}: {
+  lastBank: BankDetails | null;
+  requesting: boolean;
+  onSubmit: (bank: BankDetails) => void;
+}) {
+  const knownBank = (name: string | undefined) =>
+    (PETTY_CASH_BANKS as readonly string[]).includes(name ?? '');
+
+  const [open, setOpen] = useState(false);
+  const [bankChoice, setBankChoice] = useState(
+    lastBank ? (knownBank(lastBank.bankName) ? lastBank.bankName : PETTY_CASH_BANK_OTHER) : '',
+  );
+  const [customBank, setCustomBank] = useState(
+    lastBank && !knownBank(lastBank.bankName) ? lastBank.bankName : '',
+  );
+  const [accountNumber, setAccountNumber] = useState(lastBank?.accountNumber ?? '');
+  const [holderName, setHolderName] = useState(lastBank?.accountHolderName ?? '');
+  const [error, setError] = useState<string | null>(null);
+
+  const inputCls =
+    'h-11 w-full rounded-xl border border-border bg-background px-3.5 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-primary focus:outline-none';
+
+  function submit() {
+    const bankName = bankChoice === PETTY_CASH_BANK_OTHER ? customBank : bankChoice;
+    const parsed = normalizeBankDetails({ bankName, accountNumber, accountHolderName: holderName });
+
+    if (!parsed.ok) {
+      setError(parsed.error);
+      return;
+    }
+
+    setError(null);
+    onSubmit(parsed.value);
+  }
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-indigo-200 bg-card text-xs font-bold text-indigo-700 transition active:scale-[0.99]"
+      >
+        <Banknote className="h-3.5 w-3.5" />
+        Ajukan Refill
+      </button>
+    );
+  }
+
+  return (
+    <div className="mt-3 space-y-3 rounded-xl border border-indigo-100 bg-indigo-50/40 p-3">
+      <div className="flex items-start gap-2">
+        <Landmark className="mt-0.5 h-4 w-4 shrink-0 text-indigo-600" />
+        <div>
+          <p className="text-xs font-bold text-foreground">Rekening tujuan Refill</p>
+          <p className="text-[11px] text-muted-foreground">
+            Finance akan mentransfer uang Refill ke rekening ini. Pastikan datanya benar.
+          </p>
+        </div>
+      </div>
+
+      <div>
+        <label className="mb-1 block text-[11px] font-semibold text-muted-foreground">Bank</label>
+        <select
+          value={bankChoice}
+          onChange={(e) => { setBankChoice(e.target.value); setError(null); }}
+          className={cn(inputCls, 'appearance-none')}
+        >
+          <option value="" disabled>Pilih bank…</option>
+          {PETTY_CASH_BANKS.map((b) => <option key={b} value={b}>{b}</option>)}
+          <option value={PETTY_CASH_BANK_OTHER}>Bank lainnya…</option>
+        </select>
+
+        {bankChoice === PETTY_CASH_BANK_OTHER && (
+          <input
+            type="text"
+            value={customBank}
+            onChange={(e) => { setCustomBank(e.target.value); setError(null); }}
+            maxLength={PETTY_CASH_BANK_NAME_MAX}
+            placeholder="Nama bank"
+            className={cn(inputCls, 'mt-2')}
+          />
+        )}
+      </div>
+
+      <div>
+        <label className="mb-1 block text-[11px] font-semibold text-muted-foreground">Nomor rekening</label>
+        <input
+          type="text"
+          inputMode="numeric"
+          autoComplete="off"
+          value={accountNumber}
+          onChange={(e) => { setAccountNumber(e.target.value.replace(/[^\d\s.-]/g, '')); setError(null); }}
+          maxLength={PETTY_CASH_ACCOUNT_NUMBER_MAX + 6}
+          placeholder="Contoh: 1234567890"
+          className={cn(inputCls, 'font-mono tabular-nums')}
+        />
+      </div>
+
+      <div>
+        <label className="mb-1 block text-[11px] font-semibold text-muted-foreground">
+          Nama pemilik rekening
+        </label>
+        <input
+          type="text"
+          autoComplete="off"
+          value={holderName}
+          onChange={(e) => { setHolderName(e.target.value); setError(null); }}
+          maxLength={PETTY_CASH_ACCOUNT_HOLDER_MAX}
+          placeholder="Sesuai buku tabungan"
+          className={cn(inputCls, 'uppercase')}
+        />
+      </div>
+
+      {error && <Notice tone="error">{error}</Notice>}
+
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={() => { setOpen(false); setError(null); }}
+          disabled={requesting}
+          className="h-10 shrink-0 rounded-xl border border-border bg-card px-4 text-xs font-bold text-muted-foreground disabled:opacity-60"
+        >
+          Batal
+        </button>
+        <button
+          type="button"
+          onClick={submit}
+          disabled={requesting}
+          className="flex h-10 flex-1 items-center justify-center gap-2 rounded-xl bg-indigo-600 text-xs font-bold text-white transition active:scale-[0.99] disabled:opacity-60"
+        >
+          {requesting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Banknote className="h-3.5 w-3.5" />}
+          Kirim Request Refill
+        </button>
+      </div>
     </div>
   );
 }
 
 function RefillRequestCard({
   request,
-  isPic,
+  isHolder,
   requesting,
+  lastBank,
   onRequest,
   uploadingKind,
   onUploadProof,
   onViewImage,
 }: {
   request: RefillRequestRow | null;
-  isPic: boolean;
+  isHolder: boolean;
   requesting: boolean;
-  onRequest: () => void;
+  lastBank: BankDetails | null;
+  onRequest: (bank: BankDetails) => void;
   uploadingKind: RefillProofKind | null;
   onUploadProof: (kind: RefillProofKind, file: File) => void;
   onViewImage: (url: string) => void;
@@ -428,6 +652,7 @@ function RefillRequestCard({
           <Clock3 className="h-4 w-4 text-sky-600" />
           <p className="text-xs font-bold text-sky-700">Request Refill menunggu persetujuan OPS</p>
         </div>
+        <RefillBankLine request={request} />
       </div>
     );
   }
@@ -449,13 +674,19 @@ function RefillRequestCard({
         <div className="flex items-center gap-2">
           <Banknote className="h-4 w-4 text-indigo-600" />
           <p className="text-xs font-bold text-indigo-700">
-            OPS sudah menyetujui — ambil foto bukti setelah menerima uangnya
+            {isHolder
+              ? 'OPS sudah menyetujui Refill — ambil foto bukti setelah menerima uangnya'
+              : 'OPS sudah menyetujui Refill — menunggu PIC 1 mengunggah foto bukti'}
           </p>
         </div>
 
-        <p className="mt-1.5 text-[11px] text-indigo-600/80">
-          Saat Finance menyerahkan uangnya, ambil foto laci petty cash dan Surat Terima Petty Cash di bawah ini. Saldo akan diperbarui setelah kedua foto terkirim.
-        </p>
+        <RefillBankLine request={request} />
+
+        {isHolder && (
+          <p className="mt-1.5 text-[11px] text-indigo-600/80">
+            Saat Finance menyerahkan uangnya, ambil foto laci petty cash dan Surat Terima Petty Cash di bawah ini. Saldo akan diperbarui setelah kedua foto terkirim.
+          </p>
+        )}
 
         <div className="mt-3 space-y-2">
           {PROOF_STEPS.map((step) => (
@@ -464,6 +695,7 @@ function RefillRequestCard({
               label={step.label}
               imageUrl={photoUrls[step.kind]}
               uploading={uploadingKind === step.kind}
+              readOnly={!isHolder}
               onConfirm={(file) => onUploadProof(step.kind, file)}
               onView={onViewImage}
             />
@@ -473,7 +705,7 @@ function RefillRequestCard({
     );
   }
 
-  if (!isPic) {
+  if (!isHolder) {
     return null;
   }
 
@@ -497,16 +729,9 @@ function RefillRequestCard({
         </div>
       </div>
       {/* Outline style — a secondary action, visually distinct from the
-          filled primary "Kirim Request ke OPS" button below the page. */}
-      <button
-        type="button"
-        onClick={onRequest}
-        disabled={requesting}
-        className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-indigo-200 bg-card text-xs font-bold text-indigo-700 transition active:scale-[0.99] disabled:opacity-60"
-      >
-        {requesting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Banknote className="h-3.5 w-3.5" />}
-        Ajukan Refill
-      </button>
+          filled primary "Kirim Request ke OPS" button below the page. It
+          opens the bank-details form; the request is only sent from there. */}
+      <RefillBankForm lastBank={lastBank} requesting={requesting} onSubmit={onRequest} />
     </div>
   );
 }
@@ -558,6 +783,20 @@ function ReceiptCapture({
 
 // ─── Needs-action card (pulled out of history, given its own section) ───────
 
+/** Category as the title, the reason underneath (older requests: reason only). */
+function TxTitle({ tx }: { tx: TxRow }) {
+  return (
+    <>
+      <p className="mt-2 truncate text-sm font-semibold text-foreground">
+        {tx.categoryName ?? tx.description}
+      </p>
+      {tx.categoryName && (
+        <p className="truncate text-[11px] text-muted-foreground">{tx.description}</p>
+      )}
+    </>
+  );
+}
+
 function NeedsReceiptCard({
   tx,
   uploading,
@@ -576,9 +815,7 @@ function NeedsReceiptCard({
             Perlu Tindakan
           </span>
 
-          <p className="mt-2 truncate text-sm font-semibold text-foreground">
-            {tx.description}
-          </p>
+          <TxTitle tx={tx} />
 
           <p className="mt-0.5 text-[11px] text-muted-foreground">
             Disetujui {fmtDate(tx.createdAt)}
@@ -629,9 +866,7 @@ function ConfirmAmountCard({
             Perlu Tindakan
           </span>
 
-          <p className="mt-2 truncate text-sm font-semibold text-foreground">
-            {tx.description}
-          </p>
+          <TxTitle tx={tx} />
 
           <p className="mt-0.5 text-[11px] text-muted-foreground">
             Diminta {idr(tx.amount)} · Disetujui {fmtDate(tx.createdAt)}
@@ -701,12 +936,14 @@ function ConfirmAmountCard({
 
 function TxItem({
   tx,
+  isHolder,
   onViewImage,
 }: {
   tx: TxRow;
+  isHolder: boolean;
   onViewImage: (url: string) => void;
 }) {
-  const meta = statusMeta(tx);
+  const meta = statusMeta(tx, isHolder);
   const Icon = meta.icon;
 
   return (
@@ -743,9 +980,7 @@ function TxItem({
             </span>
           </div>
 
-          <p className="mt-2 truncate text-sm font-semibold text-foreground">
-            {tx.description}
-          </p>
+          <TxTitle tx={tx} />
 
           <p className="mt-0.5 text-[11px] text-muted-foreground">
             {fmtDate(tx.createdAt)}
@@ -779,13 +1014,16 @@ function TxItem({
 export default function EmployeePettyCashPage() {
   const { data: session } = useSession();
   const employeeType = (session?.user as any)?.employeeType as string | undefined;
-  const isPic = employeeType === 'pic_1' || employeeType === 'pic_2';
+  // PIC 1 holds the store's petty cash: request, confirm the actual amount,
+  // upload receipts, refill. Everyone else (PIC 2, SA) only views the status.
+  const isHolder = employeeType === 'pic_1';
 
   const [data, setData] = useState<PageData | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [amount, setAmount] = useState('');
+  const [categoryId, setCategoryId] = useState<number | null>(null);
   const [description, setDescription] = useState('');
 
   const [submitting, setSubmitting] = useState(false);
@@ -797,11 +1035,25 @@ export default function EmployeePettyCashPage() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
-  const [showInfo, setShowInfo] = useState(true);
 
   const [refillRequest, setRefillRequest] = useState<RefillRequestRow | null>(null);
+  const [lastBank, setLastBank] = useState<BankDetails | null>(null);
+  const [bankLoaded, setBankLoaded] = useState(false);
   const [requestingRefill, setRequestingRefill] = useState(false);
   const [uploadingProofKind, setUploadingProofKind] = useState<RefillProofKind | null>(null);
+
+  const categories = data?.categories ?? [];
+  const selectedCategory = categories.find((c) => c.id === categoryId) ?? null;
+
+  // Picking a category pre-fills Keterangan with its default reason — unless
+  // the PIC already typed their own text (anything other than the previous
+  // category's default), which is kept.
+  function selectCategory(next: PettyCashCategoryOption) {
+    const untouched = !description.trim() || description === (selectedCategory?.defaultReason ?? '');
+    setCategoryId(next.id);
+    if (untouched) setDescription(next.requiresCustomReason ? '' : (next.defaultReason ?? ''));
+    setFormError(null);
+  }
 
   // `silent` skips the full-page loading skeleton — used for background
   // refreshes after an action. Without this, the "Needs Your Action" section
@@ -835,9 +1087,16 @@ export default function EmployeePettyCashPage() {
     try {
       const res = await fetch('/api/employee/petty-cash/refill-request', { cache: 'no-store' });
       const body = await res.json();
-      if (body.success) setRefillRequest(body.request ?? null);
+      if (body.success) {
+        setRefillRequest(body.request ?? null);
+        setLastBank(body.lastBankDetails ?? null);
+      }
     } catch {
       // Non-critical — the request button just won't show a status yet.
+    } finally {
+      // The form seeds its fields from lastBank once at mount, so it must
+      // not render before this settles (see the RefillRequestCard gate below).
+      setBankLoaded(true);
     }
   }, []);
 
@@ -849,15 +1108,20 @@ export default function EmployeePettyCashPage() {
     void loadRefillStatus();
   }, [loadRefillStatus]);
 
-  async function handleRequestRefill() {
+  async function handleRequestRefill(bank: BankDetails) {
     setRequestingRefill(true);
     setActionError(null);
     setSuccessMessage(null);
     try {
-      const res = await fetch('/api/employee/petty-cash/refill-request', { method: 'POST' });
+      const res = await fetch('/api/employee/petty-cash/refill-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(bank),
+      });
       const body = await res.json();
       if (!res.ok || !body.success) throw new Error(body.error ?? 'Gagal mengajukan Refill.');
       setRefillRequest(body.request);
+      setLastBank(bank);
       setSuccessMessage('Refill diajukan — akan ditinjau oleh OPS.');
     } catch (e) {
       setActionError(e instanceof Error ? e.message : 'Gagal mengajukan Refill.');
@@ -921,13 +1185,22 @@ export default function EmployeePettyCashPage() {
 
     const amt = Number(amount.replace(/[^0-9]/g, ''));
 
+    if (!selectedCategory) {
+      setFormError('Pilih kategori terlebih dahulu.');
+      return;
+    }
+
     if (!amt || amt <= 0) {
       setFormError('Masukkan jumlah yang valid.');
       return;
     }
 
     if (!description.trim()) {
-      setFormError('Keterangan wajib diisi.');
+      setFormError(
+        selectedCategory.requiresCustomReason
+          ? `Tulis keterangan untuk kategori ${selectedCategory.name}.`
+          : 'Keterangan wajib diisi.',
+      );
       return;
     }
 
@@ -946,6 +1219,7 @@ export default function EmployeePettyCashPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           amount: amt,
+          categoryId: selectedCategory.id,
           description: description.trim(),
         }),
       });
@@ -958,6 +1232,7 @@ export default function EmployeePettyCashPage() {
       }
 
       setAmount('');
+      setCategoryId(null);
       setDescription('');
       setSuccessMessage('Request sudah dikirim ke OPS untuk disetujui.');
       setTimeout(() => setSuccessMessage(null), 4000);
@@ -1082,9 +1357,14 @@ export default function EmployeePettyCashPage() {
     () => transactions.filter(needsReceipt),
     [transactions],
   );
+  // PIC 1 sees requests waiting on them in "Perlu tindakan kamu" instead of
+  // here; everyone else has no action section, so they see every request.
   const historyTxs = useMemo(
-    () => transactions.filter((tx) => !needsReceipt(tx) && !needsActualAmount(tx)),
-    [transactions],
+    () =>
+      isHolder
+        ? transactions.filter((tx) => !needsReceipt(tx) && !needsActualAmount(tx))
+        : transactions,
+    [transactions, isHolder],
   );
 
   const summary = useMemo(() => {
@@ -1121,22 +1401,6 @@ export default function EmployeePettyCashPage() {
         </p>
       </div>
 
-      {showInfo && (
-        <div className="mx-4 mt-4">
-          <Notice tone="neutral" icon={Info} onDismiss={() => setShowInfo(false)}>
-            <p>
-              <span className="font-bold text-foreground">Request</span> — pakai
-              uang untuk keperluan tertentu. Diajukan ke OPS untuk disetujui.
-            </p>
-            <p className="mt-1">
-              <span className="font-bold text-foreground">Refill</span> — mengembalikan
-              seluruh saldo ke Rp 1.000.000 saat mulai menipis. Diajukan ke OPS
-              untuk disetujui.
-            </p>
-          </Notice>
-        </div>
-      )}
-
       <div className="space-y-5 pb-8 pt-5">
         {loading ? (
           <div className="px-4"><SkeletonBlocks count={1} className="h-36" /></div>
@@ -1147,18 +1411,20 @@ export default function EmployeePettyCashPage() {
             balance={balance}
             storeName={data?.storeName ?? ''}
             month={data?.month ?? ''}
+            currentMonth={data?.currentMonth}
             totalApprovedSpend={summary.approvedSpend}
             pendingAmount={summary.pendingAmount}
             awaitingConfirmAmount={summary.awaitingConfirmAmount}
-            isPic={isPic}
+            isHolder={isHolder}
           />
         )}
 
-        {!loading && !loadError && (isPic || refillRequest) && (
+        {!loading && !loadError && bankLoaded && (isHolder || refillRequest) && (
           <RefillRequestCard
             request={refillRequest}
-            isPic={isPic}
+            isHolder={isHolder}
             requesting={requestingRefill}
+            lastBank={lastBank}
             onRequest={handleRequestRefill}
             uploadingKind={uploadingProofKind}
             onUploadProof={handleUploadProof}
@@ -1218,7 +1484,7 @@ export default function EmployeePettyCashPage() {
           </section>
         )}
 
-        {!loading && !loadError && isPic && (needsActualAmountTxs.length > 0 || needsReceiptTxs.length > 0) && (
+        {!loading && !loadError && isHolder && (needsActualAmountTxs.length > 0 || needsReceiptTxs.length > 0) && (
           <section className="px-4">
             <SectionLabel meta={`${needsActualAmountTxs.length + needsReceiptTxs.length} request`}>
               Perlu tindakan kamu
@@ -1248,15 +1514,16 @@ export default function EmployeePettyCashPage() {
           </section>
         )}
 
-        {!loading && !loadError && !isPic && (
+        {!loading && !loadError && !isHolder && (
           <section className="px-4">
-            <Notice tone="neutral" title="Hanya PIC yang bisa mengirim Request Petty Cash">
-              Kamu bisa melihat status Request di sini. Minta PIC toko untuk mengirim Request baru.
+            <Notice tone="neutral" title="Petty cash dikelola oleh PIC 1">
+              Request, konfirmasi jumlah terpakai, foto struk, dan Refill hanya bisa dilakukan
+              PIC 1. Kamu bisa melihat saldo dan status Request di sini.
             </Notice>
           </section>
         )}
 
-        {!loading && !loadError && isPic && (
+        {!loading && !loadError && isHolder && (
           <section className="px-4">
             <SectionLabel>Request petty cash baru</SectionLabel>
 
@@ -1265,6 +1532,40 @@ export default function EmployeePettyCashPage() {
                 Kirim Request terlebih dahulu. Setelah disetujui OPS, kamu akan
                 melihatnya di &quot;Perlu Tindakan Kamu&quot; untuk mengunggah struk.
               </Notice>
+
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">
+                  Kategori
+                </label>
+
+                {categories.length === 0 ? (
+                  <Notice tone="warning">
+                    Kategori petty cash belum diatur. Hubungi OPS.
+                  </Notice>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {categories.map((c) => {
+                      const active = c.id === categoryId;
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => selectCategory(c)}
+                          aria-pressed={active}
+                          className={cn(
+                            'rounded-full border px-3.5 py-2 text-sm font-semibold transition-colors',
+                            active
+                              ? 'border-primary bg-primary text-primary-foreground'
+                              : 'border-border bg-background text-foreground active:bg-secondary',
+                          )}
+                        >
+                          {c.name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
 
               <div>
                 <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">
@@ -1299,29 +1600,42 @@ export default function EmployeePettyCashPage() {
                 )}
               </div>
 
-              <div>
-                <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">
-                  Keterangan
-                </label>
+              {selectedCategory && (
+                <div>
+                  <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">
+                    Keterangan{selectedCategory.requiresCustomReason && ' (wajib diisi)'}
+                  </label>
 
-                <textarea
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  rows={2}
-                  maxLength={200}
-                  placeholder="Request ini untuk apa? misal: alat kebersihan, tinta printer…"
-                  className="w-full resize-none rounded-xl border border-border bg-background px-3.5 py-2.5 text-base text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
-                />
-              </div>
+                  <textarea
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    rows={3}
+                    maxLength={PETTY_CASH_REASON_MAX}
+                    placeholder={
+                      selectedCategory.requiresCustomReason
+                        ? 'Jelaskan untuk apa request ini, misal: perbaikan engsel pintu gudang…'
+                        : 'Keterangan request…'
+                    }
+                    className="w-full resize-none rounded-xl border border-border bg-background px-3.5 py-2.5 text-base text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+                  />
+
+                  {!selectedCategory.requiresCustomReason && (
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      Terisi otomatis dari kategori {selectedCategory.name}. Boleh diubah atau
+                      ditambah detail.
+                    </p>
+                  )}
+                </div>
+              )}
 
               {formError && <Notice tone="error">{formError}</Notice>}
 
               <button
                 type="submit"
-                disabled={submitting || balance <= 0}
+                disabled={submitting || balance <= 0 || categories.length === 0}
                 className={cn(
                   'flex h-12 w-full items-center justify-center gap-2 rounded-xl text-sm font-bold transition-colors',
-                  submitting || balance <= 0
+                  submitting || balance <= 0 || categories.length === 0
                     ? 'bg-secondary text-muted-foreground'
                     : 'bg-primary text-primary-foreground active:opacity-80',
                 )}
@@ -1349,11 +1663,13 @@ export default function EmployeePettyCashPage() {
 
         {!loading && !loadError && historyTxs.length > 0 && (
           <section className="px-4">
-            <SectionLabel meta={`${historyTxs.length} data`}>Request bulan ini</SectionLabel>
+            <SectionLabel meta={`${historyTxs.length} data`}>
+              Request {monthLabel(data?.month)}
+            </SectionLabel>
 
             <div className="space-y-2.5">
               {historyTxs.map((tx) => (
-                <TxItem key={tx.id} tx={tx} onViewImage={setLightboxSrc} />
+                <TxItem key={tx.id} tx={tx} isHolder={isHolder} onViewImage={setLightboxSrc} />
               ))}
             </div>
 
@@ -1368,8 +1684,8 @@ export default function EmployeePettyCashPage() {
             <div className="rounded-2xl border border-dashed border-border">
               <EmptyState
                 icon={ReceiptText}
-                title="Belum ada Request Petty Cash bulan ini"
-                description={isPic ? 'Isi formulir di atas untuk mengirim Request pertamamu ke OPS.' : undefined}
+                title={`Belum ada Request Petty Cash ${monthLabel(data?.month)}`}
+                description={isHolder ? 'Isi formulir di atas untuk mengirim Request pertamamu ke OPS.' : undefined}
                 className="py-8"
               />
             </div>

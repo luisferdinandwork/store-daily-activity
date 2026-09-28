@@ -78,8 +78,11 @@ export default function OpsManagePage() {
     );
   }
 
+  // From lg up the page fills the shell's scroll area exactly (h-full) so the
+  // workspace's store rail and roster scroll inside their own panes; below
+  // lg the page just grows and scrolls.
   return (
-    <div className="min-h-full bg-slate-50">
+    <div className="flex min-h-full flex-col bg-slate-50 lg:h-full">
       <OpsPageHeader
         scope="OPS · People"
         title="Manage Workspace"
@@ -89,7 +92,7 @@ export default function OpsManagePage() {
         contentClassName="w-full"
       />
 
-      <div className="mx-auto p-6 lg:p-8">
+      <div className="flex-1 px-4 py-5 sm:px-6 lg:min-h-0 lg:px-8">
         {loading || !data ? (
           <div className="flex min-h-[360px] items-center justify-center">
             <div className="flex flex-col items-center gap-3">

@@ -14,12 +14,17 @@ import {
   users,
 } from '@/lib/db/schema';
 import {
-  getStoreCashCountForDate,
+  getStoreCashCountsForDate,
   listCoScheduledEmployees,
+  resolveCashCountScheduleId,
   submitStoreCashCount,
-  isCashCountRequiredForShift,
 } from '@/lib/db/utils/store-cash-count';
-import { resolveActorScheduleId, getMorningShiftId } from '@/lib/db/utils/shift-lookup';
+import {
+  CASH_COUNT_SESSIONS,
+  cashCountSessionLabels,
+  isCashCountSession,
+  missingCashCountSessionsForShift,
+} from '@/lib/cash-count-sessions';
 import { baseShiftCode } from '@/lib/shift-tasks';
 import { assertInGeofence, DEFAULT_GEOFENCE_RADIUS_M } from '@/lib/db/utils/tasks';
 import { parseGeoPoint } from '@/lib/geo';
@@ -204,47 +209,54 @@ async function getTodayScheduleForShift(params: {
 
 // ─── Cashier cash-count payload ───────────────────────────────────────────────
 //
-// Daily "count the cashier cash + selfie with a co-scheduled colleague" step.
-// One shared record per store per day; required before a morning / full_day
-// employee can check out.
+// "Count the cashier cash + selfie with a co-scheduled colleague" step, once
+// per store/day per SOP session (Pagi, Siang 1, Siang 2, Sore, Malam). Anyone
+// working today can record a session; all five are mandatory, enforced at
+// checkout (see missingCashCountSessionsForShift).
 async function buildCashCountPayload(
   userId: string,
   storeId: number,
   today: Date,
   todayRows: { shiftCode: string }[],
 ) {
-  const required = todayRows.some((r) => isCashCountRequiredForShift(r.shiftCode));
-  const existing = await getStoreCashCountForDate(storeId, today);
+  const canSubmit = todayRows.length > 0;
 
-  let record: {
-    totalAmount: number;
-    countedByName: string | null;
-    witnessName: string | null;
-    selfiePhoto: string;
-    completedAt: string | null;
-  } | null = null;
+  const counted = await getStoreCashCountsForDate(storeId, today);
 
-  if (existing) {
-    const names = await db
-      .select({ id: users.id, name: users.name })
-      .from(users)
-      .where(inArray(users.id, [existing.countedByUserId, existing.witnessUserId]));
-    const nameById = new Map(names.map((n) => [n.id, n.name]));
-    record = {
-      totalAmount: Number(existing.totalAmount),
-      countedByName: nameById.get(existing.countedByUserId) ?? null,
-      witnessName: nameById.get(existing.witnessUserId) ?? null,
-      selfiePhoto: existing.selfiePhoto,
-      completedAt: existing.completedAt?.toISOString() ?? null,
+  const nameIds = [...new Set(counted.flatMap((c) => [c.countedByUserId, c.witnessUserId]))];
+  const nameById = new Map(
+    nameIds.length
+      ? (
+          await db
+            .select({ id: users.id, name: users.name })
+            .from(users)
+            .where(inArray(users.id, nameIds))
+        ).map((n) => [n.id, n.name])
+      : [],
+  );
+
+  const sessions = CASH_COUNT_SESSIONS.map((session) => {
+    const row = counted.find((c) => c.session === session);
+    return {
+      session,
+      record: row
+        ? {
+            totalAmount: Number(row.totalAmount),
+            countedByName: nameById.get(row.countedByUserId) ?? null,
+            witnessName: nameById.get(row.witnessUserId) ?? null,
+            selfiePhoto: row.selfiePhoto,
+            completedAt: row.completedAt?.toISOString() ?? null,
+          }
+        : null,
     };
-  }
+  });
 
   const coScheduledEmployees =
-    !existing && required
+    canSubmit && sessions.some((s) => !s.record)
       ? await listCoScheduledEmployees(userId, storeId, today)
       : [];
 
-  return { required, done: Boolean(existing), record, coScheduledEmployees };
+  return { canSubmit, sessions, coScheduledEmployees };
 }
 
 // ─── Store geofence ───────────────────────────────────────────────────────────
@@ -499,6 +511,7 @@ export async function POST(req: NextRequest) {
       breakType: rawBreakType,
       cashOut: rawCashOut,
       cashIn: rawCashIn,
+      session: rawSession,
       totalAmount: rawTotalAmount,
       witnessUserId: rawWitnessUserId,
       selfiePhoto: rawSelfiePhoto,
@@ -511,6 +524,7 @@ export async function POST(req: NextRequest) {
       breakType?: string;
       cashOut?: number;
       cashIn?: number;
+      session?: string;
       totalAmount?: number;
       witnessUserId?: string;
       selfiePhoto?: string;
@@ -526,24 +540,28 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ── Daily cashier cash-count + buddy selfie ───────────────────────────────
-    // Not shift-specific — resolve the caller's own morning / full_day
-    // schedule for today and record one shared store-level count.
+    // ── Cashier cash-count + buddy selfie ─────────────────────────────────────
+    // Not shift-specific — record one shared store-level count for the SOP
+    // session the employee picked, against their own schedule for today.
     if (action === 'cashcount') {
-      const morningShiftId = await getMorningShiftId();
-      const today = todayInStoreTimezone();
-      const actorScheduleId = await resolveActorScheduleId(
+      if (!isCashCountSession(rawSession)) {
+        return NextResponse.json(
+          { success: false, error: 'Pilih waktu hitung kas terlebih dahulu.' },
+          { status: 400 },
+        );
+      }
+
+      const actorScheduleId = await resolveCashCountScheduleId(
         userId,
         homeStoreId,
-        morningShiftId,
-        today,
+        todayInStoreTimezone(),
       );
 
       if (!actorScheduleId) {
         return NextResponse.json(
           {
             success: false,
-            error: 'Hitung kas kasir hanya diisi oleh shift pagi / full day.',
+            error: 'Kamu tidak punya jadwal di toko ini hari ini.',
           },
           { status: 400 },
         );
@@ -553,6 +571,7 @@ export async function POST(req: NextRequest) {
         userId,
         scheduleId: actorScheduleId,
         storeId: homeStoreId,
+        session: rawSession,
         totalAmount: Number(rawTotalAmount),
         witnessUserId: String(rawWitnessUserId ?? ''),
         selfiePhoto: String(rawSelfiePhoto ?? ''),
@@ -629,23 +648,24 @@ export async function POST(req: NextRequest) {
       }
 
       case 'checkout': {
-        // Morning / full_day employees can only check out once the daily
-        // cashier cash-count + buddy selfie is recorded for the store.
-        if (isCashCountRequiredForShift(typedShift)) {
-          const cashCount = await getStoreCashCountForDate(
-            homeStoreId,
-            todayInStoreTimezone(),
+        // All five cash-count sessions are mandatory: an opening shift can't
+        // check out until sessions 1–4 (through "shift pagi pulang") are on
+        // record, a closing shift until all five are.
+        const counted = await getStoreCashCountsForDate(homeStoreId, todayInStoreTimezone());
+        const missing = missingCashCountSessionsForShift(
+          typedShift,
+          counted.map((c) => c.session),
+        );
+        if (missing.length > 0) {
+          return NextResponse.json(
+            {
+              success: false,
+              error:
+                `Hitung kas kasir sesi ${cashCountSessionLabels(missing)} belum diisi. ` +
+                'Selesaikan dulu sebelum absen pulang.',
+            },
+            { status: 400 },
           );
-          if (!cashCount) {
-            return NextResponse.json(
-              {
-                success: false,
-                error:
-                  'Hitung kas kasir dan foto bersama rekan terlebih dahulu sebelum absen pulang.',
-              },
-              { status: 400 },
-            );
-          }
         }
 
         result = await employeeCheckOut(userId, homeStoreId, typedShift);

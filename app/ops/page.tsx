@@ -2,6 +2,7 @@
 // app/ops/page.tsx
 
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useApi } from '@/lib/client/use-api';
 import Link from 'next/link';
 import {
   AlertCircle,
@@ -354,33 +355,20 @@ function KpiSkeleton() {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 export default function OpsDashboardPage() {
-  const [data, setData] = useState<DashboardData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-
-  const load = useCallback(async (mode: 'initial' | 'refresh' = 'refresh') => {
-    if (mode === 'initial') setLoading(true);
-    else setRefreshing(true);
-
-    try {
-      const res = await fetch(`/api/ops/dashboard?date=${todayKey()}`, { cache: 'no-store' });
-      const json = await res.json();
-      if (json.success) {
-        setData(json);
-        setLastUpdated(new Date());
-      }
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
+  // Cached + background-revalidated (lib/client/use-api.ts): returning to the
+  // dashboard shows the last numbers instantly while fresh ones load.
+  const dash = useApi<DashboardData & { success?: boolean }>(`/api/ops/dashboard?date=${todayKey()}`);
+  const data = dash.data?.success ? dash.data : null;
+  const loading = dash.loading;
+  const refreshing = dash.validating && !dash.loading;
+  const lastUpdated = dash.updatedAt ? new Date(dash.updatedAt) : null;
+  const { refresh } = dash;
+  const load = useCallback(() => refresh(), [refresh]);
 
   useEffect(() => {
-    void load('initial');
-    const id = setInterval(() => void load('refresh'), 60_000);
+    const id = setInterval(() => void refresh(), 60_000);
     return () => clearInterval(id);
-  }, [load]);
+  }, [refresh]);
 
   const today = data?.tasks.today;
   const month = data?.tasks.month;
@@ -405,7 +393,7 @@ export default function OpsDashboardPage() {
         scope="OPS · Overview"
         title="Dashboard"
         subtitle={todayFull()}
-        onRefresh={() => void load('refresh')}
+        onRefresh={() => void load()}
         refreshing={refreshing}
         contentClassName="w-full"
       />

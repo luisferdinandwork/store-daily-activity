@@ -3,6 +3,7 @@ import { ReactNode } from 'react';
 import type { Viewport } from 'next';
 import { cookies } from 'next/headers';
 import { requirePanel } from '@/lib/auth/guards';
+import { ensurePreviewSchedule } from '@/lib/role-preview';
 import { cn } from '@/lib/utils';
 import { EMPLOYEE_VIEW_COOKIE } from '@/lib/pic-view';
 import EmployeeMobileNav from '@/components/employee/EmployeeMobileNav';
@@ -25,6 +26,9 @@ export default async function EmployeeLayout({ children }: { children: ReactNode
   // employee (incl. PIC) or IT only. Previously ANY signed-in role — ops, finance, audit —
   // could open the employee panel.
   const session = await requirePanel('/employee');
+
+  // IT previewing an employee role: keep its daily preview schedule topped up.
+  if (session.user.switchedFromRoleId) await ensurePreviewSchedule(session.user.id);
 
   const isPic =
     session.user.employeeType === 'pic_1' || session.user.employeeType === 'pic_2';

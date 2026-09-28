@@ -3,10 +3,10 @@
 // PIC-initiated "top me back up" requests — distinct from Finance's own
 // month-end close-and-reset (pettyCashRefills in lib/db/schema/petty-cash.ts).
 //
-// Flow: PIC requests -> OPS approves/rejects the request (Finance is still
+// Flow: PIC 1 requests -> OPS approves/rejects the request (Finance is still
 // the one who will hand over the physical cash, but approval alone does NOT
 // move the balance yet — the store hasn't actually received the cash at
-// this point) -> once approved, any store employee uploads two proof-of-receipt photos
+// this point) -> once approved, PIC 1 uploads two proof-of-receipt photos
 // (the petty cash drawer and the Surat Terima Petty Cash) as evidence the
 // cash was physically handed over. Only once BOTH photos are in does the
 // balance actually top back up to the max — that's the real "the store now
@@ -19,7 +19,7 @@
 // across month boundaries until it eventually does get refilled.
 
 import { db } from '@/lib/db';
-import { and, desc, eq, inArray, or } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, or } from 'drizzle-orm';
 import {
   pettyCashRefillRequests,
   stores,
@@ -29,9 +29,15 @@ import {
 import { createNotificationsForUsers, getOpsUserIdsForArea } from './notifications';
 import { addMonths, getActivePeriod, topUpPeriodToMax } from './petty-cash-period';
 import { PETTY_CASH_MAX_BALANCE } from '@/lib/db/schema/petty-cash';
+import type { BankDetails } from '@/lib/petty-cash-bank';
 
-export function isPicType(empType: unknown): boolean {
-  return empType === 'pic_1' || empType === 'pic_2';
+/**
+ * PIC 1 is the store's petty cash holder: only they request usage, confirm
+ * the actual amount spent, upload receipts, request a refill and upload its
+ * proof photos. Everyone else at the store (PIC 2, SA) can only view.
+ */
+export function isPettyCashHolder(empType: unknown): boolean {
+  return empType === 'pic_1';
 }
 
 export function currentYearMonthJakarta(): string {
@@ -99,9 +105,35 @@ export type RefillRequestResult =
   | { success: true; request: PettyCashRefillRequest }
   | { success: false; error: string };
 
+/**
+ * The account this PIC used on their most recent refill request — pre-fills
+ * the form so they don't retype it every month (they can still change it).
+ */
+export async function getLastBankDetails(userId: string): Promise<BankDetails | null> {
+  const [row] = await db
+    .select({
+      bankName: pettyCashRefillRequests.bankName,
+      accountNumber: pettyCashRefillRequests.accountNumber,
+      accountHolderName: pettyCashRefillRequests.accountHolderName,
+    })
+    .from(pettyCashRefillRequests)
+    .where(and(eq(pettyCashRefillRequests.requestedBy, userId), isNotNull(pettyCashRefillRequests.accountNumber)))
+    .orderBy(desc(pettyCashRefillRequests.requestedAt))
+    .limit(1);
+
+  if (!row?.bankName || !row.accountNumber || !row.accountHolderName) return null;
+  return { bankName: row.bankName, accountNumber: row.accountNumber, accountHolderName: row.accountHolderName };
+}
+
+/**
+ * PIC 1 must say where Finance should send the cash at the moment they ask
+ * for the refill, so `bank` is required (already validated/normalised by
+ * normalizeBankDetails in the route).
+ */
 export async function createRefillRequest(
   storeId: number,
   userId: string,
+  bank: BankDetails,
   notes?: string,
 ): Promise<RefillRequestResult> {
   const yearMonth = currentYearMonthJakarta();
@@ -126,6 +158,9 @@ export async function createRefillRequest(
       yearMonth,
       requestedBy: userId,
       notes,
+      bankName: bank.bankName,
+      accountNumber: bank.accountNumber,
+      accountHolderName: bank.accountHolderName,
       balanceBefore: period.currentBalance,
       // Explicit app-clock timestamp — see the same fix/comment in
       // app/api/employee/petty-cash/route.ts for why DEFAULT NOW() is wrong here.
@@ -137,7 +172,7 @@ export async function createRefillRequest(
   await notifyOps(storeId, {
     type: 'petty_cash_refill_requested',
     title: `Petty cash refill requested — ${storeRow?.name ?? `Store ${storeId}`}`,
-    body: `Requested for ${yearMonth}.${notes ? ` Note: ${notes}` : ''}`,
+    body: `Requested for ${yearMonth}. Transfer to ${bank.bankName} ${bank.accountNumber} a.n. ${bank.accountHolderName}.${notes ? ` Note: ${notes}` : ''}`,
   });
 
   return { success: true, request };

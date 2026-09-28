@@ -41,7 +41,41 @@ function isValidSalesEntry(row: unknown): row is BusinessCentralSalesEntry {
   );
 }
 
+/**
+ * Short-lived per-process cache + in-flight de-duplication. BC is the slowest
+ * dependency on every performance screen (hundreds of ms to seconds per call,
+ * often several pages), and the same store/period is requested by many
+ * employees and panels at once. Periods still containing today are cached
+ * briefly so new sales show up within a minute; closed periods don't change.
+ */
+const LIVE_TTL_MS = 60_000;
+const CLOSED_TTL_MS = 15 * 60_000;
+const salesCache = new Map<string, { at: number; ttl: number; value: Promise<BusinessCentralSalesEntry[]> }>();
+
+function jakartaTodayKey() {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date());
+}
+
 export async function getBusinessCentralSalesEntries(
+  params: GetSalesEntriesParams,
+): Promise<BusinessCentralSalesEntry[]> {
+  const key = `${params.storeNo}|${params.startDate}|${params.endDate}`;
+  const now = Date.now();
+  const hit = salesCache.get(key);
+  if (hit && now - hit.at < hit.ttl) return hit.value;
+
+  const ttl = params.endDate <= jakartaTodayKey() ? CLOSED_TTL_MS : LIVE_TTL_MS;
+  const value = fetchBusinessCentralSalesEntries(params);
+  if (salesCache.size > 500) salesCache.clear(); // hard bound; it's only a cache
+  salesCache.set(key, { at: now, ttl, value });
+  // Never cache a failure — the next caller retries.
+  value.catch(() => {
+    if (salesCache.get(key)?.value === value) salesCache.delete(key);
+  });
+  return value;
+}
+
+async function fetchBusinessCentralSalesEntries(
   params: GetSalesEntriesParams,
 ): Promise<BusinessCentralSalesEntry[]> {
   const settings = await getActiveBusinessCentralSettings("sales_entries");

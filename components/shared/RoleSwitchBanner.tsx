@@ -20,6 +20,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, Loader2, Undo2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { invalidateApi } from '@/lib/client/use-api';
 
 export default function RoleSwitchBanner() {
   const { data: session, update } = useSession();
@@ -43,6 +44,7 @@ export default function RoleSwitchBanner() {
       if (!res.ok || !data.success) throw new Error(data.error ?? 'Failed to return to IT.');
 
       await update();
+      invalidateApi();
       toast.success('Back to IT.');
       router.push(data.redirectTo ?? '/it');
     } catch (err) {

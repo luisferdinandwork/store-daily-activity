@@ -6,8 +6,9 @@ import { getAttendanceForDate, opsMarkAttendance, autoCheckoutOverdueAttendance,
 import { db }                        from '@/lib/db';
 import { breakSessions, shifts, employeeTypes, users } from '@/lib/db/schema';
 import { eq, inArray }               from 'drizzle-orm';
-import { getStoreCashCountForDate }  from '@/lib/db/utils/store-cash-count';
-import { ATTENDANCE_STATUSES, isAttendanceStatus } from '@/lib/attendance-status';
+import { getStoreCashCountsForDate } from '@/lib/db/utils/store-cash-count';
+import { CASH_COUNT_SESSIONS }       from '@/lib/cash-count-sessions';
+import { LEAVE_ATTENDANCE_STATUSES, isLeaveAttendanceStatus } from '@/lib/attendance-status';
 
 import { assertStoreInActorArea, getOpsActor } from '../tasks/_helpers';
 
@@ -168,32 +169,33 @@ export async function GET(req: NextRequest) {
       }),
     );
 
-    // Daily cashier cash-count + buddy selfie for this store/day (read-only).
-    const cashRow = await getStoreCashCountForDate(storeId, date);
-    let cashCount: {
-      totalAmount: number;
-      countedByName: string | null;
-      witnessName: string | null;
-      selfiePhoto: string;
-      completedAt: string | null;
-    } | null = null;
-
-    if (cashRow) {
-      const names = await db
-        .select({ id: users.id, name: users.name })
-        .from(users)
-        .where(inArray(users.id, [cashRow.countedByUserId, cashRow.witnessUserId]));
-      const nameById = new Map(names.map(n => [n.id, n.name]));
-      cashCount = {
-        totalAmount: Number(cashRow.totalAmount),
-        countedByName: nameById.get(cashRow.countedByUserId) ?? null,
-        witnessName: nameById.get(cashRow.witnessUserId) ?? null,
-        selfiePhoto: cashRow.selfiePhoto,
-        completedAt: cashRow.completedAt?.toISOString() ?? null,
+    // Cashier cash-count + buddy selfie for this store/day, one entry per SOP
+    // session (read-only; record is null for sessions not counted yet).
+    const cashRows = await getStoreCashCountsForDate(storeId, date);
+    const nameIds  = [...new Set(cashRows.flatMap(r => [r.countedByUserId, r.witnessUserId]))];
+    const nameById = new Map(
+      nameIds.length
+        ? (await db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, nameIds)))
+            .map(n => [n.id, n.name])
+        : [],
+    );
+    const cashCounts = CASH_COUNT_SESSIONS.map((session) => {
+      const row = cashRows.find(r => r.session === session);
+      return {
+        session,
+        record: row
+          ? {
+              totalAmount:   Number(row.totalAmount),
+              countedByName: nameById.get(row.countedByUserId) ?? null,
+              witnessName:   nameById.get(row.witnessUserId) ?? null,
+              selfiePhoto:   row.selfiePhoto,
+              completedAt:   row.completedAt?.toISOString() ?? null,
+            }
+          : null,
       };
-    }
+    });
 
-    return NextResponse.json({ success: true, data: serialized, cashCount });
+    return NextResponse.json({ success: true, data: serialized, cashCounts });
   } catch (err) {
     console.error('[GET /api/ops/attendance]', err);
     return NextResponse.json({ success: false, error: 'Internal server error' }, { status: 500 });
@@ -223,14 +225,13 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // status is optional. It sets the status the first time attendance is
-    // recorded for a schedule (e.g. Ops marking a no-show or Cuti), and can
-    // re-classify a record the employee never checked in on (e.g. auto-marked
-    // absent → Sakit dengan surat dokter). A checked-in record keeps its
-    // status; only notes change (see opsMarkAttendance).
-    if (status !== undefined && !isAttendanceStatus(status)) {
+    // status is optional (omit it to only update the note). Ops can only set a
+    // justified absence — Dinas / Cuti / STD / SD — from any current status;
+    // present / late / absent / excused never come from Ops (see
+    // opsMarkAttendance).
+    if (status !== undefined && !isLeaveAttendanceStatus(status)) {
       return NextResponse.json(
-        { success: false, error: `status must be one of: ${ATTENDANCE_STATUSES.join(', ')}` },
+        { success: false, error: `status must be one of: ${LEAVE_ATTENDANCE_STATUSES.join(', ')}` },
         { status: 400 },
       );
     }

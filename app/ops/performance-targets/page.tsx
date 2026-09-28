@@ -32,7 +32,7 @@ import {
   CalendarOff,
   CheckCircle2,
   ChevronLeft,
-  LayoutGrid,
+  ChevronRight,
   Pencil,
   Plus,
   Receipt,
@@ -50,6 +50,7 @@ import {
 import { cn } from '@/lib/utils';
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
 import { OpsList, OpsListRow, OpsListSkeleton } from '@/components/ops/layout/OpsList';
+import { ConfirmDialog } from '@/components/shared/ConfirmDialog';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -321,36 +322,6 @@ function HeroMetric({ icon: Icon, iconClass, label, actual, target, format }: {
   );
 }
 
-function ViewPeriodTabs({ value, onChange }: { value: ViewPeriod; onChange: (period: ViewPeriod) => void }) {
-  const tabs: { id: ViewPeriod; label: string; icon: typeof CalendarDays }[] = [
-    { id: 'daily', label: 'Harian', icon: CalendarDays },
-    { id: 'monthly', label: 'Bulanan', icon: LayoutGrid },
-  ];
-
-  return (
-    <div className="inline-flex h-10 items-center gap-0.5 rounded-xl border border-slate-200 bg-white p-0.5">
-      {tabs.map((tab) => {
-        const active = tab.id === value;
-        const Icon = tab.icon;
-        return (
-          <button
-            key={tab.id}
-            type="button"
-            onClick={() => onChange(tab.id)}
-            className={cn(
-              'inline-flex h-full items-center gap-1.5 rounded-lg px-3 text-xs font-bold transition',
-              active ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50',
-            )}
-          >
-            <Icon className="h-3.5 w-3.5" />
-            <span>{tab.label}</span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 // ─── StoreListRow ───────────────────────────────────────────────────────────
 //
 // A store in the browsable directory — click to drill into its detail view.
@@ -371,7 +342,7 @@ function StoreListRow({ store, onOpen }: { store: StoreRow; onOpen: () => void }
         <div className="flex items-center gap-1.5">
           <p className="truncate text-sm font-bold text-slate-900">{store.name}</p>
           {hasIssue && (
-            <span title="Belum ada karyawan di roster" className="shrink-0">
+            <span title="Belum ada karyawan di Team" className="shrink-0">
               <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
             </span>
           )}
@@ -489,28 +460,49 @@ function MonthlyTargetStrip({ storeId, yearMonth, salesTarget, transactionTarget
     }
   };
 
+  const monthLabel = fmtMonthLabel(yearMonth);
+  const notSet = salesTarget <= 0 && transactionTarget <= 0;
+
   if (!editing) {
     return (
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+      <div
+        className={cn(
+          'flex flex-wrap items-center justify-between gap-3 rounded-xl border px-4 py-3',
+          notSet ? 'border-dashed border-indigo-200 bg-indigo-50/40' : 'border-slate-200 bg-slate-50',
+        )}
+      >
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-          <span className="font-bold text-slate-500">Target Bulanan</span>
-          <span className="font-black tabular-nums text-slate-900">{fmtCurrency(salesTarget)}</span>
-          <span className="text-slate-300">·</span>
-          <span className="tabular-nums text-slate-600">{transactionTarget.toLocaleString('id-ID')} transaksi</span>
-          <span className="text-slate-300">·</span>
-          <span className="tabular-nums text-slate-500">ATV {fmtCurrency(salesTarget && transactionTarget ? Math.round(salesTarget / transactionTarget) : 0)}</span>
+          <span className="font-bold text-slate-500">Target {monthLabel}</span>
+          {notSet ? (
+            <span className="font-semibold text-slate-400">Belum diisi</span>
+          ) : (
+            <>
+              <span className="font-black tabular-nums text-slate-900">{fmtCurrency(salesTarget)}</span>
+              <span className="text-slate-300">·</span>
+              <span className="tabular-nums text-slate-600">{transactionTarget.toLocaleString('id-ID')} transaksi</span>
+              <span className="text-slate-300">·</span>
+              <span className="tabular-nums text-slate-500">ATV {fmtCurrency(salesTarget && transactionTarget ? Math.round(salesTarget / transactionTarget) : 0)}</span>
+            </>
+          )}
         </div>
-        <button type="button" onClick={() => setEditing(true)}
-          className="flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-100">
-          <Pencil className="h-3.5 w-3.5" /> Ubah
-        </button>
+        {notSet ? (
+          <button type="button" onClick={() => setEditing(true)}
+            className="flex shrink-0 items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-indigo-500">
+            <Plus className="h-3.5 w-3.5" /> Isi Target
+          </button>
+        ) : (
+          <button type="button" onClick={() => setEditing(true)}
+            className="flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-100">
+            <Pencil className="h-3.5 w-3.5" /> Ubah
+          </button>
+        )}
       </div>
     );
   }
 
   return (
     <div className="rounded-2xl border-2 border-indigo-200 bg-indigo-50/50 p-4">
-      <p className="text-sm font-bold text-slate-900">Ubah Target Bulanan</p>
+      <p className="text-sm font-bold text-slate-900">{notSet ? 'Isi' : 'Ubah'} Target {monthLabel}</p>
       <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
         <label className="text-xs font-semibold text-slate-600">
           Target Sales / Bulan
@@ -541,7 +533,7 @@ function MonthlyTargetStrip({ storeId, yearMonth, salesTarget, transactionTarget
           <p className="mt-0.5 text-sm font-bold tabular-nums text-slate-700">{fmtCurrency(atv)}</p>
         </div>
       </div>
-      <p className="mt-2 text-[11px] text-slate-500">÷ {days} hari dalam bulan ini.</p>
+      <p className="mt-2 text-[11px] text-slate-500">÷ {days} hari di {monthLabel}.</p>
 
       {error && <p className="mt-2 text-xs font-semibold text-red-500">{error}</p>}
       <div className="mt-3 flex justify-end gap-2">
@@ -594,10 +586,10 @@ function AddEmployeeTargetForm({ storeId, yearMonth, eligible, onCreated, onCanc
         }),
       });
       const json = await res.json();
-      if (!res.ok || !json.success) throw new Error(json.error ?? 'Gagal menambah karyawan ke roster.');
+      if (!res.ok || !json.success) throw new Error(json.error ?? 'Gagal menambah karyawan ke Team.');
       onCreated();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Gagal menambah karyawan ke roster.');
+      setError(err instanceof Error ? err.message : 'Gagal menambah karyawan ke Team.');
     } finally {
       setSaving(false);
     }
@@ -606,14 +598,14 @@ function AddEmployeeTargetForm({ storeId, yearMonth, eligible, onCreated, onCanc
   return (
     <div className="rounded-2xl border border-indigo-100 bg-indigo-50/50 p-4">
       <div className="flex items-center justify-between">
-        <p className="text-sm font-bold text-slate-900">Tambah Karyawan ke Roster</p>
+        <p className="text-sm font-bold text-slate-900">Tambah Karyawan ke Team</p>
         <button type="button" onClick={onCancel} className="rounded-md p-1 text-slate-400 hover:bg-white hover:text-slate-600">
           <X className="h-4 w-4" />
         </button>
       </div>
 
       {available.length === 0 ? (
-        <p className="mt-3 text-xs text-slate-500">Semua karyawan di toko ini sudah ada di roster bulan ini.</p>
+        <p className="mt-3 text-xs text-slate-500">Semua karyawan di toko ini sudah ada di Team bulan ini.</p>
       ) : (
         <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
           <label className="text-xs font-semibold text-slate-600 sm:col-span-2">
@@ -908,6 +900,7 @@ function EmployeeTargetTableRow({ row, storeId, period, yearMonth, onChanged, on
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showCalendar, setShowCalendar] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const startEdit = () => {
     setPctInput(String(row.percentage));
@@ -955,15 +948,16 @@ function EmployeeTargetTableRow({ row, storeId, period, yearMonth, onChanged, on
   };
 
   const handleDeleteFromRoster = async () => {
-    if (!confirm(`Hapus ${row.name} dari roster target?`)) return;
     setSaving(true);
     try {
       const res = await fetch(`/api/ops/performance-targets/${storeId}/employees/${row.id}`, { method: 'DELETE' });
       const json = await res.json();
-      if (!res.ok || !json.success) throw new Error(json.error ?? 'Gagal menghapus dari roster.');
+      if (!res.ok || !json.success) throw new Error(json.error ?? 'Gagal menghapus dari Team.');
+      setConfirmDelete(false);
       onDeleted();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Gagal menghapus dari roster.');
+      setConfirmDelete(false);
+      setError(err instanceof Error ? err.message : 'Gagal menghapus dari Team.');
       setSaving(false);
     }
   };
@@ -1055,7 +1049,7 @@ function EmployeeTargetTableRow({ row, storeId, period, yearMonth, onChanged, on
               className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50">
               <Calendar className="h-3.5 w-3.5" />
             </button>
-            <button type="button" onClick={handleDeleteFromRoster} disabled={saving} title="Hapus dari roster"
+            <button type="button" onClick={() => setConfirmDelete(true)} disabled={saving} title="Hapus dari Team"
               className="flex h-7 w-7 items-center justify-center rounded-lg border border-red-100 bg-white text-red-500 hover:bg-red-50 disabled:opacity-60">
               <Trash2 className="h-3.5 w-3.5" />
             </button>
@@ -1073,7 +1067,42 @@ function EmployeeTargetTableRow({ row, storeId, period, yearMonth, onChanged, on
           onClose={() => setShowCalendar(false)}
         />
       )}
+
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        tone="danger"
+        title={`Hapus ${row.name} dari Team?`}
+        description={
+          <>
+            {row.name} ({row.slotCode}) tidak lagi punya target di {fmtMonthLabel(yearMonth)}. Porsi
+            karyawan lain (kecuali yang diubah manual) dihitung ulang sesuai pengaturan default.
+          </>
+        }
+        confirmLabel="Hapus"
+        busy={saving}
+        onConfirm={() => void handleDeleteFromRoster()}
+      />
     </>
+  );
+}
+
+// ─── SetupStep ────────────────────────────────────────────────────────────────
+// One line of the "Siapkan target <bulan>" checklist in the store detail.
+
+function SetupStep({ n, done, children }: { n: number; done: boolean; children: React.ReactNode }) {
+  return (
+    <li className="flex items-center gap-2 text-xs">
+      <span
+        className={cn(
+          'flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold',
+          done ? 'bg-emerald-500 text-white' : 'bg-white text-indigo-600 ring-1 ring-indigo-200',
+        )}
+      >
+        {done ? <CheckCircle2 className="h-3.5 w-3.5" /> : n}
+      </span>
+      <span className={cn(done ? 'text-slate-400 line-through' : 'font-semibold text-slate-700')}>{children}</span>
+    </li>
   );
 }
 
@@ -1088,6 +1117,11 @@ function StoreDetailPanel({ detail, loading, eligible, yearMonth, period, onRefr
   onRefresh: () => void;
 }) {
   const [showAddForm, setShowAddForm] = useState(false);
+  const [applyingAll, setApplyingAll] = useState(false);
+  const [confirmApplyAll, setConfirmApplyAll] = useState(false);
+  const [applyResult, setApplyResult] = useState<
+    { storeId: number; tone: 'success' | 'warning' | 'error'; text: string } | null
+  >(null);
   const [notes, setNotes] = useState('');
   const [notesDirty, setNotesDirty] = useState(false);
   const [notesSaving, setNotesSaving] = useState(false);
@@ -1115,12 +1149,56 @@ function StoreDetailPanel({ detail, loading, eligible, yearMonth, period, onRefr
           </div>
           <p className="font-bold text-slate-700">Pilih toko untuk melihat performa</p>
           <p className="mx-auto mt-1 max-w-xs text-xs text-slate-400">
-            Klik salah satu toko di daftar kiri untuk melihat sales aktual, transaksi, dan roster karyawannya.
+            Klik salah satu toko di daftar kiri untuk melihat sales aktual, transaksi, dan Team-nya.
           </p>
         </div>
       </div>
     );
   }
+
+  const unrostered = eligible.filter((e) => !e.hasTarget);
+  const rosterEmpty = detail.employeeTargets.length === 0;
+  const targetSet =
+    detail.rollup.storeMonthlySalesTarget > 0 || detail.rollup.storeMonthlyTransactionTarget > 0;
+  // Only show the result for the store it was applied to.
+  const applyResultHere = applyResult?.storeId === detail.store.id ? applyResult : null;
+
+  // "Apply to all staff": every store employee not on the roster yet, in one
+  // go; positions follow their employee type and the % split follows the
+  // default allocation settings (server: addAllStoreStaffToRoster).
+  const applyToAllStaff = async () => {
+    if (unrostered.length === 0) return;
+    const storeId = detail.store.id;
+    setApplyingAll(true);
+    setApplyResult(null);
+    try {
+      const res = await fetch(`/api/ops/performance-targets/${storeId}/employees/apply-all`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ yearMonth }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error ?? 'Gagal menambahkan semua staff.');
+      setShowAddForm(false);
+      setApplyResult({
+        storeId,
+        tone: json.meta?.usedFallbackEqualSplit ? 'warning' : 'success',
+        text: json.meta?.usedFallbackEqualSplit
+          ? `${json.added} karyawan ditambahkan. Belum ada pengaturan default untuk ${json.meta.headcount} orang — porsi dibagi rata.`
+          : `${json.added} karyawan ditambahkan — porsi dibagi otomatis sesuai pengaturan default untuk ${json.meta?.headcount ?? json.added} orang.`,
+      });
+      onRefresh();
+    } catch (err) {
+      setApplyResult({
+        storeId,
+        tone: 'error',
+        text: err instanceof Error ? err.message : 'Gagal menambahkan semua staff.',
+      });
+    } finally {
+      setApplyingAll(false);
+      setConfirmApplyAll(false);
+    }
+  };
 
   const saveNotes = async () => {
     setNotesSaving(true);
@@ -1156,13 +1234,30 @@ function StoreDetailPanel({ detail, loading, eligible, yearMonth, period, onRefr
   return (
     <article className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="space-y-4 border-b border-slate-100 p-4 sm:p-5">
-        <div className="min-w-0">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-500">
-            {detail.store.areaName ?? 'Toko'}
-          </p>
-          <h2 className="mt-0.5 truncate text-lg font-bold text-slate-900">{detail.store.name}</h2>
-          <p className="mt-0.5 text-xs text-slate-500">{detail.store.address}</p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-500">
+              {detail.store.areaName ?? 'Toko'}
+            </p>
+            <h2 className="mt-0.5 truncate text-lg font-bold text-slate-900">{detail.store.name}</h2>
+            <p className="mt-0.5 text-xs text-slate-500">{detail.store.address}</p>
+          </div>
+          {/* Which month's target this is — change it from the header. */}
+          <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-indigo-50 px-3 py-1 text-xs font-bold text-indigo-700 ring-1 ring-inset ring-indigo-100">
+            <CalendarDays className="h-3.5 w-3.5" />
+            Target {fmtMonthLabel(yearMonth)}
+          </span>
         </div>
+
+        {(!targetSet || rosterEmpty) && (
+          <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-3">
+            <p className="text-xs font-bold text-slate-800">Siapkan target {fmtMonthLabel(yearMonth)}</p>
+            <ol className="mt-2 space-y-1.5">
+              <SetupStep n={1} done={targetSet}>Isi Target Bulanan — sales &amp; transaksi toko</SetupStep>
+              <SetupStep n={2} done={!rosterEmpty}>Tambahkan staff ke Team — porsi dibagi otomatis</SetupStep>
+            </ol>
+          </div>
+        )}
 
         {!detail.actuals.available && (
           <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-700">
@@ -1204,10 +1299,13 @@ function StoreDetailPanel({ detail, loading, eligible, yearMonth, period, onRefr
 
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           <StatCard label="ATV Aktual" value={fmtCurrency(storeAtvActual)} sub={period === 'daily' ? 'hari ini' : 'bulan ini'} />
-          <StatCard label="Karyawan di Roster" value={String(detail.rollup.rosterCount)} sub="Man Power bulan ini" />
+          <StatCard label="Karyawan di Team" value={String(detail.rollup.rosterCount)} sub="Man Power bulan ini" />
         </div>
 
         <MonthlyTargetStrip
+          // Remount per store + month so an open edit form never carries one
+          // month's numbers into another.
+          key={`${detail.store.id}-${yearMonth}`}
           storeId={detail.store.id}
           yearMonth={yearMonth}
           salesTarget={detail.rollup.storeMonthlySalesTarget}
@@ -1236,15 +1334,44 @@ function StoreDetailPanel({ detail, loading, eligible, yearMonth, period, onRefr
           )}
         </div>
 
-        <div className="mb-3 flex items-center justify-between">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <h3 className="flex items-center text-xs font-bold uppercase tracking-widest text-slate-400">
             <Users className="mr-1.5 h-3.5 w-3.5" /> Karyawan — Aktual vs Target
           </h3>
-          <button type="button" onClick={() => setShowAddForm((v) => !v)}
-            className="flex items-center gap-1 rounded-lg bg-indigo-600 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-indigo-500">
-            <Plus className="h-3 w-3" /> Tambah
-          </button>
+          <div className="flex items-center gap-1.5">
+            {!rosterEmpty && unrostered.length > 0 && (
+              <button type="button" onClick={() => setConfirmApplyAll(true)} disabled={applyingAll}
+                title="Tambahkan semua staff toko yang belum ada di Team — porsi dibagi sesuai pengaturan default"
+                className="flex items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-[11px] font-bold text-indigo-700 hover:bg-indigo-100 disabled:opacity-60">
+                <Users className="h-3 w-3" />
+                {applyingAll ? 'Menambahkan…' : `Tambah Semua (${unrostered.length})`}
+              </button>
+            )}
+            <button type="button" onClick={() => setShowAddForm((v) => !v)}
+              className="flex items-center gap-1 rounded-lg bg-indigo-600 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-indigo-500">
+              <Plus className="h-3 w-3" /> Tambah
+            </button>
+          </div>
         </div>
+
+        {applyResultHere && (
+          <div
+            className={cn(
+              'mb-3 flex items-start gap-2 rounded-lg border px-3 py-2',
+              applyResultHere.tone === 'success' && 'border-emerald-200 bg-emerald-50 text-emerald-700',
+              applyResultHere.tone === 'warning' && 'border-amber-200 bg-amber-50 text-amber-700',
+              applyResultHere.tone === 'error' && 'border-red-200 bg-red-50 text-red-600',
+            )}
+          >
+            {applyResultHere.tone === 'success'
+              ? <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              : <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
+            <p className="min-w-0 flex-1 text-[11px] font-semibold">{applyResultHere.text}</p>
+            <button type="button" aria-label="Tutup" onClick={() => setApplyResult(null)} className="shrink-0 opacity-60 hover:opacity-100">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
 
         {showAddForm && (
           <div className="mb-3">
@@ -1259,8 +1386,29 @@ function StoreDetailPanel({ detail, loading, eligible, yearMonth, period, onRefr
         )}
 
         {sorted.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-center text-xs text-slate-400">
-            Belum ada karyawan di roster target bulan ini. Klik &quot;Tambah&quot; untuk mulai.
+          <div className="rounded-2xl border border-dashed border-slate-200 p-6 text-center">
+            <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-500">
+              <Users className="h-5 w-5" />
+            </div>
+            <p className="text-sm font-bold text-slate-700">Team {fmtMonthLabel(yearMonth)} masih kosong</p>
+            {unrostered.length > 0 ? (
+              <>
+                <p className="mx-auto mt-1 max-w-sm text-xs text-slate-400">
+                  Tambahkan semua {unrostered.length} staff toko sekaligus. Posisi PIC1 / PIC2 / SA mengikuti
+                  tipe karyawan, dan porsi dibagi otomatis sesuai pengaturan default.
+                </p>
+                <button type="button" onClick={() => setConfirmApplyAll(true)} disabled={applyingAll}
+                  className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white hover:bg-indigo-500 disabled:opacity-60">
+                  <Users className="h-3.5 w-3.5" />
+                  {applyingAll ? 'Menambahkan…' : `Tambahkan Semua Staff (${unrostered.length})`}
+                </button>
+                <p className="mt-2 text-[11px] text-slate-400">
+                  atau pilih satu per satu lewat tombol &quot;Tambah&quot;.
+                </p>
+              </>
+            ) : (
+              <p className="mt-1 text-xs text-slate-400">Belum ada karyawan aktif yang terdaftar di toko ini.</p>
+            )}
           </div>
         ) : (
           <div className="overflow-hidden rounded-2xl border border-slate-200">
@@ -1294,6 +1442,31 @@ function StoreDetailPanel({ detail, loading, eligible, yearMonth, period, onRefr
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={confirmApplyAll}
+        onOpenChange={setConfirmApplyAll}
+        icon={Users}
+        title={`Tambahkan ${unrostered.length} staff ke Team ${fmtMonthLabel(yearMonth)}?`}
+        description={
+          <div className="space-y-2">
+            <p>
+              Semua staff {detail.store.name} yang belum ada di Team akan ditambahkan sekaligus.
+              Posisi PIC1 / PIC2 / SA mengikuti tipe karyawan, dan porsi dibagi otomatis sesuai
+              pengaturan default untuk {detail.employeeTargets.length + unrostered.length} orang.
+            </p>
+            {!rosterEmpty && (
+              <p className="text-xs text-amber-700">
+                Porsi {detail.employeeTargets.length} anggota Team yang sudah ada (kecuali yang diubah manual) ikut
+                dihitung ulang.
+              </p>
+            )}
+          </div>
+        }
+        confirmLabel={`Tambahkan ${unrostered.length} Staff`}
+        busy={applyingAll}
+        onConfirm={() => void applyToAllStaff()}
+      />
     </article>
   );
 }
@@ -1362,7 +1535,23 @@ export default function PerformanceTargetsPage() {
     else setDetail(null);
   }, [selectedStoreId, loadDetail]);
 
-  useEffect(() => { setSelectedStoreId(null); }, [yearMonth]);
+  // Switching month keeps the open store (its detail reloads for the new
+  // month), so Ops can flip to next month and set it up without re-picking.
+
+  // Back to Harian inside the current month → today, not the 1st.
+  const handlePeriodChange = (next: ViewPeriod) => {
+    setViewPeriod(next);
+    if (next === 'daily' && yearMonth === dateKeyToYearMonth(todayDateKey())) {
+      setDateKey(todayDateKey());
+    }
+  };
+
+  // Overview shortcut: jump straight to next month in Bulanan.
+  const nextYearMonth = shiftYearMonth(dateKeyToYearMonth(todayDateKey()), 1);
+  const goToNextMonth = () => {
+    setViewPeriod('monthly');
+    setDateKey(`${nextYearMonth}-01`);
+  };
 
   const handleSelectStore = (storeId: number) => {
     setSelectedStoreId(storeId);
@@ -1411,12 +1600,15 @@ export default function PerformanceTargetsPage() {
         title="Performance Targets"
         subtitle={`${headingScope} · ${periodLabel}`}
         periodProps={{
+          // Bulanan → month picker (arrows step a month); Harian → day picker.
+          period: viewPeriod,
+          periods: ['daily', 'monthly'],
+          onPeriodChange: (p) => handlePeriodChange(p as ViewPeriod),
           date: dateKey,
           onDateChange: setDateKey,
         }}
         onRefresh={handleRefresh}
         refreshing={loadingOverview || loadingDetail}
-        actions={<ViewPeriodTabs value={viewPeriod} onChange={setViewPeriod} />}
       />
 
       <div className="mx-auto max-w-6xl space-y-5 px-4 py-5 sm:px-6 lg:px-8">
@@ -1448,6 +1640,32 @@ export default function PerformanceTargetsPage() {
           </div>
         ) : (
           <div className="space-y-5">
+            {/* Setting up next month is the common job — make it one click. */}
+            {yearMonth === nextYearMonth ? (
+              <div className="flex items-start gap-3 rounded-2xl border border-indigo-200 bg-indigo-50 px-4 py-3">
+                <CalendarDays className="mt-0.5 h-4 w-4 shrink-0 text-indigo-600" />
+                <p className="text-xs text-indigo-800">
+                  <span className="font-bold">Menyiapkan target {fmtMonthLabel(yearMonth)}.</span>{' '}
+                  Pilih toko, isi Target Bulanan, lalu tambahkan staff ke Team — porsi dibagi otomatis.
+                </p>
+              </div>
+            ) : yearMonth < nextYearMonth ? (
+              <button
+                type="button"
+                onClick={goToNextMonth}
+                className="flex w-full items-center gap-3 rounded-2xl border border-dashed border-indigo-200 bg-white px-4 py-3 text-left transition hover:bg-indigo-50/60"
+              >
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600">
+                  <CalendarDays className="h-4 w-4" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-bold text-slate-900">Siapkan target {fmtMonthLabel(nextYearMonth)}</p>
+                  <p className="text-xs text-slate-500">Buka bulan depan untuk mengisi target toko dan Team.</p>
+                </div>
+                <ChevronRight className="h-4 w-4 shrink-0 text-indigo-400" />
+              </button>
+            ) : null}
+
             {overview && (
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                 <IconStat icon={Store} iconClass="bg-slate-100 text-slate-500" label="Total Toko" value={String(overview.summary.storeCount)} />

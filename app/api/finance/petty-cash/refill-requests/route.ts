@@ -16,6 +16,8 @@ export async function GET() {
     return NextResponse.json({ success: false, error: scope.error }, { status: scope.status });
   }
 
-  const requests = await listRefillRequestsForFinance();
+  // Well above the ~50-store fleet: the monitor picks the live request per
+  // store out of this list, so it must not be cut off before older stores.
+  const requests = await listRefillRequestsForFinance(500);
   return NextResponse.json({ success: true, requests });
 }

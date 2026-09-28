@@ -5,6 +5,7 @@ import {
   serial,
   text,
   integer,
+  boolean,
   decimal,
   timestamp,
   unique,
@@ -14,6 +15,26 @@ import {
 import { stores, users } from './core';
 
 export const PETTY_CASH_MAX_BALANCE = 1_000_000;
+
+// ─── Request categories ───────────────────────────────────────────────────────
+//
+// What a PIC picks when requesting petty cash (Galon, ATK, …), managed by OPS
+// HO / IT at /ops/petty-cash/categories. Picking one pre-fills the request's
+// Keterangan with `defaultReason` (still editable); a `requiresCustomReason`
+// category (Lain-Lain) has no default and the PIC must write their own.
+// Requests keep a name snapshot, so renaming/deleting a category never
+// rewrites history.
+export const pettyCashCategories = pgTable('petty_cash_categories', {
+  id: serial('id').primaryKey(),
+  name: text('name').notNull().unique(),
+  defaultReason: text('default_reason'),
+  requiresCustomReason: boolean('requires_custom_reason').default(false).notNull(),
+  isActive: boolean('is_active').default(true).notNull(),
+  sortOrder: integer('sort_order').default(0).notNull(),
+
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().$onUpdate(() => new Date()).notNull(),
+});
 
 export const pettyCashPeriods = pgTable(
   'petty_cash_periods',
@@ -80,7 +101,15 @@ export const pettyCashTransactions = pgTable(
     // actually deducted from the balance is `actualAmount` below, once the
     // PIC records what was really spent.
     amount: decimal('amount', { precision: 12, scale: 2 }).notNull(),
+    // The request's reason (Keterangan) — pre-filled from the category's
+    // default reason, or written by the PIC for Lain-Lain.
     description: text('description').notNull(),
+
+    // Null on requests made before categories existed.
+    categoryId: integer('category_id').references(() => pettyCashCategories.id, {
+      onDelete: 'set null',
+    }),
+    categoryName: text('category_name'),
 
     userId: text('user_id').references(() => users.id).notNull(),
     storeId: integer('store_id').references(() => stores.id).notNull(),
@@ -183,8 +212,8 @@ export const pettyCashRefills = pgTable(
 // store runs low before month-end. OPS approves/rejects the request itself;
 // approval alone does NOT move the balance — the store hasn't physically
 // received the cash yet, and Finance (who still physically hands over the
-// cash) hasn't necessarily done so at approval time either. Any store
-// employee (not just PIC) then uploads two proof
+// cash) hasn't necessarily done so at approval time either. PIC 1 (the
+// petty cash holder) then uploads two proof
 // photos: the petty cash drawer (cash counted inside it) and the Surat
 // Terima Petty Cash. Only once BOTH photos are in does the CURRENT
 // (still-open) period's balance actually top up; it does not close the
@@ -211,6 +240,13 @@ export const pettyCashRefillRequests = pgTable(
     requestedAt: timestamp('requested_at').defaultNow().notNull(),
     notes: text('notes'),
 
+    // Where Finance sends the refill cash — PIC 1 fills these in at request
+    // time (see lib/petty-cash-bank.ts). A snapshot per request: nullable only
+    // because requests made before this existed have none.
+    bankName: text('bank_name'),
+    accountNumber: text('account_number'),
+    accountHolderName: text('account_holder_name'),
+
     // pending | approved | rejected
     status: text('status').default('pending').notNull(),
 
@@ -226,8 +262,8 @@ export const pettyCashRefillRequests = pgTable(
     rejectedAt: timestamp('rejected_at'),
     rejectionReason: text('rejection_reason'),
 
-    // Proof-of-receipt photos, uploaded by any store employee once OPS
-    // approves and Finance hands over the cash outside the system.
+    // Proof-of-receipt photos, uploaded by PIC 1 once OPS approves and
+    // Finance hands over the cash outside the system.
     drawerPhotoUrl: text('drawer_photo_url'),
     signaturePhotoUrl: text('signature_photo_url'),
     proofUploadedBy: text('proof_uploaded_by').references(() => users.id),
@@ -241,6 +277,9 @@ export const pettyCashRefillRequests = pgTable(
     statusIdx: index('pcrr_status_idx').on(t.status),
   }),
 );
+
+export type PettyCashCategory = typeof pettyCashCategories.$inferSelect;
+export type NewPettyCashCategory = typeof pettyCashCategories.$inferInsert;
 
 export type PettyCashPeriod = typeof pettyCashPeriods.$inferSelect;
 export type NewPettyCashPeriod = typeof pettyCashPeriods.$inferInsert;

@@ -4,10 +4,13 @@
 import { SessionProvider as NextAuthSessionProvider, useSession } from 'next-auth/react';
 import { usePathname } from 'next/navigation';
 import { ReactNode, useEffect } from 'react';
+import type { Session } from 'next-auth';
 import { IdleLogoutWatcher } from '@/components/idle-logout-watcher';
 
 interface SessionProviderProps {
   children: ReactNode;
+  /** Server-resolved session (app/layout.tsx) — skips the initial client fetch. */
+  session?: Session | null;
 }
 
 /**
@@ -41,13 +44,13 @@ function SessionExpiryRedirect() {
   return null;
 }
 
-export function SessionProvider({ children }: SessionProviderProps) {
+export function SessionProvider({ children, session }: SessionProviderProps) {
   return (
     // With the 15-minute session maxAge (see lib/auth.ts), an active client
     // must poll often enough to keep rolling the JWT forward. Poll every 5
     // minutes and on window focus; next-auth pauses the poll while the tab is
     // hidden, so a genuinely idle session still lapses after 15 minutes.
-    <NextAuthSessionProvider refetchInterval={5 * 60} refetchOnWindowFocus>
+    <NextAuthSessionProvider session={session} refetchInterval={5 * 60} refetchOnWindowFocus>
       <IdleLogoutWatcher />
       <SessionExpiryRedirect />
       {children}

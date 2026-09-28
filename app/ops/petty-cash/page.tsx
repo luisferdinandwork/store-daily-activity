@@ -3,6 +3,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import {
   AlertCircle,
   ArrowUpDown,
@@ -13,6 +14,7 @@ import {
   Loader2,
   MapPin,
   Search,
+  Tags,
   Wallet,
   X,
   XCircle,
@@ -28,6 +30,7 @@ type OpsPettyCashRow = {
   amount: string;
   actualAmount: string | null;
   description: string;
+  categoryName: string | null;
   status: 'pending_ops' | 'ops_approved' | 'ops_rejected' | string;
   imageUrl: string | null;
   approvedAt: string | null;
@@ -642,7 +645,7 @@ export default function OpsPettyCashPage() {
       if (isHoScope && areaFilter !== 'all' && row.areaId !== areaFilter) return false;
 
       if (q) {
-        const haystack = [row.storeNo, row.storeName, row.areaName, row.description, row.submittedByName]
+        const haystack = [row.storeNo, row.storeName, row.areaName, row.categoryName, row.description, row.submittedByName]
           .join(' ')
           .toLowerCase();
         if (!haystack.includes(q)) return false;
@@ -747,6 +750,18 @@ export default function OpsPettyCashPage() {
         periodProps={{ period, date, onDateChange: setDate }}
         onRefresh={() => void load()}
         refreshing={loading}
+        actions={
+          // Categories apply to every store — head office (OPS HO / IT) manages them.
+          isHoScope ? (
+            <Link
+              href="/ops/petty-cash/categories"
+              className="flex h-10 items-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-4 text-sm font-semibold text-indigo-700 hover:bg-indigo-100"
+            >
+              <Tags className="h-4 w-4" />
+              Categories
+            </Link>
+          ) : undefined
+        }
       />
 
       <div className="mx-auto space-y-5 px-4 py-5 sm:px-6 lg:px-8">
@@ -965,6 +980,11 @@ export default function OpsPettyCashPage() {
                         </td>
 
                         <td className="max-w-[260px] px-3 py-3">
+                          {row.categoryName && (
+                            <span className="mb-1 inline-block rounded-md bg-indigo-50 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700">
+                              {row.categoryName}
+                            </span>
+                          )}
                           <p className="truncate font-semibold text-slate-700" title={row.description}>
                             {row.description}
                           </p>
