@@ -1,4 +1,6 @@
 // lib/db/utils/marketing-check.ts
+import type { GeoPoint } from '@/lib/geo';
+import { assertInGeofence } from '@/lib/db/utils/geofence';
 import { and, eq, gte, lte } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
@@ -13,16 +15,11 @@ import {
   type MarketingCheckTask,
 } from '@/lib/db/schema';
 
-export const DEFAULT_GEOFENCE_RADIUS_M = 100;
-
 export type TaskResult<T = void> =
   | { success: true; data: T }
   | { success: false; error: string };
 
-export interface GeoPoint {
-  lat: number;
-  lng: number;
-}
+export type { GeoPoint };
 
 export interface SubmitMarketingCheckInput {
   taskId?: number;
@@ -94,20 +91,6 @@ function endOfDay(date: Date): Date {
   return result;
 }
 
-function haversineMetres(a: GeoPoint, b: GeoPoint): number {
-  const R = 6_371_000;
-  const phi1 = (a.lat * Math.PI) / 180;
-  const phi2 = (b.lat * Math.PI) / 180;
-  const deltaPhi = ((b.lat - a.lat) * Math.PI) / 180;
-  const deltaLambda = ((b.lng - a.lng) * Math.PI) / 180;
-
-  const h =
-    Math.sin(deltaPhi / 2) ** 2 +
-    Math.cos(phi1) * Math.cos(phi2) * Math.sin(deltaLambda / 2) ** 2;
-
-  return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
-}
-
 async function assertCheckedIn(scheduleId: number): Promise<string | null> {
   const [row] = await db
     .select({ checkInTime: attendance.checkInTime })
@@ -118,31 +101,6 @@ async function assertCheckedIn(scheduleId: number): Promise<string | null> {
   return row?.checkInTime
     ? null
     : 'Kamu belum absen masuk. Lakukan absensi masuk terlebih dahulu sebelum mengerjakan task.';
-}
-
-async function assertInGeofence(storeId: number, geo: GeoPoint): Promise<string | null> {
-  const [store] = await db
-    .select({
-      lat: stores.latitude,
-      lng: stores.longitude,
-      radius: stores.geofenceRadiusM,
-    })
-    .from(stores)
-    .where(eq(stores.id, storeId))
-    .limit(1);
-
-  if (!store) return 'Toko tidak ditemukan.';
-  if (!store.lat || !store.lng) return null;
-
-  const distance = haversineMetres(geo, {
-    lat: Number.parseFloat(store.lat),
-    lng: Number.parseFloat(store.lng),
-  });
-  const radius = store.radius ? Number.parseFloat(store.radius) : DEFAULT_GEOFENCE_RADIUS_M;
-
-  return distance > radius
-    ? `Kamu berada ${Math.round(distance)}m dari toko (batas: ${radius}m). Pastikan kamu berada di dalam toko dan coba lagi.`
-    : null;
 }
 
 async function assertCanProgressTask(input: {

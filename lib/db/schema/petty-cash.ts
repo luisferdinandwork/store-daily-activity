@@ -262,8 +262,16 @@ export const pettyCashRefillRequests = pgTable(
     rejectedAt: timestamp('rejected_at'),
     rejectionReason: text('rejection_reason'),
 
-    // Proof-of-receipt photos, uploaded by PIC 1 once OPS approves and
-    // Finance hands over the cash outside the system.
+    // Finance's "I have refilled this store" verification, done on the
+    // Finance Petty Cash pages after OPS approval. PIC 1 can't upload the
+    // proof-of-receipt photos below until this is set — the cash has to have
+    // actually been sent first. Cleared again if Finance undoes it before any
+    // photo is uploaded.
+    financeVerifiedBy: text('finance_verified_by').references(() => users.id),
+    financeVerifiedAt: timestamp('finance_verified_at'),
+
+    // Proof-of-receipt photos, uploaded by PIC 1 once Finance has verified
+    // the refill and handed over the cash.
     drawerPhotoUrl: text('drawer_photo_url'),
     signaturePhotoUrl: text('signature_photo_url'),
     proofUploadedBy: text('proof_uploaded_by').references(() => users.id),

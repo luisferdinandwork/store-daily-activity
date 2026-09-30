@@ -1,0 +1,3 @@
+ALTER TABLE "petty_cash_refill_requests" ADD COLUMN "finance_verified_by" text;--> statement-breakpoint
+ALTER TABLE "petty_cash_refill_requests" ADD COLUMN "finance_verified_at" timestamp;--> statement-breakpoint
+ALTER TABLE "petty_cash_refill_requests" ADD CONSTRAINT "petty_cash_refill_requests_finance_verified_by_users_id_fk" FOREIGN KEY ("finance_verified_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;

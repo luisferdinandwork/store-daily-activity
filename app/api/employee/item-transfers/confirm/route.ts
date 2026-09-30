@@ -11,6 +11,7 @@ import { db } from '@/lib/db';
 import { and, eq, gte, lte } from 'drizzle-orm';
 import { itemDroppingEntries, itemDroppingTasks, itemReturnEntries, itemReturnTasks, schedules } from '@/lib/db/schema';
 import { confirmItemDropping, confirmItemReturn, type GeoPoint } from '@/lib/db/utils/item-transfers';
+import { parseAccuracy } from '@/lib/geo';
 
 function startOfDay(d: Date): Date { const r = new Date(d); r.setHours(0, 0, 0, 0); return r; }
 function endOfDay(d: Date): Date { const r = new Date(d); r.setHours(23, 59, 59, 999); return r; }
@@ -37,6 +38,7 @@ interface ConfirmBody {
   latitude?: unknown;
   lng?: unknown;
   longitude?: unknown;
+  accuracy?: unknown;
   skipGeo?: unknown;
   qtyCounted?: unknown;
   courierSignPhoto?: unknown;
@@ -72,7 +74,11 @@ export async function POST(req: NextRequest) {
       { status: 400 },
     );
   }
-  const geo: GeoPoint = { lat: Number.isFinite(lat) ? lat : 0, lng: Number.isFinite(lng) ? lng : 0 };
+  const geo: GeoPoint = {
+    lat: Number.isFinite(lat) ? lat : 0,
+    lng: Number.isFinite(lng) ? lng : 0,
+    accuracy: parseAccuracy(body.accuracy),
+  };
 
   const qtyCounted = Number(body.qtyCounted);
   const courierSignPhoto = typeof body.courierSignPhoto === 'string' ? body.courierSignPhoto : '';

@@ -10,6 +10,8 @@
 // every time it's opened/refreshed.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import type { GeoPoint } from '@/lib/geo';
+import { assertInGeofence } from '@/lib/db/utils/geofence';
 import { db } from '@/lib/db';
 import { and, eq, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import {
@@ -29,32 +31,13 @@ import { fetchAllBusinessCentralRows } from '@/lib/bc/client';
 import { getActiveItemReturnTask } from '@/lib/db/utils/item-return';
 import { getActiveItemDroppingTask } from '@/lib/db/utils/item-dropping';
 
-export const DEFAULT_GEOFENCE_RADIUS_M = 100;
-
 export type TaskResult<T = void> =
   | { success: true; data: T }
   | { success: false; error: string };
 
-export interface GeoPoint {
-  lat: number;
-  lng: number;
-}
+export type { GeoPoint };
 
 // ─── Guard helpers (mirrors item-return.ts/item-dropping.ts) ──────────────────
-
-function haversineMetres(a: GeoPoint, b: GeoPoint): number {
-  const R = 6_371_000;
-  const φ1 = (a.lat * Math.PI) / 180;
-  const φ2 = (b.lat * Math.PI) / 180;
-  const Δφ = ((b.lat - a.lat) * Math.PI) / 180;
-  const Δλ = ((b.lng - a.lng) * Math.PI) / 180;
-
-  const h =
-    Math.sin(Δφ / 2) ** 2 +
-    Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
-
-  return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
-}
 
 async function assertCheckedIn(scheduleId: number): Promise<string | null> {
   const [att] = await db
@@ -68,24 +51,6 @@ async function assertCheckedIn(scheduleId: number): Promise<string | null> {
   }
 
   return null;
-}
-
-async function assertInGeofence(storeId: number, geo: GeoPoint): Promise<string | null> {
-  const [store] = await db
-    .select({ lat: stores.latitude, lng: stores.longitude, radius: stores.geofenceRadiusM })
-    .from(stores)
-    .where(eq(stores.id, storeId))
-    .limit(1);
-
-  if (!store) return 'Toko tidak ditemukan.';
-  if (!store.lat || !store.lng) return null;
-
-  const dist = haversineMetres(geo, { lat: parseFloat(store.lat), lng: parseFloat(store.lng) });
-  const radius = store.radius ? parseFloat(store.radius) : DEFAULT_GEOFENCE_RADIUS_M;
-
-  return dist > radius
-    ? `Kamu berada ${Math.round(dist)}m dari toko (batas: ${radius}m). Pastikan kamu berada di dalam toko dan coba lagi.`
-    : null;
 }
 
 async function assertCanProgressTask(

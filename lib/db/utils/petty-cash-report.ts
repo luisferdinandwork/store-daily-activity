@@ -8,6 +8,7 @@
 
 import { db } from '@/lib/db';
 import { and, desc, eq, isNotNull, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import {
   areas,
   employeeTypes,
@@ -16,7 +17,13 @@ import {
   stores,
   users,
 } from '@/lib/db/schema';
-import { storeCodeOf, type PettyCashReportRow } from '@/lib/petty-cash-report';
+import {
+  pickRefillByStore,
+  refillStateOf,
+  storeCodeOf,
+  type PettyCashReportRow,
+  type ReportRefill,
+} from '@/lib/petty-cash-report';
 
 export async function getPettyCashReport(month: string): Promise<PettyCashReportRow[]> {
   const storeRows = await db
@@ -25,6 +32,8 @@ export async function getPettyCashReport(month: string): Promise<PettyCashReport
       storeNo: stores.storeNo,
       name: stores.name,
       areaName: areas.name,
+      deptCode: stores.deptCode,
+      status: stores.status,
     })
     .from(stores)
     .innerJoin(areas, eq(stores.areaId, areas.id));
@@ -83,10 +92,41 @@ export async function getPettyCashReport(month: string): Promise<PettyCashReport
     else pic1ByStore.set(row.storeId, [row.name]);
   }
 
+  // The refill Finance is tracking per store (see pickRefillByStore), newest
+  // request first. The verifier is a second join onto users.
+  const verifier = alias(users, 'refill_verifier');
+  const requestRows = await db
+    .select({
+      request: pettyCashRefillRequests,
+      verifiedByName: verifier.name,
+    })
+    .from(pettyCashRefillRequests)
+    .leftJoin(verifier, eq(pettyCashRefillRequests.financeVerifiedBy, verifier.id))
+    .orderBy(desc(pettyCashRefillRequests.requestedAt));
+
+  const verifierByRequest = new Map(requestRows.map((r) => [r.request.id, r.verifiedByName]));
+  const refillByStore = pickRefillByStore(requestRows.map((r) => r.request), month);
+
   return storeRows
     .map((store): PettyCashReportRow => {
       const used = usedByStore.get(store.id);
-      const bank = bankByStore.get(store.id);
+      const request = refillByStore.get(store.id);
+      // The account on the request being paid beats the store's latest one.
+      const bank = request?.accountNumber ? request : bankByStore.get(store.id);
+
+      const refill: ReportRefill | null = request
+        ? {
+            id: request.id,
+            yearMonth: request.yearMonth,
+            state: refillStateOf(request),
+            requestedAt: request.requestedAt.toISOString(),
+            approvedAt: request.approvedAt?.toISOString() ?? null,
+            verifiedAt: request.financeVerifiedAt?.toISOString() ?? null,
+            verifiedByName: verifierByRequest.get(request.id) ?? null,
+            receivedAt: request.balanceAfter ? request.proofUploadedAt?.toISOString() ?? null : null,
+            proofCount: [request.drawerPhotoUrl, request.signaturePhotoUrl].filter(Boolean).length,
+          }
+        : null;
 
       return {
         storeId: store.id,
@@ -94,14 +134,18 @@ export async function getPettyCashReport(month: string): Promise<PettyCashReport
         storeName: store.name,
         areaName: store.areaName,
         code: storeCodeOf(store.storeNo),
+        deptCode: store.deptCode,
+        storeStatus: store.status,
 
         totalUsed: Math.round(Number(used?.total ?? 0)),
         txCount: used?.count ?? 0,
 
-        pic1Name: bank?.requesterName ?? pic1ByStore.get(store.id)?.join(', ') ?? null,
+        pic1Name: bankByStore.get(store.id)?.requesterName ?? pic1ByStore.get(store.id)?.join(', ') ?? null,
         bankName: bank?.bankName ?? null,
         accountNumber: bank?.accountNumber ?? null,
         accountHolderName: bank?.accountHolderName ?? null,
+
+        refill,
       };
     })
     .sort((a, b) => a.storeNo.localeCompare(b.storeNo, undefined, { numeric: true }));

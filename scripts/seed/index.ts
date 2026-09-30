@@ -30,6 +30,7 @@ import { seedAttendance } from './attendance';
 import { seedPettyCash } from './petty-cash';
 import { seedRosterDemo } from './roster-demo';
 import { seedRosterDemoPerformance } from './roster-demo-performance';
+import { seedStoreDeptCodes } from './store-dept-codes';
 
 type SeedStep = { name: string; run: () => Promise<void> };
 
@@ -47,6 +48,7 @@ type SeedStep = { name: string; run: () => Promise<void> };
 // `roster-demo-performance` adds dummy monthly targets for stores that have none.
 const STEPS: SeedStep[] = [
   { name: 'setup', run: seedSetup },
+  { name: 'store-dept-codes', run: seedStoreDeptCodes },
   { name: 'bc-settings', run: seedBusinessCentralSettings },
   { name: 'performance-targets', run: seedPerformanceTargets },
   { name: 'shift-tasks', run: seedShiftTasks },

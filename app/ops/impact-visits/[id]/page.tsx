@@ -404,7 +404,7 @@ export default function ImpactVisitDetailPage() {
       const res = await fetch(`/api/ops/impact-visits/${id}/geo`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lat: geo.lat, lng: geo.lng }),
+        body: JSON.stringify({ lat: geo.lat, lng: geo.lng, accuracy: geo.accuracy }),
       });
       const data = await res.json();
       if (!data.success) { setProofError(data.error ?? 'Failed to capture location.'); return; }

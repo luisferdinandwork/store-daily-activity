@@ -9,6 +9,8 @@
 // Dashboard. See app/api/employee/item-transfers/route.ts for the backing API.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useGeo } from '@/lib/hooks/useGeo';
+import type { GeoPoint } from '@/lib/geo';
 import {
   CheckCircle2, Loader2, AlertCircle,
   Store, Clock, Truck, Package, Inbox, Search, X,
@@ -132,44 +134,12 @@ const KIND_CFG: Record<Kind, {
   },
 };
 
-// ─── Geo hook ─────────────────────────────────────────────────────────────────
-
-function useGeo(required: boolean) {
-  const [geo, setGeo] = useState<{ lat: number; lng: number } | null>(null);
-  const [geoError, setGeoError] = useState<string | null>(null);
-  const [geoReady, setGeoReady] = useState(false);
-
-  const refresh = useCallback(() => {
-    if (!required) {
-      setGeo(null);
-      setGeoError(null);
-      setGeoReady(true);
-      return;
-    }
-    setGeoReady(false);
-    setGeoError(null);
-    if (!navigator.geolocation) {
-      setGeoError('Geolocation tidak didukung.');
-      setGeoReady(true);
-      return;
-    }
-    navigator.geolocation.getCurrentPosition(
-      pos => { setGeo({ lat: pos.coords.latitude, lng: pos.coords.longitude }); setGeoReady(true); },
-      () => { setGeoError('Lokasi tidak dapat diperoleh.'); setGeoReady(true); },
-      { timeout: 10_000, maximumAge: 0 },
-    );
-  }, [required]);
-
-  useEffect(() => { refresh(); }, [refresh]);
-  return { geo, geoError, geoReady, refresh };
-}
-
 // ─── Access hook ──────────────────────────────────────────────────────────────
 
 function useAccessStatus(
   scheduleId: string,
   storeId: string,
-  geo: { lat: number; lng: number } | null,
+  geo: GeoPoint | null,
   geoReady: boolean,
 ) {
   const [accessStatus, setAccessStatus] = useState<AccessStatus | null>(null);
@@ -183,7 +153,7 @@ function useAccessStatus(
     setAccessLoading(true);
     try {
       const params = new URLSearchParams({ scheduleId, storeId });
-      if (geo) { params.set('lat', String(geo.lat)); params.set('lng', String(geo.lng)); }
+      if (geo) { params.set('lat', String(geo.lat)); params.set('lng', String(geo.lng)); if (geo.accuracy != null) params.set('acc', String(geo.accuracy)); }
       const res = await fetch(`/api/employee/tasks/access?${params}`);
       const data = await res.json() as AccessStatus;
       setAccessStatus(data);
@@ -604,6 +574,7 @@ export default function ItemTransfersPage() {
           courierSignPhoto,
           lat: geo?.lat,
           lng: geo?.lng,
+          accuracy: geo?.accuracy,
           skipGeo: !requiresLocation,
         }),
       });

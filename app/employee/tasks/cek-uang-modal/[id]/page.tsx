@@ -2,6 +2,8 @@
 // app/employee/tasks/cek-uang-modal/[id]/page.tsx
 
 import { useEffect, useState, useCallback } from 'react';
+import { useGeo } from '@/lib/hooks/useGeo';
+import type { GeoPoint } from '@/lib/geo';
 import { useParams, useRouter } from 'next/navigation';
 import { CheckCircle2, CloudOff, Save } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -150,55 +152,12 @@ function fmt(iso: string | null | undefined) {
   });
 }
 
-// ─── Geo hook ─────────────────────────────────────────────────────────────────
-
-function useGeo(required: boolean) {
-  const [geo, setGeo] = useState<{ lat: number; lng: number } | null>(null);
-  const [geoError, setGeoError] = useState<string | null>(null);
-  const [geoReady, setGeoReady] = useState(false);
-
-  const refresh = useCallback(() => {
-    if (!required) {
-      setGeo(null);
-      setGeoError(null);
-      setGeoReady(true);
-      return;
-    }
-    setGeoReady(false);
-    setGeoError(null);
-
-    if (!navigator.geolocation) {
-      setGeoError('Geolocation tidak didukung.');
-      setGeoReady(true);
-      return;
-    }
-
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setGeo({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-        setGeoReady(true);
-      },
-      () => {
-        setGeoError('Lokasi tidak dapat diperoleh.');
-        setGeoReady(true);
-      },
-      { timeout: 10_000, maximumAge: 0 },
-    );
-  }, [required]);
-
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  return { geo, geoError, geoReady, refresh };
-}
-
 // ─── Access hook ──────────────────────────────────────────────────────────────
 
 function useAccessStatus(
   scheduleId: string,
   storeId: string,
-  geo: { lat: number; lng: number } | null,
+  geo: GeoPoint | null,
   geoReady: boolean,
   taskStatus: TaskStatus | undefined,
 ) {
@@ -221,7 +180,7 @@ function useAccessStatus(
 
       if (geo) {
         params.set('lat', String(geo.lat));
-        params.set('lng', String(geo.lng));
+        params.set('lng', String(geo.lng)); if (geo.accuracy != null) params.set('acc', String(geo.accuracy));
       }
 
       const res = await fetch(`/api/employee/tasks/access?${params}`);
@@ -462,6 +421,7 @@ export default function CekUangModalDetailPage() {
           storeId,
           lat: geo?.lat,
           lng: geo?.lng,
+          accuracy: geo?.accuracy,
           skipGeo: geo === null,
           denominations: payloadRows(rows),
           notes: notes || undefined,

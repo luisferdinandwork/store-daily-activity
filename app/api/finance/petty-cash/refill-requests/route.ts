@@ -2,9 +2,9 @@
 //
 // GET — all petty cash refill requests (all stores; Finance has no area
 // scoping). Read-only — OPS approves/rejects at
-// PATCH /api/ops/petty-cash/refill-requests/[id]; Finance just sees the
-// money and can privately mark ones they've physically refilled (client-only,
-// see app/finance/petty-cash/page.tsx).
+// PATCH /api/ops/petty-cash/refill-requests/[id]; Finance verifies the ones
+// it has physically refilled at POST ./verify (which unlocks PIC 1's receipt
+// upload).
 
 import { NextResponse } from 'next/server';
 import { resolveFinanceScope } from '@/lib/finance/scope';

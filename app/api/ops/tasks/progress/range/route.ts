@@ -7,6 +7,7 @@ import { getStoreSummariesForRange } from '@/lib/db/utils/tasks';
 import { db } from '@/lib/db';
 import { stores, areas } from '@/lib/db/schema';
 import { eq, inArray } from 'drizzle-orm';
+import { filterActiveStoreIds } from '@/lib/db/utils/store-status';
 import { users } from '@/lib/db/schema';
 
 // GET /api/ops/tasks/progress/range?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
@@ -59,6 +60,9 @@ export async function GET(req: NextRequest) {
 
     allowedStoreIds = areaStores.map(s => s.id);
   }
+
+  // Prep (ready_to_open) and closed stores are left out of progress rollups.
+  allowedStoreIds = await filterActiveStoreIds(allowedStoreIds);
 
   if (!allowedStoreIds.length) {
     return NextResponse.json({ success: true, summaries: [], stores: [] });

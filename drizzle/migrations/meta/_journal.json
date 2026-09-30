@@ -134,6 +134,34 @@
       "when": 1790581395052,
       "tag": "0018_wild_kylun",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1790665839154,
+      "tag": "0019_windy_katie_power",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1790669845329,
+      "tag": "0020_elite_pete_wisdom",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1790733351696,
+      "tag": "0021_fat_red_skull",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1790734265393,
+      "tag": "0022_eminent_apocalypse",
+      "breakpoints": true
     }
   ]
 }

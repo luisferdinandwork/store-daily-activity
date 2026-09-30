@@ -15,6 +15,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import type { StoreRow } from '@/app/api/ops/stores/route';
+import { STORE_STATUSES, STORE_STATUS_LABEL, type StoreStatus } from '@/lib/store-status';
 
 interface AreaOption {
   id: number;
@@ -41,6 +42,9 @@ export default function StoreEditSheet({ mode, store, areas, fixedAreaId, onClos
   const [areaId, setAreaId] = useState<string>(
     String(fixedAreaId ?? store?.areaId ?? areas[0]?.id ?? ''),
   );
+  // Back-office only — IT sets the BC dept code and a store's starting status.
+  const [deptCode, setDeptCode] = useState(store?.deptCode ?? '');
+  const [status, setStatus] = useState<StoreStatus>('ready_to_open');
   const [latitude, setLatitude] = useState(store?.latitude ?? '');
   const [longitude, setLongitude] = useState(store?.longitude ?? '');
   const [geofenceRadiusM, setGeofenceRadiusM] = useState(store?.geofenceRadiusM ?? '');
@@ -100,11 +104,13 @@ export default function StoreEditSheet({ mode, store, areas, fixedAreaId, onClos
               address: address.trim(),
               areaId: Number(areaId),
               ...location,
+              ...(isIt ? { status, deptCode: deptCode.trim() || null } : {}),
             }
           : {
               name: name.trim(),
               address: address.trim(),
               ...location,
+              ...(isIt ? { deptCode: deptCode.trim() || null } : {}),
             };
 
       const url = mode === 'create' ? '/api/ops/stores' : `/api/ops/stores/${store!.id}`;
@@ -206,6 +212,46 @@ export default function StoreEditSheet({ mode, store, areas, fixedAreaId, onClos
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+          )}
+
+          {mode === 'create' && (
+            <div className="space-y-1.5">
+              <Label htmlFor="status">Status</Label>
+              {isIt ? (
+                <Select value={status} onValueChange={(v) => setStatus(v as StoreStatus)} disabled={saving}>
+                  <SelectTrigger id="status" className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {STORE_STATUSES.map((s) => (
+                      <SelectItem key={s} value={s}>{STORE_STATUS_LABEL[s]}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Input id="status" value={STORE_STATUS_LABEL.ready_to_open} disabled />
+              )}
+              <p className="text-[11px] text-muted-foreground">
+                Ready to Open is for preparation (schedule, targets) — no attendance, tasks or petty cash until IT
+                activates the store.
+              </p>
+            </div>
+          )}
+
+          {isIt && (
+            <div className="space-y-1.5">
+              <Label htmlFor="deptCode">BC dept code</Label>
+              <Input
+                id="deptCode"
+                value={deptCode}
+                onChange={(e) => setDeptCode(e.target.value)}
+                placeholder="e.g. SALES-02-01-001"
+                disabled={saving}
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Business Central dimension value. Visible to IT and Finance only.
+              </p>
             </div>
           )}
 

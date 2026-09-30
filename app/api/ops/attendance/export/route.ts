@@ -8,6 +8,7 @@ import {
 } from '@/lib/db/schema';
 import { eq, and, gte, lte, inArray } from 'drizzle-orm';
 import { getStoresForOps }            from '@/lib/schedule-utils';
+import { filterActiveStoreIds } from '@/lib/db/utils/store-status';
 import { getOpsActor }               from '../../tasks/_helpers';
 import * as XLSX                      from 'xlsx';
 import { isShiftCode, SHIFT_LABELS } from '@/lib/shift-tasks';
@@ -355,7 +356,7 @@ export async function GET(request: NextRequest) {
     }
 
     // OPS area scope
-    const opsStoreIds = await getStoresForOps((session.user as any).id as string);
+    const opsStoreIds = await filterActiveStoreIds(await getStoresForOps((session.user as any).id as string));
     if (!opsStoreIds.length) {
       return NextResponse.json({ error: 'No stores found for your area' }, { status: 403 });
     }

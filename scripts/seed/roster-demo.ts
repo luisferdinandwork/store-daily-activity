@@ -202,7 +202,7 @@ async function findTargets(): Promise<{ targets: Target[]; skipped: string[] }> 
     db.selectDistinct({ v: monthlySchedules.storeId }).from(monthlySchedules),
     db.selectDistinct({ v: schedules.userId }).from(schedules),
     db.selectDistinct({ v: attendance.userId }).from(attendance),
-    db.select({ id: stores.id, storeNo: stores.storeNo, name: stores.name, lat: stores.latitude, lng: stores.longitude }).from(stores),
+    db.select({ id: stores.id, storeNo: stores.storeNo, name: stores.name, lat: stores.latitude, lng: stores.longitude, status: stores.status }).from(stores),
     db
       .select({ id: users.id, nik: users.nik, name: users.name, storeId: users.homeStoreId })
       .from(users)
@@ -219,6 +219,8 @@ async function findTargets(): Promise<{ targets: Target[]; skipped: string[] }> 
     const staff = employeeRows.filter((e) => e.storeId === s.id);
     if (staff.length === 0) continue;
     if (ONLY && !ONLY.has(s.storeNo.toUpperCase())) continue;
+    // Demo attendance/tasks only make sense for live stores.
+    if (s.status !== 'active') { skipped.push(`${s.storeNo} (${s.status})`); continue; }
     if (PROTECTED_STORE_NOS.has(s.storeNo)) { skipped.push(`${s.storeNo} (protected)`); continue; }
     if (busyStoreIds.has(s.id)) { skipped.push(`${s.storeNo} (already has data)`); continue; }
     const employees = staff.filter((e) => !busyUserIds.has(e.id)).map((e) => ({ id: e.id, nik: e.nik, name: e.name }));

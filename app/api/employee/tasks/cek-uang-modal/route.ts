@@ -11,6 +11,7 @@ import {
   type GeoPoint,
   type UangModalDenominationInput,
 } from '@/lib/db/utils/cek-uang-modal';
+import { parseAccuracy } from '@/lib/geo';
 
 function toInt(val: unknown, field: string): number {
   const n = parseInt(String(val ?? ''), 10);
@@ -24,7 +25,7 @@ function readGeo(body: Record<string, unknown>): GeoPoint {
   if (!isFinite(lat) || !isFinite(lng)) {
     throw new Error('Geolokasi tidak valid. Aktifkan GPS dan coba lagi.');
   }
-  return { lat, lng };
+  return { lat, lng, accuracy: parseAccuracy(body.accuracy) };
 }
 
 function readDenominations(v: unknown): UangModalDenominationInput[] {

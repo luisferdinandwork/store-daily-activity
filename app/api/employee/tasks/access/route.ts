@@ -10,11 +10,12 @@
 //   storeId     (required) — integer store id
 //   lat         (optional) — float, employee's current latitude
 //   lng         (optional) — float, employee's current longitude
+//   acc         (optional) — float, reported GPS accuracy in metres
 //
 // Response: TaskAccessStatus JSON
 //   { status: 'ok' }
 //   { status: 'not_checked_in' }
-//   { status: 'outside_geofence', distanceM: number, radiusM: number }
+//   { status: 'outside_geofence', distanceM: number, radiusM: number, accuracyM: number | null }
 //   { status: 'geo_unavailable' }
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -22,6 +23,7 @@ import { NextResponse }         from 'next/server';
 import { getServerSession }     from 'next-auth';
 import { authOptions }          from '@/lib/auth';
 import { getTaskAccessStatus }  from '@/lib/db/utils/tasks';
+import { parseAccuracy }        from '@/lib/geo';
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
@@ -34,6 +36,7 @@ export async function GET(req: Request) {
   const storeId    = parseInt(searchParams.get('storeId')    ?? '', 10);
   const latStr     = searchParams.get('lat');
   const lngStr     = searchParams.get('lng');
+  const accStr     = searchParams.get('acc');
 
   if (!scheduleId || !storeId) {
     return NextResponse.json({ error: 'scheduleId and storeId are required.' }, { status: 400 });
@@ -41,7 +44,7 @@ export async function GET(req: Request) {
 
   const geo =
     latStr && lngStr
-      ? { lat: parseFloat(latStr), lng: parseFloat(lngStr) }
+      ? { lat: parseFloat(latStr), lng: parseFloat(lngStr), accuracy: parseAccuracy(accStr) }
       : null;
 
   try {

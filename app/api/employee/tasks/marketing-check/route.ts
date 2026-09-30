@@ -8,6 +8,7 @@ import {
   submitMarketingCheck,
   type AutoSaveMarketingCheckInput,
 } from '@/lib/db/utils/marketing-check';
+import { parseAccuracy, type GeoPoint } from '@/lib/geo';
 
 function toInt(value: unknown, field: string): number {
   const parsed = Number.parseInt(String(value ?? ''), 10);
@@ -26,12 +27,12 @@ function toBool(value: unknown): boolean {
   return value === true;
 }
 
-function readGeo(value: unknown): { lat: number; lng: number } | null {
+function readGeo(value: unknown): GeoPoint | null {
   if (!value || typeof value !== 'object') return null;
 
   const geo = value as Record<string, unknown>;
   return typeof geo.lat === 'number' && typeof geo.lng === 'number'
-    ? { lat: geo.lat, lng: geo.lng }
+    ? { lat: geo.lat, lng: geo.lng, accuracy: parseAccuracy(geo.accuracy) }
     : null;
 }
 

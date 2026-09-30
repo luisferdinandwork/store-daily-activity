@@ -16,6 +16,7 @@ import {
   breakTypeEnum,
   cashCountSessionEnum,
   issueStatusEnum,
+  storeStatusEnum,
 } from './enums';
 import { userRoles, employeeTypes, shifts } from './lookups';
 
@@ -51,11 +52,32 @@ export const stores = pgTable('stores', {
   areaId:           integer('area_id').references(() => areas.id).notNull(),
   pettyCashBalance: decimal('petty_cash_balance', { precision: 12, scale: 2 }).default('1000000'),
 
+  /**
+   * Business Central department dimension code (Dimension Values →
+   * "SALES-02-01-001"). Back-office reference only — surfaced on the IT and
+   * Finance panels and never sent to Ops/employee views. Nullable: stores that
+   * predate the dimension list (or the DUMMY test store) have none.
+   */
+  deptCode: text('dept_code'),
+
+  /**
+   * Lifecycle (see lib/store-status.ts). Only `active` stores record
+   * attendance / tasks / petty cash; `ready_to_open` is prep-only; `close`
+   * is retired (the Audit close-out flow hangs off this later).
+   * Change it through changeStoreStatus(), which also writes the history row.
+   */
+  status:          storeStatusEnum('status').default('active').notNull(),
+  statusChangedAt: timestamp('status_changed_at'),
+  closedAt:        timestamp('closed_at'),
+  closeReason:     text('close_reason'),
+
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({
-  storeNoUnique: unique('stores_store_no_unique').on(t.storeNo),
-  areaIdx:       index('stores_area_idx').on(t.areaId),
+  storeNoUnique:  unique('stores_store_no_unique').on(t.storeNo),
+  deptCodeUnique: unique('stores_dept_code_unique').on(t.deptCode),
+  areaIdx:        index('stores_area_idx').on(t.areaId),
+  statusIdx:      index('stores_status_idx').on(t.status),
 }));
 
 /** See users.switchContext. */
@@ -142,6 +164,23 @@ export const businessCentralSettings = pgTable('business_central_settings', {
 }, (t) => ({
   codeUnique: unique('business_central_settings_code_unique').on(t.code),
   activeIdx:  index('business_central_settings_active_idx').on(t.isActive),
+}));
+
+// ─── Store status history ─────────────────────────────────────────────────────
+// One row per lifecycle change (ready_to_open → active → close, or a reopen).
+// `fromStatus` is null for the row written when a store is first created with
+// a non-default status. The Audit close-out (next phase) reads/extends this.
+
+export const storeStatusHistory = pgTable('store_status_history', {
+  id:         serial('id').primaryKey(),
+  storeId:    integer('store_id').references(() => stores.id, { onDelete: 'cascade' }).notNull(),
+  fromStatus: storeStatusEnum('from_status'),
+  toStatus:   storeStatusEnum('to_status').notNull(),
+  changedBy:  text('changed_by').references(() => users.id),
+  note:       text('note'),
+  createdAt:  timestamp('created_at').defaultNow().notNull(),
+}, (t) => ({
+  storeIdx: index('store_status_history_store_idx').on(t.storeId, t.createdAt),
 }));
 
 // ─── User Store / Role Assignment History ─────────────────────────────────────

@@ -20,10 +20,12 @@ import {
   attendance,
   schedules,
   stores,
+  storeStatusHistory,
   userStoreAssignments,
   users,
 } from '@/lib/db/schema/core';
 import { employeeTypes, userRoles } from '@/lib/db/schema/lookups';
+import { isStoreStatus, type StoreStatus } from '@/lib/store-status';
 
 // ─── Public types (consumed by the page) ─────────────────────────────────────
 
@@ -51,6 +53,11 @@ export type StoreRow = {
   longitude: string | null;
   geofenceRadiusM: string | null;
   pettyCashBalance: string;
+  /** Lifecycle — see lib/store-status.ts. */
+  status: StoreStatus;
+  closedAt: string | null;
+  /** BC department dimension code. Only present for IT (back-office reference, hidden from Ops). */
+  deptCode?: string | null;
   taskStats: {
     total: number;
     completed: number;
@@ -195,6 +202,7 @@ export async function GET(): Promise<NextResponse<StoresApiResponse>> {
   }
 
   const { start, end } = todayRange();
+  const isIt = (await resolveItScope()).ok;
 
   // 2. Load areas (filtered for ops_area)
   const allAreas = await db
@@ -368,6 +376,9 @@ export async function GET(): Promise<NextResponse<StoresApiResponse>> {
       longitude: store.longitude,
       geofenceRadiusM: store.geofenceRadiusM,
       pettyCashBalance: store.pettyCashBalance ?? '0',
+      status: store.status,
+      closedAt: store.closedAt ? store.closedAt.toISOString() : null,
+      ...(isIt ? { deptCode: store.deptCode } : {}),
       taskStats: {
         total: ts.total,
         completed: ts.completed,
@@ -378,7 +389,8 @@ export async function GET(): Promise<NextResponse<StoresApiResponse>> {
         colorStatus: toColorStatus(rate, ts.total),
       },
       attendanceSummary: {
-        scheduled: scheduledByStore.get(store.id) ?? 0,
+        // A prep/closed store's schedule isn't an attendance expectation.
+        scheduled: store.status === 'active' ? scheduledByStore.get(store.id) ?? 0 : 0,
         present: presentByStore.get(store.id) ?? 0,
       },
       employees: employeesByStore.get(store.id) ?? [],
@@ -472,6 +484,43 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: false, error: `A store with code "${storeNo}" already exists.` }, { status: 409 });
   }
 
+  // New stores start in preparation (ready_to_open) unless IT says otherwise:
+  // Ops/PIC can build the schedule and targets, and IT activates the store when
+  // it opens. Only IT may create a store straight into another status, and
+  // only IT sees / sets the BC dept code.
+  const itScope = await resolveItScope();
+  const isIt = itScope.ok;
+
+  let status: StoreStatus = 'ready_to_open';
+  if (body?.status !== undefined) {
+    if (!isStoreStatus(body.status)) {
+      return NextResponse.json({ success: false, error: 'Invalid status.' }, { status: 400 });
+    }
+    if (!isIt && body.status !== 'ready_to_open') {
+      return NextResponse.json(
+        { success: false, error: 'Forbidden: only IT can create a store in this status.' },
+        { status: 403 },
+      );
+    }
+    status = body.status;
+  }
+
+  let deptCode: string | null = null;
+  if (body?.deptCode !== undefined && body.deptCode !== null && body.deptCode !== '') {
+    if (!isIt) {
+      return NextResponse.json({ success: false, error: 'Forbidden: only IT can set a dept code.' }, { status: 403 });
+    }
+    if (typeof body.deptCode !== 'string') {
+      return NextResponse.json({ success: false, error: 'Invalid dept code.' }, { status: 400 });
+    }
+    const requested: string = body.deptCode.trim().toUpperCase();
+    const [dup] = await db.select({ id: stores.id }).from(stores).where(eq(stores.deptCode, requested)).limit(1);
+    if (dup) {
+      return NextResponse.json({ success: false, error: `Dept code "${requested}" is already used by another store.` }, { status: 409 });
+    }
+    deptCode = requested;
+  }
+
   const [created] = await db
     .insert(stores)
     .values({
@@ -482,8 +531,22 @@ export async function POST(request: NextRequest) {
       latitude: lat.value,
       longitude: lng.value,
       ...(radius.value ? { geofenceRadiusM: radius.value } : {}),
+      status,
+      statusChangedAt: new Date(),
+      deptCode,
+      // A store that isn't live yet carries no petty cash; activation provisions it.
+      ...(status === 'ready_to_open' ? { pettyCashBalance: '0' } : {}),
     })
     .returning();
 
-  return NextResponse.json({ success: true, store: created });
+  await db.insert(storeStatusHistory).values({
+    storeId: created.id,
+    fromStatus: null,
+    toStatus: status,
+    changedBy: scope.userId,
+    note: 'Store created',
+  });
+
+  const { deptCode: createdDeptCode, ...publicStore } = created;
+  return NextResponse.json({ success: true, store: isIt ? { ...publicStore, deptCode: createdDeptCode } : publicStore });
 }

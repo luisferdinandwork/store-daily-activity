@@ -32,6 +32,7 @@ import {
   MapPin,
   Pencil,
   Plus,
+  Power,
   Search,
   Store,
   UserMinus,
@@ -44,6 +45,8 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTitle, SheetDescription, SheetHeader } from '@/components/ui/sheet';
 import StoreEditSheet from '@/components/ops/stores/StoreEditSheet';
+import StoreStatusSheet from '@/components/ops/stores/StoreStatusSheet';
+import { STORE_STATUS_BADGE, STORE_STATUS_LABEL } from '@/lib/store-status';
 import { cn } from '@/lib/utils';
 import type { AreaGroup, EmployeeRow, StoreRow, TaskColorStatus } from '@/app/api/ops/stores/route';
 
@@ -372,6 +375,7 @@ function StoreTableRow({
   removingId,
   onToggle,
   onEdit,
+  onChangeStatus,
   onAssignClick,
   onRemove,
 }: {
@@ -381,10 +385,14 @@ function StoreTableRow({
   removingId: string | null;
   onToggle: () => void;
   onEdit: () => void;
+  onChangeStatus: () => void;
   onAssignClick: () => void;
   onRemove: (userId: string) => void;
 }) {
   const c = COLOR[store.taskStats.colorStatus];
+  // Prep / closed stores record nothing, so task + attendance columns give way
+  // to the lifecycle badge.
+  const recording = store.status === 'active';
 
   return (
     <>
@@ -418,6 +426,14 @@ function StoreTableRow({
                 <span className="rounded bg-slate-100 px-1.5 py-px font-mono text-[10px] font-bold text-slate-500">
                   {store.storeNo}
                 </span>
+                {isIt && store.deptCode && (
+                  <span
+                    title="Business Central dept code"
+                    className="rounded bg-indigo-50 px-1.5 py-px font-mono text-[10px] font-semibold text-indigo-600"
+                  >
+                    {store.deptCode}
+                  </span>
+                )}
               </div>
               <div className="mt-0.5 flex items-center gap-1 text-[11px] text-slate-400">
                 <MapPin className="h-2.5 w-2.5 shrink-0" />
@@ -429,22 +445,33 @@ function StoreTableRow({
 
         {/* Task progress */}
         <td className="px-4 py-3.5">
-          <ProgressBar rate={store.taskStats.completionRate} status={store.taskStats.colorStatus} />
-          <p className="mt-1 text-[10px] text-slate-400">
-            {store.taskStats.completed}/{store.taskStats.total} done
-            {store.taskStats.pending > 0 && (
-              <span className="ml-1.5 inline-flex items-center gap-0.5 text-amber-500">
-                <AlertTriangle className="h-2.5 w-2.5" />
-                {store.taskStats.pending} pending
-              </span>
-            )}
-          </p>
+          {recording ? (
+            <>
+              <ProgressBar rate={store.taskStats.completionRate} status={store.taskStats.colorStatus} />
+              <p className="mt-1 text-[10px] text-slate-400">
+                {store.taskStats.completed}/{store.taskStats.total} done
+                {store.taskStats.pending > 0 && (
+                  <span className="ml-1.5 inline-flex items-center gap-0.5 text-amber-500">
+                    <AlertTriangle className="h-2.5 w-2.5" />
+                    {store.taskStats.pending} pending
+                  </span>
+                )}
+              </p>
+            </>
+          ) : (
+            <p className="text-[11px] italic text-slate-400">Not recording</p>
+          )}
         </td>
 
         {/* Status badge */}
         <td className="px-4 py-3.5">
-          <span className={cn('inline-flex items-center rounded-md px-2.5 py-1 text-[10px] font-bold ring-1 ring-inset', c.badge)}>
-            {c.label}
+          <span
+            className={cn(
+              'inline-flex items-center rounded-md px-2.5 py-1 text-[10px] font-bold ring-1 ring-inset',
+              recording ? c.badge : STORE_STATUS_BADGE[store.status],
+            )}
+          >
+            {recording ? c.label : STORE_STATUS_LABEL[store.status]}
           </span>
         </td>
 
@@ -474,14 +501,27 @@ function StoreTableRow({
 
         {/* Actions */}
         <td className="px-4 py-3.5 pr-5">
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); onEdit(); }}
-            aria-label={`Edit ${store.name}`}
-            className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
-          >
-            <Pencil className="h-3.5 w-3.5" />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onEdit(); }}
+              aria-label={`Edit ${store.name}`}
+              className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+            </button>
+            {isIt && (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onChangeStatus(); }}
+                aria-label={`Change status of ${store.name}`}
+                title="Change status"
+                className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-indigo-50 hover:text-indigo-600"
+              >
+                <Power className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
         </td>
       </tr>
 
@@ -506,6 +546,7 @@ function AreaSection({
   isIt,
   removingId,
   onEditStore,
+  onChangeStatus,
   onAddStore,
   onAssignClick,
   onRemove,
@@ -514,6 +555,7 @@ function AreaSection({
   isIt: boolean;
   removingId: string | null;
   onEditStore: (store: StoreRow) => void;
+  onChangeStatus: (store: StoreRow) => void;
   onAddStore: (areaId: number) => void;
   onAssignClick: (store: StoreRow) => void;
   onRemove: (userId: string) => void;
@@ -594,6 +636,7 @@ function AreaSection({
                   removingId={removingId}
                   onToggle={() => toggle(store.id)}
                   onEdit={() => onEditStore(store)}
+                  onChangeStatus={() => onChangeStatus(store)}
                   onAssignClick={() => onAssignClick(store)}
                   onRemove={onRemove}
                 />
@@ -675,6 +718,7 @@ export default function StoreManagementView({
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<EditState | null>(null);
   const [assigningStore, setAssigningStore] = useState<StoreRow | null>(null);
+  const [statusStore, setStatusStore] = useState<StoreRow | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
@@ -798,6 +842,7 @@ export default function StoreManagementView({
               isIt={isIt}
               removingId={removingId}
               onEditStore={(store) => setEditing({ mode: 'edit', store })}
+              onChangeStatus={(store) => setStatusStore(store)}
               onAddStore={(areaId) => setEditing({ mode: 'create', fixedAreaId: areaId })}
               onAssignClick={(store) => setAssigningStore(store)}
               onRemove={handleRemove}
@@ -813,6 +858,14 @@ export default function StoreManagementView({
           areas={areas.map((a) => ({ id: a.id, name: a.name }))}
           fixedAreaId={editing.mode === 'create' ? editing.fixedAreaId : undefined}
           onClose={() => setEditing(null)}
+          onSaved={loadData}
+        />
+      )}
+
+      {statusStore && (
+        <StoreStatusSheet
+          store={statusStore}
+          onClose={() => setStatusStore(null)}
           onSaved={loadData}
         />
       )}

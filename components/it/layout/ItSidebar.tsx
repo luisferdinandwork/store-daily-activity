@@ -20,6 +20,9 @@
 //     Performance Target Defaults /it/target-allocation (PIC1/PIC2/SA % grid)
 //     Petty Cash Categories   /it/petty-cash-categories
 //
+//   Data Correction (IT-only)
+//     Koreksi Setoran        /it/setoran-correction (fix one day's amounts, carry-over recalculated)
+//
 //   Other Panels (IT keeps its role — a "Back to IT" banner shows on the way)
 //     Ops Panel             /ops
 //     Finance Panel         /finance
@@ -39,6 +42,7 @@ import {
   Building2,
   ChevronRight,
   ClipboardCheck,
+  Eraser,
   KeyRound,
   Layers,
   LayoutDashboard,
@@ -106,6 +110,12 @@ const NAV: NavSection[] = [
       { href: '/it/bc-credentials', label: 'BC Credentials', icon: KeyRound },
       { href: '/it/target-allocation', label: 'Performance Target Defaults', icon: Percent },
       { href: '/it/petty-cash-categories', label: 'Petty Cash Categories', icon: Tags },
+    ],
+  },
+  {
+    section: 'Data Correction',
+    items: [
+      { href: '/it/setoran-correction', label: 'Koreksi Setoran', icon: Eraser },
     ],
   },
   {

@@ -179,6 +179,9 @@ export function isClosingShift(code: string | null | undefined): boolean {
 /** Seeded shift codes that open the store — for `IN (...)` filters. */
 export const OPENING_SHIFT_CODES: readonly ShiftCode[] = SHIFT_CODES.filter(isOpeningShift);
 
+/** Seeded shift codes that close the store — for `IN (...)` filters. */
+export const CLOSING_SHIFT_CODES: readonly ShiftCode[] = SHIFT_CODES.filter(isClosingShift);
+
 // ─── Task catalog ─────────────────────────────────────────────────────────────
 
 export const REMOVED_TASK_TYPES = [

@@ -31,11 +31,10 @@ import {
 } from '@/lib/db/schema';
 import { users, areas }      from '@/lib/db/schema';
 import { getOrCreateMarketingCheckForSchedule } from '@/lib/db/utils/marketing-check';
-import { haversineMetres } from '@/lib/geo';
+import type { GeoPoint } from '@/lib/geo';
+import { assertInGeofence, checkStoreGeofence } from '@/lib/db/utils/geofence';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-
-export const DEFAULT_GEOFENCE_RADIUS_M = 100;
 
 const PENDING_STATUSES: readonly ['not_started', 'in_progress'] = ['not_started', 'in_progress'] as const;
 const ACTIVE_STATUSES: readonly ['not_started', 'in_progress', 'pending'] = ['not_started', 'in_progress', 'pending'] as const;
@@ -51,15 +50,12 @@ export type TaskResult<T = void> =
   | { success: true;  data: T }
   | { success: false; error: string };
 
-export interface GeoPoint {
-  lat: number;
-  lng: number;
-}
+export type { GeoPoint };
 
 export type TaskAccessStatus =
   | { status: 'ok' }
   | { status: 'not_checked_in' }
-  | { status: 'outside_geofence'; distanceM: number; radiusM: number }
+  | { status: 'outside_geofence'; distanceM: number; radiusM: number; accuracyM: number | null }
   | { status: 'geo_unavailable' };
 
 // ─── Submit input types ───────────────────────────────────────────────────────
@@ -239,24 +235,6 @@ async function assertCheckedIn(scheduleId: number): Promise<string | null> {
   return null;
 }
 
-export async function assertInGeofence(storeId: number, geo: GeoPoint): Promise<string | null> {
-  const [store] = await db
-    .select({ lat: stores.latitude, lng: stores.longitude, radius: stores.geofenceRadiusM })
-    .from(stores)
-    .where(eq(stores.id, storeId))
-    .limit(1);
-
-  if (!store)                   return 'Toko tidak ditemukan.';
-  if (!store.lat || !store.lng) return null;
-
-  const dist   = haversineMetres(geo, { lat: parseFloat(store.lat), lng: parseFloat(store.lng) });
-  const radius = store.radius ? parseFloat(store.radius) : DEFAULT_GEOFENCE_RADIUS_M;
-
-  return dist > radius
-    ? `Kamu berada ${Math.round(dist)}m dari toko (batas: ${radius}m). Pastikan kamu berada di dalam toko dan coba lagi.`
-    : null;
-}
-
 async function assertCanProgressTask(
   scheduleId: number,
   storeId:    number,
@@ -281,16 +259,9 @@ export async function getTaskAccessStatus(
   if (checkInErr) return { status: 'not_checked_in' };
   if (!geo)       return { status: 'geo_unavailable' };
 
-  const [store] = await db
-    .select({ lat: stores.latitude, lng: stores.longitude, radius: stores.geofenceRadiusM })
-    .from(stores)
-    .where(eq(stores.id, storeId))
-    .limit(1);
-
-  if (store?.lat && store?.lng) {
-    const radiusM = store.radius ? parseFloat(store.radius) : DEFAULT_GEOFENCE_RADIUS_M;
-    const distM   = haversineMetres(geo, { lat: parseFloat(store.lat), lng: parseFloat(store.lng) });
-    if (distM > radiusM) return { status: 'outside_geofence', distanceM: Math.round(distM), radiusM };
+  const verdict = await checkStoreGeofence(storeId, geo);
+  if (verdict && !verdict.inside) {
+    return { status: 'outside_geofence', distanceM: verdict.distanceM, radiusM: verdict.radiusM, accuracyM: verdict.accuracyM };
   }
   return { status: 'ok' };
 }
@@ -1500,7 +1471,7 @@ export async function getAreaTaskOverview(opsUserId: string, date: Date) {
     .where(eq(areas.id, opsUser.areaId)).limit(1);
 
   const areaStores = await db.select({ id: stores.id, name: stores.name, storeNo: stores.storeNo, address: stores.address })
-    .from(stores).where(eq(stores.areaId, opsUser.areaId)).orderBy(stores.name);
+    .from(stores).where(and(eq(stores.areaId, opsUser.areaId), eq(stores.status, 'active'))).orderBy(stores.name);
 
   const results = await Promise.all(areaStores.map(async (s) => {
     const daily = await getDailyTaskSummary(s.id, date);
@@ -1536,6 +1507,7 @@ export async function getAllTaskOverview(date: Date) {
     })
     .from(stores)
     .leftJoin(areas, eq(stores.areaId, areas.id))
+    .where(eq(stores.status, 'active'))
     .orderBy(areas.name, stores.name);
 
   const results = await Promise.all(

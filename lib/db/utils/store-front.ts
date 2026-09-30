@@ -1,6 +1,8 @@
 // lib/db/utils/store-front.ts
 // Full replacement focused on correct actor tracking for shared store/day Store Front tasks.
 
+import type { GeoPoint } from '@/lib/geo';
+import { assertInGeofence } from '@/lib/db/utils/geofence';
 import { db } from '@/lib/db';
 import { taskShiftIdFor } from '@/lib/db/utils/shift-lookup';
 import { eq, and, gte, lte } from 'drizzle-orm';
@@ -15,10 +17,7 @@ export type TaskResult<T = void> =
   | { success: true; data: T }
   | { success: false; error: string };
 
-export interface GeoPoint {
-  lat: number;
-  lng: number;
-}
+export type { GeoPoint };
 
 export const STORE_FRONT_PHOTO_RULES = {
   storefront: { min: 1, max: 3 },
@@ -45,8 +44,6 @@ export type AutoSaveStoreFrontInput = Partial<{
   notes: string;
 }>;
 
-const DEFAULT_GEOFENCE_RADIUS_M = 100;
-
 function startOfDay(d: Date): Date {
   const r = new Date(d);
   r.setHours(0, 0, 0, 0);
@@ -57,18 +54,6 @@ function endOfDay(d: Date): Date {
   const r = new Date(d);
   r.setHours(23, 59, 59, 999);
   return r;
-}
-
-function haversineMetres(a: GeoPoint, b: GeoPoint): number {
-  const R = 6_371_000;
-  const phi1 = (a.lat * Math.PI) / 180;
-  const phi2 = (b.lat * Math.PI) / 180;
-  const dPhi = ((b.lat - a.lat) * Math.PI) / 180;
-  const dLambda = ((b.lng - a.lng) * Math.PI) / 180;
-  const h =
-    Math.sin(dPhi / 2) ** 2 +
-    Math.cos(phi1) * Math.cos(phi2) * Math.sin(dLambda / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
 
 function jsonPhotos(paths: string[] | undefined): string | null {
@@ -101,31 +86,6 @@ async function assertCheckedIn(scheduleId: number, userId?: string): Promise<str
   }
 
   return null;
-}
-
-async function assertInGeofence(storeId: number, geo: GeoPoint): Promise<string | null> {
-  const [store] = await db
-    .select({
-      lat: stores.latitude,
-      lng: stores.longitude,
-      radius: stores.geofenceRadiusM,
-    })
-    .from(stores)
-    .where(eq(stores.id, storeId))
-    .limit(1);
-
-  if (!store) return 'Toko tidak ditemukan.';
-  if (!store.lat || !store.lng) return null;
-
-  const dist = haversineMetres(geo, {
-    lat: parseFloat(store.lat),
-    lng: parseFloat(store.lng),
-  });
-  const radius = store.radius ? parseFloat(store.radius) : DEFAULT_GEOFENCE_RADIUS_M;
-
-  return dist > radius
-    ? `Kamu berada ${Math.round(dist)}m dari toko (batas: ${radius}m). Pastikan kamu berada di dalam toko dan coba lagi.`
-    : null;
 }
 
 async function assertCanProgressTask(

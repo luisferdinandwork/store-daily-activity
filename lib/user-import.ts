@@ -40,6 +40,7 @@ import { asc, eq } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { users, userRoles, employeeTypes, stores, areas } from '@/lib/db/schema';
 import { setUserHomeStore } from '@/lib/db/utils/user-store-assignment';
+import { deptCodeForStoreNo } from '@/lib/store-dept-codes';
 
 const SALT_ROUNDS = 10;
 const DEFAULT_PASSWORD = 'password123'; // matches this repo's seed convention, see CLAUDE.md
@@ -471,6 +472,8 @@ export async function buildUserImportReport(
       .values({
         storeNo: store.storeNo, name: store.name, address: d.address, areaId,
         latitude: d.latitude, longitude: d.longitude, geofenceRadiusM: d.geofenceRadiusM,
+        // BC dimension for this store code, when the Dimension Values list has one.
+        deptCode: deptCodeForStoreNo(store.storeNo),
       })
       .onConflictDoNothing({ target: stores.storeNo })
       .returning({ id: stores.id });

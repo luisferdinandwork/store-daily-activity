@@ -11,6 +11,7 @@ import {
   pettyCashRefills,
   pettyCashTransactions,
 } from '@/lib/db/schema/petty-cash';
+import type { StoreStatus } from '@/lib/store-status';
 
 function getJakartaMonth() {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -50,6 +51,10 @@ export type PettyCashStoreRow = {
   storeNo: string;
   storeName: string;
   areaName: string;
+  /** BC dept code — Finance + IT only. */
+  deptCode: string | null;
+  /** Store lifecycle. ready_to_open stores are listed with a Rp 0 balance. */
+  storeStatus: StoreStatus;
 
   openingBalance: string;
   balance: string;
@@ -100,6 +105,8 @@ export async function GET(
       storeNo: stores.storeNo,
       name: stores.name,
       areaName: areas.name,
+      deptCode: stores.deptCode,
+      status: stores.status,
     })
     .from(stores)
     .innerJoin(areas, eq(stores.areaId, areas.id))
@@ -173,10 +180,34 @@ export async function GET(
     txByStore.get(tx.storeId)?.push(tx);
   }
 
+  // A store shows once it has a period row for this month — or, while it is
+  // still preparing to open (ready_to_open), always, at Rp 0: petty cash is
+  // only provisioned when IT activates the store (changeStoreStatus).
   const data: PettyCashStoreRow[] = storeRows
-    .filter((store) => periodByStore.has(store.id))
+    .filter((store) => periodByStore.has(store.id) || store.status === 'ready_to_open')
     .map((store) => {
-    const period = periodByStore.get(store.id)!;
+    const period = periodByStore.get(store.id) ?? null;
+    if (!period) {
+      return {
+        storeId: store.id,
+        storeNo: store.storeNo,
+        storeName: store.name,
+        areaName: store.areaName,
+        deptCode: store.deptCode,
+        storeStatus: store.status,
+        openingBalance: '0',
+        balance: '0',
+        closingBalance: null,
+        periodStatus: 'open' as const,
+        monthlySpend: '0',
+        pendingOpsCount: 0,
+        rejectedCount: 0,
+        refillIssued: false,
+        refillAmount: null,
+        nextYearMonth: null,
+        transactions: [],
+      };
+    }
     const refill = refillByStore.get(store.id) ?? null;
     const txList = txByStore.get(store.id) ?? [];
 
@@ -201,6 +232,8 @@ export async function GET(
       storeNo: store.storeNo,
       storeName: store.name,
       areaName: store.areaName,
+      deptCode: store.deptCode,
+      storeStatus: store.status,
 
       openingBalance: period.openingBalance,
       balance,
@@ -234,9 +267,13 @@ export async function GET(
     };
   });
 
+  // Preparing stores sink to the bottom — nothing for Finance to act on yet.
+  const rank = (row: PettyCashStoreRow) =>
+    row.storeStatus === 'ready_to_open' ? 3 : row.pendingOpsCount > 0 ? 0 : row.refillIssued ? 2 : 1;
+
   data.sort((a, b) => {
-    const priorityA = a.pendingOpsCount > 0 ? 0 : a.refillIssued ? 2 : 1;
-    const priorityB = b.pendingOpsCount > 0 ? 0 : b.refillIssued ? 2 : 1;
+    const priorityA = rank(a);
+    const priorityB = rank(b);
 
     if (priorityA !== priorityB) return priorityA - priorityB;
 

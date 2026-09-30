@@ -6,7 +6,9 @@
 // Flow: PIC 1 requests -> OPS approves/rejects the request (Finance is still
 // the one who will hand over the physical cash, but approval alone does NOT
 // move the balance yet — the store hasn't actually received the cash at
-// this point) -> once approved, PIC 1 uploads two proof-of-receipt photos
+// this point) -> Finance sends the cash and verifies the refill on its
+// Petty Cash pages (financeVerifiedAt; PIC 1 can't confirm receipt before
+// this) -> PIC 1 uploads two proof-of-receipt photos
 // (the petty cash drawer and the Surat Terima Petty Cash) as evidence the
 // cash was physically handed over. Only once BOTH photos are in does the
 // balance actually top back up to the max — that's the real "the store now
@@ -19,7 +21,7 @@
 // across month boundaries until it eventually does get refilled.
 
 import { db } from '@/lib/db';
-import { and, desc, eq, inArray, isNotNull, or } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, or } from 'drizzle-orm';
 import {
   pettyCashRefillRequests,
   stores,
@@ -234,6 +236,81 @@ export async function rejectRefillRequest(
   return { success: true, request };
 }
 
+export interface RefillVerifyResult {
+  /** Ids that actually changed. */
+  changedIds: number[];
+  /** Ids left alone (already in that state, wrong status, or proof already uploaded). */
+  skipped: number;
+}
+
+/**
+ * Finance verifies that it has refilled the store for an OPS-approved request.
+ * This is what unlocks PIC 1's "receive" step (proof photos) on the employee
+ * page — see attachRefillProof. The status guard lives in the UPDATE itself, so
+ * two Finance users racing can't both claim the same request. PIC 1 is
+ * notified for each one that actually changed.
+ */
+export async function verifyRefillRequests(ids: number[], actorUserId: string): Promise<RefillVerifyResult> {
+  if (ids.length === 0) return { changedIds: [], skipped: 0 };
+  const now = new Date();
+
+  const rows = await db
+    .update(pettyCashRefillRequests)
+    .set({ financeVerifiedBy: actorUserId, financeVerifiedAt: now })
+    .where(
+      and(
+        inArray(pettyCashRefillRequests.id, ids),
+        eq(pettyCashRefillRequests.status, 'approved'),
+        isNull(pettyCashRefillRequests.financeVerifiedAt),
+      ),
+    )
+    .returning({
+      id: pettyCashRefillRequests.id,
+      storeId: pettyCashRefillRequests.storeId,
+      requestedBy: pettyCashRefillRequests.requestedBy,
+    });
+
+  await Promise.all(
+    rows.map((r) =>
+      createNotificationsForUsers([r.requestedBy], {
+        type: 'petty_cash_refill_verified',
+        title: 'Refill petty cash sudah diproses Finance',
+        body: 'Finance sudah memverifikasi Refill toko kamu. Setelah uangnya diterima, unggah foto laci petty cash dan Surat Terima.',
+        link: '/employee/pettycash',
+        relatedType: 'petty_cash_refill_request',
+        relatedId: r.id,
+      }),
+    ),
+  );
+
+  return { changedIds: rows.map((r) => r.id), skipped: ids.length - rows.length };
+}
+
+/**
+ * Finance takes a verification back (a mis-click, or the transfer bounced).
+ * Only allowed while PIC 1 hasn't uploaded any proof photo — once they've
+ * started confirming receipt the cash is already in their hands.
+ */
+export async function unverifyRefillRequests(ids: number[]): Promise<RefillVerifyResult> {
+  if (ids.length === 0) return { changedIds: [], skipped: 0 };
+
+  const rows = await db
+    .update(pettyCashRefillRequests)
+    .set({ financeVerifiedBy: null, financeVerifiedAt: null })
+    .where(
+      and(
+        inArray(pettyCashRefillRequests.id, ids),
+        eq(pettyCashRefillRequests.status, 'approved'),
+        isNotNull(pettyCashRefillRequests.financeVerifiedAt),
+        isNull(pettyCashRefillRequests.drawerPhotoUrl),
+        isNull(pettyCashRefillRequests.signaturePhotoUrl),
+      ),
+    )
+    .returning({ id: pettyCashRefillRequests.id });
+
+  return { changedIds: rows.map((r) => r.id), skipped: ids.length - rows.length };
+}
+
 export type ProofPhotoKind = 'drawer' | 'signature';
 
 /**
@@ -254,6 +331,13 @@ export async function attachRefillProof(
   if (existing.storeId !== storeId) return { success: false, error: 'This request belongs to a different store.' };
   if (existing.status !== 'approved') {
     return { success: false, error: 'Proof photos can only be uploaded after OPS approves the refill.' };
+  }
+  // The store can only confirm receiving cash Finance has actually sent.
+  if (!existing.financeVerifiedAt) {
+    return {
+      success: false,
+      error: 'Finance belum memverifikasi Refill ini. Foto bukti bisa diunggah setelah Finance memprosesnya.',
+    };
   }
 
   const columnKey = kind === 'drawer' ? 'drawerPhotoUrl' : 'signaturePhotoUrl';

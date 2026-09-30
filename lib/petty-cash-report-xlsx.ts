@@ -5,7 +5,9 @@
 // sheet per code. Used by app/api/finance/petty-cash/report/export.
 
 import XlsxStyle from 'xlsx-js-style';
+import { STORE_STATUS_LABEL } from '@/lib/store-status';
 import {
+  REFILL_STATE_LABEL,
   groupByStoreCode,
   reportMonthLabel,
   storeCodeBrand,
@@ -15,7 +17,7 @@ import {
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 
-type CellStyle = {
+export type CellStyle = {
   font?: Record<string, unknown>;
   fill?: Record<string, unknown>;
   alignment?: Record<string, unknown>;
@@ -23,13 +25,13 @@ type CellStyle = {
   numFmt?: string;
 };
 
-const THIN = { style: 'thin', color: { rgb: 'D1D5DB' } };
-const THIN_DARK = { style: 'thin', color: { rgb: '475569' } };
-const BOX = { top: THIN, bottom: THIN, left: THIN, right: THIN };
-const solid = (hex: string) => ({ patternType: 'solid', fgColor: { rgb: hex } });
-const FONT = { name: 'Arial', sz: 10 };
+export const THIN = { style: 'thin', color: { rgb: 'D1D5DB' } };
+export const THIN_DARK = { style: 'thin', color: { rgb: '475569' } };
+export const BOX = { top: THIN, bottom: THIN, left: THIN, right: THIN };
+export const solid = (hex: string) => ({ patternType: 'solid', fgColor: { rgb: hex } });
+export const FONT = { name: 'Arial', sz: 10 };
 
-const S = {
+export const S = {
   title: { font: { name: 'Arial', sz: 14, bold: true, color: { rgb: '0F172A' } }, alignment: { vertical: 'center' } },
   subtitle: { font: { name: 'Arial', sz: 9, italic: true, color: { rgb: '64748B' } }, alignment: { vertical: 'center' } },
   header: {
@@ -66,9 +68,9 @@ const S = {
   },
 } satisfies Record<string, CellStyle>;
 
-const MONEY_FORMAT = '#,##0';
+export const MONEY_FORMAT = '#,##0';
 
-function put(
+export function put(
   ws: XlsxStyle.WorkSheet,
   r: number,
   c: number,
@@ -85,7 +87,7 @@ function put(
 
 // ─── Sheets ──────────────────────────────────────────────────────────────────
 
-function sheetTitle(ws: XlsxStyle.WorkSheet, lastCol: number, title: string, subtitle: string) {
+export function sheetTitle(ws: XlsxStyle.WorkSheet, lastCol: number, title: string, subtitle: string) {
   put(ws, 0, 0, title, S.title);
   put(ws, 1, 0, subtitle, S.subtitle);
   ws['!merges'] = [
@@ -95,15 +97,24 @@ function sheetTitle(ws: XlsxStyle.WorkSheet, lastCol: number, title: string, sub
   ws['!rows'] = [{ hpt: 26 }, { hpt: 16 }, { hpt: 6 }, { hpt: 24 }];
 }
 
-const HEADER_ROW = 3;
+const stampOf = (iso: string) =>
+  new Date(iso).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', dateStyle: 'medium', timeStyle: 'short' });
+
+export const HEADER_ROW = 3;
 
 /** One row per store: the "simple Excel" layout Finance works from. */
 function buildStoreSheet(title: string, subtitle: string, rows: PettyCashReportRow[]) {
   const ws: XlsxStyle.WorkSheet = {};
-  const headers = ['No', 'Kode Toko', 'Nama Toko', 'Total Terpakai (Rp)', 'No. Rekening', 'PIC 1', 'Bank', 'Atas Nama'];
+  const headers = [
+    'No', 'Kode Toko', 'Dept Code', 'Nama Toko', 'Status Toko', 'Total Terpakai (Rp)', 'No. Rekening', 'PIC 1',
+    'Bank', 'Atas Nama', 'Status Refill', 'Diverifikasi Finance',
+  ];
   const lastCol = headers.length - 1;
 
-  ws['!cols'] = [{ wch: 5 }, { wch: 11 }, { wch: 38 }, { wch: 20 }, { wch: 24 }, { wch: 24 }, { wch: 16 }, { wch: 28 }];
+  ws['!cols'] = [
+    { wch: 5 }, { wch: 11 }, { wch: 18 }, { wch: 38 }, { wch: 14 }, { wch: 20 }, { wch: 24 }, { wch: 24 },
+    { wch: 16 }, { wch: 28 }, { wch: 18 }, { wch: 30 },
+  ];
   sheetTitle(ws, lastCol, title, subtitle);
   headers.forEach((h, c) => put(ws, HEADER_ROW, c, h, S.header));
 
@@ -111,14 +122,34 @@ function buildStoreSheet(title: string, subtitle: string, rows: PettyCashReportR
     const r = HEADER_ROW + 1 + i;
     put(ws, r, 0, i + 1, S.textCenter);
     put(ws, r, 1, row.storeNo, S.mono);
-    put(ws, r, 2, row.storeName, S.text);
-    put(ws, r, 3, row.totalUsed, S.money, MONEY_FORMAT);
+    put(ws, r, 2, row.deptCode ?? '-', S.mono);
+    put(ws, r, 3, row.storeName, S.text);
+    put(ws, r, 4, STORE_STATUS_LABEL[row.storeStatus], S.textCenter);
+    put(ws, r, 5, row.totalUsed, S.money, MONEY_FORMAT);
     // Account numbers go in as text so Excel never turns them into 1.23E+15.
-    if (row.accountNumber) put(ws, r, 4, row.accountNumber, S.mono);
-    else put(ws, r, 4, 'Belum diisi', S.missing);
-    put(ws, r, 5, row.pic1Name ?? '-', S.text);
-    put(ws, r, 6, row.bankName ?? '-', row.bankName ? S.text : S.missing);
-    put(ws, r, 7, row.accountHolderName ?? '-', row.accountHolderName ? S.text : S.missing);
+    if (row.accountNumber) put(ws, r, 6, row.accountNumber, S.mono);
+    else put(ws, r, 6, 'Belum diisi', S.missing);
+    put(ws, r, 7, row.pic1Name ?? '-', S.text);
+    put(ws, r, 8, row.bankName ?? '-', row.bankName ? S.text : S.missing);
+    put(ws, r, 9, row.accountHolderName ?? '-', row.accountHolderName ? S.text : S.missing);
+
+    const refill = row.refill;
+    if (!refill) {
+      put(ws, r, 10, '-', S.textCenter);
+      put(ws, r, 11, '-', S.textCenter);
+    } else {
+      // Amber while Finance still owes a verification, like the missing-data cells.
+      put(ws, r, 10, REFILL_STATE_LABEL[refill.state], refill.state === 'awaiting_finance' ? S.missing : S.textCenter);
+      put(
+        ws,
+        r,
+        11,
+        refill.verifiedAt
+          ? `${refill.verifiedByName ?? 'Finance'} · ${stampOf(refill.verifiedAt)}`
+          : refill.state === 'awaiting_finance' ? 'Belum diverifikasi' : '-',
+        refill.state === 'awaiting_finance' ? S.missing : S.text,
+      );
+    }
     ws['!rows']![r] = { hpt: 18 };
   });
 
@@ -126,9 +157,11 @@ function buildStoreSheet(title: string, subtitle: string, rows: PettyCashReportR
   const total = rows.reduce((sum, row) => sum + row.totalUsed, 0);
   put(ws, totalRow, 0, '', S.totalBlank);
   put(ws, totalRow, 1, '', S.totalBlank);
-  put(ws, totalRow, 2, 'TOTAL', S.totalLabel);
-  put(ws, totalRow, 3, total, S.totalMoney, MONEY_FORMAT);
-  for (let c = 4; c <= lastCol; c++) put(ws, totalRow, c, '', S.totalBlank);
+  put(ws, totalRow, 2, '', S.totalBlank);
+  put(ws, totalRow, 3, 'TOTAL', S.totalLabel);
+  put(ws, totalRow, 4, '', S.totalBlank);
+  put(ws, totalRow, 5, total, S.totalMoney, MONEY_FORMAT);
+  for (let c = 6; c <= lastCol; c++) put(ws, totalRow, c, '', S.totalBlank);
   ws['!rows']![totalRow] = { hpt: 20 };
 
   ws['!ref'] = XlsxStyle.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: totalRow, c: lastCol } });
@@ -141,10 +174,10 @@ function buildStoreSheet(title: string, subtitle: string, rows: PettyCashReportR
 /** One row per store code with its subtotal. */
 function buildSummarySheet(title: string, subtitle: string, groups: StoreCodeGroup[]) {
   const ws: XlsxStyle.WorkSheet = {};
-  const headers = ['Kode', 'Merek', 'Jumlah Toko', 'Total Terpakai (Rp)', 'Rekening Terisi'];
+  const headers = ['Kode', 'Merek', 'Jumlah Toko', 'Total Terpakai (Rp)', 'Rekening Terisi', 'Perlu Verifikasi'];
   const lastCol = headers.length - 1;
 
-  ws['!cols'] = [{ wch: 10 }, { wch: 22 }, { wch: 14 }, { wch: 22 }, { wch: 18 }];
+  ws['!cols'] = [{ wch: 10 }, { wch: 22 }, { wch: 14 }, { wch: 22 }, { wch: 18 }, { wch: 18 }];
   sheetTitle(ws, lastCol, title, subtitle);
   headers.forEach((h, c) => put(ws, HEADER_ROW, c, h, S.header));
 
@@ -155,6 +188,7 @@ function buildSummarySheet(title: string, subtitle: string, groups: StoreCodeGro
     put(ws, r, 2, g.storeCount, S.textCenter);
     put(ws, r, 3, g.totalUsed, S.money, MONEY_FORMAT);
     put(ws, r, 4, `${g.withBankCount} / ${g.storeCount}`, g.withBankCount < g.storeCount ? S.missing : S.textCenter);
+    put(ws, r, 5, g.awaitingVerifyCount, g.awaitingVerifyCount > 0 ? S.missing : S.textCenter);
     ws['!rows']![r] = { hpt: 18 };
   });
 
@@ -164,6 +198,7 @@ function buildSummarySheet(title: string, subtitle: string, groups: StoreCodeGro
   put(ws, totalRow, 2, groups.reduce((sum, g) => sum + g.storeCount, 0), S.totalMoney);
   put(ws, totalRow, 3, groups.reduce((sum, g) => sum + g.totalUsed, 0), S.totalMoney, MONEY_FORMAT);
   put(ws, totalRow, 4, '', S.totalBlank);
+  put(ws, totalRow, 5, groups.reduce((sum, g) => sum + g.awaitingVerifyCount, 0), S.totalMoney);
   ws['!rows']![totalRow] = { hpt: 20 };
 
   ws['!ref'] = XlsxStyle.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: totalRow, c: lastCol } });

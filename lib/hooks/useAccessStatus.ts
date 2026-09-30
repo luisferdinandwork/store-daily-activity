@@ -6,7 +6,7 @@ import type { GeoPoint } from './useGeo';
 export type AccessStatus =
   | { status: 'ok' }
   | { status: 'not_checked_in' }
-  | { status: 'outside_geofence'; distanceM: number; radiusM: number }
+  | { status: 'outside_geofence'; distanceM: number; radiusM: number; accuracyM?: number | null }
   | { status: 'geo_unavailable' };
 
 export function useAccessStatus(
@@ -36,6 +36,7 @@ export function useAccessStatus(
       if (geo) {
         params.set('lat', String(geo.lat));
         params.set('lng', String(geo.lng));
+        if (geo.accuracy != null) params.set('acc', String(geo.accuracy));
       }
 
       const res = await fetch(`/api/employee/tasks/access?${params.toString()}`);

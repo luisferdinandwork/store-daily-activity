@@ -2,7 +2,7 @@
 //
 // POST — capture the geo-tag for an On Location impact visit. Hard-blocks
 // (422) if the submitted point is outside the store's own geofence, reusing
-// the same check employee task submissions use (lib/db/utils/tasks.ts).
+// the same check employee task submissions use (lib/db/utils/geofence.ts).
 
 import { NextRequest, NextResponse } from 'next/server';
 import { eq } from 'drizzle-orm';
@@ -11,7 +11,8 @@ import { db } from '@/lib/db';
 import { impactVisits, stores, areas } from '@/lib/db/schema';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
 import { computeImpactVisitPermissionFlags, serializeImpactVisit } from '@/lib/db/utils/impact-visits';
-import { assertInGeofence } from '@/lib/db/utils/tasks';
+import { assertInGeofence } from '@/lib/db/utils/geofence';
+import { parseAccuracy } from '@/lib/geo';
 
 async function loadVisitWithStoreArea(id: number) {
   const [row] = await db
@@ -74,7 +75,7 @@ export async function POST(
     return NextResponse.json({ success: false, error: 'lat and lng are required.' }, { status: 400 });
   }
 
-  const geoErr = await assertInGeofence(found.visit.storeId, { lat, lng });
+  const geoErr = await assertInGeofence(found.visit.storeId, { lat, lng, accuracy: parseAccuracy(body.accuracy) });
   if (geoErr) {
     return NextResponse.json({ success: false, error: geoErr }, { status: 422 });
   }

@@ -5,6 +5,7 @@ import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
 import {
   schedules,
+  stores,
   shifts,
   shiftTasks,
   taskDefinitions,
@@ -291,6 +292,8 @@ export async function GET(request: NextRequest) {
     const dayStart = startOfDay(targetDate);
     const dayEnd = endOfDay(targetDate);
 
+    // Only active stores get tasks — a ready_to_open / closed store keeps its
+    // schedule but no task rows are created or shown for it.
     const todaySchedules = await db
       .select({
         id: schedules.id,
@@ -298,10 +301,12 @@ export async function GET(request: NextRequest) {
         storeId: schedules.storeId,
       })
       .from(schedules)
+      .innerJoin(stores, eq(stores.id, schedules.storeId))
       .where(
         and(
           eq(schedules.userId, userId),
           eq(schedules.isHoliday, false),
+          eq(stores.status, "active"),
           gte(schedules.date, dayStart),
           lte(schedules.date, dayEnd),
         ),

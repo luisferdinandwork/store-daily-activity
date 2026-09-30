@@ -10,6 +10,7 @@ import {
   autoSaveStoreOpening,
   type StoreOpeningAutoSavePatch,
 } from '@/lib/db/utils/store-opening';
+import { parseAccuracy, type GeoPoint } from '@/lib/geo';
 
 function toInt(val: unknown, field: string): number {
   const n = parseInt(String(val ?? ''), 10);
@@ -37,11 +38,11 @@ function toOptionalString(v: unknown): string | undefined {
   return typeof v === 'string' ? v : undefined;
 }
 
-function toGeo(geo: unknown): { lat: number; lng: number } | null {
+function toGeo(geo: unknown): GeoPoint | null {
   if (!geo || typeof geo !== 'object') return null;
-  const { lat, lng } = geo as Record<string, unknown>;
+  const { lat, lng, accuracy } = geo as Record<string, unknown>;
   if (typeof lat !== 'number' || typeof lng !== 'number') return null;
-  return { lat, lng };
+  return { lat, lng, accuracy: parseAccuracy(accuracy) };
 }
 
 async function resolveTask(taskId: number | undefined): Promise<{

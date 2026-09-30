@@ -188,7 +188,7 @@ export default function FinanceDashboardPage() {
           </h2>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
             {[
-              { href: '/finance/setoran',       label: 'Setoran Review',   icon: WalletCards,   desc: 'Review money-storage discrepancies' },
+              { href: '/finance/setoran',       label: 'Setoran Review',   icon: WalletCards,   desc: 'Review, verify and export daily setoran' },
               { href: '/finance/daily-reports',  label: 'Daily Reports',    icon: FileText,      desc: 'Verify submitted EOD reports' },
               { href: '/finance/petty-cash',     label: 'Petty Cash',       icon: Wallet,        desc: 'Approve or reject cash requests' },
             ].map(({ href, label, icon: Icon, desc }) => (

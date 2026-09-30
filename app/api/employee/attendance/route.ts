@@ -10,7 +10,6 @@ import {
   attendance,
   breakSessions,
   shifts,
-  stores,
   users,
 } from '@/lib/db/schema';
 import {
@@ -26,8 +25,10 @@ import {
   missingCashCountSessionsForShift,
 } from '@/lib/cash-count-sessions';
 import { baseShiftCode } from '@/lib/shift-tasks';
-import { assertInGeofence, DEFAULT_GEOFENCE_RADIUS_M } from '@/lib/db/utils/tasks';
+import { assertInGeofence, getStoreGeofence } from '@/lib/db/utils/geofence';
 import { parseGeoPoint } from '@/lib/geo';
+import { getStoreStatus } from '@/lib/db/utils/store-status';
+import { isStoreOperational, storeInactiveMessage } from '@/lib/store-status';
 
 import {
   employeeCheckIn,
@@ -259,27 +260,6 @@ async function buildCashCountPayload(
   return { canSubmit, sessions, coScheduledEmployees };
 }
 
-// ─── Store geofence ───────────────────────────────────────────────────────────
-//
-// Sent to the page so it can show the live distance and disable Check In while
-// the employee is outside. The POST check-in re-validates server-side via
-// assertInGeofence — this is only the preview. Null = store has no
-// coordinates, in which case (as for tasks) only a location fix is required.
-async function getStoreGeofence(storeId: number) {
-  const [store] = await db
-    .select({ lat: stores.latitude, lng: stores.longitude, radius: stores.geofenceRadiusM })
-    .from(stores)
-    .where(eq(stores.id, storeId))
-    .limit(1);
-
-  if (!store?.lat || !store?.lng) return null;
-  return {
-    lat: parseFloat(store.lat),
-    lng: parseFloat(store.lng),
-    radiusM: store.radius ? parseFloat(store.radius) : DEFAULT_GEOFENCE_RADIUS_M,
-  };
-}
-
 // ─── GET /api/employee/attendance ─────────────────────────────────────────────
 
 export async function GET(_req: NextRequest) {
@@ -300,6 +280,18 @@ export async function GET(_req: NextRequest) {
 
     if (!homeStoreId || Number.isNaN(homeStoreId)) {
       return NextResponse.json({ success: true, shifts: [] });
+    }
+
+    // Ready-to-open / closed stores record no attendance — hide the shifts and
+    // tell the page why instead of showing a check-in button that would fail.
+    const storeStatus = await getStoreStatus(homeStoreId);
+    if (storeStatus && !isStoreOperational(storeStatus)) {
+      return NextResponse.json({
+        success: true,
+        shifts: [],
+        storeStatus,
+        storeInactiveMessage: storeInactiveMessage(storeStatus),
+      });
     }
 
     // Close out any of this employee's own shifts left open past their end
@@ -503,6 +495,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const storeStatus = await getStoreStatus(homeStoreId);
+    if (storeStatus && !isStoreOperational(storeStatus)) {
+      return NextResponse.json(
+        { success: false, error: storeInactiveMessage(storeStatus) },
+        { status: 403 },
+      );
+    }
+
     const body = await req.json();
 
     const {
@@ -518,6 +518,7 @@ export async function POST(req: NextRequest) {
       notes: rawNotes,
       lat: rawLat,
       lng: rawLng,
+      accuracy: rawAccuracy,
     } = body as {
       action?: string;
       shift?: string;
@@ -531,6 +532,7 @@ export async function POST(req: NextRequest) {
       notes?: string;
       lat?: unknown;
       lng?: unknown;
+      accuracy?: unknown;
     };
 
     if (!action) {
@@ -624,7 +626,7 @@ export async function POST(req: NextRequest) {
       case 'checkin': {
         // Check-in must happen at the store: a location fix is required, and
         // it has to fall inside the home store's geofence.
-        const geo = parseGeoPoint(rawLat, rawLng);
+        const geo = parseGeoPoint(rawLat, rawLng, rawAccuracy);
         if (!geo) {
           return NextResponse.json(
             {

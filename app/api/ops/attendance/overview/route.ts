@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession }          from 'next-auth';
 import { authOptions }               from '@/lib/auth';
 import { getStoresForOps }           from '@/lib/schedule-utils';
+import { filterActiveStoreIds } from '@/lib/db/utils/store-status';
 import { db }                        from '@/lib/db';
 import { schedules, attendance, stores } from '@/lib/db/schema';
 import { eq, and, gte, lte, inArray } from 'drizzle-orm';
@@ -52,7 +53,8 @@ export async function GET(req: NextRequest) {
     const dayEnd   = endOfDay(date);
 
     // getStoresForOps now returns number[] (serial PKs)
-    const storeIds = await getStoresForOps(userId);
+    // Prep (ready_to_open) and closed stores are left out of attendance progress.
+    const storeIds = await filterActiveStoreIds(await getStoresForOps(userId));
     if (!storeIds.length) {
       return NextResponse.json({ success: true, data: [] });
     }

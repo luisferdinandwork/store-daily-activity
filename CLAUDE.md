@@ -42,6 +42,7 @@ Guidance for AI assistants working in this repo. Keep this file short and curren
 - `shifts` (`code` in `morning` / `evening` / `full_day` — stable; hours/breaks/accent live here).
 - `shift_tasks` maps `shifts` → `task_definitions` (which task types a shift expects). Per-task tables in `lib/db/schema/tasks.ts`.
 - Targets: `store_monthly_targets` (Ops sets one number) + `employee_monthly_targets` (fixed monthly %, `isPercentageOverridden` locks it) + `target_allocation_templates` (default % by headcount). Logic in `lib/performance/target-utils.ts`.
+- `stores.status` (`active` / `close` / `ready_to_open`, `lib/store-status.ts` + `lib/db/utils/store-status.ts`) — only `active` stores record attendance, tasks, petty cash and appear in Ops/Finance progress rollups; `ready_to_open` is prep-only (schedules/targets, Rp 0 petty cash in Finance); change it only via `changeStoreStatus()` (IT-only; writes `store_status_history`, activation provisions petty cash; `checkStoreCloseReadiness()` is the future Audit hook). `stores.dept_code` = BC dimension code (`lib/store-dept-codes.ts`), IT + Finance views only — never return it from Ops/employee APIs.
 - `item_transfer_orders` — 3-phase (Item Return → Shipping → Item Receiving) BC-driven pipeline.
 
 ## Conventions

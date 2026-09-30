@@ -18,6 +18,7 @@
 
 import { db } from '@/lib/db';
 import { isOpeningShift } from '@/lib/shift-tasks';
+import { SETORAN_SMALL_THRESHOLD } from '@/lib/setoran-review';
 import { and, desc, eq, gte, lt, lte } from 'drizzle-orm';
 import {
   setoranTasks,
@@ -29,8 +30,9 @@ import {
   type SetoranMoneyStorage,
 } from '@/lib/db/schema';
 
-/** Below this "uang aktual diterima", no bank deposit — only a cashier photo. */
-export const SETORAN_SMALL_THRESHOLD = 50_000;
+// Below SETORAN_SMALL_THRESHOLD "uang aktual diterima", no bank deposit — only a
+// cashier photo. Defined in the client-safe review lib so Finance's pages share it.
+export { SETORAN_SMALL_THRESHOLD };
 
 export function isSmallSetoranAmount(actualReceived: number): boolean {
   return actualReceived >= 0 && actualReceived < SETORAN_SMALL_THRESHOLD;
@@ -145,7 +147,7 @@ async function getShiftCodeById(): Promise<Record<number, string>> {
   return _shiftCodeByIdCache;
 }
 
-async function getMorningShiftId(): Promise<number> {
+export async function getMorningShiftId(): Promise<number> {
   if (_morningShiftIdCache != null) return _morningShiftIdCache;
 
   const [row] = await db

@@ -375,6 +375,8 @@ type RefillRequestRow = {
   status: 'pending' | 'approved' | 'rejected';
   requestedAt: string;
   approvedAt: string | null;
+  // Set when Finance has verified the refill — until then PIC 1 can't confirm receipt.
+  financeVerifiedAt: string | null;
   balanceAfter: string | null;
   rejectedAt: string | null;
   rejectionReason: string | null;
@@ -663,6 +665,28 @@ function RefillRequestCard({
   // appearing here at all — the topped-up balance applies to NEXT month, so
   // there's nothing left to action on this month's view. The request itself
   // stays intact for Ops/Finance; PIC can fall through to request a fresh one.
+  // OPS approved, but Finance hasn't sent/verified the cash yet — there is
+  // nothing to confirm receiving, so no camera here. The server enforces the
+  // same rule (attachRefillProof).
+  if (request?.status === 'approved' && !toppedUp && !request.financeVerifiedAt) {
+    return (
+      <div className="mx-4 rounded-2xl border border-border bg-card p-4">
+        <div className="flex items-center gap-2">
+          <Clock3 className="h-4 w-4 text-sky-600" />
+          <p className="text-xs font-bold text-sky-700">OPS sudah menyetujui Refill — menunggu Finance memprosesnya</p>
+        </div>
+
+        <RefillBankLine request={request} />
+
+        <p className="mt-1.5 text-[11px] text-muted-foreground">
+          {isHolder
+            ? 'Konfirmasi penerimaan (foto laci petty cash dan Surat Terima) baru bisa dilakukan setelah Finance memverifikasi bahwa uangnya sudah dikirim. Kamu akan mendapat notifikasi.'
+            : 'PIC 1 bisa mengonfirmasi penerimaan setelah Finance memverifikasi Refill ini.'}
+        </p>
+      </div>
+    );
+  }
+
   if (request?.status === 'approved' && !toppedUp) {
     const photoUrls: Record<RefillProofKind, string | null> = {
       drawer: request.drawerPhotoUrl,
@@ -675,8 +699,8 @@ function RefillRequestCard({
           <Banknote className="h-4 w-4 text-indigo-600" />
           <p className="text-xs font-bold text-indigo-700">
             {isHolder
-              ? 'OPS sudah menyetujui Refill — ambil foto bukti setelah menerima uangnya'
-              : 'OPS sudah menyetujui Refill — menunggu PIC 1 mengunggah foto bukti'}
+              ? 'Finance sudah memproses Refill — ambil foto bukti setelah menerima uangnya'
+              : 'Finance sudah memproses Refill — menunggu PIC 1 mengunggah foto bukti'}
           </p>
         </div>
 

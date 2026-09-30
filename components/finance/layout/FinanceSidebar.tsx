@@ -2,36 +2,45 @@
 // components/finance/layout/FinanceSidebar.tsx
 //
 // Collapsible sidebar for the Finance panel.
-// Mirrors the structure of OpsSidebar but with finance-specific nav items:
+// Mirrors the structure of OpsSidebar but with finance-specific nav items.
+// Areas with two views (Review + Report) are accordion groups: clicking the
+// group opens it and goes to its first page; the sub-menu stays open while
+// you are anywhere inside it.
 //
 //   Overview
-//     Dashboard         /finance
-//
-//   Petty Cash
-//     Monitoring        /finance/petty-cash           (balances, spend, refill requests)
-//     Report            /finance/petty-cash/report    (usage + refill bank account, Excel)
+//     Dashboard             /finance
 //
 //   Cash & Reports
-//     Setoran Review    /finance/setoran              (money-storage discrepancy review)
-//     Uang Modal Harian /finance/uang-modal           (daily opening-float check)
+//     Petty Cash  ▸ Monitoring  /finance/petty-cash          (balances, spend, refill requests + verify)
+//                 ▸ Transactions /finance/petty-cash/transactions (every request; filter by store + period)
+//                 ▸ Report      /finance/petty-cash/report   (usage + refill bank account, Excel)
+//     Setoran     ▸ Review      /finance/setoran             (daily review: photos, verify, Excel)
+//                 ▸ Report      /finance/setoran/report      (monthly totals per store, Excel)
+//     Uang Modal  ▸ Review      /finance/uang-modal          (daily opening-float check, verify, Excel)
+//                 ▸ Report      /finance/uang-modal/report   (monthly fill rate per store, Excel)
+//
+//   Operations
+//     Store Closing             /finance/store-closing       (Z-Report & EDC photo, statement posted / on hold)
 //
 //   Issues
-//     Issues            /finance/issues               (issues routed to Finance role)
+//     Issues                    /finance/issues              (issues routed to Finance role)
 //
 // All routes live under app/finance/ and are protected by the Finance role
 // guard in middleware / page-level checks.
 
+import { useState } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { signOut, useSession } from 'next-auth/react';
 import {
   AlertTriangle,
+  ChevronDown,
   ChevronRight,
-  FileSpreadsheet,
+  Coins,
   KeyRound,
   LayoutDashboard,
   LogOut,
-  PocketKnife,
+  Store,
   Wallet,
   WalletCards,
 } from 'lucide-react';
@@ -47,17 +56,30 @@ import UserAvatar from '@/components/shared/UserAvatar';
 
 // ─── Nav definition ───────────────────────────────────────────────────────────
 
-type NavItem = {
+type NavLeaf = {
   href: string;
   label: string;
   icon: React.ElementType;
   exact?: boolean;
 };
 
+type NavChild = { href: string; label: string; exact?: boolean };
+
+type NavGroup = {
+  label: string;
+  icon: React.ElementType;
+  /** Sub-menu — the first child is where clicking the group goes. */
+  children: NavChild[];
+};
+
+type NavEntry = NavLeaf | NavGroup;
+
 type NavSection = {
   section: string;
-  items: NavItem[];
+  items: NavEntry[];
 };
+
+const isGroup = (e: NavEntry): e is NavGroup => 'children' in e;
 
 const NAV: NavSection[] = [
   {
@@ -67,17 +89,39 @@ const NAV: NavSection[] = [
     ],
   },
   {
-    section: 'Petty Cash',
+    section: 'Cash & Reports',
     items: [
-      { href: '/finance/petty-cash',        label: 'Monitoring', icon: Wallet, exact: true },
-      { href: '/finance/petty-cash/report', label: 'Report',     icon: FileSpreadsheet },
+      {
+        label: 'Petty Cash',
+        icon: Wallet,
+        children: [
+          { href: '/finance/petty-cash', label: 'Monitoring', exact: true },
+          { href: '/finance/petty-cash/transactions', label: 'Transactions' },
+          { href: '/finance/petty-cash/report', label: 'Report' },
+        ],
+      },
+      {
+        label: 'Setoran',
+        icon: WalletCards,
+        children: [
+          { href: '/finance/setoran', label: 'Review', exact: true },
+          { href: '/finance/setoran/report', label: 'Report' },
+        ],
+      },
+      {
+        label: 'Uang Modal',
+        icon: Coins,
+        children: [
+          { href: '/finance/uang-modal', label: 'Review', exact: true },
+          { href: '/finance/uang-modal/report', label: 'Report' },
+        ],
+      },
     ],
   },
   {
-    section: 'Cash & Reports',
+    section: 'Operations',
     items: [
-      { href: '/finance/setoran',    label: 'Setoran Review',    icon: WalletCards },
-      { href: '/finance/uang-modal', label: 'Uang Modal Harian', icon: PocketKnife },
+      { href: '/finance/store-closing', label: 'Store Closing', icon: Store },
     ],
   },
   {
@@ -118,13 +162,44 @@ function NavTooltip({ label, children }: { label: string; children: React.ReactN
 
 export default function FinanceSidebar({ collapsed = false, userName = 'Finance' }: Props) {
   const pathname = usePathname();
+  const router = useRouter();
   const { data: session } = useSession();
+
+  // Accordion state. Untouched, the open group simply follows the route (the
+  // group you're on is open, the rest are closed). Folding the current group by
+  // hand is remembered only for the page it was done on — navigating anywhere
+  // resets to "follow the route", so one group is open at a time.
+  const [fold, setFold] = useState<{ path: string; label: string; open: boolean } | null>(null);
 
   const isActive = (href: string, exact?: boolean) =>
     exact ? pathname === href : pathname.startsWith(href);
 
+  const childActive = (c: NavChild) => isActive(c.href, c.exact);
+  const groupActive = (g: NavGroup) => g.children.some(childActive);
+  const groupOpen = (g: NavGroup) =>
+    fold && fold.path === pathname && fold.label === g.label ? fold.open : groupActive(g);
+
+  function onGroupClick(g: NavGroup) {
+    // Already inside the group → just fold / unfold it. From outside → land on
+    // its first page (the route then opens it and closes the previous group).
+    if (groupActive(g)) {
+      setFold({ path: pathname, label: g.label, open: !groupOpen(g) });
+      return;
+    }
+    router.push(g.children[0].href);
+  }
+
   const displayName = session?.user?.name ?? userName;
   const initial     = displayName.charAt(0).toUpperCase();
+
+  const rowCls = (active: boolean) =>
+    cn(
+      'flex w-full items-center rounded-md px-2.5 py-2 text-sm font-medium transition-colors',
+      collapsed ? 'justify-center' : 'gap-2.5',
+      active
+        ? 'bg-emerald-600/10 text-emerald-700'
+        : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
+    );
 
   return (
     <TooltipProvider delayDuration={120}>
@@ -161,15 +236,74 @@ export default function FinanceSidebar({ collapsed = false, userName = 'Finance'
                 </p>
               )}
               <ul className="space-y-0.5">
-                {items.map(({ href, label, icon: Icon, exact }) => {
+                {items.map((entry) => {
+                  // ── Accordion group ──
+                  if (isGroup(entry)) {
+                    const Icon = entry.icon;
+                    const active = groupActive(entry);
+                    const open = groupOpen(entry);
+
+                    // Icon-only rail has no room for a sub-menu: the icon goes
+                    // straight to the group's first page.
+                    if (collapsed) {
+                      return (
+                        <li key={entry.label}>
+                          <NavTooltip label={entry.label}>
+                            <Link href={entry.children[0].href} className={rowCls(active)}>
+                              <Icon className="h-4 w-4 shrink-0" />
+                            </Link>
+                          </NavTooltip>
+                        </li>
+                      );
+                    }
+
+                    return (
+                      <li key={entry.label}>
+                        <button
+                          type="button"
+                          onClick={() => onGroupClick(entry)}
+                          aria-expanded={open}
+                          className={rowCls(active)}
+                        >
+                          <Icon className="h-4 w-4 shrink-0" />
+                          <span className="flex-1 text-left">{entry.label}</span>
+                          <ChevronDown
+                            className={cn('h-3.5 w-3.5 opacity-60 transition-transform', open && 'rotate-180')}
+                          />
+                        </button>
+
+                        {open && (
+                          <ul className="ml-[1.15rem] mt-0.5 space-y-0.5 border-l border-border pl-2.5">
+                            {entry.children.map((child) => {
+                              const on = childActive(child);
+                              return (
+                                <li key={child.href}>
+                                  <Link
+                                    href={child.href}
+                                    aria-current={on ? 'page' : undefined}
+                                    className={cn(
+                                      'flex items-center rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors',
+                                      on
+                                        ? 'bg-emerald-600/10 text-emerald-700'
+                                        : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
+                                    )}
+                                  >
+                                    <span className="flex-1">{child.label}</span>
+                                    {on && <ChevronRight className="h-3 w-3 opacity-60" />}
+                                  </Link>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        )}
+                      </li>
+                    );
+                  }
+
+                  // ── Single link ──
+                  const { href, label, icon: Icon, exact } = entry;
                   const active = isActive(href, exact);
-                  const linkCls = cn(
-                    'flex items-center rounded-md px-2.5 py-2 text-sm font-medium transition-colors',
-                    collapsed ? 'justify-center' : 'gap-2.5',
-                    active
-                      ? 'bg-emerald-600/10 text-emerald-700'
-                      : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
-                  );
+                  const linkCls = rowCls(active);
 
                   return (
                     <li key={href}>

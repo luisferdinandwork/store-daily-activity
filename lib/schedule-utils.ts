@@ -46,6 +46,7 @@ import {
 } from "@/lib/db/schema";
 import { and, eq, gte, inArray, isNotNull, isNull, lt, lte, sql } from "drizzle-orm";
 import { createNotification, deleteNotificationsByRelated } from "@/lib/db/utils/notifications";
+import { assertStoreOperational } from "@/lib/db/utils/store-status";
 
 export type { BreakType } from "@/lib/db/schema";
 import type { BreakType } from "@/lib/db/schema";
@@ -1390,6 +1391,10 @@ export async function employeeCheckIn(
   error?: string;
 }> {
   try {
+    // Prep (ready_to_open) and closed stores record no attendance.
+    const inactiveMsg = await assertStoreOperational(storeId);
+    if (inactiveMsg) return { success: false, error: inactiveMsg };
+
     const now = new Date();
     const today = todayInStoreTimezone();
     const dayStart = startOfDay(today);
@@ -1716,6 +1721,9 @@ export async function autoMarkAbsentPastSchedules(
     gte(schedules.date, lookbackStart),
     lt(schedules.date, todayStart),
     isNull(attendance.id),
+    // Only live stores accrue absences — a prep (ready_to_open) or closed store
+    // has a schedule but nobody is expected to check in.
+    eq(stores.status, "active"),
   ];
   if (filter.storeIds?.length) conditions.push(inArray(schedules.storeId, filter.storeIds));
 
@@ -1728,6 +1736,7 @@ export async function autoMarkAbsentPastSchedules(
       date:       schedules.date,
     })
     .from(schedules)
+    .innerJoin(stores, eq(stores.id, schedules.storeId))
     .leftJoin(attendance, eq(attendance.scheduleId, schedules.id))
     .where(and(...conditions));
 
@@ -2022,6 +2031,9 @@ export async function opsMarkAttendance(
 
     const auth = await canManageSchedule(actorId, sched.storeId);
     if (!auth.allowed) return { success: false, error: auth.reason };
+
+    const inactiveMsg = await assertStoreOperational(sched.storeId);
+    if (inactiveMsg) return { success: false, error: inactiveMsg };
 
     const [existing] = await db
       .select()

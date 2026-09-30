@@ -1,4 +1,6 @@
 // lib/db/utils/cek-bin.ts
+import type { GeoPoint } from '@/lib/geo';
+import { assertInGeofence } from '@/lib/db/utils/geofence';
 import { db } from '@/lib/db';
 import { taskShiftIdFor } from '@/lib/db/utils/shift-lookup';
 import { and, eq, gte, lte, sql } from 'drizzle-orm';
@@ -11,16 +13,11 @@ import {
   type CekBinTask,
 } from '@/lib/db/schema';
 
-export const DEFAULT_GEOFENCE_RADIUS_M = 100;
-
 export type TaskResult<T = void> =
   | { success: true; data: T }
   | { success: false; error: string };
 
-export interface GeoPoint {
-  lat: number;
-  lng: number;
-}
+export type { GeoPoint };
 
 export interface CekBinSelectedBinInput {
   binId: number;
@@ -81,16 +78,6 @@ function endOfDay(d: Date): Date {
   return r;
 }
 
-function haversineMetres(a: GeoPoint, b: GeoPoint): number {
-  const R = 6_371_000;
-  const p1 = (a.lat * Math.PI) / 180;
-  const p2 = (b.lat * Math.PI) / 180;
-  const dp = ((b.lat - a.lat) * Math.PI) / 180;
-  const dl = ((b.lng - a.lng) * Math.PI) / 180;
-  const h = Math.sin(dp / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
-}
-
 function toNonNegativeInt(value: unknown, field: string): number {
   const n = Number(value);
   if (!Number.isInteger(n) || n < 0) {
@@ -116,28 +103,6 @@ async function assertCheckedIn(scheduleId: number): Promise<string | null> {
   }
 
   return null;
-}
-
-async function assertInGeofence(storeId: number, geo: GeoPoint): Promise<string | null> {
-  const [store] = await db
-    .select({ lat: stores.latitude, lng: stores.longitude, radius: stores.geofenceRadiusM })
-    .from(stores)
-    .where(eq(stores.id, storeId))
-    .limit(1);
-
-  if (!store) return 'Toko tidak ditemukan.';
-  if (!store.lat || !store.lng) return null;
-
-  const dist = haversineMetres(geo, {
-    lat: parseFloat(store.lat),
-    lng: parseFloat(store.lng),
-  });
-
-  const radius = store.radius ? parseFloat(store.radius) : DEFAULT_GEOFENCE_RADIUS_M;
-
-  return dist > radius
-    ? `Kamu berada ${Math.round(dist)}m dari toko (batas: ${radius}m). Pastikan kamu berada di dalam toko dan coba lagi.`
-    : null;
 }
 
 async function assertCanProgressTask(

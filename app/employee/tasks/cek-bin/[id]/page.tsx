@@ -2,6 +2,8 @@
 // app/employee/tasks/cek-bin/[id]/page.tsx
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useGeo } from '@/lib/hooks/useGeo';
+import type { GeoPoint } from '@/lib/geo';
 import { useParams, useRouter } from 'next/navigation';
 import { Box, Check, ChevronDown, RefreshCw, Save, Search, X } from 'lucide-react';
 import { cn }    from '@/lib/utils';
@@ -49,29 +51,9 @@ interface CekBinData {
   availableBins: BinItem[]; checkedBins: CheckedBin[]; selectedBinIds: string[];
 }
 
-// ─── Geo hook ─────────────────────────────────────────────────────────────────
-
-function useGeo(required: boolean) {
-  const [geo, setGeo] = useState<{ lat: number; lng: number } | null>(null);
-  const [geoError, setGeoError] = useState<string | null>(null);
-  const [geoReady, setGeoReady] = useState(false);
-  const refresh = useCallback(() => {
-    if (!required) { setGeo(null); setGeoError(null); setGeoReady(true); return; }
-    setGeoReady(false); setGeoError(null);
-    if (!navigator.geolocation) { setGeoError('Geolocation tidak didukung.'); setGeoReady(true); return; }
-    navigator.geolocation.getCurrentPosition(
-      pos => { setGeo({ lat: pos.coords.latitude, lng: pos.coords.longitude }); setGeoReady(true); },
-      ()  => { setGeoError('Lokasi tidak dapat diperoleh.'); setGeoReady(true); },
-      { timeout: 10_000, maximumAge: 0 },
-    );
-  }, [required]);
-  useEffect(() => { refresh(); }, [refresh]);
-  return { geo, geoError, geoReady, refresh };
-}
-
 // ─── Access hook ──────────────────────────────────────────────────────────────
 
-function useAccessStatus(scheduleId: string, storeId: string, geo: { lat: number; lng: number } | null, geoReady: boolean, taskStatus?: TaskStatus) {
+function useAccessStatus(scheduleId: string, storeId: string, geo: GeoPoint | null, geoReady: boolean, taskStatus?: TaskStatus) {
   const [accessStatus, setAccessStatus] = useState<AccessStatus | null>(null);
   const [accessLoading, setAccessLoading] = useState(true);
   const check = useCallback(async () => {
@@ -80,7 +62,7 @@ function useAccessStatus(scheduleId: string, storeId: string, geo: { lat: number
     setAccessLoading(true);
     try {
       const p = new URLSearchParams({ scheduleId, storeId });
-      if (geo) { p.set('lat', String(geo.lat)); p.set('lng', String(geo.lng)); }
+      if (geo) { p.set('lat', String(geo.lat)); p.set('lng', String(geo.lng)); if (geo.accuracy != null) p.set('acc', String(geo.accuracy)); }
       setAccessStatus(await fetch(`/api/employee/tasks/access?${p}`).then(r => r.json()) as AccessStatus);
     } catch { setAccessStatus({ status: 'geo_unavailable' }); }
     finally { setAccessLoading(false); }

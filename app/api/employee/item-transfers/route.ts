@@ -56,9 +56,12 @@ export async function GET() {
   const [schedule] = await db
     .select({ id: schedules.id, storeId: schedules.storeId, shiftId: schedules.shiftId })
     .from(schedules)
+    .innerJoin(stores, eq(stores.id, schedules.storeId))
     .where(and(
       eq(schedules.userId, userId),
       eq(schedules.isHoliday, false),
+      // Prep (ready_to_open) / closed stores create no task rows.
+      eq(stores.status, 'active'),
       gte(schedules.date, dayStart),
       lte(schedules.date, dayEnd),
     ))

@@ -13,10 +13,11 @@
 // icon tiles (amber/violet/emerald 50-bg, 600-icon) and slim accent bars.
 //
 // Check-in is location-gated: while any shift still needs a check-in the page
-// reads the browser location, shows the distance to the store's geofence
+// samples a high-accuracy GPS fix, shows the distance to the store's geofence
 // (`geofence` from the GET) and keeps Check In disabled until the employee is
-// inside it. Tapping Check In takes a fresh fix and sends it; the API
-// re-validates with the same haversine + radius, so this UI is only a preview.
+// inside it. Tapping Check In sends that fix (re-sampled if it's stale) with
+// its reported accuracy; the API re-validates with the same evaluateGeofence
+// (lib/geo.ts), so this UI is only a preview.
 
 import { useState, useEffect } from 'react';
 import { useApi } from '@/lib/client/use-api';
@@ -40,7 +41,7 @@ import {
 } from '@/lib/cash-count-sessions';
 import { EmptyState, Notice, PageBody, Section, SkeletonBlocks } from '@/components/employee/ui';
 import { useGeo } from '@/lib/hooks/useGeo';
-import { haversineMetres, type GeoPoint } from '@/lib/geo';
+import { evaluateGeofence, isPoorAccuracy, WEAK_GPS_TIP, type Geofence, type GeoPoint } from '@/lib/geo';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -89,15 +90,12 @@ interface ShiftSlot {
   attendance: AttRecord | null;
 }
 
-interface Geofence {
-  lat:     number;
-  lng:     number;
-  radiusM: number;
-}
-
 interface AttResponse {
   success:   boolean;
   shifts:    ShiftSlot[];
+  /** Set when the home store isn't active (ready_to_open / close) — no shifts are returned. */
+  storeStatus?: string;
+  storeInactiveMessage?: string;
   cashCount?: CashCountPayload;
   /** Null when the store has no coordinates — then only a location fix is required. */
   geofence?: Geofence | null;
@@ -106,8 +104,8 @@ interface AttResponse {
 type LocationCheck =
   | { state: 'locating' }
   | { state: 'unavailable'; message: string }
-  | { state: 'outside'; distanceM: number; radiusM: number }
-  | { state: 'inside'; distanceM: number | null };
+  | { state: 'outside'; distanceM: number; radiusM: number; accuracyM: number | null }
+  | { state: 'inside'; distanceM: number | null; accuracyM: number | null };
 
 // ─── Shift glyph + soft accent ────────────────────────────────────────────────
 
@@ -199,15 +197,20 @@ function checkLocation(
 ): LocationCheck {
   if (!geoReady) return { state: 'locating' };
   if (geoError || !geo) return { state: 'unavailable', message: geoError ?? 'Izin lokasi belum diberikan.' };
-  if (!geofence) return { state: 'inside', distanceM: null };
-  const distanceM = Math.round(haversineMetres(geo, geofence));
-  return distanceM > geofence.radiusM
-    ? { state: 'outside', distanceM, radiusM: geofence.radiusM }
-    : { state: 'inside', distanceM };
+  const accuracyM = geo.accuracy != null ? Math.round(geo.accuracy) : null;
+  if (!geofence) return { state: 'inside', distanceM: null, accuracyM };
+  const v = evaluateGeofence(geo, geofence);
+  return v.inside
+    ? { state: 'inside', distanceM: v.distanceM, accuracyM }
+    : { state: 'outside', distanceM: v.distanceM, radiusM: v.radiusM, accuracyM };
 }
 
 function fmtDistance(m: number): string {
   return m >= 1000 ? `${(m / 1000).toLocaleString('id-ID', { maximumFractionDigits: 1 })} km` : `${m} m`;
+}
+
+function fmtAccuracy(m: number | null): string {
+  return m != null ? ` · akurasi GPS ±${fmtDistance(m)}` : '';
 }
 
 function SpinnerIcon({ className }: { className?: string }) {
@@ -219,7 +222,7 @@ function SpinnerIcon({ className }: { className?: string }) {
 function LocationNotice({ location, onRefresh }: { location: LocationCheck; onRefresh: () => void }) {
   switch (location.state) {
     case 'locating':
-      return <Notice tone="neutral" icon={SpinnerIcon}>Memeriksa lokasi…</Notice>;
+      return <Notice tone="neutral" icon={SpinnerIcon}>Mencari sinyal GPS… (maks. 20 detik)</Notice>;
     case 'unavailable':
       return (
         <Notice
@@ -239,15 +242,18 @@ function LocationNotice({ location, onRefresh }: { location: LocationCheck; onRe
           title="Di luar area toko"
           action={{ label: 'Perbarui', onClick: onRefresh, icon: RefreshCw }}
         >
-          Kamu berada {fmtDistance(location.distanceM)} dari toko (batas {fmtDistance(location.radiusM)}). Absen masuk hanya bisa dilakukan di toko.
+          Kamu terdeteksi {fmtDistance(location.distanceM)} dari toko (batas {fmtDistance(location.radiusM)}){fmtAccuracy(location.accuracyM)}.{' '}
+          {isPoorAccuracy(location.accuracyM)
+            ? <>Sinyal GPS lemah — lokasi bisa meleset. {WEAK_GPS_TIP} Lalu tekan Perbarui.</>
+            : 'Absen masuk hanya bisa dilakukan di toko.'}
         </Notice>
       );
     case 'inside':
       return (
         <Notice tone="success" icon={Navigation}>
           {location.distanceM != null
-            ? <>Lokasi terverifikasi · {fmtDistance(location.distanceM)} dari toko</>
-            : 'Lokasi terdeteksi'}
+            ? <>Lokasi terverifikasi · {fmtDistance(location.distanceM)} dari toko{fmtAccuracy(location.accuracyM)}</>
+            : <>Lokasi terdeteksi{fmtAccuracy(location.accuracyM)}</>}
         </Notice>
       );
   }
@@ -557,6 +563,7 @@ export default function EmployeeAttendancePage() {
   const slots: ShiftSlot[] = att.data?.shifts ?? [];
   const cashCount: CashCountPayload | null = att.data?.cashCount ?? null;
   const geofence: Geofence | null = att.data?.geofence ?? null;
+  const storeInactiveMessage = att.data?.storeInactiveMessage ?? null;
   const loading = sessionStatus === 'loading' || att.loading;
   const load = att.refresh;
 
@@ -566,7 +573,7 @@ export default function EmployeeAttendancePage() {
 
   // Only ask for location while there's still a shift to check into.
   const needsCheckIn = slots.some(s => !s.attendance);
-  const { geo, geoError, geoReady, refresh: refreshGeo } = useGeo(needsCheckIn);
+  const { geo, geoError, geoReady, refresh: refreshGeo, recentOrRefresh } = useGeo(needsCheckIn);
   const location = checkLocation(geo, geoError, geoReady, geofence);
 
   async function handleAction(
@@ -582,13 +589,15 @@ export default function EmployeeAttendancePage() {
       if (cashOut != null)  body.cashOut   = cashOut;
       if (cashIn  != null)  body.cashIn    = cashIn;
 
-      // Take a fresh fix at the moment of check-in rather than trusting the
-      // one read when the page opened (the employee may have moved since).
+      // Send the fix the employee just saw verified if it's under 30 s old;
+      // otherwise re-sample (they may have moved since the page opened).
+      // Reusing it avoids a fresh, noisier fix contradicting the preview.
       if (action === 'checkin') {
-        const fix = await refreshGeo();
+        const fix = await recentOrRefresh(30_000);
         if (!fix) throw new Error('Lokasi tidak dapat diperoleh. Aktifkan izin lokasi lalu coba lagi.');
         body.lat = fix.lat;
         body.lng = fix.lng;
+        if (fix.accuracy != null) body.accuracy = fix.accuracy;
       }
 
       const res  = await fetch('/api/employee/attendance', {
@@ -674,7 +683,15 @@ export default function EmployeeAttendancePage() {
       <PageBody className="space-y-4">
         {loading && <SkeletonBlocks count={2} className="h-36" />}
 
-        {!loading && slots.length === 0 && (
+        {!loading && storeInactiveMessage && (
+          <EmptyState
+            icon={CalendarX}
+            title="Toko belum aktif"
+            description={storeInactiveMessage}
+          />
+        )}
+
+        {!loading && !storeInactiveMessage && slots.length === 0 && (
           <EmptyState
             icon={CalendarX}
             title="Tidak ada jadwal hari ini"

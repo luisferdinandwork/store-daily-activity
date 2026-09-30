@@ -1,6 +1,9 @@
 // lib/db/utils/cek-uang-modal.ts
+import type { GeoPoint } from '@/lib/geo';
+import { assertInGeofence } from '@/lib/db/utils/geofence';
 import { db } from '@/lib/db';
 import { eq, and, gte, lte } from 'drizzle-orm';
+import { UANG_MODAL_DENOMINATIONS, UANG_MODAL_MAX_TOTAL } from '@/lib/uang-modal-review';
 import {
   cekUangModalTasks,
   cekUangModalDenominations,
@@ -19,36 +22,20 @@ import {
   taskShiftIdFor,
 } from '@/lib/db/utils/shift-lookup';
 
-export const DEFAULT_GEOFENCE_RADIUS_M = 100;
-
 /**
  * Daily maximum uang modal / cashier float.
  * Employee may report any total from Rp 1 up to this amount, but cannot exceed it.
  */
-export const CEK_UANG_MODAL_MAX_TOTAL = 500_000;
+export const CEK_UANG_MODAL_MAX_TOTAL = UANG_MODAL_MAX_TOTAL; // client-safe copy: lib/uang-modal-review.ts
 
 export type TaskResult<T = void> =
   | { success: true; data: T }
   | { success: false; error: string };
 
-export interface GeoPoint {
-  lat: number;
-  lng: number;
-}
+export type { GeoPoint };
 
 /** Indonesian rupiah denominations used for cashier opening cash / uang modal. */
-export const CEK_UANG_MODAL_DENOMINATIONS = [
-  100_000,
-  50_000,
-  20_000,
-  10_000,
-  5_000,
-  2_000,
-  1_000,
-  500,
-  200,
-  100,
-] as const;
+export const CEK_UANG_MODAL_DENOMINATIONS = UANG_MODAL_DENOMINATIONS;
 
 const DENOMINATION_SET = new Set<number>(
   CEK_UANG_MODAL_DENOMINATIONS as readonly number[],
@@ -94,20 +81,6 @@ function formatRupiah(value: number): string {
   return `Rp ${value.toLocaleString('id-ID')}`;
 }
 
-function haversineMetres(a: GeoPoint, b: GeoPoint): number {
-  const R = 6_371_000;
-  const φ1 = (a.lat * Math.PI) / 180;
-  const φ2 = (b.lat * Math.PI) / 180;
-  const Δφ = ((b.lat - a.lat) * Math.PI) / 180;
-  const Δλ = ((b.lng - a.lng) * Math.PI) / 180;
-
-  const h =
-    Math.sin(Δφ / 2) ** 2 +
-    Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
-
-  return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
-}
-
 async function assertCheckedIn(scheduleId: number): Promise<string | null> {
   const [att] = await db
     .select({ checkInTime: attendance.checkInTime })
@@ -120,28 +93,6 @@ async function assertCheckedIn(scheduleId: number): Promise<string | null> {
   }
 
   return null;
-}
-
-async function assertInGeofence(storeId: number, geo: GeoPoint): Promise<string | null> {
-  const [store] = await db
-    .select({ lat: stores.latitude, lng: stores.longitude, radius: stores.geofenceRadiusM })
-    .from(stores)
-    .where(eq(stores.id, storeId))
-    .limit(1);
-
-  if (!store) return 'Toko tidak ditemukan.';
-  if (!store.lat || !store.lng) return null;
-
-  const dist = haversineMetres(geo, {
-    lat: parseFloat(store.lat),
-    lng: parseFloat(store.lng),
-  });
-
-  const radius = store.radius ? parseFloat(store.radius) : DEFAULT_GEOFENCE_RADIUS_M;
-
-  return dist > radius
-    ? `Kamu berada ${Math.round(dist)}m dari toko (batas: ${radius}m). Pastikan kamu berada di dalam toko dan coba lagi.`
-    : null;
 }
 
 async function assertCanProgressTask(

@@ -38,6 +38,16 @@ export const cashCountSessionEnum = pgEnum('cash_count_session', [
   'malam',
 ]);
 
+// Keep in sync with lib/store-status.ts. Lifecycle of a store:
+//   ready_to_open → active → close
+// Only `active` stores take part in day-to-day operations (attendance, tasks,
+// petty cash); `ready_to_open` is preparation-only (schedules, targets).
+export const storeStatusEnum = pgEnum('store_status', [
+  'active',
+  'close',
+  'ready_to_open',
+]);
+
 export const taskStatusEnum = pgEnum('task_status', [
   'not_started',
   'in_progress',

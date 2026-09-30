@@ -34,6 +34,7 @@ import { Notice } from '@/components/employee/ui';
 import { useGeo, type GeoPoint } from '@/lib/hooks/useGeo';
 import { useAccessStatus, type AccessStatus } from '@/lib/hooks/useAccessStatus';
 import { useTaskLocationSetting } from '@/lib/hooks/useTaskLocationSetting';
+import { isPoorAccuracy, WEAK_GPS_TIP } from '@/lib/geo';
 
 export interface AccessGuardSlots {
   geo:            GeoPoint | null;
@@ -200,7 +201,7 @@ export function AccessBanner({
   if (!geoReady || accessLoading) {
     return (
       <Notice tone="neutral" icon={SpinnerIcon}>
-        {!geoReady ? 'Mendapatkan lokasi…' : 'Memeriksa akses…'}
+        {!geoReady ? 'Mencari sinyal GPS… (maks. 20 detik)' : 'Memeriksa akses…'}
       </Notice>
     );
   }
@@ -228,7 +229,9 @@ export function AccessBanner({
         title="Di luar area toko"
         action={{ label: 'Perbarui', onClick: onRefreshGeo, icon: RefreshCw }}
       >
-        Kamu berada {accessStatus.distanceM}m dari toko (batas {accessStatus.radiusM}m).
+        Kamu terdeteksi {accessStatus.distanceM}m dari toko (batas {accessStatus.radiusM}m)
+        {accessStatus.accuracyM != null && <> · akurasi GPS ±{accessStatus.accuracyM}m</>}.
+        {isPoorAccuracy(accessStatus.accuracyM) && <> Sinyal GPS lemah — lokasi bisa meleset. {WEAK_GPS_TIP} Lalu tekan Perbarui.</>}
       </Notice>
     );
   }
@@ -249,7 +252,9 @@ export function AccessBanner({
   // OK state — short and friendly.
   return (
     <Notice tone="success" icon={Navigation}>
-      {requireGeo && geo ? 'Lokasi terdeteksi · kamu di area toko' : 'Sudah absen masuk · siap mengerjakan task'}
+      {requireGeo && geo
+        ? <>Lokasi terdeteksi · kamu di area toko{geo.accuracy != null && <> · akurasi GPS ±{Math.round(geo.accuracy)}m</>}</>
+        : 'Sudah absen masuk · siap mengerjakan task'}
     </Notice>
   );
 }

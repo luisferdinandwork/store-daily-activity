@@ -13,6 +13,7 @@ import {
   autoSaveGrooming,
   type GroomingAutoSavePatch,
 } from '@/lib/db/utils/grooming';
+import { parseAccuracy, type GeoPoint } from '@/lib/geo';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -22,12 +23,12 @@ function toInt(val: unknown, field: string): number {
   return n;
 }
 
-function toGeo(geo: unknown, skipGeo: boolean): { lat: number; lng: number } | null {
+function toGeo(geo: unknown, skipGeo: boolean): GeoPoint | null {
   if (skipGeo) return null;
   if (!geo || typeof geo !== 'object') return null;
-  const { lat, lng } = geo as Record<string, unknown>;
+  const { lat, lng, accuracy } = geo as Record<string, unknown>;
   if (typeof lat !== 'number' || typeof lng !== 'number') return null;
-  return { lat, lng };
+  return { lat, lng, accuracy: parseAccuracy(accuracy) };
 }
 
 function strArr(v: unknown): string[] {

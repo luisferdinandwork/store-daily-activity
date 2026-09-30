@@ -7,6 +7,7 @@ import {
   boolean,
   decimal,
   integer,
+  jsonb,
   unique,
   index,
 } from 'drizzle-orm/pg-core';
@@ -168,7 +169,10 @@ export const storeFrontTasks = pgTable('store_front_tasks', {
  */
 export const setoranTasks = pgTable('setoran_tasks', {
   id:         serial('id').primaryKey(),
-  scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
+  // Null only for a setoran IT filled in afterwards for a day with no usable
+  // schedule (Koreksi Setoran → Tambah) — such a row is independent of the
+  // schedule, so replacing/deleting schedules can't wipe it.
+  scheduleId: integer('schedule_id').references(() => schedules.id),
   userId:     text('user_id').references(() => users.id).notNull(),
   storeId:    integer('store_id').references(() => stores.id).notNull(),
   shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
@@ -241,7 +245,7 @@ export const setoranMoneyStorage = pgTable('setoran_money_storage', {
     .notNull()
     .unique(),
 
-  scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
+  scheduleId: integer('schedule_id').references(() => schedules.id),
   userId: text('user_id').references(() => users.id).notNull(),
   storeId: integer('store_id').references(() => stores.id).notNull(),
   shiftId: integer('shift_id').references(() => shifts.id).notNull(),
@@ -296,6 +300,56 @@ export const setoranMoneyStorage = pgTable('setoran_money_storage', {
   uniqStoreDate: unique('setoran_money_storage_store_date_unique').on(t.storeId, t.date),
   storeDateIdx: index('setoran_money_storage_store_date_idx').on(t.storeId, t.date),
 }));
+
+/**
+ * IT corrections of a submitted setoran (lib/db/utils/setoran-correction.ts).
+ * One row per correction: the day's amounts before/after, the reason, and the
+ * later days whose carry-over was recalculated as a result. The ledger rows
+ * themselves are overwritten in place — this table is the only record of the
+ * original figures.
+ */
+export interface SetoranCorrectionCascadeJson {
+  taskId: number;
+  /** YYYY-MM-DD of the recalculated day. */
+  date: string;
+  /** [before, after] — sisa kemarin. */
+  carryIn: [number, number];
+  /** [before, after] — sisa hari itu. */
+  unpaid: [number, number];
+}
+
+export const setoranCorrections = pgTable('setoran_corrections', {
+  id: serial('id').primaryKey(),
+
+  taskId: integer('task_id').references(() => setoranTasks.id, { onDelete: 'cascade' }).notNull(),
+  storeId: integer('store_id').references(() => stores.id).notNull(),
+  /** Day bucket of the corrected setoran (copy of setoran_tasks.date). */
+  date: timestamp('date').notNull(),
+
+  /** 'correct' = amounts of a submitted day changed; 'create' = IT filled in a day that had none (before = 0 / 0 / sisa kemarin). */
+  kind: text('kind').$type<'correct' | 'create'>().default('correct').notNull(),
+  reason: text('reason').notNull(),
+
+  beforeReceived: decimal('before_received', { precision: 12, scale: 2 }).notNull(),
+  beforeStored:   decimal('before_stored',   { precision: 12, scale: 2 }).notNull(),
+  beforeUnpaid:   decimal('before_unpaid',   { precision: 12, scale: 2 }).notNull(),
+  afterReceived:  decimal('after_received',  { precision: 12, scale: 2 }).notNull(),
+  afterStored:    decimal('after_stored',    { precision: 12, scale: 2 }).notNull(),
+  afterUnpaid:    decimal('after_unpaid',    { precision: 12, scale: 2 }).notNull(),
+
+  /** Whether Finance had already verified the day (the correction resets it). */
+  wasVerified: boolean('was_verified').default(false).notNull(),
+  /** Later days recalculated by the correction (carry-over chain). */
+  cascade: jsonb('cascade').$type<SetoranCorrectionCascadeJson[]>().default([]).notNull(),
+
+  correctedBy: text('corrected_by').references(() => users.id).notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (t) => ({
+  storeIdx: index('setoran_corrections_store_idx').on(t.storeId, t.createdAt),
+  taskIdx: index('setoran_corrections_task_idx').on(t.taskId),
+}));
+
+export type SetoranCorrection = typeof setoranCorrections.$inferSelect;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**

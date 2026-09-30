@@ -4,6 +4,8 @@
 // shift at the same store/day sees and completes the SAME row. A full_day
 // employee works both halves of the day, so they get (and can complete)
 // BOTH the morning row and the evening row.
+import type { GeoPoint } from '@/lib/geo';
+import { assertInGeofence } from '@/lib/db/utils/geofence';
 import { and, eq, gte, lte } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
@@ -27,10 +29,7 @@ export type TaskResult<T = void> =
   | { success: true; data: T }
   | { success: false; error: string };
 
-export interface GeoPoint {
-  lat: number;
-  lng: number;
-}
+export type { GeoPoint };
 
 export interface SubmitBriefingInput {
   taskId?: number;
@@ -43,21 +42,6 @@ export interface SubmitBriefingInput {
   skipGeo?: boolean;
 }
 
-const DEFAULT_GEOFENCE_RADIUS_M = 100;
-
-function haversineMetres(a: GeoPoint, b: GeoPoint): number {
-  const R = 6_371_000;
-  const p1 = (a.lat * Math.PI) / 180;
-  const p2 = (b.lat * Math.PI) / 180;
-  const dp = ((b.lat - a.lat) * Math.PI) / 180;
-  const dl = ((b.lng - a.lng) * Math.PI) / 180;
-  const h =
-    Math.sin(dp / 2) ** 2 +
-    Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;
-
-  return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
-}
-
 async function assertCheckedIn(scheduleId: number): Promise<string | null> {
   const [att] = await db
     .select({ checkInTime: attendance.checkInTime })
@@ -67,39 +51,6 @@ async function assertCheckedIn(scheduleId: number): Promise<string | null> {
 
   if (!att?.checkInTime) {
     return 'Kamu belum absen masuk. Lakukan absensi masuk terlebih dahulu sebelum mengerjakan task.';
-  }
-
-  return null;
-}
-
-async function assertInGeofence(
-  storeId: number,
-  geo: GeoPoint,
-): Promise<string | null> {
-  const [store] = await db
-    .select({
-      lat: stores.latitude,
-      lng: stores.longitude,
-      radius: stores.geofenceRadiusM,
-    })
-    .from(stores)
-    .where(eq(stores.id, storeId))
-    .limit(1);
-
-  if (!store) return 'Toko tidak ditemukan.';
-  if (!store.lat || !store.lng) return null;
-
-  const radiusM = store.radius
-    ? Number(store.radius)
-    : DEFAULT_GEOFENCE_RADIUS_M;
-
-  const distanceM = haversineMetres(geo, {
-    lat: Number(store.lat),
-    lng: Number(store.lng),
-  });
-
-  if (distanceM > radiusM) {
-    return `Kamu berada ${Math.round(distanceM)}m dari toko (batas: ${radiusM}m). Pastikan kamu berada di dalam toko dan coba lagi.`;
   }
 
   return null;

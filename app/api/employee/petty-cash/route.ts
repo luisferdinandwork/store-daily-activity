@@ -15,6 +15,7 @@ import {
   listPettyCashCategories,
 } from '@/lib/db/utils/petty-cash-categories';
 import { PETTY_CASH_REASON_MAX } from '@/lib/petty-cash-categories';
+import { assertStoreOperational } from '@/lib/db/utils/store-status';
 
 function currentYearMonth() {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -31,6 +32,14 @@ function currentYearMonth() {
 
 function sessionEmployeeType(session: unknown): string | null | undefined {
   return (session as { user?: { employeeType?: string | null } } | null)?.user?.employeeType;
+}
+
+// Petty cash only runs for active stores: a ready_to_open store carries Rp 0 and
+// a closed one is frozen for Audit. Checked before getActivePeriod, which would
+// otherwise bootstrap a full-balance period on first read.
+async function storeInactiveResponse(storeId: number) {
+  const message = await assertStoreOperational(storeId);
+  return message ? NextResponse.json({ error: message }, { status: 403 }) : null;
 }
 
 async function getEmployeeStore(userId: string) {
@@ -79,6 +88,9 @@ export async function GET() {
   if (!storeId) {
     return NextResponse.json({ error: 'No store assigned.' }, { status: 403 });
   }
+
+  const inactive = await storeInactiveResponse(storeId);
+  if (inactive) return inactive;
 
   const month = currentYearMonth();
 
@@ -241,6 +253,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'No store assigned.' }, { status: 403 });
   }
 
+  const inactive = await storeInactiveResponse(storeId);
+  if (inactive) return inactive;
+
   const month = currentYearMonth();
 
   const period = await ensurePettyCashPeriod(storeId, month);
@@ -322,6 +337,9 @@ export async function PATCH(req: NextRequest) {
   if (!storeId) {
     return NextResponse.json({ error: 'No store assigned.' }, { status: 403 });
   }
+
+  const inactive = await storeInactiveResponse(storeId);
+  if (inactive) return inactive;
 
   let body: {
     txId?: unknown;

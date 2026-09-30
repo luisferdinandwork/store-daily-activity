@@ -71,7 +71,11 @@ export async function GET(req: NextRequest) {
   const storeRows = await db
     .select({ id: stores.id, name: stores.name, areaId: stores.areaId })
     .from(stores)
-    .where(scope.scope === 'area' ? eq(stores.areaId, scope.areaId) : undefined);
+    .where(
+      scope.scope === 'area'
+        ? and(eq(stores.areaId, scope.areaId), eq(stores.status, 'active'))
+        : eq(stores.status, 'active'),
+    );
 
   const storeIds = storeRows.map((s) => s.id);
 

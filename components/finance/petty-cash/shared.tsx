@@ -1,9 +1,9 @@
 'use client';
 // components/finance/petty-cash/shared.tsx
 //
-// Pieces shared by Finance's Petty Cash Monitoring and Report pages: the
-// page tabs, month navigator, Rupiah formatting and a copy-to-clipboard
-// button for account numbers.
+// Pieces shared by Finance's Petty Cash Monitoring, Transactions and Report
+// pages: the page tabs, month navigator, Rupiah formatting and a
+// copy-to-clipboard button for account numbers.
 
 import { useState } from 'react';
 import Link from 'next/link';
@@ -49,6 +49,7 @@ export const SHEET_ROW_HEAD =
 
 const TABS = [
   { href: '/finance/petty-cash', label: 'Monitoring', exact: true },
+  { href: '/finance/petty-cash/transactions', label: 'Transactions', exact: false },
   { href: '/finance/petty-cash/report', label: 'Report', exact: false },
 ];
 
