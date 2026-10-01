@@ -18,13 +18,15 @@ import { resolveItScope } from '@/lib/auth/it-scope';
 import {
   areas,
   attendance,
+  monthlyScheduleEntries,
   schedules,
   stores,
   storeStatusHistory,
   userStoreAssignments,
   users,
 } from '@/lib/db/schema/core';
-import { employeeTypes, userRoles } from '@/lib/db/schema/lookups';
+import { employeeTypes, shifts, userRoles } from '@/lib/db/schema/lookups';
+import { jakartaDayRange, jakartaTodayKey, jakartaWallClock } from '@/lib/day-bucket';
 import { isStoreStatus, type StoreStatus } from '@/lib/store-status';
 
 // ─── Public types (consumed by the page) ─────────────────────────────────────
@@ -39,7 +41,17 @@ export type EmployeeRow = {
   roleCode: string;
   employeeType: string | null;
   employeeTypeCode: string | null;
-  attendanceStatus: 'present' | 'late' | 'absent' | 'off' | 'not_scheduled' | string;
+  /**
+   * Today's roster state. Recorded attendance statuses (present / late /
+   * absent / excused / dinas / cuti / sakit_*) pass through; the rest are
+   * derived from the schedule:
+   *   upcoming        scheduled, shift hasn't started yet
+   *   not_checked_in  scheduled, shift started, no check-in recorded
+   *   off | leave     scheduled day off / leave on the monthly schedule
+   *   not_scheduled   no schedule for today at all
+   *   not_recording   store isn't `active` (prep / closed)
+   */
+  attendanceStatus: string;
   checkInTime: string | null;
 };
 
@@ -86,13 +98,13 @@ export type StoresApiResponse =
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Inclusive today range in local server time */
+/** [start, end) of today's Asia/Jakarta day — matches both stored day-bucket encodings. */
 function todayRange() {
-  const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 0);
-  return { start, end };
+  return jakartaDayRange(jakartaTodayKey());
 }
+
+/** Checked-in statuses — someone who showed up (late still counts as present). */
+const ATTENDED_STATUSES = new Set(['present', 'late']);
 
 function toColorStatus(rate: number, total: number): TaskColorStatus {
   if (total === 0) return 'gray';
@@ -240,42 +252,58 @@ export async function GET(): Promise<NextResponse<StoresApiResponse>> {
   // 4. Task stats (UNION ALL across all task tables)
   const taskStatsMap = await fetchTaskStats(storeIds, start, end);
 
-  // 5. Today's attendance — present count per store
-  const presentRows = await db
+  // 5. Today's schedule + attendance. One row per scheduled shift, joined to
+  //    its attendance record (if the employee has checked in / Ops recorded
+  //    leave). This drives both the store's present/scheduled counter and each
+  //    roster row, so the two can't disagree.
+  const todayRows = await db
     .select({
-      storeId: attendance.storeId,
-      count: sql<number>`count(*)::int`,
-    })
-    .from(attendance)
-    .where(
-      and(
-        inArray(attendance.storeId, storeIds),
-        gte(attendance.date, start),
-        lt(attendance.date, end),
-        eq(attendance.status, 'present'),
-      ),
-    )
-    .groupBy(attendance.storeId);
-
-  const presentByStore = new Map(presentRows.map((r) => [r.storeId, r.count]));
-
-  // 6. Scheduled headcount per store (from daily schedules)
-  const scheduledRows = await db
-    .select({
+      scheduleId: schedules.id,
       storeId: schedules.storeId,
-      count: sql<number>`count(*)::int`,
+      userId: schedules.userId,
+      shiftStart: shifts.startTime,
+      status: attendance.status,
+      checkInTime: attendance.checkInTime,
     })
     .from(schedules)
+    .innerJoin(shifts, eq(shifts.id, schedules.shiftId))
+    .leftJoin(attendance, eq(attendance.scheduleId, schedules.id))
     .where(
       and(
         inArray(schedules.storeId, storeIds),
+        eq(schedules.isHoliday, false),
         gte(schedules.date, start),
         lt(schedules.date, end),
       ),
-    )
-    .groupBy(schedules.storeId);
+    );
 
-  const scheduledByStore = new Map(scheduledRows.map((r) => [r.storeId, r.count]));
+  const todayKey = jakartaTodayKey();
+  const nowMs = Date.now();
+
+  const scheduledByStore = new Map<number, number>();
+  const presentByStore = new Map<number, number>();
+  // storeId:userId → best row (an attendance record beats a bare schedule)
+  const todayByEmployee = new Map<string, { status: string; checkInTime: Date | null }>();
+
+  for (const r of todayRows) {
+    scheduledByStore.set(r.storeId, (scheduledByStore.get(r.storeId) ?? 0) + 1);
+    if (r.status && ATTENDED_STATUSES.has(r.status)) {
+      presentByStore.set(r.storeId, (presentByStore.get(r.storeId) ?? 0) + 1);
+    }
+
+    const key = `${r.storeId}:${r.userId}`;
+    if (r.status) {
+      const prev = todayByEmployee.get(key);
+      // Keep a checked-in status over a leave/absent one if a user somehow
+      // has two shifts today.
+      if (!prev || !ATTENDED_STATUSES.has(prev.status)) {
+        todayByEmployee.set(key, { status: r.status, checkInTime: r.checkInTime });
+      }
+    } else if (!todayByEmployee.has(key)) {
+      const started = !r.shiftStart || jakartaWallClock(todayKey, r.shiftStart).getTime() <= nowMs;
+      todayByEmployee.set(key, { status: started ? 'not_checked_in' : 'upcoming', checkInTime: null });
+    }
+  }
 
   // 7. Active employee assignments for visible stores
   const assignmentRows = await db
@@ -302,41 +330,46 @@ export async function GET(): Promise<NextResponse<StoresApiResponse>> {
     )
     .orderBy(users.name);
 
-  // 8. Today's per-employee attendance (for roster status + check-in time)
+  // 8. Employees with no shift today: tell a planned day off / leave apart from
+  //    "not on the schedule at all" (monthly schedule keeps OFF & leave days).
   const employeeIds = [...new Set(assignmentRows.map((r) => r.userId))];
-
-  const empAttendanceMap = new Map<string, { status: string; checkInTime: Date | null }>();
+  const dayOffByUser = new Map<string, 'off' | 'leave'>();
 
   if (employeeIds.length > 0) {
-    const empAttRows = await db
+    const offRows = await db
       .select({
-        userId: attendance.userId,
-        status: attendance.status,
-        checkInTime: attendance.checkInTime,
+        userId: monthlyScheduleEntries.userId,
+        isOff: monthlyScheduleEntries.isOff,
+        isLeave: monthlyScheduleEntries.isLeave,
       })
-      .from(attendance)
+      .from(monthlyScheduleEntries)
       .where(
         and(
-          inArray(attendance.userId, employeeIds),
-          gte(attendance.date, start),
-          lt(attendance.date, end),
+          inArray(monthlyScheduleEntries.userId, employeeIds),
+          gte(monthlyScheduleEntries.date, start),
+          lt(monthlyScheduleEntries.date, end),
         ),
       );
 
-    for (const row of empAttRows) {
-      empAttendanceMap.set(row.userId, {
-        status: row.status,
-        checkInTime: row.checkInTime,
-      });
+    for (const row of offRows) {
+      if (row.isLeave) dayOffByUser.set(row.userId, 'leave');
+      else if (row.isOff && !dayOffByUser.has(row.userId)) dayOffByUser.set(row.userId, 'off');
     }
   }
+
+  const storeIsActive = new Map(storeRows.map((s) => [s.id, s.status === 'active']));
 
   // 9. Group employees by store
   const employeesByStore = new Map<number, EmployeeRow[]>();
   for (const storeId of storeIds) employeesByStore.set(storeId, []);
 
   for (const a of assignmentRows) {
-    const att = empAttendanceMap.get(a.userId);
+    const att = storeIsActive.get(a.storeId)
+      ? todayByEmployee.get(`${a.storeId}:${a.userId}`) ?? {
+          status: dayOffByUser.get(a.userId) ?? 'not_scheduled',
+          checkInTime: null,
+        }
+      : { status: 'not_recording', checkInTime: null };
     employeesByStore.get(a.storeId)?.push({
       id: a.userId,
       name: a.name,
@@ -345,8 +378,8 @@ export async function GET(): Promise<NextResponse<StoresApiResponse>> {
       roleCode: a.roleCode,
       employeeType: a.employeeTypeLabel ?? null,
       employeeTypeCode: a.employeeTypeCode ?? null,
-      attendanceStatus: att?.status ?? 'not_scheduled',
-      checkInTime: att?.checkInTime ? att.checkInTime.toISOString() : null,
+      attendanceStatus: att.status,
+      checkInTime: att.checkInTime ? att.checkInTime.toISOString() : null,
     });
   }
 
@@ -391,7 +424,8 @@ export async function GET(): Promise<NextResponse<StoresApiResponse>> {
       attendanceSummary: {
         // A prep/closed store's schedule isn't an attendance expectation.
         scheduled: store.status === 'active' ? scheduledByStore.get(store.id) ?? 0 : 0,
-        present: presentByStore.get(store.id) ?? 0,
+        // Checked in on time or late — late staff are present.
+        present: store.status === 'active' ? presentByStore.get(store.id) ?? 0 : 0,
       },
       employees: employeesByStore.get(store.id) ?? [],
     };

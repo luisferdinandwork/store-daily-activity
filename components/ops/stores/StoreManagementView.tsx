@@ -56,6 +56,8 @@ import StoreEditSheet from '@/components/ops/stores/StoreEditSheet';
 import StoreStatusSheet from '@/components/ops/stores/StoreStatusSheet';
 import { STORE_STATUSES, STORE_STATUS_BADGE, STORE_STATUS_LABEL } from '@/lib/store-status';
 import { findDuplicatePic1, PIC_1_TYPE_CODE } from '@/lib/store-pic1';
+import { attendanceStatusLabel } from '@/lib/attendance-status';
+import { jakartaTime } from '@/lib/day-bucket';
 import { cn } from '@/lib/utils';
 import type { AreaGroup, EmployeeRow, StoreRow, TaskColorStatus } from '@/app/api/ops/stores/route';
 
@@ -139,27 +141,59 @@ const COLOR: Record<
   },
 };
 
+const LEAVE_BADGE = 'bg-indigo-50 text-indigo-700 ring-indigo-200';
+
 const ATTENDANCE_BADGE: Record<string, string> = {
-  present:       'bg-emerald-50 text-emerald-700 ring-emerald-200',
-  late:          'bg-amber-50 text-amber-700 ring-amber-200',
-  absent:        'bg-rose-50 text-rose-700 ring-rose-200',
-  off:           'bg-slate-100 text-slate-500 ring-slate-200',
-  not_scheduled: 'bg-slate-50 text-slate-400 ring-slate-200',
+  present:            'bg-emerald-50 text-emerald-700 ring-emerald-200',
+  late:               'bg-amber-50 text-amber-700 ring-amber-200',
+  absent:             'bg-rose-50 text-rose-700 ring-rose-200',
+  not_checked_in:     'bg-rose-50 text-rose-600 ring-rose-200',
+  upcoming:           'bg-sky-50 text-sky-700 ring-sky-200',
+  excused:            LEAVE_BADGE,
+  dinas:              LEAVE_BADGE,
+  cuti:               LEAVE_BADGE,
+  sakit_tanpa_surat:  LEAVE_BADGE,
+  sakit_dengan_surat: LEAVE_BADGE,
+  leave:              LEAVE_BADGE,
+  off:                'bg-slate-100 text-slate-500 ring-slate-200',
+  not_scheduled:      'bg-slate-50 text-slate-400 ring-slate-200',
+  not_recording:      'bg-slate-50 text-slate-400 ring-slate-200',
 };
 
 const ATTENDANCE_DOT: Record<string, string> = {
-  present:       'bg-emerald-500',
-  late:          'bg-amber-400',
-  absent:        'bg-rose-500',
-  off:           'bg-slate-300',
-  not_scheduled: 'border border-dashed border-slate-300',
+  present:            'bg-emerald-500',
+  late:               'bg-amber-400',
+  absent:             'bg-rose-500',
+  not_checked_in:     'bg-rose-300',
+  upcoming:           'bg-sky-400',
+  excused:            'bg-indigo-400',
+  dinas:              'bg-indigo-400',
+  cuti:               'bg-indigo-400',
+  sakit_tanpa_surat:  'bg-indigo-400',
+  sakit_dengan_surat: 'bg-indigo-400',
+  leave:              'bg-indigo-400',
+  off:                'bg-slate-300',
+  not_scheduled:      'border border-dashed border-slate-300',
+  not_recording:      'border border-dashed border-slate-300',
 };
+
+const ATTENDANCE_LABEL: Record<string, string> = {
+  not_checked_in: 'Not checked in',
+  upcoming:       'Upcoming',
+  leave:          'Leave',
+  off:            'Off',
+  not_scheduled:  'Not scheduled',
+  not_recording:  'Not recording',
+};
+
+function attendanceLabel(status: string): string {
+  return ATTENDANCE_LABEL[status] ?? attendanceStatusLabel(status);
+}
 
 // ─── Small presentational helpers ────────────────────────────────────────────
 
 function fmt(iso: string | null) {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+  return jakartaTime(iso) || '—';
 }
 
 function cash(raw: string) {
@@ -408,7 +442,7 @@ function EmployeeRoster({
                   <span className="truncate text-slate-600">{emp.role}</span>
                   <span>
                     <span className={cn('inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-bold ring-1 ring-inset', badge)}>
-                      {emp.attendanceStatus === 'not_scheduled' ? 'Not scheduled' : emp.attendanceStatus}
+                      {attendanceLabel(emp.attendanceStatus)}
                     </span>
                   </span>
                   <span className="tabular-nums text-slate-500">{fmt(emp.checkInTime)}</span>
