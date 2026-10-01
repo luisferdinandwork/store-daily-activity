@@ -27,6 +27,8 @@
 // policy, duplicate NIKs within the file — and, when `commit` is true,
 // writes only the rows that passed validation (each in its own try/catch,
 // via setUserHomeStore() so userStoreAssignments stays in sync).
+// The report also lists stores the file leaves with more than one PIC 1
+// (lib/store-pic1.ts) — a warning, not a row error.
 //
 // Called twice from app/api/it/users/import/route.ts: once with
 // commit:false (preview/"great verification" step the admin reviews before
@@ -35,12 +37,13 @@
 import * as XLSX from 'xlsx';
 import { validateNewPassword } from '@/lib/auth/password';
 import bcrypt from 'bcryptjs';
-import { asc, eq } from 'drizzle-orm';
+import { asc, eq, isNull } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import { users, userRoles, employeeTypes, stores, areas } from '@/lib/db/schema';
 import { setUserHomeStore } from '@/lib/db/utils/user-store-assignment';
 import { deptCodeForStoreNo } from '@/lib/store-dept-codes';
+import { findDuplicatePic1 } from '@/lib/store-pic1';
 
 const SALT_ROUNDS = 10;
 const DEFAULT_PASSWORD = 'password123'; // matches this repo's seed convention, see CLAUDE.md
@@ -347,7 +350,7 @@ export async function loadUserImportLookups(): Promise<UserImportLookups> {
     db.select({
       id: users.id, nik: users.nik, name: users.name, roleId: users.roleId,
       employeeTypeId: users.employeeTypeId, homeStoreId: users.homeStoreId, areaId: users.areaId, isActive: users.isActive,
-    }).from(users),
+    }).from(users).where(isNull(users.deletedAt)),
   ]);
 
   return { roles: roleRows, employeeTypes: empTypeRows, stores: storeRows, areas: areaRows, existingUsers: userRows };
@@ -385,6 +388,12 @@ export interface UserImportReport {
   /** Only meaningful when the report was built with commit:true. */
   areasCreated: number;
   storesCreated: number;
+  /**
+   * Stores left with more than one active PIC 1 once the file lands — only the
+   * ones a created/updated row is part of. `row` is null for someone who is
+   * already in the system and not in the file.
+   */
+  pic1Conflicts: { storeNo: string; storeName: string; people: { nik: string; name: string; row: number | null }[] }[];
   rows: UserImportRowResult[];
 }
 
@@ -490,6 +499,19 @@ export async function buildUserImportReport(
 
   const seenNiks = new Map<string, number>(); // lowercased nik -> first excelRow seen
   const results: UserImportRowResult[] = [];
+
+  // Each valid row's resulting store / type / active state, for the PIC 1 check.
+  interface Pic1Person {
+    nik: string;
+    name: string;
+    store: PlannedStore | null;
+    employeeTypeCode: string | null;
+    isActive: boolean;
+    row: number | null;
+    /** Created/updated by this file (vs. already in the system as-is). */
+    touched: boolean;
+  }
+  const plannedPeople: { person: Pic1Person; result: UserImportRowResult }[] = [];
 
   for (const raw_ of raw) {
     const errors: string[] = [];
@@ -734,6 +756,15 @@ export async function buildUserImportReport(
 
     const result: UserImportRowResult = { row: raw_.excelRow, nik, name, action, status, errors, warnings, notes };
     results.push(result);
+    if (status === 'ok') {
+      plannedPeople.push({
+        person: {
+          nik, name, store: homeStore, employeeTypeCode: employeeTypeCode ?? null, isActive,
+          row: raw_.excelRow, touched: action !== 'unchanged',
+        },
+        result,
+      });
+    }
 
     if (opts.commit && status === 'ok' && action !== 'unchanged') {
       try {
@@ -795,6 +826,38 @@ export async function buildUserImportReport(
   const updated = results.filter((r) => r.committed && r.action === 'update').length;
   const failed = results.filter((r) => opts.commit && r.status === 'ok' && r.action !== 'unchanged' && !r.committed).length;
 
+  // ── One PIC 1 per store: everyone's state once the file has landed ──
+  const empTypeCodeById = new Map(lookups.employeeTypes.map((t) => [t.id, t.code]));
+  const finalByNik = new Map<string, Pic1Person>();
+  for (const u of lookups.existingUsers) {
+    finalByNik.set(u.nik, {
+      nik: u.nik,
+      name: u.name,
+      store: u.homeStoreId != null ? (storeById.get(u.homeStoreId) ?? null) : null,
+      employeeTypeCode: u.employeeTypeId != null ? (empTypeCodeById.get(u.employeeTypeId) ?? null) : null,
+      isActive: u.isActive,
+      row: null,
+      touched: false,
+    });
+  }
+  for (const { person, result } of plannedPeople) {
+    if (opts.commit && result.committed === false) continue; // its write failed — the old state stands
+    finalByNik.set(person.nik, person);
+  }
+  const pic1Conflicts = [
+    ...findDuplicatePic1(finalByNik.values(), (p) => ({
+      storeKey: p.store,
+      employeeTypeCode: p.employeeTypeCode,
+      isActive: p.isActive,
+    })),
+  ]
+    .filter(([, people]) => people.some((p) => p.touched))
+    .map(([store, people]) => ({
+      storeNo: store.storeNo,
+      storeName: store.name,
+      people: people.map((p) => ({ nik: p.nik, name: p.name, row: p.row })),
+    }));
+
   return {
     totalRows: results.length, toCreate, toUpdate, unchanged, invalid, created, updated, failed,
     newAreas: [...neededAreas].map((a) => a.name),
@@ -802,6 +865,7 @@ export async function buildUserImportReport(
       storeNo: s.storeNo, name: s.name, areaName: s.area.name, defaultLocation: s.details?.defaultLocation ?? false,
     })),
     areasCreated, storesCreated,
+    pic1Conflicts,
     rows: results,
   };
 }

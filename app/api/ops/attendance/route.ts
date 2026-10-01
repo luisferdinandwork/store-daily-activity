@@ -245,7 +245,7 @@ export async function POST(req: NextRequest) {
       schedIdNum,
       status,
       (session.user as any).id as string,
-      notes,
+      typeof notes === 'string' ? notes : undefined,
     );
 
     return NextResponse.json(result, { status: result.success ? 200 : 400 });

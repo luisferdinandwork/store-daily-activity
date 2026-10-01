@@ -4,6 +4,7 @@ import { asc, eq } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { areas, stores } from '@/lib/db/schema';
 import { loadOpsActor } from '@/lib/auth/ops-actor';
+import { isDayKey, jakartaDayStart } from '@/lib/day-bucket';
 
 export interface OpsActor {
   id: string;
@@ -68,13 +69,10 @@ export function parseStoreId(
   return { ok: true, id };
 }
 
+/** "YYYY-MM-DD" → that Jakarta day's bucket instant (lib/day-bucket.ts); other strings are parsed as-is. */
 export function parseLocalDate(value: string): Date | null {
-  const ymdMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-
-  if (ymdMatch) {
-    const [, y, m, d] = ymdMatch;
-    const parsed = new Date(Number(y), Number(m) - 1, Number(d), 0, 0, 0, 0);
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return isDayKey(value) ? jakartaDayStart(value) : null;
   }
 
   const parsed = new Date(value);

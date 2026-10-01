@@ -21,6 +21,7 @@ import {
 import { toast } from 'sonner';
 import { invalidateApi } from '@/lib/client/use-api';
 import { cn } from '@/lib/utils';
+import { StoreCombobox } from '@/components/shared/store-combobox';
 
 interface RoleOption {
   id: number;
@@ -367,16 +368,12 @@ export default function SwitchRolePage() {
               <div className="space-y-4">
                 <div>
                   <p className="mb-2.5 text-xs font-bold uppercase tracking-widest text-slate-400">3. Store</p>
-                  <select
-                    value={selectedStoreId}
-                    onChange={(e) => setSelectedStoreId(e.target.value)}
-                    className="h-11 w-full rounded-xl border-2 border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 outline-none focus:border-cyan-400"
-                  >
-                    <option value="">Pilih toko…</option>
-                    {stores.map((st) => (
-                      <option key={st.id} value={st.id}>{st.storeNo} — {st.name}</option>
-                    ))}
-                  </select>
+                  <StoreCombobox
+                    stores={stores}
+                    value={selectedStoreId ? Number(selectedStoreId) : null}
+                    onChange={(id) => setSelectedStoreId(id == null ? '' : String(id))}
+                    className="max-w-none"
+                  />
                   <p className="mt-1.5 text-[11px] text-slate-400">
                     You&apos;ll appear on this store&apos;s schedule while previewing — prefer the test store (DUMMY-001).
                   </p>

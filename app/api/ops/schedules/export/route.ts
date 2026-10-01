@@ -13,14 +13,21 @@
 //   3   : Date numbers — 1, 2, 3, … , daysInMonth
 //   4+  : Employee rows — No / Role / Name / E | M | L | F | JP | JS | AL | OFF per day
 //         ("Role" = the employee_type: PIC 1 / PIC 2 / SA)
-//   last: Summary rows — MORNING / EVENING / FULL DAY / OFF/CUTI counts
+//   last: Summary rows — per-shift head-count per day + OFF/CUTI
 //
-// Color palette (matches the web app):
-//   Morning  E  → orange  bg #FFF7ED  text #C2410C
-//   Evening  L  → purple  bg #F5F3FF  text #6D28D9
-//   Full Day F  → green   bg #F0FDF4  text #15803D
-//   Leave    AL → indigo  bg #EEF2FF  text #3730A3
-//   Off      OFF→ slate   bg #F8FAFC  text #94A3B8
+// Day columns come from each entry's Jakarta calendar day (lib/day-bucket.ts):
+// the DB stores the same day as Jakarta midnight (app) or UTC midnight (seed),
+// and reading it with getUTCDate() put most entries one day early.
+//
+// Color palette (matches the PIC panel grid):
+//   Morning   E  → orange  bg #FFF7ED  text #C2410C
+//   Middle    M  → sky     bg #F0F9FF  text #0369A1
+//   Evening   L  → purple  bg #F5F3FF  text #6D28D9
+//   Full Day  F  → green   bg #F0FDF4  text #15803D
+//   JKP Pagi  JP → amber   bg #FFFBEB  text #B45309
+//   JKP Siang JS → rose    bg #FFF1F2  text #BE123C
+//   Leave     AL → indigo  bg #EEF2FF  text #3730A3
+//   Off       OFF→ slate   bg #F8FAFC  text #94A3B8
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession }          from 'next-auth';
@@ -33,6 +40,8 @@ import {
 } from '@/lib/db/schema';
 import { eq, and }       from 'drizzle-orm';
 import { getStoresForOps } from '@/lib/schedule-utils';
+import { isShiftCode, SHIFT_ROSTER_CODE } from '@/lib/shift-tasks';
+import { daysInMonthKey, jakartaDateKey } from '@/lib/day-bucket';
 // xlsx-js-style is a drop-in replacement for xlsx that supports cell.s (styles)
 import XlsxStyle from 'xlsx-js-style';
 
@@ -43,20 +52,16 @@ const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct
 
 // ─── Shift code helpers ───────────────────────────────────────────────────────
 
+// Same E / M / L / F / JP / JS codes the import reads back (lib/schedule-import.ts).
 function toExcelCode(shiftCode: string | null, isOff: boolean, isLeave: boolean): string {
-  if (isLeave)                  return 'AL';
-  if (isOff || !shiftCode)      return 'OFF';
-  if (shiftCode === 'morning')     return 'E';
-  if (shiftCode === 'middle')      return 'M';
-  if (shiftCode === 'evening')     return 'L';
-  if (shiftCode === 'full_day')    return 'F';
-  if (shiftCode === 'jkp_morning') return 'JP';
-  if (shiftCode === 'jkp_evening') return 'JS';
-  return 'OFF';
+  if (isLeave)             return 'AL';
+  if (isOff || !shiftCode) return 'OFF';
+  return isShiftCode(shiftCode) ? SHIFT_ROSTER_CODE[shiftCode] : shiftCode.toUpperCase();
 }
 
-function daysInMonth(year: number, month: number): number {
-  return new Date(year, month, 0).getDate();
+/** Day of week (0 = Sunday) of a calendar date, independent of the server's zone. */
+function weekday(year: number, month: number, day: number): number {
+  return new Date(Date.UTC(year, month - 1, day)).getUTCDay();
 }
 
 // ─── Style helpers ────────────────────────────────────────────────────────────
@@ -87,25 +92,17 @@ const FONT_BOLD = { name: 'Arial', sz: 9,  bold: true };
 const FONT_SM   = { name: 'Arial', sz: 8 };
 
 // Per-code cell style — background + text color matching web UI
+function codeStyle(text: string, bg: string): XlsxStyle {
+  return { font: { ...FONT_BOLD, color: { rgb: text } }, fill: solid(bg), alignment: CENTER, border: border() };
+}
+
 const CODE_STYLE: Record<string, XlsxStyle> = {
-  E: {
-    font:      { ...FONT_BOLD, color: { rgb: 'C2410C' } },
-    fill:      solid('FFF7ED'),
-    alignment: CENTER,
-    border:    border(),
-  },
-  L: {
-    font:      { ...FONT_BOLD, color: { rgb: '6D28D9' } },
-    fill:      solid('F5F3FF'),
-    alignment: CENTER,
-    border:    border(),
-  },
-  F: {
-    font:      { ...FONT_BOLD, color: { rgb: '15803D' } },
-    fill:      solid('F0FDF4'),
-    alignment: CENTER,
-    border:    border(),
-  },
+  E:  codeStyle('C2410C', 'FFF7ED'),
+  M:  codeStyle('0369A1', 'F0F9FF'),
+  L:  codeStyle('6D28D9', 'F5F3FF'),
+  F:  codeStyle('15803D', 'F0FDF4'),
+  JP: codeStyle('B45309', 'FFFBEB'),
+  JS: codeStyle('BE123C', 'FFF1F2'),
   AL: {
     font:      { ...FONT_BOLD, color: { rgb: '3730A3' } },
     fill:      solid('EEF2FF'),
@@ -225,7 +222,7 @@ export async function GET(request: NextRequest) {
     // ── Build employee map ─────────────────────────────────────────────────
 
     const [year, month] = yearMonthParam.split('-').map(Number);
-    const totalDays     = daysInMonth(year, month);
+    const totalDays     = daysInMonthKey(yearMonthParam);
     const monthShort    = `${MONTHS_SHORT[month - 1]}-${year}`;
 
     interface EmpInfo {
@@ -240,8 +237,9 @@ export async function GET(request: NextRequest) {
 
     for (const row of rawEntries) {
       const { entry, userName, empTypeCode, empTypeLabel, shiftCode } = row;
-      const date       = new Date(entry.date);
-      const dayOfMonth = date.getUTCDate() || date.getDate();
+      const dayKey = jakartaDateKey(entry.date);
+      if (!dayKey.startsWith(`${yearMonthParam}-`)) continue;
+      const dayOfMonth = Number(dayKey.slice(8, 10));
       const code       = toExcelCode(shiftCode, entry.isOff, entry.isLeave);
 
       if (!empMap.has(entry.userId)) {
@@ -256,7 +254,7 @@ export async function GET(request: NextRequest) {
       empMap.get(entry.userId)!.days[dayOfMonth] = code;
     }
 
-    const PIC_ORDER: Record<string, number> = { pic_1: 0, pic_2: 1, so: 2 };
+    const PIC_ORDER: Record<string, number> = { pic_1: 0, pic_2: 1, sa: 2 };
     const empList = [...empMap.values()].sort((a, b) => {
       const pa = PIC_ORDER[a.picCode] ?? 99;
       const pb = PIC_ORDER[b.picCode] ?? 99;
@@ -348,7 +346,7 @@ export async function GET(request: NextRequest) {
 
     for (let day = 1; day <= totalDays; day++) {
       const col = 3 + (day - 1);
-      const dow = new Date(year, month - 1, day).getDay();
+      const dow = weekday(year, month, day);
       sc(ws, 2, col, WEEKDAYS[dow], dayHeaderStyle(dow));
       sc(ws, 3, col, day,           dateNumStyle(dow));
     }
@@ -458,7 +456,7 @@ export async function GET(request: NextRequest) {
       { hpt: 16 },   // date numbers
       ...empList.map(() => ({ hpt: 16 })),
       { hpt: 6  },   // separator
-      { hpt: 16 }, { hpt: 16 }, { hpt: 16 }, { hpt: 16 },  // summaries
+      ...SUMMARY_DEF.map(() => ({ hpt: 16 })),  // summaries
       { hpt: 6  },   // gap
       { hpt: 14 },   // legend
     ];

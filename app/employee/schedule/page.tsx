@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { attendanceStatusLabel, isLeaveAttendanceStatus } from '@/lib/attendance-status';
 import { SHIFT_ROSTER_CODE } from '@/lib/shift-tasks';
+import { jakartaDateKey, jakartaTodayKey } from '@/lib/day-bucket';
 import { cn } from '@/lib/utils';
 import { EmptyState } from '@/components/employee/ui';
 import { toast } from 'sonner';
@@ -95,15 +96,17 @@ function formatClock(iso: string | null): string {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+/** Key of a calendar cell built as `new Date(y, m - 1, d)` (a label, not an instant). */
 function toLocalDateKey(input: Date | string): string {
   const d = typeof input === 'string' ? new Date(input) : input;
   if (isNaN(d.getTime())) return '';
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+// Entry dates are day buckets — their day is the Jakarta calendar day
+// (lib/day-bucket.ts), and so is "today", matching the server's own clock.
 function currentYearMonth() {
-  const n = new Date();
-  return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}`;
+  return jakartaTodayKey().slice(0, 7);
 }
 
 function formatYearMonth(ym: string | null | undefined): string {
@@ -129,6 +132,10 @@ function attendanceBadge(entry: DayEntry, dateKey: string, todayKey: string): At
 
   const att = entry.attendance;
 
+  // Ops can record Dinas / Cuti / Sakit even over a check-in — that decision wins.
+  if (isLeaveAttendanceStatus(att?.status)) {
+    return { label: attendanceStatusLabel(att?.status), sub: 'Recorded by Ops.', color: '#6d28d9', bg: '#f5f3ff', Icon: Clock };
+  }
   if (att?.checkInTime && att?.checkOutTime) {
     return {
       label: att.status === 'late' ? 'Late, then completed' : 'Completed',
@@ -142,9 +149,6 @@ function attendanceBadge(entry: DayEntry, dateKey: string, todayKey: string): At
       sub:   `${formatClock(att.checkInTime)}${att.onBreak ? ' · on break' : ' · not checked out yet'}`,
       color: '#c2410c', bg: '#fff7ed', Icon: LogIn,
     };
-  }
-  if (isLeaveAttendanceStatus(att?.status)) {
-    return { label: attendanceStatusLabel(att?.status), sub: 'Recorded by Ops.', color: '#6d28d9', bg: '#f5f3ff', Icon: Clock };
   }
   if (att?.status === 'excused') {
     return { label: 'Excused', sub: 'Marked excused by Ops.', color: '#1d4ed8', bg: '#eff6ff', Icon: Clock };
@@ -184,8 +188,8 @@ function DayRow({
       ? 'Day Off'
       : entry?.shiftLabel ?? entry?.shift ?? 'Shift';
 
-  const dateKey = entry ? toLocalDateKey(entry.date) : toLocalDateKey(date);
-  const todayKey = toLocalDateKey(new Date());
+  const dateKey = entry ? jakartaDateKey(entry.date) : toLocalDateKey(date);
+  const todayKey = jakartaTodayKey();
   const badge = entry ? attendanceBadge(entry, dateKey, todayKey) : null;
 
   return (
@@ -425,7 +429,7 @@ export default function SchedulePage() {
     if (loading || !schedule) return;
     if (selectedMonth !== currentYearMonth()) return;
     if (!pendingTodayScrollRef.current) return;
-    scrollToDay(toLocalDateKey(new Date()), 'auto');
+    scrollToDay(jakartaTodayKey(), 'auto');
     pendingTodayScrollRef.current = false;
   }, [loading, schedule, selectedMonth, scrollToDay]);
 
@@ -449,7 +453,7 @@ export default function SchedulePage() {
       setTodayVisible(false);
       return;
     }
-    const todayKeyNow = toLocalDateKey(new Date());
+    const todayKeyNow = jakartaTodayKey();
     const el = dayRefs.current.get(todayKeyNow);
     if (!el) { setTodayVisible(false); return; }
 
@@ -473,7 +477,7 @@ export default function SchedulePage() {
       pendingTodayScrollRef.current = true;
       setSelectedMonth(cm);
     } else {
-      scrollToDay(toLocalDateKey(new Date()), 'smooth');
+      scrollToDay(jakartaTodayKey(), 'smooth');
     }
   }
 
@@ -487,7 +491,7 @@ export default function SchedulePage() {
   // order (an early return before a hook call desyncs the hook count the
   // moment auth resolves, which React treats as a hard error, not a warning).
   const [y, m] = selectedMonth.split('-').map(Number);
-  const todayKey = toLocalDateKey(new Date());
+  const todayKey = jakartaTodayKey();
   const isCurrentMonth = selectedMonth === currentYearMonth();
 
   // Memoized so its identity only changes when the underlying schedule data
@@ -498,7 +502,7 @@ export default function SchedulePage() {
   const days = useMemo(() => {
     const list: { date: Date; entry: DayEntry | null }[] = [];
     if (schedule) {
-      const entryByDate = new Map(schedule.entries.map(e => [toLocalDateKey(e.date), e]));
+      const entryByDate = new Map(schedule.entries.map(e => [jakartaDateKey(e.date), e]));
       const daysInMonth = new Date(y, m, 0).getDate();
       for (let d = 1; d <= daysInMonth; d++) {
         const date = new Date(y, m - 1, d);

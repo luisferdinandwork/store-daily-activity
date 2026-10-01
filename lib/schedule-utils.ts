@@ -13,6 +13,14 @@
 import { db } from "@/lib/db";
 import { baseShiftCode, isOpeningShift } from "@/lib/shift-tasks";
 import {
+  STORE_TIME_ZONE,
+  jakartaDateKey,
+  jakartaDayRange,
+  jakartaDayStart,
+  jakartaTodayKey,
+  jakartaYearMonth,
+} from "@/lib/day-bucket";
+import {
   isLeaveAttendanceStatus,
   type LeaveAttendanceStatus,
 } from "@/lib/attendance-status";
@@ -130,62 +138,42 @@ interface ShiftLookupRow {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+//
+// Day buckets are Jakarta calendar days (see lib/day-bucket.ts for the two
+// encodings the DB holds). These used to be the server's local midnight,
+// which is the same instant on the Jakarta-time server the app runs on — now
+// they say so explicitly, so a UTC host (or a seed/probe script) gets the
+// same day instead of drifting seven hours.
 
+/** Start of the Jakarta day `d` falls on (= the app's day-bucket instant). */
 export function startOfDay(d: Date): Date {
-  const r = new Date(d);
-  r.setHours(0, 0, 0, 0);
-  return r;
+  return jakartaDayStart(jakartaDateKey(d));
 }
 
+/** Last millisecond of the Jakarta day `d` falls on. */
 export function endOfDay(d: Date): Date {
-  const r = new Date(d);
-  r.setHours(23, 59, 59, 999);
-  return r;
+  return new Date(jakartaDayRange(jakartaDateKey(d)).end.getTime() - 1);
 }
 
 /**
- * "Today" as a naive local Date — matching how schedule/attendance dates are
- * stored (materialiseSchedulesForMonth writes `startOfDay(entry.date)`, built
- * from a plain Y-M-D string with no timezone attached).
- *
- * Deriving "today" from `new Date()` directly is wrong on any server not
- * running in the store's timezone — Vercel serverless functions default to
- * UTC. From Jakarta midnight to 06:59, the server's own clock is still on
- * "yesterday" (Jakarta is UTC+7), so a schedule lookup keyed off a naive
- * `new Date()` misses that day's row entirely — e.g. an employee who checks
- * in for the morning shift at 6am WIB gets recorded fine (check-in and the
- * lookup happen at the same moment, so they agree with each other), but once
- * the server's UTC clock rolls over at 7am WIB, every later read of "today"
- * shifts forward a day and no longer matches that same schedule/attendance
- * row — which is exactly why re-opening a task shortly after checking in can
- * wrongly report "not checked in".
+ * Today's day bucket in the store's timezone. Deriving "today" from a bare
+ * `new Date()` is wrong on any server not running in Jakarta time: from
+ * Jakarta midnight to 06:59 a UTC clock is still on "yesterday".
  *
  * Use this wherever "today" is the anchor for querying schedules/attendance/
  * task rows; keep using bare `new Date()` for genuine timestamps (e.g.
  * `checkInTime`) that should record the real instant, not a day bucket.
  */
 export function todayInStoreTimezone(): Date {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Jakarta",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-
-  const year = Number(parts.find((p) => p.type === "year")?.value);
-  const month = Number(parts.find((p) => p.type === "month")?.value);
-  const day = Number(parts.find((p) => p.type === "day")?.value);
-
-  return new Date(year, month - 1, day);
+  return jakartaDayStart(jakartaTodayKey());
 }
 
 export function yearMonthToDate(ym: string): Date {
-  const [y, m] = ym.split("-").map(Number);
-  return new Date(y, m - 1, 1, 0, 0, 0, 0);
+  return jakartaDayStart(`${ym}-01`);
 }
 
 export function dateToYearMonth(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  return jakartaYearMonth(d);
 }
 
 function isValidBreakType(value: unknown): value is BreakType {
@@ -1052,6 +1040,8 @@ export async function createMonthlyScheduleEntry(
 
     const dateStart = startOfDay(date);
 
+    // A range, not equality: seeded rows sit at UTC midnight, app rows at
+    // Jakarta midnight — the same day either way (lib/day-bucket.ts).
     const [existingEntry] = await db
       .select({ id: monthlyScheduleEntries.id })
       .from(monthlyScheduleEntries)
@@ -1059,7 +1049,8 @@ export async function createMonthlyScheduleEntry(
         and(
           eq(monthlyScheduleEntries.monthlyScheduleId, ms.id),
           eq(monthlyScheduleEntries.userId, userId),
-          eq(monthlyScheduleEntries.date, dateStart),
+          gte(monthlyScheduleEntries.date, dateStart),
+          lte(monthlyScheduleEntries.date, endOfDay(dateStart)),
         ),
       )
       .limit(1);
@@ -1437,10 +1428,7 @@ export async function employeeCheckIn(
       .limit(1);
 
     if (!existing) {
-      const [hours, minutes] = shiftData.startTime.split(":").map(Number);
-      const shiftStart = new Date(now);
-      shiftStart.setHours(hours, minutes, 0, 0);
-
+      const shiftStart = storeWallClock(sched.date, shiftData.startTime);
       const attStatus = now > shiftStart ? "late" : "present";
 
       // Two rapid check-in requests can both reach here after seeing no
@@ -1762,7 +1750,7 @@ export async function autoMarkAbsentPastSchedules(
 
     marked++;
 
-    const dateLabel = row.date.toLocaleDateString("en-ID", { day: "numeric", month: "short" });
+    const dateLabel = row.date.toLocaleDateString("en-ID", { day: "numeric", month: "short", timeZone: STORE_TIME_ZONE });
     await createNotification({
       userId: row.userId,
       type:   "attendance_auto_absent",
@@ -2021,6 +2009,8 @@ export async function opsMarkAttendance(
   if (status !== undefined && !isLeaveAttendanceStatus(status)) {
     return { success: false, error: "Ops can only set Dinas, Cuti, STD or SD." };
   }
+  // undefined = leave the note alone; an empty string clears it.
+  const note = notes === undefined ? undefined : notes.trim() || null;
   try {
     const [sched] = await db
       .select()
@@ -2049,7 +2039,7 @@ export async function opsMarkAttendance(
         .update(attendance)
         .set({
           ...(status ? { status } : {}),
-          notes,
+          notes: note,
           recordedBy: actorId,
           updatedAt: new Date(),
         })
@@ -2069,7 +2059,7 @@ export async function opsMarkAttendance(
           shiftId: sched.shiftId,
           status,
           onBreak: false,
-          notes,
+          notes: note,
           recordedBy: actorId,
         })
         .returning({ id: attendance.id });

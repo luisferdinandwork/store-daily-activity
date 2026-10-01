@@ -113,6 +113,7 @@ export async function POST(req: NextRequest) {
       month:            result.month,
       sheet:            result.sheet,
       sections:         parsed.sections,
+      warnings:         result.warnings,
     });
   } catch (err) {
     console.error('[schedule/import] uncaught error:', err);

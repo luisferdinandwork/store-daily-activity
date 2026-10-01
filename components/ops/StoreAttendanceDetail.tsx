@@ -187,7 +187,8 @@ function MarkDialog({ row, open, onClose, onSaved }: {
       const body = {
         scheduleId: row.schedule.id,
         ...(statusChanged ? { status } : {}),
-        notes: notes || undefined,
+        // Always sent, so emptying the box clears the note.
+        notes,
       };
       const res  = await fetch('/api/ops/attendance', {
         method:  'POST',

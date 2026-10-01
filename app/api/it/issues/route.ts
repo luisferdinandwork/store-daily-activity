@@ -77,6 +77,7 @@ export async function GET() {
         updatedAt: issues.updatedAt,
 
         storeId: stores.id,
+        storeNo: stores.storeNo,
         storeName: stores.name,
         areaId: areas.id,
         areaName: areas.name,
@@ -110,6 +111,7 @@ export async function GET() {
       assignedToRoles: roleMap.get(row.id) ?? [],
       store: {
         id: String(row.storeId),
+        storeNo: row.storeNo,
         name: row.storeName,
         areaId: row.areaId == null ? null : String(row.areaId),
         areaName: row.areaName,

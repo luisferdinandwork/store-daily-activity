@@ -8,6 +8,9 @@
 //
 // Layout:
 //   • Summary pills at the top (stores, tasks done, completion %, present)
+//   • Red banner when a store has more than one PIC 1 (lib/store-pic1.ts) —
+//     the store row and its roster are flagged too; IT fixes it in Users
+//   • Toolbar: search, area / status / task-progress filters, sort
 //   • Color legend
 //   • One collapsible section per area
 //     └─ Table of stores — click a row → accordion with employee roster
@@ -19,15 +22,19 @@
 //   red    < 50%   behind
 //   gray   no tasks assigned yet
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import Link from 'next/link';
 import { useSession } from 'next-auth/react';
 import { toast } from 'sonner';
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
   ClipboardList,
+  FilterX,
   Loader2,
   MapPin,
   Pencil,
@@ -39,6 +46,7 @@ import {
   UserPlus,
   Users,
   Wallet,
+  X,
 } from 'lucide-react';
 
 import { Badge } from '@/components/ui/badge';
@@ -46,7 +54,8 @@ import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTitle, SheetDescription, SheetHeader } from '@/components/ui/sheet';
 import StoreEditSheet from '@/components/ops/stores/StoreEditSheet';
 import StoreStatusSheet from '@/components/ops/stores/StoreStatusSheet';
-import { STORE_STATUS_BADGE, STORE_STATUS_LABEL } from '@/lib/store-status';
+import { STORE_STATUSES, STORE_STATUS_BADGE, STORE_STATUS_LABEL } from '@/lib/store-status';
+import { findDuplicatePic1, PIC_1_TYPE_CODE } from '@/lib/store-pic1';
 import { cn } from '@/lib/utils';
 import type { AreaGroup, EmployeeRow, StoreRow, TaskColorStatus } from '@/app/api/ops/stores/route';
 
@@ -60,10 +69,28 @@ interface AssignableUser {
   name: string;
   isActive: boolean;
   roleLabel: string;
+  employeeTypeCode: string | null;
   employeeTypeLabel: string | null;
   homeStoreId: number | null;
   storeName: string | null;
 }
+
+type StoreSortKey = 'name' | 'storeNo' | 'progress' | 'attendance' | 'pettyCash' | 'staff' | 'status';
+
+const SORT_OPTIONS: { key: StoreSortKey; label: string }[] = [
+  { key: 'name',       label: 'Name' },
+  { key: 'storeNo',    label: 'Store code' },
+  { key: 'progress',   label: 'Task progress' },
+  { key: 'attendance', label: 'Attendance' },
+  { key: 'pettyCash',  label: 'Petty cash' },
+  { key: 'staff',      label: 'Staff count' },
+  { key: 'status',     label: 'Status' },
+];
+
+/** Store id → its PIC 1s, only for stores with more than one (lib/store-pic1.ts). */
+type Pic1Conflicts = Map<number, EmployeeRow[]>;
+
+const collator = new Intl.Collator('id', { sensitivity: 'base', numeric: true });
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
 
@@ -199,6 +226,11 @@ function AssignEmployeeSheet({
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [users, search, currentEmployeeIds]);
 
+  // One PIC 1 per store: assigning another one is allowed (handover) but flagged.
+  const storePic1Names = store.employees
+    .filter((e) => e.employeeTypeCode === PIC_1_TYPE_CODE)
+    .map((e) => e.name);
+
   async function handleAssign(userId: string) {
     setAssigningId(userId);
     try {
@@ -209,7 +241,12 @@ function AssignEmployeeSheet({
       });
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data?.error ?? 'Failed to assign user.');
-      toast.success('User assigned to this store.');
+      const assigned = users.find((u) => u.id === userId);
+      if (assigned?.employeeTypeCode === PIC_1_TYPE_CODE && storePic1Names.length > 0) {
+        toast.warning(`${store.storeNo} now has ${storePic1Names.length + 1} PIC 1 — change one of them to PIC 2 or SA in Users.`);
+      } else {
+        toast.success('User assigned to this store.');
+      }
       onAssigned();
       await load();
     } catch (err) {
@@ -261,6 +298,12 @@ function AssignEmployeeSheet({
                       {u.nik} · {u.roleLabel}{u.employeeTypeLabel ? ` · ${u.employeeTypeLabel}` : ''}
                       {u.storeName ? ` · currently: ${u.storeName}` : ''}
                     </p>
+                    {u.employeeTypeCode === PIC_1_TYPE_CODE && storePic1Names.length > 0 && (
+                      <p className="mt-0.5 flex items-center gap-1 truncate text-[11px] font-semibold text-rose-600">
+                        <AlertTriangle className="h-3 w-3 shrink-0" />
+                        Store already has a PIC 1: {storePic1Names.join(', ')}
+                      </p>
+                    )}
                   </div>
                   {assigningId === u.id
                     ? <Loader2 className="h-4 w-4 shrink-0 animate-spin text-indigo-400" />
@@ -278,11 +321,13 @@ function AssignEmployeeSheet({
 // ─── Employee roster (accordion content) ─────────────────────────────────────
 
 function EmployeeRoster({
-  store, employees, isIt, onAssignClick, onRemove, removingId,
+  store, employees, isIt, duplicatePic1, onAssignClick, onRemove, removingId,
 }: {
   store: StoreRow;
   employees: EmployeeRow[];
   isIt: boolean;
+  /** The store has more than one PIC 1 — flag them. */
+  duplicatePic1: boolean;
   onAssignClick: () => void;
   onRemove: (userId: string) => void;
   removingId: string | null;
@@ -291,6 +336,19 @@ function EmployeeRoster({
     <tr>
       <td colSpan={7} className="p-0">
         <div className="border-t border-slate-100 bg-slate-50/70">
+          {duplicatePic1 && (
+            <div className="flex items-center gap-2 border-b border-rose-200 bg-rose-50 px-6 py-2 pl-14 text-xs font-semibold text-rose-700">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-rose-600" />
+              {store.storeNo} has more than one PIC 1 — a store should have only one.{' '}
+              {isIt ? (
+                <Link href="/it/users?pic1=duplicates" className="underline underline-offset-2 hover:text-rose-800">
+                  Change one in Users
+                </Link>
+              ) : (
+                'Ask IT to change one of them to PIC 2 or SA.'
+              )}
+            </div>
+          )}
           {/* Roster sub-header */}
           <div className="flex items-center justify-between gap-4 border-b border-slate-100 px-6 py-2">
             <div className="grid flex-1 grid-cols-[1fr_6rem_8rem_7rem_6rem] gap-x-4 pl-8 text-[10px] font-bold uppercase tracking-widest text-slate-400">
@@ -321,18 +379,27 @@ function EmployeeRoster({
           ) : employees.map((emp) => {
             const dot = ATTENDANCE_DOT[emp.attendanceStatus] ?? ATTENDANCE_DOT.not_scheduled;
             const badge = ATTENDANCE_BADGE[emp.attendanceStatus] ?? ATTENDANCE_BADGE.not_scheduled;
+            const extraPic1 = duplicatePic1 && emp.employeeTypeCode === PIC_1_TYPE_CODE;
 
             return (
               <div
                 key={emp.id}
-                className="flex items-center gap-4 border-b border-slate-100/70 px-6 py-2.5 text-sm last:border-0 hover:bg-white/80 transition-colors"
+                className={cn(
+                  'flex items-center gap-4 border-b border-slate-100/70 px-6 py-2.5 text-sm last:border-0 transition-colors',
+                  extraPic1 ? 'bg-rose-50 hover:bg-rose-100/60' : 'hover:bg-white/80',
+                )}
               >
                 <div className="grid flex-1 grid-cols-[1fr_6rem_8rem_7rem_6rem] items-center gap-x-4">
                   <div className="flex items-center gap-2.5 min-w-0 pl-8">
                     <span className={cn('h-2 w-2 shrink-0 rounded-full', dot)} />
-                    <span className="truncate font-medium text-slate-800">{emp.name}</span>
+                    <span className={cn('truncate font-medium', extraPic1 ? 'text-rose-800' : 'text-slate-800')}>{emp.name}</span>
                     {emp.employeeType && (
-                      <span className="shrink-0 rounded bg-slate-100 px-1.5 py-px text-[10px] font-semibold text-slate-500">
+                      <span
+                        className={cn(
+                          'shrink-0 rounded px-1.5 py-px text-[10px] font-semibold',
+                          extraPic1 ? 'bg-rose-100 text-rose-700 ring-1 ring-inset ring-rose-300' : 'bg-slate-100 text-slate-500',
+                        )}
+                      >
                         {emp.employeeTypeCode}
                       </span>
                     )}
@@ -372,6 +439,7 @@ function StoreTableRow({
   store,
   expanded,
   isIt,
+  pic1s,
   removingId,
   onToggle,
   onEdit,
@@ -382,6 +450,8 @@ function StoreTableRow({
   store: StoreRow;
   expanded: boolean;
   isIt: boolean;
+  /** Set only when the store has more than one PIC 1. */
+  pic1s: EmployeeRow[] | undefined;
   removingId: string | null;
   onToggle: () => void;
   onEdit: () => void;
@@ -400,7 +470,7 @@ function StoreTableRow({
         onClick={onToggle}
         className={cn(
           'group cursor-pointer select-none border-b border-slate-100 transition-colors',
-          expanded ? 'bg-indigo-50/40' : 'bg-white hover:bg-slate-50/70',
+          expanded ? 'bg-indigo-50/40' : pic1s ? 'bg-rose-50/70 hover:bg-rose-50' : 'bg-white hover:bg-slate-50/70',
         )}
       >
         {/* Chevron */}
@@ -432,6 +502,15 @@ function StoreTableRow({
                     className="rounded bg-indigo-50 px-1.5 py-px font-mono text-[10px] font-semibold text-indigo-600"
                   >
                     {store.deptCode}
+                  </span>
+                )}
+                {pic1s && (
+                  <span
+                    title={`PIC 1: ${pic1s.map((e) => e.name).join(', ')} — a store should have only one.`}
+                    className="inline-flex items-center gap-1 rounded bg-rose-100 px-1.5 py-px text-[10px] font-bold text-rose-700 ring-1 ring-inset ring-rose-300"
+                  >
+                    <AlertTriangle className="h-2.5 w-2.5" />
+                    {pic1s.length}× PIC 1
                   </span>
                 )}
               </div>
@@ -530,6 +609,7 @@ function StoreTableRow({
           store={store}
           employees={store.employees}
           isIt={isIt}
+          duplicatePic1={!!pic1s}
           onAssignClick={onAssignClick}
           onRemove={onRemove}
           removingId={removingId}
@@ -543,7 +623,10 @@ function StoreTableRow({
 
 function AreaSection({
   area,
+  stores,
+  filtered,
   isIt,
+  pic1Conflicts,
   removingId,
   onEditStore,
   onChangeStatus,
@@ -552,7 +635,12 @@ function AreaSection({
   onRemove,
 }: {
   area: AreaGroup;
+  /** The area's stores that pass the toolbar filters, in display order. */
+  stores: StoreRow[];
+  /** A store filter is active — the header shows "x of y". */
+  filtered: boolean;
   isIt: boolean;
+  pic1Conflicts: Pic1Conflicts;
   removingId: string | null;
   onEditStore: (store: StoreRow) => void;
   onChangeStatus: (store: StoreRow) => void;
@@ -587,7 +675,7 @@ function AreaSection({
           <span className={cn('h-2.5 w-2.5 rounded-full', COLOR[areaStatus].swatch)} />
           <h2 className="text-sm font-bold text-slate-800">{area.name}</h2>
           <Badge variant="secondary" className="rounded-md px-2 text-[10px] font-bold">
-            {area.stores.length} store{area.stores.length !== 1 ? 's' : ''}
+            {filtered && `${stores.length} of `}{area.stores.length} store{area.stores.length !== 1 ? 's' : ''}
           </Badge>
         </div>
         <div className="flex items-center gap-3">
@@ -627,12 +715,13 @@ function AreaSection({
               </tr>
             </thead>
             <tbody>
-              {area.stores.map((store) => (
+              {stores.map((store) => (
                 <StoreTableRow
                   key={store.id}
                   store={store}
                   expanded={expandedIds.has(store.id)}
                   isIt={isIt}
+                  pic1s={pic1Conflicts.get(store.id)}
                   removingId={removingId}
                   onToggle={() => toggle(store.id)}
                   onEdit={() => onEditStore(store)}
@@ -647,6 +736,68 @@ function AreaSection({
       )}
     </section>
   );
+}
+
+// ─── Toolbar ──────────────────────────────────────────────────────────────────
+
+function FilterSelect({
+  label, value, onChange, highlight = value !== 'all', children,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  /** Tint the control while it narrows the list (default: value !== 'all'). */
+  highlight?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div className="relative">
+      <select
+        aria-label={label}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={cn(
+          'h-10 max-w-[220px] appearance-none truncate rounded-xl border pl-3 pr-8 text-sm font-semibold focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100',
+          highlight ? 'border-indigo-300 bg-indigo-50 text-indigo-800' : 'border-slate-200 bg-white text-slate-700',
+        )}
+      >
+        {children}
+      </select>
+      <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+    </div>
+  );
+}
+
+/** Sort value per key; null sorts last in both directions. */
+function sortValue(store: StoreRow, key: StoreSortKey): number | string | null {
+  switch (key) {
+    case 'name':       return store.name;
+    case 'storeNo':    return store.storeNo;
+    case 'progress':   // Only stores that record tasks have a rate to compare.
+      return store.status === 'active' && store.taskStats.total > 0 ? store.taskStats.completionRate : null;
+    case 'attendance':
+      return store.attendanceSummary.scheduled > 0
+        ? store.attendanceSummary.present / store.attendanceSummary.scheduled
+        : null;
+    case 'pettyCash': {
+      const n = Number(store.pettyCashBalance);
+      return Number.isFinite(n) ? n : null;
+    }
+    case 'staff':      return store.employees.length;
+    case 'status':     return STORE_STATUSES.indexOf(store.status);
+  }
+}
+
+function compareStores(a: StoreRow, b: StoreRow, key: StoreSortKey, dir: 'asc' | 'desc'): number {
+  const va = sortValue(a, key);
+  const vb = sortValue(b, key);
+  let c = 0;
+  if (va == null || vb == null) {
+    c = va == null ? (vb == null ? 0 : 1) : -1;
+  } else {
+    c = (dir === 'asc' ? 1 : -1) * (typeof va === 'string' ? collator.compare(va, String(vb)) : va - (vb as number));
+  }
+  return c || collator.compare(a.name, b.name);
 }
 
 // ─── Summary pill ─────────────────────────────────────────────────────────────
@@ -721,6 +872,14 @@ export default function StoreManagementView({
   const [statusStore, setStatusStore] = useState<StoreRow | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
 
+  const [search, setSearch] = useState('');
+  const [areaFilter, setAreaFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [progressFilter, setProgressFilter] = useState('all');
+  const [pic1Only, setPic1Only] = useState(false);
+  const [sortKey, setSortKey] = useState<StoreSortKey>('name');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+
   const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -755,6 +914,56 @@ export default function StoreManagementView({
     onReady?.({ loading, totalAreas, totalStores, avgRate, onAddStore: () => setEditing({ mode: 'create' }), reload: () => void loadData() });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, totalAreas, totalStores, avgRate]);
+
+  // One PIC 1 per store — the roster only holds active accounts.
+  const pic1Conflicts: Pic1Conflicts = useMemo(() => {
+    const people = areas.flatMap((a) => a.stores.flatMap((st) => st.employees.map((emp) => ({ storeId: st.id, emp }))));
+    const dup = findDuplicatePic1(people, (p) => ({ storeKey: p.storeId, employeeTypeCode: p.emp.employeeTypeCode, isActive: true }));
+    return new Map([...dup].map(([storeId, list]) => [storeId, list.map((p) => p.emp)]));
+  }, [areas]);
+  const conflictStores = useMemo(
+    () => areas.flatMap((a) => a.stores).filter((st) => pic1Conflicts.has(st.id))
+      .sort((a, b) => collator.compare(a.storeNo, b.storeNo)),
+    [areas, pic1Conflicts],
+  );
+  // Once the last conflict is fixed the toggle has nothing left to show.
+  const showPic1Only = pic1Only && conflictStores.length > 0;
+
+  const storeFiltersActive =
+    search.trim() !== '' || statusFilter !== 'all' || progressFilter !== 'all' || showPic1Only;
+  const filtersActive = storeFiltersActive || areaFilter !== 'all';
+
+  function clearFilters() {
+    setSearch('');
+    setAreaFilter('all');
+    setStatusFilter('all');
+    setProgressFilter('all');
+    setPic1Only(false);
+  }
+
+  const visibleAreas = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return areas
+      .filter((a) => areaFilter === 'all' || String(a.id) === areaFilter)
+      .map((area) => ({
+        area,
+        stores: area.stores
+          .filter((st) => {
+            if (statusFilter !== 'all' && st.status !== statusFilter) return false;
+            if (progressFilter !== 'all' && st.taskStats.colorStatus !== progressFilter) return false;
+            if (showPic1Only && !pic1Conflicts.has(st.id)) return false;
+            if (!q) return true;
+            return st.name.toLowerCase().includes(q)
+              || st.storeNo.toLowerCase().includes(q)
+              || st.address.toLowerCase().includes(q);
+          })
+          .sort((a, b) => compareStores(a, b, sortKey, sortDir)),
+      }))
+      // An empty area stays visible (to add its first store) unless a store filter hides everything in it.
+      .filter(({ stores }) => stores.length > 0 || !storeFiltersActive);
+  }, [areas, search, areaFilter, statusFilter, progressFilter, showPic1Only, pic1Conflicts, sortKey, sortDir, storeFiltersActive]);
+
+  const visibleStoreCount = visibleAreas.reduce((n, a) => n + a.stores.length, 0);
 
   async function handleRemove(userId: string) {
     setRemovingId(userId);
@@ -799,6 +1008,128 @@ export default function StoreManagementView({
         <SummaryPill icon={Users}         value={totalPresent}             label="Present today" accent="bg-sky-50 text-sky-500" />
       </div>
 
+      {/* One PIC 1 per store */}
+      {!loading && conflictStores.length > 0 && (
+        <div className="rounded-2xl border border-rose-300 bg-rose-50 p-4 shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-rose-100 text-rose-600">
+                <AlertTriangle className="h-4 w-4" />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-rose-800">
+                  {conflictStores.length} store{conflictStores.length !== 1 ? 's have' : ' has'} more than one PIC 1
+                </p>
+                <p className="mt-0.5 text-xs text-rose-700">
+                  Each store should have exactly one PIC 1 — the petty-cash holder.{' '}
+                  {isIt ? 'Change the extra one to PIC 2 or SA in Users.' : 'Ask IT to change the extra one to PIC 2 or SA.'}
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setPic1Only(!showPic1Only)}
+                className="border-rose-300 bg-white text-rose-700 hover:bg-rose-100 hover:text-rose-800"
+              >
+                {showPic1Only ? 'Show all stores' : 'Show only these'}
+              </Button>
+              {isIt && (
+                <Button asChild size="sm" className="bg-rose-600 text-white hover:bg-rose-700">
+                  <Link href="/it/users?pic1=duplicates">Fix in Users</Link>
+                </Button>
+              )}
+            </div>
+          </div>
+          <ul className="mt-3 space-y-1 text-xs sm:pl-12">
+            {conflictStores.map((st) => (
+              <li key={st.id} className="text-rose-800">
+                <span className="font-mono font-bold">{st.storeNo}</span>
+                <span className="text-rose-700"> {st.name}</span>
+                <span className="text-rose-300"> — </span>
+                <span className="font-semibold">{pic1Conflicts.get(st.id)?.map((e) => e.name).join(', ')}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Toolbar */}
+      <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="relative min-w-[220px] flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search store name, code or address…"
+            className="h-10 w-full rounded-xl border border-slate-200 bg-white pl-9 pr-8 text-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch('')}
+              aria-label="Clear search"
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
+        {areas.length > 1 && (
+          <FilterSelect label="Area" value={areaFilter} onChange={setAreaFilter}>
+            <option value="all">All areas</option>
+            {areas.map((a) => (
+              <option key={a.id} value={String(a.id)}>{a.name}</option>
+            ))}
+          </FilterSelect>
+        )}
+        <FilterSelect label="Store status" value={statusFilter} onChange={setStatusFilter}>
+          <option value="all">All statuses</option>
+          {STORE_STATUSES.map((st) => (
+            <option key={st} value={st}>{STORE_STATUS_LABEL[st]}</option>
+          ))}
+        </FilterSelect>
+        <FilterSelect label="Task progress" value={progressFilter} onChange={setProgressFilter}>
+          <option value="all">All progress</option>
+          {(['green', 'yellow', 'red', 'gray'] as TaskColorStatus[]).map((st) => (
+            <option key={st} value={st}>{COLOR[st].label}</option>
+          ))}
+        </FilterSelect>
+        <div className="flex items-center gap-1.5">
+          <FilterSelect label="Sort by" value={sortKey} onChange={(v) => setSortKey(v as StoreSortKey)} highlight={false}>
+            {SORT_OPTIONS.map((o) => (
+              <option key={o.key} value={o.key}>Sort: {o.label}</option>
+            ))}
+          </FilterSelect>
+          <button
+            type="button"
+            onClick={() => setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
+            aria-label={sortDir === 'asc' ? 'Ascending — switch to descending' : 'Descending — switch to ascending'}
+            title={sortDir === 'asc' ? 'Ascending' : 'Descending'}
+            className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
+          >
+            {sortDir === 'asc' ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />}
+          </button>
+        </div>
+        {filtersActive && (
+          <button
+            type="button"
+            onClick={clearFilters}
+            className="inline-flex h-10 items-center gap-1.5 rounded-xl px-3 text-sm font-semibold text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
+          >
+            <FilterX className="h-4 w-4" />
+            Clear
+          </button>
+        )}
+        {filtersActive && !loading && (
+          <span className="text-xs text-slate-400">
+            {visibleStoreCount} of {totalStores} store{totalStores !== 1 ? 's' : ''}
+          </span>
+        )}
+      </div>
+
       {/* Color legend */}
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-slate-500">
         <span className="font-semibold uppercase tracking-wide">Task completion:</span>
@@ -833,13 +1164,25 @@ export default function StoreManagementView({
           <p className="text-sm font-semibold text-slate-600">No stores visible for your scope</p>
           <p className="mt-1 text-xs text-slate-400">Check your area assignment or store setup in admin.</p>
         </div>
+      ) : visibleAreas.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-slate-200 bg-white py-16 text-center">
+          <Search className="mx-auto mb-3 h-8 w-8 text-slate-300" />
+          <p className="text-sm font-semibold text-slate-600">No stores match these filters</p>
+          <Button type="button" variant="outline" size="sm" onClick={clearFilters} className="mt-3 gap-1.5">
+            <FilterX className="h-3.5 w-3.5" />
+            Clear filters
+          </Button>
+        </div>
       ) : (
         <div className="space-y-5">
-          {areas.map((area) => (
+          {visibleAreas.map(({ area, stores }) => (
             <AreaSection
               key={area.id}
               area={area}
+              stores={stores}
+              filtered={storeFiltersActive}
               isIt={isIt}
+              pic1Conflicts={pic1Conflicts}
               removingId={removingId}
               onEditStore={(store) => setEditing({ mode: 'edit', store })}
               onChangeStatus={(store) => setStatusStore(store)}

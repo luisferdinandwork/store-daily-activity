@@ -2,6 +2,7 @@
 import { db } from '@/lib/db';
 import { users, userRoles, employeeTypes } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
+import { isDayKey, jakartaDayStart } from '@/lib/day-bucket';
 
 export async function resolveActorCodes(
   userId: string,
@@ -54,13 +55,10 @@ export function canEditSchedule(role: string | null, empType: string | null) {
   );
 }
 
+/** "YYYY-MM-DD" → that Jakarta day's bucket instant (lib/day-bucket.ts); other strings are parsed as-is. */
 export function parseLocalDate(date: string): Date | null {
-  const ymdMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
-
-  if (ymdMatch) {
-    const [, y, m, d] = ymdMatch;
-    const parsed = new Date(Number(y), Number(m) - 1, Number(d), 0, 0, 0, 0);
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return isDayKey(date) ? jakartaDayStart(date) : null;
   }
 
   const parsed = new Date(date);

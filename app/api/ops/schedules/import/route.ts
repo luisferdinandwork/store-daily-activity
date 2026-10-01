@@ -96,6 +96,7 @@ export async function POST(req: NextRequest) {
       month:            result.month,
       sheet:            result.sheet,
       sections:         parsed.sections,
+      warnings:         result.warnings,
     });
   } catch (err) {
     console.error('[ops schedules/import] uncaught error:', err);

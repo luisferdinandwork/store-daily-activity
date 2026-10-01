@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
+import { jakartaDateKey, jakartaTodayKey } from '@/lib/day-bucket';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -61,6 +62,8 @@ interface ImportResult {
   skipped:          number;
   errors:           string[];
   notFound:         string[];
+  /** Not fatal — e.g. unrecognised shift codes imported as a day off. */
+  warnings:         string[];
   month?:           string;
   sheet?:           string;
   sections?:        string[];
@@ -115,9 +118,10 @@ function daysInMonth(yearMonth: string): number {
   return new Date(y, m, 0).getDate();
 }
 
+/** "Mo", "Tu", … — two letters so Sat/Sun and Tue/Thu don't collapse into one. */
 function dayOfWeekLabel(yearMonth: string, day: number): string {
   const [y, m] = yearMonth.split('-').map(Number);
-  return new Date(y, m - 1, day).toLocaleDateString('en-ID', { weekday: 'short' })[0];
+  return new Date(Date.UTC(y, m - 1, day)).toLocaleDateString('en-GB', { weekday: 'short', timeZone: 'UTC' }).slice(0, 2);
 }
 
 // ─── ImportButton ─────────────────────────────────────────────────────────────
@@ -148,6 +152,7 @@ function ImportButton({ onImported }: { onImported: () => void }) {
         skipped:          json.skipped          ?? 0,
         errors:           json.errors           ?? (json.error ? [json.error] : []),
         notFound:         json.notFound         ?? [],
+        warnings:         json.warnings         ?? [],
         month:            json.month,
         sheet:            json.sheet,
         sections:         json.sections,
@@ -162,7 +167,7 @@ function ImportButton({ onImported }: { onImported: () => void }) {
         return;
       }
 
-      if (normalised.schedulesCreated > 0 && normalised.errors.length === 0 && normalised.notFound.length === 0) {
+      if (normalised.schedulesCreated > 0 && normalised.errors.length === 0 && normalised.notFound.length === 0 && normalised.warnings.length === 0) {
         toast.success(`Imported ${normalised.entriesCreated} entries`);
         onImported();
       } else if (normalised.schedulesCreated > 0) {
@@ -176,7 +181,7 @@ function ImportButton({ onImported }: { onImported: () => void }) {
         toast.info('No new data imported');
       }
     } catch (err) {
-      setResult({ success: false, schedulesCreated: 0, entriesCreated: 0, skipped: 0, errors: [String(err)], notFound: [] });
+      setResult({ success: false, schedulesCreated: 0, entriesCreated: 0, skipped: 0, errors: [String(err)], notFound: [], warnings: [] });
       setShowErrors(true);
       toast.error('Network error');
     } finally {
@@ -187,7 +192,8 @@ function ImportButton({ onImported }: { onImported: () => void }) {
   const hasDateErrors = (result?.dateErrors?.length ?? 0) > 0;
   const hasErrors     = (result?.errors.length     ?? 0) > 0;
   const hasNotFound   = (result?.notFound.length   ?? 0) > 0;
-  const hasWarnings   = hasDateErrors || hasErrors || hasNotFound;
+  const hasCodeWarns  = (result?.warnings.length   ?? 0) > 0;
+  const hasWarnings   = hasDateErrors || hasErrors || hasNotFound || hasCodeWarns;
   const isFullSuccess = result?.success && !hasWarnings;
   const isHardFail    = result && !result.success && (hasDateErrors || (result.schedulesCreated === 0));
 
@@ -239,6 +245,14 @@ function ImportButton({ onImported }: { onImported: () => void }) {
                   <p className="text-[10px] font-bold uppercase tracking-widest text-red-700 mb-1.5">Wrong dates — please fix your Excel file</p>
                   <ul className="max-h-40 overflow-y-auto space-y-1">
                     {result.dateErrors!.map((e, i) => <li key={i} className="text-[11px] leading-relaxed text-red-700">• {e}</li>)}
+                  </ul>
+                </div>
+              )}
+              {hasCodeWarns && (
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-amber-700 mb-1">Unrecognised shift codes</p>
+                  <ul className="max-h-28 overflow-y-auto space-y-0.5">
+                    {result.warnings.map((w, i) => <li key={i} className="text-[11px] leading-relaxed text-amber-800">• {w}</li>)}
                   </ul>
                 </div>
               )}
@@ -363,17 +377,19 @@ export default function PicPanelPage() {
 
   // ── Derived table data ──────────────────────────────────────────────────────
   const days = useMemo(() => Array.from({ length: daysInMonth(selectedMonth) }, (_, i) => i + 1), [selectedMonth]);
-  const today = new Date();
-  const todayDay = (today.getFullYear() === y && today.getMonth() + 1 === m) ? today.getDate() : -1;
+  const todayKey = jakartaTodayKey();
+  const todayDay = todayKey.startsWith(`${selectedMonth}-`) ? Number(todayKey.slice(8)) : -1;
 
+  // Entry dates are day buckets — key them by their Jakarta calendar day.
   const entryMap = useMemo(() => {
     const map = new Map<string, DayEntry>();
     for (const e of schedule?.entries ?? []) {
-      const d = new Date(e.date);
-      map.set(`${e.userId}|${d.getDate()}`, e);
+      const key = jakartaDateKey(e.date);
+      if (!key.startsWith(`${selectedMonth}-`)) continue;
+      map.set(`${e.userId}|${Number(key.slice(8))}`, e);
     }
     return map;
-  }, [schedule]);
+  }, [schedule, selectedMonth]);
 
   const rosterEmployees = useMemo(() => {
     // Anyone with an entry this month, plus the fetched roster — deduped, sorted.

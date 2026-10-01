@@ -51,7 +51,7 @@ import {
   groomingTasks,
   breakSessions,
 } from '@/lib/db/schema';
-import { and, eq, gte, inArray, isNotNull, lte, lt, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray, isNotNull, isNull, lte, lt, sql } from 'drizzle-orm';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -650,6 +650,7 @@ export async function listManageData(actorId: string): Promise<TransferResult<{
     .where(
       and(
         eq(users.roleId, employeeRoleId),
+        isNull(users.deletedAt),
         isHO ? undefined : inArray(stores.areaId, areaIds.length ? areaIds : [-1]),
       ),
     );

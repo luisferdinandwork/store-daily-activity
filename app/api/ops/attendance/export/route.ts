@@ -1,4 +1,12 @@
 // app/api/ops/attendance/export/route.ts
+//
+// Attendance log + per-employee summary as a styled Excel file.
+//
+// Dates and times are read in Asia/Jakarta explicitly (lib/day-bucket.ts): the
+// day filter is the Jakarta [from, to] range — which matches both stored
+// encodings of a day bucket — and check-in / break times are Jakarta wall
+// clock, not whatever zone the server runs in. "Late (min)" is measured from
+// the shift's own start time, the same rule check-in uses.
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession }          from 'next-auth';
 import { authOptions }               from '@/lib/auth';
@@ -6,54 +14,44 @@ import { db }                        from '@/lib/db';
 import {
   attendance, users, stores, breakSessions, shifts,
 } from '@/lib/db/schema';
-import { eq, and, gte, lte, inArray } from 'drizzle-orm';
+import { eq, and, gte, lt, inArray } from 'drizzle-orm';
 import { getStoresForOps }            from '@/lib/schedule-utils';
 import { filterActiveStoreIds } from '@/lib/db/utils/store-status';
 import { getOpsActor }               from '../../tasks/_helpers';
-import * as XLSX                      from 'xlsx';
+// xlsx-js-style, not plain `xlsx`: the community build silently drops cell styles.
+import XLSX                           from 'xlsx-js-style';
 import { isShiftCode, SHIFT_LABELS } from '@/lib/shift-tasks';
-import { attendanceStatusLabel, isLeaveAttendanceStatus, isNoWorkStatus } from '@/lib/attendance-status';
-
-// ─── Date helpers ─────────────────────────────────────────────────────────────
-
-function startOfDay(d: Date) { const r = new Date(d); r.setHours(0,0,0,0);      return r; }
-function endOfDay(d: Date)   { const r = new Date(d); r.setHours(23,59,59,999); return r; }
+import {
+  attendanceStatusLabel, isAttendanceStatus, isLeaveAttendanceStatus, isNoWorkStatus,
+} from '@/lib/attendance-status';
+import {
+  isDayKey, jakartaDateKey, jakartaDaysRange, jakartaTime, jakartaWallClock,
+} from '@/lib/day-bucket';
 
 // ─── Formatting helpers ───────────────────────────────────────────────────────
 
-function fmtTime(iso: string | null | undefined): string {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+/** "2026-09-30" → "30/09/2026". */
+function fmtDate(dayKey: string): string {
+  const [y, m, d] = dayKey.split('-');
+  return `${d}/${m}/${y}`;
 }
 
-function fmtDate(iso: string): string {
-  const d = new Date(iso);
-  return `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}/${d.getFullYear()}`;
-}
-
-function fmtDateLong(iso: string): string {
-  return new Date(iso).toLocaleDateString('en-ID', {
-    weekday: 'short', day: 'numeric', month: 'short', year: 'numeric',
+/** "2026-09-30" → "Wed, 30 Sep 2026". */
+function fmtDateLong(dayKey: string): string {
+  return new Date(`${dayKey}T00:00:00Z`).toLocaleDateString('en-ID', {
+    weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC',
   });
 }
 
-// Check-in after this (local time) counts as late.
-const LATE_AFTER: Record<string, [number, number]> = {
-  morning: [8, 30],
-  jkp_morning: [8, 30],
-  middle: [12, 0],
-  jkp_evening: [16, 0],
-};
-
-function lateMinutes(checkInIso: string | null | undefined, shiftCode: string | null): number {
-  if (!checkInIso || !shiftCode) return 0;
-  const dt = new Date(checkInIso);
-  const threshold = new Date(dt);
-  const [h, m] = LATE_AFTER[shiftCode] ?? [13, 30];
-  threshold.setHours(h, m, 0, 0);
-  const diff = Math.floor((dt.getTime() - threshold.getTime()) / 60000);
-  return diff > 0 ? diff : 0;
+/**
+ * Minutes after the shift's start (Jakarta wall clock on that day) — the same
+ * comparison employeeCheckIn uses to mark "late", rounded up so a late row is
+ * never shown as 0.
+ */
+function lateMinutes(checkInIso: string | null, dayKey: string, shiftStart: string | null): number {
+  if (!checkInIso || !shiftStart) return 0;
+  const diff = new Date(checkInIso).getTime() - jakartaWallClock(dayKey, shiftStart).getTime();
+  return diff > 0 ? Math.ceil(diff / 60000) : 0;
 }
 
 // ─── Style constants (unchanged) ──────────────────────────────────────────────
@@ -138,8 +136,10 @@ type ExportRow = {
   userId:       string;
   userName:     string;
   storeName:    string;
-  date:         string;
+  /** Jakarta calendar day of the attendance bucket, "YYYY-MM-DD". */
+  dayKey:       string;
   shift:        string | null;          // shift code string for display
+  shiftStart:   string | null;          // shifts.start_time "HH:MM:SS"
   status:       string | null;
   checkInTime:  string | null;
   checkOutTime: string | null;
@@ -178,7 +178,7 @@ function buildLogSheet(
   merges.push({ s: { r:1, c:1 }, e: { r:1, c:3 } });
 
   cell(ws, C(1,4), 'Period:', STYLES.metaBold);
-  cell(ws, C(1,5), `${fmtDate(fromDate + 'T00:00:00')}  –  ${fmtDate(toDate + 'T00:00:00')}`, STYLES.meta);
+  cell(ws, C(1,5), `${fmtDate(fromDate)}  –  ${fmtDate(toDate)}`, STYLES.meta);
   merges.push({ s: { r:1, c:5 }, e: { r:1, c:7 } });
 
   cell(ws, C(1,8), 'Exported:', STYLES.metaBold);
@@ -198,22 +198,22 @@ function buildLogSheet(
   rows.forEach((row, idx) => {
     const r       = 4 + idx;
     const status  = row.status;
-    const late    = lateMinutes(row.checkInTime, row.shift);
+    const late    = lateMinutes(row.checkInTime, row.dayKey, row.shiftStart);
     const shiftL  = row.shift && isShiftCode(row.shift) ? SHIFT_LABELS[row.shift] : (row.shift ?? '—');
     const statusL = attendanceStatusLabel(status);
     const noWork  = isNoWorkStatus(status);
 
     const values: (string | number | null)[] = [
       idx + 1,
-      fmtDateLong(row.date),
+      fmtDateLong(row.dayKey),
       row.userName,
       row.storeName,
       shiftL,
       statusL,
-      fmtTime(row.checkInTime)  || (noWork ? '' : '—'),
-      fmtTime(row.checkOutTime) || (noWork ? '' : '—'),
-      fmtTime(row.breakOutTime) || '—',
-      fmtTime(row.returnTime)   || '—',
+      jakartaTime(row.checkInTime)  || (noWork ? '' : '—'),
+      jakartaTime(row.checkOutTime) || (noWork ? '' : '—'),
+      jakartaTime(row.breakOutTime) || '—',
+      jakartaTime(row.returnTime)   || '—',
       late > 0 ? late : (noWork ? '' : 0),
       row.notes ?? '',
     ];
@@ -340,19 +340,21 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'fromDate and toDate are required' }, { status: 400 });
     }
 
-    const fromDate = startOfDay(new Date(fromDateParam + 'T00:00:00'));
-    const toDate   = endOfDay(new Date(toDateParam     + 'T00:00:00'));
-
-    if (isNaN(fromDate.getTime()) || isNaN(toDate.getTime())) {
-      return NextResponse.json({ error: 'Invalid date format' }, { status: 400 });
+    if (!isDayKey(fromDateParam) || !isDayKey(toDateParam)) {
+      return NextResponse.json({ error: 'fromDate and toDate must be YYYY-MM-DD' }, { status: 400 });
     }
-    if (fromDate > toDate) {
+    if (fromDateParam > toDateParam) {
       return NextResponse.json({ error: 'fromDate must be before or equal to toDate' }, { status: 400 });
     }
 
-    const diffDays = (toDate.getTime() - fromDate.getTime()) / 86_400_000;
+    // Jakarta [from, to] — covers both stored encodings of each day (lib/day-bucket.ts).
+    const { start: rangeStart, end: rangeEnd } = jakartaDaysRange(fromDateParam, toDateParam);
+    const diffDays = (rangeEnd.getTime() - rangeStart.getTime()) / 86_400_000;
     if (diffDays > 90) {
       return NextResponse.json({ error: 'Date range cannot exceed 90 days' }, { status: 400 });
+    }
+    if (statusParam && !isAttendanceStatus(statusParam)) {
+      return NextResponse.json({ error: `Unknown status "${statusParam}"` }, { status: 400 });
     }
 
     // OPS area scope
@@ -391,11 +393,11 @@ export async function GET(request: NextRequest) {
     // ── Query attendance ────────────────────────────────────────────────────
     const conditions = [
       inArray(attendance.storeId, storeIds),
-      gte(attendance.date, fromDate),
-      lte(attendance.date, toDate),
+      gte(attendance.date, rangeStart),
+      lt(attendance.date, rangeEnd),
     ];
     if (shiftIdFilter) conditions.push(eq(attendance.shiftId, shiftIdFilter));
-    if (statusParam)   conditions.push(eq(attendance.status, statusParam as any));
+    if (statusParam && isAttendanceStatus(statusParam)) conditions.push(eq(attendance.status, statusParam));
 
     const rows = await db
       .select({
@@ -404,6 +406,7 @@ export async function GET(request: NextRequest) {
         userId:    users.id,
         storeName: stores.name,
         shiftCode: shifts.code,
+        shiftStart: shifts.startTime,
       })
       .from(attendance)
       .leftJoin(users,  eq(attendance.userId,  users.id))
@@ -415,7 +418,7 @@ export async function GET(request: NextRequest) {
     // First break per attendance
     const attIds = rows.map(r => r.att.id);
     const breaks = attIds.length
-      ? await db.select().from(breakSessions).where(inArray(breakSessions.attendanceId, attIds))
+      ? await db.select().from(breakSessions).where(inArray(breakSessions.attendanceId, attIds)).orderBy(breakSessions.breakOutTime)
       : [];
 
     const breakByAtt = new Map<number, typeof breaks[0]>();
@@ -435,14 +438,15 @@ export async function GET(request: NextRequest) {
     }
 
     // Build export rows
-    const exportRows: ExportRow[] = rows.map(({ att, userName, userId, storeName: sn, shiftCode }) => {
+    const exportRows: ExportRow[] = rows.map(({ att, userName, storeName: sn, shiftCode, shiftStart }) => {
       const brk = breakByAtt.get(att.id);
       return {
         userId:       att.userId,
         userName:     userName  ?? '—',
         storeName:    sn        ?? '—',
-        date:         att.date.toISOString(),
+        dayKey:       jakartaDateKey(att.date),
         shift:        shiftCode ?? null,
+        shiftStart:   shiftStart ?? null,
         status:       att.status,
         checkInTime:  att.checkInTime?.toISOString()    ?? null,
         checkOutTime: att.checkOutTime?.toISOString()   ?? null,

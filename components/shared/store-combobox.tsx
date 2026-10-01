@@ -3,7 +3,9 @@
 //
 // Searchable store dropdown (shadcn Popover + Command): type a store code or part
 // of the name, pick one. With `allLabel` an extra "all stores" row clears the
-// selection (onChange(null)); without it a store is always required.
+// selection (onChange(null)); without it a store is always required. With
+// `noneLabel` a "no store" row selects NO_STORE_ID (e.g. filtering for users
+// without a home store).
 
 import { useState } from 'react';
 import { Check, ChevronsUpDown, Loader2, Search, Store } from 'lucide-react';
@@ -24,6 +26,9 @@ export interface StoreComboboxOption {
   storeNo: string;
   name: string;
 }
+
+/** What the `noneLabel` row selects — never a real store id (serial ids start at 1). */
+export const NO_STORE_ID = -1;
 
 // Tailwind only sees whole class names, so each accent spells its classes out.
 const ACCENTS = {
@@ -51,7 +56,11 @@ export function StoreCombobox({
   onChange,
   loading = false,
   allLabel,
+  noneLabel,
   accent = 'cyan',
+  modal = false,
+  disabled = false,
+  id,
   className,
 }: {
   stores: StoreComboboxOption[];
@@ -61,13 +70,21 @@ export function StoreCombobox({
   loading?: boolean;
   /** Adds an "all stores" row (e.g. "Semua toko") that selects null. */
   allLabel?: string;
+  /** Adds a "no store" row (e.g. "Tanpa store") that selects NO_STORE_ID. */
+  noneLabel?: string;
   accent?: keyof typeof ACCENTS;
+  /** Set inside a Sheet/Dialog — otherwise its scroll lock stops the list from scrolling. */
+  modal?: boolean;
+  disabled?: boolean;
+  /** For a <label htmlFor>. */
+  id?: string;
   /** Sizing of the trigger; defaults to full width up to `max-w-md`. */
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
   const a = ACCENTS[accent];
   const selected = value == null ? null : stores.find((s) => s.id === value) ?? null;
+  const pickedNone = noneLabel != null && value === NO_STORE_ID;
 
   function pick(id: number | null) {
     onChange(id);
@@ -75,12 +92,13 @@ export function StoreCombobox({
   }
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={setOpen} modal={modal}>
       <PopoverTrigger asChild>
         <button
+          id={id}
           type="button"
           aria-label="Pilih store"
-          disabled={loading}
+          disabled={loading || disabled}
           className={cn(
             'group flex h-11 w-full max-w-md items-center gap-2.5 rounded-xl border bg-white px-3 text-left text-sm shadow-xs transition',
             'focus-visible:outline-none focus-visible:ring-4 disabled:cursor-not-allowed disabled:opacity-60',
@@ -100,6 +118,8 @@ export function StoreCombobox({
                 <span className={cn('font-mono text-xs font-semibold', a.code)}>{selected.storeNo}</span>
                 <span className="ml-2 font-semibold text-slate-900">{selected.name}</span>
               </>
+            ) : pickedNone ? (
+              <span className="font-semibold text-slate-900">{noneLabel}</span>
             ) : (
               <span className={allLabel ? 'font-semibold text-slate-700' : 'text-slate-400'}>
                 {allLabel ?? 'Pilih store…'}
@@ -135,6 +155,16 @@ export function StoreCombobox({
                 >
                   <span className="min-w-0 flex-1 truncate font-semibold">{allLabel}</span>
                   {value == null && <Check className={cn('h-4 w-4 shrink-0', a.check)} />}
+                </CommandItem>
+              )}
+              {noneLabel && (
+                <CommandItem
+                  value={noneLabel}
+                  onSelect={() => pick(NO_STORE_ID)}
+                  className={cn('gap-3 rounded-lg px-2.5 py-2', a.item)}
+                >
+                  <span className="min-w-0 flex-1 truncate font-semibold">{noneLabel}</span>
+                  {pickedNone && <Check className={cn('h-4 w-4 shrink-0', a.check)} />}
                 </CommandItem>
               )}
               {stores.map((s) => (

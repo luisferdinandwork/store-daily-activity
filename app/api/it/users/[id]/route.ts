@@ -1,8 +1,11 @@
 // app/api/it/users/[id]/route.ts
 //
-// PATCH — updates an existing user's name/role/employee type/store/area/
-// active status, and optionally resets their password. IT-only. NIK is
-// immutable (it's the login identifier).
+// PATCH  — updates an existing user's name/role/employee type/store/area/
+//          active status, and optionally resets their password. IT-only. NIK
+//          is immutable (it's the login identifier).
+// DELETE — deletes the account, always (except your own): its day-to-day
+//          records go with it, cash and shared history stays — see
+//          lib/db/utils/user-deletion.ts (./deletion previews it).
 
 import { NextResponse } from 'next/server';
 import { validateNewPassword } from '@/lib/auth/password';
@@ -13,6 +16,7 @@ import { db } from '@/lib/db';
 import { users, userRoles, employeeTypes, stores } from '@/lib/db/schema';
 import { resolveItScope } from '@/lib/auth/it-scope';
 import { setUserHomeStore } from '@/lib/db/utils/user-store-assignment';
+import { deleteUserAccount } from '@/lib/db/utils/user-deletion';
 
 const SALT_ROUNDS = 10;
 
@@ -28,7 +32,7 @@ export async function PATCH(
   const { id } = await params;
 
   const [existing] = await db.select().from(users).where(eq(users.id, id)).limit(1);
-  if (!existing) {
+  if (!existing || existing.deletedAt) {
     return NextResponse.json({ success: false, error: 'User not found.' }, { status: 404 });
   }
 
@@ -139,4 +143,26 @@ export async function PATCH(
     .returning({ id: users.id, nik: users.nik, name: users.name, isActive: users.isActive });
 
   return NextResponse.json({ success: true, user: updated });
+}
+
+export async function DELETE(
+  _req: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const scope = await resolveItScope();
+  if (!scope.ok) {
+    return NextResponse.json({ success: false, error: scope.error }, { status: scope.status });
+  }
+
+  const { id } = await params;
+  if (id === scope.userId) {
+    return NextResponse.json({ success: false, error: "You can't delete your own account." }, { status: 400 });
+  }
+
+  const result = await deleteUserAccount({ userId: id, actorId: scope.userId });
+  if (!result.success) {
+    return NextResponse.json({ success: false, error: result.error }, { status: result.status });
+  }
+
+  return NextResponse.json({ success: true, ...result.data });
 }

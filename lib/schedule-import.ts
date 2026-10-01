@@ -32,11 +32,13 @@
  *   M / MID / MIDDLE                      → middle       (Middle · 12.00–20.00)
  *   L / S / SG / SIANG / EVENING          → evening      (Last · Siang)
  *   F / FD / FULL / FULLDAY               → full day     (Full · Lembur)
- *   JP                                    → jkp_morning  (JKP Pagi · 08.30–14.30)
- *   JS                                    → jkp_evening  (JKP Siang · 16.00–22.00)
+ *   JP / JKP P / JKP PAGI                 → jkp_morning  (JKP Pagi · 08.30–14.30)
+ *   JS / JKP S / JKP SIANG                → jkp_evening  (JKP Siang · 16.00–22.00)
  *   AL / A / C / CT / CU / CUTI / I / IZIN / SICK / SAKIT /
  *     D (Dinas) / STD / SD (Sakit)        → leave
  *   X / O / OFF / LIBUR / "-" / (blank)   → day off
+ * Anything else (e.g. a bare "JKP") is also imported as a day off, but is
+ * reported back as a warning so a mistyped code doesn't vanish silently.
  */
 
 import * as XLSX from 'xlsx';
@@ -49,6 +51,7 @@ import {
   type DayAssignment,
 } from '@/lib/schedule-utils';
 import { and, eq } from 'drizzle-orm';
+import { jakartaDateKey, jakartaDayStart } from '@/lib/day-bucket';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -80,6 +83,14 @@ export interface ParsedScheduleFile {
   sheetName: string;
   employees: EmployeeScheduleRow[];
   sections: string[];
+  /** Day cells whose code isn't recognised — imported as a day off. */
+  unknownCodes: UnknownCode[];
+}
+
+export interface UnknownCode {
+  code: string;
+  name: string;
+  day: number;
 }
 
 export interface ImportResult {
@@ -89,6 +100,8 @@ export interface ImportResult {
   skipped: number;
   errors: string[];
   notFound: string[];
+  /** Not fatal — e.g. unrecognised shift codes that were imported as a day off. */
+  warnings: string[];
   month?: string;
   sheet?: string;
 }
@@ -222,6 +235,7 @@ function parseSections(raw: Row[], sheetName: string): ParsedScheduleFile {
   const employees: EmployeeScheduleRow[] = [];
   const sections: string[] = [];
   const dateErrors: string[] = [];
+  const unknownCodes: UnknownCode[] = [];
 
   const rows = raw.map((r) => (Array.isArray(r) ? r : []));
 
@@ -241,10 +255,10 @@ function parseSections(raw: Row[], sheetName: string): ParsedScheduleFile {
   if (anchors.length === 0) {
     const monthFromName = parseMonthLoose(sheetName);
     const section = sectionLabelAbove(rows, 0) || sheetName || 'Store';
-    parseOneSection(rows, 0, rows.length, section, monthFromName ?? new Date(), employees, dateErrors);
+    parseOneSection(rows, 0, rows.length, section, monthFromName ?? new Date(), employees, dateErrors, unknownCodes);
     if (employees.length > 0) sections.push(section);
     finishOrThrow(dateErrors);
-    return { month: monthFromName ?? new Date(), sheetName, employees, sections };
+    return { month: monthFromName ?? new Date(), sheetName, employees, sections, unknownCodes };
   }
 
   let month = new Date();
@@ -271,7 +285,7 @@ function parseSections(raw: Row[], sheetName: string): ParsedScheduleFile {
     month = sectionMonth;
 
     const before = employees.length;
-    parseOneSection(rows, anchor + 1, end, section, sectionMonth, employees, dateErrors);
+    parseOneSection(rows, anchor + 1, end, section, sectionMonth, employees, dateErrors, unknownCodes);
     if (employees.length > before) sections.push(section);
   }
 
@@ -282,6 +296,7 @@ function parseSections(raw: Row[], sheetName: string): ParsedScheduleFile {
     sheetName,
     employees,
     sections: [...new Set(sections)],
+    unknownCodes,
   };
 }
 
@@ -417,6 +432,7 @@ function parseOneSection(
   month: Date,
   out: EmployeeScheduleRow[],
   dateErrors: string[],
+  unknownCodes: UnknownCode[],
 ): void {
   const layout = detectLayout(rows, start, end);
   if (!layout) return;
@@ -433,10 +449,10 @@ function parseOneSection(
   const dayCols = Object.entries(layout.dayCols)
     .map(([c, day]) => ({
       col: Number(c),
-      // LOCAL midnight of the calendar day — matches the rest of the app
-      // (parseLocalDate, startOfDay) so createOrReplaceMonthlySchedule's
-      // startOfDay() is a no-op instead of shifting the date a day.
-      date: new Date(y, mi, day, 0, 0, 0, 0),
+      // Jakarta midnight of the calendar day — the app's day-bucket instant
+      // (lib/day-bucket.ts), so createOrReplaceMonthlySchedule's startOfDay()
+      // is a no-op instead of shifting the date a day.
+      date: jakartaDayStart(`${y}-${String(mi + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`),
       // Timezone-independent weekday for validation.
       dow: new Date(Date.UTC(y, mi, day)).getUTCDay(),
       day,
@@ -481,13 +497,17 @@ function parseOneSection(
     if (!name || HEADER_WORDS.test(name)) continue;
 
     const days: DayEntry[] = [];
+    const unknownHere: UnknownCode[] = [];
     let hasAnyCode = false;
-    for (const { col, date } of dayCols) {
-      const shift = codeToShift(cellText(row[col]));
-      if (cellText(row[col]) !== '') hasAnyCode = true;
-      days.push({ date, shift });
+    for (const { col, date, day } of dayCols) {
+      const text = cellText(row[col]);
+      const shift = codeToShift(text);
+      if (text !== '') hasAnyCode = true;
+      if (shift === null) unknownHere.push({ code: text, name, day });
+      days.push({ date, shift: shift ?? 'off' });
     }
     if (!hasAnyCode) continue; // a stray text row with no shift cells
+    unknownCodes.push(...unknownHere);
 
     out.push({ nik, name, pic: role, section, days });
   }
@@ -557,20 +577,38 @@ function parseMonthLoose(raw: string): Date | null {
   return isNaN(d.getTime()) ? null : new Date(Date.UTC(d.getFullYear(), d.getMonth(), 1));
 }
 
-function codeToShift(codeRaw: string): ImportShift {
+/** null = not a code this importer knows (the caller imports it as a day off and warns). */
+function codeToShift(codeRaw: string): ImportShift | null {
   const code = codeRaw.trim().toUpperCase().replace(/[^A-Z]/g, '');
-  if (code === '') return 'off';
+  if (code === '') return 'off'; // blank, "-", or a stray number
   if (['E', 'P', 'PG', 'PAGI', 'MORNING', 'MRN'].includes(code)) return 'morning';
   if (['M', 'MID', 'MIDDLE'].includes(code)) return 'middle';
   if (['L', 'S', 'SG', 'SIANG', 'EVENING', 'EVE', 'CLOSING'].includes(code)) return 'evening';
   if (['F', 'FD', 'FULL', 'FULLDAY'].includes(code)) return 'full';
-  if (code === 'JP') return 'jkp_morning';
-  if (code === 'JS') return 'jkp_evening';
+  if (['JP', 'JKPP', 'JKPPAGI', 'JKPPG', 'JPAGI', 'JPG'].includes(code)) return 'jkp_morning';
+  if (['JS', 'JKPS', 'JKPSIANG', 'JKPSG', 'JSIANG', 'JSG'].includes(code)) return 'jkp_evening';
   if ([
     'AL', 'A', 'C', 'CT', 'CU', 'CUTI', 'I', 'IZIN', 'SICK', 'SAKIT', 'CTI',
     'D', 'STD', 'SD',
   ].includes(code)) return 'leave';
-  return 'off'; // X / O / OFF / LIBUR / "-" / anything unrecognised
+  if (['X', 'O', 'OFF', 'LIBUR', 'LBR', 'DO', 'DAYOFF', 'OFFDAY'].includes(code)) return 'off';
+  return null;
+}
+
+/** One line per unrecognised code, e.g. `"JKP" in 3 cells (OPIK day 2, …) — imported as day off.` */
+function describeUnknownCodes(list: UnknownCode[]): string[] {
+  const byCode = new Map<string, UnknownCode[]>();
+  for (const u of list) {
+    const key = u.code.toUpperCase();
+    const group = byCode.get(key);
+    if (group) group.push(u);
+    else byCode.set(key, [u]);
+  }
+  return [...byCode].map(([code, cells]) => {
+    const where = cells.slice(0, 3).map((c) => `${c.name} day ${c.day}`).join(', ');
+    const more = cells.length > 3 ? `, +${cells.length - 3} more` : '';
+    return `Unknown code "${code}" in ${cells.length} cell${cells.length !== 1 ? 's' : ''} (${where}${more}) — imported as day off. Use E, M, L, F, JP, JS, X or C/D/STD/SD.`;
+  });
 }
 
 // ─── Importer ─────────────────────────────────────────────────────────────────
@@ -661,6 +699,7 @@ export async function importScheduleFromParsed(
   let skipped = 0;
   const errors: string[] = [];
   const notFound: string[] = [];
+  const warnings = describeUnknownCodes(parsed.unknownCodes);
 
   const yearMonth = dateToYearMonth(parsed.month);
 
@@ -716,7 +755,7 @@ export async function importScheduleFromParsed(
       usedUserIds.add(userId);
 
       for (const day of emp.days) {
-        const dayKey = `${userId}|${day.date.getFullYear()}-${day.date.getMonth()}-${day.date.getDate()}`;
+        const dayKey = `${userId}|${jakartaDateKey(day.date)}`;
         if (seenDayKeys.has(dayKey)) continue;
         seenDayKeys.add(dayKey);
 
@@ -776,6 +815,7 @@ export async function importScheduleFromParsed(
     skipped,
     errors,
     notFound,
+    warnings,
     month: yearMonth,
     sheet: parsed.sheetName,
   };

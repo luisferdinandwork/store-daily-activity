@@ -1,13 +1,14 @@
 // app/api/it/users/route.ts
 //
-// GET  — lists every user account (all roles), joined with role/employee
-//        type/store/area, plus the lookup lists (roles, employeeTypes,
-//        areas, stores) the Users page needs for its filters/forms.
+// GET  — lists every user account (all roles, minus deleted stubs — see
+//        users.deletedAt), joined with role/employee type/store/area, plus the
+//        lookup lists (roles, employeeTypes, areas, stores) the Users page
+//        needs for its filters/forms.
 // POST — creates a new user account. IT-only.
 
 import { NextResponse } from 'next/server';
 import { validateNewPassword } from '@/lib/auth/password';
-import { asc, eq } from 'drizzle-orm';
+import { asc, eq, isNull } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
 
 import { db } from '@/lib/db';
@@ -42,6 +43,7 @@ export async function GET() {
         employeeTypeLabel: employeeTypes.label,
 
         homeStoreId: users.homeStoreId,
+        storeNo: stores.storeNo,
         storeName: stores.name,
 
         areaId: users.areaId,
@@ -54,6 +56,7 @@ export async function GET() {
       .leftJoin(employeeTypes, eq(employeeTypes.id, users.employeeTypeId))
       .leftJoin(stores, eq(stores.id, users.homeStoreId))
       .leftJoin(areas, eq(areas.id, users.areaId))
+      .where(isNull(users.deletedAt))
       .orderBy(asc(users.name)),
     db.select({ id: userRoles.id, code: userRoles.code, label: userRoles.label })
       .from(userRoles)
@@ -64,7 +67,9 @@ export async function GET() {
       .where(eq(employeeTypes.isActive, true))
       .orderBy(asc(employeeTypes.sortOrder), asc(employeeTypes.id)),
     db.select({ id: areas.id, name: areas.name }).from(areas).orderBy(asc(areas.name)),
-    db.select({ id: stores.id, name: stores.name, areaId: stores.areaId }).from(stores).orderBy(asc(stores.name)),
+    db.select({ id: stores.id, storeNo: stores.storeNo, name: stores.name, areaId: stores.areaId, status: stores.status })
+      .from(stores)
+      .orderBy(asc(stores.storeNo)),
   ]);
 
   return NextResponse.json({
@@ -81,6 +86,7 @@ export async function GET() {
       employeeTypeCode: u.employeeTypeCode,
       employeeTypeLabel: u.employeeTypeLabel,
       homeStoreId: u.homeStoreId,
+      storeNo: u.storeNo,
       storeName: u.storeName,
       areaId: u.areaId,
       areaName: u.areaName,

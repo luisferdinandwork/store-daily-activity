@@ -9,7 +9,7 @@ Guidance for AI assistants working in this repo. Keep this file short and curren
 - Next.js 16 (App Router, React 19, React Compiler on), TypeScript strict.
 - Postgres via **Drizzle ORM** + `pg` (node-postgres). Self-hosted DB — `DATABASE_URL` in `.env.local`.
 - Auth: NextAuth (credentials). **Login is by NIK, not email.** Session user carries `id`, `role`, `employeeType`, `homeStoreId`, `areaId`.
-- Deploy: VPS + PM2 + nginx (`ecosystem.config.js`, `deploy/`). **Production runs in UTC** — see date convention below.
+- Deploy: VPS + PM2 + nginx (`ecosystem.config.js`, `deploy/`). Don't rely on the server's timezone — see the date convention below.
 - Object storage: Biznet NOS (S3-compatible), `lib/storage.ts`. `lib/oss.ts` is legacy.
 - Business Central (BC) OData integration for sales + stock transfers: `lib/bc/client.ts`, `lib/performance/business-central-*.ts`, `lib/db/utils/item-transfers.ts`.
 - UI: Tailwind v4, Radix UI, `sonner` toasts, `lucide-react`. Indonesian-language user-facing copy.
@@ -18,7 +18,7 @@ Guidance for AI assistants working in this repo. Keep this file short and curren
 
 | Role (`user_roles.code`) | Panel | Notes |
 |---|---|---|
-| `employee` | `/employee` (mobile) | `employee_types.code`: `pic_1`, `pic_2`, `sa`. PIC 1/2 also get `/pic` (manage own store's schedule — Excel import, create/edit/delete — plus team task progress). |
+| `employee` | `/employee` (mobile) | `employee_types.code`: `pic_1`, `pic_2`, `sa`. PIC 1/2 also get `/pic` (view own store's schedule + Excel import only when the month has none — create/edit/delete is Ops-only since 2026-09-15 — plus team task progress). |
 | `ops` | `/ops` | `employee_types.code`: `ops_ho` (all stores) or `ops_area` (own `areaId` only). |
 | `finance` | `/finance` | |
 | `audit` | `/audit` | |
@@ -38,6 +38,8 @@ Guidance for AI assistants working in this repo. Keep this file short and curren
 
 - `areas` → `stores` (`storeNo` = the BC/POS code, e.g. `FF001`; keep separate from `name`).
 - `users` (`nik` unique, `homeStoreId`, `areaId`) → `user_store_assignments` (assignment history; the schedule template roster reads this).
+- IT "Delete user" (`lib/db/utils/user-deletion.ts`) always succeeds: personal records go (attendance, grooming, schedule, assignments, notifications, target shares); cash + shared history stays. If anything still references the user, the row becomes a hidden stub — `users.deleted_at` set, inactive, NIK renamed `<nik>~deleted~<id8>`. User lists that don't already filter `isActive`/store must add `isNull(users.deletedAt)`.
+- One PIC 1 per store (the petty-cash holder) — flagged in red, not enforced (`lib/store-pic1.ts`): IT Users, Store Management, import review.
 - Schedule: `monthly_schedules` (per store/`yearMonth`) → `monthly_schedule_entries` (per employee/day, OFF & leave included) → `schedules` (materialised working days only — `shiftId` NOT NULL).
 - `shifts` (`code` in `morning` / `evening` / `full_day` — stable; hours/breaks/accent live here).
 - `shift_tasks` maps `shifts` → `task_definitions` (which task types a shift expects). Per-task tables in `lib/db/schema/tasks.ts`.
@@ -47,10 +49,11 @@ Guidance for AI assistants working in this repo. Keep this file short and curren
 
 ## Conventions
 
-- **Dates for day-buckets** (schedules, attendance, task `date`): store **UTC midnight of the calendar day**. Drizzle's `timestamp` column serialises via `.toISOString()`, so build these as `new Date(Date.UTC(y, m, d))`, and read "today" via `todayInStoreTimezone()` in `lib/schedule-utils.ts` (Asia/Jakarta calendar date → `new Date(y,m-1,d)`, = UTC midnight on the prod server). Real timestamps (`checkInTime`, …) use plain `new Date()`.
+- **Dates for day-buckets** (schedules, attendance, task `date`) are Asia/Jakarta calendar days, and the DB holds two encodings of day D: `D-1 17:00:00` (Jakarta midnight — what the app writes, ~95% of rows) and `D 00:00:00` (UTC midnight — seed scripts). Read a bucket with `jakartaDateKey()`, query a day with `jakartaDayRange()` (`lib/day-bucket.ts`); never `getUTCDate()`, `toISOString().slice(0,10)` or an exact timestamp match. "Today" = `todayInStoreTimezone()` (`lib/schedule-utils.ts`). Real timestamps (`checkInTime`, …) use plain `new Date()`; show them with `jakartaTime()`.
 - Neon-HTTP-safe DB style (a holdover): avoid `db.transaction()`; prefer `onConflictDo*` + batched inserts over SELECT-then-INSERT; keep `IN (...)` lists well under the Postgres 65535-param limit.
 - Money is stored as integer Rupiah in `decimal`/`text` columns; format with `toLocaleString('id-ID')`.
 - User-facing strings are Indonesian. Server/log strings and code are English.
+- Store pickers/filters on IT pages use the searchable `components/shared/store-combobox.tsx` (pass `modal` inside a Sheet/Dialog).
 - Ops pages that browse stores/orders/visits/issues use **list rows** (`components/ops/layout/OpsList.tsx`: `OpsList` + `OpsListRow`), not multi-column card grids. KPI tiles, calendars and form fields stay grids.
 - Route handlers return `{ success: boolean, ... }` JSON; utils return `{ success: true, data } | { success: false, error }`.
 

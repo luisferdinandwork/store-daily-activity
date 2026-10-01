@@ -1,7 +1,7 @@
 // components/ops/AttendanceExportModal.tsx
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -27,6 +27,8 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { addDaysKey, jakartaTodayKey } from '@/lib/day-bucket';
+import { SHIFT_CODES, SHIFT_LABELS } from '@/lib/shift-tasks';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -39,44 +41,41 @@ interface Props {
 type QuickRange = '7d' | '14d' | '30d' | 'this_month' | 'last_month' | 'custom';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function toDateStr(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
+//
+// Every date here is a Jakarta "YYYY-MM-DD" string. (These used to come from
+// `localDate.toISOString().slice(0, 10)`, which in a Jakarta browser is the
+// previous day — "This month" started on the last day of the month before and
+// "Last month" exported e.g. 31 Aug – 29 Sep.)
 
 function getQuickRange(key: QuickRange): { from: string; to: string } | null {
-  const today = new Date();
-  const to    = toDateStr(today);
+  const to = jakartaTodayKey();
+  const monthStart = `${to.slice(0, 7)}-01`;
 
-  if (key === '7d') {
-    const from = new Date(today); from.setDate(today.getDate() - 6);
-    return { from: toDateStr(from), to };
-  }
-  if (key === '14d') {
-    const from = new Date(today); from.setDate(today.getDate() - 13);
-    return { from: toDateStr(from), to };
-  }
-  if (key === '30d') {
-    const from = new Date(today); from.setDate(today.getDate() - 29);
-    return { from: toDateStr(from), to };
-  }
-  if (key === 'this_month') {
-    const from = new Date(today.getFullYear(), today.getMonth(), 1);
-    return { from: toDateStr(from), to };
-  }
+  if (key === '7d')         return { from: addDaysKey(to, -6),  to };
+  if (key === '14d')        return { from: addDaysKey(to, -13), to };
+  if (key === '30d')        return { from: addDaysKey(to, -29), to };
+  if (key === 'this_month') return { from: monthStart, to };
   if (key === 'last_month') {
-    const first = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-    const last  = new Date(today.getFullYear(), today.getMonth(), 0);
-    return { from: toDateStr(first), to: toDateStr(last) };
+    const last = addDaysKey(monthStart, -1);
+    return { from: `${last.slice(0, 7)}-01`, to: last };
   }
   return null;
 }
 
 function dayCount(from: string, to: string): number {
-  const a = new Date(from + 'T00:00:00');
-  const b = new Date(to   + 'T00:00:00');
-  return Math.round((b.getTime() - a.getTime()) / 86_400_000) + 1;
+  return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1;
 }
+
+function fmtDay(key: string, withYear: boolean): string {
+  return new Date(`${key}T00:00:00Z`).toLocaleDateString('en-ID', {
+    day: 'numeric', month: 'short', ...(withYear ? { year: 'numeric' } : {}), timeZone: 'UTC',
+  });
+}
+
+type ShiftOption = { code: string; label: string };
+
+// Until /api/ops/schedules/shifts answers — every seeded shift, JKP included.
+const FALLBACK_SHIFTS: ShiftOption[] = SHIFT_CODES.map((code) => ({ code, label: SHIFT_LABELS[code] }));
 
 const QUICK_RANGES: { key: QuickRange; label: string }[] = [
   { key: '7d',         label: 'Last 7 days'  },
@@ -90,7 +89,21 @@ const QUICK_RANGES: { key: QuickRange; label: string }[] = [
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function AttendanceExportModal({ open, onClose, stores = [] }: Props) {
-  const today = toDateStr(new Date());
+  const today = jakartaTodayKey();
+  const [shiftOptions, setShiftOptions] = useState<ShiftOption[]>(FALLBACK_SHIFTS);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    fetch('/api/ops/schedules/shifts', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((json) => {
+        if (cancelled || !json?.success || !Array.isArray(json.shifts) || json.shifts.length === 0) return;
+        setShiftOptions(json.shifts.map((s: ShiftOption) => ({ code: s.code, label: s.label })));
+      })
+      .catch(() => { /* keep the fallback list */ });
+    return () => { cancelled = true; };
+  }, [open]);
 
   const [quickRange, setQuickRange] = useState<QuickRange>('this_month');
   const [fromDate,   setFromDate]   = useState(() => {
@@ -236,7 +249,7 @@ export default function AttendanceExportModal({ open, onClose, stores = [] }: Pr
                   type="date"
                   value={toDate}
                   min={fromDate}
-                  max={toDateStr(new Date())}
+                  max={today}
                   onChange={(e) => {
                     setToDate(e.target.value);
                     setQuickRange('custom');
@@ -264,9 +277,9 @@ export default function AttendanceExportModal({ open, onClose, stores = [] }: Pr
             </span>
             {valid && (
               <span className="font-medium text-foreground">
-                {new Date(fromDate + 'T00:00:00').toLocaleDateString('en-ID', { day: 'numeric', month: 'short' })}
+                {fmtDay(fromDate, false)}
                 {' — '}
-                {new Date(toDate   + 'T00:00:00').toLocaleDateString('en-ID', { day: 'numeric', month: 'short', year: 'numeric' })}
+                {fmtDay(toDate, true)}
               </span>
             )}
           </div>
@@ -305,8 +318,9 @@ export default function AttendanceExportModal({ open, onClose, stores = [] }: Pr
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All</SelectItem>
-                    <SelectItem value="morning">Morning</SelectItem>
-                    <SelectItem value="evening">Evening</SelectItem>
+                    {shiftOptions.map((s) => (
+                      <SelectItem key={s.code} value={s.code}>{s.label}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>

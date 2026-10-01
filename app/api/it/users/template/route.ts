@@ -12,7 +12,7 @@
 // server-side verification on import is the established pattern instead.
 
 import { NextRequest, NextResponse } from 'next/server';
-import { asc, eq } from 'drizzle-orm';
+import { asc, eq, isNull } from 'drizzle-orm';
 import XlsxStyle from 'xlsx-js-style';
 
 import { db } from '@/lib/db';
@@ -122,6 +122,7 @@ export async function GET(req: NextRequest) {
       .innerJoin(userRoles, eq(userRoles.id, users.roleId))
       .leftJoin(employeeTypes, eq(employeeTypes.id, users.employeeTypeId))
       .leftJoin(stores, eq(stores.id, users.homeStoreId))
+      .where(isNull(users.deletedAt))
       .orderBy(asc(users.name));
 
     userRows.forEach((u, idx) => {

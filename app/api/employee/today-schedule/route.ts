@@ -5,9 +5,7 @@ import { authOptions }                from '@/lib/auth';
 import { db }                         from '@/lib/db';
 import { schedules, stores, shifts }  from '@/lib/db/schema';
 import { eq, and, gte, lte }          from 'drizzle-orm';
-
-function startOfDay(d: Date) { const r = new Date(d); r.setHours(0,  0,  0,   0); return r; }
-function endOfDay  (d: Date) { const r = new Date(d); r.setHours(23, 59, 59, 999); return r; }
+import { endOfDay, startOfDay, todayInStoreTimezone } from '@/lib/schedule-utils';
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -22,7 +20,9 @@ export async function GET() {
   const homeStoreId = Number(rawHomeStoreId);
   if (isNaN(homeStoreId)) return NextResponse.json({ shift: null, storeName: null });
 
-  const now = new Date();
+  // Today's Jakarta day — a bare `new Date()` is still "yesterday" on a UTC
+  // clock until 07:00 WIB.
+  const today = todayInStoreTimezone();
 
   // Fetch today's schedule joined with the shift lookup so we get the code
   const [sched] = await db
@@ -32,8 +32,8 @@ export async function GET() {
       eq(schedules.userId,    userId),
       eq(schedules.storeId,   homeStoreId),
       eq(schedules.isHoliday, false),
-      gte(schedules.date,     startOfDay(now)),
-      lte(schedules.date,     endOfDay(now)),
+      gte(schedules.date,     startOfDay(today)),
+      lte(schedules.date,     endOfDay(today)),
     ))
     .limit(1);
 

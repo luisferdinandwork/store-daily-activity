@@ -6,11 +6,9 @@ import { getStoresForOps }           from '@/lib/schedule-utils';
 import { filterActiveStoreIds } from '@/lib/db/utils/store-status';
 import { db }                        from '@/lib/db';
 import { schedules, attendance, stores } from '@/lib/db/schema';
-import { eq, and, gte, lte, inArray } from 'drizzle-orm';
+import { eq, and, gte, lt, inArray } from 'drizzle-orm';
 import { getOpsActor } from '../../tasks/_helpers';
-
-function startOfDay(d: Date) { const r = new Date(d); r.setHours(0, 0, 0, 0);     return r; }
-function endOfDay(d: Date)   { const r = new Date(d); r.setHours(23, 59, 59, 999); return r; }
+import { isDayKey, jakartaDateKey, jakartaDayRange } from '@/lib/day-bucket';
 
 interface StoreSummary {
   storeId:   number;
@@ -24,7 +22,7 @@ interface StoreSummary {
   unset:     number;
 }
 
-// GET /api/ops/attendance/overview?date=ISO
+// GET /api/ops/attendance/overview?date=YYYY-MM-DD | ISO instant (→ its Jakarta day)
 export async function GET(req: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
@@ -44,13 +42,14 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'date is required' }, { status: 400 });
     }
 
-    const date = new Date(dateStr);
-    if (isNaN(date.getTime())) {
+    // The Jakarta calendar day — its range matches both stored encodings of a
+    // day bucket (lib/day-bucket.ts), whatever zone this server runs in.
+    const dayKey = isDayKey(dateStr) ? dateStr : jakartaDateKey(new Date(dateStr));
+    if (!isDayKey(dayKey)) {
       return NextResponse.json({ success: false, error: 'invalid date' }, { status: 400 });
     }
 
-    const dayStart = startOfDay(date);
-    const dayEnd   = endOfDay(date);
+    const { start: dayStart, end: dayEnd } = jakartaDayRange(dayKey);
 
     // getStoresForOps now returns number[] (serial PKs)
     // Prep (ready_to_open) and closed stores are left out of attendance progress.
@@ -90,7 +89,7 @@ export async function GET(req: NextRequest) {
           inArray(schedules.storeId, storeIds),
           eq(schedules.isHoliday, false),
           gte(schedules.date, dayStart),
-          lte(schedules.date, dayEnd),
+          lt(schedules.date, dayEnd),
         ),
       );
 

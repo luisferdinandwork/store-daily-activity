@@ -11,7 +11,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
@@ -55,7 +55,7 @@ export async function GET() {
         .select({ id: users.id, name: users.name, nik: users.nik, areaId: users.areaId })
         .from(users)
         .innerJoin(employeeTypes, eq(employeeTypes.id, users.employeeTypeId))
-        .where(eq(employeeTypes.code, 'ops_area'))
+        .where(and(eq(employeeTypes.code, 'ops_area'), isNull(users.deletedAt)))
         .orderBy(users.name),
     ]);
 

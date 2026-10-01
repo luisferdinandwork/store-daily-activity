@@ -132,6 +132,15 @@ export const users = pgTable('users', {
 
   isActive: boolean('is_active').default(true).notNull(),
 
+  /**
+   * Set when IT deleted the account but history it can't lose still points at
+   * it (cash records, shared store tasks, …): the row stays as a hidden,
+   * inactive stub with its NIK released, so that history keeps its name.
+   * Accounts with nothing left are removed outright — see
+   * lib/db/utils/user-deletion.ts. Every user list skips these rows.
+   */
+  deletedAt: timestamp('deleted_at'),
+
   createdAt: timestamp('created_at').defaultNow().notNull(),
   updatedAt: timestamp('updated_at').defaultNow().notNull(),
 }, (t) => ({

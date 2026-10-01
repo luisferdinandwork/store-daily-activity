@@ -40,6 +40,7 @@ import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
 import { isShiftCode, paletteOf, SHIFT_ROSTER_CODE } from '@/lib/shift-tasks';
+import { jakartaDateKey, jakartaTodayKey } from '@/lib/day-bucket';
 import { Button } from '@/components/ui/button';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -126,6 +127,8 @@ interface ImportResult {
   skipped: number;
   errors: string[];
   notFound: string[];
+  /** Not fatal — e.g. unrecognised shift codes imported as a day off. */
+  warnings: string[];
   month?: string;
   sheet?: string;
   sections?: string[];
@@ -160,12 +163,6 @@ const STATUS_VISUAL: Record<'off' | 'leave', ShiftVisual> = {
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function toLocalDateKey(input: Date | string): string {
-  const d = typeof input === 'string' ? new Date(input) : input;
-  if (isNaN(d.getTime())) return '';
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
 
 function currentYearMonth() {
   const n = new Date();
@@ -707,6 +704,7 @@ function ImportButton({ storeId, storeName, onImported }: {
         skipped: json.skipped ?? 0,
         errors: json.errors ?? (json.error ? [json.error] : []),
         notFound: json.notFound ?? [],
+        warnings: json.warnings ?? [],
         month: json.month,
         sheet: json.sheet,
         sections: json.sections,
@@ -714,12 +712,12 @@ function ImportButton({ storeId, storeName, onImported }: {
       };
       setResult(norm);
       if (norm.dateErrors?.length) { setShowErrors(true); toast.error('Excel has wrong dates — please fix and re-upload'); return; }
-      if (norm.schedulesCreated > 0 && !norm.errors.length && !norm.notFound.length) { toast.success(`Imported ${norm.entriesCreated} entries to ${storeName}`); onImported(); }
+      if (norm.schedulesCreated > 0 && !norm.errors.length && !norm.notFound.length && !norm.warnings.length) { toast.success(`Imported ${norm.entriesCreated} entries to ${storeName}`); onImported(); }
       else if (norm.schedulesCreated > 0) { toast.warning('Imported with warnings'); setShowErrors(true); onImported(); }
       else if (!norm.success) { toast.error(norm.errors[0] ?? 'Import failed'); setShowErrors(true); }
       else { toast.info('No new data imported'); }
     } catch (err) {
-      setResult({ success: false, schedulesCreated: 0, entriesCreated: 0, skipped: 0, errors: [String(err)], notFound: [] });
+      setResult({ success: false, schedulesCreated: 0, entriesCreated: 0, skipped: 0, errors: [String(err)], notFound: [], warnings: [] });
       setShowErrors(true); toast.error('Network error');
     } finally { setImporting(false); }
   }
@@ -727,7 +725,8 @@ function ImportButton({ storeId, storeName, onImported }: {
   const hasDateErrors = (result?.dateErrors?.length ?? 0) > 0;
   const hasErrors     = (result?.errors.length ?? 0) > 0;
   const hasNotFound   = (result?.notFound.length ?? 0) > 0;
-  const hasWarnings   = hasDateErrors || hasErrors || hasNotFound;
+  const hasCodeWarns  = (result?.warnings.length ?? 0) > 0;
+  const hasWarnings   = hasDateErrors || hasErrors || hasNotFound || hasCodeWarns;
   const isFullSuccess = result?.success && !hasWarnings;
   const isHardFail    = result && !result.success && (hasDateErrors || result.schedulesCreated === 0);
 
@@ -783,6 +782,14 @@ function ImportButton({ storeId, storeName, onImported }: {
                   </ul>
                 </div>
               )}
+              {hasCodeWarns && (
+                <div>
+                  <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-amber-700">Unrecognised shift codes</p>
+                  <ul className="max-h-28 space-y-0.5 overflow-y-auto">
+                    {result.warnings.map((w, i) => <li key={i} className="text-[11px] leading-relaxed text-amber-800">• {w}</li>)}
+                  </ul>
+                </div>
+              )}
               {hasNotFound && (
                 <div>
                   <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-amber-700">Employees not found in system</p>
@@ -822,23 +829,18 @@ function CalendarGrid({ schedule, yearMonth, shifts, onDayPress }: {
   onDayPress: (date: Date) => void;
 }) {
   const grid = buildCalendarGrid(yearMonth);
-  const [today, setToday] = useState(() => isoDate(new Date()));
+  const [today, setToday] = useState(() => jakartaTodayKey());
 
+  // Roll the "today" highlight over at Jakarta midnight.
   useEffect(() => {
-    const now = new Date();
-    const nextMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 5);
-    const t = setTimeout(() => {
-      setToday(isoDate(new Date()));
-      const daily = setInterval(() => setToday(isoDate(new Date())), 86_400_000);
-      return () => clearInterval(daily);
-    }, nextMidnight.getTime() - now.getTime());
-    return () => clearTimeout(t);
+    const t = setInterval(() => setToday(jakartaTodayKey()), 60_000);
+    return () => clearInterval(t);
   }, []);
 
   const entriesByDate = useMemo(() => {
     const map = new Map<string, DayEntry[]>();
     for (const entry of schedule.entries) {
-      const key = toLocalDateKey(entry.date);
+      const key = jakartaDateKey(entry.date);
       if (!key) continue;
       const list = map.get(key) ?? [];
       list.push(entry);
@@ -884,7 +886,8 @@ function CalendarGrid({ schedule, yearMonth, shifts, onDayPress }: {
           const working = entries.filter(e => !e.isOff && !e.isLeave && e.shift);
           const leave   = entries.filter(e => e.isLeave);
           const preview = working.slice(0, 3);
-          const overflow = entries.length - preview.length - Math.min(leave.length, 1);
+          // People not shown in the cell (day-off entries aren't listed at all).
+          const overflow = (working.length - preview.length) + Math.max(leave.length - 1, 0);
 
           return (
             <button
@@ -1087,7 +1090,7 @@ export default function OpsSchedulesPage() {
     if (!panelDate || !schedule) return [];
     const key = isoDate(panelDate);
     return schedule.entries
-      .filter(e => toLocalDateKey(e.date) === key)
+      .filter(e => jakartaDateKey(e.date) === key)
       .sort((a, b) => {
         const ai = shifts.findIndex(s => s.code === a.shift);
         const bi = shifts.findIndex(s => s.code === b.shift);
@@ -1189,15 +1192,25 @@ export default function OpsSchedulesPage() {
 
   async function handleDelete() {
     if (!selectedStore || !schedule) return;
-    if (!confirm(`Delete the ${formatYearMonth(selectedMonth)} schedule for ${currentStoreName}? Attended days are preserved.`)) return;
+    if (!confirm(
+      `Delete the ${formatYearMonth(selectedMonth)} schedule for ${currentStoreName}?\n\n`
+      + 'Every shift, day off and leave is removed. Days someone already checked in for (or was marked '
+      + 'absent / Dinas / Cuti / Sakit) stay, so their attendance history is kept.',
+    )) return;
     setDeleting(true);
     try {
       const params = new URLSearchParams({ storeId: selectedStore, yearMonth: selectedMonth });
       const res  = await fetch(`/api/ops/schedules/monthly?${params}`, { method: 'DELETE' });
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(parseApiError(json, 'Delete failed'));
-      toast.success(json.lockedCount > 0 ? `Cleared — ${json.lockedCount} attended day(s) preserved` : 'Schedule deleted');
-      closePanel(); setSchedule(null);
+      toast.success(
+        json.lockedCount > 0
+          ? `Schedule cleared — ${json.lockedCount} day(s) with attendance kept`
+          : 'Schedule deleted',
+      );
+      closePanel();
+      // The month stays when attended days were kept — show what's left.
+      await loadSchedule();
     } catch (e) { toast.error(e instanceof Error ? e.message : 'Delete failed'); }
     finally { setDeleting(false); }
   }

@@ -37,21 +37,11 @@ import {
   endBreak,
   todayInStoreTimezone,
   autoCheckoutOverdueAttendance,
+  startOfDay,
+  endOfDay,
 } from '@/lib/schedule-utils';
 
 import type { Shift, BreakType } from '@/lib/schedule-utils';
-
-function startOfDay(d: Date) {
-  const r = new Date(d);
-  r.setHours(0, 0, 0, 0);
-  return r;
-}
-
-function endOfDay(d: Date) {
-  const r = new Date(d);
-  r.setHours(23, 59, 59, 999);
-  return r;
-}
 
 /**
  * Keep this list aligned with your break_type enum.

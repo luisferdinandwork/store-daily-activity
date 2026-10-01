@@ -8,13 +8,14 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
-  AlertTriangle, Store as StoreIcon, MapPin, Clock, User, ChevronDown,
+  AlertTriangle, Store as StoreIcon, MapPin, Clock, User,
   CheckCircle2, Eye, Loader2, X, ArrowRight,
   AlertCircle, Shield, FileText, RefreshCw,
 } from 'lucide-react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
+import { StoreCombobox } from '@/components/shared/store-combobox';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -40,7 +41,7 @@ interface ItIssue {
   reviewedAt: string | null;
   reviewedBy: string | null;
   assignedToRoles?: AssignedIssueRole[];
-  store: { id: string; name: string; areaId: string | null; areaName: string | null };
+  store: { id: string; storeNo: string; name: string; areaId: string | null; areaName: string | null };
   reporter: { id: string; name: string; nik: string };
 }
 
@@ -300,7 +301,7 @@ export default function ItIssuesPage() {
   const [loading,     setLoading]    = useState(true);
   const [refreshing,  setRefreshing] = useState(false);
   const [filter,      setFilter]     = useState<IssueStatus | 'all'>('all');
-  const [storeFilter, setStoreFilter]= useState<string>('all');
+  const [storeFilter, setStoreFilter]= useState<number | null>(null); // null = all stores
   const [selected,    setSelected]   = useState<ItIssue | null>(null);
   const [updating,    setUpdating]   = useState(false);
 
@@ -325,14 +326,15 @@ export default function ItIssuesPage() {
 
   useEffect(() => { if (isIt) load(); }, [isIt, load]);
 
+  // Stores that have issues, for the searchable store filter.
   const stores = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const i of issuesList) m.set(i.store.id, i.store.name);
-    return [...m.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+    const m = new Map<number, { id: number; storeNo: string; name: string }>();
+    for (const i of issuesList) m.set(Number(i.store.id), { id: Number(i.store.id), storeNo: i.store.storeNo, name: i.store.name });
+    return [...m.values()].sort((a, b) => a.storeNo.localeCompare(b.storeNo, undefined, { numeric: true }));
   }, [issuesList]);
 
   const storeScoped = useMemo(
-    () => storeFilter === 'all' ? issuesList : issuesList.filter(i => i.store.id === storeFilter),
+    () => storeFilter == null ? issuesList : issuesList.filter(i => Number(i.store.id) === storeFilter),
     [issuesList, storeFilter],
   );
 
@@ -423,15 +425,13 @@ export default function ItIssuesPage() {
           <div className="flex flex-wrap items-end gap-4">
             <div className="min-w-[280px] flex-1">
               <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-widest text-slate-400">Store</label>
-              <div className="relative">
-                <StoreIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <select value={storeFilter} onChange={e => { setStoreFilter(e.target.value); setSelected(null); }}
-                  className="h-11 w-full appearance-none rounded-xl border border-slate-200 bg-white pl-10 pr-10 text-sm font-semibold text-slate-800 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100">
-                  <option value="all">All stores</option>
-                  {stores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-              </div>
+              <StoreCombobox
+                stores={stores}
+                value={storeFilter}
+                onChange={(id) => { setStoreFilter(id); setSelected(null); }}
+                allLabel="All stores"
+                className="max-w-none"
+              />
             </div>
             <p className="pb-3 text-xs tabular-nums text-slate-400">
               {visible.length} shown · click a card to filter by status
