@@ -2,15 +2,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/ops/performance-targets?yearMonth=YYYY-MM
 //
-// Store list for the left-hand rail of /ops/performance-targets, grouped by
-// area for OPS HO or flat for OPS Area. Each store's rollup now reads
-// directly from store_monthly_targets (Ops-set monthly target) instead of
-// summing employee rows.
-//
-// NOTE: this file wasn't part of the files you shared, so it's a best-effort
-// rewrite inferred from how app/ops/performance-targets/page.tsx consumes
-// `OverviewResponse` / `StoreRow` / `StoreRollup`. Double check it against
-// whatever this route currently does in your repo before replacing it.
+// Every store in scope with its month rollup: the Ops-set monthly target
+// (store_monthly_targets), Team size, and Business Central actuals. OPS HO sees
+// all areas, OPS Area only their own. The page filters, sorts and totals this
+// list client-side (lib/performance/target-view.ts); `status` is the store's
+// lifecycle so closed stores can be hidden there.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -46,6 +42,7 @@ export async function GET(req: NextRequest) {
       address: stores.address,
       areaId: stores.areaId,
       areaName: areas.name,
+      status: stores.status,
     })
     .from(stores)
     .leftJoin(areas, eq(areas.id, stores.areaId))
@@ -76,6 +73,7 @@ export async function GET(req: NextRequest) {
         address: store.address,
         areaId: store.areaId,
         areaName: store.areaName,
+        status: store.status,
         rollup: {
           storeMonthlyTargetId: plan?.id ?? null,
           storeId: store.id,
@@ -94,23 +92,11 @@ export async function GET(req: NextRequest) {
     }),
   );
 
-  const summary = stores_.reduce(
-    (acc, store) => ({
-      storeMonthlySalesTarget: acc.storeMonthlySalesTarget + store.rollup.storeMonthlySalesTarget,
-      storeMonthlyTransactionTarget: acc.storeMonthlyTransactionTarget + store.rollup.storeMonthlyTransactionTarget,
-      rosterCount: acc.rosterCount + store.rollup.rosterCount,
-      storeCount: acc.storeCount + 1,
-      plannedStoreCount: acc.plannedStoreCount + (store.rollup.storeMonthlyTargetId != null ? 1 : 0),
-    }),
-    { storeMonthlySalesTarget: 0, storeMonthlyTransactionTarget: 0, rosterCount: 0, storeCount: 0, plannedStoreCount: 0 },
-  );
-
   return NextResponse.json({
     success: true,
     yearMonth,
     scope: scope.scope,
     areaId: scope.scope === 'area' ? scope.areaId : null,
-    summary,
     stores: stores_,
   });
 }

@@ -30,6 +30,7 @@ Guidance for AI assistants working in this repo. Keep this file short and curren
 - `lib/db/schema/*` — Drizzle tables. `lib/db/schema/index.ts` re-exports everything + a `schema` object.
 - `lib/db/utils/*` — per-task business logic (`briefing.ts`, `serah-terima.ts`, `store-opening.ts`, …). Task rows are created lazily via `getOrCreate*ForSchedule` when an employee opens the task — they don't all have to be pre-seeded.
 - `lib/*` — cross-cutting helpers (`schedule-utils.ts`, `shift-tasks.ts`, `schedule-import.ts`, `performance/target-utils.ts`).
+- `lib/performance/target-view.ts` — pure view logic for Ops **Performance Targets** (`/ops/performance-targets`): API types, month pace (today counts as half a day), store health bands (`on_track` / `watch` / `behind`), search + sort. UI lives in `components/ops/performance/*`; the list's filter/sort state in `useStoreListView`.
 - `lib/user-import.ts` — IT Users bulk Excel import (`/it/users` → Import Excel). Reads the PRISM template **or** an HR roster (Employee No./Zona/Store Code/Organization Unit/Level/Status); unknown areas + stores are created (new stores default to the Daan Mogot placeholder location).
 - `components/<role>/...`, `components/ui/...`.
 - `scripts/seed/*` — the dev/staging seed (see below). `scripts/{generate,migrate,reset}.ts` wrap drizzle-kit.
@@ -54,7 +55,7 @@ Guidance for AI assistants working in this repo. Keep this file short and curren
 - Money is stored as integer Rupiah in `decimal`/`text` columns; format with `toLocaleString('id-ID')`.
 - User-facing strings are Indonesian. Server/log strings and code are English.
 - Store pickers/filters on IT pages use the searchable `components/shared/store-combobox.tsx` (pass `modal` inside a Sheet/Dialog).
-- Ops pages that browse stores/orders/visits/issues use **list rows** (`components/ops/layout/OpsList.tsx`: `OpsList` + `OpsListRow`), not multi-column card grids. KPI tiles, calendars and form fields stay grids.
+- Ops pages that browse stores/orders/visits/issues use **list rows** (`components/ops/layout/OpsList.tsx`: `OpsList` + `OpsListRow`), not multi-column card grids. KPI tiles, calendars and form fields stay grids. Their search / filter / sort bar uses `components/ops/layout/OpsToolbar.tsx` (`OpsSearchInput`, `OpsFilterSelect`, `OpsSortControl`, `OpsChipTabs`); lay rows out by container width (`@container` + `@4xl:`), not viewport — the Ops sidebar takes a quarter of the screen.
 - Route handlers return `{ success: boolean, ... }` JSON; utils return `{ success: true, data } | { success: false, error }`.
 
 ## Commands
