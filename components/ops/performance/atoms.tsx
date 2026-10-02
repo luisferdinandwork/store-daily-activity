@@ -2,15 +2,14 @@
 // components/ops/performance/atoms.tsx
 //
 // Small visual building blocks shared by the Performance Targets list and
-// detail views: progress ring, target bar (with a pace marker), status chip,
-// "actual / target" pair. Colour comes from one tone vocabulary so a store reads
+// detail views: progress ring, target bar, setup chip, "actual / target" pair. Colour comes from one tone vocabulary so a store reads
 // the same everywhere (list row, summary tile, detail hero):
 //
 //   emerald on track / achieved · amber watch / needs setup · rose behind
 //   indigo  upcoming            · slate no data / inactive
 
-import type { ElementType, ReactNode } from 'react';
-import { ArrowDown, ArrowUp, Check, CloudOff, Plus, Target } from 'lucide-react';
+import type { ReactNode } from 'react';
+import { CloudOff, Plus } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import type { StoreStatus } from '@/lib/store-status';
@@ -119,39 +118,23 @@ export function ProgressRing({
 
 // ─── Bar ──────────────────────────────────────────────────────────────────────
 
-/**
- * Achievement bar. `paceMarker` (0–100) draws a thin tick where the store
- * should be by now — a fill that passes the tick is on pace, one that stops
- * short is behind. No text needed.
- */
+/** Achievement bar — the fill is the % of target reached (capped at 100). */
 export function TargetBar({
   pct,
   tone,
-  paceMarker,
   thin = false,
   className,
 }: {
   pct: number;
   tone: Tone;
-  paceMarker?: number | null;
   thin?: boolean;
   className?: string;
 }) {
   const width = Math.min(100, Math.max(0, pct));
-  const showMarker = paceMarker != null && paceMarker > 0 && paceMarker < 100;
 
   return (
-    <div className={cn('relative', className)}>
-      <div className={cn('overflow-hidden rounded-full bg-slate-100', thin ? 'h-1' : 'h-1.5')}>
-        <div className={cn('h-full rounded-full transition-all duration-500', TONE[tone].bar)} style={{ width: `${width}%` }} />
-      </div>
-      {showMarker && (
-        <span
-          className="absolute -bottom-0.5 -top-0.5 w-0.5 rounded-full bg-slate-500/60"
-          style={{ left: `${paceMarker}%` }}
-          aria-hidden="true"
-        />
-      )}
+    <div className={cn('overflow-hidden rounded-full bg-slate-100', thin ? 'h-1' : 'h-1.5', className)}>
+      <div className={cn('h-full rounded-full transition-all duration-500', TONE[tone].bar)} style={{ width: `${width}%` }} />
     </div>
   );
 }
@@ -185,52 +168,15 @@ export function ActualOfTarget({
 const CHIP_BASE =
   'inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-bold ring-1 ring-inset';
 
-/** One chip per store health: a point gap for pace states, a word for the rest. */
-export function HealthChip({
-  health,
-  gapPt,
-  detail,
-}: {
-  health: StoreHealth;
-  gapPt: number | null;
-  /** Hover text — the exact numbers behind the chip. */
-  detail?: string;
-}) {
+/** A store that can't be scored yet: no target set, or no Business Central data. */
+export function SetupChip({ health }: { health: Extract<StoreHealth, 'no_target' | 'no_data'> }) {
   const meta = HEALTH_META[health];
-  let Icon: ElementType;
-  let text: string;
-
-  switch (health) {
-    case 'achieved':
-      Icon = Check;
-      text = meta.label;
-      break;
-    case 'on_track':
-    case 'watch':
-    case 'behind': {
-      const gap = gapPt ?? 0;
-      Icon = gap >= 0 ? ArrowUp : ArrowDown;
-      text = `${Math.abs(gap)} pt`;
-      break;
-    }
-    case 'no_target':
-      Icon = Plus;
-      text = meta.label;
-      break;
-    case 'no_data':
-      Icon = CloudOff;
-      text = meta.label;
-      break;
-    case 'upcoming':
-      Icon = Target;
-      text = meta.label;
-      break;
-  }
+  const Icon = health === 'no_target' ? Plus : CloudOff;
 
   return (
-    <span className={cn(CHIP_BASE, TONE[meta.tone].chip)} title={detail ?? meta.label}>
+    <span className={cn(CHIP_BASE, TONE[meta.tone].chip)}>
       <Icon className="h-3 w-3" strokeWidth={3} />
-      {text}
+      {meta.label}
     </span>
   );
 }

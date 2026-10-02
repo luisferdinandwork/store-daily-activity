@@ -7,7 +7,7 @@
 //
 //   ┌ summary tiles ─ Sales · Transaksi · Toko (health split) · Target (setup)
 //   ├ toolbar ─ search · area · sort · group · chips (On track / Waspada / …)
-//   └ list ─ one row per store: ring · name+code · sales · transaksi · pace chip
+//   └ list ─ one row per store: ring · name+code · sales · transaksi
 
 import { useMemo, type ElementType, type ReactNode } from 'react';
 import {
@@ -53,10 +53,10 @@ import {
 import {
   ActualOfTarget,
   CodeChip,
-  HealthChip,
   LifecycleBadge,
   MicroLabel,
   ProgressRing,
+  SetupChip,
   TargetBar,
   TONE,
 } from './atoms';
@@ -65,14 +65,15 @@ import type { StoreListView } from './useStoreListView';
 // Column widths — the header strip and every row share them so they line up.
 // Rows are laid out by the list's own width (container queries), not the
 // viewport: the Ops sidebar takes a quarter of the screen, so a 1024px laptop
-// has less room than its width suggests. Wide (@4xl): one line per store. Narrower:
-// the name gets a full line and sales + pace drop beneath it.
-const ROW_LAYOUT = 'md:flex-wrap @4xl:flex-nowrap';
+// has less room than its width suggests.
+//   < @2xl   two lines: the name gets a full line, sales + transaksi sit beneath it
+//   @2xl+    one line per store: ring · name · sales
+//   @4xl+    …plus the transaksi column (hidden in between so names stay readable)
+const ROW_LAYOUT = 'md:flex-wrap @2xl:flex-nowrap';
 // Narrow: ring + name fill the first line exactly (100% − 44px ring − 16px gap).
-const COL_NAME = 'min-w-0 w-[calc(100%-3.75rem)] @4xl:w-auto @4xl:flex-1 @4xl:basis-48';
-const COL_SALES = 'min-w-[9.5rem] flex-1 @4xl:w-44 @4xl:flex-none';
-const COL_TX = 'hidden w-28 shrink-0 @4xl:block';
-const COL_CHIP = 'flex shrink-0 justify-end @4xl:w-28';
+const COL_NAME = 'min-w-0 w-[calc(100%-3.75rem)] @2xl:w-auto @2xl:flex-1 @2xl:basis-48';
+const COL_SALES = 'min-w-[9.5rem] flex-1 @2xl:w-44 @2xl:flex-none';
+const COL_TX = 'w-28 shrink-0 @2xl:hidden @4xl:block';
 
 // ─── Summary ──────────────────────────────────────────────────────────────────
 
@@ -105,7 +106,7 @@ function Tile({
   );
 }
 
-/** Sales / Transaksi tile: the network total against its target, with the pace tick. */
+/** Sales / Transaksi tile: the network total against its target. */
 function ProgressTile({
   icon,
   label,
@@ -128,7 +129,7 @@ function ProgressTile({
   const hasTarget = target > 0;
   const upcoming = phase.phase === 'future';
   const pct = pctOf(actual, target);
-  const tone: Tone = !hasTarget ? 'slate' : upcoming ? 'indigo' : HEALTH_META[classifyProgress(pct, phase).health].tone;
+  const tone: Tone = !hasTarget ? 'slate' : upcoming ? 'indigo' : HEALTH_META[classifyProgress(pct, phase)].tone;
 
   return (
     <Tile
@@ -150,12 +151,7 @@ function ProgressTile({
         <p className="mt-2.5 text-[11px] font-semibold text-slate-400">Target bulan ini</p>
       ) : (
         <>
-          <TargetBar
-            pct={pct}
-            tone={tone}
-            paceMarker={phase.phase === 'current' ? phase.expectedPct : null}
-            className="mt-3"
-          />
+          <TargetBar pct={pct} tone={tone} className="mt-3" />
           <p
             className="mt-1.5 text-[11px] tabular-nums text-slate-400"
             title="Dihitung dari toko yang sudah punya target"
@@ -335,8 +331,6 @@ function SummaryHeading({
             <span>
               Hari {phase.elapsed}/{phase.days}
             </span>
-            <span className="text-slate-300">·</span>
-            <span title="Posisi yang seharusnya tercapai hari ini">Pace {phase.expectedPct}%</span>
           </>
         )}
         {phase.phase === 'past' && <span className="text-slate-300">· Selesai</span>}
@@ -442,19 +436,7 @@ function Toolbar({ view }: { view: StoreListView }) {
 
 // ─── Rows ─────────────────────────────────────────────────────────────────────
 
-function SortHeader({
-  label,
-  sortKey,
-  view,
-  className,
-  align = 'left',
-}: {
-  label: string;
-  sortKey: SortKey;
-  view: StoreListView;
-  className?: string;
-  align?: 'left' | 'right';
-}) {
+function SortHeader({ label, sortKey, view }: { label: string; sortKey: SortKey; view: StoreListView }) {
   const active = view.sortKey === sortKey;
   return (
     <button
@@ -463,8 +445,6 @@ function SortHeader({
       className={cn(
         'inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-widest transition-colors hover:text-slate-700',
         active ? 'text-indigo-600' : 'text-slate-400',
-        align === 'right' && 'justify-end',
-        className,
       )}
     >
       {label}
@@ -475,7 +455,7 @@ function SortHeader({
 
 function ListHeader({ view }: { view: StoreListView }) {
   return (
-    <li className="hidden items-center gap-x-4 border-b border-slate-100 bg-slate-50/70 px-4 py-2 sm:px-5 @4xl:flex">
+    <li className="hidden items-center gap-x-4 border-b border-slate-100 bg-slate-50/70 px-4 py-2 sm:px-5 @2xl:flex">
       <span className="w-11 shrink-0" />
       <div className="min-w-0 flex-1">
         <SortHeader label="Toko" sortKey="name" view={view} />
@@ -485,9 +465,6 @@ function ListHeader({ view }: { view: StoreListView }) {
       </div>
       <div className="hidden w-28 shrink-0 @4xl:block">
         <SortHeader label="Transaksi" sortKey="transactions" view={view} />
-      </div>
-      <div className="w-28 shrink-0 text-right">
-        <SortHeader label="Pace" sortKey="priority" view={view} align="right" className="w-full" />
       </div>
       <span className="w-4 shrink-0" />
     </li>
@@ -499,7 +476,7 @@ function AreaRow({ name, summary, phase }: { name: string; summary: NetworkSumma
   const hasTarget = summary.salesTarget > 0;
   const tone: Tone = !hasTarget || phase.phase === 'future'
     ? 'slate'
-    : HEALTH_META[classifyProgress(pct, phase).health].tone;
+    : HEALTH_META[classifyProgress(pct, phase)].tone;
 
   return (
     <li className="flex items-center gap-3 border-y border-slate-100 bg-slate-50 px-4 py-2 first:border-t-0 sm:px-5">
@@ -560,14 +537,8 @@ function StoreRowItem({
 
   const showActuals = r.actualsAvailable && phase.phase !== 'future';
   const txTone: Tone = performing && r.storeMonthlyTransactionTarget > 0
-    ? HEALTH_META[classifyProgress(a.txPct, phase).health].tone
+    ? HEALTH_META[classifyProgress(a.txPct, phase)].tone
     : 'slate';
-
-  const paceDetail = performing
-    ? phase.phase === 'current'
-      ? `Aktual ${a.pct}% · pace ${phase.expectedPct}%`
-      : `Aktual ${a.pct}% dari target`
-    : undefined;
 
   return (
     <OpsListRow onClick={onOpen} ariaLabel={`Buka ${row.name}`} className={cn('hover:bg-indigo-50/30', ROW_LAYOUT)}>
@@ -582,8 +553,9 @@ function StoreRowItem({
 
       <div className={COL_NAME}>
         <div className="flex items-center gap-2">
-          <p className="truncate text-sm font-bold text-slate-900">{row.name}</p>
+          <p className="truncate text-sm font-bold text-slate-900" title={row.name}>{row.name}</p>
           <LifecycleBadge status={row.status} />
+          {(a.health === 'no_target' || a.health === 'no_data') && <SetupChip health={a.health} />}
         </div>
         <div className="mt-1 flex items-center gap-2 text-xs text-slate-400">
           <CodeChip>{row.storeNo}</CodeChip>
@@ -605,12 +577,7 @@ function StoreRowItem({
           format={fmtRpCompact}
           dim={!showActuals}
         />
-        <TargetBar
-          pct={performing ? a.pct : 0}
-          tone={meta.tone}
-          paceMarker={performing && phase.phase === 'current' ? phase.expectedPct : null}
-          className="mt-1.5"
-        />
+        <TargetBar pct={performing ? a.pct : 0} tone={meta.tone} className="mt-1.5" />
       </div>
 
       <div className={COL_TX}>
@@ -626,10 +593,6 @@ function StoreRowItem({
           thin
           className="mt-2"
         />
-      </div>
-
-      <div className={COL_CHIP}>
-        <HealthChip health={a.health} gapPt={a.gapPt} detail={paceDetail} />
       </div>
     </OpsListRow>
   );

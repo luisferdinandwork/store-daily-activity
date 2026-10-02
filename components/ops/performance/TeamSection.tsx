@@ -54,7 +54,7 @@ const FALLBACK_ROLE = { avatar: 'bg-slate-100 text-slate-600', chip: 'bg-slate-5
 function employeeTone(pct: number, target: number, period: ViewPeriod, phase: MonthPhase): Tone {
   if (target <= 0) return 'slate';
   if (period === 'monthly') {
-    return phase.phase === 'future' ? 'slate' : HEALTH_META[classifyProgress(pct, phase).health].tone;
+    return phase.phase === 'future' ? 'slate' : HEALTH_META[classifyProgress(pct, phase)].tone;
   }
   return pct >= 100 ? 'emerald' : pct > 0 ? 'indigo' : 'slate';
 }
@@ -156,12 +156,7 @@ function EmployeeRow({
           dim={!actualsAvailable}
         />
         <div className="mt-1.5 flex items-center gap-2">
-          <TargetBar
-            pct={salesPct}
-            tone={salesTone}
-            paceMarker={period === 'monthly' && phase.phase === 'current' && row.displaySalesTarget > 0 ? phase.expectedPct : null}
-            className="flex-1"
-          />
+          <TargetBar pct={salesPct} tone={salesTone} className="flex-1" />
           <span className={cn('w-9 text-right text-[10px] font-black tabular-nums', TONE[salesTone].text)}>
             {row.displaySalesTarget > 0 ? `${salesPct}%` : ''}
           </span>

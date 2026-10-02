@@ -1,15 +1,15 @@
 // lib/performance/target-view.ts
 //
 // Pure, client-safe view logic for /ops/performance-targets: the API payload
-// types, number formatting, month "pace", store health, search and sort.
+// types, number formatting, the month's progress, store health, search and sort.
 // No DB / server imports — the page and its components import from here.
 //
 // Vocabulary
 //   • pct      sales achieved ÷ the store's monthly sales target (not capped).
 //   • pace     where the store *should* be now: elapsed days ÷ days in month,
 //              with today as half a day (a past month is expected at 100%, a
-//              future month at 0%).
-//   • gap (pt) pct − pace, in percentage points. Negative = behind pace.
+//              future month at 0%). It only decides a store's health bucket
+//              (on track / watch / behind) — the number itself is not shown.
 
 import { daysInMonthKey, jakartaTodayKey } from '@/lib/day-bucket';
 import type { StoreStatus } from '@/lib/store-status';
@@ -180,7 +180,7 @@ export function shiftYearMonth(yearMonth: string, delta: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
-// ─── Month pace ───────────────────────────────────────────────────────────────
+// ─── Month progress ───────────────────────────────────────────────────────────
 
 export type MonthPhase = {
   phase: 'past' | 'current' | 'future';
@@ -255,27 +255,24 @@ export type StoreAssessment = {
   pct: number;
   /** Transaction % of target (0 without a target). */
   txPct: number;
-  /** pct − pace, in points; null when it doesn't apply (future month, no target/data). */
-  gapPt: number | null;
   /** Nobody on the month's Team — per-employee targets can't be split. */
   noTeam: boolean;
   /** Needs Ops action: no target and/or no Team. */
   needsSetup: boolean;
 };
 
+export type ProgressHealth = Extract<StoreHealth, 'achieved' | 'on_track' | 'watch' | 'behind'>;
+
 /**
- * Health of a progress figure (sales %, or a network total) against pace.
- * Only meaningful for a current or past month that has actuals.
+ * Health of a progress figure (sales %, or a network total) against the
+ * month's pace. Only meaningful for a current or past month that has actuals.
  */
-export function classifyProgress(
-  pct: number,
-  phase: MonthPhase,
-): { health: Extract<StoreHealth, 'achieved' | 'on_track' | 'watch' | 'behind'>; gapPt: number } {
+export function classifyProgress(pct: number, phase: MonthPhase): ProgressHealth {
   const gapPt = pct - phase.expectedPct;
-  if (pct >= 100) return { health: 'achieved', gapPt };
-  if (phase.phase === 'current' && gapPt >= -ON_TRACK_TOLERANCE_PT) return { health: 'on_track', gapPt };
-  if (gapPt >= -WATCH_BAND_PT) return { health: 'watch', gapPt };
-  return { health: 'behind', gapPt };
+  if (pct >= 100) return 'achieved';
+  if (phase.phase === 'current' && gapPt >= -ON_TRACK_TOLERANCE_PT) return 'on_track';
+  if (gapPt >= -WATCH_BAND_PT) return 'watch';
+  return 'behind';
 }
 
 export function assessStore(row: StoreRow, phase: MonthPhase): StoreAssessment {
@@ -288,7 +285,6 @@ export function assessStore(row: StoreRow, phase: MonthPhase): StoreAssessment {
   const noTeam = r.rosterCount === 0;
 
   let health: StoreHealth;
-  let gapPt: number | null = null;
 
   if (!hasTarget) {
     health = 'no_target';
@@ -297,10 +293,10 @@ export function assessStore(row: StoreRow, phase: MonthPhase): StoreAssessment {
   } else if (!r.actualsAvailable) {
     health = 'no_data';
   } else {
-    ({ health, gapPt } = classifyProgress(pct, phase));
+    health = classifyProgress(pct, phase);
   }
 
-  return { health, hasTarget, pct, txPct, gapPt, noTeam, needsSetup: !hasTarget || noTeam };
+  return { health, hasTarget, pct, txPct, noTeam, needsSetup: !hasTarget || noTeam };
 }
 
 export type AssessedStore = { row: StoreRow; a: StoreAssessment };

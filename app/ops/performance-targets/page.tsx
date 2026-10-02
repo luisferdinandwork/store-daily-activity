@@ -14,7 +14,7 @@
 //   components/ops/performance/StoreListSection.tsx  summary · search/filter/sort · rows
 //   components/ops/performance/StoreDetail.tsx       hero · target · team · notes
 //   components/ops/performance/useStoreListView.ts   list state (shared with the detail's ‹ ›)
-//   lib/performance/target-view.ts                   pace, health, sort, formatting
+//   lib/performance/target-view.ts                   month progress, health, sort, formatting
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { CircleAlert, RefreshCw } from 'lucide-react';

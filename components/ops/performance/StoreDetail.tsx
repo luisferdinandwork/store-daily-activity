@@ -2,7 +2,7 @@
 // components/ops/performance/StoreDetail.tsx
 //
 // One store's performance. Reads top to bottom:
-//   hero     ring + Sales / Transaksi (actual, target, pace tick, what's left)
+//   hero     ring + Sales / Transaksi (actual, target, what's left)
 //   facts    ATV · Team size · where we are in the month
 //   target   the monthly target Ops sets (inline edit)
 //   team     per-employee actual vs target, % share, history
@@ -48,7 +48,7 @@ import {
   type Tone,
   type ViewPeriod,
 } from '@/lib/performance/target-view';
-import { CodeChip, HealthChip, LifecycleBadge, MicroLabel, ProgressRing, TargetBar, TONE } from './atoms';
+import { CodeChip, LifecycleBadge, MicroLabel, ProgressRing, TargetBar, TONE } from './atoms';
 import MonthlyTargetEditor from './MonthlyTargetEditor';
 import TeamSection from './TeamSection';
 
@@ -133,7 +133,6 @@ function MetricCard({
   target,
   available,
   tone,
-  paceMarker,
   format,
   closing,
   perDay,
@@ -144,7 +143,6 @@ function MetricCard({
   target: number;
   available: boolean;
   tone: Tone;
-  paceMarker: number | null;
   format: (n: number) => string;
   /** 'Kurang' for a past month, 'Sisa' otherwise. */
   closing: 'Sisa' | 'Kurang';
@@ -173,12 +171,7 @@ function MetricCard({
         {available ? format(actual) : '—'}
       </p>
 
-      <TargetBar
-        pct={available ? pct : 0}
-        tone={tone}
-        paceMarker={hasTarget && available ? paceMarker : null}
-        className="mt-3.5"
-      />
+      <TargetBar pct={available ? pct : 0} tone={tone} className="mt-3.5" />
 
       <div className="mt-2 flex items-center justify-between gap-2 text-[11px] tabular-nums text-slate-400">
         <span>Target {hasTarget ? format(target) : '—'}</span>
@@ -304,18 +297,18 @@ function progressState(args: {
   monthly: boolean;
   phase: MonthPhase;
   available: boolean;
-}): { tone: Tone; health: StoreHealth | null; gapPt: number | null; performing: boolean } {
+}): { tone: Tone; health: StoreHealth | null; performing: boolean } {
   const { pct, target, monthly, phase, available } = args;
-  if (target <= 0) return { tone: 'slate', health: 'no_target', gapPt: null, performing: false };
-  if (monthly && phase.phase === 'future') return { tone: 'indigo', health: 'upcoming', gapPt: null, performing: false };
-  if (!available) return { tone: 'slate', health: 'no_data', gapPt: null, performing: false };
+  if (target <= 0) return { tone: 'slate', health: 'no_target', performing: false };
+  if (monthly && phase.phase === 'future') return { tone: 'indigo', health: 'upcoming', performing: false };
+  if (!available) return { tone: 'slate', health: 'no_data', performing: false };
   if (monthly) {
-    const { health, gapPt } = classifyProgress(pct, phase);
-    return { tone: HEALTH_META[health].tone, health, gapPt, performing: true };
+    const health = classifyProgress(pct, phase);
+    return { tone: HEALTH_META[health].tone, health, performing: true };
   }
-  // A single day has no pace to compare against — just done / in progress / nothing yet.
-  if (pct >= 100) return { tone: 'emerald', health: 'achieved', gapPt: null, performing: true };
-  return { tone: pct > 0 ? 'indigo' : 'slate', health: null, gapPt: null, performing: true };
+  // A single day is just done / in progress / nothing yet.
+  if (pct >= 100) return { tone: 'emerald', health: 'achieved', performing: true };
+  return { tone: pct > 0 ? 'indigo' : 'slate', health: null, performing: true };
 }
 
 // ─── Body ─────────────────────────────────────────────────────────────────────
@@ -351,7 +344,6 @@ function DetailBody({
 
   const salesRate = monthly ? runRate(targets.sales, salesActual, phase) : { remaining: 0, perDay: null };
   const txRate = monthly ? runRate(targets.transactions, txActual, phase) : { remaining: 0, perDay: null };
-  const pace = monthly && phase.phase === 'current' ? phase.expectedPct : null;
   const closing = monthly && phase.phase === 'past' ? 'Kurang' : 'Sisa';
 
   const targetSet = detail.rollup.storeMonthlySalesTarget > 0 || detail.rollup.storeMonthlyTransactionTarget > 0;
@@ -383,13 +375,6 @@ function DetailBody({
               <CodeChip>{identity.storeNo}</CodeChip>
               {identity.areaName && <span className="truncate">{identity.areaName}</span>}
               {identity.status && <LifecycleBadge status={identity.status} />}
-              {sales.health && ringPerforming && (
-                <HealthChip
-                  health={sales.health}
-                  gapPt={sales.gapPt}
-                  detail={pace !== null ? `Aktual ${salesPct}% · pace ${pace}%` : undefined}
-                />
-              )}
             </div>
           </div>
 
@@ -419,7 +404,6 @@ function DetailBody({
             target={targets.sales}
             available={available && !(monthly && phase.phase === 'future')}
             tone={sales.tone}
-            paceMarker={pace}
             format={fmtRp}
             closing={closing}
             perDay={salesRate.perDay}
@@ -431,7 +415,6 @@ function DetailBody({
             target={targets.transactions}
             available={available && !(monthly && phase.phase === 'future')}
             tone={tx.tone}
-            paceMarker={pace}
             format={fmtCount}
             closing={closing}
             perDay={txRate.perDay}
@@ -453,7 +436,7 @@ function DetailBody({
             {!monthly
               ? fmtDayShort(dateKey)
               : phase.phase === 'current'
-                ? <>Hari {phase.elapsed}/{phase.days}<span className="ml-1.5 text-[11px] font-semibold text-slate-400">pace {phase.expectedPct}%</span></>
+                ? `Hari ${phase.elapsed}/${phase.days}`
                 : phase.phase === 'past'
                   ? 'Selesai'
                   : 'Persiapan'}
