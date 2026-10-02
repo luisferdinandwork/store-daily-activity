@@ -309,7 +309,9 @@ function TaskRow({ task, onSelect }: { task: FlatTask; onSelect: () => void }) {
                 </span>
               )}
             </div>
-            <p className="mt-0.5 text-[11px] text-slate-400">PIC: {task.userName ?? task.userId}</p>
+            <p className="mt-0.5 text-[11px] text-slate-400">
+              {task.isPlaceholder ? 'Terjadwal' : 'PIC'}: {task.userName ?? task.userId}
+            </p>
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1">
             <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-bold', statusBadgeClass(status))}>

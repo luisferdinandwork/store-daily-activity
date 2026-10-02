@@ -19,7 +19,7 @@ import { deleteFromLegacyOss, isLegacyOssUrl } from '@/lib/oss';
 // NOS) or on the legacy Alibaba OSS bucket (uploads from before the switch).
 const isManagedImageUrl = (url: string): boolean => isStorageUrl(url) || isLegacyOssUrl(url);
 
-async function deleteManagedImages(urls: string[]): Promise<void> {
+export async function deleteManagedImages(urls: string[]): Promise<void> {
   await deleteFromStorage(urls.filter(isStorageUrl));
   await deleteFromLegacyOss(urls.filter(isLegacyOssUrl));
 }
@@ -234,4 +234,33 @@ export async function cleanupOldTaskImages(options: CleanupOptions = {}): Promis
   }
 
   return summary;
+}
+
+/**
+ * Every managed (NOS / legacy OSS) task photo URL a store owns — read before
+ * the store is deleted so the files can be removed from storage afterwards.
+ */
+export async function collectStoreImageUrls(storeId: number): Promise<string[]> {
+  const urls = new Set<string>();
+
+  for (const target of SIMPLE_TARGETS) {
+    const columnList = sql.join(target.photoColumns.map(ident), sql`, `);
+    const result = await db.execute(sql`SELECT ${columnList} FROM ${ident(target.table)} WHERE store_id = ${storeId}`);
+    for (const row of extractRows<Record<string, unknown>>(result)) {
+      for (const c of target.photoColumns) for (const u of parsePhotoUrls(row[c])) if (isManagedImageUrl(u)) urls.add(u);
+    }
+  }
+
+  for (const target of JOINED_TARGETS) {
+    const result = await db.execute(sql`
+      SELECT c.${ident(target.photoColumn)} AS photo
+      FROM ${ident(target.childTable)} c
+      JOIN ${ident(target.parentTable)} p ON p.id = c.${ident(target.fkColumn)}
+      WHERE p.store_id = ${storeId}`);
+    for (const row of extractRows<Record<string, unknown>>(result)) {
+      for (const u of parsePhotoUrls(row.photo)) if (isManagedImageUrl(u)) urls.add(u);
+    }
+  }
+
+  return [...urls];
 }

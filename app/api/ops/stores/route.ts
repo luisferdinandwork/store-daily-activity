@@ -1,7 +1,7 @@
 // app/api/ops/stores/route.ts
 //
 // Returns areas → stores with per-store:
-//   - task completion stats for today (across all 10 task tables)
+//   - task completion stats for today (rows + scheduled tasks not opened yet)
 //   - attendance summary for today
 //   - employee roster with individual attendance status
 //
@@ -10,7 +10,7 @@
 //   ops_area → their assigned areaId only
 
 import { NextRequest, NextResponse } from 'next/server';
-import { and, eq, gte, inArray, lt, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray, lt } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
@@ -26,7 +26,8 @@ import {
   users,
 } from '@/lib/db/schema/core';
 import { employeeTypes, shifts, userRoles } from '@/lib/db/schema/lookups';
-import { jakartaDayRange, jakartaTodayKey, jakartaWallClock } from '@/lib/day-bucket';
+import { jakartaDayRange, jakartaDayStart, jakartaTodayKey, jakartaWallClock } from '@/lib/day-bucket';
+import { getStoreSummariesForRange } from '@/lib/db/utils/tasks';
 import { isStoreStatus, type StoreStatus } from '@/lib/store-status';
 
 // ─── Public types (consumed by the page) ─────────────────────────────────────
@@ -115,14 +116,10 @@ function toColorStatus(rate: number, total: number): TaskColorStatus {
 
 // ─── Task aggregation ─────────────────────────────────────────────────────────
 //
-// All task tables share the same shape for the columns we need:
-//   storeId  integer  → stores.id
-//   date     timestamp
-//   status   taskStatusEnum  (not_started | in_progress | completed | pending | …)
-//
-// We UNION-ALL all 11 task tables using Drizzle's sql`` template literal so
-// parameters are bound correctly by the Neon HTTP driver.
-// The result is accessed via .rows (NeonHttpQueryResult shape).
+// Same counting as the Ops Task Progress page (getStoreSummariesForRange):
+// task rows are created lazily when an employee opens their list, so scheduled
+// tasks with no row yet count as not started instead of the store reading
+// "No tasks".
 
 type TaskStatRow = {
   storeId: number;
@@ -132,73 +129,16 @@ type TaskStatRow = {
   pending: number;
 };
 
-async function fetchTaskStats(
-  storeIds: number[],
-  start: Date,
-  end: Date,
-): Promise<Map<number, TaskStatRow>> {
-  if (storeIds.length === 0) return new Map();
+async function fetchTaskStats(storeIds: number[]): Promise<Map<number, TaskStatRow>> {
+  const today = jakartaDayStart(jakartaTodayKey());
+  const summaries = await getStoreSummariesForRange(storeIds, today, today);
 
-  // sql`` interpolates each expression as a bound parameter automatically.
-  // sql.join builds a comma-separated list of bound values for the IN clause.
-  const idList = sql.join(storeIds.map((id) => sql`${id}`), sql`, `);
-
-  const result = await db.execute<{
-    store_id: number;
-    total: number;
-    completed: number;
-    in_progress: number;
-    pending: number;
-  }>(sql`
-    WITH all_tasks AS (
-      SELECT store_id, status FROM store_opening_tasks  WHERE date >= ${start} AND date < ${end} AND store_id IN (${idList})
-      UNION ALL
-      SELECT store_id, status FROM store_front_tasks    WHERE date >= ${start} AND date < ${end} AND store_id IN (${idList})
-      UNION ALL
-      SELECT store_id, status FROM setoran_tasks        WHERE date >= ${start} AND date < ${end} AND store_id IN (${idList})
-      UNION ALL
-      SELECT store_id, status FROM cek_bin_tasks        WHERE date >= ${start} AND date < ${end} AND store_id IN (${idList})
-      UNION ALL
-      SELECT store_id, status FROM vm_checklist_tasks   WHERE date >= ${start} AND date < ${end} AND store_id IN (${idList})
-      UNION ALL
-      SELECT store_id, status FROM item_dropping_tasks  WHERE date >= ${start} AND date < ${end} AND store_id IN (${idList})
-      UNION ALL
-      SELECT store_id, status FROM marketing_check_tasks WHERE date >= ${start} AND date < ${end} AND store_id IN (${idList})
-      UNION ALL
-      SELECT store_id, status FROM briefing_tasks       WHERE date >= ${start} AND date < ${end} AND store_id IN (${idList})
-      UNION ALL
-      SELECT store_id, status FROM store_closing_tasks  WHERE date >= ${start} AND date < ${end} AND store_id IN (${idList})
-      UNION ALL
-      SELECT store_id, status FROM grooming_tasks       WHERE date >= ${start} AND date < ${end} AND store_id IN (${idList})
-    )
-    SELECT
-      store_id,
-      COUNT(*)::int                                             AS total,
-      COUNT(*) FILTER (WHERE status = 'completed')::int        AS completed,
-      COUNT(*) FILTER (WHERE status = 'in_progress')::int      AS in_progress,
-      COUNT(*) FILTER (WHERE status = 'pending')::int          AS pending
-    FROM all_tasks
-    GROUP BY store_id
-  `);
-
-  // Neon's HTTP driver returns { rows: [...] }; websocket driver is directly
-  // iterable. Access .rows when present, fall back to the result itself.
-  const rows: { store_id: number; total: number; completed: number; in_progress: number; pending: number }[] =
-    Array.isArray((result as { rows?: unknown[] }).rows)
-      ? (result as { rows: typeof rows }).rows
-      : (result as unknown as typeof rows);
-
-  const map = new Map<number, TaskStatRow>();
-  for (const row of rows) {
-    map.set(Number(row.store_id), {
-      storeId:    Number(row.store_id),
-      total:      Number(row.total),
-      completed:  Number(row.completed),
-      inProgress: Number(row.in_progress),
-      pending:    Number(row.pending),
-    });
-  }
-  return map;
+  return new Map(
+    summaries.map((s) => [
+      s.storeId,
+      { storeId: s.storeId, total: s.total, completed: s.completed, inProgress: s.inProgress, pending: s.pending },
+    ]),
+  );
 }
 
 // ─── Route handler ────────────────────────────────────────────────────────────
@@ -250,7 +190,7 @@ export async function GET(): Promise<NextResponse<StoresApiResponse>> {
   const storeIds = storeRows.map((s) => s.id);
 
   // 4. Task stats (UNION ALL across all task tables)
-  const taskStatsMap = await fetchTaskStats(storeIds, start, end);
+  const taskStatsMap = await fetchTaskStats(storeIds);
 
   // 5. Today's schedule + attendance. One row per scheduled shift, joined to
   //    its attendance record (if the employee has checked in / Ops recorded

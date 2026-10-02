@@ -56,6 +56,8 @@ export type FlatTask = {
   isBalanced: boolean | null;
   parentTaskId: number | null;
   extra: Record<string, unknown>;
+  // Scheduled, but nobody on that shift has opened the task yet — no row/data.
+  isPlaceholder?: boolean;
 };
 
 // ─── Label / icon maps ──────────────────────────────────────────────────────
@@ -1074,6 +1076,14 @@ export function GroomingEmployeeDetail({ task }: { task: FlatTask }) {
 // ─── Switch ──────────────────────────────────────────────────────────────────
 
 export function TaskDetailBody({ task }: { task: FlatTask }) {
+  if (task.isPlaceholder) {
+    return (
+      <p className="py-2 text-xs text-slate-400">
+        Task ini terjadwal, tetapi belum dibuka oleh karyawan di shift ini — belum ada data.
+      </p>
+    );
+  }
+
   switch (task.type) {
     case 'store_opening':   return <StoreOpeningDetail task={task} />;
     case 'store_front':     return <StoreFrontDetail task={task} />;
@@ -1133,7 +1143,9 @@ export function TaskDetailView({
             <div className="flex items-center gap-2">
               <h2 className="truncate text-lg font-bold text-slate-900">{label}</h2>
             </div>
-            <p className="mt-0.5 text-[11px] text-slate-400">PIC: {task.userName ?? task.userId}</p>
+            <p className="mt-0.5 text-[11px] text-slate-400">
+              {task.isPlaceholder ? 'Terjadwal' : 'PIC'}: {task.userName ?? task.userId}
+            </p>
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1">
             <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-bold', statusBadgeClass(status))}>

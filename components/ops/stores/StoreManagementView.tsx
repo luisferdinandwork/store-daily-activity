@@ -42,6 +42,7 @@ import {
   Power,
   Search,
   Store,
+  Trash2,
   UserMinus,
   UserPlus,
   Users,
@@ -54,6 +55,7 @@ import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTitle, SheetDescription, SheetHeader } from '@/components/ui/sheet';
 import StoreEditSheet from '@/components/ops/stores/StoreEditSheet';
 import StoreStatusSheet from '@/components/ops/stores/StoreStatusSheet';
+import StoreDeleteDialog from '@/components/ops/stores/StoreDeleteDialog';
 import { STORE_STATUSES, STORE_STATUS_BADGE, STORE_STATUS_LABEL } from '@/lib/store-status';
 import { findDuplicatePic1, PIC_1_TYPE_CODE } from '@/lib/store-pic1';
 import { attendanceStatusLabel } from '@/lib/attendance-status';
@@ -478,6 +480,7 @@ function StoreTableRow({
   onToggle,
   onEdit,
   onChangeStatus,
+  onDelete,
   onAssignClick,
   onRemove,
 }: {
@@ -490,6 +493,7 @@ function StoreTableRow({
   onToggle: () => void;
   onEdit: () => void;
   onChangeStatus: () => void;
+  onDelete: () => void;
   onAssignClick: () => void;
   onRemove: (userId: string) => void;
 }) {
@@ -634,6 +638,18 @@ function StoreTableRow({
                 <Power className="h-3.5 w-3.5" />
               </button>
             )}
+            {isIt && (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onDelete(); }}
+                disabled={store.status === 'active'}
+                aria-label={`Delete ${store.name}`}
+                title={store.status === 'active' ? 'Close the store first to delete it' : 'Delete store permanently'}
+                className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-slate-400"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
         </td>
       </tr>
@@ -664,6 +680,7 @@ function AreaSection({
   removingId,
   onEditStore,
   onChangeStatus,
+  onDeleteStore,
   onAddStore,
   onAssignClick,
   onRemove,
@@ -678,6 +695,7 @@ function AreaSection({
   removingId: string | null;
   onEditStore: (store: StoreRow) => void;
   onChangeStatus: (store: StoreRow) => void;
+  onDeleteStore: (store: StoreRow) => void;
   onAddStore: (areaId: number) => void;
   onAssignClick: (store: StoreRow) => void;
   onRemove: (userId: string) => void;
@@ -760,6 +778,7 @@ function AreaSection({
                   onToggle={() => toggle(store.id)}
                   onEdit={() => onEditStore(store)}
                   onChangeStatus={() => onChangeStatus(store)}
+                  onDelete={() => onDeleteStore(store)}
                   onAssignClick={() => onAssignClick(store)}
                   onRemove={onRemove}
                 />
@@ -904,6 +923,7 @@ export default function StoreManagementView({
   const [editing, setEditing] = useState<EditState | null>(null);
   const [assigningStore, setAssigningStore] = useState<StoreRow | null>(null);
   const [statusStore, setStatusStore] = useState<StoreRow | null>(null);
+  const [deleteStoreTarget, setDeleteStoreTarget] = useState<StoreRow | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
 
   const [search, setSearch] = useState('');
@@ -1220,6 +1240,7 @@ export default function StoreManagementView({
               removingId={removingId}
               onEditStore={(store) => setEditing({ mode: 'edit', store })}
               onChangeStatus={(store) => setStatusStore(store)}
+              onDeleteStore={(store) => setDeleteStoreTarget(store)}
               onAddStore={(areaId) => setEditing({ mode: 'create', fixedAreaId: areaId })}
               onAssignClick={(store) => setAssigningStore(store)}
               onRemove={handleRemove}
@@ -1244,6 +1265,14 @@ export default function StoreManagementView({
           store={statusStore}
           onClose={() => setStatusStore(null)}
           onSaved={loadData}
+        />
+      )}
+
+      {deleteStoreTarget && (
+        <StoreDeleteDialog
+          store={deleteStoreTarget}
+          onClose={() => setDeleteStoreTarget(null)}
+          onDeleted={loadData}
         />
       )}
 

@@ -52,7 +52,18 @@ export default function StoreEditSheet({ mode, store, areas, fixedAreaId, onClos
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const areaLocked = mode === 'edit' || fixedAreaId !== undefined;
+  // Moving a store to another area is IT-only (the API also allows OPS HO).
+  const areaLocked = mode === 'edit' ? !isIt : fixedAreaId !== undefined;
+
+  // Google Maps copies coordinates as "-6.1630687, 106.7739266" — split a pasted
+  // pair across both fields instead of leaving the whole string in latitude.
+  function handleCoordinatePaste(e: React.ClipboardEvent<HTMLInputElement>) {
+    const m = /^\s*(-?\d+(?:\.\d+)?)\s*[,;\s]\s*(-?\d+(?:\.\d+)?)\s*$/.exec(e.clipboardData.getData('text'));
+    if (!m) return;
+    e.preventDefault();
+    setLatitude(m[1]);
+    setLongitude(m[2]);
+  }
 
   function useCurrentLocation() {
     if (!navigator.geolocation) {
@@ -79,7 +90,7 @@ export default function StoreEditSheet({ mode, store, areas, fixedAreaId, onClos
 
     if (!name.trim()) { setError('Name is required.'); return; }
     if (mode === 'create' && !storeNo.trim()) { setError('Store code is required.'); return; }
-    if (mode === 'create' && !address.trim()) { setError('Address is required.'); return; }
+    if (!address.trim()) { setError('Address is required.'); return; }
     if (mode === 'create' && !areaId) { setError('Area is required.'); return; }
     if (isIt && ((latitude && !longitude) || (!latitude && longitude))) {
       setError('Provide both latitude and longitude, or leave both empty.');
@@ -109,6 +120,7 @@ export default function StoreEditSheet({ mode, store, areas, fixedAreaId, onClos
           : {
               name: name.trim(),
               address: address.trim(),
+              ...(isIt && Number(areaId) !== store?.areaId ? { areaId: Number(areaId) } : {}),
               ...location,
               ...(isIt ? { deptCode: deptCode.trim() || null } : {}),
             };
@@ -148,7 +160,7 @@ export default function StoreEditSheet({ mode, store, areas, fixedAreaId, onClos
           <SheetDescription>
             {mode === 'create'
               ? 'Create a new store and set its location.'
-              : 'Update the store name and its map location.'}
+              : 'Update the store name, address, area and map location.'}
           </SheetDescription>
         </SheetHeader>
 
@@ -186,22 +198,19 @@ export default function StoreEditSheet({ mode, store, areas, fixedAreaId, onClos
             />
           </div>
 
-          {mode === 'create' && (
-            <div className="space-y-1.5">
-              <Label htmlFor="address">Address</Label>
-              <Input
-                id="address"
-                value={address}
-                onChange={(e) => setAddress(e.target.value)}
-                placeholder="e.g. DKI · Daan Mogot, DKI Jakarta"
-                disabled={saving}
-              />
-            </div>
-          )}
+          <div className="space-y-1.5">
+            <Label htmlFor="address">Address</Label>
+            <Input
+              id="address"
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+              placeholder="e.g. DKI · Daan Mogot, DKI Jakarta"
+              disabled={saving}
+            />
+          </div>
 
-          {mode === 'create' && (
-            <div className="space-y-1.5">
-              <Label htmlFor="area">Area</Label>
+          <div className="space-y-1.5">
+            <Label htmlFor="area">Area</Label>
               <Select value={areaId} onValueChange={setAreaId} disabled={saving || areaLocked}>
                 <SelectTrigger id="area" className="w-full">
                   <SelectValue placeholder="Select area" />
@@ -212,8 +221,10 @@ export default function StoreEditSheet({ mode, store, areas, fixedAreaId, onClos
                   ))}
                 </SelectContent>
               </Select>
-            </div>
-          )}
+              {mode === 'edit' && !isIt && (
+                <p className="text-[11px] text-muted-foreground">Only IT can move a store to another area.</p>
+              )}
+          </div>
 
           {mode === 'create' && (
             <div className="space-y-1.5">
@@ -280,6 +291,11 @@ export default function StoreEditSheet({ mode, store, areas, fixedAreaId, onClos
             {!isIt && (
               <p className="text-[11px] text-muted-foreground">Only IT can change a store's location.</p>
             )}
+            {isIt && (
+              <p className="text-[11px] text-muted-foreground">
+                Tip: paste coordinates copied from Google Maps (e.g. -6.16, 106.77) into Latitude to fill both.
+              </p>
+            )}
 
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1">
@@ -289,6 +305,7 @@ export default function StoreEditSheet({ mode, store, areas, fixedAreaId, onClos
                   inputMode="decimal"
                   value={latitude}
                   onChange={(e) => setLatitude(e.target.value)}
+                  onPaste={handleCoordinatePaste}
                   placeholder="-6.1630687"
                   disabled={saving || !isIt}
                 />

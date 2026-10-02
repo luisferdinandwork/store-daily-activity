@@ -1,7 +1,7 @@
 // lib/db/utils/tasks.ts
 import { db }                                          from '@/lib/db';
 import { baseShiftCode, isClosingShift, isOpeningShift } from '@/lib/shift-tasks';
-import { eq, and, gte, lte, inArray, sql, isNull, or } from 'drizzle-orm';
+import { eq, and, gte, lt, lte, inArray, sql, isNull, or } from 'drizzle-orm';
 import {
   schedules, stores, shifts, attendance,
   monthlySchedules, monthlyScheduleEntries,
@@ -31,6 +31,9 @@ import {
 } from '@/lib/db/schema';
 import { users, areas }      from '@/lib/db/schema';
 import { getOrCreateMarketingCheckForSchedule } from '@/lib/db/utils/marketing-check';
+import { getExpectedTaskSlots, missingTaskSlots, storeDayKey } from '@/lib/db/utils/task-expectations';
+import { getShiftCodeById } from '@/lib/db/utils/shift-lookup';
+import { jakartaDateKey, jakartaDayRange, jakartaDaysRange } from '@/lib/day-bucket';
 import type { GeoPoint } from '@/lib/geo';
 import { assertInGeofence, checkStoreGeofence } from '@/lib/db/utils/geofence';
 
@@ -195,6 +198,9 @@ export interface FlatTask {
   isBalanced:      boolean | null;
   parentTaskId:    number | null;
   extra:           Record<string, unknown>;
+  // Scheduled but no row yet (nobody on that shift opened their task list) —
+  // synthesised from task-expectations.ts, negative id, never actionable.
+  isPlaceholder?:  boolean;
 }
 
 export interface StoreTaskSummary {
@@ -1129,49 +1135,6 @@ export async function getDiscrepancyChain(table: any, originalTaskId: number): P
     .orderBy(table.createdAt);
 }
 
-export async function getDailyTaskSummary(storeId: number, date: Date) {
-  const dayStart = startOfDay(date);
-  const dayEnd   = endOfDay(date);
-
-  function summarise(rows: { status: string | null; count: number }[]) {
-    return {
-      notStarted: rows.find(r => r.status === 'not_started')?.count ?? 0,
-      inProgress: rows.find(r => r.status === 'in_progress')?.count ?? 0,
-      completed:  rows.find(r => r.status === 'completed')?.count   ?? 0,
-      pending:    rows.find(r => r.status === 'pending')?.count     ?? 0,
-    };
-  }
-
-  const [
-    storeOpening, setoran,
-    storeFront, cekBin, vmChecklist, marketingCheck, cekUangModal, briefing,
-    storeClosing, grooming,
-  ] = await Promise.all([
-    db.select({ status: storeOpeningTasks.status,      count: sql<number>`count(*)::int` }).from(storeOpeningTasks)
-      .where(and(eq(storeOpeningTasks.storeId, storeId),      gte(storeOpeningTasks.date, dayStart),      lte(storeOpeningTasks.date, dayEnd))).groupBy(storeOpeningTasks.status).then(summarise),
-    db.select({ status: setoranTasks.status,           count: sql<number>`count(*)::int` }).from(setoranTasks)
-      .where(and(eq(setoranTasks.storeId, storeId),           gte(setoranTasks.date, dayStart),           lte(setoranTasks.date, dayEnd))).groupBy(setoranTasks.status).then(summarise),
-    db.select({ status: storeFrontTasks.status,        count: sql<number>`count(*)::int` }).from(storeFrontTasks)
-      .where(and(eq(storeFrontTasks.storeId, storeId),        gte(storeFrontTasks.date, dayStart),        lte(storeFrontTasks.date, dayEnd))).groupBy(storeFrontTasks.status).then(summarise),
-    db.select({ status: cekBinTasks.status,            count: sql<number>`count(*)::int` }).from(cekBinTasks)
-      .where(and(eq(cekBinTasks.storeId, storeId),            gte(cekBinTasks.date, dayStart),            lte(cekBinTasks.date, dayEnd))).groupBy(cekBinTasks.status).then(summarise),
-    db.select({ status: vmChecklistTasks.status,       count: sql<number>`count(*)::int` }).from(vmChecklistTasks)
-      .where(and(eq(vmChecklistTasks.storeId, storeId),       gte(vmChecklistTasks.date, dayStart),       lte(vmChecklistTasks.date, dayEnd))).groupBy(vmChecklistTasks.status).then(summarise),
-    db.select({ status: marketingCheckTasks.status,    count: sql<number>`count(*)::int` }).from(marketingCheckTasks)
-      .where(and(eq(marketingCheckTasks.storeId, storeId),    gte(marketingCheckTasks.date, dayStart),    lte(marketingCheckTasks.date, dayEnd))).groupBy(marketingCheckTasks.status).then(summarise),
-    db.select({ status: cekUangModalTasks.status,       count: sql<number>`count(*)::int` }).from(cekUangModalTasks)
-      .where(and(eq(cekUangModalTasks.storeId, storeId),       gte(cekUangModalTasks.date, dayStart),       lte(cekUangModalTasks.date, dayEnd))).groupBy(cekUangModalTasks.status).then(summarise),
-    db.select({ status: briefingTasks.status,          count: sql<number>`count(*)::int` }).from(briefingTasks)
-      .where(and(eq(briefingTasks.storeId, storeId),          gte(briefingTasks.date, dayStart),          lte(briefingTasks.date, dayEnd))).groupBy(briefingTasks.status).then(summarise),
-    db.select({ status: storeClosingTasks.status,      count: sql<number>`count(*)::int` }).from(storeClosingTasks)
-      .where(and(eq(storeClosingTasks.storeId, storeId),      gte(storeClosingTasks.date, dayStart),      lte(storeClosingTasks.date, dayEnd))).groupBy(storeClosingTasks.status).then(summarise),
-    db.select({ status: groomingTasks.status,          count: sql<number>`count(*)::int` }).from(groomingTasks)
-      .where(and(eq(groomingTasks.storeId, storeId),          gte(groomingTasks.date, dayStart),          lte(groomingTasks.date, dayEnd))).groupBy(groomingTasks.status).then(summarise),
-  ]);
-
-  return { storeOpening, setoran, storeFront, cekBin, vmChecklist, marketingCheck, cekUangModal, briefing, storeClosing, grooming };
-}
-
 function parsePhotosField(raw: unknown): string[] {
   if (raw == null) return [];
   if (Array.isArray(raw)) return raw as string[];
@@ -1263,8 +1226,8 @@ function addActorNamesToExtra(
 }
 
 export async function getFlatTasksForStoreDate(storeId: number, date: Date): Promise<FlatTask[]> {
-  const dayStart = startOfDay(date);
-  const dayEnd = endOfDay(date);
+  const dayKey = jakartaDateKey(date);
+  const { start: dayStart, end: dayEnd } = jakartaDayRange(dayKey);
 
   const shiftRows = await db.select({ id: shifts.id, code: shifts.code }).from(shifts);
   // JKP rows (e.g. a JP employee's grooming) group under their base shift.
@@ -1280,7 +1243,7 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
       .where(and(
         eq(table.storeId, storeId),
         gte(table.date, dayStart),
-        lte(table.date, dayEnd),
+        lt(table.date, dayEnd),
       ));
 
     const rawTasks = rows.map((r) => r.task as Record<string, unknown>);
@@ -1433,17 +1396,65 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
     ...grooming,
   ];
 
-  const shiftOrder: Record<string, number> = { morning: 0, full_day: 1, evening: 2 };
+  all.push(...(await placeholderTasksFor(storeId, dayKey, dayStart, all)));
+
+  const shiftOrder: Record<string, number> = { morning: 0, middle: 1, full_day: 2, evening: 3 };
 
   all.sort((a, b) => {
-    const sa = a.shift ? shiftOrder[a.shift] ?? 3 : 3;
-    const sb = b.shift ? shiftOrder[b.shift] ?? 3 : 3;
+    const sa = a.shift ? shiftOrder[a.shift] ?? 4 : 4;
+    const sb = b.shift ? shiftOrder[b.shift] ?? 4 : 4;
     if (sa !== sb) return sa - sb;
     if (a.type !== b.type) return a.type.localeCompare(b.type);
     return (a.userName ?? '').localeCompare(b.userName ?? '');
   });
 
   return all;
+}
+
+/**
+ * A not-started FlatTask for every slot the store's schedule expects on
+ * `dayKey` that has no row yet — so a shift whose staff never opened the app
+ * still shows its tasks (see task-expectations.ts).
+ */
+async function placeholderTasksFor(
+  storeId: number,
+  dayKey: string,
+  dayStart: Date,
+  existing: FlatTask[],
+): Promise<FlatTask[]> {
+  const expected = await getExpectedTaskSlots([storeId], dayKey, dayKey);
+  const missing = missingTaskSlots(expected.get(storeDayKey(storeId, dayKey)), existing);
+  if (!missing.length) return [];
+
+  const userIds = [...new Set(missing.flatMap((slot) => slot.userIds))];
+  const nameRows = await db
+    .select({ id: users.id, name: users.name })
+    .from(users)
+    .where(inArray(users.id, userIds));
+  const nameById = new Map(nameRows.map((u) => [u.id, u.name]));
+
+  return missing.map((slot, i) => ({
+    id: -(i + 1),
+    type: slot.type,
+    scheduleId: slot.scheduleId,
+    userId: slot.userIds[0],
+    userName: slot.userIds.map((id) => nameById.get(id) ?? id).join(', '),
+    completedBy: null,
+    completedByName: null,
+    verifiedBy: null,
+    verifiedByName: null,
+    verifiedAt: null,
+    storeId,
+    shift: slot.shift,
+    date: dayStart.toISOString(),
+    status: 'not_started',
+    notes: null,
+    completedAt: null,
+    isBalanced: null,
+    parentTaskId: null,
+    extra: {},
+    isPlaceholder: true,
+  }));
 }
 
 export function summariseTasks(tasks: FlatTask[]): StoreTaskSummary {
@@ -1473,25 +1484,26 @@ export async function getAreaTaskOverview(opsUserId: string, date: Date) {
   const areaStores = await db.select({ id: stores.id, name: stores.name, storeNo: stores.storeNo, address: stores.address })
     .from(stores).where(and(eq(stores.areaId, opsUser.areaId), eq(stores.status, 'active'))).orderBy(stores.name);
 
-  const results = await Promise.all(areaStores.map(async (s) => {
-    const daily = await getDailyTaskSummary(s.id, date);
-    const summary: StoreTaskSummary = {
-      notStarted: 0, inProgress: 0, completed: 0,
-      pending: 0, total: 0,
-    };
-    for (const perType of Object.values(daily)) {
-      summary.notStarted += perType.notStarted;
-      summary.inProgress += perType.inProgress;
-      summary.completed  += perType.completed;
-      summary.pending    += perType.pending;
-    }
-    summary.total =
-      summary.notStarted + summary.inProgress + summary.completed +
-      summary.pending;
-    return { ...s, summary };
-  }));
+  const summaryByStoreId = await getStoreDaySummaries(areaStores.map((s) => s.id), date);
+  const results = areaStores.map((s) => ({ ...s, summary: summaryByStoreId.get(s.id) ?? emptyStoreTaskSummary() }));
 
   return { area: area ?? null, stores: results };
+}
+
+function emptyStoreTaskSummary(): StoreTaskSummary {
+  return { notStarted: 0, inProgress: 0, completed: 0, pending: 0, total: 0 };
+}
+
+/** One day's summary per store — same counting (placeholders included) as the range view. */
+async function getStoreDaySummaries(storeIds: number[], date: Date): Promise<Map<number, StoreTaskSummary>> {
+  const rows = await getStoreSummariesForRange(storeIds, date, date);
+  return new Map(rows.map((r) => [r.storeId, {
+    notStarted: r.notStarted,
+    inProgress: r.inProgress,
+    completed: r.completed,
+    pending: r.pending,
+    total: r.total,
+  }]));
 }
 
 
@@ -1510,42 +1522,17 @@ export async function getAllTaskOverview(date: Date) {
     .where(eq(stores.status, 'active'))
     .orderBy(areas.name, stores.name);
 
-  const results = await Promise.all(
-    allStores.map(async (s) => {
-      const daily = await getDailyTaskSummary(s.id, date);
+  const summaryByStoreId = await getStoreDaySummaries(allStores.map((s) => s.id), date);
 
-      const summary: StoreTaskSummary = {
-        notStarted: 0,
-        inProgress: 0,
-        completed: 0,
-        pending: 0,
-        total: 0,
-      };
-
-      for (const perType of Object.values(daily)) {
-        summary.notStarted += perType.notStarted;
-        summary.inProgress += perType.inProgress;
-        summary.completed += perType.completed;
-        summary.pending += perType.pending;
-      }
-
-      summary.total =
-        summary.notStarted +
-        summary.inProgress +
-        summary.completed +
-        summary.pending;
-
-      return {
-        id: s.id,
-        name: s.name,
-        storeNo: s.storeNo,
-        address: s.address,
-        areaId: s.areaId,
-        areaName: s.areaName,
-        summary,
-      };
-    }),
-  );
+  const results = allStores.map((s) => ({
+    id: s.id,
+    name: s.name,
+    storeNo: s.storeNo,
+    address: s.address,
+    areaId: s.areaId,
+    areaName: s.areaName,
+    summary: summaryByStoreId.get(s.id) ?? emptyStoreTaskSummary(),
+  }));
 
   return {
     area: null,
@@ -1556,7 +1543,9 @@ export async function getAllTaskOverview(date: Date) {
 /**
  * Returns per-(storeId, date) task summaries for all stores in a date range.
  *
- * Used by OPS Progress range page.
+ * Used by OPS Progress (overview + range), the OPS dashboard and PIC progress.
+ * Scheduled task slots with no row yet count as not started (up to today) —
+ * see task-expectations.ts.
  *
  * Important:
  * The old evening closing tasks were removed:
@@ -1586,86 +1575,24 @@ export async function getStoreSummariesForRange(
 ): Promise<StoreDateSummary[]> {
   if (!storeIds.length) return [];
 
-  const dayStart = startOfDay(startDate);
-  const dayEnd = endOfDay(endDate);
+  const fromKey = jakartaDateKey(startDate);
+  const toKey = jakartaDateKey(endDate);
 
-  type RawRow = {
-    storeId: number;
-    date: Date;
-    status: string | null;
-  };
-
-  async function loadTable(table: any): Promise<RawRow[]> {
-    return db
-      .select({
-        storeId: table.storeId,
-        date: table.date,
-        status: table.status,
-      })
-      .from(table)
-      .where(
-        and(
-          inArray(table.storeId, storeIds),
-          gte(table.date, dayStart),
-          lte(table.date, dayEnd),
-        ),
-      );
-  }
-
-  const [
-    storeOpening,
-    setoran,
-    storeFront,
-    cekBin,
-    vmChecklist,
-    marketingCheck,
-    cekUangModal,
-    briefing,
-    storeClosing,
-    grooming,
-  ] = await Promise.all([
-    loadTable(storeOpeningTasks),
-    loadTable(setoranTasks),
-    loadTable(storeFrontTasks),
-    loadTable(cekBinTasks),
-    loadTable(vmChecklistTasks),
-    loadTable(marketingCheckTasks),
-    loadTable(cekUangModalTasks),
-    loadTable(briefingTasks),
-    // serah_terima intentionally excluded — no date/status columns anymore
-    // (shared rolling board, not a per-day row). item_dropping/item_return
-    // intentionally excluded — standalone on-demand page now, no more
-    // per-day materialized rows.
-    loadTable(storeClosingTasks),
-    loadTable(groomingTasks),
+  const [rows, expected] = await Promise.all([
+    loadTaskSlotRows(storeIds, fromKey, toKey),
+    getExpectedTaskSlots(storeIds, fromKey, toKey),
   ]);
-
-  const all: RawRow[] = [
-    ...storeOpening,
-    ...setoran,
-    ...storeFront,
-    ...cekBin,
-    ...vmChecklist,
-    ...marketingCheck,
-    ...cekUangModal,
-    ...briefing,
-    ...storeClosing,
-    ...grooming,
-  ];
 
   const map = new Map<string, StoreDateSummary>();
 
-  for (const row of all) {
-    const rowDate = row.date instanceof Date ? row.date : new Date(row.date);
-    const dateKey = toKey(rowDate);
-    const key = `${row.storeId}::${dateKey}`;
-
+  const entryFor = (storeId: number, date: string) => {
+    const key = storeDayKey(storeId, date);
     let entry = map.get(key);
 
     if (!entry) {
       entry = {
-        storeId: row.storeId,
-        date: dateKey,
+        storeId,
+        date,
         notStarted: 0,
         inProgress: 0,
         completed: 0,
@@ -1675,6 +1602,12 @@ export async function getStoreSummariesForRange(
 
       map.set(key, entry);
     }
+
+    return entry;
+  };
+
+  for (const row of rows) {
+    const entry = entryFor(row.storeId, row.date);
 
     entry.total++;
 
@@ -1697,13 +1630,101 @@ export async function getStoreSummariesForRange(
     }
   }
 
+  // Scheduled shifts whose staff never opened their task list have no rows —
+  // their tasks still count, as not started.
+  const rowsByStoreDay = groupByStoreDay(rows);
+
+  for (const [key, slots] of expected) {
+    const missing = missingTaskSlots(slots, rowsByStoreDay.get(key) ?? []);
+    if (!missing.length) continue;
+
+    const entry = entryFor(slots[0].storeId, slots[0].date);
+    entry.notStarted += missing.length;
+    entry.total += missing.length;
+  }
+
   return [...map.values()];
 }
 
-function toKey(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
-    d.getDate(),
-  ).padStart(2, '0')}`;
+// ─── Row loading shared by the summaries ──────────────────────────────────────
+
+interface TaskSlotRow {
+  type: string;
+  storeId: number;
+  date: string; // Jakarta "YYYY-MM-DD"
+  shift: string | null; // base shift code
+  userId: string;
+  status: string | null;
+}
+
+// serah_terima intentionally excluded — no date/status columns anymore
+// (shared rolling board, not a per-day row). item_dropping/item_return
+// intentionally excluded — standalone on-demand page now, no more per-day
+// materialized rows.
+const DAILY_TASK_TABLES: Array<{ type: string; table: any }> = [
+  { type: 'store_opening', table: storeOpeningTasks },
+  { type: 'setoran', table: setoranTasks },
+  { type: 'store_front', table: storeFrontTasks },
+  { type: 'cek_bin', table: cekBinTasks },
+  { type: 'vm_checklist', table: vmChecklistTasks },
+  { type: 'marketing_check', table: marketingCheckTasks },
+  { type: 'cek_uang_modal', table: cekUangModalTasks },
+  { type: 'briefing', table: briefingTasks },
+  { type: 'store_closing', table: storeClosingTasks },
+  { type: 'grooming', table: groomingTasks },
+];
+
+async function loadTaskSlotRows(
+  storeIds: number[],
+  fromKey: string,
+  toKey: string,
+): Promise<TaskSlotRow[]> {
+  const { start, end } = jakartaDaysRange(fromKey, toKey);
+  const shiftCodeById = await getShiftCodeById();
+
+  const perTable = await Promise.all(
+    DAILY_TASK_TABLES.map(async ({ type, table }) => {
+      const rows: Array<{ storeId: number; date: Date; shiftId: number | null; userId: string; status: string | null }> =
+        await db
+          .select({
+            storeId: table.storeId,
+            date: table.date,
+            shiftId: table.shiftId,
+            userId: table.userId,
+            status: table.status,
+          })
+          .from(table)
+          .where(
+            and(
+              inArray(table.storeId, storeIds),
+              gte(table.date, start),
+              lt(table.date, end),
+            ),
+          );
+
+      return rows.map((r): TaskSlotRow => ({
+        type,
+        storeId: r.storeId,
+        date: jakartaDateKey(r.date),
+        shift: r.shiftId != null ? baseShiftCode(shiftCodeById.get(r.shiftId)) || null : null,
+        userId: r.userId,
+        status: r.status,
+      }));
+    }),
+  );
+
+  return perTable.flat();
+}
+
+function groupByStoreDay(rows: TaskSlotRow[]): Map<string, TaskSlotRow[]> {
+  const map = new Map<string, TaskSlotRow[]>();
+  for (const row of rows) {
+    const key = storeDayKey(row.storeId, row.date);
+    const bucket = map.get(key) ?? [];
+    bucket.push(row);
+    map.set(key, bucket);
+  }
+  return map;
 }
 
 // ─── Shift breakdown ──────────────────────────────────────────────────────────
@@ -1720,48 +1741,27 @@ export async function getShiftTaskSummary(
 ): Promise<ShiftTaskSummary[]> {
   if (!storeIds.length) return [];
 
-  const dayStart = startOfDay(date);
-  const dayEnd = endOfDay(date);
+  const dayKey = jakartaDateKey(date);
 
-  type RawRow = { shiftId: number | null; status: string | null };
-
-  async function loadTable(table: any): Promise<RawRow[]> {
-    return db
-      .select({ shiftId: table.shiftId, status: table.status })
-      .from(table)
-      .where(
-        and(
-          inArray(table.storeId, storeIds),
-          gte(table.date, dayStart),
-          lte(table.date, dayEnd),
-        ),
-      );
-  }
-
-  const rowsPerTable = await Promise.all([
-    loadTable(storeOpeningTasks),
-    loadTable(setoranTasks),
-    loadTable(storeFrontTasks),
-    loadTable(cekBinTasks),
-    loadTable(vmChecklistTasks),
-    loadTable(marketingCheckTasks),
-    loadTable(cekUangModalTasks),
-    loadTable(briefingTasks),
-    loadTable(storeClosingTasks),
-    loadTable(groomingTasks),
+  const [rows, expected] = await Promise.all([
+    loadTaskSlotRows(storeIds, dayKey, dayKey),
+    getExpectedTaskSlots(storeIds, dayKey, dayKey),
   ]);
-
-  const shiftRows = await db.select({ id: shifts.id, code: shifts.code }).from(shifts);
-  const codeById = new Map(shiftRows.map((s) => [s.id, s.code]));
 
   const byShift = new Map<string, { completed: number; total: number }>();
 
-  for (const row of rowsPerTable.flat()) {
-    const code = row.shiftId != null ? codeById.get(row.shiftId) ?? 'unknown' : 'unknown';
-    const bucket = byShift.get(code) ?? { completed: 0, total: 0 };
+  const add = (shift: string, completed: boolean) => {
+    const bucket = byShift.get(shift) ?? { completed: 0, total: 0 };
     bucket.total++;
-    if (row.status === 'completed') bucket.completed++;
-    byShift.set(code, bucket);
+    if (completed) bucket.completed++;
+    byShift.set(shift, bucket);
+  };
+
+  for (const row of rows) add(row.shift ?? 'unknown', row.status === 'completed');
+
+  const rowsByStoreDay = groupByStoreDay(rows);
+  for (const [key, slots] of expected) {
+    for (const slot of missingTaskSlots(slots, rowsByStoreDay.get(key) ?? [])) add(slot.shift, false);
   }
 
   return [...byShift.entries()].map(([shift, v]) => ({ shift, ...v }));
