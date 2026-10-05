@@ -20,6 +20,8 @@ import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import type { AreaGroup } from '@/app/api/ops/stores/route';
 import type { AreaSettingsRow, OpsAreaUserRow } from '@/app/api/ops/areas/route';
+import { AttendanceCountsLine } from '@/components/ops/AttendanceStatus';
+import { EMPTY_COUNTS, addCounts, showedUp, type AttendanceCounts } from '@/lib/attendance-health';
 
 // ─── Shared bits ──────────────────────────────────────────────────────────────
 
@@ -50,19 +52,19 @@ interface AreaRollup {
   totalTasks: number;
   completedTasks: number;
   completionRate: number;
-  scheduled: number;
-  present: number;
+  /** Today's attendance across the area's stores (`total` = scheduled). */
+  attendance: AttendanceCounts;
   attendanceRate: number;
   stores: AreaGroup['stores'];
 }
 
 function rollupArea(group: AreaGroup): AreaRollup {
-  let totalTasks = 0, completedTasks = 0, scheduled = 0, present = 0;
+  let totalTasks = 0, completedTasks = 0;
+  let attendance = EMPTY_COUNTS;
   for (const s of group.stores) {
     totalTasks += s.taskStats.total;
     completedTasks += s.taskStats.completed;
-    scheduled += s.attendanceSummary.scheduled;
-    present += s.attendanceSummary.present;
+    attendance = addCounts(attendance, s.attendanceSummary);
   }
   return {
     id: group.id,
@@ -71,9 +73,8 @@ function rollupArea(group: AreaGroup): AreaRollup {
     totalTasks,
     completedTasks,
     completionRate: totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0,
-    scheduled,
-    present,
-    attendanceRate: scheduled > 0 ? Math.round((present / scheduled) * 100) : 0,
+    attendance,
+    attendanceRate: attendance.total > 0 ? Math.round((showedUp(attendance) / attendance.total) * 100) : 0,
     stores: group.stores,
   };
 }
@@ -81,7 +82,7 @@ function rollupArea(group: AreaGroup): AreaRollup {
 function AreaMonitorCard({ area }: { area: AreaRollup }) {
   const [expanded, setExpanded] = useState(false);
   const taskColor = rateColor(area.completionRate, area.totalTasks);
-  const attColor = rateColor(area.attendanceRate, area.scheduled);
+  const attColor = rateColor(area.attendanceRate, area.attendance.total);
 
   return (
     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -113,11 +114,11 @@ function AreaMonitorCard({ area }: { area: AreaRollup }) {
             </div>
             <div>
               <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                <span className="flex items-center gap-1"><UserCheck className="h-3 w-3" /> Kehadiran</span>
+                <span className="flex items-center gap-1"><UserCheck className="h-3 w-3" /> Attendance</span>
                 <span className={attColor.text}>{area.attendanceRate}%</span>
               </div>
               <div className="mt-1"><MiniBar pct={area.attendanceRate} /></div>
-              <p className="mt-0.5 text-[10px] text-slate-400">{area.present}/{area.scheduled} hadir</p>
+              <AttendanceCountsLine counts={area.attendance} className="mt-0.5" />
             </div>
           </div>
         </div>
@@ -136,9 +137,7 @@ function AreaMonitorCard({ area }: { area: AreaRollup }) {
               <span className={cn('shrink-0 text-[11px] font-bold tabular-nums', rateColor(s.taskStats.completionRate, s.taskStats.total).text)}>
                 {s.taskStats.completionRate}%
               </span>
-              <span className="shrink-0 text-[11px] text-slate-400 tabular-nums">
-                {s.attendanceSummary.present}/{s.attendanceSummary.scheduled} hadir
-              </span>
+              <AttendanceCountsLine counts={s.attendanceSummary} className="shrink-0 justify-end" />
             </div>
           ))}
         </div>

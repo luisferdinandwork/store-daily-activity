@@ -40,6 +40,17 @@ export const ATTENDANCE_STATUS_LABELS: Record<AttendanceStatus, string> = {
   sakit_dengan_surat: 'Sakit dengan surat dokter',
 };
 
+/**
+ * Names for the two states that aren't a recorded status. Every Ops screen reads
+ * them from here (via components/ops/AttendanceStatus.tsx), so rename them here
+ * and nowhere else.
+ *
+ *   PENDING_LABEL   a scheduled shift with no attendance record yet
+ *   ON_LEAVE_LABEL  the justified-absence group as a whole (Dinas / Cuti / Sakit / excused)
+ */
+export const PENDING_LABEL = 'Pending';
+export const ON_LEAVE_LABEL = 'On leave';
+
 /** Roster code shown next to leave statuses. */
 export const ATTENDANCE_STATUS_CODES: Partial<Record<AttendanceStatus, string>> = {
   dinas: 'D',

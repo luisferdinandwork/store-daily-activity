@@ -169,6 +169,13 @@
       "when": 1790821558311,
       "tag": "0023_rich_kylun",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1791181537337,
+      "tag": "0024_add_dinas_shift",
+      "breakpoints": true
     }
   ]
 }

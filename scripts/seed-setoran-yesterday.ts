@@ -2,6 +2,8 @@
 // Seeds one completed Setoran record for yesterday with an unpaid amount.
 // This lets today's morning Setoran task show previousUnpaidAmount / carriedDeficit.
 
+// Refuses to run against production (scripts/lib/not-production.ts).
+import './lib/not-production';
 import { config } from 'dotenv';
 
 config({ path: '.env.local' });

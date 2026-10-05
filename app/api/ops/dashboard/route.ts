@@ -34,6 +34,7 @@ import {
   getStoreSummariesForRange,
 } from '@/lib/db/utils/tasks';
 import { parseDate } from '../tasks/_helpers';
+import { EMPTY_COUNTS, tallyStatus, type AttendanceCounts } from '@/lib/attendance-health';
 
 function startOfDay(d: Date) {
   const r = new Date(d);
@@ -127,24 +128,12 @@ export async function GET(req: NextRequest) {
   const dayStart = startOfDay(date);
   const dayEnd = endOfDay(date);
 
-  const attendanceStoreMap = new Map<
-    number,
-    { storeId: string; storeName: string; total: number; present: number; late: number; absent: number; excused: number; unset: number }
-  >();
+  const attendanceStoreMap = new Map<number, { storeId: string; storeName: string } & AttendanceCounts>();
   for (const s of storeRows) {
-    attendanceStoreMap.set(s.id, {
-      storeId: String(s.id),
-      storeName: s.name,
-      total: 0,
-      present: 0,
-      late: 0,
-      absent: 0,
-      excused: 0,
-      unset: 0,
-    });
+    attendanceStoreMap.set(s.id, { storeId: String(s.id), storeName: s.name, ...EMPTY_COUNTS });
   }
 
-  const attendanceTotal = { total: 0, present: 0, late: 0, absent: 0, excused: 0, unset: 0 };
+  const attendanceTotal: AttendanceCounts = { ...EMPTY_COUNTS };
 
   if (storeIds.length) {
     const scheduleRows = await db
@@ -164,38 +153,8 @@ export async function GET(req: NextRequest) {
       const bucket = attendanceStoreMap.get(row.storeId);
       if (!bucket) continue;
 
-      bucket.total++;
-      attendanceTotal.total++;
-
-      if (!row.status) {
-        bucket.unset++;
-        attendanceTotal.unset++;
-        continue;
-      }
-
-      switch (row.status) {
-        case 'present':
-          bucket.present++;
-          attendanceTotal.present++;
-          break;
-        case 'late':
-          bucket.late++;
-          attendanceTotal.late++;
-          break;
-        case 'absent':
-          bucket.absent++;
-          attendanceTotal.absent++;
-          break;
-        // Dinas / Cuti / Sakit are justified absences — count as excused.
-        case 'excused':
-        case 'dinas':
-        case 'cuti':
-        case 'sakit_tanpa_surat':
-        case 'sakit_dengan_surat':
-          bucket.excused++;
-          attendanceTotal.excused++;
-          break;
-      }
+      tallyStatus(bucket, row.status);
+      tallyStatus(attendanceTotal, row.status);
     }
   }
 

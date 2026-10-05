@@ -29,6 +29,7 @@ import {
 import { cn } from '@/lib/utils';
 import { addDaysKey, jakartaTodayKey } from '@/lib/day-bucket';
 import { SHIFT_CODES, SHIFT_LABELS } from '@/lib/shift-tasks';
+import { ATTENDANCE_STATUSES, attendanceStatusLabel } from '@/lib/attendance-status';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -36,6 +37,8 @@ interface Props {
   open: boolean;
   onClose: () => void;
   stores?: { id: string; name: string }[];
+  /** Store preselected in the filter (e.g. the one picked on the Attendance page). */
+  defaultStoreId?: string;
 }
 
 type QuickRange = '7d' | '14d' | '30d' | 'this_month' | 'last_month' | 'custom';
@@ -88,7 +91,7 @@ const QUICK_RANGES: { key: QuickRange; label: string }[] = [
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function AttendanceExportModal({ open, onClose, stores = [] }: Props) {
+export default function AttendanceExportModal({ open, onClose, stores = [], defaultStoreId }: Props) {
   const today = jakartaTodayKey();
   const [shiftOptions, setShiftOptions] = useState<ShiftOption[]>(FALLBACK_SHIFTS);
 
@@ -111,7 +114,7 @@ export default function AttendanceExportModal({ open, onClose, stores = [] }: Pr
     return r?.from ?? today;
   });
   const [toDate,     setToDate]     = useState(today);
-  const [storeId,    setStoreId]    = useState('all');
+  const [storeId,    setStoreId]    = useState(defaultStoreId ?? 'all');
   const [shift,      setShift]      = useState('all');
   const [status,     setStatus]     = useState('all');
 
@@ -334,14 +337,9 @@ export default function AttendanceExportModal({ open, onClose, stores = [] }: Pr
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All Statuses</SelectItem>
-                    <SelectItem value="present">Present</SelectItem>
-                    <SelectItem value="late">Late</SelectItem>
-                    <SelectItem value="absent">Absent</SelectItem>
-                    <SelectItem value="excused">Excused</SelectItem>
-                    <SelectItem value="dinas">Dinas (D)</SelectItem>
-                    <SelectItem value="cuti">Cuti (C)</SelectItem>
-                    <SelectItem value="sakit_tanpa_surat">Sakit tanpa surat dokter (STD)</SelectItem>
-                    <SelectItem value="sakit_dengan_surat">Sakit dengan surat dokter (SD)</SelectItem>
+                    {ATTENDANCE_STATUSES.map((s) => (
+                      <SelectItem key={s} value={s}>{attendanceStatusLabel(s)}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>

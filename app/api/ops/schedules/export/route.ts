@@ -26,6 +26,7 @@
 //   Full Day  F  → green   bg #F0FDF4  text #15803D
 //   JKP Pagi  JP → amber   bg #FFFBEB  text #B45309
 //   JKP Siang JS → rose    bg #FFF1F2  text #BE123C
+//   Dinas     D  → slate   bg #F1F5F9  text #475569
 //   Leave     AL → indigo  bg #EEF2FF  text #3730A3
 //   Off       OFF→ slate   bg #F8FAFC  text #94A3B8
 
@@ -103,6 +104,7 @@ const CODE_STYLE: Record<string, XlsxStyle> = {
   F:  codeStyle('15803D', 'F0FDF4'),
   JP: codeStyle('B45309', 'FFFBEB'),
   JS: codeStyle('BE123C', 'FFF1F2'),
+  D:  codeStyle('475569', 'F1F5F9'),
   AL: {
     font:      { ...FONT_BOLD, color: { rgb: '3730A3' } },
     fill:      solid('EEF2FF'),
@@ -387,6 +389,7 @@ export async function GET(request: NextRequest) {
       { label: 'FULL DAY',  code: 'F',   bg: 'F0FDF4', text: '15803D', countBg: 'BBF7D0' },
       { label: 'JKP PAGI',  code: 'JP',  bg: 'FFFBEB', text: 'B45309', countBg: 'FDE68A' },
       { label: 'JKP SIANG', code: 'JS',  bg: 'FFF1F2', text: 'BE123C', countBg: 'FECDD3' },
+      { label: 'DINAS',     code: 'D',   bg: 'F1F5F9', text: '475569', countBg: 'CBD5E1' },
       { label: 'OFF/CUTI', code: 'OFF', bg: 'F8FAFC', text: '94A3B8', countBg: 'E2E8F0' },
     ];
 
@@ -431,7 +434,7 @@ export async function GET(request: NextRequest) {
       alignment: LEFT,
       border:    { bottom: { style: 'thin', color: { rgb: 'E2E8F0' } } },
     };
-    sc(ws, legendRow, 0, 'E = Early (Pagi)  |  M = Middle  |  L = Last (Siang)  |  F = Full (Lembur)  |  JP = JKP Pagi  |  JS = JKP Siang  |  AL = Leave  |  OFF = Day Off', legendStyle);
+    sc(ws, legendRow, 0, 'E = Early (Pagi)  |  M = Middle  |  L = Last (Siang)  |  F = Full (Lembur)  |  JP = JKP Pagi  |  JS = JKP Siang  |  D = Dinas  |  AL = Leave  |  OFF = Day Off', legendStyle);
     for (let c = 1; c < totalCols; c++) sc(ws, legendRow, c, '', legendStyle);
     merges.push({ s: { r: legendRow, c: 0 }, e: { r: legendRow, c: totalCols - 1 } });
 

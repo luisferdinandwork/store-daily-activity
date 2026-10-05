@@ -120,6 +120,7 @@ export const SHIFT_CODES = [
   'middle',
   'jkp_morning',
   'jkp_evening',
+  'dinas',
 ] as const;
 export type ShiftCode = typeof SHIFT_CODES[number];
 
@@ -130,6 +131,7 @@ export const SHIFT_LABELS: Record<ShiftCode, string> = {
   middle: 'Middle',
   jkp_morning: 'JKP Pagi',
   jkp_evening: 'JKP Siang',
+  dinas: 'Dinas',
 };
 
 export function isShiftCode(value: unknown): value is ShiftCode {
@@ -144,7 +146,16 @@ export const SHIFT_ROSTER_CODE: Record<ShiftCode, string> = {
   full_day: 'F',
   jkp_morning: 'JP',
   jkp_evening: 'JS',
+  dinas: 'D',
 };
+
+/**
+ * Dinas — working outside any store (business trip). Scheduled like a shift so
+ * it shows on the roster, but it has no hours and no tasks, and scheduling it
+ * records the employee's attendance as "dinas" automatically
+ * (lib/schedule-utils.ts → recordDinasAttendance). Never an opening/closing shift.
+ */
+export const DINAS_SHIFT_CODE = 'dinas';
 
 // ─── Shift families ───────────────────────────────────────────────────────────
 // JKP (Jam Kerja Pendek) shifts are short-hours variants of morning/evening:
@@ -436,6 +447,7 @@ export const DEFAULT_SEQUENCED_TASK_TYPES: Record<ShiftCode, TaskType[]> = {
     'serah_terima',
   ],
   jkp_evening: [],
+  dinas: [],
   middle: [],
 };
 
@@ -546,6 +558,8 @@ export const SHIFT_TASK_MAP: Record<ShiftCode, TaskType[]> = {
     'briefing',
     'serah_terima',
   ],
+  // Dinas: outside any store — no tasks.
+  dinas: [],
 };
 
 export function getDefaultTasksForShift(shiftCode: ShiftCode): TaskType[] {

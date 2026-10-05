@@ -16,6 +16,8 @@
 // need stores/users from setup, attendance needs schedules, etc.), so
 // --only just filters the fixed pipeline below rather than reordering it.
 
+// Refuses to run against production (scripts/lib/not-production.ts).
+import '../lib/not-production';
 import { config } from 'dotenv';
 config({ path: '.env.local' });
 config({ path: '.env' });

@@ -4,6 +4,8 @@
 // new IT super-admin role and the role-switch feature. Safe to re-run — a
 // no-op if the NIK already exists.
 // ─────────────────────────────────────────────────────────────────────────────
+// Refuses to run against production (scripts/lib/not-production.ts).
+import './lib/not-production';
 import { config } from 'dotenv';
 config({ path: '.env.local' });
 config({ path: '.env' });

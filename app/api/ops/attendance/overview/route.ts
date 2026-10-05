@@ -2,120 +2,115 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession }          from 'next-auth';
 import { authOptions }               from '@/lib/auth';
-import { getStoresForOps }           from '@/lib/schedule-utils';
+import { getStoresForOps, AUTO_ABSENT_LOOKBACK_DAYS } from '@/lib/schedule-utils';
 import { filterActiveStoreIds } from '@/lib/db/utils/store-status';
 import { db }                        from '@/lib/db';
 import { schedules, attendance, stores } from '@/lib/db/schema';
-import { eq, and, gte, lt, inArray } from 'drizzle-orm';
+import { eq, and, gte, lt, inArray, asc } from 'drizzle-orm';
 import { getOpsActor } from '../../tasks/_helpers';
-import { isDayKey, jakartaDateKey, jakartaDayRange } from '@/lib/day-bucket';
+import { addDaysKey, jakartaDateKey, jakartaMonthRange, jakartaTodayKey } from '@/lib/day-bucket';
+import { EMPTY_COUNTS, tallyStatus, type AttendanceMonthData, type StoreDayCounts } from '@/lib/attendance-health';
 
-interface StoreSummary {
-  storeId:   number;
-  storeName: string;
-  total:     number;
-  present:   number;
-  absent:    number;
-  late:      number;
-  excused:   number;
-  onBreak:   number;
-  unset:     number;
-}
+const MONTH_KEY = /^\d{4}-(0[1-9]|1[0-2])$/;
 
-// GET /api/ops/attendance/overview?date=YYYY-MM-DD | ISO instant (→ its Jakarta day)
+// GET /api/ops/attendance/overview?month=YYYY-MM[&storeId=N]
+//
+// One request for the whole calendar month: per day, per store, how many
+// scheduled people are present / late / absent / on leave / not recorded yet.
+// `storeId` narrows it to a single store (the single-store calendar).
 export async function GET(req: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
-    if (!session?.user) {
+    if (!session?.user?.id) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const userId  = (session.user as any).id as string;
+    const userId = session.user.id;
 
     const actor = await getOpsActor(userId);
     if (!actor) {
       return NextResponse.json({ success: false, error: 'OPS only.' }, { status: 403 });
     }
 
-    const dateStr = req.nextUrl.searchParams.get('date');
-    if (!dateStr) {
-      return NextResponse.json({ success: false, error: 'date is required' }, { status: 400 });
+    const month = req.nextUrl.searchParams.get('month') ?? '';
+    if (!MONTH_KEY.test(month)) {
+      return NextResponse.json({ success: false, error: 'month must be YYYY-MM' }, { status: 400 });
     }
 
-    // The Jakarta calendar day — its range matches both stored encodings of a
-    // day bucket (lib/day-bucket.ts), whatever zone this server runs in.
-    const dayKey = isDayKey(dateStr) ? dateStr : jakartaDateKey(new Date(dateStr));
-    if (!isDayKey(dayKey)) {
-      return NextResponse.json({ success: false, error: 'invalid date' }, { status: 400 });
-    }
-
-    const { start: dayStart, end: dayEnd } = jakartaDayRange(dayKey);
-
-    // getStoresForOps now returns number[] (serial PKs)
     // Prep (ready_to_open) and closed stores are left out of attendance progress.
-    const storeIds = await filterActiveStoreIds(await getStoresForOps(userId));
-    if (!storeIds.length) {
-      return NextResponse.json({ success: true, data: [] });
+    const allowedIds = await filterActiveStoreIds(await getStoresForOps(userId));
+    const empty: AttendanceMonthData = { stores: [], days: {} };
+    if (!allowedIds.length) {
+      return NextResponse.json({ success: true, data: empty });
     }
 
-    // Fetch store names — single query, always inArray (works for one or many)
+    // Store list for the picker — always the full scope, even when one store is picked.
     const storeRows = await db
-      .select({ id: stores.id, name: stores.name })
+      .select({ id: stores.id, storeNo: stores.storeNo, name: stores.name })
       .from(stores)
-      .where(inArray(stores.id, storeIds));
+      .where(inArray(stores.id, allowedIds))
+      .orderBy(asc(stores.storeNo));
 
-    const storeNameById = new Map<number, string>(storeRows.map(s => [s.id, s.name]));
-
-    // Pre-seed summary so stores with zero schedules still appear
-    const summaryMap = new Map<number, StoreSummary>();
-    for (const sid of storeIds) {
-      summaryMap.set(sid, {
-        storeId:   sid,
-        storeName: storeNameById.get(sid) ?? String(sid),
-        total: 0, present: 0, absent: 0, late: 0, excused: 0, onBreak: 0, unset: 0,
-      });
+    const storeIdRaw = req.nextUrl.searchParams.get('storeId');
+    let scopeIds = allowedIds;
+    if (storeIdRaw) {
+      const storeId = Number(storeIdRaw);
+      if (!Number.isInteger(storeId) || !allowedIds.includes(storeId)) {
+        return NextResponse.json(
+          { success: false, error: 'Store not found, not active, or outside your area.' },
+          { status: 403 },
+        );
+      }
+      scopeIds = [storeId];
     }
 
-    // Pull every schedule for the day across all OPS stores, with optional attendance
-    const scheduleRows = await db
+    // A past shift with no record at all is a no-show: autoMarkAbsentPastSchedules
+    // (the daily cron, or opening the store's day) will record it as absent. This
+    // overview is read-only, so it counts those the same way up front — otherwise
+    // a day nobody checked in on would read as "pending" and drop out of the rate.
+    // Today and older-than-lookback days stay pending, as nothing will mark them.
+    const today       = jakartaTodayKey();
+    const settledFrom = addDaysKey(today, -AUTO_ABSENT_LOOKBACK_DAYS);
+
+    // The Jakarta month's range matches both stored encodings of a day bucket
+    // (lib/day-bucket.ts), whatever zone this server runs in.
+    const { start, end } = jakartaMonthRange(month);
+
+    const rows = await db
       .select({
-        sched: schedules,
-        att:   attendance,
+        date:    schedules.date,
+        storeId: schedules.storeId,
+        status:  attendance.status,
       })
       .from(schedules)
       .leftJoin(attendance, eq(attendance.scheduleId, schedules.id))
       .where(
         and(
-          inArray(schedules.storeId, storeIds),
+          inArray(schedules.storeId, scopeIds),
           eq(schedules.isHoliday, false),
-          gte(schedules.date, dayStart),
-          lt(schedules.date, dayEnd),
+          gte(schedules.date, start),
+          lt(schedules.date, end),
         ),
       );
 
-    for (const { sched, att } of scheduleRows) {
-      const s = summaryMap.get(sched.storeId);
-      if (!s) continue;
-      s.total++;
+    const byDay = new Map<string, Map<number, StoreDayCounts>>();
+    for (const row of rows) {
+      const dayKey = jakartaDateKey(row.date);
+      let perStore = byDay.get(dayKey);
+      if (!perStore) byDay.set(dayKey, (perStore = new Map()));
+      let c = perStore.get(row.storeId);
+      if (!c) perStore.set(row.storeId, (c = { storeId: row.storeId, ...EMPTY_COUNTS }));
 
-      if (!att) { s.unset++; continue; }
-
-      switch (att.status) {
-        case 'present': s.present++; break;
-        case 'absent':  s.absent++;  break;
-        case 'late':    s.late++;    break;
-        // Dinas / Cuti / Sakit are justified absences — count as excused.
-        case 'excused':
-        case 'dinas':
-        case 'cuti':
-        case 'sakit_tanpa_surat':
-        case 'sakit_dengan_surat':
-          s.excused++; break;
-      }
-      if (att.onBreak) s.onBreak++;
+      // A settled past day with no record is a no-show; anything else with no
+      // record stays pending.
+      const noShow = !row.status && dayKey < today && dayKey >= settledFrom;
+      tallyStatus(c, noShow ? 'absent' : row.status);
     }
 
-    return NextResponse.json({ success: true, data: [...summaryMap.values()] });
+    const days: AttendanceMonthData['days'] = {};
+    for (const [dayKey, perStore] of byDay) days[dayKey] = [...perStore.values()];
+
+    return NextResponse.json({ success: true, data: { stores: storeRows, days } satisfies AttendanceMonthData });
   } catch (err) {
     console.error('[GET /api/ops/attendance/overview]', err);
     return NextResponse.json({ success: false, error: 'Internal server error' }, { status: 500 });

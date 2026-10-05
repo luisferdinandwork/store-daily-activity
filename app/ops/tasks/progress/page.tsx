@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 
 import {
   AlertCircle,
   AlertTriangle,
+  ArrowLeft,
   ArrowRight,
   ChevronDown,
   ChevronRight,
@@ -253,6 +254,19 @@ function ProgressBar({ pct, className }: { pct: number; className?: string }) {
   );
 }
 
+function BackButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="mb-3 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200"
+    >
+      <ArrowLeft className="h-3.5 w-3.5" />
+      {label}
+    </button>
+  );
+}
+
 // ─── TaskRow ──────────────────────────────────────────────────────────────────
 
 function TaskRow({ task, onSelect }: { task: FlatTask; onSelect: () => void }) {
@@ -312,6 +326,11 @@ function TaskRow({ task, onSelect }: { task: FlatTask; onSelect: () => void }) {
             <p className="mt-0.5 text-[11px] text-slate-400">
               {task.isPlaceholder ? 'Terjadwal' : 'PIC'}: {task.userName ?? task.userId}
             </p>
+            {task.type === 'setoran' && task.extra.actualReceivedAmount != null && (
+              <p className="mt-0.5 text-[11px] font-semibold text-slate-600">
+                Diterima Rp {Number(task.extra.actualReceivedAmount).toLocaleString('id-ID')}
+              </p>
+            )}
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1">
             <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-bold', statusBadgeClass(status))}>
@@ -667,10 +686,11 @@ function StoreProgressRow({ store, summary, onOpen }: {
 
 // ─── AreaGridPanel (daily HO right panel) ────────────────────────────────────
 
-function AreaGridPanel({ areaName, stores, onSelectStore }: {
+function AreaGridPanel({ areaName, stores, onSelectStore, onBack }: {
   areaName: string;
   stores: StoreRow[];
   onSelectStore: (storeId: string) => void;
+  onBack?: () => void;
 }) {
   const aggregate = useMemo(() => {
     const sum = stores.reduce(
@@ -690,6 +710,7 @@ function AreaGridPanel({ areaName, stores, onSelectStore }: {
   return (
     <article className="flex max-h-[calc(100vh-9rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="shrink-0 border-b border-slate-100 p-4 sm:p-5">
+        {onBack && <BackButton label="Semua area" onClick={onBack} />}
         <div className="flex items-center gap-4">
           <ProgressRing pct={aggregate.rate} size={64} stroke={6} />
           <div className="min-w-0 flex-1">
@@ -722,13 +743,14 @@ function AreaGridPanel({ areaName, stores, onSelectStore }: {
 
 // ─── RangeOverviewPanel (weekly/monthly right panel, no store selected) ────────
 
-function RangeOverviewPanel({ stores, rangeOverviewMap, loading, periodLabel, areaName, onSelectStore }: {
+function RangeOverviewPanel({ stores, rangeOverviewMap, loading, periodLabel, areaName, onSelectStore, onBack }: {
   stores: StoreRow[];
   rangeOverviewMap: Record<string, StoreSummary>;
   loading: boolean;
   periodLabel: string;
   areaName?: string;
   onSelectStore: (storeId: string) => void;
+  onBack?: () => void;
 }) {
   const aggregate = useMemo(() => {
     const sum = stores.reduce(
@@ -755,6 +777,7 @@ function RangeOverviewPanel({ stores, rangeOverviewMap, loading, periodLabel, ar
   return (
     <article className="flex max-h-[calc(100vh-9rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="shrink-0 border-b border-slate-100 p-4 sm:p-5">
+        {onBack && <BackButton label="Semua area" onClick={onBack} />}
         <div className="flex items-center gap-4">
           {loading ? (
             <div className="h-16 w-16 animate-pulse rounded-full bg-slate-100" />
@@ -796,13 +819,17 @@ function RangeOverviewPanel({ stores, rangeOverviewMap, loading, periodLabel, ar
 
 // ─── StoreRangeMatrixPanel ────────────────────────────────────────────────────
 
-function StoreRangeMatrixPanel({ storeName, storeNo, storeAddress, rows, loading, periodLabel }: {
+function StoreRangeMatrixPanel({ storeName, storeNo, storeAddress, rows, loading, periodLabel, onBack, backLabel, onSelectDay }: {
   storeName: string;
   storeNo: string;
   storeAddress: string;
   rows: DayMatrixRow[];
   loading: boolean;
   periodLabel: string;
+  onBack: () => void;
+  backLabel: string;
+  /** Open that day's full task report for this store. */
+  onSelectDay: (dateKey: string) => void;
 }) {
   const aggregate = useMemo(() => {
     const sum = rows.reduce((acc, r) => ({ completed: acc.completed + r.aggregate.completed, total: acc.total + r.aggregate.total }), { completed: 0, total: 0 });
@@ -814,6 +841,7 @@ function StoreRangeMatrixPanel({ storeName, storeNo, storeAddress, rows, loading
   return (
     <article className="flex max-h-[calc(100vh-9rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="shrink-0 border-b border-slate-100 p-4 sm:p-5">
+        <BackButton label={backLabel} onClick={onBack} />
         <div className="flex items-center gap-4">
           <ProgressRing pct={aggregate.rate} size={64} stroke={6} />
           <div className="min-w-0 flex-1">
@@ -829,7 +857,7 @@ function StoreRangeMatrixPanel({ storeName, storeNo, storeAddress, rows, loading
               <span className="text-slate-300"> dari </span>
               <span className="text-slate-700">{aggregate.total} task</span>
               <span className="text-slate-300"> · </span>
-              <span className="text-slate-500">{visibleRows.length} hari ada data</span>
+              <span className="text-slate-500">{visibleRows.length} hari ada data — klik hari untuk detail</span>
             </p>
           </div>
         </div>
@@ -848,7 +876,13 @@ function StoreRangeMatrixPanel({ storeName, storeNo, storeAddress, rows, loading
             {visibleRows.map(row => {
               const rate = row.aggregate.completionRate;
               return (
-                <div key={row.date} className={cn('flex items-center gap-3 px-4 py-3 transition', row.isToday && 'bg-indigo-50/40')}>
+                <button
+                  key={row.date}
+                  type="button"
+                  onClick={() => onSelectDay(row.date)}
+                  title="Lihat laporan task hari ini"
+                  className={cn('flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-slate-50 focus:outline-none focus-visible:bg-slate-50', row.isToday && 'bg-indigo-50/40')}
+                >
                   <div className={cn(
                     'flex h-11 w-11 shrink-0 flex-col items-center justify-center rounded-xl',
                     row.isToday ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600',
@@ -866,7 +900,8 @@ function StoreRangeMatrixPanel({ storeName, storeNo, storeAddress, rows, loading
                     </div>
                     <ProgressBar pct={rate} className="mt-1.5 h-2" />
                   </div>
-                </div>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-slate-300" />
+                </button>
               );
             })}
           </div>
@@ -878,11 +913,13 @@ function StoreRangeMatrixPanel({ storeName, storeNo, storeAddress, rows, loading
 
 // ─── StoreDetailPanel (daily) ─────────────────────────────────────────────────
 
-function StoreDetailPanel({ detail, loading, emptyMessage, onSelectTask }: {
+function StoreDetailPanel({ detail, loading, emptyMessage, onSelectTask, onBack, backLabel }: {
   detail: DetailResponse | null;
   loading: boolean;
   emptyMessage?: string;
   onSelectTask?: (taskKey: string) => void;
+  onBack?: () => void;
+  backLabel?: string;
 }) {
   const groupedTasks = useMemo(() => {
     const groups: Record<string, { regular: FlatTask[]; grooming: FlatTask[] }> = {
@@ -902,9 +939,12 @@ function StoreDetailPanel({ detail, loading, emptyMessage, onSelectTask }: {
 
   if (loading) {
     return (
-      <div className="flex min-h-[280px] items-center justify-center rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
-        <div className="flex items-center gap-2 text-sm text-slate-400">
-          <Loader2 className="h-4 w-4 animate-spin" /> Memuat detail task…
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        {onBack && <BackButton label={backLabel ?? 'Kembali'} onClick={onBack} />}
+        <div className="flex min-h-[240px] items-center justify-center p-4">
+          <div className="flex items-center gap-2 text-sm text-slate-400">
+            <Loader2 className="h-4 w-4 animate-spin" /> Memuat detail task…
+          </div>
         </div>
       </div>
     );
@@ -935,9 +975,11 @@ function StoreDetailPanel({ detail, loading, emptyMessage, onSelectTask }: {
   return (
     <article className="flex max-h-[calc(100vh-9rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="shrink-0 border-b border-slate-100 p-4 sm:p-5">
+        {onBack && <BackButton label={backLabel ?? 'Kembali'} onClick={onBack} />}
         <div className="flex items-center gap-4">
           <ProgressRing pct={detail.summary.completionRate} size={64} stroke={6} />
           <div className="min-w-0 flex-1">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-500">{fmtDateLabel(detail.date)}</p>
             <h2 className="truncate text-lg font-bold text-slate-900">{detail.store.name}</h2>
             <p className="mt-0.5 text-xs text-slate-500">
               <span className="font-mono font-semibold text-slate-600">{detail.store.storeNo}</span>
@@ -1006,6 +1048,8 @@ export default function OpsTaskProgressPage() {
   const [loadingRange, setLoadingRange]       = useState(false);
   const [error, setError]                     = useState<string | null>(null);
   const [listMinimized, setListMinimized]     = useListMinimized();
+  // Set when a day was opened from a weekly/monthly view, so Back can return there.
+  const [returnTo, setReturnTo]               = useState<{ period: Period; date: string } | null>(null);
 
   const rangeDays = useMemo((): Date[] => {
     if (period === 'daily') return [];
@@ -1173,8 +1217,16 @@ export default function OpsTaskProgressPage() {
       .sort((a, b) => a.areaName.localeCompare(b.areaName));
   }, [filteredStores, overview?.area?.id, overview?.area?.name]);
 
-  const handleSelectArea  = (areaId: string) => { setSelectedAreaId(cur => cur === areaId ? null : areaId); setSelectedStoreId(null); };
-  const handleSelectStore = (storeId: string) => { setSelectedStoreId(cur => cur === storeId ? null : storeId); };
+  const handleSelectArea  = (areaId: string) => { setSelectedAreaId(cur => cur === areaId ? null : areaId); setSelectedStoreId(null); setReturnTo(null); };
+  const handleSelectStore = (storeId: string) => { setSelectedStoreId(cur => cur === storeId ? null : storeId); setReturnTo(null); };
+  const handlePeriodChange = (next: Period) => { setReturnTo(null); setPeriod(next); };
+
+  // A day in the weekly/monthly breakdown → that day's full report for the same store.
+  const handleSelectDay = (dateKey: string) => {
+    setReturnTo({ period, date });
+    setDate(dateKey);
+    setPeriod('daily');
+  };
 
   const selectedAreaGroup = useMemo(() => groupedStores.find(g => g.areaId === selectedAreaId) ?? null, [groupedStores, selectedAreaId]);
 
@@ -1194,12 +1246,37 @@ export default function OpsTaskProgressPage() {
 
   const rangePeriodLabel = period === 'weekly' ? 'Tinjauan Mingguan' : 'Tinjauan Bulanan';
 
+  // Back from a store: to the weekly/monthly view it was opened from, else up to
+  // the area it sits in (HO), else to the all-stores overview.
+  const areaBackName = isHo && selectedAreaGroup ? selectedAreaGroup.areaName : null;
+  const storeBackLabel = returnTo
+    ? `Kembali ke ${returnTo.period === 'weekly' ? 'Mingguan' : 'Bulanan'}`
+    : areaBackName ? `Kembali ke ${areaBackName}` : 'Semua toko';
+  const handleStoreBack = () => {
+    if (returnTo) {
+      const { period: p, date: d } = returnTo;
+      setReturnTo(null);
+      setDate(d);
+      setPeriod(p);
+      return;
+    }
+    setSelectedStoreId(null);
+  };
+
   const renderRightPanel = () => {
     if (selectedStoreId) {
       if (period === 'daily') {
         const selectedTask = selectedTaskKey ? (detail?.tasks.find(t => taskKey(t) === selectedTaskKey) ?? null) : null;
         if (selectedTask) return <TaskDetailView task={selectedTask} onBack={() => setSelectedTaskKey(null)} />;
-        return <StoreDetailPanel detail={detail} loading={loadingDetail} onSelectTask={setSelectedTaskKey} />;
+        return (
+          <StoreDetailPanel
+            detail={detail}
+            loading={loadingDetail}
+            onSelectTask={setSelectedTaskKey}
+            onBack={handleStoreBack}
+            backLabel={storeBackLabel}
+          />
+        );
       }
       const selectedStore = overview?.stores.find(s => s.id === selectedStoreId);
       return (
@@ -1210,6 +1287,9 @@ export default function OpsTaskProgressPage() {
           rows={rangeMatrixRows}
           loading={loadingRange}
           periodLabel={rangePeriodLabel}
+          onBack={handleStoreBack}
+          backLabel={storeBackLabel}
+          onSelectDay={handleSelectDay}
         />
       );
     }
@@ -1224,12 +1304,20 @@ export default function OpsTaskProgressPage() {
           periodLabel={rangePeriodLabel}
           areaName={isHo && selectedAreaGroup ? selectedAreaGroup.areaName : undefined}
           onSelectStore={handleSelectStore}
+          onBack={isHo && selectedAreaGroup ? () => setSelectedAreaId(null) : undefined}
         />
       );
     }
 
     if (isHo && selectedAreaGroup) {
-      return <AreaGridPanel areaName={selectedAreaGroup.areaName} stores={selectedAreaGroup.stores} onSelectStore={handleSelectStore} />;
+      return (
+        <AreaGridPanel
+          areaName={selectedAreaGroup.areaName}
+          stores={selectedAreaGroup.stores}
+          onSelectStore={handleSelectStore}
+          onBack={() => setSelectedAreaId(null)}
+        />
+      );
     }
 
     return (
@@ -1247,7 +1335,7 @@ export default function OpsTaskProgressPage() {
         scope="OPS · Task Monitor"
         title="Task Progress"
         subtitle={`${headingScope} · ${headingRangeLabel}`}
-        periodProps={{ period, onPeriodChange: setPeriod, date, onDateChange: setDate }}
+        periodProps={{ period, onPeriodChange: handlePeriodChange, date, onDateChange: setDate }}
         onRefresh={() => {
           void loadOverview();
           if (period === 'daily' && selectedStoreId) void loadDetail(selectedStoreId, date);

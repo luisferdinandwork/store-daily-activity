@@ -1,4 +1,6 @@
 // scripts/reset.ts
+// Refuses to run against production (scripts/lib/not-production.ts).
+import './lib/not-production';
 import { config } from 'dotenv';
 import { Pool } from 'pg';
 

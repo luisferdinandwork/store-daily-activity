@@ -335,6 +335,19 @@ export async function seedLookups(): Promise<SeedLookupIds> {
       breaks: [{ type: 'dinner', label: 'Dinner', accent: 'violet' }],
       sortOrder: 50,
     }),
+    // Dinas (D) — working outside any store. No hours, no tasks; scheduling it
+    // records the employee's attendance as dinas (see recordDinasAttendance).
+    await getOrCreateShift({
+      code: 'dinas',
+      label: 'Dinas',
+      description: 'Dinas — bekerja di luar toko (tanpa task, absensi tercatat otomatis)',
+      startTime: null,
+      endTime: null,
+      accent: 'slate',
+      icon: 'clock',
+      breaks: [],
+      sortOrder: 60,
+    }),
   ];
 
   const roleId = Object.fromEntries(insertedRoles.map((r) => [r.code, r.id])) as

@@ -11,7 +11,7 @@
  */
 
 import { db } from "@/lib/db";
-import { baseShiftCode, isOpeningShift } from "@/lib/shift-tasks";
+import { DINAS_SHIFT_CODE, baseShiftCode, isOpeningShift } from "@/lib/shift-tasks";
 import {
   STORE_TIME_ZONE,
   jakartaDateKey,
@@ -236,6 +236,79 @@ async function getShiftByCode(
 async function resolveActiveShiftId(code: string): Promise<number | null> {
   const row = await getShiftByCode(code, true);
   return row?.id ?? null;
+}
+
+// ─── Dinas shift ──────────────────────────────────────────────────────────────
+// A day scheduled as Dinas (working outside any store) is not a normal shift:
+// it has no tasks and nobody checks in, so its attendance is recorded as
+// "dinas" the moment it is scheduled. That row is bookkeeping, not evidence of
+// attendance — it must never lock the day against schedule edits / re-imports,
+// and it goes away with the schedule row. Any other attendance row (e.g. Ops
+// re-marked it, or someone really checked in) still locks the day as before.
+
+const DINAS_AUTO_NOTE = "Dinas — dijadwalkan di jadwal bulanan (tugas di luar toko).";
+
+/** Id of the Dinas shift row; null if it hasn't been created yet. */
+async function getDinasShiftId(): Promise<number | null> {
+  return (await getShiftIdMap(false))[DINAS_SHIFT_CODE] ?? null;
+}
+
+/** Record "dinas" attendance for freshly scheduled Dinas days (idempotent). */
+async function recordDinasAttendance(
+  rows: { scheduleId: number; userId: string; storeId: number; shiftId: number; date: Date }[],
+): Promise<void> {
+  if (!rows.length) return;
+  await db
+    .insert(attendance)
+    .values(
+      rows.map((r) => ({
+        scheduleId: r.scheduleId,
+        userId: r.userId,
+        storeId: r.storeId,
+        date: r.date,
+        shiftId: r.shiftId,
+        status: "dinas" as const,
+        onBreak: false,
+        notes: DINAS_AUTO_NOTE,
+      })),
+    )
+    .onConflictDoNothing({ target: attendance.scheduleId });
+}
+
+/** Of these schedules, the ones with attendance that locks the day (everything but the automatic Dinas row). */
+async function lockedByAttendance(scheduleIds: number[]): Promise<Set<number>> {
+  const locked = new Set<number>();
+  if (!scheduleIds.length) return locked;
+  const dinasShiftId = await getDinasShiftId();
+  const rows = await db
+    .select({
+      scheduleId: attendance.scheduleId,
+      status: attendance.status,
+      shiftId: attendance.shiftId,
+    })
+    .from(attendance)
+    .where(inArray(attendance.scheduleId, scheduleIds));
+  for (const r of rows) {
+    const isAutoDinas = r.status === "dinas" && dinasShiftId !== null && r.shiftId === dinasShiftId;
+    if (!isAutoDinas) locked.add(r.scheduleId);
+  }
+  return locked;
+}
+
+/** Drop the automatic Dinas rows of schedules that are about to be deleted. */
+async function deleteAutoDinasAttendance(scheduleIds: number[]): Promise<void> {
+  if (!scheduleIds.length) return;
+  const dinasShiftId = await getDinasShiftId();
+  if (dinasShiftId === null) return;
+  await db
+    .delete(attendance)
+    .where(
+      and(
+        inArray(attendance.scheduleId, scheduleIds),
+        eq(attendance.status, "dinas"),
+        eq(attendance.shiftId, dinasShiftId),
+      ),
+    );
 }
 
 function getLegacyBreakConfig(shiftCode: string): {
@@ -667,13 +740,8 @@ export async function createOrReplaceMonthlySchedule(
         const lockedSchedIds = new Set<number>();
 
         if (entrySchedules.length > 0) {
-          const schedIds = entrySchedules.map((s) => s.id);
-          const attended = await db
-            .select({ scheduleId: attendance.scheduleId })
-            .from(attendance)
-            .where(inArray(attendance.scheduleId, schedIds));
-
-          for (const a of attended) lockedSchedIds.add(a.scheduleId);
+          const attended = await lockedByAttendance(entrySchedules.map((s) => s.id));
+          for (const id of attended) lockedSchedIds.add(id);
         }
 
         // Entries the import is not allowed to touch: already checked in, or
@@ -707,6 +775,7 @@ export async function createOrReplaceMonthlySchedule(
         );
 
         await deleteAllTasksForSchedules(deletableSchedIds);
+        await deleteAutoDinasAttendance(deletableSchedIds);
         if (deletableSchedIds.length > 0)
           await db
             .delete(schedules)
@@ -817,18 +886,14 @@ export async function updateMonthlyScheduleEntry(
       .limit(1);
 
     if (sched) {
-      const [att] = await db
-        .select({ id: attendance.id })
-        .from(attendance)
-        .where(eq(attendance.scheduleId, sched.id))
-        .limit(1);
-      if (att)
+      if ((await lockedByAttendance([sched.id])).size > 0)
         return {
           success: false,
           error: "Cannot edit a day that already has an attendance record.",
         };
 
       await deleteAllTasksForSchedules([sched.id]);
+      await deleteAutoDinasAttendance([sched.id]);
       await db.delete(schedules).where(eq(schedules.id, sched.id));
     }
 
@@ -898,6 +963,16 @@ export async function updateMonthlyScheduleEntry(
           .set({ scheduleId: newSched.id, updatedAt: new Date() })
           .where(eq(attendance.id, existingAtt.id));
       }
+
+      if (shiftIdToUse === (await getDinasShiftId())) {
+        await recordDinasAttendance([{
+          scheduleId: newSched.id,
+          userId: entry.userId,
+          storeId: entry.storeId,
+          shiftId: shiftIdToUse,
+          date: startOfDay(entry.date),
+        }]);
+      }
     }
 
     return { success: true };
@@ -948,13 +1023,8 @@ export async function deleteMonthlySchedule(
 
     const lockedSchedIds = new Set<number>();
     if (entrySchedules.length > 0) {
-      const schedIds = entrySchedules.map((s) => s.id);
-      const attended = await db
-        .select({ scheduleId: attendance.scheduleId })
-        .from(attendance)
-        .where(inArray(attendance.scheduleId, schedIds));
-
-      for (const a of attended) lockedSchedIds.add(a.scheduleId);
+      const attended = await lockedByAttendance(entrySchedules.map((s) => s.id));
+      for (const id of attended) lockedSchedIds.add(id);
     }
 
     const deletableSchedIds = entrySchedules
@@ -969,6 +1039,7 @@ export async function deleteMonthlySchedule(
     );
 
     await deleteAllTasksForSchedules(deletableSchedIds);
+    await deleteAutoDinasAttendance(deletableSchedIds);
     if (deletableSchedIds.length > 0)
       await db
         .delete(schedules)
@@ -1091,14 +1162,27 @@ export async function createMonthlyScheduleEntry(
       .returning({ id: monthlyScheduleEntries.id });
 
     if (!finalIsOff && !finalIsLeave && shiftIdToUse) {
-      await db.insert(schedules).values({
-        userId,
-        storeId: entryStoreId,
-        shiftId: shiftIdToUse,
-        date: dateStart,
-        monthlyScheduleEntryId: newEntry.id,
-        isHoliday: false,
-      });
+      const [newSched] = await db
+        .insert(schedules)
+        .values({
+          userId,
+          storeId: entryStoreId,
+          shiftId: shiftIdToUse,
+          date: dateStart,
+          monthlyScheduleEntryId: newEntry.id,
+          isHoliday: false,
+        })
+        .returning({ id: schedules.id });
+
+      if (shiftIdToUse === (await getDinasShiftId())) {
+        await recordDinasAttendance([{
+          scheduleId: newSched.id,
+          userId,
+          storeId: entryStoreId,
+          shiftId: shiftIdToUse,
+          date: dateStart,
+        }]);
+      }
     }
 
     return { success: true, entryId: newEntry.id };
@@ -1308,6 +1392,7 @@ export async function materialiseSchedulesForMonth(
     );
 
   const validShiftIds = new Set((await getShiftRows(false)).map((s) => s.id));
+  const dinasShiftId = await getDinasShiftId();
 
   for (const entry of entries) {
     if (!entry.shiftId) continue;
@@ -1323,7 +1408,19 @@ export async function materialiseSchedulesForMonth(
         .where(eq(schedules.monthlyScheduleEntryId, entry.id))
         .limit(1);
 
-      if (existing) continue;
+      if (existing) {
+        // Heals a Dinas day whose attendance row went missing.
+        if (entry.shiftId === dinasShiftId) {
+          await recordDinasAttendance([{
+            scheduleId: existing.id,
+            userId: entry.userId,
+            storeId: entry.storeId,
+            shiftId: entry.shiftId,
+            date: startOfDay(entry.date),
+          }]);
+        }
+        continue;
+      }
 
       const [newSched] = await db
         .insert(schedules)
@@ -1358,6 +1455,16 @@ export async function materialiseSchedulesForMonth(
           .update(attendance)
           .set({ scheduleId: newSched.id, updatedAt: new Date() })
           .where(eq(attendance.id, existingAtt.id));
+      }
+
+      if (entry.shiftId === dinasShiftId) {
+        await recordDinasAttendance([{
+          scheduleId: newSched.id,
+          userId: entry.userId,
+          storeId: entry.storeId,
+          shiftId: entry.shiftId,
+          date: startOfDay(entry.date),
+        }]);
       }
     } catch (err) {
       errors.push(`Entry ${entry.id}: ${err}`);
@@ -1398,6 +1505,12 @@ export async function employeeCheckIn(
       return {
         success: false,
         error: `Shift start time is not configured in the database.`,
+      };
+
+    if (shiftData.code === DINAS_SHIFT_CODE)
+      return {
+        success: false,
+        error: "Dinas dicatat otomatis dari jadwal — tidak perlu check-in.",
       };
 
     const [sched] = await db
@@ -1691,7 +1804,7 @@ export async function autoCheckoutOverdueAttendance(
 // created here is cleared automatically once an ops user records the
 // employee's real attendance status (see opsMarkAttendance).
 
-const AUTO_ABSENT_LOOKBACK_DAYS = 7;
+export const AUTO_ABSENT_LOOKBACK_DAYS = 7;
 
 export interface AutoAbsentFilter {
   storeIds?: number[];
@@ -1729,8 +1842,15 @@ export async function autoMarkAbsentPastSchedules(
     .where(and(...conditions));
 
   let marked = 0;
+  const dinasShiftId = await getDinasShiftId();
 
   for (const row of rows) {
+    // A Dinas day with no record (e.g. wiped by a store transfer) is Dinas, not a no-show.
+    if (row.shiftId === dinasShiftId) {
+      await recordDinasAttendance([{ ...row, shiftId: row.shiftId }]);
+      continue;
+    }
+
     try {
       await db.insert(attendance).values({
         scheduleId: row.scheduleId,

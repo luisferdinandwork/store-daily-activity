@@ -39,7 +39,7 @@ import {
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
-import { isShiftCode, paletteOf, SHIFT_ROSTER_CODE } from '@/lib/shift-tasks';
+import { DINAS_SHIFT_CODE, isShiftCode, paletteOf, SHIFT_ROSTER_CODE } from '@/lib/shift-tasks';
 import { jakartaDateKey, jakartaTodayKey } from '@/lib/day-bucket';
 import { Button } from '@/components/ui/button';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
@@ -272,7 +272,9 @@ function ShiftModePicker({ value, shifts, onChange }: {
     ...shifts.map(s => ({
       key: s.code,
       label: s.label,
-      sub: [formatTime(s.startTime), formatTime(s.endTime)].filter(Boolean).join(' – '),
+      // Dinas has no hours — say what it is instead of "Flexible".
+      sub: [formatTime(s.startTime), formatTime(s.endTime)].filter(Boolean).join(' – ')
+        || (s.code === DINAS_SHIFT_CODE ? 'Luar toko' : ''),
       visual: getShiftVisual(s.code, shifts),
     })),
     { key: 'off',   label: 'Day Off', sub: 'No work today',   visual: STATUS_VISUAL.off },

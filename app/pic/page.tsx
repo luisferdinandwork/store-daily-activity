@@ -88,6 +88,7 @@ const SHIFT_PALETTE: Record<string, { label: string; bg: string; border: string;
   middle:      { label: 'M',  bg: '#f0f9ff', border: '#bae6fd', text: '#0369a1', dot: '#38bdf8' },
   jkp_morning: { label: 'JP', bg: '#fffbeb', border: '#fde68a', text: '#b45309', dot: '#fbbf24' },
   jkp_evening: { label: 'JS', bg: '#fff1f2', border: '#fecdd3', text: '#be123c', dot: '#fb7185' },
+  dinas:    { label: 'D',  bg: '#f1f5f9', border: '#cbd5e1', text: '#475569', dot: '#94a3b8' },
   leave:    { label: 'AL', bg: '#eef2ff', border: '#c7d2fe', text: '#3730a3', dot: '#818cf8' },
   off:      { label: 'OFF', bg: '#f8fafc', border: '#e2e8f0', text: '#94a3b8', dot: '#cbd5e1' },
 };

@@ -1253,6 +1253,18 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
       const t = task as any;
       const extra = addActorNamesToExtra(buildExtra(t, photoFields), userNameById);
 
+      // setoran_tasks keeps "uang aktual diterima" in expected_amount (the
+      // ledger table calls it actualReceivedAmount), which buildExtra skips —
+      // expose it under the ledger's names so Ops sees what the store
+      // recorded, draft or submitted.
+      if (type === 'setoran' && t.expectedAmount != null) {
+        const actual = Number(t.expectedAmount);
+        if (Number.isFinite(actual)) {
+          extra.actualReceivedAmount = t.expectedAmount;
+          extra.requiredStoreAmount = (actual + Number(t.carriedDeficit ?? 0)).toFixed(2);
+        }
+      }
+
       return {
         id: t.id,
         type,

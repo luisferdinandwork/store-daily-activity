@@ -68,6 +68,7 @@ const SHIFT_TEXT_COLOR: Record<string, string> = {
   middle:      '#047857',
   jkp_morning: '#b45309',
   jkp_evening: '#1d4ed8',
+  dinas:    '#475569',
   leave:    '#5b3fd6',
   off:      '#94a3b8',
 };

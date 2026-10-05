@@ -29,6 +29,7 @@ import { employeeTypes, shifts, userRoles } from '@/lib/db/schema/lookups';
 import { jakartaDayRange, jakartaDayStart, jakartaTodayKey, jakartaWallClock } from '@/lib/day-bucket';
 import { getStoreSummariesForRange } from '@/lib/db/utils/tasks';
 import { isStoreStatus, type StoreStatus } from '@/lib/store-status';
+import { EMPTY_COUNTS, tallyStatus, type AttendanceCounts } from '@/lib/attendance-health';
 
 // ─── Public types (consumed by the page) ─────────────────────────────────────
 
@@ -80,10 +81,8 @@ export type StoreRow = {
     completionRate: number;
     colorStatus: TaskColorStatus;
   };
-  attendanceSummary: {
-    scheduled: number;
-    present: number;
-  };
+  /** Today's scheduled shifts by outcome (`total` = scheduled; `unset` = pending). Zeros unless the store is `active`. */
+  attendanceSummary: AttendanceCounts;
   employees: EmployeeRow[];
 };
 
@@ -220,16 +219,14 @@ export async function GET(): Promise<NextResponse<StoresApiResponse>> {
   const todayKey = jakartaTodayKey();
   const nowMs = Date.now();
 
-  const scheduledByStore = new Map<number, number>();
-  const presentByStore = new Map<number, number>();
+  const attendanceByStore = new Map<number, AttendanceCounts>();
   // storeId:userId → best row (an attendance record beats a bare schedule)
   const todayByEmployee = new Map<string, { status: string; checkInTime: Date | null }>();
 
   for (const r of todayRows) {
-    scheduledByStore.set(r.storeId, (scheduledByStore.get(r.storeId) ?? 0) + 1);
-    if (r.status && ATTENDED_STATUSES.has(r.status)) {
-      presentByStore.set(r.storeId, (presentByStore.get(r.storeId) ?? 0) + 1);
-    }
+    let counts = attendanceByStore.get(r.storeId);
+    if (!counts) attendanceByStore.set(r.storeId, (counts = { ...EMPTY_COUNTS }));
+    tallyStatus(counts, r.status);
 
     const key = `${r.storeId}:${r.userId}`;
     if (r.status) {
@@ -361,12 +358,10 @@ export async function GET(): Promise<NextResponse<StoresApiResponse>> {
         completionRate: rate,
         colorStatus: toColorStatus(rate, ts.total),
       },
-      attendanceSummary: {
-        // A prep/closed store's schedule isn't an attendance expectation.
-        scheduled: store.status === 'active' ? scheduledByStore.get(store.id) ?? 0 : 0,
-        // Checked in on time or late — late staff are present.
-        present: store.status === 'active' ? presentByStore.get(store.id) ?? 0 : 0,
-      },
+      // A prep/closed store's schedule isn't an attendance expectation.
+      attendanceSummary: store.status === 'active'
+        ? { ...EMPTY_COUNTS, ...attendanceByStore.get(store.id) }
+        : { ...EMPTY_COUNTS },
       employees: employeesByStore.get(store.id) ?? [],
     };
 

@@ -10,6 +10,7 @@
     "lint": "eslint",
     "db:generate": "tsx scripts/generate.ts",
     "db:migrate": "tsx scripts/migrate.ts",
+    "db:migrate:prod": "tsx scripts/migrate-prod.ts",
     "db:baseline": "tsx scripts/db-baseline.ts",
     "db:check": "tsx scripts/db-check.ts",
     "db:clear": "tsx scripts/clear.ts",

@@ -697,7 +697,7 @@ function SetoranDetail({ task }: { task: FlatTask }) {
         </div>
       )}
       <div className="space-y-1 divide-y divide-slate-100">
-        <InfoRow label="Uang aktual diterima" value={fmtAmount(actualReceived)} />
+        <InfoRow label="Uang aktual diterima" value={actualReceived == null ? '—' : fmtRupiah(actualReceived)} />
         {Number(previousUnpaid) > 0 && (
           <InfoRow label="Sisa belum disetor" value={<span className="text-amber-600">{fmtAmount(previousUnpaid)}</span>} />
         )}

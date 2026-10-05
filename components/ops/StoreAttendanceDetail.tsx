@@ -15,24 +15,29 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog';
 import {
-  CheckCircle2, XCircle, Clock, AlertCircle, HelpCircle, Sun, Moon, Zap,
-  RefreshCw, UserCircle, Pencil, CalendarDays, Coffee, LogIn, LogOut,
-  Briefcase, Palmtree, Thermometer, Stethoscope, Sunrise,
+  Clock, Sun, Moon, Zap,
+  RefreshCw, UserCircle, Pencil, CalendarDays, Coffee, LogIn, LogOut, Sunrise,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import {
-  attendanceStatusLabel,
   isLeaveAttendanceStatus,
   LEAVE_ATTENDANCE_STATUSES,
   type AttendanceStatus,
   type LeaveAttendanceStatus,
 } from '@/lib/attendance-status';
+import {
+  attendanceRate, attendanceHealth, tallyStatus, EMPTY_COUNTS, HEALTH_LABEL,
+  type AttendanceCounts,
+} from '@/lib/attendance-health';
 import { CASH_COUNT_SESSION_INFO, type CashCountSession } from '@/lib/cash-count-sessions';
+import {
+  ATTENDANCE_COUNT_ITEMS, AttendanceStatusBadge, AttendanceStatusDot,
+  STATUS, HEALTH_STYLE, type RowStatus,
+} from '@/components/ops/AttendanceStatus';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type AttStatus = AttendanceStatus;
-type RowStatus = AttStatus | 'pending';
 
 /** One SOP cash-count session for the store/day; record null = not counted. */
 interface CashCountEntry {
@@ -107,19 +112,6 @@ function shiftAccentFor(accent: string | null) {
 function fmtShiftTime(t: string | null) {
   return t ? t.slice(0, 5) : '—';
 }
-
-// Indicator colors: green = present, yellow = late, red = absent, blue = pending (unset).
-const STATUS: Record<RowStatus, { label: string; Icon: React.ElementType; chip: string; dot: string }> = {
-  present: { label: 'Present', Icon: CheckCircle2, chip: 'border-emerald-200 bg-emerald-50 text-emerald-700', dot: 'bg-emerald-500' },
-  late:    { label: 'Late',    Icon: Clock,        chip: 'border-amber-200 bg-amber-50 text-amber-700',       dot: 'bg-amber-400'   },
-  absent:  { label: 'Absent',  Icon: XCircle,      chip: 'border-red-200 bg-red-50 text-red-700',             dot: 'bg-red-500'     },
-  excused: { label: 'Excused', Icon: AlertCircle,  chip: 'border-border bg-secondary text-muted-foreground',  dot: 'bg-slate-400'   },
-  dinas:              { label: attendanceStatusLabel('dinas'),              Icon: Briefcase,   chip: 'border-indigo-200 bg-indigo-50 text-indigo-700', dot: 'bg-indigo-500' },
-  cuti:               { label: attendanceStatusLabel('cuti'),               Icon: Palmtree,    chip: 'border-violet-200 bg-violet-50 text-violet-700', dot: 'bg-violet-500' },
-  sakit_tanpa_surat:  { label: attendanceStatusLabel('sakit_tanpa_surat'),  Icon: Thermometer, chip: 'border-orange-200 bg-orange-50 text-orange-700', dot: 'bg-orange-500' },
-  sakit_dengan_surat: { label: attendanceStatusLabel('sakit_dengan_surat'), Icon: Stethoscope, chip: 'border-teal-200 bg-teal-50 text-teal-700',       dot: 'bg-teal-500'   },
-  pending: { label: 'Pending', Icon: HelpCircle,    chip: 'border-sky-200 bg-sky-50 text-sky-700',             dot: 'bg-sky-400'     },
-};
 
 function rowStatus(att: AttendanceData | null): RowStatus {
   return att?.status ?? 'pending';
@@ -250,10 +242,7 @@ function MarkDialog({ row, open, onClose, onSaved }: {
           <div className="space-y-1.5">
             <Label>Current status</Label>
             <div>
-              <Badge variant="outline" className={cn('gap-1.5 text-xs', STATUS[currentStatus].chip)}>
-                {(() => { const Icon = STATUS[currentStatus].Icon; return <Icon className="h-3.5 w-3.5" />; })()}
-                {STATUS[currentStatus].label}
-              </Badge>
+              <AttendanceStatusBadge status={currentStatus} className="text-xs" />
             </div>
           </div>
 
@@ -311,14 +300,10 @@ function MarkDialog({ row, open, onClose, onSaved }: {
 
 // ─── Status indicator ───────────────────────────────────────────────────────
 function StatusDot({ status, onBreak }: { status: RowStatus; onBreak?: boolean }) {
-  const cfg = STATUS[status];
   return (
     <span className="inline-flex items-center gap-1.5">
-      <span className={cn('h-2 w-2 flex-shrink-0 rounded-full', onBreak ? 'bg-amber-400' : cfg.dot)} />
-      <Badge variant="outline" className={cn('gap-1 text-[11px]', cfg.chip)}>
-        <cfg.Icon className="h-3 w-3" />
-        {onBreak ? 'On Break' : cfg.label}
-      </Badge>
+      <AttendanceStatusDot status={status} className={onBreak ? 'bg-amber-400' : undefined} />
+      <AttendanceStatusBadge status={status} label={onBreak ? 'On Break' : undefined} className="text-[11px]" />
     </span>
   );
 }
@@ -479,29 +464,26 @@ export default function StoreAttendanceDetail({
     return [...groups.values()].sort((a, b) => a.sortOrder - b.sortOrder);
   })();
 
-  const total       = rows.length;
-  const present     = rows.filter((r) => r.attendance?.status === 'present').length;
-  const late        = rows.filter((r) => r.attendance?.status === 'late').length;
-  const absent      = rows.filter((r) => r.attendance?.status === 'absent').length;
-  const onLeave     = rows.filter((r) => isLeaveAttendanceStatus(r.attendance?.status)).length;
+  // Same buckets and rule as the calendar: present + late over present + late +
+  // absent, pending and leave left out.
+  const counts: AttendanceCounts = { ...EMPTY_COUNTS };
+  for (const r of rows) tallyStatus(counts, r.attendance?.status);
+  const { total, unset } = counts;
   const onBreak     = rows.filter((r) => r.attendance?.onBreak).length;
-  const unset       = rows.filter((r) => !r.attendance).length;
   const recordedPct = total > 0 ? Math.round(((total - unset) / total) * 100) : 0;
+  const rate        = attendanceRate(counts);
+  const health      = attendanceHealth(counts);
 
   return (
     <div className="space-y-5">
       {/* Stats */}
       <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-7">
         {[
-          { label: 'Scheduled', value: total,   color: 'text-foreground'   },
-          { label: 'Present',   value: present, color: 'text-emerald-600'  },
-          { label: 'Late',      value: late,     color: 'text-amber-600'   },
-          { label: 'Absent',    value: absent,  color: 'text-red-600'      },
-          { label: 'Dinas / Cuti / Sakit', value: onLeave, color: 'text-violet-600' },
-          { label: 'Pending',   value: unset,    color: 'text-sky-600'     },
-          { label: 'On Break',  value: onBreak,  color: 'text-amber-600'   },
-        ].map(({ label, value, color }) => (
-          <Card key={label}>
+          { label: 'Scheduled', value: total, color: 'text-foreground', hint: undefined },
+          ...ATTENDANCE_COUNT_ITEMS.map((i) => ({ label: i.label, value: counts[i.key], color: i.text, hint: i.hint })),
+          { label: 'On Break', value: onBreak, color: 'text-amber-600', hint: undefined },
+        ].map(({ label, value, color, hint }) => (
+          <Card key={label} title={hint}>
             <CardContent className="p-4 text-center">
               <p className={cn('text-2xl font-bold', color)}>{loading ? '—' : value}</p>
               <p className="mt-0.5 text-xs text-muted-foreground">{label}</p>
@@ -512,9 +494,21 @@ export default function StoreAttendanceDetail({
 
       {!loading && total > 0 && (
         <div className="space-y-1.5">
-          <div className="flex items-center justify-between text-xs text-muted-foreground">
-            <span>{recordedPct}% recorded</span>
-            <span>{total - unset}/{total} employees · {unset} unmarked</span>
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span className="flex items-center gap-2">
+              {rate !== null && (
+                <Badge
+                  variant="outline"
+                  className={cn('gap-1.5 text-[11px] font-bold', HEALTH_STYLE[health].light, HEALTH_STYLE[health].border, HEALTH_STYLE[health].text)}
+                  title="Present + late, out of present + late + absent. Pending and leave aren't counted."
+                >
+                  <span className={cn('h-1.5 w-1.5 rounded-full', HEALTH_STYLE[health].bg)} />
+                  {rate}% attendance · {HEALTH_LABEL[health]}
+                </Badge>
+              )}
+              <span>{recordedPct}% recorded</span>
+            </span>
+            <span>{total - unset}/{total} employees · {unset} {STATUS.pending.label}</span>
           </div>
           <Progress value={recordedPct} className="h-1.5" />
         </div>

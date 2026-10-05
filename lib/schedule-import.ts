@@ -34,8 +34,10 @@
  *   F / FD / FULL / FULLDAY               → full day     (Full · Lembur)
  *   JP / JKP P / JKP PAGI                 → jkp_morning  (JKP Pagi · 08.30–14.30)
  *   JS / JKP S / JKP SIANG                → jkp_evening  (JKP Siang · 16.00–22.00)
+ *   D / DINAS                             → dinas        (working outside any store — no tasks,
+ *                                                          attendance is recorded as Dinas automatically)
  *   AL / A / C / CT / CU / CUTI / I / IZIN / SICK / SAKIT /
- *     D (Dinas) / STD / SD (Sakit)        → leave
+ *     STD / SD (Sakit)                    → leave
  *   X / O / OFF / LIBUR / "-" / (blank)   → day off
  * Anything else (e.g. a bare "JKP") is also imported as a day off, but is
  * reported back as a warning so a mistyped code doesn't vanish silently.
@@ -62,6 +64,7 @@ export type ImportShift =
   | 'middle'
   | 'jkp_morning'
   | 'jkp_evening'
+  | 'dinas'
   | 'off'
   | 'leave';
 
@@ -587,9 +590,10 @@ function codeToShift(codeRaw: string): ImportShift | null {
   if (['F', 'FD', 'FULL', 'FULLDAY'].includes(code)) return 'full';
   if (['JP', 'JKPP', 'JKPPAGI', 'JKPPG', 'JPAGI', 'JPG'].includes(code)) return 'jkp_morning';
   if (['JS', 'JKPS', 'JKPSIANG', 'JKPSG', 'JSIANG', 'JSG'].includes(code)) return 'jkp_evening';
+  if (['D', 'DINAS'].includes(code)) return 'dinas';
   if ([
     'AL', 'A', 'C', 'CT', 'CU', 'CUTI', 'I', 'IZIN', 'SICK', 'SAKIT', 'CTI',
-    'D', 'STD', 'SD',
+    'STD', 'SD',
   ].includes(code)) return 'leave';
   if (['X', 'O', 'OFF', 'LIBUR', 'LBR', 'DO', 'DAYOFF', 'OFFDAY'].includes(code)) return 'off';
   return null;
@@ -607,7 +611,7 @@ function describeUnknownCodes(list: UnknownCode[]): string[] {
   return [...byCode].map(([code, cells]) => {
     const where = cells.slice(0, 3).map((c) => `${c.name} day ${c.day}`).join(', ');
     const more = cells.length > 3 ? `, +${cells.length - 3} more` : '';
-    return `Unknown code "${code}" in ${cells.length} cell${cells.length !== 1 ? 's' : ''} (${where}${more}) — imported as day off. Use E, M, L, F, JP, JS, X or C/D/STD/SD.`;
+    return `Unknown code "${code}" in ${cells.length} cell${cells.length !== 1 ? 's' : ''} (${where}${more}) — imported as day off. Use E, M, L, F, JP, JS, D, X or C/STD/SD.`;
   });
 }
 
@@ -765,7 +769,8 @@ export async function importScheduleFromParsed(
           day.shift === 'evening' ||
           day.shift === 'middle' ||
           day.shift === 'jkp_morning' ||
-          day.shift === 'jkp_evening'
+          day.shift === 'jkp_evening' ||
+          day.shift === 'dinas'
         ) {
           assignments.push({ ...base, shift: day.shift, isOff: false, isLeave: false });
         } else if (day.shift === 'full') {

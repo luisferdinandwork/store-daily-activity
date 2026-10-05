@@ -20,7 +20,9 @@ import {
 } from 'lucide-react';
 
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
+import { AttendanceCountsLine } from '@/components/ops/AttendanceStatus';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { EMPTY_COUNTS, showedUp } from '@/lib/attendance-health';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -265,7 +267,8 @@ function StoreRankCard({
   tone: Tone;
   title: string;
   viewHref: string;
-  rows: Array<{ key: string | number; name: string; rate: number; detail: string }>;
+  /** `detail` sits beside the rate; `breakdown` sits under the bar. */
+  rows: Array<{ key: string | number; name: string; rate: number; detail?: string; breakdown?: ReactNode }>;
   emptyLabel: string;
   moreCount?: number;
 }) {
@@ -295,11 +298,12 @@ function StoreRankCard({
                   <div className="mb-1 flex items-baseline justify-between gap-2">
                     <p className="truncate text-sm font-medium text-slate-800">{row.name}</p>
                     <span className="flex shrink-0 items-baseline gap-1.5">
-                      <span className="text-xs text-slate-400">{row.detail}</span>
+                      {row.detail && <span className="text-xs text-slate-400">{row.detail}</span>}
                       <span className={`text-xs font-semibold ${TONE[t].text}`}>{row.rate}%</span>
                     </span>
                   </div>
                   <Bar pct={row.rate} tone={t} />
+                  {row.breakdown && <div className="mt-1.5">{row.breakdown}</div>}
                 </div>
               );
             })}
@@ -429,8 +433,9 @@ export default function OpsDashboardPage() {
                 footer={
                   <>
                     <Bar pct={att?.rate ?? 0} tone={rateTone(att?.rate ?? 0)} />
-                    <p className="mt-2 text-xs text-slate-500">
-                      {(att?.present ?? 0) + (att?.late ?? 0)}/{att?.total ?? 0} hadir hari ini
+                    <AttendanceCountsLine counts={att ?? EMPTY_COUNTS} className="mt-2.5 text-[11px]" />
+                    <p className="mt-1 text-[11px] text-slate-400">
+                      Rate = Present + Late: {att ? showedUp(att) : 0} of {att?.total ?? 0} scheduled
                     </p>
                   </>
                 }
@@ -545,12 +550,7 @@ export default function OpsDashboardPage() {
                 key: s.storeId,
                 name: s.storeName,
                 rate: s.rate,
-                detail:
-                  s.absent > 0 || s.unset > 0
-                    ? `${s.absent} absen · ${s.unset} belum hadir`
-                    : s.late > 0
-                      ? `${s.late} terlambat`
-                      : `${s.present}/${s.total} hadir`,
+                breakdown: <AttendanceCountsLine counts={s} className="text-[11px]" />,
               }))}
               moreCount={Math.max(0, attendanceStoresBehind.length - 6)}
             />

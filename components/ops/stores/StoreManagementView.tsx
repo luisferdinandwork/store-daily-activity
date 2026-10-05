@@ -58,7 +58,11 @@ import StoreStatusSheet from '@/components/ops/stores/StoreStatusSheet';
 import StoreDeleteDialog from '@/components/ops/stores/StoreDeleteDialog';
 import { STORE_STATUSES, STORE_STATUS_BADGE, STORE_STATUS_LABEL } from '@/lib/store-status';
 import { findDuplicatePic1, PIC_1_TYPE_CODE } from '@/lib/store-pic1';
-import { attendanceStatusLabel } from '@/lib/attendance-status';
+import { showedUp } from '@/lib/attendance-health';
+import {
+  AttendanceCountsLine, AttendanceStatusBadge, AttendanceStatusDot, isAttendanceTag,
+  type AttendanceTag,
+} from '@/components/ops/AttendanceStatus';
 import { jakartaTime } from '@/lib/day-bucket';
 import { cn } from '@/lib/utils';
 import type { AreaGroup, EmployeeRow, StoreRow, TaskColorStatus } from '@/app/api/ops/stores/route';
@@ -143,54 +147,19 @@ const COLOR: Record<
   },
 };
 
-const LEAVE_BADGE = 'bg-indigo-50 text-indigo-700 ring-indigo-200';
-
-const ATTENDANCE_BADGE: Record<string, string> = {
-  present:            'bg-emerald-50 text-emerald-700 ring-emerald-200',
-  late:               'bg-amber-50 text-amber-700 ring-amber-200',
-  absent:             'bg-rose-50 text-rose-700 ring-rose-200',
-  not_checked_in:     'bg-rose-50 text-rose-600 ring-rose-200',
-  upcoming:           'bg-sky-50 text-sky-700 ring-sky-200',
-  excused:            LEAVE_BADGE,
-  dinas:              LEAVE_BADGE,
-  cuti:               LEAVE_BADGE,
-  sakit_tanpa_surat:  LEAVE_BADGE,
-  sakit_dengan_surat: LEAVE_BADGE,
-  leave:              LEAVE_BADGE,
-  off:                'bg-slate-100 text-slate-500 ring-slate-200',
-  not_scheduled:      'bg-slate-50 text-slate-400 ring-slate-200',
-  not_recording:      'bg-slate-50 text-slate-400 ring-slate-200',
-};
-
-const ATTENDANCE_DOT: Record<string, string> = {
-  present:            'bg-emerald-500',
-  late:               'bg-amber-400',
-  absent:             'bg-rose-500',
-  not_checked_in:     'bg-rose-300',
-  upcoming:           'bg-sky-400',
-  excused:            'bg-indigo-400',
-  dinas:              'bg-indigo-400',
-  cuti:               'bg-indigo-400',
-  sakit_tanpa_surat:  'bg-indigo-400',
-  sakit_dengan_surat: 'bg-indigo-400',
-  leave:              'bg-indigo-400',
-  off:                'bg-slate-300',
-  not_scheduled:      'border border-dashed border-slate-300',
-  not_recording:      'border border-dashed border-slate-300',
-};
-
-const ATTENDANCE_LABEL: Record<string, string> = {
-  not_checked_in: 'Not checked in',
-  upcoming:       'Upcoming',
-  leave:          'Leave',
-  off:            'Off',
-  not_scheduled:  'Not scheduled',
-  not_recording:  'Not recording',
-};
-
-function attendanceLabel(status: string): string {
-  return ATTENDANCE_LABEL[status] ?? attendanceStatusLabel(status);
+/**
+ * A roster state from /api/ops/stores → the shared tag. Both "no check-in yet"
+ * states are Pending, like everywhere else; the tooltip says which one.
+ */
+function rosterTag(status: string): AttendanceTag {
+  if (status === 'not_checked_in' || status === 'upcoming') return 'pending';
+  return isAttendanceTag(status) ? status : 'not_scheduled';
 }
+
+const ROSTER_HINT: Record<string, string> = {
+  not_checked_in: 'Shift has started — no check-in yet',
+  upcoming:       "Shift hasn't started yet",
+};
 
 // ─── Small presentational helpers ────────────────────────────────────────────
 
@@ -413,8 +382,7 @@ function EmployeeRoster({
               No employees assigned to {store.storeNo}.
             </p>
           ) : employees.map((emp) => {
-            const dot = ATTENDANCE_DOT[emp.attendanceStatus] ?? ATTENDANCE_DOT.not_scheduled;
-            const badge = ATTENDANCE_BADGE[emp.attendanceStatus] ?? ATTENDANCE_BADGE.not_scheduled;
+            const tag = rosterTag(emp.attendanceStatus);
             const extraPic1 = duplicatePic1 && emp.employeeTypeCode === PIC_1_TYPE_CODE;
 
             return (
@@ -427,7 +395,7 @@ function EmployeeRoster({
               >
                 <div className="grid flex-1 grid-cols-[1fr_6rem_8rem_7rem_6rem] items-center gap-x-4">
                   <div className="flex items-center gap-2.5 min-w-0 pl-8">
-                    <span className={cn('h-2 w-2 shrink-0 rounded-full', dot)} />
+                    <AttendanceStatusDot status={tag} />
                     <span className={cn('truncate font-medium', extraPic1 ? 'text-rose-800' : 'text-slate-800')}>{emp.name}</span>
                     {emp.employeeType && (
                       <span
@@ -443,9 +411,7 @@ function EmployeeRoster({
                   <span className="font-mono text-xs text-slate-500">{emp.nik}</span>
                   <span className="truncate text-slate-600">{emp.role}</span>
                   <span>
-                    <span className={cn('inline-flex items-center rounded-md px-2 py-0.5 text-[10px] font-bold ring-1 ring-inset', badge)}>
-                      {attendanceLabel(emp.attendanceStatus)}
-                    </span>
+                    <AttendanceStatusBadge status={tag} compact title={ROSTER_HINT[emp.attendanceStatus]} />
                   </span>
                   <span className="tabular-nums text-slate-500">{fmt(emp.checkInTime)}</span>
                 </div>
@@ -594,16 +560,22 @@ function StoreTableRow({
 
         {/* Attendance */}
         <td className="px-4 py-3.5">
-          <div className="flex items-center gap-1.5">
-            <Users className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-            <span className="text-sm font-semibold text-slate-700">
-              {store.attendanceSummary.present}
-              <span className="font-normal text-slate-400">
-                /{store.attendanceSummary.scheduled}
-              </span>
-            </span>
-          </div>
-          <p className="mt-0.5 text-[10px] text-slate-400">present / scheduled</p>
+          {store.attendanceSummary.total > 0 ? (
+            <>
+              <div className="flex items-center gap-1.5" title="Present + Late, out of scheduled">
+                <Users className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                <span className="text-sm font-semibold text-slate-700">
+                  {showedUp(store.attendanceSummary)}
+                  <span className="font-normal text-slate-400">
+                    /{store.attendanceSummary.total}
+                  </span>
+                </span>
+              </div>
+              <AttendanceCountsLine counts={store.attendanceSummary} className="mt-0.5" />
+            </>
+          ) : (
+            <p className="text-[11px] italic text-slate-400">No one scheduled</p>
+          )}
         </td>
 
         {/* Petty cash */}
@@ -829,8 +801,8 @@ function sortValue(store: StoreRow, key: StoreSortKey): number | string | null {
     case 'progress':   // Only stores that record tasks have a rate to compare.
       return store.status === 'active' && store.taskStats.total > 0 ? store.taskStats.completionRate : null;
     case 'attendance':
-      return store.attendanceSummary.scheduled > 0
-        ? store.attendanceSummary.present / store.attendanceSummary.scheduled
+      return store.attendanceSummary.total > 0
+        ? showedUp(store.attendanceSummary) / store.attendanceSummary.total
         : null;
     case 'pettyCash': {
       const n = Number(store.pettyCashBalance);
@@ -962,7 +934,7 @@ export default function StoreManagementView({
   const totalTasks   = areas.reduce((s, a) => a.stores.reduce((ss, st) => ss + st.taskStats.total, s), 0);
   const doneTasks    = areas.reduce((s, a) => a.stores.reduce((ss, st) => ss + st.taskStats.completed, s), 0);
   const avgRate      = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
-  const totalPresent = areas.reduce((s, a) => a.stores.reduce((ss, st) => ss + st.attendanceSummary.present, s), 0);
+  const totalShowedUp = areas.reduce((s, a) => a.stores.reduce((ss, st) => ss + showedUp(st.attendanceSummary), s), 0);
 
   useEffect(() => {
     onReady?.({ loading, totalAreas, totalStores, avgRate, onAddStore: () => setEditing({ mode: 'create' }), reload: () => void loadData() });
@@ -1059,7 +1031,7 @@ export default function StoreManagementView({
         <SummaryPill icon={Store}         value={totalStores}              label="Stores"        accent="bg-indigo-50 text-indigo-500" />
         <SummaryPill icon={ClipboardList} value={`${doneTasks}/${totalTasks}`} label="Tasks done" accent="bg-emerald-50 text-emerald-500" />
         <SummaryPill icon={CheckCircle2}  value={`${avgRate}%`}            label="Completion"    accent="bg-violet-50 text-violet-500" />
-        <SummaryPill icon={Users}         value={totalPresent}             label="Present today" accent="bg-sky-50 text-sky-500" />
+        <SummaryPill icon={Users}         value={totalShowedUp}            label="Present + Late today" accent="bg-sky-50 text-sky-500" />
       </div>
 
       {/* One PIC 1 per store */}

@@ -32,6 +32,8 @@ Guidance for AI assistants working in this repo. Keep this file short and curren
 - `lib/*` — cross-cutting helpers (`schedule-utils.ts`, `shift-tasks.ts`, `schedule-import.ts`, `performance/target-utils.ts`).
 - `lib/performance/target-view.ts` — pure view logic for Ops **Performance Targets** (`/ops/performance-targets`): API types, store health bands (`on_track` / `watch` / `behind`, judged against elapsed days with today as half a day — that pace is **not shown** in the UI, Ops found it confusing), search + sort. UI lives in `components/ops/performance/*`; the list's filter/sort state in `useStoreListView`.
 - `lib/user-import.ts` — IT Users bulk Excel import (`/it/users` → Import Excel). Reads the PRISM template **or** an HR roster (Employee No./Zona/Store Code/Organization Unit/Level/Status); unknown areas + stores are created (new stores default to the Daan Mogot placeholder location).
+- `lib/attendance-health.ts` — the Ops **Attendance** (`/ops/attendance`) rule: rate = (present + late) ÷ (present + late + absent), **pending and leave are left out**; ≥ 90% good, 75–89% at risk, < 75% critical, plus a "many late" tier with its own colour (fuchsia). Calendar, day panel and store detail all use it. Its month API (`/api/ops/attendance/overview?month=YYYY-MM[&storeId=N]`) is **read-only**: past no-record shifts inside the auto-absent window count as absent (what the cron will record). `GET /api/ops/attendance` (store day) is *not* read-only — it runs the auto-absent / auto-checkout fixers.
+- **Attendance status names are defined once.** Words live in `lib/attendance-status.ts` (`ATTENDANCE_STATUS_LABELS`, `PENDING_LABEL` = "Pending", `ON_LEAVE_LABEL` = "On leave"); look + pieces in `components/ops/AttendanceStatus.tsx` (`STATUS`, `AttendanceStatusBadge/Dot`, `AttendanceCountsLine`, `ATTENDANCE_COUNT_ITEMS`). Dashboard, Attendance, Stores and Areas all draw from them — never hand-write "hadir / belum hadir / not checked in / leave" or per-page colour maps. Counts go through `tallyStatus()` (`lib/attendance-health.ts`) so a status can't land in a different bucket per page; `/api/ops/stores` `attendanceSummary` is a full `AttendanceCounts` (`present` = on time only — use `showedUp()` for present + late).
 - `components/<role>/...`, `components/ui/...`.
 - `scripts/seed/*` — the dev/staging seed (see below). `scripts/{generate,migrate,reset}.ts` wrap drizzle-kit.
 
@@ -43,6 +45,7 @@ Guidance for AI assistants working in this repo. Keep this file short and curren
 - One PIC 1 per store (the petty-cash holder) — flagged in red, not enforced (`lib/store-pic1.ts`): IT Users, Store Management, import review.
 - Schedule: `monthly_schedules` (per store/`yearMonth`) → `monthly_schedule_entries` (per employee/day, OFF & leave included) → `schedules` (materialised working days only — `shiftId` NOT NULL).
 - `shifts` (`code` in `morning` / `evening` / `full_day` — stable; hours/breaks/accent live here).
+- **Dinas shift** (`dinas`, roster code `D`, no hours/tasks): working outside any store. Scheduling it (Ops editor or Excel `D`) auto-records `attendance.status = 'dinas'` (`recordDinasAttendance` in `lib/schedule-utils.ts`). That auto row never locks the day — `lockedByAttendance()` ignores it and schedule deletes drop it; any other attendance row still locks. Counts as On leave (excused), not in the rate.
 - `shift_tasks` maps `shifts` → `task_definitions` (which task types a shift expects). Per-task tables in `lib/db/schema/tasks.ts`.
 - Targets: `store_monthly_targets` (Ops sets one number) + `employee_monthly_targets` (fixed monthly %, `isPercentageOverridden` locks it) + `target_allocation_templates` (default % by headcount). Logic in `lib/performance/target-utils.ts`.
 - `stores.status` (`active` / `close` / `ready_to_open`, `lib/store-status.ts` + `lib/db/utils/store-status.ts`) — only `active` stores record attendance, tasks, petty cash and appear in Ops/Finance progress rollups; `ready_to_open` is prep-only (schedules/targets, Rp 0 petty cash in Finance); change it only via `changeStoreStatus()` (IT-only; writes `store_status_history`, activation provisions petty cash; `checkStoreCloseReadiness()` is the future Audit hook). `stores.dept_code` = BC dimension code (`lib/store-dept-codes.ts`), IT + Finance views only — never return it from Ops/employee APIs.
@@ -74,6 +77,10 @@ npm run lint                     # eslint (scripts/ has pre-existing `any` noise
 ```
 
 Run seed/migrate/probe scripts as `npx dotenv -e .env.local -- tsx <file>` (`@/lib/db` reads `DATABASE_URL` at import).
+
+## Environments (staging → production)
+
+`.env.local` holds **two** databases: `DATABASE_URL` = **staging** (the app, `db:migrate`, `db:seed`, `db:reset` all use it) and `PRODUCTION_DATABASE_URL` = production (only `scripts/migrate-prod.ts` reads it; the server has its own `.env.local` with just `DATABASE_URL`). Flow: change schema → `db:generate` → review SQL → `npm run db:migrate` (staging) → test → commit → `npm run db:migrate:prod -- --dry` → `npm run db:migrate:prod` (ships exactly the files staging already ran, in one transaction, refuses DROP/DELETE/TRUNCATE/type changes without `--allow-destructive`, rolls back if any table loses rows, you type the DB name to confirm) → deploy the code. Migrate prod *before* deploying. Destructive scripts (`db:reset`, `db:seed`, the `seed-*` one-offs) import `scripts/lib/not-production.ts` and refuse to run if `DATABASE_URL` is production. New staging DB: `npm run db:migrate && npm run db:seed:prod` (or `db:seed` for demo data).
 
 ## Seed world
 
