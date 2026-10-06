@@ -27,7 +27,7 @@ import {
   type LeaveAttendanceStatus,
 } from '@/lib/attendance-status';
 import {
-  attendanceRate, attendanceHealth, tallyStatus, EMPTY_COUNTS, HEALTH_LABEL,
+  attendanceRate, attendanceHealth, tallyPeople, EMPTY_COUNTS, HEALTH_LABEL,
   type AttendanceCounts,
 } from '@/lib/attendance-health';
 import { CASH_COUNT_SESSION_INFO, type CashCountSession } from '@/lib/cash-count-sessions';
@@ -465,9 +465,10 @@ export default function StoreAttendanceDetail({
   })();
 
   // Same buckets and rule as the calendar: present + late over present + late +
-  // absent, pending and leave left out.
+  // absent, pending and leave left out. One status per person, so an employee
+  // listed twice (two schedule rows) still counts once.
   const counts: AttendanceCounts = { ...EMPTY_COUNTS };
-  for (const r of rows) tallyStatus(counts, r.attendance?.status);
+  tallyPeople(counts, rows.map((r) => ({ userId: r.user?.id, status: r.attendance?.status })));
   const { total, unset } = counts;
   const onBreak     = rows.filter((r) => r.attendance?.onBreak).length;
   const recordedPct = total > 0 ? Math.round(((total - unset) / total) * 100) : 0;
@@ -477,7 +478,7 @@ export default function StoreAttendanceDetail({
   return (
     <div className="space-y-5">
       {/* Stats */}
-      <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-7">
+      <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 lg:grid-cols-8">
         {[
           { label: 'Scheduled', value: total, color: 'text-foreground', hint: undefined },
           ...ATTENDANCE_COUNT_ITEMS.map((i) => ({ label: i.label, value: counts[i.key], color: i.text, hint: i.hint })),

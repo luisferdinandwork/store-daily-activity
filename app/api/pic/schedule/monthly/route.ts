@@ -75,6 +75,9 @@ export async function GET(req: NextRequest) {
 
     isOff: entry.isOff,
     isLeave: entry.isLeave,
+    // Days with attendance stay put on import; PIC may import only when
+    // every listed day has it (lib/schedule-utils.ts, blockIfUnattended).
+    hasAttendance: entry.hasAttendance,
   }));
 
   const schedule = {

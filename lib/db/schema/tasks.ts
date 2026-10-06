@@ -627,7 +627,9 @@ export const itemReturnEntries = pgTable('item_return_entries', {
  */
 export const cekUangModalTasks = pgTable('cek_uang_modal_tasks', {
   id:         serial('id').primaryKey(),
-  scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
+  // Null once Ops deleted the day's schedule together with its history — the
+  // count stays for Finance, unlinked (same as setoran_tasks.schedule_id).
+  scheduleId: integer('schedule_id').references(() => schedules.id),
   userId:     text('user_id').references(() => users.id).notNull(),
   storeId:    integer('store_id').references(() => stores.id).notNull(),
   shiftId:    integer('shift_id').references(() => shifts.id).notNull(),
@@ -906,7 +908,9 @@ export const serahTerimaTasks = pgTable('serah_terima_tasks', {
  */
 export const storeClosingTasks = pgTable('store_closing_tasks', {
   id:         serial('id').primaryKey(),
-  scheduleId: integer('schedule_id').references(() => schedules.id).notNull(),
+  // Null once Ops deleted the day's schedule together with its history — the
+  // Z-report / EDC record stays for Finance, unlinked.
+  scheduleId: integer('schedule_id').references(() => schedules.id),
   userId:     text('user_id').references(() => users.id).notNull(),
   storeId:    integer('store_id').references(() => stores.id).notNull(),
   shiftId:    integer('shift_id').references(() => shifts.id).notNull(),

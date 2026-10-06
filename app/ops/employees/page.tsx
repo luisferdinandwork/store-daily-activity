@@ -7,26 +7,18 @@
 // a dense table view; /ops/manage stays the store-by-store transfer
 // workspace. Clicking a row opens the same EmployeeDetailSheet used there
 // (transfer / schedule / history) so "manage" behaves identically in both
-// places.
+// places. Adding employees is IT-only (/it/users) — there is no create
+// action on this page.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
-import { Loader2, Plus, Search, Shield, UserPlus, Users, X } from 'lucide-react';
+import { Loader2, Search, Shield, Users, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
-import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
 import {
   Select,
   SelectContent,
@@ -84,146 +76,6 @@ function Avatar({ name, avatarUrl }: { name: string; avatarUrl?: string | null }
 
 const ALL = 'all';
 
-// ─── Add Employee dialog ────────────────────────────────────────────────────────
-
-function AddEmployeeDialog({
-  open,
-  onOpenChange,
-  stores,
-  employeeTypes,
-  onCreated,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  stores: WorkspaceData['stores'];
-  employeeTypes: WorkspaceData['lookups']['employeeTypes'];
-  onCreated: () => Promise<void> | void;
-}) {
-  const [nik, setNik] = useState('');
-  const [name, setName] = useState('');
-  const [password, setPassword] = useState('');
-  const [employeeTypeId, setEmployeeTypeId] = useState('');
-  const [homeStoreId, setHomeStoreId] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (open) {
-      setNik('');
-      setName('');
-      setPassword('');
-      setEmployeeTypeId('');
-      setHomeStoreId('');
-    }
-  }, [open]);
-
-  const canSubmit = nik.trim() && name.trim() && password.length >= 8 && employeeTypeId && homeStoreId;
-
-  async function handleSubmit() {
-    if (!canSubmit) return;
-    setSaving(true);
-    try {
-      const res = await fetch('/api/ops/users', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          nik: nik.trim(),
-          name: name.trim(),
-          password,
-          employeeTypeId: Number(employeeTypeId),
-          homeStoreId: Number(homeStoreId),
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error ?? 'Gagal membuat karyawan.');
-
-      toast.success(`${name.trim()} berhasil ditambahkan.`);
-      onOpenChange(false);
-      await onCreated();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Gagal membuat karyawan.');
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <UserPlus className="h-4 w-4 text-violet-600" />
-            Tambah Karyawan
-          </DialogTitle>
-          <DialogDescription>
-            Membuat akun karyawan baru di store yang kamu kelola.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-4">
-          <div>
-            <label className="mb-1.5 block text-xs font-bold text-slate-500">NIK</label>
-            <Input value={nik} onChange={(e) => setNik(e.target.value)} placeholder="NIK karyawan" />
-          </div>
-
-          <div>
-            <label className="mb-1.5 block text-xs font-bold text-slate-500">Nama</label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nama lengkap" />
-          </div>
-
-          <div>
-            <label className="mb-1.5 block text-xs font-bold text-slate-500">Password awal</label>
-            <Input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Minimal 8 karakter"
-            />
-          </div>
-
-          <div>
-            <label className="mb-1.5 block text-xs font-bold text-slate-500">Role</label>
-            <Select value={employeeTypeId} onValueChange={setEmployeeTypeId}>
-              <SelectTrigger className="focus:ring-violet-400">
-                <SelectValue placeholder="Pilih role…" />
-              </SelectTrigger>
-              <SelectContent>
-                {employeeTypes.map((t) => (
-                  <SelectItem key={t.id} value={String(t.id)}>{t.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div>
-            <label className="mb-1.5 block text-xs font-bold text-slate-500">Toko</label>
-            <Select value={homeStoreId} onValueChange={setHomeStoreId}>
-              <SelectTrigger className="focus:ring-violet-400">
-                <SelectValue placeholder="Pilih toko…" />
-              </SelectTrigger>
-              <SelectContent>
-                {stores.map((s) => (
-                  <SelectItem key={s.id} value={String(s.id)}>{s.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-
-        <DialogFooter>
-          <Button
-            onClick={handleSubmit}
-            disabled={!canSubmit || saving}
-            className="w-full gap-1.5 bg-violet-600 hover:bg-violet-700 text-white sm:w-auto"
-          >
-            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-            Buat karyawan
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function OpsEmployeesPage() {
@@ -237,7 +89,6 @@ export default function OpsEmployeesPage() {
   const [data, setData] = useState<WorkspaceData | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedEmployee, setSelectedEmployee] = useState<ManageEmployee | null>(null);
-  const [addOpen, setAddOpen] = useState(false);
 
   const [query, setQuery] = useState('');
   const [storeFilter, setStoreFilter] = useState<string>(ALL);
@@ -333,16 +184,6 @@ export default function OpsEmployeesPage() {
         onRefresh={load}
         refreshing={loading}
         contentClassName="w-full"
-        actions={
-          <Button
-            onClick={() => setAddOpen(true)}
-            disabled={!data}
-            className="h-10 gap-1.5 rounded-xl bg-violet-600 px-4 text-sm font-semibold text-white hover:bg-violet-700"
-          >
-            <UserPlus className="h-4 w-4" />
-            Add Employee
-          </Button>
-        }
       />
 
       <div className="mx-auto max-w-[1400px] space-y-4 p-6 lg:p-8">
@@ -535,16 +376,6 @@ export default function OpsEmployeesPage() {
             await load();
             setSelectedEmployee(null);
           }}
-        />
-      )}
-
-      {data && (
-        <AddEmployeeDialog
-          open={addOpen}
-          onOpenChange={setAddOpen}
-          stores={data.stores}
-          employeeTypes={data.lookups.employeeTypes}
-          onCreated={load}
         />
       )}
     </div>

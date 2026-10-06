@@ -264,3 +264,43 @@ export async function collectStoreImageUrls(storeId: number): Promise<string[]> 
 
   return [...urls];
 }
+
+/**
+ * Managed task photo URLs on the rows of `tables` that belong to these working
+ * days (schedule_id) — read before a schedule removal deletes those rows
+ * (lib/schedule-utils.ts). Runs on `db` or inside a transaction.
+ */
+export async function collectScheduleImageUrls(
+  dbx: Pick<typeof db, 'execute'>,
+  scheduleIds: number[],
+  tables: string[],
+): Promise<string[]> {
+  if (scheduleIds.length === 0) return [];
+  const urls = new Set<string>();
+  const idList = sql.join(scheduleIds.map((id) => sql`${id}`), sql`, `);
+
+  for (const target of SIMPLE_TARGETS) {
+    if (!tables.includes(target.table)) continue;
+    const columnList = sql.join(target.photoColumns.map(ident), sql`, `);
+    const result = await dbx.execute(
+      sql`SELECT ${columnList} FROM ${ident(target.table)} WHERE schedule_id IN (${idList})`,
+    );
+    for (const row of extractRows<Record<string, unknown>>(result)) {
+      for (const c of target.photoColumns) for (const u of parsePhotoUrls(row[c])) if (isManagedImageUrl(u)) urls.add(u);
+    }
+  }
+
+  for (const target of JOINED_TARGETS) {
+    if (!tables.includes(target.parentTable)) continue;
+    const result = await dbx.execute(sql`
+      SELECT c.${ident(target.photoColumn)} AS photo
+      FROM ${ident(target.childTable)} c
+      JOIN ${ident(target.parentTable)} p ON p.id = c.${ident(target.fkColumn)}
+      WHERE p.schedule_id IN (${idList})`);
+    for (const row of extractRows<Record<string, unknown>>(result)) {
+      for (const u of parsePhotoUrls(row.photo)) if (isManagedImageUrl(u)) urls.add(u);
+    }
+  }
+
+  return [...urls];
+}

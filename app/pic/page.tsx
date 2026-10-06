@@ -4,18 +4,20 @@
 //
 // Desktop dashboard, not a mobile app screen: sticky header with month nav
 // and actions, stat tiles, and a spreadsheet-style employee × day grid.
-// PIC can only view the grid and import an Excel file when no schedule
-// exists yet for the month — creating/editing/deleting is Ops-only; ask Ops
-// to remove an existing schedule before re-uploading.
+// PIC can only view the grid and import an Excel file — creating/editing/
+// deleting is Ops-only. Import works when the month has no schedule yet, or
+// when every listed day already has attendance (e.g. after Ops deleted the
+// schedule keeping attendance history): those days stay, the file fills the
+// rest. Otherwise Ops has to delete the schedule first.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSession }  from 'next-auth/react';
 import { useRouter }   from 'next/navigation';
 import {
   Upload, Download, Loader2, RefreshCw,
   Shield, Calendar, ChevronLeft, ChevronRight,
   CheckCircle2, AlertCircle, ChevronDown, ChevronUp,
-  Users, X,
+  Users, X, Lock,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
@@ -43,6 +45,8 @@ interface DayEntry {
   shift:    ShiftCode | null;
   isOff:    boolean;
   isLeave:  boolean;
+  /** Attendance is recorded — an import never changes this day. */
+  hasAttendance?: boolean;
 }
 
 interface MonthlySchedule {
@@ -60,6 +64,8 @@ interface ImportResult {
   schedulesCreated: number;
   entriesCreated:   number;
   skipped:          number;
+  /** Cells left alone because attendance is already recorded for that employee-day. */
+  skippedAttended?: number;
   errors:           string[];
   notFound:         string[];
   /** Not fatal — e.g. unrecognised shift codes imported as a day off. */
@@ -127,7 +133,11 @@ function dayOfWeekLabel(yearMonth: string, day: number): string {
 
 // ─── ImportButton ─────────────────────────────────────────────────────────────
 
-function ImportButton({ onImported }: { onImported: () => void }) {
+function ImportButton({ onImported, lockedReason }: {
+  onImported: () => void;
+  /** Set when this month can't be imported into — shown instead of the file picker. */
+  lockedReason?: string | null;
+}) {
   const [importing,  setImporting]  = useState(false);
   const [result,     setResult]     = useState<ImportResult | null>(null);
   const [showErrors, setShowErrors] = useState(false);
@@ -151,6 +161,7 @@ function ImportButton({ onImported }: { onImported: () => void }) {
         schedulesCreated: json.schedulesCreated ?? 0,
         entriesCreated:   json.entriesCreated   ?? 0,
         skipped:          json.skipped          ?? 0,
+        skippedAttended:  json.skippedAttended  ?? 0,
         errors:           json.errors           ?? (json.error ? [json.error] : []),
         notFound:         json.notFound         ?? [],
         warnings:         json.warnings         ?? [],
@@ -201,13 +212,17 @@ function ImportButton({ onImported }: { onImported: () => void }) {
   return (
     <div className="relative">
       <label
+        title={lockedReason ?? undefined}
+        aria-disabled={!!lockedReason}
         className={cn(
-          'flex h-10 cursor-pointer items-center gap-2 rounded-xl border px-4 text-sm font-semibold transition-colors',
-          importing ? 'border-slate-200 bg-slate-50 text-slate-400' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50',
+          'flex h-10 items-center gap-2 rounded-xl border px-4 text-sm font-semibold transition-colors',
+          lockedReason
+            ? 'cursor-not-allowed border-slate-200 bg-slate-50 text-slate-400'
+            : importing ? 'cursor-pointer border-slate-200 bg-slate-50 text-slate-400' : 'cursor-pointer border-slate-200 bg-white text-slate-600 hover:bg-slate-50',
         )}
       >
-        <input type="file" accept=".xlsx,.xls" className="hidden" onChange={handleFile} disabled={importing} />
-        {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+        <input type="file" accept=".xlsx,.xls" className="hidden" onChange={handleFile} disabled={importing || !!lockedReason} />
+        {lockedReason ? <Lock className="h-4 w-4" /> : importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
         {importing ? 'Importing…' : 'Import Excel'}
       </label>
 
@@ -230,6 +245,12 @@ function ImportButton({ onImported }: { onImported: () => void }) {
                 {result.entriesCreated} entries · {result.schedulesCreated} store(s)
                 {result.month && ` · ${formatYearMonth(result.month)}`}
               </p>
+              {(result.skippedAttended ?? 0) > 0 && (
+                <p className="mt-0.5 flex items-center gap-1 text-[11px] text-slate-500">
+                  <Lock className="h-2.5 w-2.5 shrink-0" />
+                  {result.skippedAttended} hari tidak diubah — absensi sudah tercatat
+                </p>
+              )}
             </div>
             {hasWarnings && (
               <button onClick={() => setShowErrors(v => !v)} className={cn('text-[11px] font-semibold flex items-center gap-0.5', isHardFail ? 'text-red-700' : 'text-amber-700')}>
@@ -325,17 +346,22 @@ export default function PicPanelPage() {
   }, [isPic1]);
 
   // ── Load schedule ──────────────────────────────────────────────────────────
+  // Paging months quickly fires overlapping loads; only the last month asked
+  // for may land, or the grid (and the import lock) would show another month.
+  const latestRequestedMonth = useRef<string | null>(null);
   const loadSchedule = useCallback(async (ym: string) => {
     if (!storeId) return;
+    latestRequestedMonth.current = ym;
     setLoading(true);
     try {
       const res  = await fetch(`/api/pic/schedule/monthly?yearMonth=${ym}`);
       const json = await res.json();
+      if (latestRequestedMonth.current !== ym) return;
       setSchedule(json.schedule ?? null);
     } catch {
-      toast.error('Failed to load schedule');
+      if (latestRequestedMonth.current === ym) toast.error('Failed to load schedule');
     } finally {
-      setLoading(false);
+      if (latestRequestedMonth.current === ym) setLoading(false);
     }
   }, [storeId]);
 
@@ -406,6 +432,14 @@ export default function PicPanelPage() {
   const workingDays    = schedule ? schedule.entries.filter(e => !e.isOff && !e.isLeave && e.shift).length : 0;
   const leaveDays      = schedule ? schedule.entries.filter(e => e.isLeave).length : 0;
 
+  // Same rule the import route enforces (blockIfUnattended): an existing month
+  // can only be imported into when every listed day already has attendance.
+  const attendedDays = schedule ? schedule.entries.filter(e => e.hasAttendance).length : 0;
+  const openDays     = schedule ? schedule.entries.length - attendedDays : 0;
+  const importLockedReason = openDays > 0
+    ? `Jadwal ${formatYearMonth(selectedMonth)} masih punya ${openDays} jadwal harian tanpa absensi — minta Ops menghapus jadwal (simpan riwayat absensi) dulu, lalu upload ulang.`
+    : null;
+
   // ── Auth loading ───────────────────────────────────────────────────────────
   if (authStatus === 'loading' || !session) return (
     <div className="flex min-h-full items-center justify-center bg-slate-50">
@@ -436,7 +470,7 @@ export default function PicPanelPage() {
                 </p>
               ) : (
                 <p className="mt-1 text-sm text-slate-500">
-                  Jika jadwal bulan ini sudah ada, hubungi Ops untuk menghapusnya sebelum upload ulang.
+                  Belum ada jadwal bulan ini — import Excel untuk membuatnya.
                 </p>
               )}
             </div>
@@ -462,7 +496,7 @@ export default function PicPanelPage() {
                 Refresh
               </button>
 
-              <ImportButton onImported={() => loadSchedule(selectedMonth)} />
+              <ImportButton onImported={() => loadSchedule(selectedMonth)} lockedReason={importLockedReason} />
 
               <button
                 type="button"
@@ -494,6 +528,27 @@ export default function PicPanelPage() {
           </div>
         ) : (
           <>
+            {/* Import status */}
+            {importLockedReason ? (
+              <div className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                <Lock className="mt-0.5 h-4 w-4 shrink-0" />
+                <p>
+                  <span className="font-semibold">Import dikunci.</span> Masih ada {openDays} jadwal harian tanpa
+                  absensi di bulan ini. Minta Ops menghapus jadwal dengan pilihan <span className="font-semibold">Keep
+                  attendance history</span>, lalu upload ulang — hari yang sudah ada absensinya tetap disimpan.
+                </p>
+              </div>
+            ) : (
+              <div className="flex items-start gap-2.5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+                <p>
+                  {attendedDays > 0
+                    ? `Semua ${attendedDays} jadwal harian di bulan ini sudah ada absensinya dan tidak akan berubah. Import Excel untuk mengisi hari lainnya.`
+                    : 'Jadwal bulan ini masih kosong — import Excel untuk mengisinya.'}
+                </p>
+              </div>
+            )}
+
             {/* Stats */}
             <div className="grid grid-cols-3 gap-3">
               {[
@@ -526,6 +581,10 @@ export default function PicPanelPage() {
               <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
                 <span className="h-2 w-2 rounded-full" style={{ background: SHIFT_PALETTE.off.dot }} />
                 Off
+              </div>
+              <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
+                <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                Absensi tercatat
               </div>
               <span className="ml-auto flex items-center gap-1.5 text-[11px] font-medium text-slate-400">
                 <Users className="h-3 w-3" /> View only — Ops manages edits, PIC re-imports via Excel
@@ -573,13 +632,16 @@ export default function PicPanelPage() {
                             <td key={d} className={cn('p-0.5 text-center', d === todayDay && 'bg-indigo-50/40')}>
                               <div
                                 className={cn(
-                                  'mx-auto flex h-7 w-7 items-center justify-center rounded-md text-[9px] font-bold',
+                                  'relative mx-auto flex h-7 w-7 items-center justify-center rounded-md text-[9px] font-bold',
                                   !pal && 'border border-dashed border-slate-200 text-slate-300',
                                 )}
                                 style={pal ? { background: pal.bg, color: pal.text, border: `1px solid ${pal.border}` } : undefined}
-                                title={pal ? pal.label : undefined}
+                                title={pal ? `${pal.label}${entry?.hasAttendance ? ' · absensi tercatat' : ''}` : undefined}
                               >
                                 {pal ? pal.label : ''}
+                                {entry?.hasAttendance && (
+                                  <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full border border-white bg-emerald-500" />
+                                )}
                               </div>
                             </td>
                           );

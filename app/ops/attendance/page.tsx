@@ -207,7 +207,7 @@ function SummaryBar({ totals }: { totals: AttendanceCounts }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+      <div className="grid grid-cols-3 gap-2 sm:grid-cols-7">
         {tiles.map((t) => (
           <div key={t.label} title={t.hint} className="rounded-lg bg-secondary/50 px-2 py-2 text-center">
             <p className={cn('text-lg font-bold tabular-nums leading-tight', t.color)}>{t.value}</p>

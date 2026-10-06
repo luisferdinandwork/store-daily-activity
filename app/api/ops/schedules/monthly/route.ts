@@ -7,6 +7,7 @@ import {
   createEmptyMonthlySchedule,
   deleteMonthlySchedule,
   getMonthlySchedule,
+  type ScheduleDeleteMode,
 } from '@/lib/schedule-utils';
 
 import {
@@ -22,7 +23,7 @@ function mapSchedule(rawSchedule: Awaited<ReturnType<typeof getMonthlySchedule>>
     ...rawSchedule.schedule,
     id: String(rawSchedule.schedule.id),
     storeId: String(rawSchedule.schedule.storeId),
-    entries: rawSchedule.entries.map((entry: any) => ({
+    entries: rawSchedule.entries.map((entry) => ({
       id: String(entry.id),
       userId: entry.userId,
       userName: entry.userName,
@@ -34,6 +35,7 @@ function mapSchedule(rawSchedule: Awaited<ReturnType<typeof getMonthlySchedule>>
       shiftLabel: entry.shiftLabel ?? entry.shiftCode ?? null,
       isOff: entry.isOff,
       isLeave: entry.isLeave,
+      hasAttendance: entry.hasAttendance,
     })),
   };
 }
@@ -173,6 +175,10 @@ export async function DELETE(req: NextRequest) {
 
   const parsedStore = parseStoreId(req.nextUrl.searchParams.get('storeId'));
   const yearMonth = req.nextUrl.searchParams.get('yearMonth');
+  // keep_history (default): days with attendance stay. all: everything goes —
+  // only with `confirm` = the store code.
+  const rawMode = req.nextUrl.searchParams.get('mode') ?? 'keep_history';
+  const confirmStoreNo = req.nextUrl.searchParams.get('confirm') ?? undefined;
 
   if (!parsedStore.ok) {
     return NextResponse.json(
@@ -188,6 +194,14 @@ export async function DELETE(req: NextRequest) {
     );
   }
 
+  if (rawMode !== 'keep_history' && rawMode !== 'all') {
+    return NextResponse.json(
+      { success: false, error: 'mode must be keep_history or all.' },
+      { status: 400 },
+    );
+  }
+  const mode: ScheduleDeleteMode = rawMode;
+
   const areaError = await assertStoreInActorArea(actor, parsedStore.id);
 
   if (areaError) {
@@ -197,7 +211,10 @@ export async function DELETE(req: NextRequest) {
     );
   }
 
-  const result = await deleteMonthlySchedule(parsedStore.id, yearMonth, actor.id);
+  const result = await deleteMonthlySchedule(parsedStore.id, yearMonth, actor.id, {
+    mode,
+    confirmStoreNo,
+  });
 
   if (!result.success) {
     return NextResponse.json(result, { status: 400 });

@@ -38,23 +38,34 @@ import {
   shifts,
   storeOpeningTasks,
   storeFrontTasks,
-  setoranTasks,
   cekBinTasks,
   vmChecklistTasks,
   marketingCheckTasks,
-  cekUangModalTasks,
   itemDroppingTasks,
   itemReturnTasks,
   briefingTasks,
-  storeClosingTasks,
   groomingTasks,
+  notifications,
   type Area,
   type MonthlySchedule,
   type MonthlyScheduleEntry,
 } from "@/lib/db/schema";
-import { and, eq, gte, inArray, isNotNull, isNull, lt, lte, sql } from "drizzle-orm";
+import {
+  and,
+  eq,
+  getTableName,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  lte,
+  sql,
+  TransactionRollbackError,
+} from "drizzle-orm";
 import { createNotification, deleteNotificationsByRelated } from "@/lib/db/utils/notifications";
 import { assertStoreOperational } from "@/lib/db/utils/store-status";
+import { collectScheduleImageUrls, deleteManagedImages } from "@/lib/db/utils/task-image-cleanup";
 
 export type { BreakType } from "@/lib/db/schema";
 import type { BreakType } from "@/lib/db/schema";
@@ -105,11 +116,12 @@ export interface CreateMonthlyScheduleInput {
   note?: string;
   importedBy: string;
   /**
-   * When true, reject instead of overwriting if a schedule already exists for
-   * this store/month. Used for PIC-initiated imports — PIC can only upload a
-   * schedule where none exists yet; Ops must remove the existing one first.
+   * PIC-initiated imports: reject, instead of replacing, when the month already
+   * has an entry without attendance. PIC may only fill a month that is empty or
+   * whose remaining entries are all attendance history (e.g. what Ops' "Delete
+   * schedule → keep attendance history" leaves) — anything else, Ops deletes first.
    */
-  blockIfExists?: boolean;
+  blockIfUnattended?: boolean;
 }
 
 export interface MonthlyScheduleWithEntries {
@@ -119,6 +131,8 @@ export interface MonthlyScheduleWithEntries {
     userEmployeeType: string | null;
     shiftCode: string | null;
     shiftLabel: string | null;
+    /** Attendance is recorded for this employee-day — import and "keep history" delete leave it alone. */
+    hasAttendance: boolean;
   })[];
 }
 
@@ -275,12 +289,16 @@ async function recordDinasAttendance(
     .onConflictDoNothing({ target: attendance.scheduleId });
 }
 
+// The handle a db.transaction() callback gets; `Reader` is satisfied by it and by `db`.
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+type Reader = Pick<typeof db, "select">;
+
 /** Of these schedules, the ones with attendance that locks the day (everything but the automatic Dinas row). */
-async function lockedByAttendance(scheduleIds: number[]): Promise<Set<number>> {
+async function lockedByAttendance(scheduleIds: number[], dbx: Reader = db): Promise<Set<number>> {
   const locked = new Set<number>();
   if (!scheduleIds.length) return locked;
   const dinasShiftId = await getDinasShiftId();
-  const rows = await db
+  const rows = await dbx
     .select({
       scheduleId: attendance.scheduleId,
       status: attendance.status,
@@ -295,20 +313,24 @@ async function lockedByAttendance(scheduleIds: number[]): Promise<Set<number>> {
   return locked;
 }
 
-/** Drop the automatic Dinas rows of schedules that are about to be deleted. */
-async function deleteAutoDinasAttendance(scheduleIds: number[]): Promise<void> {
-  if (!scheduleIds.length) return;
-  const dinasShiftId = await getDinasShiftId();
-  if (dinasShiftId === null) return;
-  await db
-    .delete(attendance)
-    .where(
-      and(
-        inArray(attendance.scheduleId, scheduleIds),
-        eq(attendance.status, "dinas"),
-        eq(attendance.shiftId, dinasShiftId),
-      ),
-    );
+/**
+ * The working days (schedules) behind these monthly entries, and which entries
+ * attendance locks — the employee-days whose history is recorded. Import, the
+ * month delete and the schedule views all draw the line here.
+ */
+async function entryLocks(entryIds: number[], dbx: Reader = db) {
+  const daySchedules = entryIds.length
+    ? await dbx
+        .select({ id: schedules.id, entryId: schedules.monthlyScheduleEntryId })
+        .from(schedules)
+        .where(inArray(schedules.monthlyScheduleEntryId, entryIds))
+    : [];
+  const lockedScheduleIds = await lockedByAttendance(daySchedules.map((s) => s.id), dbx);
+  const lockedEntryIds = new Set<number>();
+  for (const s of daySchedules) {
+    if (s.entryId != null && lockedScheduleIds.has(s.id)) lockedEntryIds.add(s.entryId);
+  }
+  return { daySchedules, lockedScheduleIds, lockedEntryIds };
 }
 
 function getLegacyBreakConfig(shiftCode: string): {
@@ -328,78 +350,179 @@ function getLegacyBreakConfig(shiftCode: string): {
   };
 }
 
-// Keep schedule/task cleanup compatible with Neon HTTP by avoiding giant IN queries.
-// This is also the only task-table cleanup owned by schedule-utils. The actual
-// task-generation rules live in lib/db/utils/tasks.ts.
-const SCHEDULE_TASK_DELETE_BATCH_SIZE = 150;
+// ─── Removing working days ────────────────────────────────────────────────────
+// Every path that drops `schedules` rows — a re-import, a day edit, "Delete
+// schedule" — goes through removeSchedulesWithin(), so a removed day is treated
+// the same way everywhere:
+//   • its own task progress goes (opening, store front, cek bin, VM, marketing,
+//     item receiving / return, briefing, grooming), photos included;
+//   • the money records Finance reviews never go with it — setoran (+ ledger),
+//     cek uang modal, store closing and cash counts stay where Finance reads
+//     them (by store + date), only unlinked from the day;
+//   • every other pointer at the day is unlinked as well (completed-by columns,
+//     the serah terima board) — a removed day never takes others' work along;
+//   • attendance: only the automatic Dinas row — unless `wipeAttendance` (Ops
+//     "delete everything"), then every record of the day, breaks included. Any
+//     other attendance row makes the final delete fail, so a checked-in day can
+//     never be dropped by accident.
 
-function uniqueNumbers(values: number[]): number[] {
-  return [...new Set(values.filter((value) => Number.isFinite(value)))];
+/** A working day's own task rows — deleted with it. */
+const DAY_TASK_TABLES = [
+  storeOpeningTasks,
+  storeFrontTasks,
+  cekBinTasks,
+  vmChecklistTasks,
+  marketingCheckTasks,
+  itemDroppingTasks,
+  itemReturnTasks,
+  briefingTasks,
+  groomingTasks,
+] as const;
+
+const DAY_TASK_TABLE_NAMES: string[] = DAY_TASK_TABLES.map((t) => getTableName(t));
+
+/** Unlinked, never deleted, when their day goes — Finance reviews these. */
+const FINANCE_RECORD_LABELS: Record<string, string> = {
+  setoran_tasks: "setoran",
+  cek_uang_modal_tasks: "cek uang modal",
+  store_closing_tasks: "store closing (Z-report / EDC)",
+  store_cash_counts: "cash counts",
+};
+
+interface ScheduleRemoval {
+  /** Rows deleted, per table. */
+  removed: Map<string, number>;
+  /** Finance records unlinked from the removed days, per table. */
+  keptFinance: Map<string, number>;
+  /** Photos of the deleted task rows — remove from storage once committed. */
+  photoUrls: string[];
 }
 
-function chunkArray<T>(
-  items: T[],
-  size = SCHEDULE_TASK_DELETE_BATCH_SIZE,
-): T[][] {
-  const chunks: T[][] = [];
-  for (let i = 0; i < items.length; i += size)
-    chunks.push(items.slice(i, i + size));
-  return chunks;
+function extractRows<T>(result: unknown): T[] {
+  const withRows = result as { rows?: unknown[] };
+  return Array.isArray(withRows.rows) ? (withRows.rows as T[]) : (result as unknown as T[]);
 }
 
-/**
- * Delete all task rows referencing the given schedule IDs.
- *
- * Store Closing replaces the removed evening task tables:
- *   - edc_reconciliation_tasks
- *   - eod_z_report_tasks
- *   - open_statement_tasks
- *
- * Those tables must not be referenced here anymore after the destructive
- * migration, otherwise schedule replace/delete will fail at build/runtime.
- */
-async function deleteAllTasksForSchedules(
+const ident = (name: string) => sql.raw(`"${name.replace(/"/g, '""')}"`);
+
+/** Every nullable single-column FK pointing at schedules.id. */
+async function loadNullableScheduleRefs(tx: Tx): Promise<{ table: string; column: string }[]> {
+  const result = await tx.execute(sql`
+    SELECT src.relname AS "table", col.attname AS "column"
+    FROM pg_constraint con
+    JOIN pg_class src     ON src.oid = con.conrelid
+    JOIN pg_namespace ns  ON ns.oid = src.relnamespace
+    JOIN pg_attribute col ON col.attrelid = con.conrelid AND col.attnum = con.conkey[1]
+    WHERE con.contype = 'f'
+      AND ns.nspname = 'public'
+      AND array_length(con.conkey, 1) = 1
+      AND con.confrelid = 'public.schedules'::regclass
+      AND NOT col.attnotnull
+  `);
+  return extractRows<{ table: string; column: string }>(result);
+}
+
+async function removeSchedulesWithin(
+  tx: Tx,
   scheduleIds: number[],
-): Promise<void> {
-  const ids = uniqueNumbers(scheduleIds);
-  if (ids.length === 0) return;
+  opts: { wipeAttendance: boolean },
+): Promise<ScheduleRemoval> {
+  const ids = [...new Set(scheduleIds)];
+  const out: ScheduleRemoval = { removed: new Map(), keptFinance: new Map(), photoUrls: [] };
+  if (ids.length === 0) return out;
 
-  for (const batch of chunkArray(ids)) {
-    await Promise.all([
-      db
-        .delete(storeOpeningTasks)
-        .where(inArray(storeOpeningTasks.scheduleId, batch)),
-      db
-        .delete(storeFrontTasks)
-        .where(inArray(storeFrontTasks.scheduleId, batch)),
-      db.delete(setoranTasks).where(inArray(setoranTasks.scheduleId, batch)),
-      db.delete(cekBinTasks).where(inArray(cekBinTasks.scheduleId, batch)),
-      db
-        .delete(vmChecklistTasks)
-        .where(inArray(vmChecklistTasks.scheduleId, batch)),
-      db
-        .delete(marketingCheckTasks)
-        .where(inArray(marketingCheckTasks.scheduleId, batch)),
-      db
-        .delete(cekUangModalTasks)
-        .where(inArray(cekUangModalTasks.scheduleId, batch)),
-      db
-        .delete(itemDroppingTasks)
-        .where(inArray(itemDroppingTasks.scheduleId, batch)),
-      db
-        .delete(itemReturnTasks)
-        .where(inArray(itemReturnTasks.scheduleId, batch)),
-      db.delete(briefingTasks).where(inArray(briefingTasks.scheduleId, batch)),
-      // serah_terima_tasks / serah_terima_entries are NOT deleted here — their
-      // schedule FKs are `on delete set null` (the board is per store, not per
-      // schedule), so dropping a schedule row just nulls the provenance.
-      db
-        .delete(storeClosingTasks)
-        .where(inArray(storeClosingTasks.scheduleId, batch)),
-      db
-        .delete(groomingTasks)
-        .where(inArray(groomingTasks.scheduleId, batch as any)),
-    ]);
+  const tally = (counts: Map<string, number>, table: string, n: number) => {
+    if (n > 0) counts.set(table, (counts.get(table) ?? 0) + n);
+  };
+  const idList = sql.join(ids.map((id) => sql`${id}`), sql`, `);
+
+  // Photos are read before the rows holding them go.
+  out.photoUrls = await collectScheduleImageUrls(tx, ids, DAY_TASK_TABLE_NAMES);
+
+  for (const table of DAY_TASK_TABLES) {
+    const rows = await tx
+      .delete(table)
+      .where(inArray(table.scheduleId, ids))
+      .returning({ id: table.id });
+    tally(out.removed, getTableName(table), rows.length);
+  }
+
+  const columnsByTable = new Map<string, string[]>();
+  for (const { table, column } of await loadNullableScheduleRefs(tx)) {
+    columnsByTable.set(table, [...(columnsByTable.get(table) ?? []), column]);
+  }
+  for (const [table, columns] of columnsByTable) {
+    if (FINANCE_RECORD_LABELS[table]) {
+      const linked = sql.join(columns.map((c) => sql`${ident(c)} IN (${idList})`), sql` OR `);
+      const [row] = extractRows<{ n: number }>(
+        await tx.execute(sql`SELECT count(*)::int AS "n" FROM ${ident(table)} WHERE ${linked}`),
+      );
+      tally(out.keptFinance, table, Number(row?.n ?? 0));
+    }
+    for (const column of columns) {
+      await tx.execute(
+        sql`UPDATE ${ident(table)} SET ${ident(column)} = NULL WHERE ${ident(column)} IN (${idList})`,
+      );
+    }
+  }
+
+  const dinasShiftId = await getDinasShiftId();
+  if (opts.wipeAttendance) {
+    // Break sessions cascade with their attendance row — counted first.
+    const [breaks] = await tx
+      .select({ n: sql<number>`count(*)::int` })
+      .from(breakSessions)
+      .innerJoin(attendance, eq(attendance.id, breakSessions.attendanceId))
+      .where(inArray(attendance.scheduleId, ids));
+    tally(out.removed, "break_sessions", Number(breaks?.n ?? 0));
+    const att = await tx
+      .delete(attendance)
+      .where(inArray(attendance.scheduleId, ids))
+      .returning({ status: attendance.status, shiftId: attendance.shiftId });
+    // The automatic Dinas row is bookkeeping, not history — not counted (the
+    // other paths drop it silently too).
+    tally(
+      out.removed,
+      "attendance",
+      att.filter((a) => !(a.status === "dinas" && a.shiftId === dinasShiftId)).length,
+    );
+  } else {
+    if (dinasShiftId !== null) {
+      await tx
+        .delete(attendance)
+        .where(
+          and(
+            inArray(attendance.scheduleId, ids),
+            eq(attendance.status, "dinas"),
+            eq(attendance.shiftId, dinasShiftId),
+          ),
+        );
+    }
+  }
+
+  // e.g. "Marked absent — you didn't check in" for a day that no longer exists.
+  const inbox = await tx
+    .delete(notifications)
+    .where(and(eq(notifications.relatedType, "schedule"), inArray(notifications.relatedId, ids)))
+    .returning({ id: notifications.id });
+  tally(out.removed, "notifications", inbox.length);
+
+  const days = await tx
+    .delete(schedules)
+    .where(inArray(schedules.id, ids))
+    .returning({ id: schedules.id });
+  tally(out.removed, "schedules", days.length);
+
+  return out;
+}
+
+/** Best effort, after commit — a storage failure never undoes the delete. */
+async function deleteTaskPhotos(urls: string[], context: string): Promise<void> {
+  if (urls.length === 0) return;
+  try {
+    await deleteManagedImages(urls);
+  } catch (err) {
+    console.error(`[schedule-utils] ${context}: ${urls.length} task photos could not be removed from storage:`, err);
   }
 }
 
@@ -641,8 +764,8 @@ export async function createOrReplaceMonthlySchedule(
   scheduleId?: number;
   error?: string;
   /**
-   * Incoming entries that were dropped instead of applied because the day is
-   * already in the past or the employee has already checked in for it.
+   * Incoming entries that were dropped instead of applied because attendance
+   * is already recorded for that employee-day.
    */
   skippedProtected?: number;
 }> {
@@ -652,13 +775,13 @@ export async function createOrReplaceMonthlySchedule(
     if (!data.entries.length)
       return { success: false, error: "No entries provided." };
 
-    // A re-import must never rewrite history: any day earlier than "today"
-    // (store timezone) and any day an employee has already checked in for is
-    // locked. Keyed by userId + local-midnight timestamp so it can be matched
-    // against both the DB rows and the parsed import rows.
-    const dayKey = (userId: string, date: Date) =>
-      `${userId}|${startOfDay(date).getTime()}`;
-    const todayStart = startOfDay(todayInStoreTimezone());
+    // A re-import never rewrites history: an employee-day that already has
+    // attendance (checked in, marked absent, Cuti/Sakit… — anything but the
+    // automatic Dinas row) keeps its entry, and the file's cell for it is
+    // skipped. Every other day, past or future, is replaced by the file. Keyed
+    // by userId + Jakarta day so DB rows (either day-bucket encoding) and
+    // parsed rows match.
+    const dayKey = (userId: string, date: Date) => `${userId}|${jakartaDateKey(date)}`;
     const protectedDayKeys = new Set<string>();
 
     const uniqueEntryStoreIds = [
@@ -700,17 +823,10 @@ export async function createOrReplaceMonthlySchedule(
 
     let monthlyScheduleId: number;
 
-    if (existing && data.blockIfExists) {
-      return {
-        success: false,
-        error: `A schedule for ${data.yearMonth} already exists. Ask Ops to remove it before re-uploading.`,
-      };
-    }
-
     if (existing) {
       monthlyScheduleId = existing.id;
 
-      const entriesToCheck = await db
+      const current = await db
         .select({
           id: monthlyScheduleEntries.id,
           userId: monthlyScheduleEntries.userId,
@@ -719,72 +835,41 @@ export async function createOrReplaceMonthlySchedule(
         .from(monthlyScheduleEntries)
         .where(eq(monthlyScheduleEntries.monthlyScheduleId, monthlyScheduleId));
 
-      const entryIds = entriesToCheck.map((e) => e.id);
-
-      // Days already in the past are locked regardless of attendance.
-      const pastEntryIds = new Set(
-        entriesToCheck
-          .filter((e) => startOfDay(e.date) < todayStart)
-          .map((e) => e.id),
+      const { daySchedules, lockedScheduleIds, lockedEntryIds } = await entryLocks(
+        current.map((e) => e.id),
       );
 
-      if (entryIds.length > 0) {
-        const entrySchedules = await db
-          .select({
-            id: schedules.id,
-            entryId: schedules.monthlyScheduleEntryId,
-          })
-          .from(schedules)
-          .where(inArray(schedules.monthlyScheduleEntryId, entryIds));
-
-        const lockedSchedIds = new Set<number>();
-
-        if (entrySchedules.length > 0) {
-          const attended = await lockedByAttendance(entrySchedules.map((s) => s.id));
-          for (const id of attended) lockedSchedIds.add(id);
-        }
-
-        // Entries the import is not allowed to touch: already checked in, or
-        // already in the past.
-        const attendedEntryIds = new Set(
-          entrySchedules
-            .filter((s) => lockedSchedIds.has(s.id))
-            .map((s) => s.entryId)
-            .filter((id): id is number => id != null),
-        );
-        const protectedEntryIds = new Set<number>([
-          ...attendedEntryIds,
-          ...pastEntryIds,
-        ]);
-
-        for (const e of entriesToCheck) {
-          if (protectedEntryIds.has(e.id)) {
-            protectedDayKeys.add(dayKey(e.userId, e.date));
-          }
-        }
-
-        const deletableSchedIds = entrySchedules
-          .filter(
-            (s) =>
-              !lockedSchedIds.has(s.id) &&
-              !(s.entryId != null && pastEntryIds.has(s.entryId)),
-          )
-          .map((s) => s.id);
-        const deletableEntryIds = entryIds.filter(
-          (id) => !protectedEntryIds.has(id),
-        );
-
-        await deleteAllTasksForSchedules(deletableSchedIds);
-        await deleteAutoDinasAttendance(deletableSchedIds);
-        if (deletableSchedIds.length > 0)
-          await db
-            .delete(schedules)
-            .where(inArray(schedules.id, deletableSchedIds));
-        if (deletableEntryIds.length > 0)
-          await db
-            .delete(monthlyScheduleEntries)
-            .where(inArray(monthlyScheduleEntries.id, deletableEntryIds));
+      // Checked before anything is touched.
+      const open = current.filter((e) => !lockedEntryIds.has(e.id)).length;
+      if (data.blockIfUnattended && open > 0) {
+        return {
+          success: false,
+          error:
+            `The ${data.yearMonth} schedule still has ${open} day${open !== 1 ? "s" : ""} without attendance. ` +
+            "Ask Ops to delete it (keeping attendance history) before re-uploading.",
+        };
       }
+
+      for (const e of current) {
+        if (lockedEntryIds.has(e.id)) protectedDayKeys.add(dayKey(e.userId, e.date));
+      }
+
+      const replacedSchedIds = daySchedules
+        .filter((s) => !lockedScheduleIds.has(s.id))
+        .map((s) => s.id);
+      const replacedEntryIds = current
+        .filter((e) => !lockedEntryIds.has(e.id))
+        .map((e) => e.id);
+
+      const { photoUrls } = await db.transaction(async (tx) => {
+        const removal = await removeSchedulesWithin(tx, replacedSchedIds, { wipeAttendance: false });
+        if (replacedEntryIds.length > 0)
+          await tx
+            .delete(monthlyScheduleEntries)
+            .where(inArray(monthlyScheduleEntries.id, replacedEntryIds));
+        return removal;
+      });
+      await deleteTaskPhotos(photoUrls, `re-import ${data.yearMonth} for store ${data.storeId}`);
 
       await db
         .update(monthlySchedules)
@@ -803,8 +888,8 @@ export async function createOrReplaceMonthlySchedule(
       monthlyScheduleId = ms.id;
     }
 
-    // Drop any incoming row that targets a locked day (past / already checked
-    // in). For a brand-new schedule nothing is locked, so this is a no-op.
+    // Drop any incoming row that targets a day with attendance. For a
+    // brand-new schedule nothing is locked, so this is a no-op.
     const entriesToApply = data.entries.filter(
       (e) => !protectedDayKeys.has(dayKey(e.userId, e.date)),
     );
@@ -892,9 +977,10 @@ export async function updateMonthlyScheduleEntry(
           error: "Cannot edit a day that already has an attendance record.",
         };
 
-      await deleteAllTasksForSchedules([sched.id]);
-      await deleteAutoDinasAttendance([sched.id]);
-      await db.delete(schedules).where(eq(schedules.id, sched.id));
+      const { photoUrls } = await db.transaction((tx) =>
+        removeSchedulesWithin(tx, [sched.id], { wipeAttendance: false }),
+      );
+      await deleteTaskPhotos(photoUrls, `edit schedule entry ${entryId}`);
     }
 
     const currentShiftCode = entry.shiftId
@@ -981,87 +1067,190 @@ export async function updateMonthlyScheduleEntry(
   }
 }
 
+// ─── Delete a month ───────────────────────────────────────────────────────────
+// Ops picks one of two options (components/ops/schedules/ScheduleDeleteDialog):
+//   • keep_history — every employee-day without attendance goes; days with
+//     attendance stay, with their tasks, so the month stays when any is left.
+//     What remains is exactly what a PIC re-import may build on.
+//   • all — every employee-day goes, attendance and task progress included
+//     (Ops types the store code to confirm). Finance's money records stay,
+//     unlinked (see removeSchedulesWithin).
+// One transaction either way; the preview runs the same steps and rolls back.
+
+export type ScheduleDeleteMode = "keep_history" | "all";
+
+export interface ScheduleRecordCount {
+  table: string;
+  label: string;
+  count: number;
+}
+
+export interface MonthlyScheduleDeletionSummary {
+  mode: ScheduleDeleteMode;
+  /** Employee-days (shifts, days off, leave) removed. */
+  removedDays: number;
+  /** Employee-days kept because attendance is recorded on them (keep_history). */
+  keptDays: number;
+  /** Nothing is left, so the month itself is gone too. */
+  monthRemoved: boolean;
+  /** History removed with the days, biggest first: attendance, breaks, task progress, notifications. */
+  removed: ScheduleRecordCount[];
+  /** Money records Finance reviews that stay, unlinked from the removed days. */
+  keptFinance: ScheduleRecordCount[];
+  /** Task photos removed from storage. */
+  photos: number;
+}
+
+export type MonthlyScheduleDeletionPreview = Record<ScheduleDeleteMode, MonthlyScheduleDeletionSummary>;
+
+const HISTORY_LABELS: Record<string, string> = {
+  attendance: "attendance records",
+  break_sessions: "break records",
+  notifications: "notifications",
+};
+
+function summariseDeletion(
+  mode: ScheduleDeleteMode,
+  removedDays: number,
+  keptDays: number,
+  removal: ScheduleRemoval,
+): MonthlyScheduleDeletionSummary {
+  const removed: ScheduleRecordCount[] = [];
+  let taskRows = 0;
+  for (const [table, count] of removal.removed) {
+    if (DAY_TASK_TABLE_NAMES.includes(table)) taskRows += count;
+    else if (HISTORY_LABELS[table]) removed.push({ table, label: HISTORY_LABELS[table], count });
+  }
+  if (taskRows > 0) removed.push({ table: "tasks", label: "task progress records", count: taskRows });
+  removed.sort((a, b) => b.count - a.count);
+
+  return {
+    mode,
+    removedDays,
+    keptDays,
+    monthRemoved: keptDays === 0,
+    removed,
+    keptFinance: [...removal.keptFinance].map(([table, count]) => ({
+      table,
+      label: FINANCE_RECORD_LABELS[table] ?? table,
+      count,
+    })),
+    photos: removal.photoUrls.length,
+  };
+}
+
+async function deleteMonthWithin(tx: Tx, monthlyScheduleId: number, mode: ScheduleDeleteMode) {
+  const entries = await tx
+    .select({ id: monthlyScheduleEntries.id })
+    .from(monthlyScheduleEntries)
+    .where(eq(monthlyScheduleEntries.monthlyScheduleId, monthlyScheduleId));
+  const entryIds = entries.map((e) => e.id);
+
+  const { daySchedules, lockedScheduleIds, lockedEntryIds } = await entryLocks(entryIds, tx);
+  const keepHistory = mode === "keep_history";
+  const removedSchedIds = daySchedules
+    .filter((s) => !(keepHistory && lockedScheduleIds.has(s.id)))
+    .map((s) => s.id);
+  const removedEntryIds = entryIds.filter((id) => !(keepHistory && lockedEntryIds.has(id)));
+
+  const removal = await removeSchedulesWithin(tx, removedSchedIds, { wipeAttendance: !keepHistory });
+  if (removedEntryIds.length > 0)
+    await tx.delete(monthlyScheduleEntries).where(inArray(monthlyScheduleEntries.id, removedEntryIds));
+
+  const keptDays = entryIds.length - removedEntryIds.length;
+  if (keptDays === 0) await tx.delete(monthlySchedules).where(eq(monthlySchedules.id, monthlyScheduleId));
+
+  return {
+    summary: summariseDeletion(mode, removedEntryIds.length, keptDays, removal),
+    photoUrls: removal.photoUrls,
+  };
+}
+
+async function findMonthlyScheduleId(storeId: number, yearMonth: string): Promise<number | null> {
+  const [ms] = await db
+    .select({ id: monthlySchedules.id })
+    .from(monthlySchedules)
+    .where(and(eq(monthlySchedules.storeId, storeId), eq(monthlySchedules.yearMonth, yearMonth)))
+    .limit(1);
+  return ms?.id ?? null;
+}
+
+/** What each delete option would do — the real steps, rolled back. */
+export async function previewMonthlyScheduleDeletion(
+  storeId: number,
+  yearMonth: string,
+  actorId: string,
+): Promise<{ success: true; data: MonthlyScheduleDeletionPreview } | { success: false; error: string }> {
+  try {
+    const auth = await canManageSchedule(actorId, storeId);
+    if (!auth.allowed) return { success: false, error: auth.reason ?? "Not allowed." };
+
+    const monthlyScheduleId = await findMonthlyScheduleId(storeId, yearMonth);
+    if (monthlyScheduleId === null) return { success: false, error: "Monthly schedule not found." };
+
+    const dryRun = async (mode: ScheduleDeleteMode) => {
+      const box: { summary?: MonthlyScheduleDeletionSummary } = {};
+      try {
+        await db.transaction(async (tx) => {
+          box.summary = (await deleteMonthWithin(tx, monthlyScheduleId, mode)).summary;
+          tx.rollback();
+        });
+      } catch (err) {
+        if (!(err instanceof TransactionRollbackError)) throw err;
+      }
+      if (!box.summary) throw new Error(`dry run (${mode}) returned nothing`);
+      return box.summary;
+    };
+
+    return {
+      success: true,
+      data: { keep_history: await dryRun("keep_history"), all: await dryRun("all") },
+    };
+  } catch (err) {
+    return { success: false, error: `previewMonthlyScheduleDeletion: ${err}` };
+  }
+}
+
 export async function deleteMonthlySchedule(
   storeId: number,
   yearMonth: string,
   actorId: string,
-): Promise<{ success: boolean; lockedCount?: number; error?: string }> {
+  options: {
+    mode?: ScheduleDeleteMode;
+    /** Required for mode "all": the store code, typed by Ops. */
+    confirmStoreNo?: string;
+  } = {},
+): Promise<{
+  success: boolean;
+  /** Employee-days kept because attendance is recorded on them. */
+  lockedCount?: number;
+  summary?: MonthlyScheduleDeletionSummary;
+  error?: string;
+}> {
+  const mode = options.mode ?? "keep_history";
   try {
     const auth = await canManageSchedule(actorId, storeId);
     if (!auth.allowed) return { success: false, error: auth.reason };
 
-    const [ms] = await db
-      .select({ id: monthlySchedules.id })
-      .from(monthlySchedules)
-      .where(
-        and(
-          eq(monthlySchedules.storeId, storeId),
-          eq(monthlySchedules.yearMonth, yearMonth),
-        ),
-      )
-      .limit(1);
-
-    if (!ms) return { success: false, error: "Monthly schedule not found." };
-
-    const allEntries = await db
-      .select({ id: monthlyScheduleEntries.id })
-      .from(monthlyScheduleEntries)
-      .where(eq(monthlyScheduleEntries.monthlyScheduleId, ms.id));
-
-    const entryIds = allEntries.map((e) => e.id);
-
-    const entrySchedules =
-      entryIds.length > 0
-        ? await db
-            .select({
-              id: schedules.id,
-              entryId: schedules.monthlyScheduleEntryId,
-            })
-            .from(schedules)
-            .where(inArray(schedules.monthlyScheduleEntryId, entryIds))
-        : [];
-
-    const lockedSchedIds = new Set<number>();
-    if (entrySchedules.length > 0) {
-      const attended = await lockedByAttendance(entrySchedules.map((s) => s.id));
-      for (const id of attended) lockedSchedIds.add(id);
+    if (mode === "all") {
+      const [store] = await db
+        .select({ storeNo: stores.storeNo })
+        .from(stores)
+        .where(eq(stores.id, storeId))
+        .limit(1);
+      if (!store) return { success: false, error: "Store not found." };
+      if ((options.confirmStoreNo ?? "").trim().toUpperCase() !== store.storeNo.toUpperCase()) {
+        return { success: false, error: `Type the store code (${store.storeNo}) to delete everything.` };
+      }
     }
 
-    const deletableSchedIds = entrySchedules
-      .filter((s) => !lockedSchedIds.has(s.id))
-      .map((s) => s.id);
-    const lockedCount = lockedSchedIds.size;
-    const lockedEntryIds = new Set(
-      entrySchedules
-        .filter((s) => lockedSchedIds.has(s.id))
-        .map((s) => s.entryId)
-        .filter((id): id is number => id != null),
-    );
+    const monthlyScheduleId = await findMonthlyScheduleId(storeId, yearMonth);
+    if (monthlyScheduleId === null) return { success: false, error: "Monthly schedule not found." };
 
-    await deleteAllTasksForSchedules(deletableSchedIds);
-    await deleteAutoDinasAttendance(deletableSchedIds);
-    if (deletableSchedIds.length > 0)
-      await db
-        .delete(schedules)
-        .where(inArray(schedules.id, deletableSchedIds));
+    const out = await db.transaction((tx) => deleteMonthWithin(tx, monthlyScheduleId, mode));
+    await deleteTaskPhotos(out.photoUrls, `delete ${yearMonth} schedule of store ${storeId}`);
 
-    if (lockedCount === 0) {
-      if (entryIds.length > 0)
-        await db
-          .delete(monthlyScheduleEntries)
-          .where(inArray(monthlyScheduleEntries.id, entryIds));
-      await db.delete(monthlySchedules).where(eq(monthlySchedules.id, ms.id));
-    } else {
-      const deletableEntryIds = entryIds.filter(
-        (id) => !lockedEntryIds.has(id),
-      );
-      if (deletableEntryIds.length > 0)
-        await db
-          .delete(monthlyScheduleEntries)
-          .where(inArray(monthlyScheduleEntries.id, deletableEntryIds));
-    }
-
-    return { success: true, lockedCount };
+    return { success: true, lockedCount: out.summary.keptDays, summary: out.summary };
   } catch (err) {
     return { success: false, error: `deleteMonthlySchedule: ${err}` };
   }
@@ -1222,6 +1411,8 @@ export async function getMonthlySchedule(
     .where(eq(monthlyScheduleEntries.monthlyScheduleId, ms.id))
     .orderBy(monthlyScheduleEntries.date, users.name);
 
+  const { lockedEntryIds } = await entryLocks(rawEntries.map((r) => r.entry.id));
+
   return {
     schedule: ms,
     entries: rawEntries.map((r) => ({
@@ -1230,6 +1421,7 @@ export async function getMonthlySchedule(
       userEmployeeType: r.empType?.label ?? null,
       shiftCode: r.shiftRow?.code ?? null,
       shiftLabel: r.shiftRow?.label ?? null,
+      hasAttendance: lockedEntryIds.has(r.entry.id),
     })),
   };
 }

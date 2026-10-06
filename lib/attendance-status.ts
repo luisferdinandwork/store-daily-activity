@@ -17,8 +17,9 @@ export type AttendanceStatus = typeof ATTENDANCE_STATUSES[number];
 
 /**
  * Justified absences Ops records on a scheduled day (D / C / STD / SD). The
- * employee didn't work, but it isn't a no-show — dashboards and overview
- * counters fold these into the "excused" bucket.
+ * employee didn't work, but it isn't a no-show. Dashboards and overview
+ * counters (tallyStatus) keep Dinas in its own bucket and fold the rest into
+ * "excused" (On leave); none of them count against the attendance rate.
  */
 export const LEAVE_ATTENDANCE_STATUSES = [
   'dinas',
@@ -46,7 +47,8 @@ export const ATTENDANCE_STATUS_LABELS: Record<AttendanceStatus, string> = {
  * and nowhere else.
  *
  *   PENDING_LABEL   a scheduled shift with no attendance record yet
- *   ON_LEAVE_LABEL  the justified-absence group as a whole (Dinas / Cuti / Sakit / excused)
+ *   ON_LEAVE_LABEL  justified leave as a count (Cuti / Sakit / excused) — Dinas is counted
+ *                   and named on its own
  */
 export const PENDING_LABEL = 'Pending';
 export const ON_LEAVE_LABEL = 'On leave';

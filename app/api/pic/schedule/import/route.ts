@@ -98,8 +98,9 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Ops/IT importing through this route (e.g. on a PIC's behalf) may still
-    // overwrite; a PIC actor may only upload where no schedule exists yet.
+    // Ops/IT importing through this route (e.g. on a PIC's behalf) may replace
+    // any day without attendance; a PIC actor may only upload into a month
+    // that is empty or holds nothing but attendance history.
     const isPicActor = role !== 'ops' && role !== 'it';
     const result = await importScheduleFromParsed(parsed, normalized, actorId, isPicActor);
 
@@ -108,6 +109,7 @@ export async function POST(req: NextRequest) {
       schedulesCreated: result.schedulesCreated,
       entriesCreated:   result.entriesCreated,
       skipped:          result.skipped,
+      skippedAttended:  result.skippedAttended,
       errors:           result.errors,
       notFound:         result.notFound,
       month:            result.month,

@@ -57,9 +57,13 @@ type StoreAttendanceRow = {
   present: number;
   late: number;
   absent: number;
+  dinas: number;
   excused: number;
   unset: number;
-  rate: number;
+  /** Roster people with no shift (not even OFF / leave) today. */
+  noSchedule: number;
+  /** null = nobody has a shift today, so there is no rate to show. */
+  rate: number | null;
 };
 
 type PettyCashRow = {
@@ -95,8 +99,10 @@ type DashboardData = {
     present: number;
     late: number;
     absent: number;
+    dinas: number;
     excused: number;
     unset: number;
+    noSchedule: number;
     rate: number;
     stores: StoreAttendanceRow[];
   };
@@ -268,7 +274,7 @@ function StoreRankCard({
   title: string;
   viewHref: string;
   /** `detail` sits beside the rate; `breakdown` sits under the bar. */
-  rows: Array<{ key: string | number; name: string; rate: number; detail?: string; breakdown?: ReactNode }>;
+  rows: Array<{ key: string | number; name: string; rate: number | null; detail?: string; breakdown?: ReactNode }>;
   emptyLabel: string;
   moreCount?: number;
 }) {
@@ -292,23 +298,25 @@ function StoreRankCard({
         ) : (
           <div className="space-y-4">
             {rows.map((row) => {
-              const t = rateTone(row.rate);
+              const t = row.rate === null ? null : rateTone(row.rate);
               return (
                 <div key={row.key}>
                   <div className="mb-1 flex items-baseline justify-between gap-2">
                     <p className="truncate text-sm font-medium text-slate-800">{row.name}</p>
                     <span className="flex shrink-0 items-baseline gap-1.5">
                       {row.detail && <span className="text-xs text-slate-400">{row.detail}</span>}
-                      <span className={`text-xs font-semibold ${TONE[t].text}`}>{row.rate}%</span>
+                      {row.rate !== null && t && (
+                        <span className={`text-xs font-semibold ${TONE[t].text}`}>{row.rate}%</span>
+                      )}
                     </span>
                   </div>
-                  <Bar pct={row.rate} tone={t} />
+                  {row.rate !== null && t && <Bar pct={row.rate} tone={t} />}
                   {row.breakdown && <div className="mt-1.5">{row.breakdown}</div>}
                 </div>
               );
             })}
             {moreCount > 0 && (
-              <p className="pt-1 text-xs text-slate-400">+{moreCount} more store{moreCount === 1 ? '' : 's'} below target</p>
+              <p className="pt-1 text-xs text-slate-400">+{moreCount} more store{moreCount === 1 ? '' : 's'} need attention</p>
             )}
           </div>
         )}
@@ -385,7 +393,10 @@ export default function OpsDashboardPage() {
   // Store-level rankings power the "Stores Needing Attention" section — the
   // top KPI row shows the system-wide pulse, this shows *where* to act.
   const taskStoresBehind = (data?.tasks.todayByStore ?? []).filter((s) => s.completionRate < 100);
-  const attendanceStoresBehind = (data?.attendance.stores ?? []).filter((s) => s.rate < 100);
+  // Below 100%, or with people the schedule doesn't cover today, or no shifts at all today.
+  const attendanceStoresBehind = (data?.attendance.stores ?? []).filter(
+    (s) => s.rate === null || s.rate < 100 || s.noSchedule > 0,
+  );
 
   const scopeLabel = data
     ? `${data.scope === 'all_areas' ? 'All Areas' : 'Area'} · ${data.storeCount} store${data.storeCount === 1 ? '' : 's'}`
@@ -545,11 +556,12 @@ export default function OpsDashboardPage() {
               tone="emerald"
               title="Attendance by Store"
               viewHref="/ops/attendance"
-              emptyLabel="Semua toko hadir lengkap hari ini"
+              emptyLabel="Semua toko hadir lengkap dan terjadwal hari ini"
               rows={attendanceStoresBehind.slice(0, 6).map((s) => ({
                 key: s.storeId,
                 name: s.storeName,
                 rate: s.rate,
+                detail: s.rate === null ? 'Tidak ada shift hari ini' : undefined,
                 breakdown: <AttendanceCountsLine counts={s} className="text-[11px]" />,
               }))}
               moreCount={Math.max(0, attendanceStoresBehind.length - 6)}

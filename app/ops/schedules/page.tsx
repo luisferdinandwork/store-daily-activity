@@ -27,6 +27,7 @@ import {
   FileSpreadsheet,
   Globe2,
   Loader2,
+  Lock,
   MapPin,
   Plus,
   Shield,
@@ -39,6 +40,7 @@ import {
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
+import ScheduleDeleteDialog from '@/components/ops/schedules/ScheduleDeleteDialog';
 import { DINAS_SHIFT_CODE, isShiftCode, paletteOf, SHIFT_ROSTER_CODE } from '@/lib/shift-tasks';
 import { jakartaDateKey, jakartaTodayKey } from '@/lib/day-bucket';
 import { Button } from '@/components/ui/button';
@@ -78,6 +80,8 @@ interface DayEntry {
   shiftLabel?: string | null;
   isOff: boolean;
   isLeave: boolean;
+  /** Attendance is recorded — import skips this day, "keep history" delete keeps it. */
+  hasAttendance?: boolean;
 }
 
 interface MonthlySchedule {
@@ -125,6 +129,8 @@ interface ImportResult {
   schedulesCreated: number;
   entriesCreated: number;
   skipped: number;
+  /** Cells left alone because attendance is already recorded for that employee-day. */
+  skippedAttended?: number;
   errors: string[];
   notFound: string[];
   /** Not fatal — e.g. unrecognised shift codes imported as a day off. */
@@ -368,6 +374,7 @@ function DetailView({ entries, shifts, onEdit, onAdd }: {
                       key={entry.id}
                       type="button"
                       onClick={() => onEdit(entry)}
+                      title={entry.hasAttendance ? 'Attendance recorded — imports and "keep history" deletes leave this day as it is' : undefined}
                       className="flex w-full items-center gap-3 rounded-2xl border px-4 py-3 text-left transition-all hover:shadow-sm"
                       style={{ borderColor: visual.border, background: visual.bg }}
                     >
@@ -381,6 +388,11 @@ function DetailView({ entries, shifts, onEdit, onAdd }: {
                         <p className="truncate text-sm font-bold text-slate-800">{entry.userName}</p>
                         <p className="text-[11px] text-slate-400">
                           {getEmployeeTypeLabel(entry.userType)} · {getShiftHours(entry.shift, shifts)}
+                          {entry.hasAttendance && (
+                            <span className="ml-1.5 inline-flex items-center gap-0.5 font-semibold text-emerald-600">
+                              <Lock className="h-2.5 w-2.5" />Attendance recorded
+                            </span>
+                          )}
                         </p>
                       </div>
                       <div
@@ -704,6 +716,7 @@ function ImportButton({ storeId, storeName, onImported }: {
         schedulesCreated: json.schedulesCreated ?? 0,
         entriesCreated: json.entriesCreated ?? 0,
         skipped: json.skipped ?? 0,
+        skippedAttended: json.skippedAttended ?? 0,
         errors: json.errors ?? (json.error ? [json.error] : []),
         notFound: json.notFound ?? [],
         warnings: json.warnings ?? [],
@@ -760,6 +773,12 @@ function ImportButton({ storeId, storeName, onImported }: {
               <p className="mt-0.5 text-[11px] text-slate-500">
                 {result.entriesCreated} entries · {result.schedulesCreated} store(s){result.month && ` · ${formatYearMonth(result.month)}`}
               </p>
+              {(result.skippedAttended ?? 0) > 0 && (
+                <p className="mt-0.5 flex items-center gap-1 text-[11px] text-slate-500">
+                  <Lock className="h-2.5 w-2.5 shrink-0" />
+                  {result.skippedAttended} day{result.skippedAttended !== 1 ? 's' : ''} left as they were — attendance already recorded
+                </p>
+              )}
             </div>
             {hasWarnings && (
               <button
@@ -815,6 +834,7 @@ function ImportButton({ storeId, storeName, onImported }: {
       {!result && !importing && (
         <p className="flex items-center gap-1.5 px-1 text-[10px] text-slate-400">
           <FileSpreadsheet className="h-3 w-3 shrink-0" />
+          Days that already have attendance are left as they are; every other day follows the file.
           Shift codes are loaded dynamically from OPS Shift settings.
         </p>
       )}
@@ -1055,7 +1075,7 @@ export default function OpsSchedulesPage() {
   const [employees,     setEmployees]     = useState<EmployeeOption[]>([]);
   const [loading,       setLoading]       = useState(false);
   const [creating,      setCreating]      = useState(false);
-  const [deleting,      setDeleting]      = useState(false);
+  const [showDelete,    setShowDelete]    = useState(false);
   const [showCreateConfirm, setShowCreateConfirm] = useState(false);
   const [exporting,     setExporting]     = useState(false);
   const [templating,    setTemplating]    = useState(false);
@@ -1192,29 +1212,10 @@ export default function OpsSchedulesPage() {
     finally { setCreating(false); }
   }
 
-  async function handleDelete() {
-    if (!selectedStore || !schedule) return;
-    if (!confirm(
-      `Delete the ${formatYearMonth(selectedMonth)} schedule for ${currentStoreName}?\n\n`
-      + 'Every shift, day off and leave is removed. Days someone already checked in for (or was marked '
-      + 'absent / Dinas / Cuti / Sakit) stay, so their attendance history is kept.',
-    )) return;
-    setDeleting(true);
-    try {
-      const params = new URLSearchParams({ storeId: selectedStore, yearMonth: selectedMonth });
-      const res  = await fetch(`/api/ops/schedules/monthly?${params}`, { method: 'DELETE' });
-      const json = await res.json();
-      if (!res.ok || !json.success) throw new Error(parseApiError(json, 'Delete failed'));
-      toast.success(
-        json.lockedCount > 0
-          ? `Schedule cleared — ${json.lockedCount} day(s) with attendance kept`
-          : 'Schedule deleted',
-      );
-      closePanel();
-      // The month stays when attended days were kept — show what's left.
-      await loadSchedule();
-    } catch (e) { toast.error(e instanceof Error ? e.message : 'Delete failed'); }
-    finally { setDeleting(false); }
+  function handleDeleted() {
+    closePanel();
+    // The month stays when attended days were kept — show what's left.
+    void loadSchedule();
   }
 
   async function handleExport() {
@@ -1359,11 +1360,10 @@ export default function OpsSchedulesPage() {
                   </button>
                   <button
                     type="button"
-                    onClick={handleDelete}
-                    disabled={deleting}
+                    onClick={() => setShowDelete(true)}
                     className="flex h-10 items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 text-sm font-semibold text-red-600 hover:bg-red-100 disabled:opacity-50"
                   >
-                    {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                    <Trash2 className="h-4 w-4" />
                     Delete schedule
                   </button>
                 </>
@@ -1543,6 +1543,18 @@ export default function OpsSchedulesPage() {
           onEdit={e => { setPanelEditEntry(e); setPanelView('edit'); }}
           onSaveNew={handleSaveNewEntry}
           onSaveEdit={handleSaveEntry}
+        />
+      )}
+
+      {showDelete && schedule && currentStore && (
+        <ScheduleDeleteDialog
+          storeId={currentStore.id}
+          storeNo={currentStore.storeNo}
+          storeName={currentStore.name}
+          yearMonth={selectedMonth}
+          monthLabel={formatYearMonth(selectedMonth)}
+          onClose={() => setShowDelete(false)}
+          onDeleted={handleDeleted}
         />
       )}
 

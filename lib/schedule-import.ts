@@ -101,6 +101,8 @@ export interface ImportResult {
   schedulesCreated: number;
   entriesCreated: number;
   skipped: number;
+  /** Day cells not applied because attendance is already recorded for that employee-day. */
+  skippedAttended: number;
   errors: string[];
   notFound: string[];
   /** Not fatal — e.g. unrecognised shift codes that were imported as a day off. */
@@ -691,16 +693,23 @@ async function resolveEmployee(
  * section at a single chosen store, so this also merges all sections that
  * land on the same store into ONE createOrReplaceMonthlySchedule call
  * (calling it twice for the same store/month wipes the first batch).
+ *
+ * Into an existing month, an employee-day that already has attendance keeps
+ * its entry and the file's cell for it is skipped (counted in
+ * `skippedAttended`); every other day is replaced by the file. With
+ * `blockIfUnattended` (PIC uploads) the month must be empty or hold nothing
+ * but attendance history — see createOrReplaceMonthlySchedule.
  */
 export async function importScheduleFromParsed(
   parsed: ParsedScheduleFile,
   storeMap: Record<string, number>,
   actorId: string,
-  blockIfExists?: boolean,
+  blockIfUnattended?: boolean,
 ): Promise<ImportResult> {
   let schedulesCreated = 0;
   let entriesCreated = 0;
   let skipped = 0;
+  let skippedAttended = 0;
   const errors: string[] = [];
   const notFound: string[] = [];
   const warnings = describeUnknownCodes(parsed.unknownCodes);
@@ -780,7 +789,6 @@ export async function importScheduleFromParsed(
         } else {
           assignments.push({ ...base, shift: null, isOff: true, isLeave: false });
         }
-        entriesCreated++;
       }
     }
 
@@ -795,7 +803,7 @@ export async function importScheduleFromParsed(
       entries: assignments,
       note: `Imported from ${parsed.sheetName}`,
       importedBy: actorId,
-      blockIfExists,
+      blockIfUnattended,
     });
 
     if (!result.success) {
@@ -803,10 +811,11 @@ export async function importScheduleFromParsed(
       continue;
     }
 
-    if (result.skippedProtected && result.skippedProtected > 0) {
-      skipped += result.skippedProtected;
-      entriesCreated = Math.max(0, entriesCreated - result.skippedProtected);
-    }
+    // Only what actually landed — a refused store adds nothing.
+    const kept = result.skippedProtected ?? 0;
+    skipped += kept;
+    skippedAttended += kept;
+    entriesCreated += assignments.length - kept;
 
     schedulesCreated++;
   }
@@ -818,6 +827,7 @@ export async function importScheduleFromParsed(
     schedulesCreated,
     entriesCreated,
     skipped,
+    skippedAttended,
     errors,
     notFound,
     warnings,

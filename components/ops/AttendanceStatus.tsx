@@ -8,7 +8,7 @@
 //   STATUS                      per-status look (label, icon, chip / dot / text colours)
 //   AttendanceStatusBadge/Dot   one person's status
 //   ATTENDANCE_COUNT_ITEMS      the standard order + names for a store / day's counts
-//   AttendanceCountsLine        "12 Present · 2 Late · 1 Absent · 3 Pending"
+//   AttendanceCountsLine        "12 Present · 2 Late · 1 Absent · 1 Dinas · 3 Pending · 2 Not scheduled"
 //   HEALTH_STYLE                store / day level colours (good / at risk / critical …)
 //
 // The words themselves live in lib/attendance-status.ts (labels, PENDING_LABEL,
@@ -24,7 +24,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
-  ATTENDANCE_STATUS_CODES, ON_LEAVE_LABEL, PENDING_LABEL,
+  ATTENDANCE_STATUS_CODES, ATTENDANCE_STATUS_LABELS, ON_LEAVE_LABEL, PENDING_LABEL,
   attendanceStatusLabel, isLeaveAttendanceStatus, type AttendanceStatus,
 } from '@/lib/attendance-status';
 import type { AttendanceCounts, AttendanceHealth } from '@/lib/attendance-health';
@@ -34,7 +34,7 @@ export type RowStatus = AttendanceStatus | 'pending';
 
 /**
  * Everything that can be drawn as a status tag. On top of RowStatus:
- *   leave          the whole justified-absence group (counts), or a planned leave day
+ *   leave          justified leave as a count (Cuti / Sakit / excused), or a planned leave day
  *   off            planned day off — no attendance expected
  *   not_scheduled  no shift today
  *   not_recording  the store isn't active, so nothing is recorded
@@ -66,7 +66,7 @@ export const STATUS: Record<AttendanceTag, StatusStyle> = {
   pending: { label: PENDING_LABEL,  Icon: HelpCircle, chip: 'border-sky-200 bg-sky-50 text-sky-700',             dot: 'bg-sky-400',   text: 'text-sky-600'   },
   leave:   { label: ON_LEAVE_LABEL, Icon: CalendarOff, chip: 'border-violet-200 bg-violet-50 text-violet-700',   dot: 'bg-violet-500', text: 'text-violet-600' },
   off:           { label: 'Off',           Icon: MinusCircle,  chip: 'border-border bg-secondary text-muted-foreground', dot: 'bg-slate-300', text: 'text-slate-500' },
-  not_scheduled: { label: 'Not scheduled', Icon: CircleDashed, chip: 'border-slate-200 bg-slate-50 text-slate-400',      dot: 'border border-dashed border-slate-300', text: 'text-slate-400' },
+  not_scheduled: { label: 'Not scheduled', Icon: CircleDashed, chip: 'border-slate-200 bg-slate-50 text-slate-400',      dot: 'border border-dashed border-slate-300', text: 'text-slate-500' },
   not_recording: { label: 'Not recording', Icon: CircleSlash,  chip: 'border-slate-200 bg-slate-50 text-slate-400',      dot: 'border border-dashed border-slate-300', text: 'text-slate-400' },
 };
 
@@ -115,34 +115,41 @@ export function AttendanceStatusDot({ status, className }: { status: AttendanceT
 
 // ─── A store's / day's counts ────────────────────────────────────────────────
 
-export type CountKey = 'present' | 'late' | 'absent' | 'excused' | 'unset';
+export type CountKey = 'present' | 'late' | 'absent' | 'dinas' | 'excused' | 'unset';
 
 const COUNT_ITEM_DEFS: { key: CountKey; tag: AttendanceTag; hint: string }[] = [
   { key: 'present', tag: 'present', hint: 'Checked in on time' },
   { key: 'late',    tag: 'late',    hint: 'Checked in late' },
   { key: 'absent',  tag: 'absent',  hint: 'Did not show up' },
-  { key: 'excused', tag: 'leave',   hint: 'Dinas / Cuti / Sakit — a justified absence' },
+  { key: 'dinas',   tag: 'dinas',   hint: 'On dinas — working outside the store' },
+  { key: 'excused', tag: 'leave',   hint: 'Cuti / Sakit — a justified absence' },
   { key: 'unset',   tag: 'pending', hint: 'No attendance recorded yet' },
 ];
 
 /** The standard order and names of a count breakdown — draw tiles from this too, not your own list. */
 export const ATTENDANCE_COUNT_ITEMS = COUNT_ITEM_DEFS.map((d) => ({
   ...d,
-  label: STATUS[d.tag].label,
+  // A count says "Dinas", not the chip's "Dinas (D)" — the roster code is for the chip.
+  label: d.key === 'dinas' ? ATTENDANCE_STATUS_LABELS.dinas : STATUS[d.tag].label,
   text:  STATUS[d.tag].text,
 }));
 
 /**
- * "12 Present · 2 Late · 1 Absent · 3 Pending" in the standard colours. Present
- * always shows (even 0 — that's the number people look for); the rest only
- * when there is something to say.
+ * "12 Present · 2 Late · 1 Absent · 1 Dinas · 3 Pending" in the standard colours.
+ * Present always shows (even 0 — that's the number people look for); the rest
+ * only when there is something to say.
+ *
+ * `noSchedule` is optional: employees on the roster with no shift (not even an
+ * OFF / leave day) today. It isn't one of a day's scheduled shifts, so it isn't
+ * part of ATTENDANCE_COUNT_ITEMS — only screens that work it out pass it in.
  */
 export function AttendanceCountsLine({
   counts, className,
 }: {
-  counts:     Pick<AttendanceCounts, CountKey>;
+  counts:     Pick<AttendanceCounts, CountKey> & { noSchedule?: number };
   className?: string;
 }) {
+  const noSchedule = counts.noSchedule ?? 0;
   return (
     <div className={cn('flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px]', className)}>
       {ATTENDANCE_COUNT_ITEMS.map(({ key, label, text, hint }) =>
@@ -151,6 +158,11 @@ export function AttendanceCountsLine({
             <span className="tabular-nums">{counts[key]}</span> {label}
           </span>
         ) : null,
+      )}
+      {noSchedule > 0 && (
+        <span title="On the store roster but no shift (or OFF / leave) scheduled today" className={cn('font-medium', STATUS.not_scheduled.text)}>
+          <span className="tabular-nums">{noSchedule}</span> {STATUS.not_scheduled.label}
+        </span>
       )}
     </div>
   );

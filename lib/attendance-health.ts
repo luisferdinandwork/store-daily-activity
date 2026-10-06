@@ -8,7 +8,7 @@
 //
 //   rate = (present + late) / (present + late + absent)
 //
-// Pending (no record yet) and justified leave (Dinas / Cuti / Sakit / excused)
+// Pending (no record yet), Dinas and justified leave (Cuti / Sakit / excused)
 // are left out of both sides. Late counts as present — they showed up — but a
 // store where many people are late gets its own colour so it stands out even
 // when the rate itself is fine.
@@ -25,12 +25,14 @@ export const LATE_HEAVY_MIN = 2;
 export const LATE_HEAVY_RATE = 0.2;
 
 export interface AttendanceCounts {
-  /** Scheduled working rows (OFF / holidays are never in here). */
+  /** Scheduled people — one per employee per day (OFF / holidays are never in here). */
   total: number;
   present: number;
   late: number;
   absent: number;
-  /** Dinas / Cuti / Sakit / excused — justified, left out of the rate. */
+  /** Dinas — working outside any store; kept apart from leave, left out of the rate. */
+  dinas: number;
+  /** Cuti / Sakit / excused ("On leave") — justified, left out of the rate. */
   excused: number;
   /** No attendance record yet — left out of the rate. */
   unset: number;
@@ -51,7 +53,7 @@ export interface AttendanceMonthData {
 }
 
 export const EMPTY_COUNTS: AttendanceCounts = {
-  total: 0, present: 0, late: 0, absent: 0, excused: 0, unset: 0,
+  total: 0, present: 0, late: 0, absent: 0, dinas: 0, excused: 0, unset: 0,
 };
 
 export function addCounts(a: AttendanceCounts, b: AttendanceCounts): AttendanceCounts {
@@ -60,6 +62,7 @@ export function addCounts(a: AttendanceCounts, b: AttendanceCounts): AttendanceC
     present: a.present + b.present,
     late:    a.late    + b.late,
     absent:  a.absent  + b.absent,
+    dinas:   a.dinas   + b.dinas,
     excused: a.excused + b.excused,
     unset:   a.unset   + b.unset,
   };
@@ -67,9 +70,10 @@ export function addCounts(a: AttendanceCounts, b: AttendanceCounts): AttendanceC
 
 /**
  * Add one scheduled shift to `c` (mutates): its recorded status, or pending
- * (`unset`) when there is none. Dinas / Cuti / Sakit and the legacy "excused"
- * all fold into `excused`. Every screen that counts attendance goes through
- * here, so a status can't land in a different bucket on different pages.
+ * (`unset`) when there is none. Dinas has its own bucket; Cuti / Sakit and the
+ * legacy "excused" fold into `excused` ("On leave"). Every screen that counts
+ * attendance goes through here, so a status can't land in a different bucket
+ * on different pages.
  */
 export function tallyStatus(c: AttendanceCounts, status: string | null | undefined): void {
   c.total++;
@@ -77,7 +81,51 @@ export function tallyStatus(c: AttendanceCounts, status: string | null | undefin
   else if (status === 'present') c.present++;
   else if (status === 'late') c.late++;
   else if (status === 'absent') c.absent++;
+  else if (status === 'dinas') c.dinas++;
   else if (status === 'excused' || isLeaveAttendanceStatus(status)) c.excused++;
+}
+
+/**
+ * Which status stands for a person who has more than one schedule row on the
+ * same day (higher wins). Late beats present — they came, but late — and anyone
+ * who showed up beats a leave / absent / pending row beside it.
+ */
+const DAY_STATUS_RANK: Record<string, number> = {
+  late: 6, present: 5, dinas: 4, cuti: 3, sakit_dengan_surat: 3, sakit_tanpa_surat: 3, excused: 3, absent: 2,
+};
+
+function dayStatusRank(status: string | null | undefined): number {
+  return status ? (DAY_STATUS_RANK[status] ?? 1) : 0;
+}
+
+/** The status that counts when one person has both `a` and `b` on the same day. */
+export function pickDayStatus(a: string | null | undefined, b: string | null | undefined): string | null | undefined {
+  return dayStatusRank(b) > dayStatusRank(a) ? b : a;
+}
+
+/**
+ * Tally one store's schedule rows for one day, one status per PERSON: an
+ * employee with two rows (a duplicate or a second shift) counts once, as their
+ * best status — late if either row is late, otherwise present — so "1 Present ·
+ * 1 Late" can never mean the same person twice. Rows without a user count alone.
+ * Every screen that tallies rows goes through here (or `tallyStatus` for a
+ * single, already-collapsed status).
+ */
+export function tallyPeople(
+  c: AttendanceCounts,
+  rows: Iterable<{ userId: string | null | undefined; status: string | null | undefined }>,
+): void {
+  const byPerson = new Map<string, string | null | undefined>();
+  for (const r of rows) {
+    if (!r.userId) {
+      tallyStatus(c, r.status);
+    } else if (byPerson.has(r.userId)) {
+      byPerson.set(r.userId, pickDayStatus(byPerson.get(r.userId), r.status));
+    } else {
+      byPerson.set(r.userId, r.status);
+    }
+  }
+  for (const status of byPerson.values()) tallyStatus(c, status);
 }
 
 /** Everyone who showed up — present + late (late people did come). */

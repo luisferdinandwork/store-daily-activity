@@ -9,7 +9,7 @@ import { schedules, attendance, stores } from '@/lib/db/schema';
 import { eq, and, gte, lt, inArray, asc } from 'drizzle-orm';
 import { getOpsActor } from '../../tasks/_helpers';
 import { addDaysKey, jakartaDateKey, jakartaMonthRange, jakartaTodayKey } from '@/lib/day-bucket';
-import { EMPTY_COUNTS, tallyStatus, type AttendanceMonthData, type StoreDayCounts } from '@/lib/attendance-health';
+import { EMPTY_COUNTS, tallyPeople, type AttendanceMonthData, type StoreDayCounts } from '@/lib/attendance-health';
 
 const MONTH_KEY = /^\d{4}-(0[1-9]|1[0-2])$/;
 
@@ -80,6 +80,7 @@ export async function GET(req: NextRequest) {
       .select({
         date:    schedules.date,
         storeId: schedules.storeId,
+        userId:  schedules.userId,
         status:  attendance.status,
       })
       .from(schedules)
@@ -93,22 +94,31 @@ export async function GET(req: NextRequest) {
         ),
       );
 
-    const byDay = new Map<string, Map<number, StoreDayCounts>>();
+    // Group the rows by day → store, then count one status per person: an
+    // employee with two rows on a day (say one late, one present) is a single
+    // late, never one of each — see tallyPeople().
+    const byDay = new Map<string, Map<number, { userId: string; status: string | null }[]>>();
     for (const row of rows) {
       const dayKey = jakartaDateKey(row.date);
       let perStore = byDay.get(dayKey);
       if (!perStore) byDay.set(dayKey, (perStore = new Map()));
-      let c = perStore.get(row.storeId);
-      if (!c) perStore.set(row.storeId, (c = { storeId: row.storeId, ...EMPTY_COUNTS }));
+      let list = perStore.get(row.storeId);
+      if (!list) perStore.set(row.storeId, (list = []));
 
       // A settled past day with no record is a no-show; anything else with no
       // record stays pending.
       const noShow = !row.status && dayKey < today && dayKey >= settledFrom;
-      tallyStatus(c, noShow ? 'absent' : row.status);
+      list.push({ userId: row.userId, status: noShow ? 'absent' : row.status });
     }
 
     const days: AttendanceMonthData['days'] = {};
-    for (const [dayKey, perStore] of byDay) days[dayKey] = [...perStore.values()];
+    for (const [dayKey, perStore] of byDay) {
+      days[dayKey] = [...perStore].map(([storeId, list]): StoreDayCounts => {
+        const c: StoreDayCounts = { storeId, ...EMPTY_COUNTS };
+        tallyPeople(c, list);
+        return c;
+      });
+    }
 
     return NextResponse.json({ success: true, data: { stores: storeRows, days } satisfies AttendanceMonthData });
   } catch (err) {

@@ -29,7 +29,7 @@ import { employeeTypes, shifts, userRoles } from '@/lib/db/schema/lookups';
 import { jakartaDayRange, jakartaDayStart, jakartaTodayKey, jakartaWallClock } from '@/lib/day-bucket';
 import { getStoreSummariesForRange } from '@/lib/db/utils/tasks';
 import { isStoreStatus, type StoreStatus } from '@/lib/store-status';
-import { EMPTY_COUNTS, tallyStatus, type AttendanceCounts } from '@/lib/attendance-health';
+import { EMPTY_COUNTS, pickDayStatus, tallyPeople, type AttendanceCounts } from '@/lib/attendance-health';
 
 // ─── Public types (consumed by the page) ─────────────────────────────────────
 
@@ -102,9 +102,6 @@ export type StoresApiResponse =
 function todayRange() {
   return jakartaDayRange(jakartaTodayKey());
 }
-
-/** Checked-in statuses — someone who showed up (late still counts as present). */
-const ATTENDED_STATUSES = new Set(['present', 'late']);
 
 function toColorStatus(rate: number, total: number): TaskColorStatus {
   if (total === 0) return 'gray';
@@ -223,23 +220,34 @@ export async function GET(): Promise<NextResponse<StoresApiResponse>> {
   // storeId:userId → best row (an attendance record beats a bare schedule)
   const todayByEmployee = new Map<string, { status: string; checkInTime: Date | null }>();
 
+  // Counted once per person: an employee with two rows today is one status
+  // (late over present — see tallyPeople()), not one of each.
+  const rowsByStore = new Map<number, { userId: string; status: string | null }[]>();
+
   for (const r of todayRows) {
-    let counts = attendanceByStore.get(r.storeId);
-    if (!counts) attendanceByStore.set(r.storeId, (counts = { ...EMPTY_COUNTS }));
-    tallyStatus(counts, r.status);
+    let list = rowsByStore.get(r.storeId);
+    if (!list) rowsByStore.set(r.storeId, (list = []));
+    list.push({ userId: r.userId, status: r.status });
 
     const key = `${r.storeId}:${r.userId}`;
     if (r.status) {
       const prev = todayByEmployee.get(key);
-      // Keep a checked-in status over a leave/absent one if a user somehow
-      // has two shifts today.
-      if (!prev || !ATTENDED_STATUSES.has(prev.status)) {
+      // If a user somehow has two rows today, the better status stands — late
+      // over present, a checked-in status over leave / absent — the same pick
+      // tallyPeople() makes for the store's counts.
+      if (!prev || pickDayStatus(prev.status, r.status) !== prev.status) {
         todayByEmployee.set(key, { status: r.status, checkInTime: r.checkInTime });
       }
     } else if (!todayByEmployee.has(key)) {
       const started = !r.shiftStart || jakartaWallClock(todayKey, r.shiftStart).getTime() <= nowMs;
       todayByEmployee.set(key, { status: started ? 'not_checked_in' : 'upcoming', checkInTime: null });
     }
+  }
+
+  for (const [storeId, list] of rowsByStore) {
+    const counts = { ...EMPTY_COUNTS };
+    tallyPeople(counts, list);
+    attendanceByStore.set(storeId, counts);
   }
 
   // 7. Active employee assignments for visible stores

@@ -176,6 +176,13 @@
       "when": 1791181537337,
       "tag": "0024_add_dinas_shift",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1791275947616,
+      "tag": "0025_detach_finance_tasks_from_schedules",
+      "breakpoints": true
     }
   ]
 }

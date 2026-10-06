@@ -12,15 +12,17 @@
 // store, OPS Area is limited to stores in their assigned area.
 
 import { NextRequest, NextResponse } from 'next/server';
-import { and, desc, eq, gte, inArray, lte, or } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull, lt, or } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
+import { jakartaDateKey, jakartaDayRange } from '@/lib/day-bucket';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
 import { todayInStoreTimezone } from '@/lib/schedule-utils';
 import {
   attendance,
   issueRoleAssignments,
   issues,
+  monthlyScheduleEntries,
   schedules,
   stores,
   userRoles,
@@ -34,18 +36,8 @@ import {
   getStoreSummariesForRange,
 } from '@/lib/db/utils/tasks';
 import { parseDate } from '../tasks/_helpers';
-import { EMPTY_COUNTS, tallyStatus, type AttendanceCounts } from '@/lib/attendance-health';
+import { EMPTY_COUNTS, addCounts, tallyPeople, type AttendanceCounts } from '@/lib/attendance-health';
 
-function startOfDay(d: Date) {
-  const r = new Date(d);
-  r.setHours(0, 0, 0, 0);
-  return r;
-}
-function endOfDay(d: Date) {
-  const r = new Date(d);
-  r.setHours(23, 59, 59, 999);
-  return r;
-}
 function toDateKey(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
@@ -125,19 +117,23 @@ export async function GET(req: NextRequest) {
   );
 
   // ── Attendance: today, every store in scope ──────────────────────────────────
-  const dayStart = startOfDay(date);
-  const dayEnd = endOfDay(date);
+  // The Jakarta calendar day, matched on both stored encodings (lib/day-bucket.ts).
+  const { start: dayStart, end: dayEnd } = jakartaDayRange(jakartaDateKey(date));
 
-  const attendanceStoreMap = new Map<number, { storeId: string; storeName: string } & AttendanceCounts>();
+  // `noSchedule` sits beside the counts, not in them: it's roster people with no
+  // shift today, so it isn't one of the day's scheduled shifts (`total`).
+  type StoreAttendance = { storeId: string; storeName: string; noSchedule: number } & AttendanceCounts;
+  const attendanceStoreMap = new Map<number, StoreAttendance>();
   for (const s of storeRows) {
-    attendanceStoreMap.set(s.id, { storeId: String(s.id), storeName: s.name, ...EMPTY_COUNTS });
+    attendanceStoreMap.set(s.id, { storeId: String(s.id), storeName: s.name, noSchedule: 0, ...EMPTY_COUNTS });
   }
 
-  const attendanceTotal: AttendanceCounts = { ...EMPTY_COUNTS };
+  let attendanceTotal: AttendanceCounts = { ...EMPTY_COUNTS };
+  let noScheduleTotal = 0;
 
   if (storeIds.length) {
     const scheduleRows = await db
-      .select({ storeId: schedules.storeId, status: attendance.status })
+      .select({ storeId: schedules.storeId, userId: schedules.userId, status: attendance.status })
       .from(schedules)
       .leftJoin(attendance, eq(attendance.scheduleId, schedules.id))
       .where(
@@ -145,16 +141,76 @@ export async function GET(req: NextRequest) {
           inArray(schedules.storeId, storeIds),
           eq(schedules.isHoliday, false),
           gte(schedules.date, dayStart),
-          lte(schedules.date, dayEnd),
+          lt(schedules.date, dayEnd),
         ),
       );
 
+    // One status per person per store: an employee with two schedule rows today
+    // (say one late, one present) is a single late — see tallyPeople().
+    const rowsByStore = new Map<number, { userId: string; status: string | null }[]>();
     for (const row of scheduleRows) {
-      const bucket = attendanceStoreMap.get(row.storeId);
+      let list = rowsByStore.get(row.storeId);
+      if (!list) rowsByStore.set(row.storeId, (list = []));
+      list.push({ userId: row.userId, status: row.status });
+    }
+    for (const [storeId, list] of rowsByStore) {
+      const bucket = attendanceStoreMap.get(storeId);
       if (!bucket) continue;
 
-      tallyStatus(bucket, row.status);
-      tallyStatus(attendanceTotal, row.status);
+      tallyPeople(bucket, list);
+      attendanceTotal = addCounts(attendanceTotal, bucket);
+    }
+
+    // No schedule: an active store employee (home store = this store) with no
+    // shift anywhere today AND no planned entry for today. A monthly-schedule
+    // entry — including OFF and leave — means someone planned the day, so only
+    // people the schedule doesn't mention at all land here.
+    const roster = await db
+      .select({ id: users.id, storeId: users.homeStoreId })
+      .from(users)
+      .innerJoin(userRoles, eq(userRoles.id, users.roleId))
+      .where(
+        and(
+          inArray(users.homeStoreId, storeIds),
+          eq(users.isActive, true),
+          isNull(users.deletedAt),
+          eq(userRoles.code, 'employee'),
+        ),
+      );
+
+    if (roster.length) {
+      const rosterIds = roster.map((r) => r.id);
+      const [shiftRows, plannedRows] = await Promise.all([
+        db
+          .selectDistinct({ userId: schedules.userId })
+          .from(schedules)
+          .where(
+            and(
+              inArray(schedules.userId, rosterIds),
+              gte(schedules.date, dayStart),
+              lt(schedules.date, dayEnd),
+            ),
+          ),
+        db
+          .selectDistinct({ userId: monthlyScheduleEntries.userId })
+          .from(monthlyScheduleEntries)
+          .where(
+            and(
+              inArray(monthlyScheduleEntries.userId, rosterIds),
+              gte(monthlyScheduleEntries.date, dayStart),
+              lt(monthlyScheduleEntries.date, dayEnd),
+            ),
+          ),
+      ]);
+
+      const onSchedule = new Set([...shiftRows, ...plannedRows].map((r) => r.userId));
+      for (const person of roster) {
+        if (onSchedule.has(person.id)) continue;
+        const bucket = person.storeId != null ? attendanceStoreMap.get(person.storeId) : undefined;
+        if (!bucket) continue;
+        bucket.noSchedule++;
+        noScheduleTotal++;
+      }
     }
   }
 
@@ -257,11 +313,14 @@ export async function GET(req: NextRequest) {
     },
     attendance: {
       ...attendanceTotal,
+      noSchedule: noScheduleTotal,
       rate: completionRate(attendanceTotal.present + attendanceTotal.late, attendanceTotal.total),
+      // A store with staff but no shifts today has no rate (null) — it still
+      // shows, after the rated stores, so a missing schedule is visible.
       stores: [...attendanceStoreMap.values()]
-        .filter((s) => s.total > 0)
-        .map((s) => ({ ...s, rate: completionRate(s.present + s.late, s.total) }))
-        .sort((a, b) => a.rate - b.rate),
+        .filter((s) => s.total > 0 || s.noSchedule > 0)
+        .map((s) => ({ ...s, rate: s.total > 0 ? completionRate(s.present + s.late, s.total) : null }))
+        .sort((a, b) => (a.rate ?? 101) - (b.rate ?? 101) || b.noSchedule - a.noSchedule),
     },
     pettyCash: {
       pendingCount: pettyCashPendingCount,

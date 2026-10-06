@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
   if (!session?.user) return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
-  const actor = await getOpsActor((session.user as any).id);
+  const actor = await getOpsActor(session.user.id);
   if (!actor) return NextResponse.json({ success: false, error: 'OPS only.' }, { status: 403 });
 
   try {
@@ -32,7 +32,7 @@ export async function POST(req: NextRequest) {
     const areaErr = await assertStoreInActorArea(actor, parsedStore.id);
     if (areaErr) return NextResponse.json({ success: false, error: areaErr }, { status: 403 });
 
-    let storeMap: Record<string, number> = {};
+    const storeMap: Record<string, number> = {};
     if (rawMap) {
       try {
         const parsed = JSON.parse(rawMap) as Record<string, string | number>;
@@ -91,6 +91,7 @@ export async function POST(req: NextRequest) {
       schedulesCreated: result.schedulesCreated,
       entriesCreated:   result.entriesCreated,
       skipped:          result.skipped,
+      skippedAttended:  result.skippedAttended,
       errors:           result.errors,
       notFound:         result.notFound,
       month:            result.month,
