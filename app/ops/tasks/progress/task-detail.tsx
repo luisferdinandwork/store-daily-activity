@@ -712,7 +712,7 @@ function SetoranDetail({ task }: { task: FlatTask }) {
           <p className="text-xs italic text-slate-400">
             {isNoSetoran
               ? 'Tidak ada setoran hari ini — cukup foto sisa setoran dan foto kartu ATM.'
-              : 'Uang diterima di bawah Rp 50.000 — tidak disetor, cukup foto sisa setoran dan foto kartu ATM.'}
+              : 'Total uang cash drawer di bawah Rp 50.000 — tidak disetor, cukup foto sisa setoran dan foto kartu ATM.'}
           </p>
           <PhotoGrid label="Foto Sisa Setoran" photos={e.cashierPhoto} columns={2} />
           <PhotoGrid label="Foto Kartu ATM" photos={e.atmCardPhoto} columns={2} />

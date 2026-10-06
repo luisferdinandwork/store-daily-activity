@@ -7,10 +7,12 @@
 // requiredStoreAmount  = actualReceivedAmount + previousUnpaidAmount
 // unpaidAmount         = requiredStoreAmount - storedAmount
 //
-// Small setoran: 0 <= actualReceivedAmount < SETORAN_SMALL_THRESHOLD → nothing is
-// deposited (storedAmount = 0, everything carries over), resi + ATM selfie are
-// not required, but a "Foto sisa setoran" (cashierPhoto) + "Foto kartu ATM"
-// (atmCardPhoto) are.
+// Small setoran: 0 <= requiredStoreAmount (the whole cash drawer — uang aktual
+// diterima PLUS sisa kemarin) < SETORAN_SMALL_THRESHOLD → nothing is deposited
+// (storedAmount = 0, everything carries over), resi + ATM selfie are not
+// required, but a "Foto sisa setoran" (cashierPhoto) + "Foto kartu ATM"
+// (atmCardPhoto) are. Judged on the drawer total, never on uang diterima alone:
+// Rp 47.800 received + Rp 49.551 carried = Rp 97.351 must still be deposited.
 //
 // Backward compatibility:
 // - expectedAmount is accepted as actualReceivedAmount
@@ -30,12 +32,13 @@ import {
   type SetoranMoneyStorage,
 } from '@/lib/db/schema';
 
-// Below SETORAN_SMALL_THRESHOLD "uang aktual diterima", no bank deposit — only a
-// cashier photo. Defined in the client-safe review lib so Finance's pages share it.
+// Below SETORAN_SMALL_THRESHOLD total cash drawer (uang aktual diterima + sisa
+// kemarin), no bank deposit — only a cashier photo. Defined in the client-safe
+// review lib so Finance's pages share it.
 export { SETORAN_SMALL_THRESHOLD };
 
-export function isSmallSetoranAmount(actualReceived: number): boolean {
-  return actualReceived >= 0 && actualReceived < SETORAN_SMALL_THRESHOLD;
+export function isSmallSetoranAmount(cashDrawerTotal: number): boolean {
+  return cashDrawerTotal >= 0 && cashDrawerTotal < SETORAN_SMALL_THRESHOLD;
 }
 
 export type TaskResult<T = void> =
@@ -416,16 +419,18 @@ function preserveSetoranFieldActors(
   return values;
 }
 
-function validateSetoranPayload(input: SubmitSetoranInput): string | null {
-  const actualReceived = parseAmount(input.actualReceivedAmount ?? input.expectedAmount);
+/**
+ * `cashDrawerTotal` = uang aktual diterima + sisa kemarin (requiredStoreAmount).
+ */
+function validateSetoranPayload(input: SubmitSetoranInput, cashDrawerTotal: number): string | null {
   const stored = parseAmount(input.storedAmount ?? input.amount);
 
-  // Setoran kecil (< Rp 50.000, termasuk 0 / "tidak ada setoran") — tidak
-  // disetor ke bank, tanpa resi + selfie ATM, cukup foto sisa setoran + foto
-  // kartu ATM.
-  if (isSmallSetoranAmount(actualReceived)) {
+  // Setoran kecil (total cash drawer < Rp 50.000, termasuk 0 / "tidak ada
+  // setoran") — tidak disetor ke bank, tanpa resi + selfie ATM, cukup foto sisa
+  // setoran + foto kartu ATM.
+  if (isSmallSetoranAmount(cashDrawerTotal)) {
     if (stored > 0) {
-      return `Uang aktual diterima di bawah Rp ${SETORAN_SMALL_THRESHOLD.toLocaleString('id-ID')} tidak perlu disetor. Nominal disetor harus 0.`;
+      return `Total uang cash drawer (Rp ${cashDrawerTotal.toLocaleString('id-ID')}) di bawah Rp ${SETORAN_SMALL_THRESHOLD.toLocaleString('id-ID')} tidak perlu disetor. Nominal disetor harus 0.`;
     }
     if (!input.cashierPhoto?.trim()) return 'Foto sisa setoran wajib diupload.';
     if (!input.atmCardPhoto?.trim()) return 'Foto kartu ATM wajib diupload.';
@@ -450,9 +455,6 @@ export async function submitSetoran(
     const checkInErr = await assertCheckedIn(input.scheduleId);
     if (checkInErr) return { success: false, error: checkInErr };
 
-    const validationErr = validateSetoranPayload(input);
-    if (validationErr) return { success: false, error: validationErr };
-
     const ensured = await getOrCreateSetoranForSchedule(input.scheduleId);
     if (!ensured.success) return ensured;
 
@@ -464,10 +466,17 @@ export async function submitSetoran(
 
     const actualReceived = parseAmount(input.actualReceivedAmount ?? input.expectedAmount);
     const previousUnpaid = parseAmount(await getPriorUnpaidForStore(existing.storeId, existing.date));
+    // Total uang cash drawer — the amount the small-setoran rule is judged on.
     const requiredStoreAmount = actualReceived + previousUnpaid;
+
+    const validationErr = validateSetoranPayload(input, requiredStoreAmount);
+    if (validationErr) return { success: false, error: validationErr };
+
     const stored = parseAmount(input.storedAmount ?? input.amount);
-    const isNoSetoran = actualReceived === 0;
-    const isSmallSetoran = isSmallSetoranAmount(actualReceived);
+    const isSmallSetoran = isSmallSetoranAmount(requiredStoreAmount);
+    // "Tidak ada setoran" = nothing received AND no carried balance big enough to
+    // deposit; a day that deposits the carried sisa is a normal setoran.
+    const isNoSetoran = actualReceived === 0 && isSmallSetoran;
 
     if (stored > requiredStoreAmount) {
       return {

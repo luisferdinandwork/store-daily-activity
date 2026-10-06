@@ -7,7 +7,10 @@ export { storeCodeOf } from '@/lib/petty-cash-report';
 
 // ─── Business thresholds ─────────────────────────────────────────────────────
 
-/** Below this "uang aktual diterima" nothing is deposited — only a cashier photo. */
+/**
+ * Below this total cash drawer (uang aktual diterima + sisa kemarin) nothing is
+ * deposited — only a cashier photo.
+ */
 export const SETORAN_SMALL_THRESHOLD = 50_000;
 
 /**
@@ -132,8 +135,9 @@ export interface EvidenceSlot {
 }
 
 /**
- * The photos Finance should see for this row. A small setoran (< Rp 50.000)
- * carries "Foto sisa setoran" + "Foto kartu ATM"; a normal one carries the
+ * The photos Finance should see for this row. A small setoran (cash drawer
+ * < Rp 50.000, nothing deposited) carries "Foto sisa setoran" + "Foto kartu
+ * ATM"; a normal one carries the
  * bank receipt + a selfie with the ATM card. Before an amount is entered we
  * just list whichever photos exist.
  */

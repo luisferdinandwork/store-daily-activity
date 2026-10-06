@@ -13,9 +13,10 @@
 //   • "Kurang" field — the remainder that carries to the next setoran
 //   • two slim photo rows + a note
 //
-// Small setoran: uang aktual diterima between Rp 0 and Rp 49.999 → nothing is
-// deposited (Total wajib disetor fixed at 0, everything carries over as
-// "Kurang"); resi + ATM selfie are replaced by two photos: "Foto Sisa Setoran"
+// Small setoran: Total uang Cash Drawer (diterima + sisa kemarin) between Rp 0
+// and Rp 49.999 → nothing is deposited (Total wajib disetor fixed at 0,
+// everything carries over as "Kurang"); resi + ATM selfie are replaced by two
+// photos: "Foto Sisa Setoran"
 // (cashierPhoto) and "Foto Kartu ATM" (atmCardPhoto).
 // All business logic (autosave, no-geo guard, upload, submit gating) is
 // unchanged from the previous version.
@@ -96,7 +97,7 @@ function toNumber(raw: string | null | undefined): number {
 }
 
 const SETORAN_STEP = 50_000;
-/** Mirrors SETORAN_SMALL_THRESHOLD in lib/db/utils/setoran.ts. */
+/** Mirrors SETORAN_SMALL_THRESHOLD in lib/setoran-review.ts (applies to the cash drawer total). */
 const SMALL_SETORAN_THRESHOLD = 50_000;
 
 /** Round a cash-drawer total DOWN to the nearest deposit step (kelipatan 50.000). */
@@ -174,17 +175,20 @@ export default function SetoranTaskPage() {
   );
   const actualReceivedNumber = useMemo(() => toNumber(actualReceivedAmount), [actualReceivedAmount]);
 
-  // "Tidak ada setoran" — employee explicitly typed 0 for uang aktual diterima.
-  // No money to deposit, so nominal disetor and photos are not required.
-  const isNoSetoran = actualReceivedAmount.trim() !== '' && actualReceivedNumber === 0;
-  // "Setoran kecil" — under Rp 50.000 received (0 included). Nothing is
-  // deposited; a cashier photo replaces the resi + ATM selfie.
-  const isSmallSetoran =
-    actualReceivedAmount.trim() !== '' && actualReceivedNumber < SMALL_SETORAN_THRESHOLD;
-  const noDeposit = isSmallSetoran;
-
   // "Total uang Cash Drawer" = uang aktual diterima + sisa belum disetor.
   const cashDrawerTotal = actualReceivedNumber + previousUnpaidAmount;
+
+  // "Setoran kecil" — the whole cash drawer (received + sisa kemarin) is under
+  // Rp 50.000 (0 included). Nothing is deposited; a cashier photo replaces the
+  // resi + ATM selfie. Judged on the drawer total, NOT on uang diterima alone:
+  // Rp 47.800 received + Rp 49.551 carried over is Rp 97.351 and still has to be
+  // deposited.
+  const isSmallSetoran =
+    actualReceivedAmount.trim() !== '' && cashDrawerTotal < SMALL_SETORAN_THRESHOLD;
+  // "Tidak ada setoran" — employee typed 0 for uang aktual diterima and there is
+  // no carried balance big enough to deposit either.
+  const isNoSetoran = isSmallSetoran && actualReceivedNumber === 0;
+  const noDeposit = isSmallSetoran;
   // Auto-suggested deposit: that total rounded DOWN to the nearest Rp 50.000.
   const autoStored = noDeposit ? 0 : roundDownToStep(cashDrawerTotal);
   const storedNumber = noDeposit ? 0 : toNumber(storedAmount);
@@ -317,6 +321,9 @@ function SetoranPageBody(props: BodyProps) {
   const [editOpen, setEditOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const noDeposit = isSmallSetoran;
+  // A blank "uang aktual diterima" must not silently record Rp 0 — even when the
+  // carried sisa alone is enough to deposit.
+  const hasReceived = actualReceivedAmount.trim() !== '';
 
   // ─── Autosave (no geo) ───────────────────────────────────────────────────
   const { status: saveStatus, lastSaved, save: rawAutoSave } = useAutoSave({
@@ -398,7 +405,7 @@ function SetoranPageBody(props: BodyProps) {
         return;
       }
     } else {
-      if (storedNumber <= 0) {
+      if (!hasReceived || storedNumber <= 0) {
         setSubmitError('Total wajib disetor belum terisi. Isi uang aktual diterima kemarin terlebih dahulu.');
         return;
       }
@@ -418,7 +425,7 @@ function SetoranPageBody(props: BodyProps) {
 
     setConfirmOpen(true);
   }, [
-    readonly, isSmallSetoran, storedNumber, cashDrawerTotal,
+    readonly, isSmallSetoran, hasReceived, storedNumber, cashDrawerTotal,
     resiPhoto, atmCardSelfiePhoto, cashierPhoto, atmCardPhoto, setSubmitError,
   ]);
 
@@ -469,7 +476,7 @@ function SetoranPageBody(props: BodyProps) {
   const canSubmit =
     !readonly && accessOk &&
     ((isSmallSetoran && !!cashierPhoto && !!atmCardPhoto) ||
-      (!isSmallSetoran && storedNumber > 0 && !isOverStored && !!resiPhoto && !!atmCardSelfiePhoto));
+      (!isSmallSetoran && hasReceived && storedNumber > 0 && !isOverStored && !!resiPhoto && !!atmCardSelfiePhoto));
 
   const submitHint = (() => {
     if (readonly) return undefined;
@@ -479,7 +486,7 @@ function SetoranPageBody(props: BodyProps) {
       if (!atmCardPhoto) return 'Foto kartu ATM belum diupload.';
       return undefined;
     }
-    if (storedNumber <= 0) return 'Isi uang aktual diterima kemarin terlebih dahulu.';
+    if (!hasReceived || storedNumber <= 0) return 'Isi uang aktual diterima kemarin terlebih dahulu.';
     if (isOverStored) return 'Total wajib disetor melebihi total uang cash drawer.';
     if (!resiPhoto) return 'Foto resi belum diupload.';
     if (!atmCardSelfiePhoto) return 'Foto selfie dengan kartu ATM belum diupload.';
@@ -548,7 +555,7 @@ function SetoranPageBody(props: BodyProps) {
                   {isNoSetoran
                     ? 'Tidak ada setoran hari ini.'
                     : isSmallSetoran
-                      ? `Di bawah ${rupiah(SMALL_SETORAN_THRESHOLD)} — tidak perlu disetor hari ini.`
+                      ? `Total cash drawer di bawah ${rupiah(SMALL_SETORAN_THRESHOLD)} — tidak perlu disetor hari ini.`
                       : storedManual
                       ? `Diubah manual · ketuk untuk ubah · otomatis ${rupiah(autoStored)}`
                       : 'Otomatis kelipatan Rp 50.000 · ketuk untuk ubah'}
@@ -569,7 +576,7 @@ function SetoranPageBody(props: BodyProps) {
                   isNoSetoran
                     ? 'Tidak ada setoran hari ini — tetap wajib foto sisa setoran & foto kartu ATM.'
                     : isSmallSetoran
-                      ? `Di bawah ${rupiah(SMALL_SETORAN_THRESHOLD)}: tidak perlu resi & selfie ATM, cukup foto sisa setoran & foto kartu ATM.`
+                      ? `Total cash drawer di bawah ${rupiah(SMALL_SETORAN_THRESHOLD)}: tidak perlu resi & selfie ATM, cukup foto sisa setoran & foto kartu ATM.`
                       : undefined
                 }
               />
@@ -727,7 +734,7 @@ function KurangField({
         ? 'Tidak ada setoran hari ini — sisa kemarin tetap dibawa ke setoran berikutnya.'
         : 'Tidak ada setoran hari ini.')
     : isSmallSetoran
-      ? `Di bawah ${rupiah(SMALL_SETORAN_THRESHOLD)} — seluruhnya dibawa ke setoran berikutnya.`
+      ? `Total cash drawer di bawah ${rupiah(SMALL_SETORAN_THRESHOLD)} — seluruhnya dibawa ke setoran berikutnya.`
       : {
         neutral: 'Isi uang aktual diterima kemarin dulu.',
         ok: 'Setoran pas.',
@@ -873,7 +880,7 @@ function ConfirmSubmitModal({
 
       {isSmallSetoran && !isNoSetoran && (
         <Notice tone="warning" icon={AlertCircle}>
-          Uang aktual diterima di bawah <span className="font-bold">{rupiah(SMALL_SETORAN_THRESHOLD)}</span> —
+          Total uang cash drawer di bawah <span className="font-bold">{rupiah(SMALL_SETORAN_THRESHOLD)}</span> —
           hari ini <span className="font-bold">tidak disetor</span>, cukup dengan foto sisa setoran dan
           foto kartu ATM. Seluruh uang dibawa ke setoran berikutnya.
         </Notice>

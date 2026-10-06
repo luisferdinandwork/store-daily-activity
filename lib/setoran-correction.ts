@@ -157,9 +157,9 @@ export function planSetoranCorrection(
   }
 
   // The deposit comes out of the whole cash drawer: uang diterima PLUS sisa
-  // kemarin. (submitSetoran only looks at uang diterima for the "setoran kecil"
-  // rule; here the carried sisa counts too, so a day can deposit the accumulated
-  // balance even when little was received that day.)
+  // kemarin. (Same rule as submitSetoran's "setoran kecil" check: the carried
+  // sisa counts too, so a day deposits the accumulated balance even when little
+  // was received that day.)
   const required = received + target.carryIn;
   if (required < SETORAN_SMALL_THRESHOLD && stored > 0) {
     return {

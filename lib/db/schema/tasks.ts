@@ -187,18 +187,19 @@ export const setoranTasks = pgTable('setoran_tasks', {
   unpaidAmount:            decimal('unpaid_amount',             { precision: 12, scale: 2 }).default('0').notNull(),
 
   /**
-   * Set when the store genuinely had no setoran that day (uang diterima = 0).
-   * The task still completes normally with amount/unpaid = 0; resi + ATM
-   * selfie photos are not required in this case. Read by Ops/Finance/PIC to
+   * Set when the store genuinely had no setoran that day (uang diterima = 0 and
+   * no carried sisa big enough to deposit). The task still completes normally
+   * with amount = 0; resi + ATM selfie photos are not required in this case. Read by Ops/Finance/PIC to
    * show "Tidak ada setoran" instead of treating it as missing evidence.
    */
   isNoSetoran:             boolean('is_no_setoran').default(false).notNull(),
 
   /**
    * Photo of the remaining/uncollected setoran cash ("Foto sisa setoran").
-   * Required together with atmCardPhoto instead of resi + ATM selfie when
-   * uang aktual diterima is below Rp 50.000 (SETORAN_SMALL_THRESHOLD in
-   * lib/db/utils/setoran.ts) — the deposit stays 0 and the money carries over.
+   * Required together with atmCardPhoto instead of resi + ATM selfie when the
+   * total cash drawer (uang aktual diterima + sisa kemarin) is below Rp 50.000
+   * (SETORAN_SMALL_THRESHOLD in lib/setoran-review.ts) — the deposit stays 0 and
+   * the money carries over.
    * Column kept as cashier_photo (pre-dates the "sisa setoran" wording).
    */
   cashierPhoto:            text('cashier_photo'),
