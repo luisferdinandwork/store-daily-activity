@@ -24,6 +24,7 @@ import {
   issues,
   monthlyScheduleEntries,
   schedules,
+  shifts,
   stores,
   userRoles,
   users,
@@ -102,6 +103,10 @@ export async function GET(req: NextRequest) {
     .sort((a, b) => a.completionRate - b.completionRate);
 
   const shiftRows = storeIds.length ? await getShiftTaskSummary(storeIds, date) : [];
+  // Shift names come from the shifts table, like everywhere else in Ops.
+  const shiftLabels = new Map(
+    (await db.select({ code: shifts.code, label: shifts.label }).from(shifts)).map((s) => [s.code, s.label]),
+  );
 
   const monthStart = new Date(date.getFullYear(), date.getMonth(), 1);
   const monthSummaries = storeIds.length
@@ -308,7 +313,11 @@ export async function GET(req: NextRequest) {
     tasks: {
       today: { ...today, completionRate: completionRate(today.completed, today.total) },
       todayByStore,
-      shiftToday: shiftRows.map((s) => ({ ...s, completionRate: completionRate(s.completed, s.total) })),
+      shiftToday: shiftRows.map((s) => ({
+        ...s,
+        label: shiftLabels.get(s.shift) ?? 'Other',
+        completionRate: completionRate(s.completed, s.total),
+      })),
       month: { ...month, completionRate: completionRate(month.completed, month.total) },
     },
     attendance: {

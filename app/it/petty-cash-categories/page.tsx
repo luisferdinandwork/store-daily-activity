@@ -438,7 +438,7 @@ export default function ItPettyCashCategoriesPage() {
         <div className="mx-auto flex max-w-4xl items-center justify-between">
           <div>
             <p className="text-[10px] font-bold uppercase tracking-widest text-cyan-600">IT</p>
-            <h1 className="text-xl font-bold text-slate-900">Kategori Petty Cash</h1>
+            <h1 className="text-xl font-bold text-slate-900">Petty Cash Categories</h1>
             <p className="mt-0.5 text-xs text-slate-400">
               {categories.length} kategori · {activeCount} tampil di form Request PIC
             </p>

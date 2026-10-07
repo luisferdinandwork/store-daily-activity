@@ -116,7 +116,7 @@ export function statusLabel(status: string | null | undefined): string {
     case 'rejected':    return 'Ditolak';
     case 'in_progress': return 'Aktif';
     case 'pending':     return 'Pending';
-    default:            return 'Not Started';
+    default:            return 'Belum mulai';
   }
 }
 
@@ -696,15 +696,18 @@ function SetoranDetail({ task }: { task: FlatTask }) {
           Tidak ada setoran hari ini
         </div>
       )}
+      {/* Same words as Finance Setoran Review + IT Koreksi Setoran (the staff
+          app calls these "uang aktual diterima" / "total uang cash drawer" /
+          "total wajib disetor"). */}
       <div className="space-y-1 divide-y divide-slate-100">
-        <InfoRow label="Uang aktual diterima" value={actualReceived == null ? '—' : fmtRupiah(actualReceived)} />
+        <InfoRow label="Uang diterima" value={actualReceived == null ? '—' : fmtRupiah(actualReceived)} />
         {Number(previousUnpaid) > 0 && (
-          <InfoRow label="Sisa belum disetor" value={<span className="text-amber-600">{fmtAmount(previousUnpaid)}</span>} />
+          <InfoRow label="Sisa kemarin" value={<span className="text-amber-600">{fmtAmount(previousUnpaid)}</span>} />
         )}
-        {Boolean(requiredStore) && <InfoRow label="Total uang cash drawer" value={fmtAmount(requiredStore)} />}
-        <InfoRow label="Total wajib disetor" value={fmtAmount(stored)} />
+        {Boolean(requiredStore) && <InfoRow label="Wajib disetor" value={fmtAmount(requiredStore)} />}
+        <InfoRow label="Disetor" value={fmtAmount(stored)} />
         {Number(unpaid) > 0 && (
-          <InfoRow label="Sisa Setoran" value={<span className="font-bold text-amber-600">{fmtAmount(unpaid)}</span>} />
+          <InfoRow label="Sisa" value={<span className="font-bold text-amber-600">{fmtAmount(unpaid)}</span>} />
         )}
       </div>
       {hasSmallSetoranPhotos ? (
@@ -712,7 +715,7 @@ function SetoranDetail({ task }: { task: FlatTask }) {
           <p className="text-xs italic text-slate-400">
             {isNoSetoran
               ? 'Tidak ada setoran hari ini — cukup foto sisa setoran dan foto kartu ATM.'
-              : 'Total uang cash drawer di bawah Rp 50.000 — tidak disetor, cukup foto sisa setoran dan foto kartu ATM.'}
+              : 'Wajib disetor di bawah Rp 50.000 — tidak disetor, cukup foto sisa setoran dan foto kartu ATM.'}
           </p>
           <PhotoGrid label="Foto Sisa Setoran" photos={e.cashierPhoto} columns={2} />
           <PhotoGrid label="Foto Kartu ATM" photos={e.atmCardPhoto} columns={2} />
@@ -828,7 +831,9 @@ function CekUangModalDetail({ task }: { task: FlatTask }) {
         <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
           <div className="min-w-0 flex-1">
-            <p className="text-xs font-bold text-amber-800">Uang modal belum lengkap</p>
+            <p className="text-xs font-bold text-amber-800">
+              {isPartial ? 'Uang modal belum penuh' : 'Pecahan belum lengkap'}
+            </p>
             {isPartial && (
               <p className="mt-0.5 text-[10px] text-amber-700">
                 Kurang {fmtRupiah(remainingAmount)} dari batas harian {fmtRupiah(maxAmount)}.
@@ -845,10 +850,11 @@ function CekUangModalDetail({ task }: { task: FlatTask }) {
       )}
 
       <div className="space-y-1 divide-y divide-slate-100">
-        <InfoRow label="Total Uang Modal" value={<span className="font-bold text-slate-800">{fmtRupiah(totalAmount)}</span>} />
-        <InfoRow label="Batas Harian" value={fmtRupiah(maxAmount)} />
+        {/* Same words as Finance Uang Modal Review. */}
+        <InfoRow label="Terhitung" value={<span className="font-bold text-slate-800">{fmtRupiah(totalAmount)}</span>} />
+        <InfoRow label="Batas harian" value={fmtRupiah(maxAmount)} />
         <InfoRow
-          label="Sisa Limit"
+          label="Kurang dari batas"
           value={
             <span className={remainingAmount >= 0 ? 'text-emerald-600' : 'text-red-600'}>
               {fmtRupiah(remainingAmount)}
@@ -934,7 +940,7 @@ function StoreClosingDetail({ task }: { task: FlatTask }) {
 
   const openStatement =
     decision === 'post_statement'
-      ? { label: 'Post Statement', cls: 'text-emerald-600', Icon: CheckCircle2 }
+      ? { label: 'Posted', cls: 'text-emerald-600', Icon: CheckCircle2 }
       : decision === 'on_hold'
         ? { label: 'On Hold', cls: 'text-amber-600', Icon: PauseCircle }
         : { label: 'Belum dipilih', cls: 'text-amber-500', Icon: Circle };
@@ -946,7 +952,7 @@ function StoreClosingDetail({ task }: { task: FlatTask }) {
         <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
           <PauseCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
           <div className="min-w-0 flex-1">
-            <p className="text-xs font-bold text-amber-800">Open Statement On Hold</p>
+            <p className="text-xs font-bold text-amber-800">Statement On Hold</p>
             <p className="mt-0.5 text-[10px] text-amber-700">
               Issue terkait sedang ditangani; task dibuka kembali setelah resolved.
               {heldAt ? ` · Ditahan ${fmtTime(heldAt)}` : ''}
@@ -1017,7 +1023,7 @@ function StoreClosingDetail({ task }: { task: FlatTask }) {
           value={<span className={cn('flex items-center gap-1 font-bold', openStatement.cls)}><OpenIcon className="h-3 w-3" />{openStatement.label}</span>}
         />
         {reopenedAt && (
-          <InfoRow label="Dibuka kembali" value={<span className="text-indigo-600">{fmtTime(reopenedAt)}</span>} />
+          <InfoRow label="Hold selesai" value={<span className="text-indigo-600">{fmtTime(reopenedAt)}</span>} />
         )}
       </div>
       {isOnHold && holdReason && (

@@ -16,6 +16,8 @@
 // with a clear error, which the callers record and show to IT.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { createHash } from 'node:crypto';
+
 export const DEFAULT_MAIL_FROM = 'no-reply@panatradeprestasi.com';
 
 const GRAPH_SCOPE = 'https://graph.microsoft.com/.default';
@@ -63,8 +65,38 @@ const globalForMail = globalThis as unknown as {
   __graphToken?: { value: string; expiresAt: number; key: string };
 };
 
+/** Changes whenever any credential does, so an edited secret never reuses an old token. */
+function tokenKey(cfg: GraphConfig): string {
+  return createHash('sha256').update(`${cfg.tenantId}:${cfg.clientId}:${cfg.clientSecret}`).digest('hex');
+}
+
+/**
+ * Azure / Graph error codes → what to fix, in the IT page's language. The raw
+ * message stays in front so it can still be searched for.
+ */
+export function mailErrorHint(error: string, from: string = mailFromAddress()): string | null {
+  if (/AADSTS7000215/.test(error)) {
+    return 'AZURE_CLIENT_SECRET salah: isi dengan kolom "Value" (bukan "Secret ID") dari Certificates & secrets, atau secret itu sudah dihapus.';
+  }
+  if (/AADSTS7000222/.test(error)) return 'Client secret sudah kedaluwarsa — buat secret baru di Azure.';
+  if (/AADSTS700016/.test(error)) return 'AZURE_CLIENT_ID tidak ditemukan di tenant ini.';
+  if (/AADSTS90002|AADSTS900023/.test(error)) return 'AZURE_TENANT_ID salah.';
+  if (/ErrorAccessDenied|ErrorSendAsDenied/.test(error)) {
+    return `Aplikasi Azure belum diizinkan mengirim sebagai ${from}: pastikan izin Microsoft Graph tipe Application "Mail.Send" (bukan Delegated) sudah di-"Grant admin consent", dan jika akses dibatasi di Exchange, mailbox ini termasuk. Perubahan izin bisa butuh sampai 1 jam.`;
+  }
+  if (/ErrorInvalidUser|MailboxNotEnabledForRESTAPI|ResourceNotFound/.test(error)) {
+    return `Mailbox ${from} tidak ditemukan atau belum aktif di Exchange Online.`;
+  }
+  return null;
+}
+
+function withHint(error: string): string {
+  const hint = mailErrorHint(error);
+  return hint ? `${error} — ${hint}` : error;
+}
+
 async function getAccessToken(cfg: GraphConfig): Promise<string> {
-  const key = `${cfg.tenantId}:${cfg.clientId}`;
+  const key = tokenKey(cfg);
   const cached = globalForMail.__graphToken;
   if (cached && cached.key === key && cached.expiresAt - 5 * 60_000 > Date.now()) return cached.value;
 
@@ -157,13 +189,15 @@ export async function sendMail(message: MailMessage): Promise<SendMailResult> {
 
     if (res.status === 202 || res.ok) return { success: true, mode: 'graph' };
 
-    if (res.status === 401) globalForMail.__graphToken = undefined;
+    // A token minted before admin consent was granted carries no Mail.Send role and
+    // would keep failing until it expires (~1h) — fetch a fresh one next time.
+    if (res.status === 401 || res.status === 403) globalForMail.__graphToken = undefined;
     const body = (await res.json().catch(() => ({}))) as { error?: { code?: string; message?: string } };
     const detail = body.error ? `${body.error.code ?? ''} ${body.error.message ?? ''}`.trim() : `HTTP ${res.status}`;
-    return { success: false, error: `Graph sendMail failed: ${detail}` };
+    return { success: false, error: withHint(`Graph sendMail failed: ${detail}`) };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[mail] send failed:', msg);
-    return { success: false, error: msg };
+    return { success: false, error: withHint(msg) };
   }
 }

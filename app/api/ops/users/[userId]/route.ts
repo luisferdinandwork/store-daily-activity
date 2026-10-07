@@ -36,6 +36,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ userId:
     schedule: snapshot.data.map((r) => ({
       date: r.date.toISOString(),
       shiftCode: r.shiftCode,
+      shiftLabel: r.shiftLabel,
       isOff: r.isOff,
       isLeave: r.isLeave,
     })),

@@ -404,7 +404,7 @@ export default function FinanceSetoranReportPage() {
                     <th className={cn(TH, 'text-left')}>Nama Toko</th>
                     <th className={cn(TH, 'text-center')}>Hari Kerja</th>
                     <th className={cn(TH, 'text-center')}>Setor</th>
-                    <th className={cn(TH, 'text-center')}>Tanpa Setor</th>
+                    <th className={cn(TH, 'text-center')}>Tanpa Setoran</th>
                     <th className={cn(TH, 'text-center')}>Belum Setor</th>
                     <th className={cn(TH, 'text-right')}>Diterima (Rp)</th>
                     <th className={cn(TH, 'text-right')}>Disetor (Rp)</th>
@@ -425,7 +425,7 @@ export default function FinanceSetoranReportPage() {
 
             <p className="text-[11px] text-slate-500">
               Hari Kerja = hari dengan jadwal shift pembuka sampai hari ini. Setor = disubmit dengan uang disetor;
-              Tanpa Setor = disubmit tanpa setoran (tidak ada / di bawah Rp 50.000); Belum Setor = hari kerja yang
+              Tanpa Setoran = disubmit tanpa setoran (tidak ada / di bawah Rp 50.000); Belum Setor = hari kerja yang
               sudah lewat tanpa submit. Sisa Akhir = saldo yang masih harus disetor pada akhir {reportMonthLabel(month)}.
             </p>
           </>

@@ -97,7 +97,7 @@ export function StoreCombobox({
         <button
           id={id}
           type="button"
-          aria-label="Pilih store"
+          aria-label="Pilih toko"
           disabled={loading || disabled}
           className={cn(
             'group flex h-11 w-full max-w-md items-center gap-2.5 rounded-xl border bg-white px-3 text-left text-sm shadow-xs transition',
@@ -112,7 +112,7 @@ export function StoreCombobox({
           </span>
           <span className="min-w-0 flex-1 truncate">
             {loading ? (
-              <span className="text-slate-400">Memuat daftar store…</span>
+              <span className="text-slate-400">Memuat daftar toko…</span>
             ) : selected ? (
               <>
                 <span className={cn('font-mono text-xs font-semibold', a.code)}>{selected.storeNo}</span>
@@ -122,7 +122,7 @@ export function StoreCombobox({
               <span className="font-semibold text-slate-900">{noneLabel}</span>
             ) : (
               <span className={allLabel ? 'font-semibold text-slate-700' : 'text-slate-400'}>
-                {allLabel ?? 'Pilih store…'}
+                {allLabel ?? 'Pilih toko…'}
               </span>
             )}
           </span>
@@ -140,11 +140,11 @@ export function StoreCombobox({
           className="bg-white"
           filter={(itemValue, search) => (itemValue.toLowerCase().includes(search.trim().toLowerCase()) ? 1 : 0)}
         >
-          <CommandInput placeholder="Cari kode atau nama store…" className="h-11" />
+          <CommandInput placeholder="Cari kode atau nama toko…" className="h-11" />
           <CommandList className="max-h-72 p-1.5">
             <CommandEmpty>
               <Search className="mx-auto mb-1.5 h-5 w-5 text-slate-300" />
-              <span className="text-slate-500">Store tidak ditemukan</span>
+              <span className="text-slate-500">Toko tidak ditemukan</span>
             </CommandEmpty>
             <CommandGroup className="p-0">
               {allLabel && (
@@ -182,7 +182,7 @@ export function StoreCombobox({
             </CommandGroup>
           </CommandList>
           <div className="border-t border-slate-100 bg-slate-50 px-3 py-1.5 text-[11px] text-slate-400">
-            {stores.length} store tersedia
+            {stores.length} toko tersedia
           </div>
         </Command>
       </PopoverContent>

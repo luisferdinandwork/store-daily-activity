@@ -32,6 +32,7 @@ import {
   Search,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { STATUS_LABELS as ISSUE_STATUS_LABELS } from '@/lib/issues';
 import {
   STATEMENT_META,
   STATEMENT_ORDER,
@@ -179,13 +180,8 @@ function FixButton({
   );
 }
 
-const ISSUE_LABEL: Record<string, string> = {
-  draft: 'Draft',
-  reported: 'Dilaporkan',
-  in_review: 'Ditinjau',
-  solved: 'Solved',
-  completed: 'Selesai',
-};
+// Same words as the Issues pages (lib/issues.ts).
+const ISSUE_LABEL: Record<string, string> = ISSUE_STATUS_LABELS;
 
 function IssueChip({ issue }: { issue: NonNullable<StoreClosingRow['holdIssue']> }) {
   const done = issue.status === 'completed' || issue.status === 'solved';

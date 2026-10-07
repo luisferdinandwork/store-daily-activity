@@ -24,6 +24,7 @@ import {
   isLeaveAttendanceStatus,
   type LeaveAttendanceStatus,
 } from "@/lib/attendance-status";
+import { isFeatureEnabled } from "@/lib/db/utils/feature-switches";
 import {
   areas,
   users,
@@ -1074,10 +1075,14 @@ export async function updateMonthlyScheduleEntry(
 //     What remains is exactly what a PIC re-import may build on.
 //   • all — every employee-day goes, attendance and task progress included
 //     (Ops types the store code to confirm). Finance's money records stay,
-//     unlinked (see removeSchedulesWithin).
+//     unlinked (see removeSchedulesWithin). Off unless IT turns on the
+//     `schedule_delete_all` switch (/it/feature-switches).
 // One transaction either way; the preview runs the same steps and rolls back.
 
 export type ScheduleDeleteMode = "keep_history" | "all";
+
+export const SCHEDULE_DELETE_ALL_OFF_ERROR =
+  'Deleting everything is turned off. Use "Keep attendance history", or ask IT to turn it on in Feature Switches.';
 
 export interface ScheduleRecordCount {
   table: string;
@@ -1101,7 +1106,11 @@ export interface MonthlyScheduleDeletionSummary {
   photos: number;
 }
 
-export type MonthlyScheduleDeletionPreview = Record<ScheduleDeleteMode, MonthlyScheduleDeletionSummary>;
+export interface MonthlyScheduleDeletionPreview {
+  keep_history: MonthlyScheduleDeletionSummary;
+  /** Null while IT has "Delete everything" switched off. */
+  all: MonthlyScheduleDeletionSummary | null;
+}
 
 const HISTORY_LABELS: Record<string, string> = {
   attendance: "attendance records",
@@ -1202,9 +1211,13 @@ export async function previewMonthlyScheduleDeletion(
       return box.summary;
     };
 
+    const allEnabled = await isFeatureEnabled("schedule_delete_all");
     return {
       success: true,
-      data: { keep_history: await dryRun("keep_history"), all: await dryRun("all") },
+      data: {
+        keep_history: await dryRun("keep_history"),
+        all: allEnabled ? await dryRun("all") : null,
+      },
     };
   } catch (err) {
     return { success: false, error: `previewMonthlyScheduleDeletion: ${err}` };
@@ -1233,6 +1246,9 @@ export async function deleteMonthlySchedule(
     if (!auth.allowed) return { success: false, error: auth.reason };
 
     if (mode === "all") {
+      if (!(await isFeatureEnabled("schedule_delete_all"))) {
+        return { success: false, error: SCHEDULE_DELETE_ALL_OFF_ERROR };
+      }
       const [store] = await db
         .select({ storeNo: stores.storeNo })
         .from(stores)

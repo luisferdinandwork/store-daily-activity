@@ -276,15 +276,17 @@ function TaskRow({ task, onSelect }: { task: FlatTask; onSelect: () => void }) {
 
   // Cek Uang Modal: mark a completed float that's below the daily max or has
   // denominations left at 0 (employees no longer have to fully stock it).
+  // Words match Finance Uang Modal Review ("Belum penuh") and the task detail.
   const cekUangModalIncomplete = (() => {
-    if (task.type !== 'cek_uang_modal') return false;
-    if (status !== 'completed' && status !== 'verified') return false;
+    if (task.type !== 'cek_uang_modal') return null;
+    if (status !== 'completed' && status !== 'verified') return null;
     const e = task.extra;
     const total = Number(e.totalAmount ?? 0);
-    if (total <= 0) return false;
+    if (total <= 0) return null;
     const denomCount = Number(e.denominationCount ?? 0);
     const filled = Number(e.filledDenominationCount ?? 0);
-    return e.isPartial === true || (denomCount > 0 && filled < denomCount);
+    if (e.isPartial === true) return 'Belum penuh';
+    return denomCount > 0 && filled < denomCount ? 'Pecahan belum lengkap' : null;
   })();
 
   const accentClass =
@@ -319,7 +321,7 @@ function TaskRow({ task, onSelect }: { task: FlatTask; onSelect: () => void }) {
               )}
               {cekUangModalIncomplete && (
                 <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700">
-                  <AlertTriangle className="h-2.5 w-2.5" /> Belum lengkap
+                  <AlertTriangle className="h-2.5 w-2.5" /> {cekUangModalIncomplete}
                 </span>
               )}
             </div>
@@ -453,9 +455,9 @@ function GroomingGroupCard({ tasks, onSelectEmployee }: {
 
 function SummaryBreakdown({ summary }: { summary: StoreSummary }) {
   const rows = [
-    { label: 'Completed',   value: summary.completed,   cls: 'text-emerald-600' },
-    { label: 'In Progress', value: summary.inProgress,  cls: 'text-indigo-600'  },
-    { label: 'Not Started', value: summary.notStarted,  cls: 'text-amber-500'   },
+    { label: 'Selesai',     value: summary.completed,   cls: 'text-emerald-600' },
+    { label: 'Aktif',       value: summary.inProgress,  cls: 'text-indigo-600'  },
+    { label: 'Belum mulai', value: summary.notStarted,  cls: 'text-amber-500'   },
     { label: 'Pending',     value: summary.pending,     cls: 'text-amber-600'   },
   ];
   return (
@@ -786,7 +788,7 @@ function RangeOverviewPanel({ stores, rangeOverviewMap, loading, periodLabel, ar
           )}
           <div className="min-w-0 flex-1">
             <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-500">{periodLabel}</p>
-            <h2 className="mt-0.5 text-lg font-bold text-slate-900">{areaName ?? 'Semua Toko'}</h2>
+            <h2 className="mt-0.5 text-lg font-bold text-slate-900">{areaName ?? 'Semua toko'}</h2>
             <p className="mt-0.5 text-xs text-slate-500">{stores.length} toko</p>
             {!loading && (
               <p className="mt-1.5 text-xs font-semibold text-slate-600">
@@ -1230,7 +1232,7 @@ export default function OpsTaskProgressPage() {
 
   const selectedAreaGroup = useMemo(() => groupedStores.find(g => g.areaId === selectedAreaId) ?? null, [groupedStores, selectedAreaId]);
 
-  const headingScope = isHo ? 'All Areas' : (overview?.area?.name ?? 'Area');
+  const headingScope = isHo ? 'All areas' : (overview?.area?.name ?? 'Area');
   const selectedStoreRow  = selectedStoreId ? overview?.stores.find(s => s.id === selectedStoreId) : undefined;
   const selectedStoreName = selectedStoreRow ? `${selectedStoreRow.storeNo} · ${selectedStoreRow.name}` : null;
 

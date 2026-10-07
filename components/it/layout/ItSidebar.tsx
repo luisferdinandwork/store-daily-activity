@@ -20,6 +20,7 @@
 //     BC Credentials           /it/bc-credentials
 //     Performance Target Defaults /it/target-allocation (PIC1/PIC2/SA % grid)
 //     Petty Cash Categories   /it/petty-cash-categories
+//     Feature Switches        /it/feature-switches (on/off for risky features, e.g. schedule "Delete everything")
 //
 //   Data Correction (IT-only)
 //     Koreksi Setoran        /it/setoran-correction (fix one day's amounts, carry-over recalculated)
@@ -55,6 +56,7 @@ import {
   Repeat,
   Store,
   Tags,
+  ToggleRight,
   UserCog,
   Users,
   Wallet,
@@ -117,6 +119,7 @@ const NAV: NavSection[] = [
       { href: '/it/bc-credentials', label: 'BC Credentials', icon: KeyRound },
       { href: '/it/target-allocation', label: 'Performance Target Defaults', icon: Percent },
       { href: '/it/petty-cash-categories', label: 'Petty Cash Categories', icon: Tags },
+      { href: '/it/feature-switches', label: 'Feature Switches', icon: ToggleRight },
     ],
   },
   {

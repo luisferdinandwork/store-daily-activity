@@ -96,7 +96,7 @@ function itNotifyRecipients(): string[] {
 async function recordEmailResult(requestId: number, result: Awaited<ReturnType<typeof sendMail>>) {
   await db
     .update(passwordResetRequests)
-    .set({ lastEmailError: result.success ? null : result.error.slice(0, 500) })
+    .set({ lastEmailError: result.success ? null : result.error.slice(0, 1000) })
     .where(eq(passwordResetRequests.id, requestId));
   if (!result.success) console.error(`[password-reset] email for request ${requestId} failed: ${result.error}`);
 }

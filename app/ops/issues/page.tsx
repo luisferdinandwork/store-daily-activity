@@ -18,6 +18,7 @@ import {
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
+import { STATUS_LABELS as ISSUE_STATUS_LABELS } from '@/lib/issues';
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
 import { OpsList, OpsListRow } from '@/components/ops/layout/OpsList';
 
@@ -55,10 +56,10 @@ const STATUS_CFG: Record<IssueStatus, {
   label: string; accent: string; Icon: typeof AlertCircle;
   next: IssueStatus | null; action: string;
 }> = {
-  reported:  { label: 'Reported',  accent: '#f59e0b', Icon: AlertCircle,  next: 'in_review', action: 'Start Review'   },
-  in_review: { label: 'In Review', accent: '#3b82f6', Icon: Eye,          next: null,        action: ''               },
-  solved:    { label: 'Solved',    accent: '#8b5cf6', Icon: CheckCircle2, next: 'completed', action: 'Mark Complete'  },
-  completed: { label: 'Completed', accent: '#10b981', Icon: CheckCircle2, next: null,        action: ''               },
+  reported:  { label: ISSUE_STATUS_LABELS.reported,  accent: '#f59e0b', Icon: AlertCircle,  next: 'in_review', action: 'Start Review'   },
+  in_review: { label: ISSUE_STATUS_LABELS.in_review, accent: '#3b82f6', Icon: Eye,          next: null,        action: ''               },
+  solved:    { label: ISSUE_STATUS_LABELS.solved,    accent: '#8b5cf6', Icon: CheckCircle2, next: 'completed', action: 'Mark Complete'  },
+  completed: { label: ISSUE_STATUS_LABELS.completed, accent: '#10b981', Icon: CheckCircle2, next: null,        action: ''               },
 };
 
 const STEPS: IssueStatus[] = ['reported', 'in_review', 'solved', 'completed'];
@@ -388,10 +389,10 @@ export default function OpsIssuesPage() {
 
   const statCards = [
     { key: 'all'      as const, label: 'Total',     value: meta.all,       color: '#6366f1', Icon: AlertTriangle },
-    { key: 'reported' as const, label: 'Reported',  value: meta.reported,  color: '#f59e0b', Icon: AlertCircle   },
-    { key: 'in_review'as const, label: 'In Review', value: meta.in_review, color: '#3b82f6', Icon: Eye           },
-    { key: 'solved'   as const, label: 'Solved',    value: meta.solved,    color: '#8b5cf6', Icon: CheckCircle2  },
-    { key: 'completed'as const, label: 'Completed', value: meta.completed, color: '#10b981', Icon: CheckCircle2  },
+    { key: 'reported' as const, label: ISSUE_STATUS_LABELS.reported,  value: meta.reported,  color: '#f59e0b', Icon: AlertCircle   },
+    { key: 'in_review'as const, label: ISSUE_STATUS_LABELS.in_review, value: meta.in_review, color: '#3b82f6', Icon: Eye           },
+    { key: 'solved'   as const, label: ISSUE_STATUS_LABELS.solved,    value: meta.solved,    color: '#8b5cf6', Icon: CheckCircle2  },
+    { key: 'completed'as const, label: ISSUE_STATUS_LABELS.completed, value: meta.completed, color: '#10b981', Icon: CheckCircle2  },
   ];
 
   if (authStatus === 'loading' || !session) return (

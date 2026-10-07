@@ -242,7 +242,7 @@ export function buildMonthWorkbook(input: {
     { header: 'Area', width: 20, kind: 'text', value: (r) => r.areaName },
     { header: 'Hari Kerja', width: 11, kind: 'center', value: (r) => r.workDays, total: num((t) => t.workDays) },
     { header: 'Setor', width: 9, kind: 'center', value: (r) => r.depositDays, total: num((t) => t.depositDays) },
-    { header: 'Tanpa Setor', width: 12, kind: 'center', value: (r) => r.noDepositDays, total: num((t) => t.noDepositDays) },
+    { header: 'Tanpa Setoran', width: 12, kind: 'center', value: (r) => r.noDepositDays, total: num((t) => t.noDepositDays) },
     {
       header: 'Belum Setor', width: 12, kind: 'center', value: (r) => r.missedDays,
       style: (r) => (r.missedDays > 0 ? TONE.rose : undefined), total: num((t) => t.missedDays),

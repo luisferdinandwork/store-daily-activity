@@ -37,6 +37,8 @@ type TaskBucket = {
 
 type ShiftBucket = {
   shift: string;
+  /** shifts.label, e.g. "Morning" ("Other" for tasks without a shift). */
+  label: string;
   completed: number;
   total: number;
   completionRate: number;
@@ -131,29 +133,27 @@ const TONE = {
 
 type Tone = keyof typeof TONE;
 
+// Same bands (80 / 50) and words as the Stores page's task-progress legend.
 const STATUS_WORD: Record<'emerald' | 'amber' | 'rose', string> = {
   emerald: 'On track',
-  amber: 'Watch',
+  amber: 'In progress',
   rose: 'Behind',
-};
-
-const SHIFT_LABEL: Record<string, string> = {
-  morning: 'Pagi',
-  evening: 'Sore',
-  full_day: 'Full day',
-  unknown: 'Lainnya',
 };
 
 const SHIFT_DOT: Record<string, string> = {
   morning: '#f59e0b',
+  middle: '#14b8a6',
   evening: '#7c3aed',
   full_day: '#0ea5e9',
   unknown: '#94a3b8',
 };
 
+// Same words as the Ops Petty Cash page: everything OPS approved (still
+// waiting on the PIC's actual amount, or completed) reads "Approved".
 const PETTY_CASH_STATUS: Record<string, { label: string; tone: Tone }> = {
-  pending_ops: { label: 'Pending', tone: 'amber' },
+  pending_ops: { label: 'Waiting OPS', tone: 'amber' },
   ops_approved: { label: 'Approved', tone: 'emerald' },
+  completed: { label: 'Approved', tone: 'emerald' },
   ops_rejected: { label: 'Rejected', tone: 'rose' },
 };
 
@@ -188,10 +188,10 @@ function relativeTime(iso: string) {
   const mins = Math.floor(diffMs / 60_000);
   const hours = Math.floor(diffMs / 3_600_000);
   const days = Math.floor(diffMs / 86_400_000);
-  if (mins < 1) return 'baru saja';
-  if (mins < 60) return `${mins}m lalu`;
-  if (hours < 24) return `${hours}j lalu`;
-  if (days < 7) return `${days}h lalu`;
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  if (days < 7) return `${days}d ago`;
   return new Date(iso).toLocaleDateString('id-ID', { day: '2-digit', month: 'short' });
 }
 
@@ -399,7 +399,7 @@ export default function OpsDashboardPage() {
   );
 
   const scopeLabel = data
-    ? `${data.scope === 'all_areas' ? 'All Areas' : 'Area'} · ${data.storeCount} store${data.storeCount === 1 ? '' : 's'}`
+    ? `${data.scope === 'all_areas' ? 'All areas' : 'Area'} ·${data.storeCount} store${data.storeCount === 1 ? '' : 's'}`
     : '';
 
   return (
@@ -467,7 +467,7 @@ export default function OpsDashboardPage() {
                               className="h-1.5 w-1.5 shrink-0 rounded-full"
                               style={{ background: SHIFT_DOT[s.shift] ?? SHIFT_DOT.unknown }}
                             />
-                            {SHIFT_LABEL[s.shift] ?? s.shift}
+                            {s.label}
                             <span className="font-semibold text-slate-900">{s.completionRate}%</span>
                           </span>
                         ))

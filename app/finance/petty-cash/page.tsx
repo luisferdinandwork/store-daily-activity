@@ -51,6 +51,8 @@ import {
   storeCodeOf,
   type RefillState,
 } from '@/lib/petty-cash-report';
+import { TX_STATUS_LABEL } from '@/lib/petty-cash-transactions';
+import { STORE_STATUS_LABEL } from '@/lib/store-status';
 import {
   CopyButton,
   MonthNavigator,
@@ -118,19 +120,19 @@ function storeStatus(s: PettyCashStoreRow): StoreStatus {
 }
 
 const STATUS_META: Record<StoreStatus, { label: string; chip: string }> = {
-  'pending-ops': { label: 'Pending OPS', chip: 'bg-amber-50 text-amber-700 ring-amber-200' },
+  'pending-ops': { label: 'Waiting OPS', chip: 'bg-amber-50 text-amber-700 ring-amber-200' },
   ok: { label: 'OK', chip: 'bg-emerald-50 text-emerald-700 ring-emerald-200' },
   refilled: { label: 'Refilled', chip: 'bg-slate-100 text-slate-600 ring-slate-200' },
   'no-activity': { label: 'No activity', chip: 'bg-slate-50 text-slate-400 ring-slate-200' },
-  'ready-to-open': { label: 'Ready to Open', chip: 'bg-sky-50 text-sky-700 ring-sky-200' },
-  closed: { label: 'Close', chip: 'bg-slate-100 text-slate-500 ring-slate-300' },
+  'ready-to-open': { label: STORE_STATUS_LABEL.ready_to_open, chip: 'bg-sky-50 text-sky-700 ring-sky-200' },
+  closed: { label: STORE_STATUS_LABEL.close, chip: 'bg-slate-100 text-slate-500 ring-slate-300' },
 };
 
 const TX_STATUS_META: Record<string, { label: string; text: string }> = {
-  pending_ops: { label: 'Waiting OPS', text: 'text-amber-600' },
-  ops_approved: { label: 'Awaiting actual amount', text: 'text-sky-600' },
-  completed: { label: 'Completed', text: 'text-emerald-600' },
-  ops_rejected: { label: 'Rejected', text: 'text-rose-500' },
+  pending_ops: { label: TX_STATUS_LABEL.pending_ops, text: 'text-amber-600' },
+  ops_approved: { label: TX_STATUS_LABEL.ops_approved, text: 'text-sky-600' },
+  completed: { label: TX_STATUS_LABEL.completed, text: 'text-emerald-600' },
+  ops_rejected: { label: TX_STATUS_LABEL.ops_rejected, text: 'text-rose-500' },
 };
 
 function Chip({ className, children }: { className: string; children: React.ReactNode }) {
@@ -687,7 +689,7 @@ export default function FinancePettyCashPage() {
             {[
               { label: `Used · ${reportMonthLabel(month)}`, value: rp(totalUsed) },
               { label: 'Stores', value: String(allStores.length) },
-              { label: 'Pending OPS', value: String(pendingStores), warn: pendingStores > 0 },
+              { label: 'Waiting OPS', value: String(pendingStores), warn: pendingStores > 0 },
               { label: 'Refill in progress', value: String(openRefills), warn: openRefills > 0 },
             ].map(({ label, value, warn }) => (
               <div key={label} className="px-4 py-3">

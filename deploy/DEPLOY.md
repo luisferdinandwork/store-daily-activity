@@ -2,7 +2,7 @@
 
 Target: Ubuntu server (same box that runs PostgreSQL, `103.94.239.190`).
 App: Next.js 16 on `127.0.0.1:3000`, nginx terminates the public :80/:443.
-Domain: `sdt.pri.co.id`. PM2 process name: `store-daily-task`.
+Domain: `prism.panatradeprestasi.com`. PM2 process name: `store-daily-task`.
 Deploy path: `/var/www/store-daily-task`.
 
 ---
@@ -39,7 +39,7 @@ runtime). Start from the dev machine's `.env.local`, then change:
 
 ```ini
 DATABASE_URL="postgresql://dts_user:Prestasi10@127.0.0.1:5432/daily-task-store"
-NEXTAUTH_URL="https://sdt.pri.co.id"        # real public URL — not localhost
+NEXTAUTH_URL="https://prism.panatradeprestasi.com"   # real public URL — "Lupa password" email links use it
 NEXTAUTH_SECRET="<keep or rotate>"
 CRON_SECRET="<pick a long random string>"   # must match deploy/crontab.example
 # BC_*, NOS_*, OSS_* — copy as-is (NOS_* is the image storage; set NOS_SECRET_ACCESS_KEY)
@@ -87,35 +87,37 @@ npm run build
 pm2 reload ecosystem.config.js        # zero-downtime
 ```
 
-## 6. nginx (domain: sdt.pri.co.id)
+## 6. nginx (domain: prism.panatradeprestasi.com)
 
-First point DNS: an **A record** `sdt.pri.co.id -> 103.94.239.190`. Confirm with
-`dig +short sdt.pri.co.id` before running certbot.
+DNS: an **A record** `prism.panatradeprestasi.com -> 103.94.239.190`
+(`dig +short prism.panatradeprestasi.com` to check).
+
+`deploy/nginx/store-daily-task.conf` is the full site config — HTTP→HTTPS
+redirect, the :443 server, rate limits on sign-in and the "Lupa password" API.
+Copy it over the site's file in `sites-available` (first install: also link it
+into `sites-enabled` and remove `default`):
 
 ```bash
-sudo cp deploy/nginx/store-daily-task.conf \
-        /etc/nginx/sites-available/store-daily-task
-sudo ln -s /etc/nginx/sites-available/store-daily-task \
-           /etc/nginx/sites-enabled/
-sudo rm -f /etc/nginx/sites-enabled/default
-sudo nginx -t && sudo systemctl reload nginx
+sudo cp deploy/nginx/store-daily-task.conf /etc/nginx/sites-available/store-daily-task
+sudo ln -sf /etc/nginx/sites-available/store-daily-task /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx     # never reload without -t passing
 sudo ufw allow 'Nginx Full'
 ```
 
-`server_name` is already set to `sdt.pri.co.id`. Visit `http://sdt.pri.co.id`
-(or `http://103.94.239.190`) — you should get the app.
-
 ## 7. HTTPS
 
-```bash
-sudo apt install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d sdt.pri.co.id
+TLS uses the company wildcard certificate, not certbot:
+
+```
+/etc/ssl/panatradeprestasi.com/panatradeprestasi.com.crt   # cert + intermediate chain
+/etc/ssl/panatradeprestasi.com/panatradeprestasi.com.key
 ```
 
-certbot edits the nginx file to add the :443 block + HTTP→HTTPS redirect and
-sets up auto-renewal (`systemctl status certbot.timer`). Then make sure
-`NEXTAUTH_URL="https://sdt.pri.co.id"` in `.env.local`, rebuild if it changed,
-and `pm2 reload ecosystem.config.js`.
+When it is renewed, replace both files and `sudo nginx -t && sudo systemctl reload nginx`.
+HSTS and the other security headers are sent by the app (`proxy.ts`) once
+`NEXTAUTH_URL` starts with `https://` — keep it set to
+`https://prism.panatradeprestasi.com`, rebuild if it changed, and
+`pm2 reload ecosystem.config.js`.
 
 ## 8. Scheduled jobs (replaces vercel.json crons)
 

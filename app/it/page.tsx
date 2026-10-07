@@ -5,9 +5,10 @@ import { useEffect, useState, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { STATUS_LABELS as ISSUE_STATUS_LABELS } from '@/lib/issues';
 import {
   ArrowRight, KeyRound, ClipboardCheck, Layers, Store, Users, Wallet, Percent,
-  AlertTriangle, Repeat, Loader2, Shield, AlertCircle, Eye, CheckCircle2, Tags, LockKeyhole,
+  AlertTriangle, Repeat, Loader2, Shield, AlertCircle, Eye, CheckCircle2, Tags, LockKeyhole, ToggleRight,
 } from 'lucide-react';
 
 type IssueStatus = 'reported' | 'in_review' | 'solved' | 'completed';
@@ -69,10 +70,10 @@ export default function ItDashboardPage() {
   };
 
   const statCards = [
-    { label: 'Reported',  value: stats.reported,  color: '#f59e0b', Icon: AlertCircle },
-    { label: 'In Review', value: stats.in_review, color: '#3b82f6', Icon: Eye },
-    { label: 'Solved',    value: stats.solved,    color: '#8b5cf6', Icon: CheckCircle2 },
-    { label: 'Completed', value: stats.completed, color: '#10b981', Icon: CheckCircle2 },
+    { label: ISSUE_STATUS_LABELS.reported,  value: stats.reported,  color: '#f59e0b', Icon: AlertCircle },
+    { label: ISSUE_STATUS_LABELS.in_review, value: stats.in_review, color: '#3b82f6', Icon: Eye },
+    { label: ISSUE_STATUS_LABELS.solved,    value: stats.solved,    color: '#8b5cf6', Icon: CheckCircle2 },
+    { label: ISSUE_STATUS_LABELS.completed, value: stats.completed, color: '#10b981', Icon: CheckCircle2 },
   ];
 
   const settingsLinks = [
@@ -84,11 +85,12 @@ export default function ItDashboardPage() {
     { href: '/it/bc-credentials', label: 'BC Credentials', desc: 'Manage Business Central API credentials.', Icon: KeyRound },
     { href: '/it/target-allocation', label: 'Performance Target Defaults', desc: 'PIC1 / PIC2 / SA target split percentages.', Icon: Percent },
     { href: '/it/petty-cash-categories', label: 'Petty Cash Categories', desc: 'Manage categories PIC picks when requesting petty cash.', Icon: Tags },
+    { href: '/it/feature-switches', label: 'Feature Switches', desc: 'Turn risky features on or off, e.g. schedule "Delete everything".', Icon: ToggleRight },
   ];
 
   const panelLinks = [
     { href: '/ops', label: 'Ops Panel', desc: 'Schedules, attendance, targets, stores, issues.', Icon: Store },
-    { href: '/finance', label: 'Finance Panel', desc: 'Petty cash, setoran, uang modal verification.', Icon: Wallet },
+    { href: '/finance', label: 'Finance Panel', desc: 'Setoran, uang modal, petty cash refills, store closing.', Icon: Wallet },
     { href: '/audit', label: 'Audit Panel', desc: 'Store-visit reviews and compliance checks.', Icon: ClipboardCheck },
   ];
 

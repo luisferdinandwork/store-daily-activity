@@ -824,16 +824,24 @@ function SchedulePreview({ schedule, loading }: { schedule: ScheduleDay[]; loadi
     byMonth.get(key)!.push(d);
   }
 
+  // Shift names come from the shifts table (same as Schedules); only the colour is per code.
+  const SHIFT_BADGE_CLS: Record<string, string> = {
+    morning: 'bg-orange-100 text-orange-700',
+    evening: 'bg-violet-100 text-violet-700',
+    full_day: 'bg-emerald-100 text-emerald-700',
+    middle: 'bg-sky-100 text-sky-700',
+    jkp_morning: 'bg-amber-100 text-amber-700',
+    jkp_evening: 'bg-rose-100 text-rose-700',
+  };
+
   function shiftBadge(d: ScheduleDay) {
     if (d.isLeave) return { label: 'Cuti', cls: 'bg-indigo-100 text-indigo-700' };
     if (d.isOff) return { label: 'Off', cls: 'bg-slate-100 text-slate-500' };
-    if (d.shiftCode === 'morning') return { label: 'Pagi', cls: 'bg-orange-100 text-orange-700' };
-    if (d.shiftCode === 'evening') return { label: 'Sore', cls: 'bg-violet-100 text-violet-700' };
-    if (d.shiftCode === 'full_day') return { label: 'Full', cls: 'bg-emerald-100 text-emerald-700' };
-    if (d.shiftCode === 'middle') return { label: 'Middle', cls: 'bg-sky-100 text-sky-700' };
-    if (d.shiftCode === 'jkp_morning') return { label: 'JKP Pagi', cls: 'bg-amber-100 text-amber-700' };
-    if (d.shiftCode === 'jkp_evening') return { label: 'JKP Siang', cls: 'bg-rose-100 text-rose-700' };
-    return { label: '—', cls: 'bg-slate-100 text-slate-500' };
+    if (!d.shiftCode) return { label: '—', cls: 'bg-slate-100 text-slate-500' };
+    return {
+      label: d.shiftLabel ?? d.shiftCode,
+      cls: SHIFT_BADGE_CLS[d.shiftCode] ?? 'bg-slate-100 text-slate-600',
+    };
   }
 
   return (

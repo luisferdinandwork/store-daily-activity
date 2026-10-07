@@ -117,7 +117,7 @@ const NAV = [
   {
     section: 'Akun',
     items: [
-      { href: '/ops/settings', label: 'Pengaturan', icon: KeyRound },
+      { href: '/ops/settings', label: 'Profil & Keamanan', icon: KeyRound },
     ],
   },
 ];
@@ -145,7 +145,7 @@ function NavTooltip({ label, children }: { label: string; children: React.ReactN
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function OpsSidebar({ storeName = 'Store Manager', collapsed = false }: Props) {
+export default function OpsSidebar({ storeName = 'Ops', collapsed = false }: Props) {
   const pathname   = usePathname();
   const { data: session } = useSession();
 
@@ -185,8 +185,9 @@ export default function OpsSidebar({ storeName = 'Store Manager', collapsed = fa
           )}
           {!collapsed && (
             <div className="min-w-0 overflow-hidden">
-              <p className="text-xs font-semibold text-foreground truncate">OPS Panel</p>
-              <p className="truncate text-[10px] text-muted-foreground">{storeName}</p>
+              <p className="text-xs font-semibold text-foreground truncate">Ops Panel</p>
+              {/* Signed-in name, like the Finance / Audit / IT sidebars. */}
+              <p className="truncate text-[10px] text-muted-foreground">{session?.user?.name ?? storeName}</p>
             </div>
           )}
         </div>
@@ -319,7 +320,7 @@ export default function OpsSidebar({ storeName = 'Store Manager', collapsed = fa
         <div className="border-t border-border px-2 py-3">
           <div className={cn('flex items-center rounded-md px-2 py-2', collapsed ? 'justify-center' : 'gap-2.5')}>
             {collapsed ? (
-              <NavTooltip label={`${session?.user?.name ?? 'OPS Manager'} · Logout`}>
+              <NavTooltip label={`${session?.user?.name ?? 'Ops'} · Logout`}>
                 <button
                   onClick={() => signOut({ callbackUrl: '/login' })}
                   className="flex h-7 w-7 items-center justify-center rounded-full bg-secondary text-xs font-semibold text-secondary-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
@@ -331,16 +332,16 @@ export default function OpsSidebar({ storeName = 'Store Manager', collapsed = fa
               <>
                 <UserAvatar
                   src={session?.user?.image}
-                  name={session?.user?.name ?? 'OPS Manager'}
+                  name={session?.user?.name ?? 'Ops'}
                   className="h-7 w-7 shrink-0"
                   fallbackClassName="text-xs"
                 />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-xs font-medium text-foreground">
-                    {session?.user?.name ?? 'OPS Manager'}
+                    {session?.user?.name ?? 'Ops'}
                   </p>
                   <p className="truncate text-[10px] text-muted-foreground">
-                    {(session?.user as any)?.nik ? `NIK ${(session?.user as any).nik}` : 'OPS user'}
+                    {(session?.user as any)?.nik ? `NIK ${(session?.user as any).nik}` : 'Ops'}
                   </p>
                 </div>
                 <button

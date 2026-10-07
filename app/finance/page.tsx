@@ -16,8 +16,10 @@ import Link from 'next/link';
 import {
   AlertTriangle,
   ArrowRight,
+  Coins,
   FileText,
   RefreshCw,
+  Store,
   Wallet,
   WalletCards,
 } from 'lucide-react';
@@ -155,9 +157,9 @@ export default function FinanceDashboardPage() {
             <>
               <SummaryCard
                 icon={Wallet}
-                label="Petty Cash awaiting approval"
+                label="Petty cash requests waiting OPS"
                 value={data?.pendingPettyCash ?? 0}
-                href="/finance/petty-cash"
+                href="/finance/petty-cash/transactions"
                 accent="bg-emerald-50 text-emerald-600"
                 urgent
               />
@@ -186,11 +188,13 @@ export default function FinanceDashboardPage() {
           <h2 className="mb-3 text-xs font-bold uppercase tracking-widest text-slate-400">
             Quick access
           </h2>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          {/* Same names as the Finance sidebar. */}
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             {[
-              { href: '/finance/setoran',       label: 'Setoran Review',   icon: WalletCards,   desc: 'Review, verify and export daily setoran' },
-              { href: '/finance/daily-reports',  label: 'Daily Reports',    icon: FileText,      desc: 'Verify submitted EOD reports' },
-              { href: '/finance/petty-cash',     label: 'Petty Cash',       icon: Wallet,        desc: 'Approve or reject cash requests' },
+              { href: '/finance/setoran',        label: 'Setoran Review',         icon: WalletCards, desc: 'Review, verify and export daily setoran' },
+              { href: '/finance/uang-modal',     label: 'Uang Modal Review',      icon: Coins,       desc: 'Review and verify daily uang modal counts' },
+              { href: '/finance/petty-cash',     label: 'Petty Cash Monitoring',  icon: Wallet,      desc: 'Balances, requests and refills per store' },
+              { href: '/finance/store-closing',  label: 'Store Closing',          icon: Store,       desc: 'Z-Report & EDC photos and Statement On Hold' },
             ].map(({ href, label, icon: Icon, desc }) => (
               <Link
                 key={href}

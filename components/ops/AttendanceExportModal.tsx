@@ -300,10 +300,10 @@ export default function AttendanceExportModal({ open, onClose, stores = [], defa
                   <Label className="mb-1 block text-xs text-muted-foreground">Store</Label>
                   <Select value={storeId} onValueChange={setStoreId}>
                     <SelectTrigger className="h-8 text-xs">
-                      <SelectValue placeholder="All Stores" />
+                      <SelectValue placeholder="All stores" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="all">All Stores</SelectItem>
+                      <SelectItem value="all">All stores</SelectItem>
                       {stores.map((s) => (
                         <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
                       ))}
@@ -333,10 +333,10 @@ export default function AttendanceExportModal({ open, onClose, stores = [], defa
                 <Label className="mb-1 block text-xs text-muted-foreground">Status</Label>
                 <Select value={status} onValueChange={setStatus}>
                   <SelectTrigger className="h-8 text-xs">
-                    <SelectValue placeholder="All Statuses" />
+                    <SelectValue placeholder="All statuses" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">All Statuses</SelectItem>
+                    <SelectItem value="all">All statuses</SelectItem>
                     {ATTENDANCE_STATUSES.map((s) => (
                       <SelectItem key={s} value={s}>{attendanceStatusLabel(s)}</SelectItem>
                     ))}

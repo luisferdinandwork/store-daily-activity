@@ -402,7 +402,7 @@ function RefillRequestsSection() {
         <div className="min-w-0 flex-1">
           <p className="text-sm font-bold text-indigo-900">Petty Cash Refill Requests</p>
           <p className="text-[11px] text-indigo-500">
-            Mid-month top-up requests — requested by PIC, approved here by OPS. Separate from spending requests below.
+            Mid-month refill requests — requested by PIC 1, approved here by OPS, then sent and verified by Finance. Separate from spending requests below.
           </p>
         </div>
         {pendingCount > 0 && (
@@ -742,7 +742,7 @@ export default function OpsPettyCashPage() {
   return (
     <div className="min-h-full bg-slate-50">
       <OpsPageHeader
-        scope={isHoScope ? 'OPS HO · All Areas' : 'OPS · Area Approval'}
+        scope={isHoScope ? 'OPS HO · All areas' : 'OPS · Area Approval'}
         title="Petty Cash"
         subtitle={`${monthLabelFromDateKey(date)} · Approve store petty cash usage requests from PIC`}
         periodProps={{ period, date, onDateChange: setDate }}

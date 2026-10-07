@@ -338,8 +338,8 @@ function DetailPanel({
               {row.scheduledStaff.length > 0 ? row.scheduledStaff.map((s) => s.name).join(', ') : <span className="font-normal text-slate-300">–</span>}
             </dd>
           </div>
-          <TrailLine label="Nominal diterima" who={row.receivedBy} at={row.receivedAt} />
-          <TrailLine label="Nominal disetor" who={row.storedBy} at={row.storedAt} />
+          <TrailLine label="Uang diterima" who={row.receivedBy} at={row.receivedAt} />
+          <TrailLine label="Disetor" who={row.storedBy} at={row.storedAt} />
           <TrailLine label="Disubmit" who={row.submittedBy} at={row.submittedAt} />
           <TrailLine label="Diverifikasi" who={row.verifiedAt ? row.verifiedBy ?? 'Finance' : null} at={row.verifiedAt} />
           {row.correction && (

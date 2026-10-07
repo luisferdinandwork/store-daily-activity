@@ -152,7 +152,7 @@ export default function PerformanceTargetsPage() {
   const detailError = detailReady ? detailState.error : null;
 
   const isHo = overview?.scope === 'all_areas';
-  const headingScope = isHo ? 'Semua Area' : (overview?.stores[0]?.areaName ?? 'Area Anda');
+  const headingScope = isHo ? 'Semua area' : (overview?.stores[0]?.areaName ?? 'Area Anda');
   const showingDetail = selectedStoreId != null;
   const selectedStore = overview?.stores.find((s) => s.id === selectedStoreId) ?? null;
 

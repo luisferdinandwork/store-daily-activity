@@ -246,13 +246,13 @@ function SetoranDialog({
 
           <div className="grid gap-3 sm:grid-cols-2">
             <MoneyField
-              label="Uang aktual diterima"
+              label="Uang diterima"
               value={received}
               onChange={changeReceived}
               hint={isAdd ? undefined : `Sebelumnya ${rp(day.received ?? 0)}`}
             />
             <MoneyField
-              label="Nominal disetor"
+              label="Disetor"
               value={stored}
               onChange={changeStored}
               action={
@@ -474,7 +474,7 @@ function DayList({
                         title={`Diverifikasi ${r.verifiedBy ?? 'Finance'} · ${fmtStamp(r.verifiedAt)}`}
                         className="inline-flex items-center gap-0.5 rounded bg-emerald-50 px-1 py-0.5 text-[10px] font-bold text-emerald-700"
                       >
-                        <BadgeCheck className="h-3 w-3" /> Verified
+                        <BadgeCheck className="h-3 w-3" /> Terverifikasi
                       </span>
                     )}
                     {r.correctionCount > 0 && (
@@ -640,7 +640,7 @@ export default function ItSetoranCorrectionPage() {
         const json = await api('/api/ops/setoran-correction');
         if (!cancelled) setStores(json.stores);
       } catch (e) {
-        if (!cancelled) toast.error(e instanceof Error ? e.message : 'Gagal memuat daftar store');
+        if (!cancelled) toast.error(e instanceof Error ? e.message : 'Gagal memuat daftar toko');
       } finally {
         if (!cancelled) setLoadingStores(false);
       }
@@ -727,14 +727,14 @@ export default function ItSetoranCorrectionPage() {
 
       <div className="mx-auto max-w-5xl space-y-4 px-4 py-5 sm:px-6 lg:px-8">
         <div className="space-y-1.5">
-          <span className="block text-xs font-bold text-slate-600">Store</span>
+          <span className="block text-xs font-bold text-slate-600">Toko</span>
           <StoreCombobox stores={stores} value={storeId} loading={loadingStores} onChange={pickStore} />
         </div>
 
         {storeId == null ? (
           <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-10 text-center">
             <Pencil className="mx-auto h-8 w-8 text-slate-300" />
-            <p className="mt-3 text-sm font-semibold text-slate-700">Pilih store untuk melihat setorannya per hari</p>
+            <p className="mt-3 text-sm font-semibold text-slate-700">Pilih toko untuk melihat setorannya per hari</p>
             <p className="mt-1 text-xs text-slate-400">
               Klik pensil untuk mengoreksi nominal, atau “Tambah” pada tanggal yang belum ada setorannya.
             </p>

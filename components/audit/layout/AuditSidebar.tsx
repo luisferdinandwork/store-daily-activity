@@ -60,7 +60,7 @@ const NAV: NavSection[] = [
   {
     section: 'Akun',
     items: [
-      { href: '/audit/settings', label: 'Pengaturan', icon: KeyRound },
+      { href: '/audit/settings', label: 'Profil & Keamanan', icon: KeyRound },
     ],
   },
 ];

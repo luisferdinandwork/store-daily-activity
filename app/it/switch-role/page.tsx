@@ -48,7 +48,7 @@ const ROLE_META: Record<string, { icon: typeof Users; description: string; accen
   },
   finance: {
     icon: Wallet,
-    description: 'Finance team — petty cash approvals, setoran, reporting.',
+    description: 'Finance team — setoran, uang modal, petty cash refills, store closing.',
     accent: 'emerald',
   },
   audit: {

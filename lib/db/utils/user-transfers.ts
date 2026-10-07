@@ -846,7 +846,13 @@ export async function getUserScheduleSnapshot(
   storeId: number | null,
   fromDate: Date,
   toDate: Date,
-): Promise<TransferResult<Array<{ date: Date; shiftCode: string | null; isOff: boolean; isLeave: boolean }>>> {
+): Promise<TransferResult<Array<{
+  date: Date;
+  shiftCode: string | null;
+  shiftLabel: string | null;
+  isOff: boolean;
+  isLeave: boolean;
+}>>> {
   const access = await getActorAccess(actorId);
   if (!access.allowed) return { success: false, error: access.error };
 
@@ -861,6 +867,7 @@ export async function getUserScheduleSnapshot(
     .select({
       date: monthlyScheduleEntries.date,
       shiftCode: sql<string | null>`shifts.code`,
+      shiftLabel: sql<string | null>`shifts.label`,
       isOff: monthlyScheduleEntries.isOff,
       isLeave: monthlyScheduleEntries.isLeave,
     })
@@ -874,6 +881,7 @@ export async function getUserScheduleSnapshot(
     data: rows.map((r) => ({
       date: new Date(r.date),
       shiftCode: r.shiftCode,
+      shiftLabel: r.shiftLabel,
       isOff: r.isOff,
       isLeave: r.isLeave,
     })),

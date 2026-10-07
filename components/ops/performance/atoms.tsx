@@ -12,7 +12,7 @@ import type { ReactNode } from 'react';
 import { CloudOff, Plus } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import type { StoreStatus } from '@/lib/store-status';
+import { STORE_STATUS_LABEL, type StoreStatus } from '@/lib/store-status';
 import { HEALTH_META, type StoreHealth, type Tone } from '@/lib/performance/target-view';
 
 export const TONE: Record<Tone, { hex: string; bar: string; text: string; chip: string; soft: string }> = {
@@ -192,7 +192,7 @@ export function LifecycleBadge({ status }: { status: StoreStatus }) {
         ready ? 'bg-sky-50 text-sky-700 ring-sky-200' : 'bg-slate-100 text-slate-500 ring-slate-200',
       )}
     >
-      {ready ? 'Siap buka' : 'Tutup'}
+      {STORE_STATUS_LABEL[status]}
     </span>
   );
 }

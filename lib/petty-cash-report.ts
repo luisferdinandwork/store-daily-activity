@@ -25,12 +25,14 @@ export function refillStateOf(r: {
   return r.financeVerifiedAt ? 'verified' : 'awaiting_finance';
 }
 
+// pending / rejected use the same words as the Ops refill table and Finance's
+// petty cash request statuses (lib/petty-cash-transactions.ts).
 export const REFILL_STATE_LABEL: Record<RefillState, string> = {
-  pending: 'Menunggu OPS',
+  pending: 'Waiting OPS',
   awaiting_finance: 'Perlu verifikasi',
   verified: 'Terverifikasi',
   received: 'Diterima toko',
-  rejected: 'Ditolak OPS',
+  rejected: 'Rejected',
 };
 
 /**

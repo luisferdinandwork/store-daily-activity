@@ -67,6 +67,8 @@ export interface HistoryItem {
 export interface ScheduleDay {
   date: string;
   shiftCode: string | null;
+  /** shifts.label — the shift name shown everywhere (Morning, Evening, …). */
+  shiftLabel: string | null;
   isOff: boolean;
   isLeave: boolean;
 }

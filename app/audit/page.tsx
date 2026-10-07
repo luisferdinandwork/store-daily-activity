@@ -5,6 +5,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { STATUS_LABELS as ISSUE_STATUS_LABELS } from '@/lib/issues';
 import { AlertTriangle, ArrowRight, CheckCircle2, Eye, Loader2, AlertCircle, Shield } from 'lucide-react';
 
 type IssueStatus = 'reported' | 'in_review' | 'solved' | 'completed';
@@ -64,10 +65,10 @@ export default function AuditDashboardPage() {
   };
 
   const cards = [
-    { label: 'Reported',  value: stats.reported,  color: '#f59e0b', Icon: AlertCircle },
-    { label: 'In Review', value: stats.in_review, color: '#3b82f6', Icon: Eye },
-    { label: 'Solved',    value: stats.solved,    color: '#8b5cf6', Icon: CheckCircle2 },
-    { label: 'Completed', value: stats.completed, color: '#10b981', Icon: CheckCircle2 },
+    { label: ISSUE_STATUS_LABELS.reported,  value: stats.reported,  color: '#f59e0b', Icon: AlertCircle },
+    { label: ISSUE_STATUS_LABELS.in_review, value: stats.in_review, color: '#3b82f6', Icon: Eye },
+    { label: ISSUE_STATUS_LABELS.solved,    value: stats.solved,    color: '#8b5cf6', Icon: CheckCircle2 },
+    { label: ISSUE_STATUS_LABELS.completed, value: stats.completed, color: '#10b981', Icon: CheckCircle2 },
   ];
 
   return (

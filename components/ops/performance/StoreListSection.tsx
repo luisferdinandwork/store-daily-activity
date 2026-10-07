@@ -50,6 +50,7 @@ import {
   type SortKey,
   type Tone,
 } from '@/lib/performance/target-view';
+import { STORE_STATUS_LABEL } from '@/lib/store-status';
 import {
   ActualOfTarget,
   CodeChip,
@@ -165,10 +166,10 @@ function ProgressTile({
 }
 
 const SEGMENT_ORDER: { key: 'good' | 'watch' | 'behind' | 'upcoming'; tone: Tone; label: string }[] = [
-  { key: 'good', tone: 'emerald', label: 'On track' },
-  { key: 'watch', tone: 'amber', label: 'Waspada' },
-  { key: 'behind', tone: 'rose', label: 'Tertinggal' },
-  { key: 'upcoming', tone: 'indigo', label: 'Siap' },
+  { key: 'good', tone: 'emerald', label: HEALTH_META.on_track.label },
+  { key: 'watch', tone: 'amber', label: HEALTH_META.watch.label },
+  { key: 'behind', tone: 'rose', label: HEALTH_META.behind.label },
+  { key: 'upcoming', tone: 'indigo', label: HEALTH_META.upcoming.label },
 ];
 
 /** Toko tile: how many stores sit in each health bucket; the legend filters the list. */
@@ -422,7 +423,7 @@ function Toolbar({ view }: { view: StoreListView }) {
                 showClosed ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200',
               )}
             >
-              Tutup · {closedCount}
+              {STORE_STATUS_LABEL.close} · {closedCount}
             </button>
           )}
           <span className="tabular-nums">

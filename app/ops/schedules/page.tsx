@@ -43,6 +43,7 @@ import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
 import ScheduleDeleteDialog from '@/components/ops/schedules/ScheduleDeleteDialog';
 import { DINAS_SHIFT_CODE, isShiftCode, paletteOf, SHIFT_ROSTER_CODE } from '@/lib/shift-tasks';
 import { jakartaDateKey, jakartaTodayKey } from '@/lib/day-bucket';
+import { ON_LEAVE_LABEL } from '@/lib/attendance-status';
 import { Button } from '@/components/ui/button';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -284,7 +285,7 @@ function ShiftModePicker({ value, shifts, onChange }: {
       visual: getShiftVisual(s.code, shifts),
     })),
     { key: 'off',   label: 'Day Off', sub: 'No work today',   visual: STATUS_VISUAL.off },
-    { key: 'leave', label: 'Leave',   sub: 'AL / CU / Sick',  visual: STATUS_VISUAL.leave },
+    { key: 'leave', label: ON_LEAVE_LABEL, sub: 'Cuti / Sakit', visual: STATUS_VISUAL.leave },
   ];
 
   return (
@@ -410,7 +411,7 @@ function DetailView({ entries, shifts, onEdit, onAdd }: {
 
           {leave.length > 0 && (
             <div>
-              <p className="mb-1.5 px-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">On Leave</p>
+              <p className="mb-1.5 px-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">{ON_LEAVE_LABEL}</p>
               <div className="space-y-2">
                 {leave.map(entry => (
                   <button
@@ -424,7 +425,7 @@ function DetailView({ entries, shifts, onEdit, onAdd }: {
                       <p className="truncate text-sm font-bold text-slate-800">{entry.userName}</p>
                       <p className="text-[11px] text-slate-400">{getEmployeeTypeLabel(entry.userType)}</p>
                     </div>
-                    <span className="rounded-lg bg-indigo-100 px-2 py-0.5 text-[10px] font-bold text-indigo-600">Leave</span>
+                    <span className="rounded-lg bg-indigo-100 px-2 py-0.5 text-[10px] font-bold text-indigo-600">{ON_LEAVE_LABEL}</span>
                   </button>
                 ))}
               </div>
@@ -1309,7 +1310,7 @@ export default function OpsSchedulesPage() {
     <div className="min-h-full bg-slate-50">
       <OpsPageHeader
         scope={isHO ? 'OPS · Head Office' : 'OPS · Area Schedules'}
-        title="Schedule Manager"
+        title="Schedules"
         subtitle={
           isHO
             ? `${areas.length} area${areas.length !== 1 ? 's' : ''} · ${stores.length} store${stores.length !== 1 ? 's' : ''}`
@@ -1481,7 +1482,7 @@ export default function OpsSchedulesPage() {
                   </div>
                 );
               })}
-              <div className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-indigo-400" />Leave (AL)</div>
+              <div className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-indigo-400" />{ON_LEAVE_LABEL} (AL)</div>
               <span className="ml-auto">Click any day to view or edit</span>
             </div>
 
