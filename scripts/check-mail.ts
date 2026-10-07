@@ -22,10 +22,12 @@ const sendTo = sendIdx >= 0 ? args[sendIdx + 1] : null;
 
 const ok = (msg: string) => console.log(`  ✔ ${msg}`);
 const bad = (msg: string) => console.log(`  ✖ ${msg}`);
-const fail = (msg: string): never => {
+// A function declaration (not an arrow const) so TypeScript treats calls as
+// never-returning and narrows the code after `if (!x.success) fail(...)`.
+function fail(msg: string): never {
   console.log(`\n❌ ${msg}\n`);
   process.exit(1);
-};
+}
 
 async function main() {
   const tenantId = process.env.AZURE_TENANT_ID?.trim();
