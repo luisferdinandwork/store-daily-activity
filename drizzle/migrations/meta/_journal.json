@@ -183,6 +183,13 @@
       "when": 1791275947616,
       "tag": "0025_detach_finance_tasks_from_schedules",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1791345722591,
+      "tag": "0026_password_reset_requests",
+      "breakpoints": true
     }
   ]
 }

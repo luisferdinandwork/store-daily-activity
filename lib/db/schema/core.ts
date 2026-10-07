@@ -61,6 +61,13 @@ export const stores = pgTable('stores', {
   deptCode: text('dept_code'),
 
   /**
+   * The store's shared mailbox. "Lupa password" asks for it together with the
+   * NIK, and every reset email (request received, the link, success) goes
+   * here — see lib/db/utils/password-reset.ts. IT-only; stored lowercase.
+   */
+  email: text('email'),
+
+  /**
    * Lifecycle (see lib/store-status.ts). Only `active` stores record
    * attendance / tasks / petty cash; `ready_to_open` is prep-only; `close`
    * is retired (the Audit close-out flow hangs off this later).

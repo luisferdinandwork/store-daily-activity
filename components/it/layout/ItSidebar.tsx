@@ -12,6 +12,7 @@
 //     Users                 /it/users            (create/edit accounts, assign roles)
 //     Area Management       /it/areas            (rename areas, assign OPS Area users)
 //     Store Management      /it/stores           (create/edit stores, assign employees/ops)
+//     Reset Password         /it/password-reset   ("Lupa password" queue; badge = waiting on IT)
 //
 //   Configuration (IT-only)
 //     Task Management        /it/task-management
@@ -34,6 +35,7 @@
 //     Finance Issues        /finance/issues
 //     Audit Issues           /audit/issues
 
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { signOut, useSession } from 'next-auth/react';
@@ -46,6 +48,7 @@ import {
   KeyRound,
   Layers,
   LayoutDashboard,
+  LockKeyhole,
   LogOut,
   MapPinned,
   Percent,
@@ -65,6 +68,7 @@ import {
 } from '@/components/ui/tooltip';
 import EmployeeLogoMark from '@/components/employee/EmployeeLogoMark';
 import UserAvatar from '@/components/shared/UserAvatar';
+import { PASSWORD_RESET_CHANGED_EVENT } from '@/lib/password-reset';
 
 // ─── Nav definition ───────────────────────────────────────────────────────────
 
@@ -73,6 +77,8 @@ type NavItem = {
   label: string;
   icon: React.ElementType;
   exact?: boolean;
+  /** Shows a count pill (see usePasswordResetBadge). */
+  badge?: 'passwordReset';
 };
 
 type NavSection = {
@@ -94,6 +100,7 @@ const NAV: NavSection[] = [
       { href: '/it/users', label: 'Users', icon: Users },
       { href: '/it/areas', label: 'Area Management', icon: MapPinned },
       { href: '/it/stores', label: 'Store Management', icon: Building2 },
+      { href: '/it/password-reset', label: 'Reset Password', icon: LockKeyhole, badge: 'passwordReset' },
     ],
   },
   {
@@ -157,6 +164,50 @@ function NavTooltip({ label, children }: { label: string; children: React.ReactN
   );
 }
 
+// ─── Badge ────────────────────────────────────────────────────────────────────
+
+/**
+ * "Lupa password" requests waiting on IT (pending + expired/locked links).
+ * Polled every minute while the tab is visible, on navigation, and right after
+ * an action on the Reset Password page (PASSWORD_RESET_CHANGED_EVENT).
+ */
+async function fetchPasswordResetCount(): Promise<number | null> {
+  try {
+    const res = await fetch('/api/it/password-reset?count=1', { cache: 'no-store' });
+    const json = await res.json();
+    return json.success ? Number(json.count) || 0 : null;
+  } catch {
+    return null; // badge only — ignore
+  }
+}
+
+function usePasswordResetBadge(enabled: boolean, pathname: string): number {
+  const [count, setCount] = useState(0);
+
+  useEffect(() => {
+    if (!enabled) return;
+    let alive = true;
+    const refresh = () => {
+      fetchPasswordResetCount().then((n) => {
+        if (alive && n !== null) setCount(n);
+      });
+    };
+
+    refresh();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') refresh();
+    }, 60_000);
+    window.addEventListener(PASSWORD_RESET_CHANGED_EVENT, refresh);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+      window.removeEventListener(PASSWORD_RESET_CHANGED_EVENT, refresh);
+    };
+  }, [enabled, pathname]);
+
+  return count;
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function ItSidebar({ collapsed = false, userName = 'IT' }: Props) {
@@ -165,6 +216,9 @@ export default function ItSidebar({ collapsed = false, userName = 'IT' }: Props)
 
   const isActive = (href: string, exact?: boolean) =>
     exact ? pathname === href : pathname.startsWith(href);
+
+  const resetCount = usePasswordResetBadge(session?.user?.role === 'it', pathname);
+  const badgeFor = (badge: NavItem['badge']) => (badge === 'passwordReset' ? resetCount : 0);
 
   const displayName = session?.user?.name ?? userName;
   const initial     = displayName.charAt(0).toUpperCase();
@@ -204,8 +258,9 @@ export default function ItSidebar({ collapsed = false, userName = 'IT' }: Props)
                 </p>
               )}
               <ul className="space-y-0.5">
-                {items.map(({ href, label, icon: Icon, exact }) => {
+                {items.map(({ href, label, icon: Icon, exact, badge }) => {
                   const active = isActive(href, exact);
+                  const count = badgeFor(badge);
                   const linkCls = cn(
                     'flex items-center rounded-md px-2.5 py-2 text-sm font-medium transition-colors',
                     collapsed ? 'justify-center' : 'gap-2.5',
@@ -217,15 +272,26 @@ export default function ItSidebar({ collapsed = false, userName = 'IT' }: Props)
                   return (
                     <li key={href}>
                       {collapsed ? (
-                        <NavTooltip label={label}>
-                          <Link href={href} className={linkCls}>
+                        <NavTooltip label={count > 0 ? `${label} · ${count} menunggu` : label}>
+                          <Link href={href} className={cn(linkCls, 'relative')}>
                             <Icon className="h-4 w-4 shrink-0" />
+                            {count > 0 && (
+                              <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-rose-500 ring-2 ring-card" />
+                            )}
                           </Link>
                         </NavTooltip>
                       ) : (
                         <Link href={href} className={linkCls}>
                           <Icon className="h-4 w-4 shrink-0" />
                           <span className="flex-1">{label}</span>
+                          {count > 0 && (
+                            <span
+                              className="min-w-5 rounded-full bg-rose-500 px-1.5 py-px text-center text-[10px] font-bold tabular-nums text-white"
+                              aria-label={`${count} menunggu`}
+                            >
+                              {count > 99 ? '99+' : count}
+                            </span>
+                          )}
                           {active && <ChevronRight className="h-3 w-3 opacity-60" />}
                         </Link>
                       )}

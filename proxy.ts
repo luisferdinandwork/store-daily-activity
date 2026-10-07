@@ -23,6 +23,7 @@ import {
   apiRolesFor,
   homePathFor,
   isApiPath,
+  isCsrfExemptPath,
   isKnownRole,
   isPublicPath,
   pageRolesFor,
@@ -172,7 +173,7 @@ export async function proxy(req: NextRequest) {
   const done = (res: NextResponse) => applySecurityHeaders(res, api);
 
   // 1. CSRF — before anything else, and not for NextAuth (own CSRF token) / cron (bearer secret).
-  if (api && UNSAFE_METHODS.has(req.method) && !isPublicPath(pathname) && !isSameOrigin(req)) {
+  if (api && UNSAFE_METHODS.has(req.method) && !isCsrfExemptPath(pathname) && !isSameOrigin(req)) {
     return done(json(403, 'Cross-origin request blocked.'));
   }
 

@@ -85,15 +85,29 @@ export function apiRolesFor(pathname: string): readonly AppRoleCode[] | null {
 /**
  * Paths reachable without a session:
  *   /login            — the sign-in page
+ *   /forgot-password  — "Lupa password" request form
+ *   /reset-password/* — the emailed one-time link (lib/db/utils/password-reset.ts)
+ *   /api/password-reset/* — their endpoints (throttled; still CSRF-checked)
  *   /api/auth/*       — NextAuth (has its own CSRF token handling)
  *   /api/cron/*       — machine callers; each handler verifies CRON_SECRET itself
  */
 export function isPublicPath(pathname: string): boolean {
   return (
     pathname === '/login' ||
-    matchesPrefix(pathname, '/api/auth') ||
-    matchesPrefix(pathname, '/api/cron')
+    pathname === '/forgot-password' ||
+    matchesPrefix(pathname, '/reset-password') ||
+    matchesPrefix(pathname, '/api/password-reset') ||
+    isCsrfExemptPath(pathname)
   );
+}
+
+/**
+ * API paths the proxy's same-origin check skips: NextAuth runs its own CSRF
+ * token, cron callers authenticate with a bearer secret. Every other state-
+ * changing request — public ones included — must come from this origin.
+ */
+export function isCsrfExemptPath(pathname: string): boolean {
+  return matchesPrefix(pathname, '/api/auth') || matchesPrefix(pathname, '/api/cron');
 }
 
 export function isApiPath(pathname: string): boolean {

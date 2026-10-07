@@ -29,6 +29,7 @@ import { employeeTypes, shifts, userRoles } from '@/lib/db/schema/lookups';
 import { jakartaDayRange, jakartaDayStart, jakartaTodayKey, jakartaWallClock } from '@/lib/day-bucket';
 import { getStoreSummariesForRange } from '@/lib/db/utils/tasks';
 import { isStoreStatus, type StoreStatus } from '@/lib/store-status';
+import { parseStoreEmail } from '@/lib/store-email';
 import { EMPTY_COUNTS, pickDayStatus, tallyPeople, type AttendanceCounts } from '@/lib/attendance-health';
 
 // ─── Public types (consumed by the page) ─────────────────────────────────────
@@ -72,6 +73,8 @@ export type StoreRow = {
   closedAt: string | null;
   /** BC department dimension code. Only present for IT (back-office reference, hidden from Ops). */
   deptCode?: string | null;
+  /** Store mailbox for "Lupa password" emails. Only present for IT (IT maintains it). */
+  email?: string | null;
   taskStats: {
     total: number;
     completed: number;
@@ -356,7 +359,7 @@ export async function GET(): Promise<NextResponse<StoresApiResponse>> {
       pettyCashBalance: store.pettyCashBalance ?? '0',
       status: store.status,
       closedAt: store.closedAt ? store.closedAt.toISOString() : null,
-      ...(isIt ? { deptCode: store.deptCode } : {}),
+      ...(isIt ? { deptCode: store.deptCode, email: store.email } : {}),
       taskStats: {
         total: ts.total,
         completed: ts.completed,
@@ -498,6 +501,16 @@ export async function POST(request: NextRequest) {
     deptCode = requested;
   }
 
+  let email: string | null = null;
+  if (body?.email !== undefined && body.email !== null && body.email !== '') {
+    if (!isIt) {
+      return NextResponse.json({ success: false, error: "Forbidden: only IT can set a store's email." }, { status: 403 });
+    }
+    const parsed = parseStoreEmail(body.email);
+    if (!parsed.ok) return NextResponse.json({ success: false, error: parsed.error }, { status: 400 });
+    email = parsed.value;
+  }
+
   const [created] = await db
     .insert(stores)
     .values({
@@ -511,6 +524,7 @@ export async function POST(request: NextRequest) {
       status,
       statusChangedAt: new Date(),
       deptCode,
+      email,
       // A store that isn't live yet carries no petty cash; activation provisions it.
       ...(status === 'ready_to_open' ? { pettyCashBalance: '0' } : {}),
     })
@@ -524,6 +538,9 @@ export async function POST(request: NextRequest) {
     note: 'Store created',
   });
 
-  const { deptCode: createdDeptCode, ...publicStore } = created;
-  return NextResponse.json({ success: true, store: isIt ? { ...publicStore, deptCode: createdDeptCode } : publicStore });
+  const { deptCode: createdDeptCode, email: createdEmail, ...publicStore } = created;
+  return NextResponse.json({
+    success: true,
+    store: isIt ? { ...publicStore, deptCode: createdDeptCode, email: createdEmail } : publicStore,
+  });
 }

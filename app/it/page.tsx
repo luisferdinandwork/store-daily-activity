@@ -7,7 +7,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
   ArrowRight, KeyRound, ClipboardCheck, Layers, Store, Users, Wallet, Percent,
-  AlertTriangle, Repeat, Loader2, Shield, AlertCircle, Eye, CheckCircle2, Tags,
+  AlertTriangle, Repeat, Loader2, Shield, AlertCircle, Eye, CheckCircle2, Tags, LockKeyhole,
 } from 'lucide-react';
 
 type IssueStatus = 'reported' | 'in_review' | 'solved' | 'completed';
@@ -20,7 +20,7 @@ interface ItIssue {
 export default function ItDashboardPage() {
   const { data: session, status: authStatus } = useSession();
   const router = useRouter();
-  const role = (session?.user as any)?.role as string | undefined;
+  const role = session?.user?.role;
   const isIt = role === 'it';
 
   const [issues, setIssues]   = useState<ItIssue[]>([]);
@@ -78,6 +78,7 @@ export default function ItDashboardPage() {
   const settingsLinks = [
     { href: '/it/users', label: 'Users', desc: 'Create accounts, assign roles, deactivate access.', Icon: Users },
     { href: '/it/switch-role', label: 'Switch Role', desc: 'Preview the app as another role, then switch back.', Icon: Repeat },
+    { href: '/it/password-reset', label: 'Reset Password', desc: 'Verify "Lupa password" requests and email the one-time link.', Icon: LockKeyhole },
     { href: '/it/task-management', label: 'Task Management', desc: 'Configure location requirements per task.', Icon: ClipboardCheck },
     { href: '/it/shift-tasks', label: 'Shift & Tasks', desc: 'Configure shifts and their task assignments.', Icon: Layers },
     { href: '/it/bc-credentials', label: 'BC Credentials', desc: 'Manage Business Central API credentials.', Icon: KeyRound },

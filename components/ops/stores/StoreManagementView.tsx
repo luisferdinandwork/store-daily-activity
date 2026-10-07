@@ -36,6 +36,7 @@ import {
   ClipboardList,
   FilterX,
   Loader2,
+  Mail,
   MapPin,
   Pencil,
   Plus,
@@ -522,6 +523,15 @@ function StoreTableRow({
                 <MapPin className="h-2.5 w-2.5 shrink-0" />
                 <span className="truncate max-w-[220px]">{store.address}</span>
               </div>
+              {isIt && (
+                <div
+                  title="Store email — used by Lupa password"
+                  className={cn('mt-0.5 flex items-center gap-1 text-[11px]', store.email ? 'text-slate-500' : 'text-amber-600')}
+                >
+                  <Mail className="h-2.5 w-2.5 shrink-0" />
+                  <span className="truncate max-w-[220px]">{store.email ?? 'No store email — Lupa password unavailable'}</span>
+                </div>
+              )}
             </div>
           </div>
         </td>

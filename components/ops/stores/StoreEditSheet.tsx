@@ -6,7 +6,7 @@
 
 import { useState } from 'react';
 import { useSession } from 'next-auth/react';
-import { Crosshair, Loader2, Lock, MapPin, Store as StoreIcon } from 'lucide-react';
+import { Crosshair, Loader2, Lock, Mail, MapPin, Store as StoreIcon } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Sheet, SheetContent, SheetTitle, SheetDescription, SheetHeader, SheetFooter } from '@/components/ui/sheet';
@@ -34,7 +34,7 @@ interface Props {
 
 export default function StoreEditSheet({ mode, store, areas, fixedAreaId, onClose, onSaved }: Props) {
   const { data: session } = useSession();
-  const isIt = (session?.user as any)?.role === 'it';
+  const isIt = session?.user?.role === 'it';
 
   const [storeNo, setStoreNo] = useState(store?.storeNo ?? '');
   const [name, setName] = useState(store?.name ?? '');
@@ -44,6 +44,7 @@ export default function StoreEditSheet({ mode, store, areas, fixedAreaId, onClos
   );
   // Back-office only — IT sets the BC dept code and a store's starting status.
   const [deptCode, setDeptCode] = useState(store?.deptCode ?? '');
+  const [email, setEmail] = useState(store?.email ?? '');
   const [status, setStatus] = useState<StoreStatus>('ready_to_open');
   const [latitude, setLatitude] = useState(store?.latitude ?? '');
   const [longitude, setLongitude] = useState(store?.longitude ?? '');
@@ -115,14 +116,14 @@ export default function StoreEditSheet({ mode, store, areas, fixedAreaId, onClos
               address: address.trim(),
               areaId: Number(areaId),
               ...location,
-              ...(isIt ? { status, deptCode: deptCode.trim() || null } : {}),
+              ...(isIt ? { status, deptCode: deptCode.trim() || null, email: email.trim() || null } : {}),
             }
           : {
               name: name.trim(),
               address: address.trim(),
               ...(isIt && Number(areaId) !== store?.areaId ? { areaId: Number(areaId) } : {}),
               ...location,
-              ...(isIt ? { deptCode: deptCode.trim() || null } : {}),
+              ...(isIt ? { deptCode: deptCode.trim() || null, email: email.trim() || null } : {}),
             };
 
       const url = mode === 'create' ? '/api/ops/stores' : `/api/ops/stores/${store!.id}`;
@@ -266,6 +267,29 @@ export default function StoreEditSheet({ mode, store, areas, fixedAreaId, onClos
             </div>
           )}
 
+          {isIt && (
+            <div className="space-y-1.5">
+              <Label htmlFor="storeEmail" className="flex items-center gap-1.5">
+                <Mail className="h-3.5 w-3.5 text-muted-foreground" />
+                Store email
+              </Label>
+              <Input
+                id="storeEmail"
+                type="email"
+                inputMode="email"
+                autoComplete="off"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="e.g. daanmogot@fisikfootball.com"
+                disabled={saving}
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Staff type this with their NIK on &quot;Lupa password&quot;; every reset email (request received, the
+                link, success) goes here. Visible to IT only.
+              </p>
+            </div>
+          )}
+
           <div className="space-y-2 rounded-xl border border-border bg-secondary/40 p-3">
             <div className="flex items-center justify-between">
               <p className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
@@ -289,7 +313,7 @@ export default function StoreEditSheet({ mode, store, areas, fixedAreaId, onClos
             </div>
 
             {!isIt && (
-              <p className="text-[11px] text-muted-foreground">Only IT can change a store's location.</p>
+              <p className="text-[11px] text-muted-foreground">Only IT can change a store&apos;s location.</p>
             )}
             {isIt && (
               <p className="text-[11px] text-muted-foreground">

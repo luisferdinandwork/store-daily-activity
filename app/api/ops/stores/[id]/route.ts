@@ -2,8 +2,9 @@
 //
 // PATCH /api/ops/stores/:id
 //   → update a store's name, address, latitude/longitude, or geofence radius.
-//   → IT only: set the BC dept code (deptCode) and move the store through its
-//     lifecycle (status: ready_to_open → active → close, + optional statusNote).
+//   → IT only: set the BC dept code (deptCode), the store mailbox used by
+//     "Lupa password" (email), and move the store through its lifecycle
+//     (status: ready_to_open → active → close, + optional statusNote).
 //   → reassign a store to a different area (areaId) — OPS HO only; moving a
 //     store between areas is a structural org-chart change, not something an
 //     OPS Area user should be able to do (even within/out of their own area).
@@ -19,6 +20,7 @@ import { resolveOpsScope } from '@/lib/performance/ops-scope';
 import { resolveItScope } from '@/lib/auth/it-scope';
 import { changeStoreStatus } from '@/lib/db/utils/store-status';
 import { isStoreStatus } from '@/lib/store-status';
+import { parseStoreEmail } from '@/lib/store-email';
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -125,16 +127,27 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     updates.areaId = areaId;
   }
 
-  // Dept code + lifecycle are IT-only back-office fields.
+  // Dept code, email + lifecycle are IT-only back-office fields.
   const wantsDeptCode = 'deptCode' in (body ?? {});
+  const wantsEmail = 'email' in (body ?? {});
   const wantsStatus = 'status' in (body ?? {});
   const isIt = (await resolveItScope()).ok;
 
-  if ((wantsDeptCode || wantsStatus) && !isIt) {
+  if ((wantsDeptCode || wantsEmail || wantsStatus) && !isIt) {
     return NextResponse.json(
-      { success: false, error: "Forbidden: only IT can change a store's dept code or status." },
+      { success: false, error: "Forbidden: only IT can change a store's dept code, email or status." },
       { status: 403 },
     );
+  }
+
+  if (wantsEmail) {
+    if (body.email === null || body.email === '') {
+      updates.email = null;
+    } else {
+      const parsed = parseStoreEmail(body.email);
+      if (!parsed.ok) return NextResponse.json({ success: false, error: parsed.error }, { status: 400 });
+      updates.email = parsed.value;
+    }
   }
 
   if (wantsDeptCode) {
@@ -171,6 +184,6 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 
   const [updated] = await db.update(stores).set(updates).where(eq(stores.id, id)).returning();
 
-  const { deptCode, ...publicStore } = updated;
-  return NextResponse.json({ success: true, store: isIt ? { ...publicStore, deptCode } : publicStore });
+  const { deptCode, email, ...publicStore } = updated;
+  return NextResponse.json({ success: true, store: isIt ? { ...publicStore, deptCode, email } : publicStore });
 }

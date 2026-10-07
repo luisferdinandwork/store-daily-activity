@@ -6,8 +6,9 @@
 //   • Removed with the account — its own day-to-day records: attendance (except
 //     days where a break logged cash), its personal grooming tasks, its schedule
 //     (monthly entries + the working days nothing else hangs off), store
-//     assignment history, notifications and monthly target shares (the store's
-//     roster % is re-split afterwards, like removing someone from the roster).
+//     assignment history, notifications, password-reset requests and monthly
+//     target shares (the store's roster % is re-split afterwards, like
+//     removing someone from the roster).
 //   • Kept as history — cash records (petty cash, setoran, cek uang modal, cash
 //     counts, break cash, store closing …), which the delete dialog shows as a
 //     notice, plus everything shared with or owned by others: the store task
@@ -31,6 +32,7 @@ import {
   groomingTasks,
   monthlyScheduleEntries,
   notifications,
+  passwordResetRequests,
   schedules,
   userStoreAssignments,
   users,
@@ -61,6 +63,7 @@ const REMOVED_LABELS: Record<string, string> = {
   monthly_schedule_entries: 'schedule entries',
   user_store_assignments: 'store assignment history',
   notifications: 'notifications',
+  password_reset_requests: 'password reset requests',
   employee_monthly_targets: 'monthly target shares',
 };
 
@@ -214,6 +217,12 @@ async function deleteWithin(tx: Tx, userId: string) {
 
   const inbox = await tx.delete(notifications).where(eq(notifications.userId, userId)).returning({ id: notifications.id });
   noteRemoved('notifications', inbox.length);
+
+  const resets = await tx
+    .delete(passwordResetRequests)
+    .where(eq(passwordResetRequests.userId, userId))
+    .returning({ id: passwordResetRequests.id });
+  noteRemoved('password_reset_requests', resets.length);
 
   const shares = await tx
     .delete(employeeMonthlyTargets)

@@ -43,7 +43,19 @@ NEXTAUTH_URL="https://sdt.pri.co.id"        # real public URL — not localhost
 NEXTAUTH_SECRET="<keep or rotate>"
 CRON_SECRET="<pick a long random string>"   # must match deploy/crontab.example
 # BC_*, NOS_*, OSS_* — copy as-is (NOS_* is the image storage; set NOS_SECRET_ACCESS_KEY)
+
+# "Lupa password" emails — Microsoft Graph (Entra ID app registration with the
+# application permission Mail.Send, admin-consented). See lib/email/graph-mail.ts.
+AZURE_TENANT_ID="<Directory (tenant) ID>"
+AZURE_CLIENT_ID="<Application (client) ID>"
+AZURE_CLIENT_SECRET="<client secret VALUE>"  # expires — note the date, rotate before it does
+MAIL_FROM="no-reply@panatradeprestasi.com"   # sender mailbox (default if omitted)
+# MAIL_IT_NOTIFY_TO="it@panatradeprestasi.com" # optional: IT inbox copy of new/completed requests
 ```
+
+Without the AZURE_* values the reset flow still works, but no email is sent in
+production — the IT "Reset Password" page shows "Email belum dikonfigurasi" and
+offers the link to copy instead.
 
 ## 4. Build
 
