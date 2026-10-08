@@ -11,6 +11,7 @@ export const ATTENDANCE_STATUSES = [
   'cuti',
   'sakit_tanpa_surat',
   'sakit_dengan_surat',
+  'backup',
 ] as const;
 
 export type AttendanceStatus = typeof ATTENDANCE_STATUSES[number];
@@ -30,15 +31,27 @@ export const LEAVE_ATTENDANCE_STATUSES = [
 
 export type LeaveAttendanceStatus = typeof LEAVE_ATTENDANCE_STATUSES[number];
 
+/**
+ * The only statuses Ops can set on a scheduled day: Dinas (working outside the
+ * store), Izin (`excused`) and Back-up (covering another employee's shift, e.g.
+ * a morning employee extended to full day because the evening shift is out).
+ * Cuti / Sakit stay in the enum so older records still read, but Ops no longer
+ * picks them.
+ */
+export const OPS_SETTABLE_ATTENDANCE_STATUSES = ['dinas', 'excused', 'backup'] as const satisfies readonly AttendanceStatus[];
+
+export type OpsSettableAttendanceStatus = typeof OPS_SETTABLE_ATTENDANCE_STATUSES[number];
+
 export const ATTENDANCE_STATUS_LABELS: Record<AttendanceStatus, string> = {
   present: 'Present',
   late: 'Late',
   absent: 'Absent',
-  excused: 'Excused',
+  excused: 'Izin',
   dinas: 'Dinas',
   cuti: 'Cuti',
   sakit_tanpa_surat: 'Sakit tanpa surat dokter',
   sakit_dengan_surat: 'Sakit dengan surat dokter',
+  backup: 'Back-up',
 };
 
 /**
@@ -63,6 +76,10 @@ export const ATTENDANCE_STATUS_CODES: Partial<Record<AttendanceStatus, string>> 
 
 export function isAttendanceStatus(value: unknown): value is AttendanceStatus {
   return typeof value === 'string' && (ATTENDANCE_STATUSES as readonly string[]).includes(value);
+}
+
+export function isOpsSettableAttendanceStatus(value: unknown): value is OpsSettableAttendanceStatus {
+  return typeof value === 'string' && (OPS_SETTABLE_ATTENDANCE_STATUSES as readonly string[]).includes(value);
 }
 
 export function isLeaveAttendanceStatus(value: unknown): value is LeaveAttendanceStatus {

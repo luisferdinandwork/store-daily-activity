@@ -8,7 +8,7 @@ import { breakSessions, shifts, employeeTypes, users } from '@/lib/db/schema';
 import { eq, inArray }               from 'drizzle-orm';
 import { getStoreCashCountsForDate } from '@/lib/db/utils/store-cash-count';
 import { CASH_COUNT_SESSIONS }       from '@/lib/cash-count-sessions';
-import { LEAVE_ATTENDANCE_STATUSES, isLeaveAttendanceStatus } from '@/lib/attendance-status';
+import { OPS_SETTABLE_ATTENDANCE_STATUSES, isOpsSettableAttendanceStatus } from '@/lib/attendance-status';
 
 import { assertStoreInActorArea, getOpsActor } from '../tasks/_helpers';
 
@@ -225,13 +225,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // status is optional (omit it to only update the note). Ops can only set a
-    // justified absence — Dinas / Cuti / STD / SD — from any current status;
-    // present / late / absent / excused never come from Ops (see
-    // opsMarkAttendance).
-    if (status !== undefined && !isLeaveAttendanceStatus(status)) {
+    // status is optional (omit it to only update the note). Ops can only set
+    // Dinas / Izin / Back-up, from any current status; present / late / absent
+    // never come from Ops (see opsMarkAttendance).
+    if (status !== undefined && !isOpsSettableAttendanceStatus(status)) {
       return NextResponse.json(
-        { success: false, error: `status must be one of: ${LEAVE_ATTENDANCE_STATUSES.join(', ')}` },
+        { success: false, error: `status must be one of: ${OPS_SETTABLE_ATTENDANCE_STATUSES.join(', ')}` },
         { status: 400 },
       );
     }

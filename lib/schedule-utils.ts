@@ -21,8 +21,8 @@ import {
   jakartaYearMonth,
 } from "@/lib/day-bucket";
 import {
-  isLeaveAttendanceStatus,
-  type LeaveAttendanceStatus,
+  isOpsSettableAttendanceStatus,
+  type OpsSettableAttendanceStatus,
 } from "@/lib/attendance-status";
 import { isFeatureEnabled } from "@/lib/db/utils/feature-switches";
 import {
@@ -2321,21 +2321,21 @@ export async function getAttendanceForDate(storeId: number, date: Date) {
 }
 
 /**
- * Ops records a justified absence — Dinas / Cuti / STD / SD — on a scheduled
- * day, from whatever the status was (not recorded yet, auto-marked absent,
- * or even a checked-in present / late). Ops never sets present / late /
- * absent / excused: present & late only come from the employee's own
- * check-in, absent from autoMarkAbsentPastSchedules. With no `status` this
+ * Ops records Dinas / Izin (excused) / Back-up on a scheduled day, from
+ * whatever the status was (not recorded yet, auto-marked absent, or even a
+ * checked-in present / late). Ops never sets present / late / absent:
+ * present & late only come from the employee's own check-in, absent from
+ * autoMarkAbsentPastSchedules. With no `status` this
  * only updates the note on an existing record.
  */
 export async function opsMarkAttendance(
   scheduleId: number,
-  status: LeaveAttendanceStatus | undefined,
+  status: OpsSettableAttendanceStatus | undefined,
   actorId: string,
   notes?: string,
 ): Promise<{ success: boolean; attendanceId?: number; error?: string }> {
-  if (status !== undefined && !isLeaveAttendanceStatus(status)) {
-    return { success: false, error: "Ops can only set Dinas, Cuti, STD or SD." };
+  if (status !== undefined && !isOpsSettableAttendanceStatus(status)) {
+    return { success: false, error: "Ops can only set Dinas, Izin or Back-up." };
   }
   // undefined = leave the note alone; an empty string clears it.
   const note = notes === undefined ? undefined : notes.trim() || null;
@@ -2361,7 +2361,7 @@ export async function opsMarkAttendance(
     let attendanceId: number;
 
     if (existing) {
-      // Re-classify to a leave status from anything (check-in times, if
+      // Re-classify to Dinas / Izin / Back-up from anything (check-in times, if
       // any, are kept as-is), or just update the note.
       await db
         .update(attendance)
@@ -2375,7 +2375,7 @@ export async function opsMarkAttendance(
       attendanceId = existing.id;
     } else {
       if (!status) {
-        return { success: false, error: "Choose Dinas, Cuti, STD or SD to record attendance." };
+        return { success: false, error: "Choose Dinas, Izin or Back-up to record attendance." };
       }
       const [att] = await db
         .insert(attendance)

@@ -13,12 +13,13 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   AlertTriangle, Store as StoreIcon, MapPin, Clock, User, ChevronDown,
   CheckCircle2, Eye, Loader2, X, ArrowRight, Globe2,
-  AlertCircle, Shield, FileText,
+  AlertCircle, Shield,
 } from 'lucide-react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import { STATUS_LABELS as ISSUE_STATUS_LABELS } from '@/lib/issues';
+import { IssueAttachments } from '@/components/shared/IssueAttachments';
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
 import { OpsList, OpsListRow } from '@/components/ops/layout/OpsList';
 
@@ -188,53 +189,14 @@ function IssueDrawer({ issue, onClose, onAdvance, updating }: {
             </p>
           </div>
 
-          {/* Photos */}
-          {issue.attachmentUrls.length > 0 && (
-            <div>
-              <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Photos ({issue.attachmentUrls.length})</p>
-              <div className="grid grid-cols-3 gap-2">
-                {issue.attachmentUrls.map((url, i) => (
-                  <a key={i} href={url} target="_blank" rel="noopener noreferrer"
-                    className="group relative block aspect-square overflow-hidden rounded-xl border border-slate-200 bg-slate-100 transition-all hover:border-indigo-300 hover:shadow-sm">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={url} alt={`Attachment ${i + 1}`} className="h-full w-full object-cover transition-transform group-hover:scale-105" />
-                  </a>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Berita Acara — read-only for Ops, uploaded by the reporter */}
-          {issue.baAttachmentUrls.length > 0 && (
-            <div>
-              <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">
-                Berita Acara ({issue.baAttachmentUrls.length})
-              </p>
-              <div className="grid grid-cols-3 gap-2">
-                {issue.baAttachmentUrls.map((url, i) => {
-                  const isImage = /\.(jpe?g|png|gif|webp|heic|heif)$/i.test(url);
-                  const ext = url.split('.').pop()?.toUpperCase() ?? 'FILE';
-                  return (
-                    <a key={i} href={url} target="_blank" rel="noopener noreferrer"
-                      className="group relative block aspect-square overflow-hidden rounded-xl border border-violet-200 bg-slate-100 transition-all hover:border-violet-300 hover:shadow-sm">
-                      {isImage ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={url} alt={`Berita Acara ${i + 1}`} className="h-full w-full object-cover transition-transform group-hover:scale-105" />
-                      ) : (
-                        <div className="flex h-full w-full flex-col items-center justify-center gap-1 bg-violet-50 px-1 text-center">
-                          <FileText className="h-6 w-6 text-violet-500" />
-                          <span className="text-[10px] font-bold text-violet-600">{ext}</span>
-                        </div>
-                      )}
-                    </a>
-                  );
-                })}
-              </div>
-              {issue.baUploadedAt && (
-                <p className="mt-1.5 text-[11px] text-slate-400">Uploaded {relativeTime(issue.baUploadedAt)}</p>
-              )}
-            </div>
-          )}
+          {/* Photos + Berita Acara — images open in a viewer, not a new tab */}
+          <IssueAttachments
+            title={issue.title}
+            attachmentUrls={issue.attachmentUrls}
+            baAttachmentUrls={issue.baAttachmentUrls}
+            baUploadedLabel={issue.baUploadedAt ? `Uploaded ${relativeTime(issue.baUploadedAt)}` : null}
+            hoverClass="hover:border-indigo-300"
+          />
 
           {issue.solvedAt && (
             <div className="flex items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-4 py-3">

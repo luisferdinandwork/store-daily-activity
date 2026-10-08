@@ -761,6 +761,7 @@ export async function seedAttendance() {
     marketingCheckTasks,
     pendingIds(marketingMap, 0.9, morningSchedules),
     {
+      hasMarketingCheck: true,
       promoName: true,
       promoPeriod: true,
       promoMechanism: true,

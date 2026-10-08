@@ -48,6 +48,8 @@ interface OpsPageHeaderProps {
   onRefresh?: () => void;
   refreshing?: boolean;
   actions?: ReactNode;
+  /** Underline tabs for a page with sibling pages; rendered under the title, flush with the header's bottom edge. */
+  tabs?: ReactNode;
   className?: string;
   contentClassName?: string;
 }
@@ -368,6 +370,7 @@ export function OpsPageHeader({
   onRefresh,
   refreshing = false,
   actions,
+  tabs,
   className,
   contentClassName,
 }: OpsPageHeaderProps) {
@@ -384,7 +387,7 @@ export function OpsPageHeader({
 
   return (
     <div className={cn('sticky top-0 z-10 border-b border-slate-200 bg-white/90 backdrop-blur', className)}>
-      <div className={cn('mx-auto px-4 py-4 sm:px-6 lg:px-8', contentClassName)}>
+      <div className={cn('mx-auto px-4 sm:px-6 lg:px-8', tabs ? 'pt-4' : 'py-4', contentClassName)}>
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
             {scope && (
@@ -426,6 +429,8 @@ export function OpsPageHeader({
             </div>
           )}
         </div>
+
+        {tabs && <div className="mt-3">{tabs}</div>}
       </div>
     </div>
   );

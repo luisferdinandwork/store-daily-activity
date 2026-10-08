@@ -42,3 +42,5 @@ next-env.d.ts
 
 certificates
 .claude/
+# petty cash reset backups (real production data)
+/backups/

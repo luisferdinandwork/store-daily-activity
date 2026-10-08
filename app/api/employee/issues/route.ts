@@ -1,14 +1,15 @@
 // app/api/employee/issues/route.ts
 //
 // GET  — list issues visible to the current employee's store.
-//        Draft issues stay private to the reporter.
+//        Draft issues stay private to the reporter — except a Store Closing
+//        On Hold draft, which the whole store sees (and can send).
 //        Reported / in_review / resolved issues are visible to every employee
 //        assigned to the same store.
 // POST — create a new issue routed to one or more roles/departments.
 
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
-import { and, desc, eq, ne, or } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne, or } from 'drizzle-orm';
 
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
@@ -16,6 +17,7 @@ import { issues, users } from '@/lib/db/schema';
 import {
   computeIssuePermissionFlags,
   createIssueWithRoles,
+  getStoreClosingHoldIssueIdsForStore,
   loadIssueAssignedRoles,
   notifyIssueEvent,
   serializeIssue,
@@ -57,15 +59,20 @@ export async function GET(req: Request) {
     return NextResponse.json({ success: true, issues: [] });
   }
 
+  const holdIssueIds = await getStoreClosingHoldIssueIdsForStore(me.homeStoreId);
+  const holdIssueIdSet = new Set(holdIssueIds);
+
   const conditions = [
     eq(issues.storeId, me.homeStoreId),
 
     // Visibility rule:
     // - own issues are always visible, including draft
     // - other employee issues in the same store are visible only after draft
+    // - a Store Closing On Hold draft is the whole store's
     or(
       eq(issues.userId, userId),
       ne(issues.status, 'draft'),
+      ...(holdIssueIds.length ? [inArray(issues.id, holdIssueIds)] : []),
     )!,
   ];
 
@@ -83,7 +90,10 @@ export async function GET(req: Request) {
 
   const out = rows.map((row) => ({
     ...serializeIssue(row, roleMap.get(row.id) ?? []),
-    ...computeIssuePermissionFlags(row, userId),
+    ...computeIssuePermissionFlags(row, userId, {
+      isStoreClosingHold: holdIssueIdSet.has(row.id),
+      sameStore: true,
+    }),
   }));
 
   return NextResponse.json({ success: true, issues: out });

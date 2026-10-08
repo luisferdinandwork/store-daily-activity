@@ -36,7 +36,12 @@ import {
   PauseCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { shiftLabel } from "@/components/employee/tasks";
+import {
+  CalendarTile,
+  shiftLabel,
+  TaskDayChip,
+  taskDayInfo,
+} from "@/components/employee/tasks";
 import { baseShiftCode } from "@/lib/shift-tasks";
 import { EmptyState, Notice, SkeletonBlocks } from "@/components/employee/ui";
 
@@ -160,6 +165,7 @@ export interface StoreFrontData extends TaskBase {
   rollingDoorClosedPhoto: string | null;
 }
 export interface MarketingCheckData extends TaskBase {
+  hasMarketingCheck: boolean | null;
   promoName: boolean;
   promoPeriod: boolean;
   promoMechanism: boolean;
@@ -1720,6 +1726,11 @@ function TaskCard({
     (item.data as SerahTerimaData).pendingCount > 0;
   const needsAttention = isDiscrepancy || hasSetoranDeficit || isRejected || hasSerahTerimaPending;
 
+  // Store Closing can carry forward (on hold / reopened) — its card shows which
+  // day's closing it is, as a calendar tile in the icon slot.
+  const closingDay =
+    item.type === "store_closing" ? taskDayInfo(item.data.date) : null;
+
   const storeClosingHoldLabel =
     isStoreClosingHold && !isTerminal
       ? "Open Statement sedang On Hold. Setelah issue resolved, task ini akan bisa diselesaikan lagi."
@@ -1764,20 +1775,29 @@ function TaskCard({
 
       <CardContent className="py-3.5 pl-4 pr-3">
         <div className="flex items-start gap-3">
-          <div
-            className={cn(
-              "mt-0.5 flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl",
-              needsAttention ? "bg-amber-100" : "bg-secondary",
-            )}
-          >
-            <TaskIcon
-              className={cn(
-                "h-[18px] w-[18px]",
-                needsAttention ? "text-amber-700" : "text-foreground",
-              )}
-              strokeWidth={2}
+          {closingDay ? (
+            <CalendarTile
+              info={closingDay}
+              size="sm"
+              tone={closingDay.isCarryForward ? "amber" : "primary"}
+              className="mt-0.5"
             />
-          </div>
+          ) : (
+            <div
+              className={cn(
+                "mt-0.5 flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl",
+                needsAttention ? "bg-amber-100" : "bg-secondary",
+              )}
+            >
+              <TaskIcon
+                className={cn(
+                  "h-[18px] w-[18px]",
+                  needsAttention ? "text-amber-700" : "text-foreground",
+                )}
+                strokeWidth={2}
+              />
+            </div>
+          )}
 
           <div className="min-w-0 flex-1">
             <div className="flex items-start justify-between gap-2">
@@ -1798,6 +1818,15 @@ function TaskCard({
                 <ChevronRight className="mt-0.5 h-4 w-4 flex-shrink-0 text-muted-foreground" />
               )}
             </div>
+
+            {closingDay && (
+              <p className="mt-1 flex flex-wrap items-center gap-1.5">
+                <span className="text-[11px] font-semibold text-foreground">
+                  {closingDay.short}
+                </span>
+                <TaskDayChip info={closingDay} />
+              </p>
+            )}
 
             <p
               className={cn(

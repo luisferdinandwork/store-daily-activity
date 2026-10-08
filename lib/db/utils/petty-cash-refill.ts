@@ -62,7 +62,7 @@ async function notifyOps(storeId: number, input: { type: string; title: string; 
     .limit(1);
 
   const opsUserIds = await getOpsUserIdsForArea(storeRow?.areaId ?? null);
-  await createNotificationsForUsers(opsUserIds, { ...input, link: '/ops/petty-cash' });
+  await createNotificationsForUsers(opsUserIds, { ...input, link: '/ops/petty-cash/refills' });
 }
 
 /** A request still "in play" for the month — blocks a new request. Rejected ones don't count. */
@@ -407,20 +407,3 @@ export async function listRefillRequestsForFinance(limit = 50): Promise<RefillRe
   return rows.map((r) => ({ ...r.request, storeName: r.storeName, storeAreaId: r.storeAreaId, requestedByName: r.requestedByName }));
 }
 
-export async function listRefillRequestsForAreas(areaIds: number[] | null, limit = 50): Promise<RefillRequestWithContext[]> {
-  const rows = await db
-    .select({
-      request: pettyCashRefillRequests,
-      storeName: stores.name,
-      storeAreaId: stores.areaId,
-      requestedByName: users.name,
-    })
-    .from(pettyCashRefillRequests)
-    .innerJoin(stores, eq(pettyCashRefillRequests.storeId, stores.id))
-    .leftJoin(users, eq(pettyCashRefillRequests.requestedBy, users.id))
-    .where(areaIds ? inArray(stores.areaId, areaIds) : undefined)
-    .orderBy(desc(pettyCashRefillRequests.requestedAt))
-    .limit(limit);
-
-  return rows.map((r) => ({ ...r.request, storeName: r.storeName, storeAreaId: r.storeAreaId, requestedByName: r.requestedByName }));
-}

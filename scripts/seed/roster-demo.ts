@@ -601,7 +601,7 @@ async function seedStore(target: Target, ctx: Ctx): Promise<Counts> {
           const t = (m: number) => addMin(done, -m);
           T.marketing.push({
             ...base(a, morningId, st, done),
-            promoName: true, promoPeriod: true, promoMechanism: true, randomShoeItems: true, randomNonShoeItems: true, sellTag: true,
+            hasMarketingCheck: true, promoName: true, promoPeriod: true, promoMechanism: true, randomShoeItems: true, randomNonShoeItems: true, sellTag: true,
             promoNameBy: a.userId, promoNameAt: t(6), promoPeriodBy: a.userId, promoPeriodAt: t(5), promoMechanismBy: a.userId, promoMechanismAt: t(4),
             randomShoeItemsBy: a.userId, randomShoeItemsAt: t(3), randomNonShoeItemsBy: a.userId, randomNonShoeItemsAt: t(2), sellTagBy: a.userId, sellTagAt: t(1),
             ...who, ...geo(),

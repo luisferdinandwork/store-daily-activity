@@ -20,7 +20,7 @@ import type { ElementType } from 'react';
 import {
   CheckCircle2, XCircle, Clock, AlertCircle, HelpCircle,
   Briefcase, Palmtree, Thermometer, Stethoscope,
-  CalendarOff, MinusCircle, CircleDashed, CircleSlash,
+  CalendarOff, MinusCircle, CircleDashed, CircleSlash, UserPlus,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
@@ -63,6 +63,7 @@ export const STATUS: Record<AttendanceTag, StatusStyle> = {
   cuti:               { label: attendanceStatusLabel('cuti'),               Icon: Palmtree,    chip: 'border-violet-200 bg-violet-50 text-violet-700', dot: 'bg-violet-500', text: 'text-violet-600' },
   sakit_tanpa_surat:  { label: attendanceStatusLabel('sakit_tanpa_surat'),  Icon: Thermometer, chip: 'border-orange-200 bg-orange-50 text-orange-700', dot: 'bg-orange-500', text: 'text-orange-600' },
   sakit_dengan_surat: { label: attendanceStatusLabel('sakit_dengan_surat'), Icon: Stethoscope, chip: 'border-teal-200 bg-teal-50 text-teal-700',       dot: 'bg-teal-500',   text: 'text-teal-600'   },
+  backup:             { label: attendanceStatusLabel('backup'),             Icon: UserPlus,    chip: 'border-cyan-200 bg-cyan-50 text-cyan-700',       dot: 'bg-cyan-500',   text: 'text-cyan-600'   },
   pending: { label: PENDING_LABEL,  Icon: HelpCircle, chip: 'border-sky-200 bg-sky-50 text-sky-700',             dot: 'bg-sky-400',   text: 'text-sky-600'   },
   leave:   { label: ON_LEAVE_LABEL, Icon: CalendarOff, chip: 'border-violet-200 bg-violet-50 text-violet-700',   dot: 'bg-violet-500', text: 'text-violet-600' },
   off:           { label: 'Off',           Icon: MinusCircle,  chip: 'border-border bg-secondary text-muted-foreground', dot: 'bg-slate-300', text: 'text-slate-500' },
@@ -122,7 +123,7 @@ const COUNT_ITEM_DEFS: { key: CountKey; tag: AttendanceTag; hint: string }[] = [
   { key: 'late',    tag: 'late',    hint: 'Checked in late' },
   { key: 'absent',  tag: 'absent',  hint: 'Did not show up' },
   { key: 'dinas',   tag: 'dinas',   hint: 'On dinas — working outside the store' },
-  { key: 'excused', tag: 'leave',   hint: 'Cuti / Sakit — a justified absence' },
+  { key: 'excused', tag: 'leave',   hint: 'Izin (or older Cuti / Sakit) — a justified absence' },
   { key: 'unset',   tag: 'pending', hint: 'No attendance recorded yet' },
 ];
 

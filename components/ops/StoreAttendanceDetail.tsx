@@ -21,10 +21,10 @@ import {
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import {
-  isLeaveAttendanceStatus,
-  LEAVE_ATTENDANCE_STATUSES,
+  isOpsSettableAttendanceStatus,
+  OPS_SETTABLE_ATTENDANCE_STATUSES,
   type AttendanceStatus,
-  type LeaveAttendanceStatus,
+  type OpsSettableAttendanceStatus,
 } from '@/lib/attendance-status';
 import {
   attendanceRate, attendanceHealth, tallyPeople, EMPTY_COUNTS, HEALTH_LABEL,
@@ -117,10 +117,10 @@ function rowStatus(att: AttendanceData | null): RowStatus {
   return att?.status ?? 'pending';
 }
 
-// The only statuses Ops can set: justified absences (D / C / STD / SD), from
-// any current status. Present / late come from the employee's own check-in,
-// absent from the auto no-show job — never from this dialog.
-const OPS_SETTABLE_STATUSES = LEAVE_ATTENDANCE_STATUSES;
+// The only statuses Ops can set: Dinas, Izin and Back-up, from any current
+// status. Present / late come from the employee's own check-in, absent from
+// the auto no-show job — never from this dialog.
+const OPS_SETTABLE_STATUSES = OPS_SETTABLE_ATTENDANCE_STATUSES;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function fmtTime(iso: string | null) {
@@ -160,9 +160,9 @@ function MarkDialog({ row, open, onClose, onSaved }: {
   row: AttRow | null; open: boolean; onClose: () => void; onSaved: () => void;
 }) {
   const currentStatus = rowStatus(row?.attendance ?? null);
-  const [status, setStatus] = useState<LeaveAttendanceStatus | null>(() => {
+  const [status, setStatus] = useState<OpsSettableAttendanceStatus | null>(() => {
     const s = row?.attendance?.status;
-    return isLeaveAttendanceStatus(s) ? s : null;
+    return isOpsSettableAttendanceStatus(s) ? s : null;
   });
   const [notes,  setNotes]  = useState(row?.attendance?.notes ?? '');
   const [saving, setSaving] = useState(false);
@@ -274,7 +274,7 @@ function MarkDialog({ row, open, onClose, onSaved }: {
             </div>
             <p className="text-[11px] text-muted-foreground">
               Present and Late come from the employee&apos;s own check-in, and Absent is marked
-              automatically — only Dinas, Cuti or Sakit can be set here.
+              automatically — only Dinas, Izin or Back-up can be set here.
             </p>
           </div>
 
@@ -580,7 +580,7 @@ export default function StoreAttendanceDetail({
       {/* Legend + refresh */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-          {(['present', 'late', 'absent', 'dinas', 'cuti', 'sakit_tanpa_surat', 'sakit_dengan_surat', 'pending'] as const).map((s) => (
+          {(['present', 'late', 'absent', 'dinas', 'excused', 'backup', 'pending'] as const).map((s) => (
             <span key={s} className="flex items-center gap-1">
               <span className={cn('h-2 w-2 rounded-full', STATUS[s].dot)} />
               {STATUS[s].label}

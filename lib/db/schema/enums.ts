@@ -14,9 +14,9 @@ export const reportStatusEnum = pgEnum('report_status', [
   'submitted',
 ]);
 
-// Keep in sync with lib/attendance-status.ts. The last four are justified
-// absences Ops records on a scheduled day: Dinas (D), Cuti (C), Sakit tanpa
-// surat dokter (STD), Sakit dengan surat dokter (SD).
+// Keep in sync with lib/attendance-status.ts. Ops sets Dinas, Izin (excused)
+// and Back-up (covering another shift) on a scheduled day; Cuti (C), Sakit
+// tanpa surat (STD) and Sakit dengan surat (SD) are legacy values still read.
 export const attendanceStatusEnum = pgEnum('attendance_status', [
   'present',
   'absent',
@@ -26,6 +26,7 @@ export const attendanceStatusEnum = pgEnum('attendance_status', [
   'cuti',
   'sakit_tanpa_surat',
   'sakit_dengan_surat',
+  'backup',
 ]);
 
 // Keep in sync with lib/cash-count-sessions.ts — the five SOP moments the

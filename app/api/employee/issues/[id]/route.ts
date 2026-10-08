@@ -3,6 +3,9 @@
 // Employee flow:
 // - draft can be edited (title/description/photos/destination) by the reporter only
 // - draft can be sent to OPS by changing status draft -> reported
+// - a Store Closing On Hold issue is the whole store's: any employee of its
+//   store may edit / send / mark it solved like the reporter, and nobody can
+//   delete it (the held task points at it — see computeIssuePermissionFlags)
 // - once reported, content is locked — reported / in_review / solved / completed
 //   are read-only for store employees, EXCEPT:
 //     - the reporter can mark it "solved" from "reported" or "in_review"
@@ -24,6 +27,7 @@ import { issues } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import {
   computeIssuePermissionFlags,
+  getStoreClosingHoldIssueIds,
   loadIssueAssignedRoles,
   notifyIssueEvent,
   replaceIssueRoleAssignments,
@@ -78,7 +82,12 @@ export async function PATCH(
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const user = session.user as { id: string; role?: string; employeeType?: string | null };
+    const user = session.user as {
+      id: string;
+      role?: string;
+      employeeType?: string | null;
+      homeStoreId?: number | null;
+    };
 
     const [existing] = await db
       .select()
@@ -102,9 +111,13 @@ export async function PATCH(
 
     const manager = isIssueManager(user);
     const ownsIssue = existing.userId === user.id;
+    const isStoreClosingHold = (await getStoreClosingHoldIssueIds([issueId])).has(issueId);
+    const sameStore = user.homeStoreId != null && Number(user.homeStoreId) === existing.storeId;
+    // The reporter — or, for a Store Closing On Hold issue, anyone in its store.
+    const actsAsReporter = ownsIssue || (isStoreClosingHold && sameStore);
     const roleIds = cleanRoleIds(parsed.data);
 
-    if (!manager && !ownsIssue) {
+    if (!manager && !actsAsReporter) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 
@@ -123,7 +136,7 @@ export async function PATCH(
 
     const wantsToSendDraft = existing.status === 'draft' && parsed.data.status === 'reported';
     const wantsToMarkSolved =
-      ownsIssue &&
+      actsAsReporter &&
       parsed.data.status === 'solved' &&
       (existing.status === 'reported' || existing.status === 'in_review');
 
@@ -173,7 +186,7 @@ export async function PATCH(
     let assignedRoles: Awaited<ReturnType<typeof validateAssignableRoleIds>> | null = null;
 
     if (roleIds) {
-      if (!ownsIssue && !manager) {
+      if (!actsAsReporter && !manager) {
         return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
       }
 
@@ -263,7 +276,7 @@ export async function PATCH(
       success: true,
       issue: {
         ...serialized,
-        ...computeIssuePermissionFlags(updated, user.id),
+        ...computeIssuePermissionFlags(updated, user.id, { isStoreClosingHold, sameStore }),
       },
     });
   } catch (err) {
@@ -304,6 +317,15 @@ export async function DELETE(
     const isAdmin = user.role === 'it';
     if (existing.userId !== user.id && !isAdmin) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+
+    // The held Store Closing task points at this issue — deleting it would
+    // leave the task On Hold with nothing to resolve.
+    if ((await getStoreClosingHoldIssueIds([issueId])).has(issueId)) {
+      return NextResponse.json(
+        { error: 'This issue holds a Store Closing task On Hold, so it cannot be deleted. Send it to OPS instead.' },
+        { status: 409 },
+      );
     }
 
     if (!isAdmin && existing.status !== 'draft') {

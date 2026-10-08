@@ -24,7 +24,17 @@ const TITLES: Record<string, string> = {
   '/employee/pettycash': 'Petty Cash',
   '/employee/announcements': 'Notifications',
   '/employee/item-transfers': 'Transfer Orders',
+  '/employee/impact-visits': 'Impact Visit Result',
 };
+
+/** Pages under a path (e.g. one visit) share their list page's title. */
+const PREFIX_TITLES: [prefix: string, title: string][] = [
+  ['/employee/impact-visits/', 'Impact Visit Result'],
+];
+
+function titleFor(pathname: string): string | undefined {
+  return TITLES[pathname] ?? PREFIX_TITLES.find(([prefix]) => pathname.startsWith(prefix))?.[1];
+}
 
 /** Task detail pages own their header (TaskHeader → EmployeeAppBar). */
 export function isTaskDetailPath(pathname: string): boolean {
@@ -36,7 +46,7 @@ export default function EmployeeHeader() {
 
   if (isTaskDetailPath(pathname)) return null;
 
-  const title = TITLES[pathname];
+  const title = titleFor(pathname);
   // Root tabs and URLs we have no title for (e.g. the not-found page) show
   // the branded root bar rather than a back button with an empty title.
   if (ROOT_TABS.has(pathname) || !title) return <EmployeeAppBar root />;

@@ -1,11 +1,15 @@
 // app/api/it/issues/[id]/route.ts
 //
-// PATCH — advance an IT-assigned issue's status:
-//   in_review — IT starts working it (optional; can be set any time
+// PATCH — IT moves an issue along:
+//   reported  — send a DRAFT to the roles it's routed to, for any issue (IT is
+//               the super-admin; e.g. a Store Closing On Hold draft its store
+//               never sent). Notifies those roles like the reporter's "Send".
+//   in_review — IT starts working it (only issues routed to IT; any time
 //               from "reported").
-//   completed — IT gives final closure, but ONLY once the reporter has
-//               already marked the issue "solved" (employee-only, see
-//               /api/employee/issues/[id]) — never the other way around.
+//   completed — IT gives final closure (only issues routed to IT), but ONLY
+//               once the reporter has already marked the issue "solved"
+//               (employee-only, see /api/employee/issues/[id]) — never the
+//               other way around. Releases a Store Closing held by it.
 //
 // IT sees every store — no area scoping (unlike Ops).
 
@@ -21,8 +25,9 @@ import {
   serializeIssue,
   type IssueStatus,
 } from '@/lib/db/utils/issues';
+import { reopenStoreClosingHoldForIssue } from '@/lib/db/utils/store-closing';
 
-const VALID_STATUSES: IssueStatus[] = ['in_review', 'completed'];
+const VALID_STATUSES: IssueStatus[] = ['reported', 'in_review', 'completed'];
 
 function isValidStatus(value: string): value is IssueStatus {
   return VALID_STATUSES.includes(value as IssueStatus);
@@ -50,7 +55,7 @@ export async function PATCH(
 
     if (!isValidStatus(requestedStatus)) {
       return NextResponse.json(
-        { error: 'Invalid status. IT can only use in_review or completed.' },
+        { error: 'Invalid status. IT can only use reported, in_review or completed.' },
         { status: 400 },
       );
     }
@@ -81,10 +86,39 @@ export async function PATCH(
       return NextResponse.json({ error: 'Not found' }, { status: 404 });
     }
 
+    // ── Send a draft on the reporter's behalf ──────────────────────────────
+    if (requestedStatus === 'reported') {
+      if (target.status !== 'draft') {
+        return NextResponse.json({ error: 'Only a draft issue can be sent.' }, { status: 409 });
+      }
+
+      const [sent] = await db
+        .update(issues)
+        .set({ status: 'reported', updatedAt: new Date() })
+        .where(and(eq(issues.id, issueId), eq(issues.status, 'draft')))
+        .returning();
+      if (!sent) {
+        return NextResponse.json({ error: 'This issue was just changed. Refresh and try again.' }, { status: 409 });
+      }
+
+      const roles = (await loadIssueAssignedRoles([issueId])).get(issueId) ?? [];
+      await notifyIssueEvent({
+        issueId,
+        storeId: sent.storeId,
+        assignedRoles: roles,
+        type: 'issue_reported',
+        title: `New issue: ${sent.title}`,
+        body: 'An issue was reported and routed to your team.',
+        excludeUserId: scope.userId,
+      });
+
+      return NextResponse.json({ success: true, issue: serializeIssue(sent, roles) });
+    }
+
     if (target.status === 'draft') {
       return NextResponse.json(
-        { error: 'This issue is still a draft and has not been sent to IT yet.' },
-        { status: 403 },
+        { error: 'This issue is still a draft. Send it first.' },
+        { status: 409 },
       );
     }
 
@@ -131,6 +165,9 @@ export async function PATCH(
     const assignedRoles = (await loadIssueAssignedRoles([issueId])).get(issueId) ?? [];
 
     if (requestedStatus === 'completed') {
+      // Same as Ops completing it: a Store Closing held by this issue reopens.
+      await reopenStoreClosingHoldForIssue(issueId);
+
       await notifyIssueEvent({
         issueId,
         storeId: target.storeId,

@@ -289,6 +289,12 @@ function TaskRow({ task, onSelect }: { task: FlatTask; onSelect: () => void }) {
     return denomCount > 0 && filled < denomCount ? 'Pecahan belum lengkap' : null;
   })();
 
+  // Marketing Check submitted as "tidak ada marketing / promo baru".
+  const marketingSkipped =
+    task.type === 'marketing_check' &&
+    (status === 'completed' || status === 'verified') &&
+    task.extra.hasMarketingCheck === false;
+
   const accentClass =
     status === 'completed'   ? 'bg-emerald-500' :
     status === 'in_progress' ? 'bg-indigo-500' :
@@ -322,6 +328,11 @@ function TaskRow({ task, onSelect }: { task: FlatTask; onSelect: () => void }) {
               {cekUangModalIncomplete && (
                 <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700">
                   <AlertTriangle className="h-2.5 w-2.5" /> {cekUangModalIncomplete}
+                </span>
+              )}
+              {marketingSkipped && (
+                <span className="inline-flex items-center gap-0.5 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-600">
+                  Tidak ada promo
                 </span>
               )}
             </div>

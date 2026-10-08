@@ -12,6 +12,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Circle,
+  CircleSlash,
   ClipboardList,
   CreditCard,
   ImageOff,
@@ -787,6 +788,22 @@ function MarketingCheckDetail({ task }: { task: FlatTask }) {
     { label: 'Random item non-sepatu', base: 'randomNonShoeItems', done: !!e.randomNonShoeItems },
     { label: 'Sell tag',               base: 'sellTag',            done: !!e.sellTag },
   ];
+  // The employee answered "tidak ada marketing / promo baru" — no checklist to show.
+  if (e.hasMarketingCheck === false) {
+    return (
+      <div>
+        <div className="flex items-start gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+          <CircleSlash className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-500" />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-bold text-slate-700">Tidak ada marketing / promo baru</p>
+            <p className="mt-0.5 text-[10px] text-slate-500">Disubmit tanpa checklist promo, random checking dan sell tag.</p>
+          </div>
+        </div>
+        <ActorFooter task={task} />
+        <NotesBlock notes={task.notes} />
+      </div>
+    );
+  }
   return (
     <div className="divide-y divide-slate-100">
       {items.map(i => (

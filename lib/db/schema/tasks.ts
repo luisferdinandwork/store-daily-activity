@@ -717,6 +717,10 @@ export const marketingCheckTasks = pgTable('marketing_check_tasks', {
   randomNonShoeItems: boolean('random_non_shoe_items').default(false).notNull(),
   sellTag: boolean('sell_tag').default(false).notNull(),
 
+  // Employee's answer to "ada marketing / promo baru hari ini?": true = do the
+  // checklist above, false = submit without it, null = not answered yet.
+  hasMarketingCheck: boolean('has_marketing_check'),
+
   promoNameBy: text('promo_name_by').references(() => users.id),
   promoNameAt: timestamp('promo_name_at'),
 

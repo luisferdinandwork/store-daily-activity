@@ -500,7 +500,7 @@ export default function OpsDashboardPage() {
                 footer={
                   <div className="-mx-1.5 space-y-0.5">
                     <Link
-                      href="/ops/petty-cash"
+                      href="/ops/petty-cash/requests"
                       className="flex items-center justify-between rounded-lg px-1.5 py-1 text-xs text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
                     >
                       <span className="flex items-center gap-2">
@@ -581,7 +581,7 @@ export default function OpsDashboardPage() {
                     Recent Petty Cash
                     {pettyCashPending > 0 && <TrendChip tone="amber">{pettyCashPending} pending</TrendChip>}
                   </CardTitle>
-                  <ViewLink href="/ops/petty-cash">View all</ViewLink>
+                  <ViewLink href="/ops/petty-cash/requests">View all</ViewLink>
                 </div>
               </CardHeader>
               <CardContent className="overflow-x-auto p-0 pb-2">

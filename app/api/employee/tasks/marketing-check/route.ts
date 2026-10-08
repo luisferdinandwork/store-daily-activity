@@ -36,6 +36,11 @@ function readGeo(value: unknown): GeoPoint | null {
     : null;
 }
 
+/** true / false = answered, anything else = not answered yet. */
+function readChoice(value: unknown): boolean | null {
+  return typeof value === 'boolean' ? value : null;
+}
+
 function readNotes(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
@@ -47,6 +52,7 @@ function readPatch(body: Record<string, unknown>): AutoSaveMarketingCheckInput {
   if ('scheduleId' in body) patch.scheduleId = optionalInt(body.scheduleId);
   if ('storeId' in body) patch.storeId = optionalInt(body.storeId);
 
+  if ('hasMarketingCheck' in body) patch.hasMarketingCheck = readChoice(body.hasMarketingCheck);
   if ('promoName' in body) patch.promoName = toBool(body.promoName);
   if ('promoPeriod' in body) patch.promoPeriod = toBool(body.promoPeriod);
   if ('promoMechanism' in body) patch.promoMechanism = toBool(body.promoMechanism);
@@ -95,6 +101,7 @@ export async function POST(req: NextRequest) {
     storeId,
     geo: geo ?? { lat: 0, lng: 0 },
     skipGeo: body.skipGeo === true,
+    hasMarketingCheck: readChoice(body.hasMarketingCheck),
     promoName: toBool(body.promoName),
     promoPeriod: toBool(body.promoPeriod),
     promoMechanism: toBool(body.promoMechanism),

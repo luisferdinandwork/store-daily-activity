@@ -11,7 +11,9 @@
 //
 // On Hold behavior:
 //   • Submit with openStatementDecision = 'on_hold' creates an Issue in Bahasa.
-//   • The generated Issue starts with status = 'draft'.
+//   • The generated Issue starts with status = 'draft'. It belongs to the whole
+//     store, not just the submitter: every employee of the store sees it and can
+//     send / solve it (computeIssuePermissionFlags), IT sees it too (/it/issues).
 //   • The Store Closing row stays with status = 'pending' and isOnHold=true.
 //   • Future days still generate their own Store Closing rows.
 //   • When the linked issue is resolved, syncResolvedStoreClosingHoldsForStores()

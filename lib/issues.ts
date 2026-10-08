@@ -42,6 +42,8 @@ export interface Issue {
 
   /** Store visibility helpers returned by the employee issue API. */
   isOwner?:       boolean;
+  /** Holds a Store Closing On Hold — the whole store can edit / send / solve it. */
+  isStoreClosingHold?: boolean;
   canEdit?:       boolean;
   canDelete?:     boolean;
   canSendToOps?:  boolean;

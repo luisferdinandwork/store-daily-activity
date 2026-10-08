@@ -70,7 +70,8 @@ export function addCounts(a: AttendanceCounts, b: AttendanceCounts): AttendanceC
 
 /**
  * Add one scheduled shift to `c` (mutates): its recorded status, or pending
- * (`unset`) when there is none. Dinas has its own bucket; Cuti / Sakit and the
+ * (`unset`) when there is none. Back-up (covering another shift) counts as
+ * present — they worked. Dinas has its own bucket; Cuti / Sakit and the
  * legacy "excused" fold into `excused` ("On leave"). Every screen that counts
  * attendance goes through here, so a status can't land in a different bucket
  * on different pages.
@@ -78,7 +79,7 @@ export function addCounts(a: AttendanceCounts, b: AttendanceCounts): AttendanceC
 export function tallyStatus(c: AttendanceCounts, status: string | null | undefined): void {
   c.total++;
   if (!status) c.unset++;
-  else if (status === 'present') c.present++;
+  else if (status === 'present' || status === 'backup') c.present++;
   else if (status === 'late') c.late++;
   else if (status === 'absent') c.absent++;
   else if (status === 'dinas') c.dinas++;
@@ -91,7 +92,7 @@ export function tallyStatus(c: AttendanceCounts, status: string | null | undefin
  * who showed up beats a leave / absent / pending row beside it.
  */
 const DAY_STATUS_RANK: Record<string, number> = {
-  late: 6, present: 5, dinas: 4, cuti: 3, sakit_dengan_surat: 3, sakit_tanpa_surat: 3, excused: 3, absent: 2,
+  late: 6, present: 5, backup: 5, dinas: 4, cuti: 3, sakit_dengan_surat: 3, sakit_tanpa_surat: 3, excused: 3, absent: 2,
 };
 
 function dayStatusRank(status: string | null | undefined): number {

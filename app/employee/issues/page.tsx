@@ -736,10 +736,18 @@ function IssueDetail({
     <div className="flex flex-col">
       <SubHeader title={issue.title} subtitle={`Ref ${issue.id.padStart(6, '0')}`} onBack={onBack} />
 
-      <div className="mx-auto flex w-full max-w-md flex-col gap-5 px-4 pb-8 pt-4">
+      <div className="mx-auto flex w-full max-w-md flex-col gap-5 px-4 pb-24 pt-4">
         {actionError && <Notice tone="error">{actionError}</Notice>}
 
-        {issue.status === 'draft' && issue.isOwner !== false && (
+        {issue.isStoreClosingHold && issue.status !== 'completed' && (
+          <Notice tone="warning" title="Store Closing On Hold">
+            {issue.status === 'draft'
+              ? 'This draft is holding a Store Closing task. Anyone in this store can check it and send it to OPS — the task reopens once OPS completes the issue.'
+              : 'This issue is holding a Store Closing task. Anyone in this store can mark it solved — the task reopens once OPS completes it.'}
+          </Notice>
+        )}
+
+        {issue.status === 'draft' && issue.isOwner !== false && !issue.isStoreClosingHold && (
           <Notice tone="warning" title="Draft issue">
             This issue is still editable by store employee. Send it to OPS when the details are ready.
           </Notice>
@@ -937,15 +945,17 @@ function IssueDetail({
             <ActionButton icon={Send} loading={actionLoading} disabled={!canSendDraft} onClick={handleSendDraft}>
               Send to OPS
             </ActionButton>
-            <button
-              type="button"
-              disabled={actionLoading || !canDeleteDraft}
-              onClick={() => setConfirmDelete(true)}
-              className="col-span-2 flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-red-50 text-sm font-semibold text-red-600 transition-all active:scale-[0.98] disabled:opacity-60"
-            >
-              <Trash2 className="h-4 w-4" />
-              Delete Draft
-            </button>
+            {canDeleteDraft && (
+              <button
+                type="button"
+                disabled={actionLoading}
+                onClick={() => setConfirmDelete(true)}
+                className="col-span-2 flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-red-50 text-sm font-semibold text-red-600 transition-all active:scale-[0.98] disabled:opacity-60"
+              >
+                <Trash2 className="h-4 w-4" />
+                Delete Draft
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -1085,7 +1095,7 @@ export default function IssuesPage() {
               Issue Reports
             </h1>
             <p className="mt-1 text-xs text-primary-foreground/50">
-              Drafts are private. Sent issues are visible to your store.
+              Drafts are private (except Store Closing holds). Sent issues are visible to your store.
             </p>
           </div>
 

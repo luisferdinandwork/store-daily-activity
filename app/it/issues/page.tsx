@@ -1,26 +1,27 @@
 'use client';
 
-// app/it/issues/page.tsx — IT issue inbox (desktop)
+// app/it/issues/page.tsx — IT issue overview (desktop)
 //
-// Adapted from app/ops/issues/page.tsx: same list + detail-drawer mechanics,
-// cyan accent (matching ItSidebar), no area scoping — IT sees
-// every store.
+// Every issue in the system, drafts included, whoever it's routed to (GET
+// /api/it/issues). IT can send any draft (e.g. a Store Closing On Hold draft
+// its store never sent) and review / complete the issues routed to IT; the
+// rest are view-only here (PATCH /api/it/issues/[id]).
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
-import {
-  AlertTriangle, Store as StoreIcon, MapPin, Clock, User,
-  CheckCircle2, Eye, Loader2, X, ArrowRight,
-  AlertCircle, Shield, FileText, RefreshCw,
-} from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
+import { toast } from 'sonner';
+import {
+  ArrowRight, Inbox, Loader2, Lock, Search, Send, Shield, X,
+} from 'lucide-react';
+
 import { cn } from '@/lib/utils';
-import { STATUS_LABELS as ISSUE_STATUS_LABELS } from '@/lib/issues';
+import { STATUS_LABELS, type IssueStatus } from '@/lib/issues';
 import { StoreCombobox } from '@/components/shared/store-combobox';
+import { IssueAttachments } from '@/components/shared/IssueAttachments';
+import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-
-type IssueStatus = 'reported' | 'in_review' | 'solved' | 'completed';
 
 interface AssignedIssueRole {
   id: number;
@@ -40,253 +41,232 @@ interface ItIssue {
   createdAt: string;
   updatedAt: string;
   reviewedAt: string | null;
-  reviewedBy: string | null;
-  assignedToRoles?: AssignedIssueRole[];
+  reviewedByName: string | null;
+  assignedToRoles: AssignedIssueRole[];
+  routedToIt: boolean;
+  isStoreClosingHold: boolean;
   store: { id: string; storeNo: string; name: string; areaId: string | null; areaName: string | null };
   reporter: { id: string; name: string; nik: string };
 }
 
-// ─── Status config ──────────────────────────────────────────────────────────
+type StatusFilter = IssueStatus | 'all';
 
-const STATUS_CFG: Record<IssueStatus, {
-  label: string; accent: string; Icon: typeof AlertCircle;
-  next: IssueStatus | null; action: string;
-}> = {
-  reported:  { label: ISSUE_STATUS_LABELS.reported,  accent: '#f59e0b', Icon: AlertCircle,  next: 'in_review', action: 'Start Review'   },
-  in_review: { label: ISSUE_STATUS_LABELS.in_review, accent: '#3b82f6', Icon: Eye,          next: null,        action: ''               },
-  solved:    { label: ISSUE_STATUS_LABELS.solved,    accent: '#8b5cf6', Icon: CheckCircle2, next: 'completed', action: 'Mark Complete'  },
-  completed: { label: ISSUE_STATUS_LABELS.completed, accent: '#059669', Icon: CheckCircle2, next: null,        action: ''               },
+// ─── Status look ──────────────────────────────────────────────────────────────
+
+const STATUS_ORDER: IssueStatus[] = ['draft', 'reported', 'in_review', 'solved', 'completed'];
+
+const STATUS_STYLE: Record<IssueStatus, { badge: string; dot: string }> = {
+  draft:     { badge: 'bg-slate-100 text-slate-600',     dot: 'bg-slate-400'   },
+  reported:  { badge: 'bg-amber-50 text-amber-700',      dot: 'bg-amber-500'   },
+  in_review: { badge: 'bg-blue-50 text-blue-700',        dot: 'bg-blue-500'    },
+  solved:    { badge: 'bg-violet-50 text-violet-700',    dot: 'bg-violet-500'  },
+  completed: { badge: 'bg-emerald-50 text-emerald-700',  dot: 'bg-emerald-500' },
 };
 
-const STEPS: IssueStatus[] = ['reported', 'in_review', 'solved', 'completed'];
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function relativeTime(dateStr: string): string {
-  const diff  = Date.now() - new Date(dateStr).getTime();
-  const mins  = Math.floor(diff / 60_000);
-  const hours = Math.floor(diff / 3_600_000);
-  const days  = Math.floor(diff / 86_400_000);
-  if (mins  < 1)  return 'just now';
-  if (mins  < 60) return `${mins}m ago`;
-  if (hours < 24) return `${hours}h ago`;
-  if (days  < 7)  return `${days}d ago`;
-  return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-}
-
-// ─── Status badge ─────────────────────────────────────────────────────────────
-
 function StatusBadge({ status }: { status: IssueStatus }) {
-  const c = STATUS_CFG[status];
+  const s = STATUS_STYLE[status];
   return (
-    <span
-      className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold"
-      style={{ background: c.accent + '18', color: c.accent }}
-    >
-      <span className="h-1.5 w-1.5 rounded-full" style={{ background: c.accent }} />
-      {c.label}
+    <span className={cn('inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-1.5 py-0.5 text-[11px] font-medium', s.badge)}>
+      <span className={cn('h-1.5 w-1.5 rounded-full', s.dot)} />
+      {STATUS_LABELS[status]}
     </span>
   );
 }
 
-// ─── Issue detail drawer ────────────────────────────────────────────────────
-
-function IssueDrawer({ issue, onClose, onAdvance, updating }: {
-  issue:    ItIssue;
-  onClose:  () => void;
-  onAdvance:(id: string, next: IssueStatus) => void;
-  updating: boolean;
-}) {
-  const cfg = STATUS_CFG[issue.status];
-  const currentIdx = STEPS.indexOf(issue.status);
-
+function RoleChips({ roles }: { roles: AssignedIssueRole[] }) {
+  if (!roles.length) return <span className="text-slate-400">—</span>;
   return (
-    <div className="fixed inset-0 z-50 flex" onClick={onClose}>
-      <div className="flex-1 bg-slate-900/50 backdrop-blur-sm" />
-      <div
-        className="flex w-[440px] max-w-full flex-col overflow-hidden bg-white shadow-2xl"
-        style={{ animation: 'slideInRight 0.25s ease-out' }}
-        onClick={e => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="border-b border-slate-100 px-6 py-5">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <StatusBadge status={issue.status} />
-                <span className="text-[11px] text-slate-400">{relativeTime(issue.createdAt)}</span>
-              </div>
-              <p className="mt-1.5 text-lg font-bold leading-snug text-slate-900">{issue.title}</p>
-            </div>
-            <button onClick={onClose} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-400 hover:bg-slate-200">
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
+    <span className="flex flex-wrap gap-1">
+      {roles.map((r) => (
+        <span key={r.id} className="rounded border border-slate-200 bg-white px-1.5 py-px text-[10px] font-medium text-slate-600">
+          {r.label}
+        </span>
+      ))}
+    </span>
+  );
+}
 
-        {/* Body */}
-        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
-          {/* Progress */}
-          <div className="flex items-center gap-1">
-            {STEPS.map((step, i) => {
-              const done = i <= currentIdx;
-              const isLast = i === STEPS.length - 1;
-              return (
-                <div key={step} className="flex flex-1 items-center gap-1">
-                  <div
-                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 text-[10px] font-bold transition-colors"
-                    style={{
-                      borderColor: done ? STATUS_CFG[step].accent : '#e2e8f0',
-                      background:  done ? STATUS_CFG[step].accent : 'white',
-                      color:       done ? 'white' : '#94a3b8',
-                    }}
-                  >
-                    {done ? <CheckCircle2 className="h-3 w-3" /> : i + 1}
-                  </div>
-                  <span className="whitespace-nowrap text-[10px] font-bold" style={{ color: done ? STATUS_CFG[step].accent : '#94a3b8' }}>
-                    {STATUS_CFG[step].label}
-                  </span>
-                  {!isLast && <div className="mx-1 h-px flex-1" style={{ background: i < currentIdx ? STATUS_CFG[step].accent : '#e2e8f0' }} />}
-                </div>
-              );
-            })}
-          </div>
+function HoldTag() {
+  return (
+    <span className="inline-flex items-center gap-1 rounded bg-amber-50 px-1.5 py-px text-[10px] font-medium text-amber-700 ring-1 ring-inset ring-amber-200">
+      <Lock className="h-2.5 w-2.5" />
+      Store Closing hold
+    </span>
+  );
+}
 
-          {/* Context */}
-          <div className="space-y-3 rounded-2xl border p-4" style={{ borderColor: cfg.accent + '33', background: cfg.accent + '0d' }}>
-            {[
-              { Icon: StoreIcon, label: 'Store', value: issue.store.name },
-              { Icon: MapPin,    label: 'Area',  value: issue.store.areaName ?? '—' },
-            ].map(({ Icon, label, value }) => (
-              <div key={label} className="flex items-center gap-2.5">
-                <Icon className="h-4 w-4 shrink-0" style={{ color: cfg.accent }} />
-                <div>
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{label}</p>
-                  <p className="text-sm font-semibold text-slate-800">{value}</p>
-                </div>
-              </div>
-            ))}
-            <div className="flex items-center gap-2.5">
-              <User className="h-4 w-4 shrink-0" style={{ color: cfg.accent }} />
-              <div>
-                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Reported by</p>
-                <p className="text-sm font-semibold text-slate-800">{issue.reporter.name}</p>
-                <p className="text-[11px] text-slate-400">NIK {issue.reporter.nik}</p>
-              </div>
-            </div>
-          </div>
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-          {/* Description */}
-          <div>
-            <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Description</p>
-            <p className="whitespace-pre-wrap rounded-2xl border border-slate-100 bg-slate-50 p-4 text-sm leading-relaxed text-slate-700">
-              {issue.description}
-            </p>
-          </div>
+function refNo(id: string): string {
+  return `#${id.padStart(6, '0')}`;
+}
 
-          {/* Photos */}
-          {issue.attachmentUrls.length > 0 && (
-            <div>
-              <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Photos ({issue.attachmentUrls.length})</p>
-              <div className="grid grid-cols-3 gap-2">
-                {issue.attachmentUrls.map((url, i) => (
-                  <a key={i} href={url} target="_blank" rel="noopener noreferrer"
-                    className="group relative block aspect-square overflow-hidden rounded-xl border border-slate-200 bg-slate-100 transition-all hover:border-cyan-300 hover:shadow-sm">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={url} alt={`Attachment ${i + 1}`} className="h-full w-full object-cover transition-transform group-hover:scale-105" />
-                  </a>
-                ))}
-              </div>
-            </div>
-          )}
+function formatDateTime(iso: string): string {
+  return new Date(iso).toLocaleString('en-GB', {
+    timeZone: 'Asia/Jakarta',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
 
-          {/* Berita Acara — read-only for IT, uploaded by the reporter */}
-          {issue.baAttachmentUrls.length > 0 && (
-            <div>
-              <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">
-                Berita Acara ({issue.baAttachmentUrls.length})
-              </p>
-              <div className="grid grid-cols-3 gap-2">
-                {issue.baAttachmentUrls.map((url, i) => {
-                  const isImage = /\.(jpe?g|png|gif|webp|heic|heif)$/i.test(url);
-                  const ext = url.split('.').pop()?.toUpperCase() ?? 'FILE';
-                  return (
-                    <a key={i} href={url} target="_blank" rel="noopener noreferrer"
-                      className="group relative block aspect-square overflow-hidden rounded-xl border border-violet-200 bg-slate-100 transition-all hover:border-violet-300 hover:shadow-sm">
-                      {isImage ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={url} alt={`Berita Acara ${i + 1}`} className="h-full w-full object-cover transition-transform group-hover:scale-105" />
-                      ) : (
-                        <div className="flex h-full w-full flex-col items-center justify-center gap-1 bg-violet-50 px-1 text-center">
-                          <FileText className="h-6 w-6 text-violet-500" />
-                          <span className="text-[10px] font-bold text-violet-600">{ext}</span>
-                        </div>
-                      )}
-                    </a>
-                  );
-                })}
-              </div>
-              {issue.baUploadedAt && (
-                <p className="mt-1.5 text-[11px] text-slate-400">Uploaded {relativeTime(issue.baUploadedAt)}</p>
-              )}
-            </div>
-          )}
+function formatDate(iso: string): string {
+  return new Date(iso).toLocaleDateString('en-GB', {
+    timeZone: 'Asia/Jakarta',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+}
 
-          {issue.solvedAt && (
-            <div className="flex items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-4 py-3">
-              <CheckCircle2 className="h-4 w-4 shrink-0 text-violet-500" />
-              <p className="text-xs text-violet-700">Marked solved {relativeTime(issue.solvedAt)}</p>
-            </div>
-          )}
+function relativeTime(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60_000);
+  const hours = Math.floor(diff / 3_600_000);
+  const days = Math.floor(diff / 86_400_000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  return `${days}d ago`;
+}
 
-          {issue.reviewedAt && (
-            <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
-              <Eye className="h-4 w-4 shrink-0 text-emerald-500" />
-              <p className="text-xs text-emerald-700">Reviewed {relativeTime(issue.reviewedAt)}</p>
-            </div>
-          )}
+/** The one action IT can take on this issue right now, if any. */
+function nextAction(issue: ItIssue): { status: IssueStatus; label: string } | null {
+  if (issue.status === 'draft') return { status: 'reported', label: 'Send to assigned teams' };
+  if (!issue.routedToIt) return null;
+  if (issue.status === 'reported') return { status: 'in_review', label: 'Start review' };
+  if (issue.status === 'solved') return { status: 'completed', label: 'Mark complete' };
+  return null;
+}
 
-          <p className="text-center text-[11px] text-slate-300">Ref: {issue.id.padStart(6, '0')}</p>
-        </div>
+// ─── Detail drawer ────────────────────────────────────────────────────────────
 
-        {/* Footer action */}
-        {cfg.next && (
-          <div className="border-t border-slate-100 px-5 py-4">
-            <button
-              onClick={() => onAdvance(issue.id, cfg.next!)}
-              disabled={updating}
-              className="flex h-12 w-full items-center justify-center gap-2 rounded-2xl text-sm font-bold text-white transition-all active:scale-[0.99] disabled:opacity-60"
-              style={{ background: STATUS_CFG[cfg.next].accent }}
-            >
-              {updating ? <Loader2 className="h-4 w-4 animate-spin" /> : <>{cfg.action}<ArrowRight className="h-4 w-4" /></>}
-            </button>
-          </div>
-        )}
-      </div>
-      <style>{`@keyframes slideInRight{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="grid grid-cols-[104px_1fr] gap-3 py-1.5">
+      <dt className="text-xs text-slate-500">{label}</dt>
+      <dd className="min-w-0 text-xs text-slate-800">{children}</dd>
     </div>
   );
 }
 
-// ─── Issue row ────────────────────────────────────────────────────────────────
+function IssueDrawer({ issue, onClose, onAction, updating }: {
+  issue: ItIssue;
+  onClose: () => void;
+  onAction: (issue: ItIssue, next: IssueStatus) => void;
+  updating: boolean;
+}) {
+  const action = nextAction(issue);
 
-function IssueRow({ issue, onClick }: { issue: ItIssue; onClick: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
   return (
-    <button
-      onClick={onClick}
-      className="group w-full rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition-all hover:border-cyan-200 hover:shadow-md"
-    >
-      <div className="mb-2 flex items-start justify-between gap-3">
-        <p className="line-clamp-1 text-sm font-bold leading-snug text-slate-800">{issue.title}</p>
-        <StatusBadge status={issue.status} />
-      </div>
-      <p className="mb-3 line-clamp-2 text-xs leading-relaxed text-slate-500">{issue.description}</p>
-      <div className="flex items-center gap-3 text-[11px] text-slate-400">
-        <span className="flex items-center gap-1"><StoreIcon className="h-3 w-3" />{issue.store.name}</span>
-        <span className="flex items-center gap-1"><MapPin className="h-3 w-3" />{issue.store.areaName ?? 'Unknown'}</span>
-        <span className="ml-auto flex items-center gap-1"><Clock className="h-3 w-3" />{relativeTime(issue.createdAt)}</span>
-      </div>
-    </button>
+    <div className="fixed inset-0 z-50 flex" onClick={onClose}>
+      <div className="flex-1 bg-slate-900/30" />
+      <aside
+        className="flex w-[440px] max-w-full flex-col border-l border-slate-200 bg-white shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+        aria-label={`Issue ${refNo(issue.id)}`}
+      >
+        {/* Header */}
+        <div className="flex items-start gap-3 border-b border-slate-200 px-5 py-4">
+          <div className="min-w-0 flex-1">
+            <p className="font-mono text-[11px] text-slate-400">{refNo(issue.id)}</p>
+            <h2 className="mt-0.5 text-sm font-semibold leading-snug text-slate-900">{issue.title}</h2>
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <StatusBadge status={issue.status} />
+              {issue.isStoreClosingHold && <HoldTag />}
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+            aria-label="Close"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 space-y-5 overflow-y-auto px-5 py-4">
+          <dl className="divide-y divide-slate-100">
+            <Field label="Routed to"><RoleChips roles={issue.assignedToRoles} /></Field>
+            <Field label="Store">
+              <span className="font-medium">{issue.store.storeNo}</span> · {issue.store.name}
+            </Field>
+            <Field label="Area">{issue.store.areaName ?? '—'}</Field>
+            <Field label="Reporter">
+              {issue.reporter.name} <span className="text-slate-400">· {issue.reporter.nik}</span>
+            </Field>
+            <Field label="Created">{formatDateTime(issue.createdAt)}</Field>
+            {issue.reviewedAt && (
+              <Field label="Reviewed">
+                {formatDateTime(issue.reviewedAt)}
+                {issue.reviewedByName && <span className="text-slate-400"> · {issue.reviewedByName}</span>}
+              </Field>
+            )}
+            {issue.solvedAt && <Field label="Solved">{formatDateTime(issue.solvedAt)}</Field>}
+          </dl>
+
+          {issue.isStoreClosingHold && issue.status !== 'completed' && (
+            <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
+              A Store Closing task is On Hold until this issue is completed. Anyone in the store can
+              send or solve it; completing it reopens the task.
+            </p>
+          )}
+
+          <section>
+            <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Description</h3>
+            <p className="whitespace-pre-wrap text-xs leading-relaxed text-slate-700">{issue.description}</p>
+          </section>
+
+          <IssueAttachments
+            compact
+            title={issue.title}
+            attachmentUrls={issue.attachmentUrls}
+            baAttachmentUrls={issue.baAttachmentUrls}
+            baUploadedLabel={issue.baUploadedAt ? `Uploaded ${formatDate(issue.baUploadedAt)}` : null}
+          />
+        </div>
+
+        {/* Footer */}
+        <div className="border-t border-slate-200 px-5 py-3">
+          {action ? (
+            <button
+              onClick={() => onAction(issue, action.status)}
+              disabled={updating}
+              className="flex h-9 w-full items-center justify-center gap-2 rounded-md bg-slate-900 text-xs font-medium text-white transition-colors hover:bg-slate-800 disabled:opacity-60"
+            >
+              {updating ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <>
+                  {action.status === 'reported' ? <Send className="h-3.5 w-3.5" /> : null}
+                  {action.label}
+                  {action.status !== 'reported' ? <ArrowRight className="h-3.5 w-3.5" /> : null}
+                </>
+              )}
+            </button>
+          ) : (
+            <p className="text-center text-[11px] text-slate-400">
+              {issue.status === 'completed'
+                ? 'Closed — no further action.'
+                : issue.routedToIt
+                  ? issue.status === 'in_review'
+                    ? 'Waiting for the store to mark it solved.'
+                    : 'No action needed from IT.'
+                  : 'Not routed to IT — view only.'}
+            </p>
+          )}
+        </div>
+      </aside>
+    </div>
   );
 }
 
@@ -295,190 +275,250 @@ function IssueRow({ issue, onClick }: { issue: ItIssue; onClick: () => void }) {
 export default function ItIssuesPage() {
   const { data: session, status: authStatus } = useSession();
   const router = useRouter();
-  const role = (session?.user as any)?.role as string | undefined;
-  const isIt = role === 'it';
+  const isIt = session?.user?.role === 'it';
 
   const [issuesList, setIssuesList] = useState<ItIssue[]>([]);
-  const [loading,     setLoading]    = useState(true);
-  const [refreshing,  setRefreshing] = useState(false);
-  const [filter,      setFilter]     = useState<IssueStatus | 'all'>('all');
-  const [storeFilter, setStoreFilter]= useState<number | null>(null); // null = all stores
-  const [selected,    setSelected]   = useState<ItIssue | null>(null);
-  const [updating,    setUpdating]   = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [storeFilter, setStoreFilter] = useState<number | null>(null);
+  const [roleFilter, setRoleFilter] = useState<string>('all');
+  const [query, setQuery] = useState('');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [updating, setUpdating] = useState(false);
 
   useEffect(() => {
     if (authStatus === 'loading') return;
-    if (!session)     { router.replace('/login'); return; }
-    if (!isIt)   router.replace('/');
+    if (!session) { router.replace('/login'); return; }
+    if (!isIt) router.replace('/');
   }, [authStatus, session, isIt, router]);
 
-  const load = useCallback(async (isRefresh = false) => {
-    isRefresh ? setRefreshing(true) : setLoading(true);
+  const load = useCallback(async () => {
+    setLoading(true);
     try {
-      const res  = await fetch('/api/it/issues', { cache: 'no-store' });
+      const res = await fetch('/api/it/issues', { cache: 'no-store' });
       const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data?.error ?? 'Failed to load issues.');
       setIssuesList(data.issues ?? []);
-    } catch {
-      // silent
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to load issues.');
     } finally {
-      setLoading(false); setRefreshing(false);
+      setLoading(false);
     }
   }, []);
 
-  useEffect(() => { if (isIt) load(); }, [isIt, load]);
+  useEffect(() => { if (isIt) void load(); }, [isIt, load]);
 
-  // Stores that have issues, for the searchable store filter.
+  // Stores and destinations that appear in the data, for the filters.
   const stores = useMemo(() => {
     const m = new Map<number, { id: number; storeNo: string; name: string }>();
     for (const i of issuesList) m.set(Number(i.store.id), { id: Number(i.store.id), storeNo: i.store.storeNo, name: i.store.name });
     return [...m.values()].sort((a, b) => a.storeNo.localeCompare(b.storeNo, undefined, { numeric: true }));
   }, [issuesList]);
 
-  const storeScoped = useMemo(
-    () => storeFilter == null ? issuesList : issuesList.filter(i => Number(i.store.id) === storeFilter),
-    [issuesList, storeFilter],
-  );
+  const roles = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const i of issuesList) for (const r of i.assignedToRoles) m.set(r.code, r.label);
+    return [...m.entries()].map(([code, label]) => ({ code, label }));
+  }, [issuesList]);
 
-  const meta = useMemo(() => ({
-    all:       storeScoped.length,
-    reported:  storeScoped.filter(i => i.status === 'reported').length,
-    in_review: storeScoped.filter(i => i.status === 'in_review').length,
-    solved:    storeScoped.filter(i => i.status === 'solved').length,
-    completed: storeScoped.filter(i => i.status === 'completed').length,
-  }), [storeScoped]);
+  // Store + destination + search narrow the list; the status tabs count within that.
+  const scoped = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return issuesList.filter((i) => {
+      if (storeFilter != null && Number(i.store.id) !== storeFilter) return false;
+      if (roleFilter !== 'all' && !i.assignedToRoles.some((r) => r.code === roleFilter)) return false;
+      if (!q) return true;
+      return [i.title, i.description, i.store.name, i.store.storeNo, i.reporter.name, i.reporter.nik, refNo(i.id)]
+        .some((v) => v.toLowerCase().includes(q));
+    });
+  }, [issuesList, storeFilter, roleFilter, query]);
+
+  const counts = useMemo(() => {
+    const c: Record<StatusFilter, number> = { all: scoped.length, draft: 0, reported: 0, in_review: 0, solved: 0, completed: 0 };
+    for (const i of scoped) c[i.status]++;
+    return c;
+  }, [scoped]);
 
   const visible = useMemo(
-    () => filter === 'all' ? storeScoped : storeScoped.filter(i => i.status === filter),
-    [storeScoped, filter],
+    () => (statusFilter === 'all' ? scoped : scoped.filter((i) => i.status === statusFilter)),
+    [scoped, statusFilter],
   );
 
-  async function handleAdvance(id: string, next: IssueStatus) {
+  const selected = useMemo(
+    () => issuesList.find((i) => i.id === selectedId) ?? null,
+    [issuesList, selectedId],
+  );
+
+  async function handleAction(issue: ItIssue, next: IssueStatus) {
     setUpdating(true);
     try {
-      const res = await fetch(`/api/it/issues/${id}`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      const res = await fetch(`/api/it/issues/${issue.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: next }),
       });
-      if (!res.ok) throw new Error();
-      const { issue: updated } = await res.json();
-      const patch = {
-        status: updated.status as IssueStatus,
-        reviewedAt: updated.reviewedAt ?? null,
-        reviewedBy: updated.reviewedBy ?? null,
-        updatedAt: updated.updatedAt,
-      };
-      setIssuesList(prev => prev.map(i => i.id === id ? { ...i, ...patch } : i));
-      setSelected(prev => prev?.id === id ? { ...prev, ...patch } : prev);
-    } catch {
-      // silent
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) throw new Error(data?.error ?? 'Update failed.');
+      toast.success(next === 'reported' ? `${refNo(issue.id)} sent.` : `${refNo(issue.id)} updated.`);
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Update failed.');
     } finally {
       setUpdating(false);
     }
   }
 
-  const statCards = [
-    { key: 'all'       as const, label: 'Total',     value: meta.all,       color: '#0891b2', Icon: AlertTriangle },
-    { key: 'reported'  as const, label: ISSUE_STATUS_LABELS.reported,  value: meta.reported,  color: '#f59e0b', Icon: AlertCircle   },
-    { key: 'in_review' as const, label: ISSUE_STATUS_LABELS.in_review, value: meta.in_review, color: '#3b82f6', Icon: Eye           },
-    { key: 'solved'    as const, label: ISSUE_STATUS_LABELS.solved,    value: meta.solved,    color: '#8b5cf6', Icon: CheckCircle2  },
-    { key: 'completed' as const, label: ISSUE_STATUS_LABELS.completed, value: meta.completed, color: '#10b981', Icon: CheckCircle2  },
-  ];
-
   if (authStatus === 'loading' || !session) return (
-    <div className="flex min-h-full items-center justify-center bg-slate-50"><Loader2 className="h-6 w-6 animate-spin text-cyan-400" /></div>
-  );
-
-  if (!isIt) return (
-    <div className="flex min-h-full flex-col items-center justify-center gap-4 bg-slate-50 p-8 text-center">
-      <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-red-50"><Shield className="h-8 w-8 text-red-500" /></div>
-      <p className="text-base font-bold text-slate-800">Access Restricted</p>
-      <p className="text-sm text-slate-500">Only IT users can review issue reports.</p>
+    <div className="flex min-h-full items-center justify-center bg-slate-50">
+      <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
     </div>
   );
 
+  if (!isIt) return (
+    <div className="flex min-h-full flex-col items-center justify-center gap-3 bg-slate-50 p-8 text-center">
+      <Shield className="h-7 w-7 text-red-500" />
+      <p className="text-sm font-semibold text-slate-800">Access restricted</p>
+      <p className="text-xs text-slate-500">Only IT can view all issue reports.</p>
+    </div>
+  );
+
+  const drafts = issuesList.filter((i) => i.status === 'draft').length;
+  const open = issuesList.filter((i) => i.status !== 'completed' && i.status !== 'draft').length;
+  const tabs: StatusFilter[] = ['all', ...STATUS_ORDER];
+
   return (
     <div className="min-h-full bg-slate-50">
-      {/* Header */}
-      <div className="border-b border-slate-200 bg-white px-6 py-5 lg:px-8">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-cyan-600">IT</p>
-            <h1 className="text-xl font-bold text-slate-900">Issue Reports</h1>
-            <p className="mt-0.5 text-xs text-slate-400">
-              {issuesList.length} issue{issuesList.length !== 1 ? 's' : ''} routed to IT
-            </p>
+      <OpsPageHeader
+        scope="IT · Support"
+        title="Issues"
+        subtitle={loading && !issuesList.length
+          ? 'Loading…'
+          : `${issuesList.length} total · ${open} open · ${drafts} draft${drafts !== 1 ? 's' : ''} — every store, every destination`}
+        onRefresh={() => void load()}
+        refreshing={loading}
+      />
+
+      <div className="mx-auto max-w-7xl space-y-3 px-4 py-5 sm:px-6 lg:px-8">
+        {/* Filters */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative min-w-[220px] flex-1">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search title, store, reporter, NIK or ref…"
+              className="h-9 w-full rounded-md border border-slate-200 bg-white pl-8 pr-3 text-xs text-slate-800 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none"
+            />
           </div>
-          <button
-            onClick={() => load(true)}
-            disabled={refreshing}
-            className="flex h-9 items-center gap-1.5 rounded-xl border border-cyan-200 bg-cyan-50 px-3 text-xs font-bold text-cyan-700 transition-colors hover:bg-cyan-100 disabled:opacity-60"
+          <div className="w-full sm:w-64">
+            <StoreCombobox
+              stores={stores}
+              value={storeFilter}
+              onChange={setStoreFilter}
+              allLabel="All stores"
+              className="max-w-none"
+            />
+          </div>
+          <select
+            value={roleFilter}
+            onChange={(e) => setRoleFilter(e.target.value)}
+            className="h-9 rounded-md border border-slate-200 bg-white px-2.5 text-xs text-slate-700 focus:border-slate-400 focus:outline-none"
+            aria-label="Routed to"
           >
-            <RefreshCw className={cn('h-3.5 w-3.5', refreshing && 'animate-spin')} />
-            Refresh
-          </button>
+            <option value="all">All destinations</option>
+            {roles.map((r) => <option key={r.code} value={r.code}>{r.label}</option>)}
+          </select>
         </div>
-      </div>
 
-      <div className="mx-auto max-w-7xl space-y-6 p-6 lg:p-8">
+        {/* Table */}
+        <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
+          {/* Status tabs */}
+          <div className="flex gap-1 overflow-x-auto overflow-y-hidden border-b border-slate-200 px-2">
+            {tabs.map((t) => {
+              const active = statusFilter === t;
+              return (
+                <button
+                  key={t}
+                  onClick={() => setStatusFilter(t)}
+                  className={cn(
+                    '-mb-px flex shrink-0 items-center gap-1.5 border-b-2 px-2.5 py-2.5 text-xs font-medium transition-colors',
+                    active ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-500 hover:text-slate-700',
+                  )}
+                >
+                  {t === 'all' ? 'All' : STATUS_LABELS[t]}
+                  <span className={cn('rounded px-1 text-[10px] tabular-nums', active ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-500')}>
+                    {counts[t]}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
 
-        {/* Store filter */}
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-wrap items-end gap-4">
-            <div className="min-w-[280px] flex-1">
-              <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-widest text-slate-400">Store</label>
-              <StoreCombobox
-                stores={stores}
-                value={storeFilter}
-                onChange={(id) => { setStoreFilter(id); setSelected(null); }}
-                allLabel="All stores"
-                className="max-w-none"
-              />
+          {loading && !issuesList.length ? (
+            <div className="flex items-center justify-center py-16">
+              <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
             </div>
-            <p className="pb-3 text-xs tabular-nums text-slate-400">
-              {visible.length} shown · click a card to filter by status
-            </p>
-          </div>
-        </div>
-
-        {/* Stat cards (clickable status filters) */}
-        <div className="grid grid-cols-3 gap-3 sm:grid-cols-5">
-          {statCards.map(({ key, label, value, color, Icon }) => {
-            const active = filter === key;
-            return (
-              <button key={key} onClick={() => { setFilter(key); setSelected(null); }}
-                className="flex items-center gap-3 rounded-2xl border bg-white px-4 py-4 text-left shadow-sm transition-all"
-                style={{ borderColor: active ? color : '#e2e8f0', boxShadow: active ? `0 0 0 3px ${color}20` : undefined }}>
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl" style={{ background: color + '15' }}>
-                  <Icon className="h-5 w-5" style={{ color }} />
-                </div>
-                <div>
-                  <p className="text-2xl font-bold tabular-nums" style={{ color }}>{value}</p>
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{label}</p>
-                </div>
-              </button>
-            );
-          })}
-        </div>
-
-        {/* List */}
-        {loading ? (
-          <div className="flex items-center justify-center py-20"><Loader2 className="h-8 w-8 animate-spin text-cyan-400" /></div>
-        ) : visible.length === 0 ? (
-          <div className="flex flex-col items-center gap-4 rounded-2xl border border-dashed border-slate-200 bg-white py-20 text-center">
-            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-50"><AlertTriangle className="h-8 w-8 text-slate-300" /></div>
-            <div>
-              <p className="text-sm font-bold text-slate-700">No issues to show</p>
-              <p className="mt-1 text-xs text-slate-400">
-                {filter !== 'all' ? `No ${STATUS_CFG[filter as IssueStatus].label.toLowerCase()} issues in scope.` : 'Everything routed to IT is clear.'}
-              </p>
+          ) : visible.length === 0 ? (
+            <div className="flex flex-col items-center gap-2 py-16 text-center">
+              <Inbox className="h-6 w-6 text-slate-300" />
+              <p className="text-xs font-medium text-slate-600">No issues match these filters</p>
             </div>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-            {visible.map(issue => (
-              <IssueRow key={issue.id} issue={issue} onClick={() => setSelected(issue)} />
-            ))}
-          </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[920px] text-left text-xs">
+                <thead className="bg-slate-50 text-[11px] text-slate-500">
+                  <tr>
+                    <th className="px-3 py-2 font-medium">Ref</th>
+                    <th className="px-3 py-2 font-medium">Issue</th>
+                    <th className="px-3 py-2 font-medium">Store</th>
+                    <th className="px-3 py-2 font-medium">Reporter</th>
+                    <th className="px-3 py-2 font-medium">Routed to</th>
+                    <th className="px-3 py-2 font-medium">Status</th>
+                    <th className="px-3 py-2 text-right font-medium">Created</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {visible.map((i) => (
+                    <tr
+                      key={i.id}
+                      onClick={() => setSelectedId(i.id)}
+                      className={cn(
+                        'cursor-pointer align-top transition-colors hover:bg-slate-50',
+                        selectedId === i.id && 'bg-slate-50',
+                      )}
+                    >
+                      <td className="whitespace-nowrap px-3 py-2.5 font-mono text-[11px] text-slate-400">{refNo(i.id)}</td>
+                      <td className="max-w-[340px] px-3 py-2.5">
+                        <p className="truncate font-medium text-slate-900">{i.title}</p>
+                        <p className="mt-0.5 truncate text-[11px] text-slate-500">{i.description}</p>
+                        {i.isStoreClosingHold && <span className="mt-1 inline-block"><HoldTag /></span>}
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <p className="whitespace-nowrap font-medium text-slate-800">{i.store.storeNo}</p>
+                        <p className="max-w-[180px] truncate text-[11px] text-slate-500">{i.store.name}</p>
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <p className="max-w-[160px] truncate text-slate-800">{i.reporter.name}</p>
+                        <p className="text-[11px] text-slate-500">{i.reporter.nik}</p>
+                      </td>
+                      <td className="px-3 py-2.5"><RoleChips roles={i.assignedToRoles} /></td>
+                      <td className="px-3 py-2.5"><StatusBadge status={i.status} /></td>
+                      <td className="whitespace-nowrap px-3 py-2.5 text-right">
+                        <p className="text-slate-700">{formatDate(i.createdAt)}</p>
+                        <p className="text-[11px] text-slate-400">{relativeTime(i.createdAt)}</p>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        {!loading && (
+          <p className="px-1 text-[11px] text-slate-400">
+            Showing {visible.length} of {issuesList.length}. IT can send any draft, and review or complete issues routed to IT.
+          </p>
         )}
       </div>
 
@@ -486,8 +526,8 @@ export default function ItIssuesPage() {
         <IssueDrawer
           issue={selected}
           updating={updating}
-          onAdvance={handleAdvance}
-          onClose={() => setSelected(null)}
+          onAction={handleAction}
+          onClose={() => setSelectedId(null)}
         />
       )}
     </div>

@@ -10,7 +10,7 @@ import {
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { useAutoSave } from '@/lib/hooks/useAutoSave';
-import { TaskHeader, TaskSubmitBar, SaveIndicator, shiftLabel } from '@/components/employee/tasks';
+import { TaskDateCard, TaskHeader, TaskSubmitBar, SaveIndicator, shiftLabel } from '@/components/employee/tasks';
 import {
   CheckRow, EmptyState, ListGroup, Notice, NotesField, PageBody, PhotoRow, Section,
   SkeletonBlocks, TaskReviewNotices,
@@ -421,12 +421,23 @@ export default function StoreClosingDetailPage() {
             />
 
             <PageBody bottomBar={!readonly && !isOnHold && !!taskData}>
+              {/* Which day's closing this is — a carried-forward one is amber. */}
+              {!loading && taskData && (
+                <TaskDateCard date={taskData.date} label="Store Closing untuk tanggal" />
+              )}
+
               {/* Access banner — hidden while loading or on-hold */}
               {!readonly && !isOnHold && !loading && taskData && banner}
 
               {isOnHold && (
-                <Notice tone="warning" icon={Clock} title="Task sedang On Hold">
-                  Issue terkait sedang ditangani tim. Task akan dibuka kembali setelah issue diselesaikan.
+                <Notice
+                  tone="warning"
+                  icon={Clock}
+                  title="Task sedang On Hold"
+                  action={{ label: 'Lihat issue', onClick: () => router.push('/employee/issues') }}
+                >
+                  Task akan dibuka kembali setelah issue terkait diselesaikan OPS. Kalau issue-nya
+                  masih Draft, siapa pun di toko ini bisa mengirimnya ke OPS lewat menu Issues.
                   {taskData?.openStatementHoldReason && (
                     <p className="mt-1.5 italic">&ldquo;{taskData.openStatementHoldReason}&rdquo;</p>
                   )}

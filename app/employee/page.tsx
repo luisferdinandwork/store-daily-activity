@@ -241,7 +241,7 @@ const ATT_CFG = {
   },
   excused: {
     Icon: AlertCircle,
-    label: "Excused",
+    label: attendanceStatusLabel("excused"),
     textClass: "text-white/60",
     bg: "bg-white/10",
   },
@@ -266,6 +266,12 @@ const ATT_CFG = {
   sakit_dengan_surat: {
     Icon: AlertCircle,
     label: attendanceStatusLabel("sakit_dengan_surat"),
+    textClass: "text-white/60",
+    bg: "bg-white/10",
+  },
+  backup: {
+    Icon: AlertCircle,
+    label: attendanceStatusLabel("backup"),
     textClass: "text-white/60",
     bg: "bg-white/10",
   },

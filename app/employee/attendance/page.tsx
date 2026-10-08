@@ -143,11 +143,12 @@ const STATUS_CFG: Record<AttStatus, { label: string; Icon: React.ElementType; te
   present: { label: 'Present', Icon: CheckCircle2, text: 'text-emerald-600', tile: 'bg-emerald-50', dot: 'bg-emerald-500' },
   late:    { label: 'Late',    Icon: Clock,        text: 'text-amber-600',   tile: 'bg-amber-50',   dot: 'bg-amber-500'   },
   absent:  { label: 'Absent',  Icon: XCircle,      text: 'text-red-600',     tile: 'bg-red-50',     dot: 'bg-red-500'     },
-  excused: { label: 'Excused', Icon: AlertCircle,  text: 'text-muted-foreground', tile: 'bg-secondary', dot: 'bg-muted-foreground' },
+  excused: { label: attendanceStatusLabel('excused'), Icon: AlertCircle,  text: 'text-muted-foreground', tile: 'bg-secondary', dot: 'bg-muted-foreground' },
   dinas:              { label: attendanceStatusLabel('dinas'),              Icon: AlertCircle, text: 'text-indigo-600', tile: 'bg-indigo-50', dot: 'bg-indigo-500' },
   cuti:               { label: attendanceStatusLabel('cuti'),               Icon: AlertCircle, text: 'text-violet-600', tile: 'bg-violet-50', dot: 'bg-violet-500' },
   sakit_tanpa_surat:  { label: attendanceStatusLabel('sakit_tanpa_surat'),  Icon: AlertCircle, text: 'text-orange-600', tile: 'bg-orange-50', dot: 'bg-orange-500' },
   sakit_dengan_surat: { label: attendanceStatusLabel('sakit_dengan_surat'), Icon: AlertCircle, text: 'text-teal-600',   tile: 'bg-teal-50',   dot: 'bg-teal-500'   },
+  backup:             { label: attendanceStatusLabel('backup'),             Icon: CheckCircle2, text: 'text-cyan-600',  tile: 'bg-cyan-50',   dot: 'bg-cyan-500'   },
 };
 const BREAK_TILE = 'bg-amber-50';
 const BREAK_TEXT = 'text-amber-600';

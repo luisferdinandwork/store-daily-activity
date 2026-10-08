@@ -1,29 +1,16 @@
 // app/api/ops/petty-cash/route.ts
+//
+// GET ?month=YYYY-MM — petty cash spending requests for Ops' Requests page:
+// those filed in that Jakarta month plus every one still waiting on Ops.
+// Scoped: ops_area sees only their area's stores, ops_ho / IT see all.
+// Approve / reject lives at PATCH /api/ops/petty-cash/[txId].
 
 import { NextRequest, NextResponse } from 'next/server';
-import { and, desc, eq, sql } from 'drizzle-orm';
 
-import { db } from '@/lib/db';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
-import { areas, stores, users } from '@/lib/db/schema/core';
-import { pettyCashTransactions } from '@/lib/db/schema/petty-cash';
-
-function currentYearMonth() {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Jakarta',
-    year: 'numeric',
-    month: '2-digit',
-  }).formatToParts(new Date());
-
-  const year = parts.find((p) => p.type === 'year')?.value;
-  const month = parts.find((p) => p.type === 'month')?.value;
-
-  return `${year}-${month}`;
-}
-
-function isValidMonth(value: string) {
-  return /^\d{4}-\d{2}$/.test(value);
-}
+import { getOpsRequestRows } from '@/lib/db/utils/petty-cash-ops';
+import { isValidMonth } from '@/lib/ops-petty-cash';
+import { currentYearMonthJakarta } from '@/lib/db/utils/petty-cash-refill';
 
 export async function GET(req: NextRequest) {
   const scope = await resolveOpsScope();
@@ -35,7 +22,7 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const month = req.nextUrl.searchParams.get('month') ?? currentYearMonth();
+  const month = req.nextUrl.searchParams.get('month') ?? currentYearMonthJakarta();
 
   if (!isValidMonth(month)) {
     return NextResponse.json(
@@ -44,69 +31,13 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const rows = await db
-    .select({
-      id: pettyCashTransactions.id,
-      amount: pettyCashTransactions.amount,
-      actualAmount: pettyCashTransactions.actualAmount,
-      description: pettyCashTransactions.description,
-      categoryName: pettyCashTransactions.categoryName,
-      status: pettyCashTransactions.status,
-      imageUrl: pettyCashTransactions.imageUrl,
-      approvedAt: pettyCashTransactions.approvedAt,
-      rejectedAt: pettyCashTransactions.rejectedAt,
-      rejectionReason: pettyCashTransactions.rejectionReason,
-      createdAt: pettyCashTransactions.createdAt,
-
-      storeId: stores.id,
-      storeNo: stores.storeNo,
-      storeName: stores.name,
-      areaId: areas.id,
-      areaName: areas.name,
-
-      submittedById: users.id,
-      submittedByName: users.name,
-    })
-    .from(pettyCashTransactions)
-    .innerJoin(stores, eq(stores.id, pettyCashTransactions.storeId))
-    .innerJoin(areas, eq(areas.id, stores.areaId))
-    .innerJoin(users, eq(users.id, pettyCashTransactions.userId))
-    .where(
-      and(
-        eq(pettyCashTransactions.yearMonth, month),
-        scope.scope === 'area'
-          ? eq(stores.areaId, scope.areaId)
-          : sql`TRUE`,
-      ),
-    )
-    .orderBy(desc(pettyCashTransactions.createdAt));
+  const data = await getOpsRequestRows({ areaId: scope.areaId, month });
 
   return NextResponse.json({
     success: true,
     month,
     scope: scope.scope,
     areaId: scope.areaId,
-    data: rows.map((row) => ({
-      id: row.id,
-      amount: row.amount,
-      actualAmount: row.actualAmount,
-      description: row.description,
-      categoryName: row.categoryName,
-      status: row.status,
-      imageUrl: row.imageUrl,
-      approvedAt: row.approvedAt ? new Date(row.approvedAt).toISOString() : null,
-      rejectedAt: row.rejectedAt ? new Date(row.rejectedAt).toISOString() : null,
-      rejectionReason: row.rejectionReason,
-      createdAt: new Date(row.createdAt).toISOString(),
-
-      storeId: row.storeId,
-      storeNo: row.storeNo,
-      storeName: row.storeName,
-      areaId: row.areaId,
-      areaName: row.areaName,
-
-      submittedById: row.submittedById,
-      submittedByName: row.submittedByName,
-    })),
+    data,
   });
 }

@@ -29,6 +29,9 @@ export interface SubmitMarketingCheckInput {
   geo: GeoPoint;
   skipGeo?: boolean;
 
+  /** true = there is marketing / a new promo to check; false = submit without the checklist. */
+  hasMarketingCheck: boolean | null;
+
   promoName: boolean;
   promoPeriod: boolean;
   promoMechanism: boolean;
@@ -46,6 +49,8 @@ export interface AutoSaveMarketingCheckInput {
   storeId?: number;
   geo?: GeoPoint | null;
   skipGeo?: boolean;
+
+  hasMarketingCheck?: boolean | null;
 
   promoName?: boolean;
   promoPeriod?: boolean;
@@ -225,7 +230,27 @@ function buildSubmitChecklistUpdate(
   return update;
 }
 
+// "Tidak ada marketing / promo baru": the checklist is skipped, so any ticks
+// left over from autosave are cleared rather than submitted.
+function buildSkippedChecklistUpdate(): Record<string, unknown> {
+  const update: Record<string, unknown> = {};
+
+  for (const field of BOOLEAN_FIELDS) {
+    const actor = ACTOR_COLUMNS[field];
+    update[field] = false;
+    update[actor.by] = null;
+    update[actor.at] = null;
+  }
+
+  return update;
+}
+
 function validateSubmit(input: SubmitMarketingCheckInput): string | null {
+  if (input.hasMarketingCheck === null) {
+    return 'Pilih dulu: ada marketing / promo baru hari ini atau tidak.';
+  }
+  // Nothing to check today — submit without the checklist.
+  if (!input.hasMarketingCheck) return null;
   if (!input.promoName) return 'Checklist Nama Promo belum ditandai.';
   if (!input.promoPeriod) return 'Checklist Periode Promo belum ditandai.';
   if (!input.promoMechanism) return 'Checklist Mekanisme Promo belum ditandai.';
@@ -311,6 +336,10 @@ export async function autoSaveMarketingCheck(
     if (input.userId) update.userId = input.userId;
     if (existing.status === 'not_started') update.status = 'in_progress';
 
+    if ('hasMarketingCheck' in input && input.hasMarketingCheck !== undefined) {
+      update.hasMarketingCheck = input.hasMarketingCheck;
+    }
+
     Object.assign(update, buildChecklistUpdate(input, input.userId, now));
 
     if ('notes' in input) {
@@ -375,14 +404,17 @@ export async function submitMarketingCheck(
       completedBy: input.userId,
       completedByScheduleId: input.scheduleId,
       updatedAt: now,
-      ...buildSubmitChecklistUpdate(existing, {
-        promoName: input.promoName,
-        promoPeriod: input.promoPeriod,
-        promoMechanism: input.promoMechanism,
-        randomShoeItems: input.randomShoeItems,
-        randomNonShoeItems: input.randomNonShoeItems,
-        sellTag: input.sellTag,
-      }, input.userId, now),
+      hasMarketingCheck: input.hasMarketingCheck,
+      ...(input.hasMarketingCheck
+        ? buildSubmitChecklistUpdate(existing, {
+            promoName: input.promoName,
+            promoPeriod: input.promoPeriod,
+            promoMechanism: input.promoMechanism,
+            randomShoeItems: input.randomShoeItems,
+            randomNonShoeItems: input.randomNonShoeItems,
+            sellTag: input.sellTag,
+          }, input.userId, now)
+        : buildSkippedChecklistUpdate()),
     };
 
     const [task] = await db

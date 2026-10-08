@@ -4,7 +4,11 @@
 //
 // This supports:
 // - issue.status = draft | reported | in_review | solved | completed
-//     draft      → private to reporter, fully editable
+//     draft      → private to reporter, fully editable — EXCEPT a Store
+//                  Closing On Hold issue (linked from store_closing_tasks.
+//                  hold_issue_id): every employee of that store can see, edit,
+//                  send and later mark it solved, so the held task can't get
+//                  stuck behind one person's account. It can't be deleted.
 //     reported   → sent to assigned roles
 //     in_review  → optional: a manager (ops/finance/it/audit) started working it
 //     solved     → the reporter resolves it (reachable from reported or in_review)
@@ -23,12 +27,13 @@ import {
   employeeTypes,
   issueRoleAssignments,
   issues,
+  storeClosingTasks,
   stores,
   userRoles,
   users,
   type Issue,
 } from '@/lib/db/schema';
-import { and, asc, desc, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull } from 'drizzle-orm';
 import { createNotificationsForUsers, getOpsUserIdsForArea, getUserIdsForRole } from './notifications';
 
 export type IssueStatus = 'draft' | 'reported' | 'in_review' | 'completed' | 'solved';
@@ -214,8 +219,40 @@ export function serializeIssue(issue: Issue, assignedRoles: IssueAssignedRole[] 
   };
 }
 
+// ─── Store Closing On Hold issues ────────────────────────────────────────────
+//
+// Putting a Store Closing's Open Statement "On Hold" creates a draft issue
+// (lib/db/utils/store-closing.ts) and the task stays held until that issue is
+// completed. Such an issue belongs to the whole store, not just whoever
+// submitted the closing — see computeIssuePermissionFlags.
+
+/** Which of `issueIds` hold a Store Closing task On Hold. */
+export async function getStoreClosingHoldIssueIds(issueIds: number[]): Promise<Set<number>> {
+  const cleanIds = uniqueNumbers(issueIds);
+  if (!cleanIds.length) return new Set();
+
+  const rows = await db
+    .select({ issueId: storeClosingTasks.holdIssueId })
+    .from(storeClosingTasks)
+    .where(inArray(storeClosingTasks.holdIssueId, cleanIds));
+
+  return new Set(rows.map((r) => r.issueId).filter((id): id is number => id != null));
+}
+
+/** Every Store Closing On Hold issue of one store (any status). */
+export async function getStoreClosingHoldIssueIdsForStore(storeId: number): Promise<number[]> {
+  const rows = await db
+    .select({ issueId: storeClosingTasks.holdIssueId })
+    .from(storeClosingTasks)
+    .where(and(eq(storeClosingTasks.storeId, storeId), isNotNull(storeClosingTasks.holdIssueId)));
+
+  return uniqueNumbers(rows.map((r) => r.issueId));
+}
+
 export interface IssuePermissionFlags {
   isOwner: boolean;
+  /** A Store Closing On Hold issue — shared by the whole store. */
+  isStoreClosingHold: boolean;
   canEdit: boolean;
   canDelete: boolean;
   canSendToOps: boolean;
@@ -223,20 +260,31 @@ export interface IssuePermissionFlags {
   canUploadBa: boolean;
 }
 
-/** Computed employee-facing permission flags for a single issue row. */
+/**
+ * Computed employee-facing permission flags for a single issue row.
+ *
+ * The reporter can edit / send / delete a draft and later mark it solved. For a
+ * Store Closing On Hold issue every employee of its store gets the same rights
+ * (`sameStore`), except deleting — the held task points at it. The Berita Acara
+ * stays the reporter's.
+ */
 export function computeIssuePermissionFlags(
   issue: Pick<Issue, 'userId' | 'status' | 'baAttachmentUrls'>,
   userId: string,
+  opts: { isStoreClosingHold?: boolean; sameStore?: boolean } = {},
 ): IssuePermissionFlags {
   const isOwner = issue.userId === userId;
   const isDraft = issue.status === 'draft';
+  const isStoreClosingHold = opts.isStoreClosingHold === true;
+  const actsAsReporter = isOwner || (isStoreClosingHold && opts.sameStore === true);
 
   return {
     isOwner,
-    canEdit: isOwner && isDraft,
-    canDelete: isOwner && isDraft,
-    canSendToOps: isOwner && isDraft,
-    canMarkSolved: isOwner && (issue.status === 'reported' || issue.status === 'in_review'),
+    isStoreClosingHold,
+    canEdit: actsAsReporter && isDraft,
+    canDelete: isOwner && isDraft && !isStoreClosingHold,
+    canSendToOps: actsAsReporter && isDraft,
+    canMarkSolved: actsAsReporter && (issue.status === 'reported' || issue.status === 'in_review'),
     canUploadBa: isOwner && !parseAttachmentUrls(issue.baAttachmentUrls).length,
   };
 }
@@ -260,6 +308,9 @@ export async function createIssueWithRoles(input: CreateIssueWithRolesInput): Pr
       assignedToRoleId: roles[0].id,
       status: input.status ?? 'reported',
       attachmentUrls: attachmentJson(input.attachmentUrls),
+      // Explicit, not defaultNow(): the DB session runs in Asia/Jakarta, so a
+      // defaultNow() timestamp reads back 7h off (see CLAUDE.md conventions).
+      createdAt: new Date(),
       updatedAt: new Date(),
     })
     .returning();

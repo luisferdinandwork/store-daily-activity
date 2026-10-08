@@ -1130,6 +1130,7 @@ export async function GET(request: NextRequest) {
             shift: (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode,
             date: t.date.toISOString(),
 
+            hasMarketingCheck: t.hasMarketingCheck,
             promoName: t.promoName,
             promoPeriod: t.promoPeriod,
             promoMechanism: t.promoMechanism,

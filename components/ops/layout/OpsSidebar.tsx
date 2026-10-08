@@ -1,15 +1,16 @@
 'use client';
 // components/ops/layout/OpsSidebar.tsx
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { signOut, useSession } from 'next-auth/react';
 import {
   AlertTriangle,
   BarChart3,
   BookOpen,
   Calendar,
+  ChevronDown,
   ChevronRight,
   ClipboardCheck,
   FileCheck2,
@@ -87,7 +88,31 @@ const MANUALS_ITEM = {
   key: 'manuals',
 };
 
-const NAV = [
+type NavChild = { href: string; label: string };
+
+type NavItem = {
+  href: string;
+  label: string;
+  icon: React.ElementType;
+  exact?: boolean;
+  /** Sub-menu (accordion) — the first child is where clicking the item goes. */
+  children?: NavChild[];
+};
+
+type NavSection = { section: string; items: NavItem[] };
+
+// Petty Cash is two pages: spending requests and top-up (refill) requests.
+const PETTY_CASH_ITEM: NavItem = {
+  href: '/ops/petty-cash',
+  label: 'Petty Cash',
+  icon: Wallet,
+  children: [
+    { href: '/ops/petty-cash/requests', label: 'Requests' },
+    { href: '/ops/petty-cash/refills', label: 'Refills' },
+  ],
+};
+
+const NAV: NavSection[] = [
   {
     section: 'Overview',
     items: [
@@ -109,7 +134,7 @@ const NAV = [
     items: [
       { href: '/ops/issues',               label: 'Issues',               icon: AlertTriangle },
       { href: IMPACT_VISIT_ITEM.href,      label: IMPACT_VISIT_ITEM.label, icon: IMPACT_VISIT_ITEM.icon },
-      { href: '/ops/petty-cash',           label: 'Petty Cash',           icon: Wallet },
+      PETTY_CASH_ITEM,
       { href: ITEM_TRANSFERS_ITEM.href,    label: ITEM_TRANSFERS_ITEM.label, icon: ITEM_TRANSFERS_ITEM.icon },
       { href: PERFORMANCE_TARGETS_ITEM.href, label: PERFORMANCE_TARGETS_ITEM.label, icon: PERFORMANCE_TARGETS_ITEM.icon },
     ],
@@ -147,6 +172,7 @@ function NavTooltip({ label, children }: { label: string; children: React.ReactN
 
 export default function OpsSidebar({ storeName = 'Ops', collapsed = false }: Props) {
   const pathname   = usePathname();
+  const router     = useRouter();
   const { data: session } = useSession();
 
   const isOpsHo = session?.user?.isOpsHo === true;
@@ -155,7 +181,7 @@ export default function OpsSidebar({ storeName = 'Ops', collapsed = false }: Pro
   // render via this array, with an OPS-HO-only "OPS HQ" section spliced in right
   // after Overview. IT-only configuration (Task Management, Shift & Tasks, BC
   // Credentials) now lives in the /it panel, not here.
-  const restSections = useMemo(() => {
+  const restSections = useMemo<NavSection[]>(() => {
     return isOpsHo
       ? [{ section: 'OPS HQ', items: [AREA_MANAGEMENT_ITEM, MANUALS_ITEM] }, ...NAV.slice(1)]
       : NAV.slice(1);
@@ -163,6 +189,23 @@ export default function OpsSidebar({ storeName = 'Ops', collapsed = false }: Pro
 
   const isActive = (href: string, exact?: boolean) =>
     exact ? pathname === href : pathname.startsWith(href);
+
+  // Accordion state, as in the Finance sidebar. Untouched, a group is open while
+  // you are inside it; folding it by hand is remembered only for the page it was
+  // done on — navigating anywhere goes back to "follow the route".
+  const [fold, setFold] = useState<{ path: string; label: string; open: boolean } | null>(null);
+
+  const groupOpen = (item: NavItem) =>
+    fold && fold.path === pathname && fold.label === item.label ? fold.open : isActive(item.href);
+
+  function onGroupClick(item: NavItem) {
+    // Already inside → just fold / unfold it. From outside → land on its first page.
+    if (isActive(item.href)) {
+      setFold({ path: pathname, label: item.label, open: !groupOpen(item) });
+      return;
+    }
+    router.push(item.children![0].href);
+  }
 
   // ── Width transition ──────────────────────────────────────────────────────
 
@@ -284,7 +327,8 @@ export default function OpsSidebar({ storeName = 'Ops', collapsed = false }: Pro
                 </p>
               )}
               <ul className="space-y-0.5">
-                {items.map(({ href, label, icon: Icon }) => {
+                {items.map((item) => {
+                  const { href, label, icon: Icon, children } = item;
                   const active = isActive(href);
                   const linkCls = cn(
                     'flex items-center rounded-md px-2.5 py-2 text-sm font-medium transition-colors',
@@ -293,6 +337,65 @@ export default function OpsSidebar({ storeName = 'Ops', collapsed = false }: Pro
                       ? 'bg-primary/10 text-primary'
                       : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
                   );
+
+                  // ── Accordion group (Petty Cash ▸ Requests / Refills) ──
+                  if (children) {
+                    // The icon-only rail has no room for a sub-menu: the icon goes
+                    // straight to the group's first page.
+                    if (collapsed) {
+                      return (
+                        <li key={href}>
+                          <NavTooltip label={label}>
+                            <Link href={children[0].href} className={linkCls}>
+                              <Icon className="h-4 w-4 shrink-0" />
+                            </Link>
+                          </NavTooltip>
+                        </li>
+                      );
+                    }
+
+                    const open = groupOpen(item);
+                    return (
+                      <li key={href}>
+                        <button
+                          type="button"
+                          onClick={() => onGroupClick(item)}
+                          aria-expanded={open}
+                          className={cn(linkCls, 'w-full')}
+                        >
+                          <Icon className="h-4 w-4 shrink-0" />
+                          <span className="flex-1 text-left">{label}</span>
+                          <ChevronDown className={cn('h-3.5 w-3.5 opacity-60 transition-transform', open && 'rotate-180')} />
+                        </button>
+
+                        {open && (
+                          <ul className="ml-[1.15rem] mt-0.5 space-y-0.5 border-l border-border pl-2.5">
+                            {children.map((child) => {
+                              const on = isActive(child.href);
+                              return (
+                                <li key={child.href}>
+                                  <Link
+                                    href={child.href}
+                                    aria-current={on ? 'page' : undefined}
+                                    className={cn(
+                                      'flex items-center rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors',
+                                      on
+                                        ? 'bg-primary/10 text-primary'
+                                        : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
+                                    )}
+                                  >
+                                    <span className="flex-1">{child.label}</span>
+                                    {on && <ChevronRight className="h-3 w-3 opacity-60" />}
+                                  </Link>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        )}
+                      </li>
+                    );
+                  }
+
                   return (
                     <li key={href}>
                       {collapsed ? (

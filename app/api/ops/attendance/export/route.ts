@@ -284,7 +284,7 @@ function buildEmployeeSheet(ws: XLSX.WorkSheet, rows: ExportRow[]) {
     };
     // Dinas / Cuti / Sakit are justified absences — tallied with excused here.
     const raw = row.status ?? 'absent';
-    const s = (isLeaveAttendanceStatus(raw) ? 'excused' : raw) as keyof Pick<EmpStat,'present'|'late'|'absent'|'excused'>;
+    const s = (isLeaveAttendanceStatus(raw) ? 'excused' : raw === 'backup' ? 'present' : raw) as keyof Pick<EmpStat,'present'|'late'|'absent'|'excused'>;
     if (s in prev) (prev[s] as number)++;
     empMap.set(key, prev);
   }
