@@ -29,6 +29,7 @@ import { Chip, ListGroup, NavRow, SectionLabel, SkeletonBlocks } from "@/compone
 
 import { EmployeeTargetGauge } from "@/components/employee/EmployeeTargetGauge";
 import { StoreContributionPie } from "@/components/employee/StoreContributionPie";
+import ImpactFixBar from "@/components/employee/ImpactFixBar";
 
 interface AttSlot {
   schedule: {
@@ -537,7 +538,7 @@ export default function EmployeeDashboard() {
             </div>
           )}
         </div>
-      </div>
+      </div>      
 
       {/* ── Performance — target gauge + store contribution pie ──────────── */}
       <div className="mx-auto w-full max-w-md px-4 pt-5 pb-2">
@@ -615,6 +616,9 @@ export default function EmployeeDashboard() {
           </div>
         )}
       </div>
+
+      {/* ── Impact Visit — findings still to fix vs already fixed (draws nothing without a visit) ── */}
+      <ImpactFixBar enabled={signedIn} />
 
       {/* ── Quick actions ─────────────────────────────────────────────────── */}
       <div className="mx-auto w-full max-w-md px-4 pt-5 pb-8">

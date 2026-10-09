@@ -107,6 +107,53 @@ export interface OpsImpactVisitResult extends ImpactVisitResultDetail {
   canReview: boolean;
 }
 
+/**
+ * What the employee dashboard's fix bar shows: across the visits the staff can see
+ * (the latest EMPLOYEE_VISIBLE_VISITS), how many "tidak" findings Ops has since
+ * re-checked as fixed ("Sudah diperbaiki") and how many are still open
+ * ("Belum diperbaiki" — including findings Ops has not re-checked yet).
+ */
+export interface ImpactFixOverview {
+  visits: number;
+  total: number;
+  fixed: number;
+  open: number;
+  /** Share fixed, 0–100 (100 when there is nothing to fix). */
+  fixedPct: number;
+  /** Most recent Ops re-check across those visits (ISO), if any. */
+  lastCheckedAt: string | null;
+}
+
+export function impactFixOverview(visits: ImpactVisitResultSummary[]): ImpactFixOverview {
+  let total = 0;
+  let fixed = 0;
+  let lastCheckedAt: string | null = null;
+  for (const { followUp } of visits) {
+    total += followUp.total;
+    fixed += followUp.verified;
+    if (followUp.lastCheckedAt && (!lastCheckedAt || followUp.lastCheckedAt > lastCheckedAt)) {
+      lastCheckedAt = followUp.lastCheckedAt;
+    }
+  }
+  return {
+    visits: visits.length,
+    total,
+    fixed,
+    open: total - fixed,
+    fixedPct: total === 0 ? 100 : Math.round((fixed / total) * 100),
+    lastCheckedAt,
+  };
+}
+
+/** The line under the bar's headline — a nudge that follows how far along the store is. */
+export function impactFixMessage({ total, fixed, open, fixedPct }: ImpactFixOverview): string {
+  if (total === 0) return 'Tidak ada temuan negatif dari kunjungan Ops terakhir. Pertahankan!';
+  if (open === 0) return 'Semua temuan sudah diperbaiki. Kerja bagus, tim!';
+  if (fixed === 0) return 'Belum ada yang diperbaiki. Mulai dari satu poin — Ops akan mengecek ulang.';
+  if (fixedPct >= 50) return `Tinggal ${open} poin lagi — sedikit lagi beres!`;
+  return `${fixed} poin sudah beres. Ayo tuntaskan ${open} sisanya sebelum Ops mengecek ulang.`;
+}
+
 export const IMPACT_VISIT_TYPE_LABEL: Record<'virtual' | 'on_location', string> = {
   virtual: 'Virtual',
   on_location: 'On Location',

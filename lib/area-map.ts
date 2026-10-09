@@ -6,11 +6,20 @@
 // drawn. Areas are free-text (HR "Zona" names such as "DKI - BALI"), so one
 // area can cover several regions; an area nothing matches is simply listed as
 // "not on the map". Rendering: components/ops/areas/IndonesiaAreaMap.tsx.
+//
+// Two views share this data: the whole archipelago, and a zoomed "Pulau Jawa"
+// view. Java's provinces (Banten, DKI Jakarta, Jawa Barat, Jawa Tengah, DIY,
+// Jawa Timur) are far too small to tell apart at archipelago scale — Jakarta is
+// a few pixels there — and "DKI" / "Jabar" areas used to share one region, so one
+// of them was never drawn.
 
 export type RegionId =
   | 'sumatera'
+  | 'banten'
+  | 'dki-jakarta'
   | 'jawa-barat'
   | 'jawa-tengah'
+  | 'diy'
   | 'jawa-timur'
   | 'bali'
   | 'nusa-tenggara'
@@ -19,19 +28,28 @@ export type RegionId =
   | 'maluku'
   | 'papua';
 
-type LonLat = [lon: number, lat: number];
+export type LonLat = [lon: number, lat: number];
+
+export type MapViewId = 'indonesia' | 'jawa';
+
+/** Text on the map. A region too small to hold its name gets the text beside it and a line pointing in. */
+export interface MapLabel {
+  at: LonLat;
+  pointTo?: LonLat;
+}
 
 export interface MapRegion {
   id: RegionId;
+  /** Full name — the tooltip. */
   label: string;
-  /** What the map itself prints (the long label goes in the tooltip). */
+  /** What the map itself prints. */
   short: string;
   /** Polygons in lon/lat. */
   polys: LonLat[][];
-  /** Draw only this longitude slice of the polygons (Java is split west / central / east). */
-  clipLon?: [number, number];
-  /** Where the label sits. */
-  labelAt: LonLat;
+  /** One of Java's provinces: labelled in the Pulau Jawa view, summed up as "Jawa" in the Indonesia view. */
+  java?: boolean;
+  /** Where the label sits, per view (no entry = not labelled in that view). */
+  labels: Partial<Record<MapViewId, MapLabel>>;
 }
 
 const SUMATERA: LonLat[] = [
@@ -41,11 +59,71 @@ const SUMATERA: LonLat[] = [
   [100.3, -0.9], [99.6, -0.1], [99.0, 0.7], [98.7, 1.7], [97.8, 2.7], [96.7, 3.6], [95.6, 4.8],
 ];
 
-const JAVA: LonLat[] = [
-  [105.2, -6.8], [105.9, -5.95], [106.8, -6.0], [107.9, -6.2], [108.6, -6.7], [109.3, -6.9], [110.4, -6.9],
-  [111.1, -6.5], [112.2, -6.9], [112.9, -7.2], [113.9, -7.7], [114.5, -7.9], [114.4, -8.7], [113.5, -8.4],
-  [112.0, -8.3], [110.8, -8.1], [109.4, -7.8], [108.3, -7.8], [107.2, -7.7], [106.5, -7.4], [105.6, -7.0],
+// ─── Java ────────────────────────────────────────────────────────────────────
+// One coastline cut into its provinces. Every boundary is a single list of points
+// used by both neighbours (one of them reversed), so provinces meet exactly — no
+// gaps, no overlap. Orientation does not matter for an SVG fill.
+
+const J = {
+  // Where boundaries meet the sea (and the one triple point inland of it).
+  S_B: [106.4, -6.97] as LonLat, // Banten | Jawa Barat, south coast
+  N_B: [106.68, -6.05] as LonLat, // Banten | DKI, north coast
+  E_D: [106.98, -6.07] as LonLat, // DKI | Jawa Barat, north coast
+  N_J: [108.78, -6.82] as LonLat, // Jawa Barat | Jawa Tengah, north coast
+  J_S: [108.62, -7.72] as LonLat, // Jawa Barat | Jawa Tengah, south coast
+  N_T: [111.52, -6.78] as LonLat, // Jawa Tengah | Jawa Timur, north coast
+  T_D: [111.05, -7.95] as LonLat, // Jawa Tengah | Jawa Timur | DIY
+  D_E: [111.0, -8.17] as LonLat, // DIY | Jawa Timur, south coast
+  D_W: [110.02, -7.95] as LonLat, // DIY | Jawa Tengah, south coast
+};
+
+// Coastlines between those points.
+const COAST_BANTEN: LonLat[] = [
+  J.S_B, [106.1, -6.93], [105.8, -6.86], [105.5, -6.8], [105.22, -6.76], [105.3, -6.58], [105.55, -6.46],
+  [105.8, -6.36], [105.95, -6.08], [106.01, -5.92], [106.25, -5.9], [106.45, -5.98], J.N_B,
 ];
+const COAST_DKI: LonLat[] = [J.N_B, [106.78, -6.09], [106.88, -6.08], J.E_D];
+const COAST_JABAR_N: LonLat[] = [
+  J.E_D, [107.05, -5.98], [107.2, -5.93], [107.4, -6.0], [107.65, -6.2], [107.85, -6.25], [108.05, -6.3],
+  [108.3, -6.3], [108.45, -6.45], [108.55, -6.72], J.N_J,
+];
+const COAST_JABAR_S: LonLat[] = [
+  J.J_S, [108.3, -7.7], [108.0, -7.68], [107.7, -7.66], [107.35, -7.48], [107.0, -7.42], [106.6, -7.38],
+  [106.4, -7.3], [106.5, -7.1], J.S_B,
+];
+const COAST_JATENG_N: LonLat[] = [
+  J.N_J, [109.05, -6.85], [109.35, -6.88], [109.65, -6.88], [109.95, -6.88], [110.3, -6.92], [110.5, -6.92],
+  [110.55, -6.72], [110.7, -6.55], [110.9, -6.55], [111.1, -6.65], [111.3, -6.72], J.N_T,
+];
+const COAST_JATENG_S: LonLat[] = [J.D_W, [109.75, -7.82], [109.45, -7.72], [109.1, -7.68], [108.85, -7.65], J.J_S];
+const COAST_DIY: LonLat[] = [J.D_E, [110.75, -8.21], [110.52, -8.17], [110.3, -8.03], J.D_W];
+const COAST_JATIM: LonLat[] = [
+  J.N_T, [111.85, -6.85], [112.1, -6.9], [112.4, -6.88], [112.6, -7.1], [112.75, -7.22], [112.85, -7.45],
+  [112.95, -7.65], [113.3, -7.72], [113.65, -7.72], [114.0, -7.72], [114.3, -7.95], [114.42, -8.15],
+  [114.52, -8.45], [114.45, -8.72], [114.1, -8.62], [113.85, -8.52], [113.5, -8.4], [113.15, -8.3],
+  [112.75, -8.4], [112.35, -8.35], [111.95, -8.3], [111.55, -8.28], [111.2, -8.25], J.D_E,
+];
+
+// Boundaries.
+/** Banten | the rest, from the south coast up to DKI — its last stretch is DKI's west edge too. */
+const B_BANTEN: LonLat[] = [J.S_B, [106.47, -6.78], [106.55, -6.58], [106.62, -6.42], [106.7, -6.32], [106.7, -6.2], J.N_B];
+const DKI_SOUTH: LonLat[] = [[106.7, -6.32], [106.85, -6.38], [106.97, -6.36]];
+const DKI_EAST: LonLat[] = [[106.97, -6.36], [106.99, -6.2], J.E_D];
+const B_JABAR_JATENG: LonLat[] = [J.N_J, [108.72, -7.05], [108.64, -7.4], J.J_S];
+const B_JATENG_JATIM: LonLat[] = [J.N_T, [111.4, -7.15], [111.2, -7.55], J.T_D];
+/** DIY | Jawa Tengah, from DIY's south-east corner round the north to its south-west coast. */
+const B_DIY: LonLat[] = [J.T_D, [110.85, -7.8], [110.65, -7.62], [110.42, -7.55], [110.2, -7.62], [110.05, -7.75], J.D_W];
+
+const rev = (pts: LonLat[]): LonLat[] => [...pts].reverse();
+/** Joins polylines end to start into one ring, dropping each repeated joint. */
+const ring = (...parts: LonLat[][]): LonLat[] => parts.flatMap((part, i) => (i === 0 ? part : part.slice(1)));
+
+const BANTEN: LonLat[] = ring(COAST_BANTEN, rev(B_BANTEN));
+const DKI: LonLat[] = ring(COAST_DKI, rev(DKI_EAST), rev(DKI_SOUTH), B_BANTEN.slice(-3));
+const JABAR: LonLat[] = ring(COAST_JABAR_N, B_JABAR_JATENG, COAST_JABAR_S, B_BANTEN.slice(0, 5), DKI_SOUTH, DKI_EAST);
+const JATENG: LonLat[] = ring(COAST_JATENG_N, B_JATENG_JATIM, B_DIY, COAST_JATENG_S, rev(B_JABAR_JATENG));
+const DIY: LonLat[] = ring(COAST_DIY, rev(B_DIY));
+const JATIM: LonLat[] = ring(COAST_JATIM, [J.D_E, ...rev(B_JATENG_JATIM)]);
 
 const MADURA: LonLat[] = [[112.7, -6.95], [113.5, -6.9], [114.1, -7.1], [113.4, -7.25], [112.8, -7.2]];
 
@@ -88,35 +166,77 @@ const PAPUA: LonLat[] = [
 ];
 
 export const MAP_REGIONS: MapRegion[] = [
-  { id: 'sumatera', label: 'Sumatera', short: 'Sumatera', polys: [SUMATERA], labelAt: [100.6, 0.5] },
-  { id: 'jawa-barat', label: 'Banten · DKI · Jabar', short: 'Jabar', polys: [JAVA], clipLon: [104.5, 108.6], labelAt: [107.2, -9.3] },
-  { id: 'jawa-tengah', label: 'Jawa Tengah · DIY', short: 'Jateng', polys: [JAVA], clipLon: [108.6, 111.0], labelAt: [109.8, -9.3] },
-  { id: 'jawa-timur', label: 'Jawa Timur', short: 'Jatim', polys: [JAVA, MADURA], clipLon: [111.0, 115.0], labelAt: [112.6, -9.3] },
-  { id: 'bali', label: 'Bali', short: 'Bali', polys: [BALI], labelAt: [115.1, -9.5] },
-  { id: 'nusa-tenggara', label: 'Nusa Tenggara', short: 'Nusa Tenggara', polys: NUSA_TENGGARA, labelAt: [121.7, -10.7] },
-  { id: 'kalimantan', label: 'Kalimantan', short: 'Kalimantan', polys: [KALIMANTAN], labelAt: [113.6, -0.4] },
-  { id: 'sulawesi', label: 'Sulawesi', short: 'Sulawesi', polys: [SULAWESI], labelAt: [121.2, -2.3] },
-  { id: 'maluku', label: 'Maluku', short: 'Maluku', polys: MALUKU, labelAt: [128.7, -2.2] },
-  { id: 'papua', label: 'Papua', short: 'Papua', polys: [PAPUA], labelAt: [137.5, -4.8] },
+  { id: 'sumatera', label: 'Sumatera', short: 'Sumatera', polys: [SUMATERA], labels: { indonesia: { at: [100.6, 0.5] } } },
+  {
+    id: 'banten', label: 'Banten', short: 'Banten', polys: [BANTEN], java: true,
+    labels: { jawa: { at: [105.95, -6.62] } },
+  },
+  {
+    id: 'dki-jakarta', label: 'DKI Jakarta', short: 'DKI Jakarta', polys: [DKI], java: true,
+    labels: { jawa: { at: [106.84, -5.68], pointTo: [106.84, -6.18] } },
+  },
+  {
+    id: 'jawa-barat', label: 'Jawa Barat', short: 'Jawa Barat', polys: [JABAR], java: true,
+    labels: { jawa: { at: [107.75, -7.1] } },
+  },
+  {
+    id: 'jawa-tengah', label: 'Jawa Tengah', short: 'Jawa Tengah', polys: [JATENG], java: true,
+    labels: { jawa: { at: [109.85, -7.35] } },
+  },
+  {
+    id: 'diy', label: 'DI Yogyakarta', short: 'DIY', polys: [DIY], java: true,
+    labels: { jawa: { at: [110.55, -8.6], pointTo: [110.5, -8.05] } },
+  },
+  {
+    id: 'jawa-timur', label: 'Jawa Timur', short: 'Jawa Timur', polys: [JATIM, MADURA], java: true,
+    labels: { jawa: { at: [112.75, -7.9] } },
+  },
+  { id: 'bali', label: 'Bali', short: 'Bali', polys: [BALI], labels: { indonesia: { at: [115.1, -9.5] }, jawa: { at: [115.1, -8.5] } } },
+  {
+    id: 'nusa-tenggara', label: 'Nusa Tenggara', short: 'Nusa Tenggara', polys: NUSA_TENGGARA,
+    labels: { indonesia: { at: [121.7, -10.7] } },
+  },
+  { id: 'kalimantan', label: 'Kalimantan', short: 'Kalimantan', polys: [KALIMANTAN], labels: { indonesia: { at: [113.6, -0.4] } } },
+  { id: 'sulawesi', label: 'Sulawesi', short: 'Sulawesi', polys: [SULAWESI], labels: { indonesia: { at: [121.2, -2.3] } } },
+  { id: 'maluku', label: 'Maluku', short: 'Maluku', polys: MALUKU, labels: { indonesia: { at: [128.7, -2.2] } } },
+  { id: 'papua', label: 'Papua', short: 'Papua', polys: [PAPUA], labels: { indonesia: { at: [137.5, -4.8] } } },
 ];
 
-// ─── Projection (equirectangular, 20 units per degree) ───────────────────────
+/** Java's provinces, west → east. */
+export const JAVA_REGIONS: RegionId[] = MAP_REGIONS.filter((r) => r.java).map((r) => r.id);
 
-const LON_MIN = 94.5;
-const LAT_MAX = 6.5;
-const SCALE = 20;
+/** Where the Indonesia view prints its single "Jawa · perbesar" button (Java's provinces are unlabelled there). */
+export const JAVA_ZOOM_ANCHOR: LonLat = [109.9, -9.75];
 
-export const MAP_VIEWBOX = { width: 940, height: 350 };
+// ─── Views + projection (equirectangular) ────────────────────────────────────
 
-export function projectLonLat([lon, lat]: LonLat): [number, number] {
-  return [(lon - LON_MIN) * SCALE, (LAT_MAX - lat) * SCALE];
+export interface MapView {
+  id: MapViewId;
+  label: string;
+  /** Longitude / latitude of the top-left corner. */
+  lonMin: number;
+  latMax: number;
+  /** SVG units per degree. */
+  scale: number;
+  width: number;
+  height: number;
 }
 
-export function polygonPath(points: LonLat[]): string {
+export const MAP_VIEWS: Record<MapViewId, MapView> = {
+  indonesia: { id: 'indonesia', label: 'Indonesia', lonMin: 94.5, latMax: 6.5, scale: 20, width: 940, height: 350 },
+  // 105.0°E–115.9°E, 5.55°S–9.05°S at 85 units/degree: Jakarta (~0.3° across) is ~25 units wide.
+  jawa: { id: 'jawa', label: 'Pulau Jawa', lonMin: 105.0, latMax: -5.55, scale: 85, width: 927, height: 290 },
+};
+
+export function projectLonLat([lon, lat]: LonLat, view: MapView = MAP_VIEWS.indonesia): [number, number] {
+  return [(lon - view.lonMin) * view.scale, (view.latMax - lat) * view.scale];
+}
+
+export function polygonPath(points: LonLat[], view: MapView = MAP_VIEWS.indonesia): string {
   return (
     points
       .map((p, i) => {
-        const [x, y] = projectLonLat(p);
+        const [x, y] = projectLonLat(p, view);
         return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`;
       })
       .join('') + 'Z'
@@ -131,11 +251,17 @@ const REGION_KEYWORDS: Record<RegionId, string[]> = {
     'sumatera', 'sumatra', 'sumut', 'sumbar', 'sumsel', 'aceh', 'medan', 'padang', 'palembang', 'lampung',
     'riau', 'kepri', 'batam', 'jambi', 'bengkulu', 'bangka', 'belitung', 'pekanbaru',
   ],
+  // "Jabodetabek" = Jakarta + Bogor / Depok / Tangerang / Bekasi, so it paints all three.
+  banten: ['banten', 'tangerang', 'tangsel', 'serang', 'cilegon', 'lebak', 'pandeglang', 'jabodetabek'],
+  'dki-jakarta': ['dki', 'jakarta', 'jkt', 'jabodetabek'],
   'jawa-barat': [
-    'dki', 'jakarta', 'jabodetabek', 'jabar', 'jawa barat', 'banten', 'bekasi', 'bogor', 'depok', 'tangerang',
-    'bandung', 'cirebon', 'karawang',
+    'jabar', 'jawa barat', 'bekasi', 'bogor', 'depok', 'bandung', 'cirebon', 'karawang', 'sukabumi', 'cianjur',
+    'garut', 'tasikmalaya', 'subang', 'indramayu', 'jabodetabek',
   ],
-  'jawa-tengah': ['jateng', 'jawa tengah', 'semarang', 'yogyakarta', 'yogya', 'jogja', 'diy', 'solo', 'surakarta'],
+  'jawa-tengah': [
+    'jateng', 'jawa tengah', 'semarang', 'solo', 'surakarta', 'pekalongan', 'tegal', 'kudus', 'cilacap', 'magelang',
+  ],
+  diy: ['diy', 'yogyakarta', 'yogya', 'jogja', 'jogjakarta'],
   'jawa-timur': ['jatim', 'jawa timur', 'surabaya', 'malang', 'madura'],
   bali: ['bali', 'denpasar'],
   'nusa-tenggara': ['ntb', 'ntt', 'nusa tenggara', 'nusra', 'lombok', 'mataram', 'kupang', 'flores', 'sumbawa'],
@@ -150,7 +276,6 @@ const REGION_KEYWORDS: Record<RegionId, string[]> = {
 
 /** "Jawa" / "Java" on its own means the whole island. */
 const WHOLE_JAVA_KEYWORDS = ['jawa', 'java'];
-const JAVA_REGIONS: RegionId[] = ['jawa-barat', 'jawa-tengah', 'jawa-timur'];
 
 /** The map regions an area name points at (empty when nothing matches). */
 export function regionsForAreaName(name: string): RegionId[] {

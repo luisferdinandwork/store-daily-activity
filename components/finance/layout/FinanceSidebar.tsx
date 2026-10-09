@@ -21,6 +21,7 @@
 //
 //   Operations
 //     Store Closing             /finance/store-closing       (Z-Report & EDC photo, statement posted / on hold)
+//     Sales Return              /finance/sales-returns       (receipt number + photos the stores filed, by store / period)
 //
 //   Issues
 //     Issues                    /finance/issues              (issues routed to Finance role)
@@ -40,6 +41,7 @@ import {
   KeyRound,
   LayoutDashboard,
   LogOut,
+  ReceiptText,
   Store,
   Wallet,
   WalletCards,
@@ -122,6 +124,7 @@ const NAV: NavSection[] = [
     section: 'Operations',
     items: [
       { href: '/finance/store-closing', label: 'Store Closing', icon: Store },
+      { href: '/finance/sales-returns', label: 'Sales Return', icon: ReceiptText },
     ],
   },
   {

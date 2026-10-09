@@ -24,6 +24,7 @@ const TITLES: Record<string, string> = {
   '/employee/pettycash': 'Petty Cash',
   '/employee/announcements': 'Notifications',
   '/employee/item-transfers': 'Transfer Orders',
+  '/employee/sales-returns': 'Sales Return',
   '/employee/impact-visits': 'Impact Visit Result',
 };
 
