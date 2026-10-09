@@ -182,7 +182,7 @@ function OpenStatementSelector({
             className="w-full resize-none rounded-xl border border-amber-200 bg-white px-3.5 py-2.5 text-base placeholder:text-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-300 disabled:opacity-60"
           />
           <p className="text-[11px] text-amber-700">
-            Issue akan dibuat secara otomatis dan dikirim ke tim terkait untuk ditindaklanjuti.
+            Issue akan dibuat dan langsung dikirim otomatis ke Ops, Finance, dan IT untuk ditindaklanjuti.
           </p>
         </div>
       )}
@@ -349,7 +349,7 @@ export default function StoreClosingDetailPage() {
 
       toast.success(
         openStatementDecision === 'on_hold'
-          ? 'Open Statement ditandai On Hold. Issue telah dibuat. ✓'
+          ? 'Open Statement ditandai On Hold. Issue sudah dikirim ke Ops, Finance, dan IT. ✓'
           : 'Store Closing berhasil disubmit! ✓',
         { duration: 4000 },
       );
@@ -436,8 +436,8 @@ export default function StoreClosingDetailPage() {
                   title="Task sedang On Hold"
                   action={{ label: 'Lihat issue', onClick: () => router.push('/employee/issues') }}
                 >
-                  Task akan dibuka kembali setelah issue terkait diselesaikan OPS. Kalau issue-nya
-                  masih Draft, siapa pun di toko ini bisa mengirimnya ke OPS lewat menu Issues.
+                  Issue sudah dikirim otomatis ke Ops, Finance, dan IT. Task akan dibuka kembali
+                  setelah issue terkait diselesaikan. Pantau statusnya lewat menu Issues.
                   {taskData?.openStatementHoldReason && (
                     <p className="mt-1.5 italic">&ldquo;{taskData.openStatementHoldReason}&rdquo;</p>
                   )}

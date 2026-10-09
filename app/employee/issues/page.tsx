@@ -8,8 +8,8 @@
 // Status lifecycle: draft -> reported -> in_review -> solved -> completed.
 // - draft issues are private and fully editable by the reporter
 // - draft issues can be sent to OPS by changing status draft -> reported
-// - the reporter resolves the issue by marking it "solved" (from reported
-//   or in_review) — this happens BEFORE Ops gives final closure
+// - the reporter resolves the issue by marking it "solved" — only once it is
+//   in_review (the button is locked before that) — BEFORE Ops gives final closure
 // - OPS gives final confirmation by marking it "completed" — only once the
 //   reporter has already marked it solved
 // - the reporter can attach a one-time Berita Acara (BA) at ANY status,
@@ -649,6 +649,7 @@ function IssueDetail({
   const canDeleteDraft = issue.canDelete ?? canEditDraft;
   const canSendDraft = issue.canSendToOps ?? canEditDraft;
   const canMarkSolved = issue.canMarkSolved ?? false;
+  const showMarkSolved = issue.showMarkSolved ?? canMarkSolved;
   const canUploadBa = issue.canUploadBa ?? false;
 
   const handleSendDraft = async () => {
@@ -931,10 +932,17 @@ function IssueDetail({
           <Notice tone="success" icon={Eye}>Reviewed {formatRelativeTime(issue.reviewedAt)}</Notice>
         )}
 
-        {canMarkSolved && (
-          <ActionButton icon={ShieldCheck} loading={actionLoading} onClick={handleMarkSolved}>
-            Mark as Solved
-          </ActionButton>
+        {showMarkSolved && (
+          <>
+            <ActionButton icon={ShieldCheck} loading={actionLoading} disabled={!canMarkSolved} onClick={handleMarkSolved}>
+              Mark as Solved
+            </ActionButton>
+            {!canMarkSolved && issue.status === 'reported' && (
+              <p className="-mt-1 text-center text-xs text-muted-foreground">
+                Tombol aktif setelah issue berstatus In Review.
+              </p>
+            )}
+          </>
         )}
 
         {(canEditDraft || canSendDraft || canDeleteDraft) && (

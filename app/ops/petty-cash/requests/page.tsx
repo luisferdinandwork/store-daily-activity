@@ -14,6 +14,9 @@
 // recorded — the same rule as Finance.
 //
 // Top-ups for a low cash box live on the Refills page.
+//
+// Phones (below `md`) get cards instead of the sheet — same state, filters and
+// approve / reject (components/ops/mobile/PettyCashMobile.tsx).
 
 import { useState } from 'react';
 import { AlertTriangle, Wallet } from 'lucide-react';
@@ -22,7 +25,18 @@ import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
 import { OpsChipTabs, OpsFilterSelect, OpsSearchInput, OpsSortControl } from '@/components/ops/layout/OpsToolbar';
-import { KpiStrip, PhotoLightbox } from '@/components/finance/shared/sheet-kit';
+import { KpiStrip, PhotoLightbox, type KpiItem } from '@/components/finance/shared/sheet-kit';
+import { ChipScroller, MonthStepper } from '@/components/ops/mobile/MobileKit';
+import {
+  CardListSkeleton,
+  MobileFilterRow,
+  MobileKpiScroller,
+  MobileSearch,
+  MobileSelect,
+  MobileSort,
+  PettyCashMobileHeader,
+  RequestCard,
+} from '@/components/ops/mobile/PettyCashMobile';
 import {
   DecisionButtons,
   Pager,
@@ -157,6 +171,29 @@ export default function OpsPettyCashRequestsPage() {
     ...TX_STATUS_ORDER.map((s) => ({ key: s, label: TX_STATUS_LABEL[s], count: counts[s], tone: TX_STATUS_TONE[s] })),
   ];
 
+  const kpis: KpiItem[] = [
+    {
+      label: 'Waiting OPS',
+      value: String(totals.waiting),
+      sub: totals.waiting > 0 ? `${rp(totals.waitingAmount)} requested` : 'nothing to approve',
+      warn: totals.waiting > 0,
+    },
+    { label: 'Awaiting actual amount', value: String(totals.awaitingActual), sub: 'approved, PIC yet to record' },
+    { label: 'Completed', value: String(totals.completed), sub: 'actual amount recorded' },
+    { label: 'Rejected', value: String(totals.rejected), sub: 'by OPS' },
+    { label: 'Total used', value: rp(totals.used), sub: 'completed requests, actual amount' },
+  ];
+
+  const refreshAll = () => {
+    feed.reload();
+    refreshPending();
+  };
+
+  const changeMonth = (d: string) => {
+    setDate(d);
+    setPage(1);
+  };
+
   return (
     <div className="min-h-full bg-slate-50">
       {lightbox && (
@@ -169,43 +206,137 @@ export default function OpsPettyCashRequestsPage() {
         />
       )}
 
+      {/* ── Phones ─────────────────────────────────────────────────────────── */}
+      <div className="md:hidden">
+        <PettyCashMobileHeader isHo={isHo} pending={pending} onRefresh={refreshAll} refreshing={feed.loading} />
+
+        <div className="space-y-3 px-4 pb-8 pt-3">
+          <MonthStepper date={date} onChange={changeMonth} currentMonthStart={currentMonthStart()} />
+
+          {feed.data && <MobileKpiScroller items={kpis} />}
+
+          <MobileSearch
+            value={query}
+            onChange={(v) => {
+              setQuery(v);
+              setPage(1);
+            }}
+            placeholder="Search store, code, item or PIC…"
+          />
+
+          <ChipScroller
+            items={statusChips}
+            value={status}
+            onChange={(st) => {
+              setStatus(st);
+              setPage(1);
+            }}
+          />
+
+          <MobileFilterRow>
+            <MobileSort
+              options={REQUEST_SORT_OPTIONS}
+              sortKey={sort.key}
+              sortDir={sort.dir}
+              onChange={({ key, dir, keyChanged }) => {
+                setSort({ key, dir: keyChanged ? defaultSortDir(key) : dir });
+                setPage(1);
+              }}
+            />
+            {isHo && areaOptions.length > 1 && (
+              <MobileSelect
+                label="Area"
+                value={String(area)}
+                active={area !== 'all'}
+                onChange={(v) => {
+                  setArea(v === 'all' ? 'all' : Number(v));
+                  setPage(1);
+                }}
+                options={[{ value: 'all', label: 'All areas' }, ...areaOptions.map((a) => ({ value: String(a.id), label: a.name }))]}
+              />
+            )}
+            {categoryOptions.length > 0 && (
+              <MobileSelect
+                label="Category"
+                value={category}
+                active={category !== 'all'}
+                onChange={(v) => {
+                  setCategory(v);
+                  setPage(1);
+                }}
+                options={[{ value: 'all', label: 'All categories' }, ...categoryOptions.map((c) => ({ value: c, label: c }))]}
+              />
+            )}
+            {filtersActive && (
+              <button type="button" onClick={clearFilters} className="shrink-0 px-2 text-xs font-semibold text-slate-500 underline">
+                Clear
+              </button>
+            )}
+          </MobileFilterRow>
+
+          {feed.error && (
+            <div className="flex items-center gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3">
+              <AlertTriangle className="h-4 w-4 shrink-0 text-rose-500" />
+              <p className="text-sm font-medium text-rose-700">{feed.error}</p>
+            </div>
+          )}
+
+          {loadingFirst ? (
+            <CardListSkeleton />
+          ) : feed.data && sorted.length === 0 ? (
+            <SheetEmpty
+              icon={Wallet}
+              title={filtersActive ? 'No requests match your filters.' : 'No petty cash requests this month.'}
+              hint={filtersActive ? undefined : 'Try another month with the arrows above.'}
+              onClear={filtersActive ? clearFilters : undefined}
+            />
+          ) : feed.data ? (
+            <>
+              <div className={cn('space-y-2.5 transition-opacity', feed.loading && 'opacity-60')}>
+                {pageRows.map((r) => (
+                  <RequestCard
+                    key={r.id}
+                    row={r}
+                    isHo={isHo}
+                    busy={busyId === r.id}
+                    onApprove={() => void decide(r, 'approve')}
+                    onReject={(reason) => void decide(r, 'reject', reason)}
+                    onOpenReceipt={(url) => setLightbox({ title: `${r.storeNo} · ${r.storeName}`, url })}
+                  />
+                ))}
+              </div>
+              <Pager
+                page={currentPage}
+                pages={pages}
+                from={offset + 1}
+                to={offset + pageRows.length}
+                total={sorted.length}
+                noun="request"
+                onPage={setPage}
+              />
+            </>
+          ) : null}
+        </div>
+      </div>
+
+      {/* ── Desktop ────────────────────────────────────────────────────────── */}
       <OpsPageHeader
+        className="hidden md:block"
         scope={isHo ? 'OPS HO · All areas' : 'OPS · Area Approval'}
         title="Petty Cash"
         tabs={<PettyCashTabs pending={pending} />}
         periodProps={{
           period: 'monthly',
           date,
-          onDateChange: (d) => {
-            setDate(d);
-            setPage(1);
-          },
+          onDateChange: changeMonth,
         }}
-        onRefresh={() => {
-          feed.reload();
-          refreshPending();
-        }}
+        onRefresh={refreshAll}
         refreshing={feed.loading}
       />
 
-      <div className="mx-auto space-y-4 px-4 py-5 sm:px-6 lg:px-8">
+      <div className="mx-auto hidden space-y-4 px-4 py-5 sm:px-6 md:block lg:px-8">
         {/* Key numbers */}
-        {feed.data && (
-          <KpiStrip
-            items={[
-              {
-                label: 'Waiting OPS',
-                value: String(totals.waiting),
-                sub: totals.waiting > 0 ? `${rp(totals.waitingAmount)} requested` : 'nothing to approve',
-                warn: totals.waiting > 0,
-              },
-              { label: 'Awaiting actual amount', value: String(totals.awaitingActual), sub: 'approved, PIC yet to record' },
-              { label: 'Completed', value: String(totals.completed), sub: 'actual amount recorded' },
-              { label: 'Rejected', value: String(totals.rejected), sub: 'by OPS' },
-              { label: 'Total used', value: rp(totals.used), sub: 'completed requests, actual amount' },
-            ]}
-          />
-        )}
+        {feed.data && <KpiStrip items={kpis} />}
 
         {/* Search / filter / sort */}
         <div className="space-y-3">

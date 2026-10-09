@@ -18,6 +18,7 @@ import {
   LayoutDashboard,
   LogOut,
   MapPinned,
+  Monitor,
   Store,
   Target,
   Truck,
@@ -26,6 +27,7 @@ import {
   Wallet,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { isOpsMobileReady } from '@/lib/ops-mobile';
 import {
   Tooltip,
   TooltipContent,
@@ -70,15 +72,6 @@ const AREA_MANAGEMENT_ITEM = {
   key: 'area-management',
 };
 
-// Digitized store-visit audit (paper "OPS Impact Visit" form). Both
-// ops_area (own area) and ops_ho (all areas) can fill/view — area scoping
-// is enforced server-side, not by hiding this nav item.
-const IMPACT_VISIT_ITEM = {
-  href: '/ops/impact-visits',
-  label: 'Impact Visit',
-  icon: FileCheck2,
-  key: 'impact-visit',
-};
 
 // OPS HO only — manage the Knowledge Base library employees see.
 const MANUALS_ITEM = {
@@ -100,6 +93,21 @@ type NavItem = {
 };
 
 type NavSection = { section: string; items: NavItem[] };
+
+// Digitized store-visit audit (paper "OPS Impact Visit" form): the visits
+// themselves, and the month-by-month report on its own page. Both ops_area (own
+// area) and ops_ho (all areas) can fill/view — area scoping is enforced
+// server-side, not by hiding this nav item.
+const IMPACT_VISIT_ITEM: NavItem = {
+  href: '/ops/impact-visits',
+  label: 'Impact Visit',
+  icon: FileCheck2,
+  children: [
+    { href: '/ops/impact-visits', label: 'Visits' },
+    { href: '/ops/impact-visits/results', label: 'Hasil Visit' },
+    { href: '/ops/impact-visits/report', label: 'Monthly Report' },
+  ],
+};
 
 // Petty Cash is two pages: spending requests and top-up (refill) requests.
 const PETTY_CASH_ITEM: NavItem = {
@@ -133,7 +141,7 @@ const NAV: NavSection[] = [
     section: 'Operations',
     items: [
       { href: '/ops/issues',               label: 'Issues',               icon: AlertTriangle },
-      { href: IMPACT_VISIT_ITEM.href,      label: IMPACT_VISIT_ITEM.label, icon: IMPACT_VISIT_ITEM.icon },
+      IMPACT_VISIT_ITEM,
       PETTY_CASH_ITEM,
       { href: ITEM_TRANSFERS_ITEM.href,    label: ITEM_TRANSFERS_ITEM.label, icon: ITEM_TRANSFERS_ITEM.icon },
       { href: PERFORMANCE_TARGETS_ITEM.href, label: PERFORMANCE_TARGETS_ITEM.label, icon: PERFORMANCE_TARGETS_ITEM.icon },
@@ -153,6 +161,11 @@ interface Props {
   storeName?: string;
   /** Controlled collapse state from OpsNavbar. If omitted the sidebar manages itself. */
   collapsed?: boolean;
+  /**
+   * Inside the phone's Menu drawer (OpsMobileChrome): fills the drawer, and marks
+   * the pages that aren't built for phones with a small monitor icon.
+   */
+  drawer?: boolean;
 }
 
 // ─── Tooltip helper for collapsed mode ───────────────────────────────────────
@@ -170,7 +183,7 @@ function NavTooltip({ label, children }: { label: string; children: React.ReactN
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function OpsSidebar({ storeName = 'Ops', collapsed = false }: Props) {
+export default function OpsSidebar({ storeName = 'Ops', collapsed = false, drawer = false }: Props) {
   const pathname   = usePathname();
   const router     = useRouter();
   const { data: session } = useSession();
@@ -190,6 +203,13 @@ export default function OpsSidebar({ storeName = 'Ops', collapsed = false }: Pro
   const isActive = (href: string, exact?: boolean) =>
     exact ? pathname === href : pathname.startsWith(href);
 
+  // A group's children can nest (Impact Visit's "Visits" is /ops/impact-visits,
+  // its report /ops/impact-visits/report): only the most specific match is lit.
+  const activeChild = (children: NavChild[]) =>
+    children
+      .filter((c) => pathname === c.href || pathname.startsWith(`${c.href}/`))
+      .sort((a, b) => b.href.length - a.href.length)[0]?.href;
+
   // Accordion state, as in the Finance sidebar. Untouched, a group is open while
   // you are inside it; folding it by hand is remembered only for the page it was
   // done on — navigating anywhere goes back to "follow the route".
@@ -197,6 +217,12 @@ export default function OpsSidebar({ storeName = 'Ops', collapsed = false }: Pro
 
   const groupOpen = (item: NavItem) =>
     fold && fold.path === pathname && fold.label === item.label ? fold.open : isActive(item.href);
+
+  /** In the drawer: a quiet "better on desktop" mark beside pages not built for phones. */
+  const desktopMark = (href: string) =>
+    drawer && !isOpsMobileReady(href) ? (
+      <Monitor className="h-3 w-3 shrink-0 opacity-40" aria-label="Lebih baik di desktop" />
+    ) : null;
 
   function onGroupClick(item: NavItem) {
     // Already inside → just fold / unfold it. From outside → land on its first page.
@@ -213,8 +239,9 @@ export default function OpsSidebar({ storeName = 'Ops', collapsed = false }: Pro
     <TooltipProvider delayDuration={120}>
       <aside
         className={cn(
-          'flex h-screen flex-col border-r border-border bg-card transition-all duration-200 ease-in-out overflow-hidden',
-          collapsed ? 'w-16' : 'w-64',
+          'flex flex-col bg-card transition-all duration-200 ease-in-out overflow-hidden',
+          drawer ? 'h-full w-full' : 'h-screen border-r border-border',
+          !drawer && (collapsed ? 'w-16' : 'w-64'),
         )}
       >
         {/* ── Logo / brand ── */}
@@ -267,6 +294,7 @@ export default function OpsSidebar({ storeName = 'Ops', collapsed = false }: Pro
                       <Link href={href} className={linkCls}>
                         <Icon className="h-4 w-4 shrink-0" />
                         <span className="flex-1">{label}</span>
+                        {desktopMark(href)}
                         {active && <ChevronRight className="h-3 w-3 opacity-60" />}
                       </Link>
                     )}
@@ -312,6 +340,7 @@ export default function OpsSidebar({ storeName = 'Ops', collapsed = false }: Pro
                 >
                   <TASK_PROGRESS_ITEM.icon className="h-4 w-4 shrink-0" />
                   <span className="flex-1">{TASK_PROGRESS_ITEM.label}</span>
+                  {desktopMark(TASK_PROGRESS_ITEM.href)}
                   {isActive(TASK_PROGRESS_ITEM.href) && <ChevronRight className="h-3 w-3 opacity-60" />}
                 </Link>
               )}
@@ -338,7 +367,7 @@ export default function OpsSidebar({ storeName = 'Ops', collapsed = false }: Pro
                       : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
                   );
 
-                  // ── Accordion group (Petty Cash ▸ Requests / Refills) ──
+                  // ── Accordion group (Impact Visit ▸ Visits / Monthly Report, Petty Cash ▸ Requests / Refills) ──
                   if (children) {
                     // The icon-only rail has no room for a sub-menu: the icon goes
                     // straight to the group's first page.
@@ -365,13 +394,14 @@ export default function OpsSidebar({ storeName = 'Ops', collapsed = false }: Pro
                         >
                           <Icon className="h-4 w-4 shrink-0" />
                           <span className="flex-1 text-left">{label}</span>
+                          {desktopMark(children[0].href)}
                           <ChevronDown className={cn('h-3.5 w-3.5 opacity-60 transition-transform', open && 'rotate-180')} />
                         </button>
 
                         {open && (
                           <ul className="ml-[1.15rem] mt-0.5 space-y-0.5 border-l border-border pl-2.5">
                             {children.map((child) => {
-                              const on = isActive(child.href);
+                              const on = activeChild(children) === child.href;
                               return (
                                 <li key={child.href}>
                                   <Link
@@ -408,6 +438,7 @@ export default function OpsSidebar({ storeName = 'Ops', collapsed = false }: Pro
                         <Link href={href} className={linkCls}>
                           <Icon className="h-4 w-4 shrink-0" />
                           <span className="flex-1">{label}</span>
+                          {desktopMark(href)}
                           {active && <ChevronRight className="h-3 w-3 opacity-60" />}
                         </Link>
                       )}

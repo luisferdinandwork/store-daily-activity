@@ -11,7 +11,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, isNull } from 'drizzle-orm';
 
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
@@ -21,11 +21,25 @@ import { getOpsActor } from '@/app/api/ops/tasks/_helpers';
 
 export const dynamic = 'force-dynamic';
 
+export interface StorePic {
+  name: string;
+  nik: string;
+}
+
+export interface AreaStoreRow {
+  id: number;
+  name: string;
+  storeNo: string;
+  /** Active PIC 1 / PIC 2 whose home store this is (normally one each; PIC 1 duplicates are tolerated, see lib/store-pic1.ts). */
+  pic1: StorePic[];
+  pic2: StorePic[];
+}
+
 export interface AreaSettingsRow {
   id: number;
   name: string;
   storeCount: number;
-  stores: { id: number; name: string; storeNo: string }[];
+  stores: AreaStoreRow[];
   opsUser: { id: string; name: string; nik: string } | null;
 }
 
@@ -48,7 +62,7 @@ export async function GET() {
   }
 
   try {
-    const [areaRows, storeRows, opsUserRows] = await Promise.all([
+    const [areaRows, storeRows, opsUserRows, picRows] = await Promise.all([
       db.select().from(areas).orderBy(areas.name),
       db.select({ id: stores.id, name: stores.name, storeNo: stores.storeNo, areaId: stores.areaId }).from(stores).orderBy(stores.name),
       db
@@ -57,7 +71,26 @@ export async function GET() {
         .innerJoin(employeeTypes, eq(employeeTypes.id, users.employeeTypeId))
         .where(and(eq(employeeTypes.code, 'ops_area'), isNull(users.deletedAt)))
         .orderBy(users.name),
+      db
+        .select({ name: users.name, nik: users.nik, storeId: users.homeStoreId, type: employeeTypes.code })
+        .from(users)
+        .innerJoin(employeeTypes, eq(employeeTypes.id, users.employeeTypeId))
+        .where(and(
+          inArray(employeeTypes.code, ['pic_1', 'pic_2']),
+          eq(users.isActive, true),
+          isNull(users.deletedAt),
+          isNotNull(users.homeStoreId),
+        ))
+        .orderBy(users.name),
     ]);
+
+    const picsByStoreId = new Map<number, { pic1: StorePic[]; pic2: StorePic[] }>();
+    for (const p of picRows) {
+      if (p.storeId == null) continue;
+      const entry = picsByStoreId.get(p.storeId) ?? { pic1: [], pic2: [] };
+      (p.type === 'pic_1' ? entry.pic1 : entry.pic2).push({ name: p.name, nik: p.nik });
+      picsByStoreId.set(p.storeId, entry);
+    }
 
     const areaNameById = new Map(areaRows.map((a) => [a.id, a.name]));
     const opsUserByAreaId = new Map(opsUserRows.filter((u) => u.areaId != null).map((u) => [u.areaId as number, u]));
@@ -75,7 +108,13 @@ export async function GET() {
         id: a.id,
         name: a.name,
         storeCount: areaStores.length,
-        stores: areaStores.map((s) => ({ id: s.id, name: s.name, storeNo: s.storeNo })),
+        stores: areaStores.map((s) => ({
+          id: s.id,
+          name: s.name,
+          storeNo: s.storeNo,
+          pic1: picsByStoreId.get(s.id)?.pic1 ?? [],
+          pic2: picsByStoreId.get(s.id)?.pic2 ?? [],
+        })),
         opsUser: opsUser ? { id: opsUser.id, name: opsUser.name, nik: opsUser.nik } : null,
       };
     });

@@ -1,6 +1,6 @@
 // app/api/employee/impact-visits/[id]/route.ts
 //
-// GET — one submitted Impact Visit of the employee's home store, with the items
+// GET — one of the latest 3 submitted Impact Visits of the employee's home store, with the items
 // Ops answered "tidak" (main checklist + VM checklist) and Ops's notes.
 
 import { NextResponse } from 'next/server';

@@ -5,12 +5,12 @@
 //          server-side whenever checklistResponses/vmChecklistResponses are
 //          touched, so the client never has to (and can't) fake a score.
 //          Setting status:'submitted' locks the visit — no further edits.
-// DELETE — draft only.
+// DELETE — IT only (draft or submitted). Ops can't delete a visit.
 //
 // Editing rights: the visit's own creator (visitedBy), or any ops_ho/admin
 // via resolveOpsScope()'s 'all_areas' scope. An ops_area user outside the
 // visit's store area is rejected entirely (area scoping); one inside the
-// area but who isn't the creator can view but not edit/delete.
+// area but who isn't the creator can view but not edit.
 
 import { NextRequest, NextResponse } from 'next/server';
 import { eq } from 'drizzle-orm';
@@ -75,7 +75,7 @@ export async function GET(
     success: true,
     visit: {
       ...serializeImpactVisit(found.visit),
-      ...computeImpactVisitPermissionFlags(found.visit, { userId: scope.userId, isHO }),
+      ...computeImpactVisitPermissionFlags(found.visit, { userId: scope.userId, isHO, isIt: scope.isIt }),
       store: { name: found.storeName, storeNo: found.storeNo },
       areaName: found.areaName,
     },
@@ -107,7 +107,7 @@ export async function PATCH(
   }
 
   const isHO = scope.scope === 'all_areas';
-  const { canEdit } = computeImpactVisitPermissionFlags(found.visit, { userId: scope.userId, isHO });
+  const { canEdit } = computeImpactVisitPermissionFlags(found.visit, { userId: scope.userId, isHO, isIt: scope.isIt });
 
   if (!canEdit) {
     return NextResponse.json(
@@ -187,7 +187,7 @@ export async function PATCH(
     success: true,
     visit: {
       ...serializeImpactVisit(updated),
-      ...computeImpactVisitPermissionFlags(updated, { userId: scope.userId, isHO }),
+      ...computeImpactVisitPermissionFlags(updated, { userId: scope.userId, isHO, isIt: scope.isIt }),
       store: { name: found.storeName, storeNo: found.storeNo },
       areaName: found.areaName,
     },
@@ -219,10 +219,10 @@ export async function DELETE(
   }
 
   const isHO = scope.scope === 'all_areas';
-  const { canDelete } = computeImpactVisitPermissionFlags(found.visit, { userId: scope.userId, isHO });
+  const { canDelete } = computeImpactVisitPermissionFlags(found.visit, { userId: scope.userId, isHO, isIt: scope.isIt });
 
   if (!canDelete) {
-    return NextResponse.json({ success: false, error: 'Only a draft visit can be deleted.' }, { status: 409 });
+    return NextResponse.json({ success: false, error: 'Only IT can delete an Impact Visit.' }, { status: 403 });
   }
 
   await db.delete(impactVisits).where(eq(impactVisits.id, visitId));

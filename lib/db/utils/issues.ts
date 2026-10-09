@@ -156,6 +156,20 @@ export async function getOperationIssueRoleIds(): Promise<number[]> {
   return rows.slice(0, 1).map((role) => role.id);
 }
 
+/**
+ * Role ids for Ops + IT + Finance — where a Store Closing "On Hold" issue goes the
+ * moment it is submitted. Roles that don't exist / can't receive issues are
+ * skipped; Ops falls back like getOperationIssueRoleIds().
+ */
+export async function getStoreClosingHoldIssueRoleIds(): Promise<number[]> {
+  const rows = await getAssignableIssueRoles();
+  const ids = new Set(await getOperationIssueRoleIds());
+  for (const role of rows) {
+    if (role.code === 'it' || role.code === 'finance') ids.add(role.id);
+  }
+  return [...ids];
+}
+
 export async function replaceIssueRoleAssignments(issueId: number, roleIds: number[]): Promise<void> {
   const cleanIds = uniqueNumbers(roleIds);
 
@@ -256,7 +270,10 @@ export interface IssuePermissionFlags {
   canEdit: boolean;
   canDelete: boolean;
   canSendToOps: boolean;
+  /** The "Mark as Solved" button is pressable — only once the issue is In Review. */
   canMarkSolved: boolean;
+  /** The button is shown at all (locked until In Review, and again after Solved / Completed). */
+  showMarkSolved: boolean;
   canUploadBa: boolean;
 }
 
@@ -284,7 +301,8 @@ export function computeIssuePermissionFlags(
     canEdit: actsAsReporter && isDraft,
     canDelete: isOwner && isDraft && !isStoreClosingHold,
     canSendToOps: actsAsReporter && isDraft,
-    canMarkSolved: actsAsReporter && (issue.status === 'reported' || issue.status === 'in_review'),
+    canMarkSolved: actsAsReporter && issue.status === 'in_review',
+    showMarkSolved: actsAsReporter && !isDraft,
     canUploadBa: isOwner && !parseAttachmentUrls(issue.baAttachmentUrls).length,
   };
 }

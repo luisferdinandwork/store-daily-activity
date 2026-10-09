@@ -1,10 +1,11 @@
 'use client';
 // app/employee/impact-visits/page.tsx
 //
-// Impact Visit Result — the store's submitted Impact Visits (Ops store audits),
-// latest first and highlighted. Each opens to the points Ops marked "tidak", so
-// the team can fix them before the next visit. Reached from the floating
-// "More" menu; the back/title bar comes from EmployeeHeader.
+// Impact Visit Result — the store's latest 3 submitted Impact Visits (Ops store
+// audits, EMPLOYEE_VISIBLE_VISITS), latest first and highlighted. Each opens to
+// the points Ops marked "tidak", so the team can fix them before the next visit.
+// Reached from the floating "More" menu; the back/title bar comes from
+// EmployeeHeader.
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
@@ -12,14 +13,16 @@ import { ChevronRight, ClipboardCheck, Sparkles, Wrench } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { CalendarTile, taskDayInfo } from '@/components/employee/tasks';
 import { Chip, EmptyState, Notice, SectionLabel, SkeletonBlocks } from '@/components/employee/ui';
-import { FixCountBanner, ScoreTile } from '@/components/employee/impact-visit-ui';
+import { ScoreTile } from '@/components/employee/impact-visit-ui';
+import { CheckProgress } from '@/components/shared/ImpactFollowUp';
 import {
+  EMPLOYEE_VISIBLE_VISITS,
   IMPACT_VISIT_TYPE_LABEL,
   type ImpactVisitResultSummary,
 } from '@/lib/impact-visit/results';
 
 function fixCount(v: ImpactVisitResultSummary): number {
-  return v.main.negativeCount + v.vm.negativeCount;
+  return v.followUp.total - v.followUp.verified;
 }
 
 function typeLabel(v: ImpactVisitResultSummary): string | null {
@@ -58,7 +61,7 @@ function LatestVisitCard({ visit }: { visit: ImpactVisitResultSummary }) {
         <ScoreTile label="VM Checklist" result={visit.vm} />
       </div>
 
-      <FixCountBanner count={fixCount(visit)} className="mt-2" />
+      <div className="mt-2"><CheckProgress summary={visit.followUp} /></div>
     </Link>
   );
 }
@@ -91,7 +94,7 @@ function VisitRow({ visit }: { visit: ImpactVisitResultSummary }) {
           count > 0 ? 'bg-amber-50 text-amber-800' : 'bg-green-50 text-green-700',
         )}
       >
-        {count > 0 ? <><Wrench className="h-3 w-3" />{count}</> : 'OK'}
+        {count > 0 ? <><Wrench className="h-3 w-3" />{count}</> : 'Selesai'}
       </span>
       <ChevronRight className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
     </Link>
@@ -138,8 +141,8 @@ export default function ImpactVisitResultsPage() {
         ) : (
           <>
             <p className="text-xs leading-relaxed text-muted-foreground">
-              Hasil kunjungan Ops ke toko. Buka visit untuk melihat poin yang dinilai
-              &ldquo;Tidak&rdquo; — perbaiki sebelum visit berikutnya.
+              Hasil {EMPLOYEE_VISIBLE_VISITS} kunjungan Ops terakhir ke toko. Buka visit untuk melihat
+              status perbaikan dan pemeriksaan mingguan oleh Ops.
             </p>
 
             <LatestVisitCard visit={latest} />

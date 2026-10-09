@@ -48,6 +48,8 @@ export interface Issue {
   canDelete?:     boolean;
   canSendToOps?:  boolean;
   canMarkSolved?: boolean;
+  /** Show the Mark as Solved button (disabled unless `canMarkSolved`). */
+  showMarkSolved?: boolean;
   canUploadBa?:   boolean;
 }
 

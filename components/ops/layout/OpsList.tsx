@@ -34,6 +34,7 @@ export function OpsListRow({
   className,
   showChevron = true,
   ariaLabel,
+  trailing,
 }: {
   onClick: () => void;
   children: ReactNode;
@@ -41,15 +42,18 @@ export function OpsListRow({
   /** The trailing "opens detail" chevron. */
   showChevron?: boolean;
   ariaLabel?: string;
+  /** Row-level controls (e.g. a delete button). Rendered beside the row button, never inside it — a button can't contain a button. */
+  trailing?: ReactNode;
 }) {
   return (
-    <li>
+    <li className={cn(trailing && 'flex items-center hover:bg-slate-50')}>
       <button
         type="button"
         onClick={onClick}
         aria-label={ariaLabel}
         className={cn(
           'group flex w-full flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 text-left transition-colors hover:bg-slate-50 focus:outline-none focus-visible:bg-slate-50 sm:px-5 md:flex-nowrap',
+          trailing && 'min-w-0 flex-1',
           className,
         )}
       >
@@ -58,6 +62,7 @@ export function OpsListRow({
           <ChevronRight className="order-last hidden h-4 w-4 shrink-0 text-slate-300 transition-transform group-hover:translate-x-0.5 group-hover:text-slate-500 md:block" />
         )}
       </button>
+      {trailing && <div className="flex shrink-0 items-center pr-3 sm:pr-4">{trailing}</div>}
     </li>
   );
 }

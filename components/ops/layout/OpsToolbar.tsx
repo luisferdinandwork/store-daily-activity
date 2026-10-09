@@ -35,7 +35,7 @@ export function OpsSearchInput({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         aria-label={placeholder}
-        className="h-10 w-full rounded-xl border border-slate-200 bg-white pl-9 pr-8 text-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+        className="h-10 w-full rounded-xl border border-slate-200 bg-white pl-9 pr-8 text-base md:text-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
       />
       {value && (
         <button
@@ -72,7 +72,7 @@ export function OpsFilterSelect({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className={cn(
-          'h-10 max-w-[220px] appearance-none truncate rounded-xl border pl-3 pr-8 text-sm font-semibold focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100',
+          'h-10 max-w-[220px] appearance-none truncate rounded-xl border pl-3 pr-8 text-base font-semibold md:text-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100',
           highlight ? 'border-indigo-300 bg-indigo-50 text-indigo-800' : 'border-slate-200 bg-white text-slate-700',
         )}
       >

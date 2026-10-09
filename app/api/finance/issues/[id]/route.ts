@@ -21,6 +21,7 @@ import {
   serializeIssue,
   type IssueStatus,
 } from '@/lib/db/utils/issues';
+import { reopenStoreClosingHoldForIssue } from '@/lib/db/utils/store-closing';
 
 const VALID_STATUSES: IssueStatus[] = ['in_review', 'completed'];
 
@@ -131,6 +132,9 @@ export async function PATCH(
     const assignedRoles = (await loadIssueAssignedRoles([issueId])).get(issueId) ?? [];
 
     if (requestedStatus === 'completed') {
+      // A Store Closing held by this issue reopens (Store Closing On Hold issues are routed to Finance too).
+      await reopenStoreClosingHoldForIssue(issueId);
+
       await notifyIssueEvent({
         issueId,
         storeId: target.storeId,

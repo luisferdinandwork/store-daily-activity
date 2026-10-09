@@ -1,10 +1,12 @@
 // lib/impact-visit/results.ts
 //
 // What a store's staff see of an Impact Visit (employee "Impact Visit Result"):
-// only SUBMITTED visits, and of each one the items Ops answered "tidak" — the
-// points to fix before the next visit — with Ops's note on each. Pure +
-// client-safe (no DB imports); the API in app/api/employee/impact-visits
-// fills these shapes.
+// only SUBMITTED visits — the latest EMPLOYEE_VISIBLE_VISITS of them — and of
+// each one the items Ops answered "tidak" — the points to fix before the next
+// visit — with Ops's note on each. The Ops visitor gets the same shapes for the
+// store's earlier visits in a side panel while filling the next one. Pure +
+// client-safe (no DB imports); app/api/employee/impact-visits and
+// app/api/ops/impact-visits/[id]/history fill these shapes.
 
 import {
   IMPACT_CHECKLIST,
@@ -14,6 +16,13 @@ import {
   type ChecklistItem,
 } from './checklist-config';
 import type { ChecklistResponses } from './scoring';
+import type { FollowUpCheck, FollowUpSummary } from './follow-up';
+
+/** Store staff see only the store's latest 3 submitted visits (list + detail). */
+export const EMPLOYEE_VISIBLE_VISITS = 3;
+
+/** How many earlier visits the Ops history panel offers. */
+export const OPS_HISTORY_VISITS = 6;
 
 export interface NegativeItem {
   id: string;
@@ -24,6 +33,7 @@ export interface NegativeItem {
   points: number;
   /** Ops's note on this item, if any. */
   note: string | null;
+  followUp?: FollowUpCheck;
 }
 
 /** Items answered "tidak", in checklist order. Unanswered items are not listed. */
@@ -78,6 +88,7 @@ export interface ImpactVisitResultSummary {
   visitedByName: string | null;
   main: ChecklistResultScore;
   vm: ChecklistResultScore;
+  followUp: FollowUpSummary;
 }
 
 /** GET /api/employee/impact-visits/[id]. */
@@ -86,6 +97,14 @@ export interface ImpactVisitResultDetail extends ImpactVisitResultSummary {
   notes: string | null;
   mainNegatives: NegativeItem[];
   vmNegatives: NegativeItem[];
+  checks: FollowUpCheck[];
+}
+
+export interface OpsImpactVisitResult extends ImpactVisitResultDetail {
+  visitedBy: string;
+  store: { id: number; name: string; storeNo: string };
+  areaName: string | null;
+  canReview: boolean;
 }
 
 export const IMPACT_VISIT_TYPE_LABEL: Record<'virtual' | 'on_location', string> = {

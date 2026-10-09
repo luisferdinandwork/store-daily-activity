@@ -58,7 +58,7 @@ export async function GET(req: NextRequest) {
 
   const out = rows.map((row) => ({
     ...serializeImpactVisit(row.visit),
-    ...computeImpactVisitPermissionFlags(row.visit, { userId: scope.userId, isHO }),
+    ...computeImpactVisitPermissionFlags(row.visit, { userId: scope.userId, isHO, isIt: scope.isIt }),
     store: { name: row.storeName, storeNo: row.storeNo },
     areaName: row.areaName,
     visitorName: row.visitorName,
@@ -117,7 +117,7 @@ export async function POST(req: NextRequest) {
     success: true,
     visit: {
       ...serializeImpactVisit(created),
-      ...computeImpactVisitPermissionFlags(created, { userId: scope.userId, isHO: scope.scope === 'all_areas' }),
+      ...computeImpactVisitPermissionFlags(created, { userId: scope.userId, isHO: scope.scope === 'all_areas', isIt: scope.isIt }),
     },
   }, { status: 201 });
 }

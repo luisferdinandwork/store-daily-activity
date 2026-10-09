@@ -13,7 +13,9 @@ import { CalendarTile, taskDayInfo } from '@/components/employee/tasks';
 import {
   Chip, EmptyState, Notice, Section, Segmented, SkeletonBlocks,
 } from '@/components/employee/ui';
-import { FixCountBanner, ScoreTile } from '@/components/employee/impact-visit-ui';
+import { ScoreTile } from '@/components/employee/impact-visit-ui';
+import { CheckProgress, CheckStatus, CheckTimeline, checkDate } from '@/components/shared/ImpactFollowUp';
+import type { FollowUpCheck } from '@/lib/impact-visit/follow-up';
 import {
   IMPACT_VISIT_TYPE_LABEL,
   groupBySection,
@@ -30,17 +32,15 @@ const TAB_NAME: Record<Tab, string> = {
 
 // ─── One "tidak" point ───────────────────────────────────────────────────────
 
-function NegativeItemCard({ item }: { item: NegativeItem }) {
+function NegativeItemCard({ item, checks }: { item: NegativeItem; checks: FollowUpCheck[] }) {
+  const verified = item.followUp?.status === 'verified';
   return (
-    <div className="rounded-2xl border border-red-100 bg-card p-3.5">
+    <div className={`rounded-2xl border bg-card p-3.5 ${verified ? 'border-emerald-200' : 'border-red-100'}`}>
       <div className="flex items-start gap-2.5">
-        <XCircle className="mt-0.5 h-4 w-4 flex-shrink-0 text-red-500" />
+        {verified ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" /> : <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />}
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
             <p className="text-[13px] font-semibold leading-snug text-foreground">{item.criteria}</p>
-            <span className="flex-shrink-0 rounded-md bg-red-50 px-1.5 py-0.5 text-[10px] font-bold text-red-700">
-              {item.points} poin
-            </span>
           </div>
 
           <p className="mt-1.5 flex gap-1.5 text-[11px] leading-relaxed text-muted-foreground">
@@ -54,13 +54,19 @@ function NegativeItemCard({ item }: { item: NegativeItem }) {
               <p className="mt-0.5 whitespace-pre-line text-xs leading-relaxed text-amber-900">{item.note}</p>
             </div>
           )}
+          <div className="mt-3 space-y-2 border-t border-slate-100 pt-3">
+            <CheckStatus status={item.followUp?.status} />
+            <p className="text-[11px] text-slate-500">{item.followUp ? `${checkDate(item.followUp.checkedAt)} WIB · ${item.followUp.reviewerName ?? 'Ops'}` : 'Menunggu pemeriksaan ulang oleh Ops.'}</p>
+            {item.followUp?.note && <p className="whitespace-pre-line text-xs text-slate-700">{item.followUp.note}</p>}
+            <CheckTimeline checks={checks} />
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-function NegativeList({ items, tab }: { items: NegativeItem[]; tab: Tab }) {
+function NegativeList({ items, tab, checks }: { items: NegativeItem[]; tab: Tab; checks: FollowUpCheck[] }) {
   if (items.length === 0) {
     return (
       <EmptyState
@@ -77,7 +83,7 @@ function NegativeList({ items, tab }: { items: NegativeItem[]; tab: Tab }) {
       {groupBySection(items).map((g) => (
         <Section key={g.section} title={g.section} meta={`${g.items.length} poin`}>
           <div className="space-y-2">
-            {g.items.map((item) => <NegativeItemCard key={item.id} item={item} />)}
+            {g.items.map((item) => <NegativeItemCard key={item.id} item={item} checks={checks.filter((c) => c.itemId === item.id)} />)}
           </div>
         </Section>
       ))}
@@ -147,7 +153,8 @@ export default function ImpactVisitResultDetailPage() {
                 <ScoreTile label="VM Checklist" result={visit.vm} />
               </div>
 
-              <FixCountBanner count={visit.mainNegatives.length + visit.vmNegatives.length} className="mt-2" />
+              <div className="mt-2"><CheckProgress summary={visit.followUp} /></div>
+              <p className="mt-2 text-[11px] text-muted-foreground">Nilai di atas adalah hasil saat visit. Status perbaikan diperbarui setelah pemeriksaan mingguan oleh Ops.</p>
             </div>
 
             {visit.notes && (
@@ -166,7 +173,7 @@ export default function ImpactVisitResultDetailPage() {
                   { value: 'vm',   label: TAB_NAME.vm,   count: visit.vmNegatives.length },
                 ]}
               />
-              <NegativeList tab={tab} items={tab === 'main' ? visit.mainNegatives : visit.vmNegatives} />
+              <NegativeList tab={tab} checks={visit.checks} items={tab === 'main' ? visit.mainNegatives : visit.vmNegatives} />
             </div>
           </>
         )}

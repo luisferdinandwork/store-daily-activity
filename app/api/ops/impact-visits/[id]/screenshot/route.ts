@@ -67,7 +67,7 @@ export async function POST(
   }
 
   const isHO = scope.scope === 'all_areas';
-  const { canEdit } = computeImpactVisitPermissionFlags(found.visit, { userId: scope.userId, isHO });
+  const { canEdit } = computeImpactVisitPermissionFlags(found.visit, { userId: scope.userId, isHO, isIt: scope.isIt });
   if (!canEdit) {
     return NextResponse.json(
       { success: false, error: found.visit.status !== 'draft' ? 'This visit has already been submitted.' : 'Forbidden' },
@@ -106,7 +106,7 @@ export async function POST(
     success: true,
     visit: {
       ...serializeImpactVisit(updated),
-      ...computeImpactVisitPermissionFlags(updated, { userId: scope.userId, isHO }),
+      ...computeImpactVisitPermissionFlags(updated, { userId: scope.userId, isHO, isIt: scope.isIt }),
       store: { name: found.storeName, storeNo: found.storeNo },
       areaName: found.areaName,
     },

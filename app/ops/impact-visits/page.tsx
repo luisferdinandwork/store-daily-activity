@@ -4,16 +4,29 @@
 //
 // Mirrors the desktop panel look of app/ops/issues/page.tsx: OpsPageHeader,
 // slate canvas, store filter, card list. Area scoping is enforced
-// server-side by resolveOpsScope() in /api/ops/impact-visits.
+// server-side by resolveOpsScope() in /api/ops/impact-visits. The Monthly
+// Report is its own page (sidebar: Impact Visit > Monthly Report). Only IT can
+// delete a visit.
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import {
   ClipboardCheck, MapPin, Clock, Loader2, Plus,
-  Shield, Globe2, User, Video, Navigation, BarChart3,
+  Shield, Globe2, User, Video, Navigation, History, Trash2,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
 import { OpsList, OpsListRow } from '@/components/ops/layout/OpsList';
 import StorePickerCombobox, {
@@ -24,6 +37,7 @@ import StorePickerCombobox, {
 
 interface VisitListItem {
   id: string;
+  storeId: string;
   visitDate: string;
   status: 'draft' | 'submitted';
   visitType: 'virtual' | 'on_location' | null;
@@ -36,6 +50,7 @@ interface VisitListItem {
   store: { name: string; storeNo: string };
   areaName: string | null;
   visitorName: string | null;
+  canDelete: boolean;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -98,8 +113,8 @@ function VisitTypeBadge({ visitType }: { visitType: 'virtual' | 'on_location' | 
 export default function ImpactVisitsPage() {
   const { data: session, status: authStatus } = useSession();
   const router = useRouter();
-  const role = (session?.user as any)?.role as string | undefined;
-  const employeeType = (session?.user as any)?.employeeType as string | undefined;
+  const role = session?.user?.role;
+  const employeeType = session?.user?.employeeType;
   const isIt  = role === 'it';
   const isOps = isIt || employeeType === 'ops_area' || employeeType === 'ops_ho';
   const isHO  = isIt || employeeType === 'ops_ho';
@@ -114,6 +129,8 @@ export default function ImpactVisitsPage() {
   const [newVisitType, setNewVisitType] = useState<'virtual' | 'on_location'>('on_location');
   const [creating,    setCreating]    = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [toDelete,    setToDelete]    = useState<VisitListItem | null>(null);
+  const [deletingId,  setDeletingId]  = useState<string | null>(null);
 
   useEffect(() => {
     if (authStatus === 'loading') return;
@@ -155,6 +172,28 @@ export default function ImpactVisitsPage() {
   }, [isOps]);
 
   const allStoreOptions = useMemo(() => storeGroups.flatMap((g) => g.stores), [storeGroups]);
+
+  // Earlier submitted visits of the store picked for a new visit — known only
+  // while the list isn't narrowed to some other store.
+  const newStoreHistory = useMemo(() => {
+    if (!newStoreId || (storeFilter !== 'all' && storeFilter !== newStoreId)) return null;
+    return visits.filter((v) => v.storeId === newStoreId && v.status === 'submitted').length;
+  }, [visits, newStoreId, storeFilter]);
+
+  async function handleDelete(visit: VisitListItem) {
+    setDeletingId(visit.id);
+    try {
+      const res  = await fetch(`/api/ops/impact-visits/${visit.id}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error ?? 'Failed to delete.');
+      setVisits((prev) => prev.filter((v) => v.id !== visit.id));
+      toast.success(`Impact Visit deleted — ${visit.store.name}.`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete.');
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   async function handleStartVisit() {
     if (!newStoreId) return;
@@ -204,16 +243,6 @@ export default function ImpactVisitsPage() {
         onRefresh={() => load(true)}
         refreshing={refreshing}
         contentClassName="w-full"
-        actions={
-          <button
-            type="button"
-            onClick={() => router.push('/ops/impact-visits/report')}
-            className="flex h-9 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 text-xs font-bold text-slate-600 hover:bg-slate-50"
-          >
-            <BarChart3 className="h-3.5 w-3.5" />
-            Monthly Report
-          </button>
-        }
       />
 
       <div className="mx-auto max-w-5xl space-y-6 p-6 lg:p-8">
@@ -263,6 +292,12 @@ export default function ImpactVisitsPage() {
               Start Visit
             </button>
           </div>
+          {newStoreHistory != null && newStoreHistory > 0 && (
+            <p className="mt-3 flex items-center gap-1.5 rounded-lg bg-indigo-50 px-3 py-2 text-xs text-indigo-700">
+              <History className="h-3.5 w-3.5 shrink-0" />
+              Toko ini punya {newStoreHistory} visit sebelumnya — poin &ldquo;Tidak&rdquo;-nya tampil di panel Riwayat saat kamu mengisi visit baru.
+            </p>
+          )}
           {createError && <p className="mt-2 text-xs text-rose-600">{createError}</p>}
         </div>
 
@@ -300,6 +335,18 @@ export default function ImpactVisitsPage() {
                 key={visit.id}
                 onClick={() => router.push(`/ops/impact-visits/${visit.id}`)}
                 className="hover:bg-indigo-50/30"
+                trailing={visit.canDelete && (
+                  <button
+                    type="button"
+                    title="Delete visit (IT)"
+                    aria-label="Delete visit"
+                    disabled={deletingId === visit.id}
+                    onClick={() => setToDelete(visit)}
+                    className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-300 transition-colors hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"
+                  >
+                    {deletingId === visit.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                  </button>
+                )}
               >
                 <div className="min-w-0 flex-1 basis-64">
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -326,6 +373,36 @@ export default function ImpactVisitsPage() {
           </OpsList>
         )}
       </div>
+
+      <AlertDialog open={!!toDelete} onOpenChange={(open) => { if (!open) setToDelete(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this Impact Visit?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {toDelete && (
+                <>
+                  {toDelete.store.name} · {new Date(toDelete.visitDate).toLocaleDateString('id-ID')} ·{' '}
+                  {toDelete.status === 'submitted' ? 'Submitted' : 'Draft'}.{' '}
+                </>
+              )}
+              The visit and all its answers are removed for good
+              {toDelete?.status === 'submitted' ? ' — it also leaves the Monthly Report and the store’s Impact Visit Result' : ''}.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-rose-600 hover:bg-rose-700"
+              onClick={() => {
+                if (toDelete) void handleDelete(toDelete);
+                setToDelete(null);
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

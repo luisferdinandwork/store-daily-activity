@@ -100,3 +100,18 @@ export const impactVisits = pgTable('impact_visits', {
 
 export type ImpactVisit = typeof impactVisits.$inferSelect;
 export type NewImpactVisit = typeof impactVisits.$inferInsert;
+
+// Append-only rechecks: one entry each time Ops verifies a negative point.
+// The visit's original responses/scores remain immutable after submission.
+export const impactFollowUpStatusEnum = pgEnum('impact_follow_up_status', ['needs_fix', 'not_done', 'verified']);
+export const impactVisitChecks = pgTable('impact_visit_checks', {
+  id: serial('id').primaryKey(),
+  visitId: integer('visit_id').references(() => impactVisits.id, { onDelete: 'cascade' }).notNull(),
+  itemId: text('item_id').notNull(),
+  status: impactFollowUpStatusEnum('status').notNull(),
+  note: text('note'),
+  checkedBy: text('checked_by').references(() => users.id, { onDelete: 'set null' }),
+  checkedAt: timestamp('checked_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  latestIdx: index('impact_visit_checks_latest_idx').on(t.visitId, t.itemId, t.checkedAt, t.id),
+}));

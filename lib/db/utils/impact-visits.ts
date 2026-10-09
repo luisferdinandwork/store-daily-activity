@@ -117,9 +117,13 @@ export interface ImpactVisitPermissionFlags {
   canDelete: boolean;
 }
 
+/**
+ * Edit: a draft, by its own visitor or HO / IT. Delete: IT only — draft or
+ * submitted — Ops can't delete a visit, not even their own draft.
+ */
 export function computeImpactVisitPermissionFlags(
   visit: Pick<ImpactVisit, 'status' | 'visitedBy'>,
-  actor: { userId: string; isHO: boolean },
+  actor: { userId: string; isHO: boolean; isIt: boolean },
 ): ImpactVisitPermissionFlags {
   const isDraft = visit.status === 'draft';
   const owns = visit.visitedBy === actor.userId;
@@ -127,7 +131,7 @@ export function computeImpactVisitPermissionFlags(
 
   return {
     canEdit: isDraft && canManage,
-    canDelete: isDraft && canManage,
+    canDelete: actor.isIt,
   };
 }
 

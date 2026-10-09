@@ -1,6 +1,6 @@
 // app/api/employee/impact-visits/route.ts
 //
-// GET — the employee's home store's submitted Impact Visits, latest first,
+// GET — the employee's home store's latest 3 submitted Impact Visits, latest first,
 // each with its scores and how many items Ops answered "tidak".
 
 import { NextResponse } from 'next/server';

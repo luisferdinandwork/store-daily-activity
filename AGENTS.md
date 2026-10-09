@@ -50,6 +50,7 @@ Guidance for AI assistants working in this repo. Keep this file short and curren
 - Targets: `store_monthly_targets` (Ops sets one number) + `employee_monthly_targets` (fixed monthly %, `isPercentageOverridden` locks it) + `target_allocation_templates` (default % by headcount). Logic in `lib/performance/target-utils.ts`.
 - `stores.status` (`active` / `close` / `ready_to_open`, `lib/store-status.ts` + `lib/db/utils/store-status.ts`) — only `active` stores record attendance, tasks, petty cash and appear in Ops/Finance progress rollups; `ready_to_open` is prep-only (schedules/targets, Rp 0 petty cash in Finance); change it only via `changeStoreStatus()` (IT-only; writes `store_status_history`, activation provisions petty cash; `checkStoreCloseReadiness()` is the future Audit hook). `stores.dept_code` = BC dimension code (`lib/store-dept-codes.ts`), IT + Finance views only — never return it from Ops/employee APIs.
 - `item_transfer_orders` — 3-phase (Item Return → Shipping → Item Receiving) BC-driven pipeline.
+- Impact Visit follow-ups: `/ops/impact-visits/results` is creator-only for Area Ops (within their area); HO/IT monitor all. Only the creator records weekly checks. `impact_visit_checks` is append-only (`needs_fix` / `not_done` / `verified`), uses Monday–Sunday WIB, and never changes original answers/scores. Employee results share these statuses/history but still expose only the latest 3 submitted visits. Report tables isolate their sticky layers below the page header.
 
 ## Conventions
 

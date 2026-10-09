@@ -8,7 +8,7 @@
 //   delete it (the held task points at it — see computeIssuePermissionFlags)
 // - once reported, content is locked — reported / in_review / solved / completed
 //   are read-only for store employees, EXCEPT:
-//     - the reporter can mark it "solved" from "reported" or "in_review"
+//     - the reporter can mark it "solved" only once it is "in_review"
 //       (their own resolution — happens BEFORE Ops gives final closure)
 //     - the reporter can upload a one-time Berita Acara (BA) attachment at
 //       ANY status, including draft, any time before it's uploaded once
@@ -138,7 +138,14 @@ export async function PATCH(
     const wantsToMarkSolved =
       actsAsReporter &&
       parsed.data.status === 'solved' &&
-      (existing.status === 'reported' || existing.status === 'in_review');
+      existing.status === 'in_review';
+
+    if (actsAsReporter && !manager && parsed.data.status === 'solved' && existing.status !== 'in_review') {
+      return NextResponse.json(
+        { error: 'Issue baru bisa ditandai solved setelah statusnya In Review.' },
+        { status: 409 },
+      );
+    }
 
     const wantsToEditContent =
       parsed.data.title !== undefined ||

@@ -21,8 +21,9 @@ import { db } from '@/lib/db';
 import { employeeTypes, userRoles, users } from '@/lib/db/schema';
 
 export type OpsScope =
-  | { ok: true; scope: 'all_areas'; userId: string; areaId: null }
-  | { ok: true; scope: 'area'; userId: string; areaId: number }
+  // `isIt` — IT keeps a few powers Ops doesn't have (e.g. deleting an Impact Visit).
+  | { ok: true; scope: 'all_areas'; userId: string; areaId: null; isIt: boolean }
+  | { ok: true; scope: 'area'; userId: string; areaId: number; isIt: false }
   | { ok: false; status: 401 | 403; error: string };
 
 export async function resolveOpsScope(): Promise<OpsScope> {
@@ -50,14 +51,14 @@ export async function resolveOpsScope(): Promise<OpsScope> {
   }
 
   if (row.roleCode === 'it' || row.employeeTypeCode === 'ops_ho') {
-    return { ok: true, scope: 'all_areas', userId, areaId: null };
+    return { ok: true, scope: 'all_areas', userId, areaId: null, isIt: row.roleCode === 'it' };
   }
 
   if (row.employeeTypeCode === 'ops_area') {
     if (row.areaId == null) {
       return { ok: false, status: 403, error: 'OPS Area user has no assigned area.' };
     }
-    return { ok: true, scope: 'area', userId, areaId: row.areaId };
+    return { ok: true, scope: 'area', userId, areaId: row.areaId, isIt: false };
   }
 
   return { ok: false, status: 403, error: 'Forbidden: OPS access only.' };

@@ -6,36 +6,45 @@
 // and app/it/areas/page.tsx (IT); each page supplies its own auth guard and
 // header chrome, this component owns everything below that.
 //
-//   • Monitoring — today's task completion + attendance, rolled up per area
-//     (reuses the same per-store stats /ops/stores already computes).
-//   • Settings   — rename an area, assign the one OPS Area user responsible
-//     for it (1:1), and move stores between areas.
+// Monitoring and settings are one thing here:
+//   • a sketch map of Indonesia, each area in its own colour (lib/area-map.ts)
+//   • one table — Area · Ops Area · Toko · Task · Attendance · Detail
+//   • the Detail modal: rename the area, assign its one OPS Area user (1:1),
+//     and see every store with its PIC, today's numbers and a "move" action.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
-  MapPinned, ClipboardCheck, UserCheck, Users, Store, Loader2,
-  ChevronDown, Plus, Pencil, Check, X, UserX, Search,
+  MapPinned, ClipboardCheck, UserCheck, Store, Loader2, Plus, Pencil, Check, X,
+  UserX, ChevronsUpDown, ArrowRightLeft, Eye, UserRound,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import type { AreaGroup } from '@/app/api/ops/stores/route';
-import type { AreaSettingsRow, OpsAreaUserRow } from '@/app/api/ops/areas/route';
+import type { AreaSettingsRow, AreaStoreRow, OpsAreaUserRow, StorePic } from '@/app/api/ops/areas/route';
 import { AttendanceCountsLine } from '@/components/ops/AttendanceStatus';
+import { OpsSearchInput } from '@/components/ops/layout/OpsToolbar';
+import IndonesiaAreaMap, { type MapArea } from '@/components/ops/areas/IndonesiaAreaMap';
 import { EMPTY_COUNTS, addCounts, showedUp, type AttendanceCounts } from '@/lib/attendance-health';
+import { areaColor, regionsForAreaName } from '@/lib/area-map';
+import {
+  Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
+} from '@/components/ui/command';
+import {
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 
 // ─── Shared bits ──────────────────────────────────────────────────────────────
 
-type Tab = 'monitoring' | 'settings';
-
 function rateColor(rate: number, total: number) {
-  if (total === 0) return { text: 'text-slate-400', bar: 'bg-slate-300', bg: 'bg-slate-50' };
-  if (rate >= 80) return { text: 'text-emerald-600', bar: 'bg-emerald-500', bg: 'bg-emerald-50' };
-  if (rate >= 50) return { text: 'text-amber-600', bar: 'bg-amber-400', bg: 'bg-amber-50' };
-  return { text: 'text-rose-600', bar: 'bg-rose-500', bg: 'bg-rose-50' };
+  if (total === 0) return { text: 'text-slate-400', bar: 'bg-slate-300' };
+  if (rate >= 80) return { text: 'text-emerald-600', bar: 'bg-emerald-500' };
+  if (rate >= 50) return { text: 'text-amber-600', bar: 'bg-amber-400' };
+  return { text: 'text-rose-600', bar: 'bg-rose-500' };
 }
 
-function MiniBar({ pct }: { pct: number }) {
-  const c = rateColor(pct, 1);
+function MiniBar({ pct, total }: { pct: number; total: number }) {
+  const c = rateColor(pct, total);
   return (
     <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
       <div className={cn('h-full rounded-full transition-all', c.bar)} style={{ width: `${Math.min(100, pct)}%` }} />
@@ -43,413 +52,549 @@ function MiniBar({ pct }: { pct: number }) {
   );
 }
 
-// ─── Monitoring tab ─────────────────────────────────────────────────────────
+// ─── Merged row: settings + today's monitoring ───────────────────────────────
 
-interface AreaRollup {
+type MonitorStore = AreaGroup['stores'][number];
+
+interface AreaRow {
   id: number;
   name: string;
-  storeCount: number;
+  color: string;
+  regions: MapArea['regions'];
+  opsUser: AreaSettingsRow['opsUser'];
+  stores: AreaStoreRow[];
+  monitor: Map<number, MonitorStore>;
   totalTasks: number;
   completedTasks: number;
   completionRate: number;
   /** Today's attendance across the area's stores (`total` = scheduled). */
   attendance: AttendanceCounts;
   attendanceRate: number;
-  stores: AreaGroup['stores'];
 }
 
-function rollupArea(group: AreaGroup): AreaRollup {
-  let totalTasks = 0, completedTasks = 0;
-  let attendance = EMPTY_COUNTS;
-  for (const s of group.stores) {
-    totalTasks += s.taskStats.total;
-    completedTasks += s.taskStats.completed;
-    attendance = addCounts(attendance, s.attendanceSummary);
-  }
-  return {
-    id: group.id,
-    name: group.name,
-    storeCount: group.stores.length,
-    totalTasks,
-    completedTasks,
-    completionRate: totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0,
-    attendance,
-    attendanceRate: attendance.total > 0 ? Math.round((showedUp(attendance) / attendance.total) * 100) : 0,
-    stores: group.stores,
-  };
+function buildRows(areas: AreaSettingsRow[], groups: AreaGroup[]): AreaRow[] {
+  const groupById = new Map(groups.map((g) => [g.id, g]));
+  return areas.map((a, index) => {
+    const monitor = new Map<number, MonitorStore>((groupById.get(a.id)?.stores ?? []).map((s) => [s.id, s]));
+    let totalTasks = 0, completedTasks = 0;
+    let attendance = EMPTY_COUNTS;
+    for (const s of monitor.values()) {
+      totalTasks += s.taskStats.total;
+      completedTasks += s.taskStats.completed;
+      attendance = addCounts(attendance, s.attendanceSummary);
+    }
+    return {
+      id: a.id,
+      name: a.name,
+      color: areaColor(index),
+      regions: regionsForAreaName(a.name),
+      opsUser: a.opsUser,
+      stores: a.stores,
+      monitor,
+      totalTasks,
+      completedTasks,
+      completionRate: totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0,
+      attendance,
+      attendanceRate: attendance.total > 0 ? Math.round((showedUp(attendance) / attendance.total) * 100) : 0,
+    };
+  });
 }
 
-function AreaMonitorCard({ area }: { area: AreaRollup }) {
-  const [expanded, setExpanded] = useState(false);
-  const taskColor = rateColor(area.completionRate, area.totalTasks);
-  const attColor = rateColor(area.attendanceRate, area.attendance.total);
+// ─── Searchable picker (Popover + Command) ───────────────────────────────────
+// Replaces the native <select>s: long labels truncate instead of stretching the
+// layout, the list scrolls inside the popover, and it is searchable.
+
+interface PickerOption {
+  value: string;
+  label: string;
+  hint?: string;
+  /** Text matched by the search box. */
+  search: string;
+}
+
+function SearchPicker({
+  options, value, onPick, placeholder, searchPlaceholder, emptyText, disabled, saving, icon, trigger, align = 'start',
+}: {
+  options: PickerOption[];
+  value: string | null;
+  onPick: (value: string) => void;
+  placeholder: string;
+  searchPlaceholder: string;
+  emptyText: string;
+  disabled?: boolean;
+  saving?: boolean;
+  icon?: ReactNode;
+  /** Custom trigger content; default is a full-width select-like button. */
+  trigger?: ReactNode;
+  align?: 'start' | 'end';
+}) {
+  const [open, setOpen] = useState(false);
+  const selected = options.find((o) => o.value === value);
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <button
-        type="button"
-        onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-center gap-4 p-4 text-left hover:bg-slate-50"
-      >
-        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600">
-          <MapPinned className="h-5 w-5" />
-        </div>
-
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <p className="truncate text-sm font-bold text-slate-900">{area.name}</p>
-            <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-500">
-              {area.storeCount} toko
+    <Popover open={open} onOpenChange={setOpen} modal>
+      <PopoverTrigger asChild>
+        {trigger ?? (
+          <button
+            type="button"
+            disabled={disabled || saving}
+            className={cn(
+              'group flex h-10 w-full items-center gap-2 rounded-xl border bg-white px-3 text-left text-sm shadow-xs transition',
+              'hover:border-indigo-300 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-indigo-100 disabled:cursor-not-allowed disabled:opacity-60',
+              open ? 'border-indigo-400 ring-4 ring-indigo-100' : 'border-slate-200',
+            )}
+          >
+            {icon}
+            <span className="min-w-0 flex-1 truncate">
+              {selected ? (
+                <span className="font-semibold text-slate-900">{selected.label}</span>
+              ) : (
+                <span className="text-slate-400">{placeholder}</span>
+              )}
             </span>
-          </div>
-
-          <div className="mt-2 grid gap-3 sm:grid-cols-2">
-            <div>
-              <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                <span className="flex items-center gap-1"><ClipboardCheck className="h-3 w-3" /> Task</span>
-                <span className={taskColor.text}>{area.completionRate}%</span>
-              </div>
-              <div className="mt-1"><MiniBar pct={area.completionRate} /></div>
-              <p className="mt-0.5 text-[10px] text-slate-400">{area.completedTasks}/{area.totalTasks} selesai</p>
-            </div>
-            <div>
-              <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                <span className="flex items-center gap-1"><UserCheck className="h-3 w-3" /> Attendance</span>
-                <span className={attColor.text}>{area.attendanceRate}%</span>
-              </div>
-              <div className="mt-1"><MiniBar pct={area.attendanceRate} /></div>
-              <AttendanceCountsLine counts={area.attendance} className="mt-0.5" />
-            </div>
-          </div>
-        </div>
-
-        <ChevronDown className={cn('h-4 w-4 shrink-0 text-slate-400 transition-transform', expanded && 'rotate-180')} />
-      </button>
-
-      {expanded && (
-        <div className="divide-y divide-slate-100 border-t border-slate-100">
-          {area.stores.length === 0 ? (
-            <p className="p-4 text-center text-xs text-slate-400">Belum ada toko di area ini.</p>
-          ) : area.stores.map((s) => (
-            <div key={s.id} className="flex items-center gap-3 px-4 py-2.5">
-              <Store className="h-3.5 w-3.5 shrink-0 text-slate-300" />
-              <p className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-700">{s.name}</p>
-              <span className={cn('shrink-0 text-[11px] font-bold tabular-nums', rateColor(s.taskStats.completionRate, s.taskStats.total).text)}>
-                {s.taskStats.completionRate}%
-              </span>
-              <AttendanceCountsLine counts={s.attendanceSummary} className="shrink-0 justify-end" />
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+            {saving ? (
+              <Loader2 className="h-4 w-4 shrink-0 animate-spin text-slate-400" />
+            ) : (
+              <ChevronsUpDown className="h-4 w-4 shrink-0 text-slate-400 group-hover:text-slate-500" />
+            )}
+          </button>
+        )}
+      </PopoverTrigger>
+      <PopoverContent
+        align={align}
+        sideOffset={6}
+        className="w-(--radix-popover-trigger-width) min-w-64 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border-slate-200 p-0 shadow-lg"
+      >
+        <Command
+          className="bg-white"
+          filter={(itemValue, search) => (itemValue.toLowerCase().includes(search.trim().toLowerCase()) ? 1 : 0)}
+        >
+          <CommandInput placeholder={searchPlaceholder} className="h-11 text-base md:text-sm" />
+          <CommandList className="max-h-64 p-1.5">
+            <CommandEmpty><span className="text-slate-500">{emptyText}</span></CommandEmpty>
+            <CommandGroup className="p-0">
+              {options.map((o) => (
+                <CommandItem
+                  key={o.value}
+                  value={o.search}
+                  onSelect={() => { setOpen(false); onPick(o.value); }}
+                  className="gap-2 rounded-lg px-2.5 py-2 data-[selected=true]:bg-indigo-50 data-[selected=true]:text-indigo-900"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-semibold">{o.label}</span>
+                    {o.hint && <span className="block truncate text-[11px] text-slate-400">{o.hint}</span>}
+                  </span>
+                  {o.value === value && <Check className="h-4 w-4 shrink-0 text-indigo-600" />}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 }
 
-function MonitoringView({ groups, loading }: { groups: AreaGroup[]; loading: boolean }) {
-  const rollups = useMemo(() => groups.map(rollupArea), [groups]);
+const NO_OPS = '__none__';
 
-  if (loading) {
-    return (
-      <div className="flex flex-col gap-3">
-        {Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-24 animate-pulse rounded-2xl bg-slate-100" />)}
-      </div>
-    );
-  }
-
-  if (rollups.length === 0) {
-    return (
-      <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-10 text-center">
-        <MapPinned className="mx-auto h-8 w-8 text-slate-300" />
-        <p className="mt-3 text-sm font-semibold text-slate-700">Belum ada area</p>
-        <p className="mt-1 text-xs text-slate-400">Buat area di tab Settings untuk mulai memantau.</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-3">
-      {rollups.map((a) => <AreaMonitorCard key={a.id} area={a} />)}
-    </div>
-  );
-}
-
-// ─── Settings tab ─────────────────────────────────────────────────────────────
-
-function AssignOpsUserControl({
+function OpsUserPicker({
   area, opsUsers, saving, onAssign,
 }: {
-  area: AreaSettingsRow;
+  area: AreaRow;
   opsUsers: OpsAreaUserRow[];
   saving: boolean;
   onAssign: (userId: string | null) => void;
 }) {
+  const options: PickerOption[] = [
+    { value: NO_OPS, label: 'Belum ditugaskan', search: 'belum ditugaskan kosong' },
+    ...opsUsers.map((u) => ({
+      value: u.id,
+      label: u.name,
+      hint: `${u.nik}${u.areaId != null && u.areaId !== area.id ? ` · saat ini: ${u.areaName}` : ''}`,
+      search: `${u.name} ${u.nik} ${u.areaName ?? ''}`,
+    })),
+  ];
   return (
-    <div className="flex items-center gap-2 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
-      <UserCheck className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-      <select
-        value={area.opsUser?.id ?? ''}
-        disabled={saving}
-        onChange={(e) => onAssign(e.target.value || null)}
-        className="h-8 flex-1 rounded-lg border border-slate-200 bg-white px-2 text-xs font-semibold text-slate-700 focus:border-indigo-400 focus:outline-none disabled:opacity-60"
-      >
-        <option value="">— Belum ditugaskan —</option>
-        {opsUsers.map((u) => (
-          <option key={u.id} value={u.id}>
-            {u.name} ({u.nik}){u.areaId != null && u.areaId !== area.id ? ` · saat ini: ${u.areaName}` : ''}
-          </option>
-        ))}
-      </select>
-      {saving && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-slate-400" />}
-    </div>
+    <SearchPicker
+      options={options}
+      value={area.opsUser?.id ?? NO_OPS}
+      onPick={(v) => onAssign(v === NO_OPS ? null : v)}
+      placeholder="Pilih Ops Area…"
+      searchPlaceholder="Cari nama atau NIK…"
+      emptyText="Ops Area tidak ditemukan"
+      saving={saving}
+      icon={<UserCheck className="h-4 w-4 shrink-0 text-slate-400" />}
+    />
   );
 }
 
-function StoreMoveRow({
-  store, areas, saving, onMove,
-}: {
-  store: AreaSettingsRow['stores'][number];
-  areas: AreaSettingsRow[];
-  saving: boolean;
-  onMove: (newAreaId: number) => void;
-}) {
-  const currentAreaId = areas.find((a) => a.stores.some((s) => s.id === store.id))?.id;
+// ─── Detail modal ─────────────────────────────────────────────────────────────
+
+function PicLine({ label, pics }: { label: string; pics: StorePic[] }) {
   return (
-    <div className="flex items-center gap-2 px-1 py-1.5">
-      <Store className="h-3.5 w-3.5 shrink-0 text-slate-300" />
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-xs font-semibold text-slate-700">{store.name}</p>
-        <p className="truncate text-[10px] text-slate-400 font-mono">{store.storeNo}</p>
-      </div>
-      <select
-        value={currentAreaId ?? ''}
-        disabled={saving}
-        onChange={(e) => onMove(Number(e.target.value))}
-        className="h-7 shrink-0 rounded-lg border border-slate-200 bg-white px-1.5 text-[10px] font-semibold text-slate-600 focus:border-indigo-400 focus:outline-none disabled:opacity-60"
-      >
-        {areas.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-      </select>
-    </div>
-  );
-}
-
-function NewAreaForm({ onCreate, creating }: { onCreate: (name: string) => void; creating: boolean }) {
-  const [open, setOpen] = useState(false);
-  const [name, setName] = useState('');
-
-  if (!open) {
-    return (
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="flex w-full items-center justify-center gap-1.5 rounded-2xl border-2 border-dashed border-slate-200 py-3 text-xs font-bold text-slate-500 transition hover:bg-slate-50"
-      >
-        <Plus className="h-3.5 w-3.5" /> Area baru
-      </button>
-    );
-  }
-
-  return (
-    <div className="flex items-center gap-2 rounded-2xl border border-indigo-200 bg-indigo-50 p-3">
-      <input
-        autoFocus
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        placeholder="Nama area (mis. Jawa Tengah)"
-        className="h-9 flex-1 rounded-lg border border-slate-200 bg-white px-3 text-sm focus:border-indigo-400 focus:outline-none"
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && name.trim()) { onCreate(name.trim()); setName(''); setOpen(false); }
-          if (e.key === 'Escape') setOpen(false);
-        }}
-      />
-      <button
-        type="button"
-        disabled={!name.trim() || creating}
-        onClick={() => { onCreate(name.trim()); setName(''); setOpen(false); }}
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-600 text-white disabled:opacity-50"
-      >
-        {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-      </button>
-      <button
-        type="button"
-        onClick={() => setOpen(false)}
-        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500"
-      >
-        <X className="h-4 w-4" />
-      </button>
-    </div>
-  );
-}
-
-function AreaSettingsCard({
-  area, allAreas, opsUsers, busy, onRename, onAssign, onMoveStore,
-}: {
-  area: AreaSettingsRow;
-  allAreas: AreaSettingsRow[];
-  opsUsers: OpsAreaUserRow[];
-  busy: Set<string>;
-  onRename: (id: number, name: string) => void;
-  onAssign: (id: number, userId: string | null) => void;
-  onMoveStore: (storeId: number, newAreaId: number) => void;
-}) {
-  const [editingName, setEditingName] = useState(false);
-  const [nameDraft, setNameDraft] = useState(area.name);
-  const [storesOpen, setStoresOpen] = useState(false);
-
-  const savingRename = busy.has(`rename:${area.id}`);
-  const savingAssign = busy.has(`assign:${area.id}`);
-
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="flex items-start gap-3">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600">
-          <MapPinned className="h-4.5 w-4.5" />
-        </div>
-
-        <div className="min-w-0 flex-1">
-          {editingName ? (
-            <div className="flex items-center gap-1.5">
-              <input
-                autoFocus
-                value={nameDraft}
-                onChange={(e) => setNameDraft(e.target.value)}
-                className="h-8 flex-1 rounded-lg border border-indigo-300 bg-white px-2 text-sm font-bold text-slate-900 focus:outline-none"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && nameDraft.trim()) { onRename(area.id, nameDraft.trim()); setEditingName(false); }
-                  if (e.key === 'Escape') { setNameDraft(area.name); setEditingName(false); }
-                }}
-              />
-              <button
-                type="button"
-                onClick={() => { if (nameDraft.trim()) { onRename(area.id, nameDraft.trim()); setEditingName(false); } }}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-600 text-white"
-              >
-                {savingRename ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-              </button>
-            </div>
-          ) : (
-            <div className="flex items-center gap-1.5">
-              <p className="truncate text-sm font-bold text-slate-900">{area.name}</p>
-              <button
-                type="button"
-                onClick={() => { setNameDraft(area.name); setEditingName(true); }}
-                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-slate-300 hover:bg-slate-100 hover:text-slate-500"
-              >
-                <Pencil className="h-3 w-3" />
-              </button>
-            </div>
-          )}
-          <p className="mt-0.5 text-[11px] text-slate-400">{area.storeCount} toko</p>
-        </div>
-      </div>
-
-      <div className="mt-3">
-        <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-400">OPS Area bertanggung jawab</p>
-        <AssignOpsUserControl
-          area={area}
-          opsUsers={opsUsers}
-          saving={savingAssign}
-          onAssign={(userId) => onAssign(area.id, userId)}
-        />
-        {!area.opsUser && (
-          <p className="mt-1.5 flex items-center gap-1 text-[10px] font-medium text-amber-600">
-            <UserX className="h-3 w-3" /> Belum ada OPS Area yang bertanggung jawab
-          </p>
-        )}
-      </div>
-
-      <button
-        type="button"
-        onClick={() => setStoresOpen((v) => !v)}
-        className="mt-3 flex w-full items-center justify-between rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-600"
-      >
-        <span className="flex items-center gap-1.5"><Users className="h-3.5 w-3.5" /> Toko di area ini</span>
-        <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', storesOpen && 'rotate-180')} />
-      </button>
-
-      {storesOpen && (
-        <div className="mt-1.5 divide-y divide-slate-100 rounded-xl border border-slate-100 px-2">
-          {area.stores.length === 0 ? (
-            <p className="py-3 text-center text-[11px] text-slate-400">Belum ada toko.</p>
-          ) : area.stores.map((s) => (
-            <StoreMoveRow
-              key={s.id}
-              store={s}
-              areas={allAreas}
-              saving={busy.has(`store:${s.id}`)}
-              onMove={(newAreaId) => onMoveStore(s.id, newAreaId)}
-            />
-          ))}
-        </div>
+    <div className="flex items-baseline gap-1.5 text-xs">
+      <span className="w-9 shrink-0 text-[10px] font-bold uppercase tracking-wide text-slate-400">{label}</span>
+      {pics.length === 0 ? (
+        <span className="text-slate-300">—</span>
+      ) : (
+        <span className={cn('min-w-0 truncate font-semibold', pics.length > 1 ? 'text-rose-600' : 'text-slate-700')} title={pics.map((p) => `${p.name} (${p.nik})`).join(', ')}>
+          {pics.map((p) => p.name).join(', ')}
+        </span>
       )}
     </div>
   );
 }
 
-function SettingsView({
-  areasData, opsUsers, loading, busy, search, onSearch,
-  onCreateArea, creatingArea, onRename, onAssign, onMoveStore,
+function StoreRowInModal({
+  store, live, areas, currentAreaId, moving, onMove,
 }: {
-  areasData: AreaSettingsRow[];
+  store: AreaStoreRow;
+  live: MonitorStore | undefined;
+  areas: AreaRow[];
+  currentAreaId: number;
+  moving: boolean;
+  onMove: (newAreaId: number) => void;
+}) {
+  const options: PickerOption[] = areas
+    .filter((a) => a.id !== currentAreaId)
+    .map((a) => ({ value: String(a.id), label: a.name, search: a.name }));
+
+  return (
+    <li className="flex flex-col gap-2.5 px-4 py-3 sm:flex-row sm:items-center sm:gap-4">
+      <div className="flex min-w-0 flex-1 items-start gap-2.5">
+        <Store className="mt-0.5 h-4 w-4 shrink-0 text-slate-300" />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-bold text-slate-800">{store.name}</p>
+          <p className="font-mono text-[11px] text-slate-400">{store.storeNo}</p>
+          {live && (
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5">
+              <span className={cn('text-[11px] font-bold tabular-nums', rateColor(live.taskStats.completionRate, live.taskStats.total).text)}>
+                Task {live.taskStats.completionRate}%
+              </span>
+              <AttendanceCountsLine counts={live.attendanceSummary} />
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="min-w-0 space-y-0.5 pl-6.5 sm:w-52 sm:shrink-0 sm:pl-0">
+        <PicLine label="PIC 1" pics={store.pic1} />
+        <PicLine label="PIC 2" pics={store.pic2} />
+      </div>
+
+      <div className="pl-6.5 sm:pl-0">
+        <SearchPicker
+          options={options}
+          value={null}
+          onPick={(v) => onMove(Number(v))}
+          placeholder=""
+          searchPlaceholder="Pindahkan ke area…"
+          emptyText="Area tidak ditemukan"
+          align="end"
+          trigger={
+            <button
+              type="button"
+              disabled={moving || options.length === 0}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-600 transition hover:border-indigo-300 hover:text-indigo-700 disabled:opacity-50"
+            >
+              {moving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ArrowRightLeft className="h-3.5 w-3.5" />}
+              Pindah
+            </button>
+          }
+        />
+      </div>
+    </li>
+  );
+}
+
+function AreaDetailDialog({
+  area, allAreas, opsUsers, busy, onClose, onRename, onAssign, onMoveStore,
+}: {
+  area: AreaRow | null;
+  allAreas: AreaRow[];
   opsUsers: OpsAreaUserRow[];
-  loading: boolean;
   busy: Set<string>;
-  search: string;
-  onSearch: (v: string) => void;
-  onCreateArea: (name: string) => void;
-  creatingArea: boolean;
+  onClose: () => void;
   onRename: (id: number, name: string) => void;
   onAssign: (id: number, userId: string | null) => void;
   onMoveStore: (storeId: number, newAreaId: number) => void;
 }) {
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return areasData;
-    return areasData.filter((a) =>
-      a.name.toLowerCase().includes(q) ||
-      a.opsUser?.name.toLowerCase().includes(q) ||
-      a.stores.some((s) => s.name.toLowerCase().includes(q)),
-    );
-  }, [areasData, search]);
+  // Which area's name is being edited — keyed by id so every area opens with a closed editor.
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [draft, setDraft] = useState('');
+  const editing = area != null && editingId === area.id;
+  const setEditing = (on: boolean) => setEditingId(on && area ? area.id : null);
 
-  if (loading) {
-    return (
-      <div className="grid gap-3 sm:grid-cols-2">
-        {Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-56 animate-pulse rounded-2xl bg-slate-100" />)}
-      </div>
-    );
+  function commitRename() {
+    if (!area) return;
+    const next = draft.trim();
+    if (next && next !== area.name) onRename(area.id, next);
+    setEditing(false);
   }
 
+  const taskColor = area ? rateColor(area.completionRate, area.totalTasks) : null;
+  const attColor = area ? rateColor(area.attendanceRate, area.attendance.total) : null;
+
   return (
-    <div className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <label className="relative block max-w-sm flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-          <input
-            value={search}
-            onChange={(e) => onSearch(e.target.value)}
-            placeholder="Cari area, toko, atau OPS…"
-            className="h-10 w-full rounded-xl border border-slate-200 bg-white pl-9 pr-3 text-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
-          />
-        </label>
-      </div>
+    <Dialog open={!!area} onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="flex max-h-[90dvh] w-[calc(100%-1rem)] max-w-3xl flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
+        {area && taskColor && attColor && (
+          <>
+            <DialogHeader className="border-b border-slate-100 px-5 py-4 pr-12 text-left">
+              <div className="flex items-center gap-3">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white" style={{ backgroundColor: area.color }}>
+                  <MapPinned className="h-5 w-5" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  {editing ? (
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        autoFocus
+                        value={draft}
+                        onChange={(e) => setDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') commitRename();
+                          if (e.key === 'Escape') setEditing(false);
+                        }}
+                        aria-label="Nama area"
+                        className="h-9 min-w-0 flex-1 rounded-lg border border-indigo-300 bg-white px-2.5 text-base font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                      />
+                      <button type="button" onClick={commitRename} aria-label="Simpan nama" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-600 text-white">
+                        <Check className="h-4 w-4" />
+                      </button>
+                      <button type="button" onClick={() => setEditing(false)} aria-label="Batal" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500">
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1.5">
+                      <DialogTitle className="truncate text-base font-bold text-slate-900">{area.name}</DialogTitle>
+                      <button
+                        type="button"
+                        onClick={() => { setDraft(area.name); setEditing(true); }}
+                        aria-label="Ubah nama area"
+                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-300 hover:bg-slate-100 hover:text-slate-500"
+                      >
+                        {busy.has(`rename:${area.id}`) ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Pencil className="h-3.5 w-3.5" />}
+                      </button>
+                    </div>
+                  )}
+                  <DialogDescription className="mt-0.5 text-xs text-slate-400">
+                    {area.stores.length} toko
+                  </DialogDescription>
+                </div>
+              </div>
+            </DialogHeader>
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        {filtered.map((a) => (
-          <AreaSettingsCard
-            key={a.id}
-            area={a}
-            allAreas={areasData}
-            opsUsers={opsUsers}
-            busy={busy}
-            onRename={onRename}
-            onAssign={onAssign}
-            onMoveStore={onMoveStore}
-          />
-        ))}
-      </div>
+            <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4">
+              <div className="grid gap-4 md:grid-cols-2">
+                <section>
+                  <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-400">Ops Area bertanggung jawab</p>
+                  <OpsUserPicker
+                    area={area}
+                    opsUsers={opsUsers}
+                    saving={busy.has(`assign:${area.id}`)}
+                    onAssign={(userId) => onAssign(area.id, userId)}
+                  />
+                  {!area.opsUser && (
+                    <p className="mt-1.5 flex items-center gap-1 text-[11px] font-medium text-amber-600">
+                      <UserX className="h-3 w-3" /> Belum ada Ops Area yang bertanggung jawab
+                    </p>
+                  )}
+                </section>
 
-      <NewAreaForm onCreate={onCreateArea} creating={creatingArea} />
+                <section>
+                  <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-400">Hari ini</p>
+                  <div className="grid grid-cols-2 gap-3 rounded-xl border border-slate-100 bg-slate-50 p-3">
+                    <div>
+                      <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                        <span className="flex items-center gap-1"><ClipboardCheck className="h-3 w-3" /> Task</span>
+                        <span className={taskColor.text}>{area.completionRate}%</span>
+                      </div>
+                      <div className="mt-1"><MiniBar pct={area.completionRate} total={area.totalTasks} /></div>
+                      <p className="mt-0.5 text-[10px] text-slate-400">{area.completedTasks}/{area.totalTasks} selesai</p>
+                    </div>
+                    <div>
+                      <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                        <span className="flex items-center gap-1"><UserCheck className="h-3 w-3" /> Attendance</span>
+                        <span className={attColor.text}>{area.attendanceRate}%</span>
+                      </div>
+                      <div className="mt-1"><MiniBar pct={area.attendanceRate} total={area.attendance.total} /></div>
+                      <AttendanceCountsLine counts={area.attendance} className="mt-0.5" />
+                    </div>
+                  </div>
+                </section>
+              </div>
+
+              <section>
+                <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-400">Toko di area ini</p>
+                {area.stores.length === 0 ? (
+                  <p className="rounded-xl border border-dashed border-slate-200 py-8 text-center text-xs text-slate-400">Belum ada toko di area ini.</p>
+                ) : (
+                  <ul className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200">
+                    {area.stores.map((s) => (
+                      <StoreRowInModal
+                        key={s.id}
+                        store={s}
+                        live={area.monitor.get(s.id)}
+                        areas={allAreas}
+                        currentAreaId={area.id}
+                        moving={busy.has(`store:${s.id}`)}
+                        onMove={(newAreaId) => onMoveStore(s.id, newAreaId)}
+                      />
+                    ))}
+                  </ul>
+                )}
+              </section>
+            </div>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── New area ────────────────────────────────────────────────────────────────
+
+function NewAreaDialog({
+  open, creating, onOpenChange, onCreate,
+}: {
+  open: boolean;
+  creating: boolean;
+  onOpenChange: (open: boolean) => void;
+  onCreate: (name: string) => void;
+}) {
+  const [name, setName] = useState('');
+  const submit = () => { if (name.trim()) { onCreate(name.trim()); setName(''); onOpenChange(false); } };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="w-[calc(100%-1rem)] sm:max-w-md">
+        <DialogHeader className="text-left">
+          <DialogTitle>Area baru</DialogTitle>
+          <DialogDescription>
+            Sebut wilayahnya di nama area (mis. “Jawa Tengah”, “Kalimantan”) agar area tampil di peta.
+          </DialogDescription>
+        </DialogHeader>
+        <input
+          autoFocus
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
+          placeholder="Nama area"
+          aria-label="Nama area"
+          className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-base focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100 md:text-sm"
+        />
+        <div className="flex justify-end gap-2">
+          <button type="button" onClick={() => onOpenChange(false)} className="h-10 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-600 hover:bg-slate-50">
+            Batal
+          </button>
+          <button
+            type="button"
+            disabled={!name.trim() || creating}
+            onClick={submit}
+            className="inline-flex h-10 items-center gap-1.5 rounded-xl bg-indigo-600 px-4 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {creating && <Loader2 className="h-4 w-4 animate-spin" />} Buat area
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Table ───────────────────────────────────────────────────────────────────
+
+const TH = 'px-4 py-2.5 text-left text-[10px] font-bold uppercase tracking-widest text-slate-400';
+
+function AreaTable({
+  rows, hoveredId, onHover, onOpen,
+}: {
+  rows: AreaRow[];
+  hoveredId: number | null;
+  onHover: (id: number | null) => void;
+  onOpen: (id: number) => void;
+}) {
+  return (
+    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[20rem] text-sm">
+          <thead className="border-b border-slate-100 bg-slate-50/70">
+            <tr>
+              <th className={TH}>Area</th>
+              <th className={TH}>Ops Area</th>
+              <th className={cn(TH, 'hidden md:table-cell')}>Toko</th>
+              <th className={cn(TH, 'hidden w-44 lg:table-cell')}>Task hari ini</th>
+              <th className={cn(TH, 'hidden w-56 lg:table-cell')}>Attendance hari ini</th>
+              <th className={cn(TH, 'w-px text-right')}><span className="sr-only">Aksi</span></th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {rows.map((a) => {
+              const taskColor = rateColor(a.completionRate, a.totalTasks);
+              const attColor = rateColor(a.attendanceRate, a.attendance.total);
+              return (
+                <tr
+                  key={a.id}
+                  onMouseEnter={() => onHover(a.id)}
+                  onMouseLeave={() => onHover(null)}
+                  className={cn('transition-colors', hoveredId === a.id ? 'bg-indigo-50/50' : 'hover:bg-slate-50')}
+                >
+                  <td className="px-4 py-3 align-middle">
+                    <div className="flex items-center gap-2.5">
+                      <span className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: a.color }} aria-hidden />
+                      <div className="min-w-0">
+                        <p className="font-bold text-slate-900">{a.name}</p>
+                        <p className="text-[11px] text-slate-400 md:hidden">{a.stores.length} toko</p>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 align-middle">
+                    {a.opsUser ? (
+                      <div className="min-w-0">
+                        <p className="font-semibold text-slate-700">{a.opsUser.name}</p>
+                        <p className="font-mono text-[11px] text-slate-400">{a.opsUser.nik}</p>
+                      </div>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
+                        <UserX className="h-3 w-3" /> Belum ditugaskan
+                      </span>
+                    )}
+                  </td>
+                  <td className="hidden px-4 py-3 align-middle font-semibold tabular-nums text-slate-700 md:table-cell">
+                    {a.stores.length}
+                  </td>
+                  <td className="hidden px-4 py-3 align-middle lg:table-cell">
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className="text-slate-400">{a.completedTasks}/{a.totalTasks}</span>
+                      <span className={cn('font-bold tabular-nums', taskColor.text)}>{a.completionRate}%</span>
+                    </div>
+                    <div className="mt-1"><MiniBar pct={a.completionRate} total={a.totalTasks} /></div>
+                  </td>
+                  <td className="hidden px-4 py-3 align-middle lg:table-cell">
+                    <div className="flex items-center justify-end text-[11px]">
+                      <span className={cn('font-bold tabular-nums', attColor.text)}>{a.attendanceRate}%</span>
+                    </div>
+                    <div className="mt-1"><MiniBar pct={a.attendanceRate} total={a.attendance.total} /></div>
+                    <AttendanceCountsLine counts={a.attendance} className="mt-1" />
+                  </td>
+                  <td className="px-4 py-3 text-right align-middle">
+                    <button
+                      type="button"
+                      onClick={() => onOpen(a.id)}
+                      aria-label={`Lihat detail ${a.name}`}
+                      className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-600 transition hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700"
+                    >
+                      <Eye className="h-3.5 w-3.5" />
+                      <span className="hidden sm:inline">Detail</span>
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -469,7 +614,6 @@ export default function AreaManagementView({
   /** Called on every load with a small snapshot the host page's header may want to show. */
   onReady?: (info: { loading: boolean; areaCount: number; storeCount: number; reload: () => void }) => void;
 }) {
-  const [tab, setTab] = useState<Tab>('monitoring');
   const [monitorGroups, setMonitorGroups] = useState<AreaGroup[]>([]);
   const [settingsAreas, setSettingsAreas] = useState<AreaSettingsRow[]>([]);
   const [opsUsers, setOpsUsers] = useState<OpsAreaUserRow[]>([]);
@@ -477,6 +621,9 @@ export default function AreaManagementView({
   const [search, setSearch] = useState('');
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [creatingArea, setCreatingArea] = useState(false);
+  const [newAreaOpen, setNewAreaOpen] = useState(false);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [hoveredId, setHoveredId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -512,6 +659,28 @@ export default function AreaManagementView({
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, settingsAreas]);
+
+  const rows = useMemo(() => buildRows(settingsAreas, monitorGroups), [settingsAreas, monitorGroups]);
+  const mapAreas = useMemo<MapArea[]>(
+    () => rows.map((r) => ({ id: r.id, name: r.name, color: r.color, regions: r.regions })),
+    [rows],
+  );
+  const selected = rows.find((r) => r.id === selectedId) ?? null;
+
+  const visibleRows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter((a) =>
+      a.name.toLowerCase().includes(q) ||
+      a.opsUser?.name.toLowerCase().includes(q) ||
+      a.opsUser?.nik.toLowerCase().includes(q) ||
+      a.stores.some((s) =>
+        s.name.toLowerCase().includes(q) ||
+        s.storeNo.toLowerCase().includes(q) ||
+        [...s.pic1, ...s.pic2].some((p) => p.name.toLowerCase().includes(q)),
+      ),
+    );
+  }, [rows, search]);
 
   function withBusy<T>(key: string, fn: () => Promise<T>) {
     setBusy((cur) => new Set(cur).add(key));
@@ -558,9 +727,6 @@ export default function AreaManagementView({
   }
 
   async function handleAssign(areaId: number, userId: string | null) {
-    const prev = settingsAreas;
-    const prevOpsUsers = opsUsers;
-
     await withBusy(`assign:${areaId}`, async () => {
       try {
         const res = await fetch(`/api/ops/areas/${areaId}/assign`, {
@@ -570,12 +736,10 @@ export default function AreaManagementView({
         });
         const json = await res.json();
         if (!res.ok || !json.success) throw new Error(json.error ?? 'Failed to assign');
-        toast.success(userId ? 'OPS Area ditugaskan' : 'Penugasan dihapus');
+        toast.success(userId ? 'Ops Area ditugaskan' : 'Penugasan dihapus');
         await load(); // simplest correct way to reflect the 1:1 displacement everywhere
       } catch (e) {
-        setSettingsAreas(prev);
-        setOpsUsers(prevOpsUsers);
-        toast.error(e instanceof Error ? e.message : 'Gagal menugaskan OPS Area');
+        toast.error(e instanceof Error ? e.message : 'Gagal menugaskan Ops Area');
       }
     });
   }
@@ -599,48 +763,73 @@ export default function AreaManagementView({
   }
 
   return (
-    <div className="space-y-5">
-      <div className="inline-flex h-10 items-center gap-0.5 rounded-xl border border-slate-200 bg-white p-0.5">
-        {([
-          { id: 'monitoring' as const, label: 'Monitoring', icon: ClipboardCheck },
-          { id: 'settings' as const, label: 'Settings', icon: MapPinned },
-        ]).map((t) => {
-          const active = t.id === tab;
-          const Icon = t.icon;
-          return (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => setTab(t.id)}
-              className={cn(
-                'inline-flex h-full items-center gap-1.5 rounded-lg px-3 text-xs font-bold transition',
-                active ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50',
-              )}
-            >
-              <Icon className="h-3.5 w-3.5" />
-              {t.label}
-            </button>
-          );
-        })}
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <OpsSearchInput
+          value={search}
+          onChange={setSearch}
+          placeholder="Cari area, toko, PIC, atau Ops Area…"
+          className="max-w-md"
+        />
+        <button
+          type="button"
+          onClick={() => setNewAreaOpen(true)}
+          className="inline-flex h-10 items-center gap-1.5 rounded-xl bg-indigo-600 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700"
+        >
+          <Plus className="h-4 w-4" /> Area baru
+        </button>
       </div>
 
-      {tab === 'monitoring' ? (
-        <MonitoringView groups={monitorGroups} loading={loading} />
+      {loading && rows.length === 0 ? (
+        <div className="space-y-3">
+          <div className="h-56 animate-pulse rounded-2xl bg-slate-100" />
+          <div className="h-64 animate-pulse rounded-2xl bg-slate-100" />
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-10 text-center">
+          <MapPinned className="mx-auto h-8 w-8 text-slate-300" />
+          <p className="mt-3 text-sm font-semibold text-slate-700">Belum ada area</p>
+          <p className="mt-1 text-xs text-slate-400">Klik “Area baru” untuk membuat area pertama.</p>
+        </div>
       ) : (
-        <SettingsView
-          areasData={settingsAreas}
-          opsUsers={opsUsers}
-          loading={loading}
-          busy={busy}
-          search={search}
-          onSearch={setSearch}
-          onCreateArea={handleCreateArea}
-          creatingArea={creatingArea}
-          onRename={handleRename}
-          onAssign={handleAssign}
-          onMoveStore={handleMoveStore}
-        />
+        <>
+          <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Peta area</p>
+              <p className="text-[11px] text-slate-400">Klik wilayah untuk membuka detail</p>
+            </div>
+            <IndonesiaAreaMap areas={mapAreas} hoveredId={hoveredId} onHover={setHoveredId} onSelect={setSelectedId} />
+          </section>
+
+          {visibleRows.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-10 text-center">
+              <UserRound className="mx-auto h-8 w-8 text-slate-300" />
+              <p className="mt-3 text-sm font-semibold text-slate-700">Tidak ada hasil</p>
+              <p className="mt-1 text-xs text-slate-400">Coba kata kunci lain.</p>
+            </div>
+          ) : (
+            <AreaTable rows={visibleRows} hoveredId={hoveredId} onHover={setHoveredId} onOpen={setSelectedId} />
+          )}
+        </>
       )}
+
+      <AreaDetailDialog
+        area={selected}
+        allAreas={rows}
+        opsUsers={opsUsers}
+        busy={busy}
+        onClose={() => setSelectedId(null)}
+        onRename={handleRename}
+        onAssign={handleAssign}
+        onMoveStore={handleMoveStore}
+      />
+
+      <NewAreaDialog
+        open={newAreaOpen}
+        creating={creatingArea}
+        onOpenChange={setNewAreaOpen}
+        onCreate={handleCreateArea}
+      />
     </div>
   );
 }

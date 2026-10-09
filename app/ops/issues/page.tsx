@@ -8,12 +8,16 @@
 //
 // Scope is enforced server-side (/api/ops/issues): Ops HO sees every Ops-routed
 // issue; an area Ops sees only issues from stores in their area.
+//
+// Phones (below `md`) get their own layout from the same state: a sticky header
+// with a store picker + status chips, issue cards, and the detail drawer as a
+// bottom sheet (see lib/ops-mobile.ts).
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   AlertTriangle, Store as StoreIcon, MapPin, Clock, User, ChevronDown,
   CheckCircle2, Eye, Loader2, X, ArrowRight, Globe2,
-  AlertCircle, Shield,
+  AlertCircle, Shield, ImageIcon, ChevronRight,
 } from 'lucide-react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
@@ -22,6 +26,7 @@ import { STATUS_LABELS as ISSUE_STATUS_LABELS } from '@/lib/issues';
 import { IssueAttachments } from '@/components/shared/IssueAttachments';
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
 import { OpsList, OpsListRow } from '@/components/ops/layout/OpsList';
+import { ChipScroller, MobileEmpty, MobilePageHeader, type ChipTone } from '@/components/ops/mobile/MobileKit';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -106,15 +111,19 @@ function IssueDrawer({ issue, onClose, onAdvance, updating }: {
   const currentIdx = STEPS.indexOf(issue.status);
 
   return (
-    <div className="fixed inset-0 z-50 flex" onClick={onClose}>
-      <div className="flex-1 bg-slate-900/50 backdrop-blur-sm" />
+    <div className="fixed inset-0 z-50 flex max-md:flex-col max-md:justify-end" onClick={onClose}>
+      <div className="bg-slate-900/50 backdrop-blur-sm max-md:absolute max-md:inset-0 md:flex-1" />
       <div
-        className="flex w-[440px] max-w-full flex-col overflow-hidden bg-white shadow-2xl"
-        style={{ animation: 'slideInRight 0.25s ease-out' }}
+        className="relative flex w-[440px] max-w-full flex-col overflow-hidden bg-white shadow-2xl max-md:max-h-[92dvh] max-md:w-full max-md:rounded-t-3xl max-md:[animation:slideUpSheet_0.3s_cubic-bezier(0.2,0.8,0.2,1)] md:[animation:slideInRight_0.25s_ease-out]"
         onClick={e => e.stopPropagation()}
       >
+        {/* Grabber (phones) */}
+        <div className="flex justify-center pt-2.5 md:hidden">
+          <span className="h-1.5 w-10 rounded-full bg-slate-200" />
+        </div>
+
         {/* Header */}
-        <div className="border-b border-slate-100 px-6 py-5">
+        <div className="border-b border-slate-100 px-5 py-4 md:px-6 md:py-5">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
@@ -148,7 +157,10 @@ function IssueDrawer({ issue, onClose, onAdvance, updating }: {
                   >
                     {done ? <CheckCircle2 className="h-3 w-3" /> : i + 1}
                   </div>
-                  <span className="whitespace-nowrap text-[10px] font-bold" style={{ color: done ? STATUS_CFG[step].accent : '#94a3b8' }}>
+                  <span
+                    className={cn('whitespace-nowrap text-[10px] font-bold', i !== currentIdx && 'max-sm:hidden')}
+                    style={{ color: done ? STATUS_CFG[step].accent : '#94a3b8' }}
+                  >
                     {STATUS_CFG[step].label}
                   </span>
                   {!isLast && <div className="mx-1 h-px flex-1" style={{ background: i < currentIdx ? STATUS_CFG[step].accent : '#e2e8f0' }} />}
@@ -217,7 +229,7 @@ function IssueDrawer({ issue, onClose, onAdvance, updating }: {
 
         {/* Footer action */}
         {cfg.next && (
-          <div className="border-t border-slate-100 px-5 py-4">
+          <div className="border-t border-slate-100 px-5 pt-4 pb-[calc(1rem+env(safe-area-inset-bottom))] md:pb-4">
             <button
               onClick={() => onAdvance(issue.id, cfg.next!)}
               disabled={updating}
@@ -229,7 +241,7 @@ function IssueDrawer({ issue, onClose, onAdvance, updating }: {
           </div>
         )}
       </div>
-      <style>{`@keyframes slideInRight{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
+      <style>{`@keyframes slideInRight{from{transform:translateX(100%)}to{transform:translateX(0)}}@keyframes slideUpSheet{from{transform:translateY(100%)}to{transform:translateY(0)}}`}</style>
     </div>
   );
 }
@@ -253,12 +265,77 @@ function IssueRow({ issue, onClick }: { issue: OpsIssue; onClick: () => void }) 
   );
 }
 
+// ─── Issue card (phones) ─────────────────────────────────────────────────────
+
+function IssueCard({ issue, showArea, onClick }: { issue: OpsIssue; showArea: boolean; onClick: () => void }) {
+  const cfg = STATUS_CFG[issue.status];
+  const photos = issue.attachmentUrls.length + issue.baAttachmentUrls.length;
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex w-full overflow-hidden rounded-2xl border border-slate-200 bg-white text-left shadow-sm transition active:scale-[0.99] active:bg-slate-50"
+    >
+      <span className="w-1 shrink-0" style={{ background: cfg.accent }} />
+      <span className="min-w-0 flex-1 p-3.5">
+        <span className="flex items-center justify-between gap-2">
+          <StatusBadge status={issue.status} />
+          <span className="flex items-center gap-1 text-[11px] text-slate-400">
+            <Clock className="h-3 w-3" />
+            {relativeTime(issue.createdAt)}
+          </span>
+        </span>
+        <span className="mt-2 line-clamp-2 block text-[15px] font-bold leading-snug text-slate-900">{issue.title}</span>
+        <span className="mt-1 line-clamp-2 block text-xs leading-relaxed text-slate-500">{issue.description}</span>
+        <span className="mt-2.5 flex items-center gap-3 text-[11px] text-slate-500">
+          <span className="flex min-w-0 items-center gap-1">
+            <StoreIcon className="h-3 w-3 shrink-0 text-slate-400" />
+            <span className="truncate font-medium">{issue.store.name}</span>
+          </span>
+          {showArea && issue.store.areaName && (
+            <span className="flex min-w-0 shrink items-center gap-1">
+              <MapPin className="h-3 w-3 shrink-0 text-slate-400" />
+              <span className="truncate">{issue.store.areaName}</span>
+            </span>
+          )}
+          {photos > 0 && (
+            <span className="ml-auto flex shrink-0 items-center gap-1">
+              <ImageIcon className="h-3 w-3 text-slate-400" />
+              {photos}
+            </span>
+          )}
+        </span>
+        {cfg.next && (
+          <span
+            className="mt-3 flex items-center justify-between rounded-xl px-3 py-2 text-xs font-bold"
+            style={{ background: STATUS_CFG[cfg.next].accent + '14', color: STATUS_CFG[cfg.next].accent }}
+          >
+            {issue.status === 'reported' ? 'Waiting for your review' : 'Solved by the store — confirm'}
+            <span className="flex items-center gap-0.5">
+              {cfg.action}
+              <ChevronRight className="h-3.5 w-3.5" />
+            </span>
+          </span>
+        )}
+      </span>
+    </button>
+  );
+}
+
+const STATUS_CHIP_TONE: Record<IssueStatus, ChipTone> = {
+  reported: 'amber',
+  in_review: 'sky',
+  solved: 'violet',
+  completed: 'emerald',
+};
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function OpsIssuesPage() {
   const { data: session, status: authStatus } = useSession();
   const router = useRouter();
-  const role = (session?.user as any)?.role as string | undefined;
+  const role = session?.user?.role;
   const isOps = role === 'ops' || role === 'it';
 
   const [issuesList, setIssuesList] = useState<OpsIssue[]>([]);
@@ -369,9 +446,68 @@ export default function OpsIssuesPage() {
     </div>
   );
 
+  const storeSelect = (className: string) => (
+    <select value={storeFilter} onChange={e => { setStoreFilter(e.target.value); setSelected(null); }} className={className}>
+      <option value="all">All stores</option>
+      {storesByArea.length > 1
+        ? storesByArea.map(g => (
+            <optgroup key={g.areaName} label={g.areaName}>
+              {g.list.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </optgroup>
+          ))
+        : storesByArea[0]?.list.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+    </select>
+  );
+
   return (
     <div className="min-h-full bg-slate-50">
+      {/* ── Phones ─────────────────────────────────────────────────────────── */}
+      <div className="md:hidden">
+        <MobilePageHeader
+          eyebrow={isHO ? 'OPS · All areas' : `OPS · ${areaName ?? 'Your area'}`}
+          title="Issues"
+          subtitle={`${issuesList.length} issue${issuesList.length !== 1 ? 's' : ''} routed to Ops`}
+          onRefresh={() => load(true)}
+          refreshing={refreshing}
+        >
+          <div className="relative">
+            <StoreIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            {storeSelect('h-10 w-full appearance-none rounded-xl border border-slate-200 bg-white pl-9 pr-9 text-base font-semibold text-slate-800 shadow-sm focus:border-indigo-400 focus:outline-none')}
+            <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          </div>
+          <ChipScroller
+            value={filter}
+            onChange={(k) => { setFilter(k); setSelected(null); }}
+            items={[
+              { key: 'all' as const, label: 'All', count: meta.all },
+              ...STEPS.map((st) => ({ key: st, label: STATUS_CFG[st].label, count: meta[st], tone: STATUS_CHIP_TONE[st] })),
+            ]}
+          />
+        </MobilePageHeader>
+
+        <div className="space-y-2.5 px-4 pb-8 pt-3">
+          {loading ? (
+            Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="h-36 animate-pulse rounded-2xl bg-white ring-1 ring-slate-200" />
+            ))
+          ) : visible.length === 0 ? (
+            <MobileEmpty
+              icon={filter === 'all' ? CheckCircle2 : AlertTriangle}
+              tone={filter === 'all' ? 'emerald' : 'slate'}
+              title="No issues to show"
+              hint={filter !== 'all' ? `No ${STATUS_CFG[filter as IssueStatus].label.toLowerCase()} issues in scope.` : 'Everything routed to Ops is clear.'}
+            />
+          ) : (
+            visible.map(issue => (
+              <IssueCard key={issue.id} issue={issue} showArea={isHO} onClick={() => setSelected(issue)} />
+            ))
+          )}
+        </div>
+      </div>
+
+      {/* ── Desktop ────────────────────────────────────────────────────────── */}
       <OpsPageHeader
+        className="hidden md:block"
         scope={isHO ? 'OPS · Head Office' : 'OPS · Area Issues'}
         title="Issue Reports"
         subtitle={
@@ -398,7 +534,7 @@ export default function OpsIssuesPage() {
         contentClassName="w-full"
       />
 
-      <div className="mx-auto max-w-7xl space-y-6 p-6 lg:p-8">
+      <div className="mx-auto hidden max-w-7xl space-y-6 p-6 md:block lg:p-8">
 
         {/* Store filter */}
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -409,17 +545,7 @@ export default function OpsIssuesPage() {
               </label>
               <div className="relative">
                 <StoreIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <select value={storeFilter} onChange={e => { setStoreFilter(e.target.value); setSelected(null); }}
-                  className="h-11 w-full appearance-none rounded-xl border border-slate-200 bg-white pl-10 pr-10 text-sm font-semibold text-slate-800 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100">
-                  <option value="all">All stores</option>
-                  {storesByArea.length > 1
-                    ? storesByArea.map(g => (
-                        <optgroup key={g.areaName} label={g.areaName}>
-                          {g.list.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                        </optgroup>
-                      ))
-                    : storesByArea[0]?.list.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                </select>
+                {storeSelect('h-11 w-full appearance-none rounded-xl border border-slate-200 bg-white pl-10 pr-10 text-sm font-semibold text-slate-800 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100')}
                 <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               </div>
             </div>

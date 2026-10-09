@@ -48,7 +48,8 @@ import {
 } from '@/lib/db/schema';
 import {
   createIssueWithRoles,
-  getOperationIssueRoleIds,
+  getStoreClosingHoldIssueRoleIds,
+  notifyIssueEvent,
 } from '@/lib/db/utils/issues';
 
 // ─── Public types ─────────────────────────────────────────────────────────────
@@ -252,26 +253,27 @@ async function createOpenStatementHoldIssue(input: {
     .where(eq(stores.id, input.task.storeId))
     .limit(1);
 
-  const operationRoleIds = await getOperationIssueRoleIds();
-  if (!operationRoleIds.length) {
+  // Sent straight away to Ops, IT and Finance — no draft for the store to forward.
+  const holdRoleIds = await getStoreClosingHoldIssueRoleIds();
+  if (!holdRoleIds.length) {
     throw new Error('Tidak ada role Operation/Ops yang aktif untuk menerima issue.');
   }
 
   const storeName = store?.name ?? `Store #${input.task.storeId}`;
   const dateLabel = formatDateId(input.task.date);
 
-  const title = `Draft Issue Open Statement Tertunda - ${storeName} - ${dateLabel}`;
+  const title = `Open Statement Tertunda - ${storeName} - ${dateLabel}`;
   const holdReason = input.reason.trim() || 'Tidak ada alasan tambahan dari employee.';
   const description = [
-    `Draft issue dari task Store Closing untuk toko ${storeName} pada tanggal ${dateLabel}.`,
+    `Issue otomatis dari task Store Closing untuk toko ${storeName} pada tanggal ${dateLabel}.`,
     '',
     'Open Statement dipilih On Hold sehingga task Store Closing belum dapat diselesaikan.',
     '',
     `Alasan dari employee: ${holdReason}`,
     '',
-    'Mohon tim Operation melakukan pengecekan sesuai area toko. Ops Area hanya melihat issue dari area toko ini, sedangkan Ops HO dapat melihat seluruh issue Operation.',
+    'Issue ini otomatis dikirim ke tim Operation, Finance, dan IT. Ops Area hanya melihat issue dari area toko ini, sedangkan Ops HO dapat melihat seluruh issue Operation.',
     '',
-    'Setelah issue ditandai Resolved, task Store Closing terkait akan dibuka kembali agar employee bisa menyelesaikan Open Statement.',
+    'Setelah issue diselesaikan (Completed), task Store Closing terkait akan dibuka kembali agar employee bisa menyelesaikan Open Statement.',
   ].join('\n');
 
   const serialized = await createIssueWithRoles({
@@ -279,12 +281,27 @@ async function createOpenStatementHoldIssue(input: {
     description,
     userId: input.userId,
     storeId: input.task.storeId,
-    assignedToRoleIds: operationRoleIds,
-    status: 'draft',
+    assignedToRoleIds: holdRoleIds,
+    status: 'reported',
     attachmentUrls: [input.eodEdcSettlementPhoto, input.storefrontLockedPhoto].filter(
       (u): u is string => typeof u === 'string' && u.length > 0,
     ),
   });
+
+  // A failed notification must not undo the submit: the issue is already visible in each inbox.
+  try {
+    await notifyIssueEvent({
+      issueId: Number(serialized.id),
+      storeId: input.task.storeId,
+      assignedRoles: serialized.assignedToRoles,
+      type: 'issue_reported',
+      title: `Open Statement On Hold: ${storeName}`,
+      body: `Store Closing ${dateLabel} ditandai On Hold oleh employee. Issue otomatis dikirim ke Ops, Finance, dan IT.`,
+      excludeUserId: input.userId,
+    });
+  } catch (err) {
+    console.error('[createOpenStatementHoldIssue] notify failed:', err);
+  }
 
   const [issue] = await db
     .select()
@@ -633,7 +650,20 @@ export async function submitStoreClosing(
     };
 
     if (input.openStatementDecision === 'on_hold') {
-      const issue = existing.holdIssueId
+      // A task reopened after its hold issue was completed still points at that
+      // (closed) issue. Putting it On Hold again opens a NEW issue from this
+      // submission — never the completed one — and the task links to the new one.
+      let reuseIssueId: number | null = null;
+      if (existing.holdIssueId) {
+        const [prev] = await db
+          .select({ status: issues.status })
+          .from(issues)
+          .where(eq(issues.id, existing.holdIssueId))
+          .limit(1);
+        if (prev && prev.status !== 'completed') reuseIssueId = existing.holdIssueId;
+      }
+
+      const issue = reuseIssueId
         ? null
         : await createOpenStatementHoldIssue({
             task: existing,
@@ -649,7 +679,7 @@ export async function submitStoreClosing(
           ...baseValues,
           status: 'pending',
           isOnHold: true,
-          holdIssueId: existing.holdIssueId ?? issue?.id ?? null,
+          holdIssueId: issue?.id ?? reuseIssueId,
           heldBy: input.userId,
           heldAt: now,
           completedBy: null,

@@ -8,24 +8,15 @@
 // the same month, the most recently submitted one wins.
 
 import { NextRequest, NextResponse } from 'next/server';
-import { and, eq, gte, lte } from 'drizzle-orm';
+import { and, eq, gte, lt } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
-import { impactVisits, stores, areas } from '@/lib/db/schema';
+import { impactVisits, stores, areas, users } from '@/lib/db/schema';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
 import { parseJson } from '@/lib/db/utils/impact-visits';
+import type { ReportCell } from '@/lib/impact-visit/report';
 import type { ChecklistResponses } from '@/lib/impact-visit/scoring';
-
-interface ReportCell {
-  visitId: string;
-  checklist: { pass: boolean; score: number; max: number };
-  money: { ok: boolean };
-  vm: { pass: boolean; score: number; max: number };
-  // Per-question answers, so Ops can drill from the score down to exactly
-  // which checklist items passed/failed each month.
-  checklistResponses: ChecklistResponses;
-  vmChecklistResponses: ChecklistResponses;
-}
+import { jakartaDateKey, jakartaDayStart } from '@/lib/day-bucket';
 
 export async function GET(req: NextRequest) {
   const scope = await resolveOpsScope();
@@ -34,15 +25,15 @@ export async function GET(req: NextRequest) {
   }
 
   const yearParam = Number(req.nextUrl.searchParams.get('year'));
-  const year = Number.isInteger(yearParam) && yearParam > 2000 ? yearParam : new Date().getFullYear();
+  const year = Number.isInteger(yearParam) && yearParam > 2000 && yearParam < 2200 ? yearParam : Number(jakartaDateKey(new Date()).slice(0, 4));
 
-  const yearStart = new Date(Date.UTC(year, 0, 1));
-  const yearEnd = new Date(Date.UTC(year, 11, 31, 23, 59, 59, 999));
+  const yearStart = jakartaDayStart(`${year}-01-01`);
+  const yearEnd = jakartaDayStart(`${year + 1}-01-01`);
 
   const conditions = [
     eq(impactVisits.status, 'submitted'),
     gte(impactVisits.visitDate, yearStart),
-    lte(impactVisits.visitDate, yearEnd),
+    lt(impactVisits.visitDate, yearEnd),
   ];
   if (scope.scope === 'area') {
     conditions.push(eq(stores.areaId, scope.areaId));
@@ -54,15 +45,17 @@ export async function GET(req: NextRequest) {
       storeName: stores.name,
       storeNo: stores.storeNo,
       areaName: areas.name,
+      visitorName: users.name,
     })
     .from(impactVisits)
     .innerJoin(stores, eq(impactVisits.storeId, stores.id))
     .leftJoin(areas, eq(stores.areaId, areas.id))
+    .leftJoin(users, eq(users.id, impactVisits.visitedBy))
     .where(and(...conditions))
     // Ascending by updatedAt so that, as we fold rows into the per-month
     // slot below, the last write for a given (store, month, type) is simply
     // whichever row came last — no separate "most recent" comparison needed.
-    .orderBy(impactVisits.updatedAt);
+    .orderBy(impactVisits.updatedAt, impactVisits.id);
 
   type StoreEntry = {
     storeId: string;
@@ -90,13 +83,15 @@ export async function GET(req: NextRequest) {
       byStore.set(v.storeId, entry);
     }
 
-    const month = v.visitDate.getUTCMonth() + 1;
+    const month = Number(jakartaDateKey(v.visitDate).slice(5, 7));
     if (!entry.months[month]) {
       entry.months[month] = { virtual: null, onLocation: null };
     }
 
     const cell: ReportCell = {
       visitId: String(v.id),
+      visitDate: v.visitDate.toISOString(),
+      visitorName: row.visitorName,
       checklist: { pass: v.checklistGrade === 'A', score: v.checklistScore, max: v.checklistMaxScore },
       money: { ok: v.cashMoneyOk },
       vm: { pass: v.vmChecklistGrade === 'A', score: v.vmChecklistScore, max: v.vmChecklistMaxScore },

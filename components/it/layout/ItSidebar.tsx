@@ -46,6 +46,7 @@ import {
   ChevronRight,
   ClipboardCheck,
   Eraser,
+  FileCheck2,
   KeyRound,
   Layers,
   LayoutDashboard,
@@ -126,6 +127,8 @@ const NAV: NavSection[] = [
     section: 'Data Correction',
     items: [
       { href: '/it/setoran-correction', label: 'Koreksi Setoran', icon: Eraser },
+      // Ops pages — only IT may delete a visit (draft or submitted).
+      { href: '/ops/impact-visits', label: 'Impact Visits', icon: FileCheck2 },
     ],
   },
   {
