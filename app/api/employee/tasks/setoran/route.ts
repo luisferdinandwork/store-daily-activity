@@ -7,14 +7,21 @@ import {
   autoSaveSetoran,
   getSetoranById,
   resolveSetoranActorSchedule,
+  assertSetoranActor,
   type SetoranAutoSavePatch,
 } from '@/lib/db/utils/setoran';
 import type { SetoranTask } from '@/lib/db/schema';
+import { db } from '@/lib/db';
+import { schedules } from '@/lib/db/schema';
+import { eq } from 'drizzle-orm';
+import { parseGeoPoint } from '@/lib/geo';
+import { taskRequiresLocation } from '@/lib/db/utils/task-location';
+import { assertInGeofence } from '@/lib/db/utils/geofence';
 
 function tryInt(val: unknown): number | null {
   if (val === undefined || val === null || val === '') return null;
-  const n = parseInt(String(val), 10);
-  return Number.isNaN(n) ? null : n;
+  const n = Number(val);
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
 }
 
 function toMoneyString(v: unknown): string | undefined {
@@ -56,7 +63,7 @@ async function readJson(req: NextRequest): Promise<Record<string, unknown> | Nex
   }
 }
 
-type ResolvedSetoranTask = SetoranTask & { actorScheduleId: number };
+type ResolvedSetoranTask = Pick<SetoranTask, 'storeId'> & { actorScheduleId: number };
 
 async function resolveTaskFromBody(
   body: Record<string, unknown>,
@@ -64,7 +71,15 @@ async function resolveTaskFromBody(
 ): Promise<ResolvedSetoranTask | null> {
   const taskId = tryInt(body.taskId);
 
-  if (!taskId) return null;
+  if (!taskId) {
+    const scheduleId = tryInt(body.scheduleId);
+    if (!scheduleId) return null;
+    const [schedule] = await db.select().from(schedules).where(eq(schedules.id, scheduleId)).limit(1);
+    if (!schedule || schedule.userId !== userId || (body.storeId !== undefined && tryInt(body.storeId) !== schedule.storeId)) throw new Error('Forbidden');
+    const actorScheduleId = await resolveSetoranActorSchedule(userId, schedule.storeId, schedule.date);
+    if (!actorScheduleId) throw new Error('Forbidden');
+    return { storeId: schedule.storeId, actorScheduleId };
+  }
 
   const task = await getSetoranById(taskId);
   if (!task) {
@@ -99,11 +114,19 @@ export async function POST(req: NextRequest) {
   try {
     const task = await resolveTaskFromBody(body, session.user.id);
 
-    const scheduleId = task?.actorScheduleId ?? tryInt(body.scheduleId) ?? task?.scheduleId;
-    const storeId = tryInt(body.storeId) ?? task?.storeId;
+    const scheduleId = task?.actorScheduleId;
+    const storeId = task?.storeId;
 
     if (!scheduleId) return jsonError('scheduleId is required.');
     if (!storeId) return jsonError('storeId is required.');
+
+    if (await taskRequiresLocation('setoran')) {
+      const raw = body.geo as Record<string, unknown> | undefined;
+      const geo = raw && parseGeoPoint(raw.lat, raw.lng, raw.accuracy);
+      if (!geo) return jsonError('Lokasi wajib aktif untuk setoran ini. Perbarui lokasi lalu coba lagi.');
+      const error = await assertInGeofence(storeId, geo);
+      if (error) return jsonError(error);
+    }
 
     const result = await submitSetoran({
       scheduleId,
@@ -147,11 +170,13 @@ export async function PATCH(req: NextRequest) {
 
   try {
     const task = await resolveTaskFromBody(body, session.user.id);
-    const scheduleId = task?.actorScheduleId ?? tryInt(body.scheduleId) ?? task?.scheduleId;
+    const scheduleId = task?.actorScheduleId;
 
     if (!scheduleId) {
       return jsonError('scheduleId or taskId is required for Setoran autosave.');
     }
+    const actorError = await assertSetoranActor(scheduleId, session.user.id, task?.storeId);
+    if (actorError) return jsonError(actorError);
 
     const patch: SetoranAutoSavePatch = {};
 
@@ -190,7 +215,7 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ success: true, data: { saved: [] } });
     }
 
-    const result = await autoSaveSetoran(scheduleId, patch);
+    const result = await autoSaveSetoran(scheduleId, patch, { userId: session.user.id, scheduleId });
 
     if (!result.success) {
       console.warn('[PATCH /api/employee/tasks/setoran] autosave failed:', result.error, {

@@ -54,13 +54,13 @@ export interface AccessGuardSlots {
 interface AccessGuardProps {
   scheduleId: string;
   storeId: string;
-  /** When set to completed/verified/rejected, all location checks are skipped. */
+  /** Completed/verified tasks are read-only and skip location checks. */
   taskStatus: string | undefined;
   /**
    * OPS-managed task code (e.g. 'setoran', 'briefing') — when given, whether
    * this task enforces geolocation + geofence is read live from OPS's Task
-   * Management settings (/api/employee/task-settings), defaulting to
-   * "required" until that setting loads. Takes priority over `requireGeo`.
+   * Management settings (/api/employee/task-settings), using `requireGeo`
+   * until that setting loads. Takes priority once the setting is available.
    */
   taskType?: string;
   /**
@@ -90,26 +90,26 @@ export default function AccessGuard({
   // value flips, and so the geolocation prompt genuinely never fires in
   // no-geo mode.
   return effectiveRequireGeo
-    ? <AccessGuardWithGeo scheduleId={scheduleId} storeId={storeId} taskStatus={taskStatus}>{children}</AccessGuardWithGeo>
-    : <AccessGuardNoGeo   scheduleId={scheduleId} storeId={storeId} taskStatus={taskStatus}>{children}</AccessGuardNoGeo>;
+    ? <AccessGuardWithGeo scheduleId={scheduleId} storeId={storeId} taskStatus={taskStatus} taskType={taskType}>{children}</AccessGuardWithGeo>
+    : <AccessGuardNoGeo   scheduleId={scheduleId} storeId={storeId} taskStatus={taskStatus} taskType={taskType}>{children}</AccessGuardNoGeo>;
 }
 
 // ─── Full-geo variant ──────────────────────────────────────────────────────
 
 function AccessGuardWithGeo({
-  scheduleId, storeId, taskStatus, children,
+  scheduleId, storeId, taskStatus, taskType, children,
 }: Omit<AccessGuardProps, 'requireGeo'>) {
-  const { geo, geoError, geoReady, refresh: refreshGeo } = useGeo();
-  const { accessStatus, accessLoading, refreshAccess } =
-    useAccessStatus(scheduleId, storeId, geo, geoReady, taskStatus);
-
   const readonly = taskStatus === 'completed' || taskStatus === 'verified';
+  const { geo, geoError, geoReady, refresh: refreshGeo } = useGeo(!readonly);
+  const { accessStatus, accessLoading, refreshAccess } =
+    useAccessStatus(scheduleId, storeId, geo, geoReady, taskStatus, taskType);
 
   const locationBlocked = !geoReady || !geo || accessStatus?.status === 'geo_unavailable';
   const locked =
     !readonly &&
     (accessLoading ||
       locationBlocked ||
+      accessStatus?.status === 'validation_unavailable' ||
       accessStatus?.status === 'not_checked_in' ||
       accessStatus?.status === 'outside_geofence');
   const dis = readonly || locked;
@@ -139,18 +139,17 @@ function AccessGuardWithGeo({
 
 // ─── Check-in-only variant ─────────────────────────────────────────────────
 // No useGeo() call → no permission prompt. We still call useAccessStatus, but
-// with null geo so the server only validates check-in. The geo_unavailable and
-// outside_geofence states will never apply because the endpoint only emits
-// those when given coordinates.
+// with null geo. A geo_unavailable verdict for a known task means IT's policy
+// changed; pause editing until the settings refresh switches to the geo guard.
 
 function AccessGuardNoGeo({
-  scheduleId, storeId, taskStatus, children,
+  scheduleId, storeId, taskStatus, taskType, children,
 }: Omit<AccessGuardProps, 'requireGeo'>) {
   const { accessStatus, accessLoading, refreshAccess } =
-    useAccessStatus(scheduleId, storeId, /* geo */ null, /* geoReady */ true, taskStatus);
+    useAccessStatus(scheduleId, storeId, /* geo */ null, /* geoReady */ true, taskStatus, taskType);
 
   const readonly = taskStatus === 'completed' || taskStatus === 'verified';
-  const locked = !readonly && (accessLoading || accessStatus?.status === 'not_checked_in');
+  const locked = !readonly && (accessLoading || accessStatus?.status === 'not_checked_in' || accessStatus?.status === 'validation_unavailable' || (!!taskType && accessStatus?.status === 'geo_unavailable'));
   const dis = readonly || locked;
 
   const banner = readonly ? null : (
@@ -206,6 +205,20 @@ export function AccessBanner({
     );
   }
   if (!accessStatus) return null;
+
+  if (!requireGeo && accessStatus.status === 'geo_unavailable') {
+    return <Notice tone="warning" icon={RefreshCw} title="Memuat pengaturan lokasi"
+      action={{ label: 'Cek ulang', onClick: onRefreshAccess, icon: RefreshCw }}>
+      Pengaturan lokasi sedang diperbarui. Tunggu sebentar lalu coba lagi.
+    </Notice>;
+  }
+
+  if (accessStatus.status === 'validation_unavailable') {
+    return <Notice tone="warning" icon={RefreshCw} title="Validasi belum tersedia"
+      action={{ label: 'Cek ulang', onClick: onRefreshAccess, icon: RefreshCw }}>
+      {accessStatus.error ?? 'Koneksi bermasalah. Coba cek ulang.'}
+    </Notice>;
+  }
 
   if (accessStatus.status === 'not_checked_in') {
     return (
@@ -274,6 +287,7 @@ export function LockedOverlay({
   allowWithoutGeo?: boolean;
 }) {
   if (!accessStatus || accessStatus.status === 'ok') return null;
+  if (accessStatus.status === 'validation_unavailable') return null;
   if (allowWithoutGeo && accessStatus.status === 'geo_unavailable') return null;
 
   // In no-geo mode, only not_checked_in lockouts make sense.

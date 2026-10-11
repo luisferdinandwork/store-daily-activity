@@ -29,9 +29,7 @@ const precision = (p: GeoPoint | null) => p?.accuracy ?? Infinity;
 function sampleLocation(): { promise: Promise<Sample>; cancel: () => void } {
   let best: GeoPoint | null = null;
   let lastErrorCode: number | null = null;
-  let watchId: number | undefined;
   let settleTimer: ReturnType<typeof setTimeout> | undefined;
-  let hardTimer: ReturnType<typeof setTimeout> | undefined;
   let done = false;
   let resolve!: (s: Sample) => void;
   const promise = new Promise<Sample>((r) => { resolve = r; });
@@ -45,7 +43,7 @@ function sampleLocation(): { promise: Promise<Sample>; cancel: () => void } {
     resolve(s);
   };
 
-  watchId = navigator.geolocation.watchPosition(
+  const watchId = navigator.geolocation.watchPosition(
     (pos) => {
       const fix: GeoPoint = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy };
       if (precision(fix) <= precision(best)) best = fix;
@@ -60,7 +58,7 @@ function sampleLocation(): { promise: Promise<Sample>; cancel: () => void } {
     { enableHighAccuracy: true, maximumAge: 0 },
   );
 
-  hardTimer = setTimeout(() => finish(
+  const hardTimer = setTimeout(() => finish(
     best ? { point: best } : { error: lastErrorCode === 2 /* POSITION_UNAVAILABLE */ ? ERR_UNAVAILABLE : ERR_TIMEOUT },
   ), TIMEOUT_MS);
 
@@ -111,6 +109,8 @@ export function useGeo(enabled = true) {
         last.current = { point: s.point, at: Date.now() };
         setGeo(s.point);
       } else {
+        last.current = null;
+        setGeo(null);
         setGeoError(s.error);
       }
       setGeoReady(true);
@@ -131,7 +131,8 @@ export function useGeo(enabled = true) {
   }, [refresh]);
 
   useEffect(() => {
-    refresh();
+    const timer = setTimeout(() => { void refresh(); }, 0);
+    return () => clearTimeout(timer);
   }, [refresh]);
 
   // Release the GPS watch if the page unmounts mid-sample.

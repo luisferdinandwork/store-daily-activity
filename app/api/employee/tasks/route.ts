@@ -27,6 +27,7 @@ import {
 } from "@/lib/db/schema";
 import { eq, and, gte, lte, desc, inArray, asc } from "drizzle-orm";
 import { todayInStoreTimezone } from "@/lib/schedule-utils";
+import { isDayKey, jakartaDateKey, jakartaDayRange } from "@/lib/day-bucket";
 import { getOrCreateSetoranForSchedule } from "@/lib/db/utils/setoran";
 import { getOrCreateStoreOpeningForSchedule } from "@/lib/db/utils/store-opening";
 import {
@@ -70,15 +71,11 @@ function isSupportedTaskType(value: string): value is TaskType {
 }
 
 function startOfDay(d: Date): Date {
-  const r = new Date(d);
-  r.setHours(0, 0, 0, 0);
-  return r;
+  return jakartaDayRange(jakartaDateKey(d)).start;
 }
 
 function endOfDay(d: Date): Date {
-  const r = new Date(d);
-  r.setHours(23, 59, 59, 999);
-  return r;
+  return new Date(jakartaDayRange(jakartaDateKey(d)).end.getTime() - 1);
 }
 
 function parseJsonArray<T = unknown>(raw: string | null | undefined): T[] {
@@ -285,9 +282,12 @@ export async function GET(request: NextRequest) {
     const userId = session.user.id;
     const { searchParams } = new URL(request.url);
     const dateParam = searchParams.get("date");
+    if (dateParam && !isDayKey(dateParam)) {
+      return NextResponse.json({ success: false, error: "Tanggal tidak valid." }, { status: 400 });
+    }
 
     const targetDate = dateParam
-      ? new Date(`${dateParam}T00:00:00`)
+      ? jakartaDayRange(dateParam).start
       : todayInStoreTimezone();
     const dayStart = startOfDay(targetDate);
     const dayEnd = endOfDay(targetDate);

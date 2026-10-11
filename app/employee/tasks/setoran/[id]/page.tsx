@@ -1,8 +1,8 @@
 'use client';
 // app/employee/tasks/setoran/[id]/page.tsx
 //
-// Setoran does not enforce location. AccessGuard runs in check-in-only mode
-// (`requireGeo={false}`), and no `geo` is sent on autosave/submit.
+// Setoran defaults to check-in-only access. If IT enables location, AccessGuard
+// requests a fix and the submit API validates it using the same store fence.
 //
 // UI: a single calm column —
 //   • purple summary box: "Total uang Cash Drawer" (uang aktual diterima + sisa
@@ -44,6 +44,7 @@ import {
 } from '@/components/employee/ui';
 import CameraCapture from '@/components/shared/CameraCapture';
 import { uploadTaskPhoto } from '@/lib/tasks-upload';
+import type { GeoPoint } from '@/lib/geo';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -216,9 +217,10 @@ export default function SetoranTaskPage() {
       taskType="setoran"
       requireGeo={false}
     >
-      {({ readonly, dis, locked, banner, lockedOverlay }) => (
+      {({ readonly, dis, locked, banner, lockedOverlay, geo }) => (
         <SetoranPageBody
           task={task}
+          geo={geo}
           actualReceivedAmount={actualReceivedAmount}
           setActualReceivedAmount={setActualReceivedAmount}
           storedAmount={storedAmount}
@@ -265,6 +267,7 @@ export default function SetoranTaskPage() {
 // ─── Body (inside AccessGuard) ──────────────────────────────────────────────
 
 interface BodyProps {
+  geo: GeoPoint | null;
   task: SetoranTaskData;
   actualReceivedAmount: string;
   setActualReceivedAmount: (v: string) => void;
@@ -307,7 +310,7 @@ interface BodyProps {
 
 function SetoranPageBody(props: BodyProps) {
   const {
-    task, actualReceivedAmount, setActualReceivedAmount, storedAmount, setStoredAmount,
+    task, geo, actualReceivedAmount, setActualReceivedAmount, storedAmount, setStoredAmount,
     resiPhoto, setResiPhoto, atmCardSelfiePhoto, setAtmCardSelfiePhoto,
     cashierPhoto, setCashierPhoto, atmCardPhoto, setAtmCardPhoto, notes, setNotes,
     cashDrawerTotal, autoStored, storedManual, setStoredManual,
@@ -337,7 +340,7 @@ function SetoranPageBody(props: BodyProps) {
   });
 
   const autoSave = useCallback((patch: Record<string, unknown>) => {
-    if (readonly) return;
+    if (dis) return;
     rawAutoSave({
       taskId: Number(task.id),
       scheduleId: Number(task.scheduleId),
@@ -352,7 +355,7 @@ function SetoranPageBody(props: BodyProps) {
       ...patch,
     });
   }, [
-    readonly, rawAutoSave, task,
+    dis, rawAutoSave, task,
     actualReceivedAmount, storedAmount, resiPhoto, atmCardSelfiePhoto, cashierPhoto, atmCardPhoto, notes,
   ]);
 
@@ -430,6 +433,7 @@ function SetoranPageBody(props: BodyProps) {
   ]);
 
   const doSubmit = useCallback(async () => {
+    if (dis) return;
     setSubmitting(true);
     try {
       const res = await fetch('/api/employee/tasks/setoran', {
@@ -437,6 +441,7 @@ function SetoranPageBody(props: BodyProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           taskId: Number(task.id),
+          geo,
           scheduleId: Number(task.scheduleId),
           storeId: Number(task.storeId),
           actualReceivedAmount,
@@ -468,7 +473,7 @@ function SetoranPageBody(props: BodyProps) {
     }
   }, [
     storedNumber, resiPhoto, atmCardSelfiePhoto, cashierPhoto, atmCardPhoto,
-    task, actualReceivedAmount, notes, router,
+    task, geo, dis, actualReceivedAmount, notes, router,
     setSubmitError, setSubmitting,
   ]);
 
@@ -480,7 +485,7 @@ function SetoranPageBody(props: BodyProps) {
 
   const submitHint = (() => {
     if (readonly) return undefined;
-    if (!accessOk) return 'Pastikan kamu sudah absen masuk.';
+    if (!accessOk) return 'Selesaikan validasi akses di atas sebelum submit.';
     if (isSmallSetoran) {
       if (!cashierPhoto) return 'Foto sisa setoran belum diupload.';
       if (!atmCardPhoto) return 'Foto kartu ATM belum diupload.';

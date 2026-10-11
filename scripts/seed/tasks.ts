@@ -15,7 +15,8 @@ import { config } from "dotenv";
 config({ path: ".env.local" });
 config({ path: ".env" });
 
-import { and, eq, gte, inArray, lte } from "drizzle-orm";
+import { and, eq, gte, inArray, lte, lt } from "drizzle-orm";
+import { jakartaDateKey, jakartaDayRange, jakartaDayStart, jakartaMonthRange } from '@/lib/day-bucket';
 
 import { db } from "@/lib/db";
 import {
@@ -43,19 +44,15 @@ type TaskCounts = Record<string, CountBucket>;
 const BATCH_SIZE = Number(process.env.SEED_BATCH_SIZE ?? 500);
 
 function startOfDay(d: Date): Date {
-  const r = new Date(d);
-  r.setHours(0, 0, 0, 0);
-  return r;
+  return jakartaDayRange(jakartaDateKey(d)).start;
 }
 
 function endOfDay(d: Date): Date {
-  const r = new Date(d);
-  r.setHours(23, 59, 59, 999);
-  return r;
+  return new Date(jakartaDayRange(jakartaDateKey(d)).end.getTime() - 1);
 }
 
 function ymd(d: Date): string {
-  return startOfDay(d).toISOString().slice(0, 10);
+  return jakartaDateKey(d);
 }
 
 function resolveSeedRange() {
@@ -121,10 +118,8 @@ function resolveSeedRange() {
   }
 
   if (/^\d{4}-\d{2}$/.test(raw)) {
-    const [year, month] = raw.split("-").map(Number);
-    const start = new Date(year, month - 1, 1);
-    const end = new Date(year, month, 0, 23, 59, 59, 999);
-    return { start: startOfDay(start), end: endOfDay(end), label: raw };
+    const { start, end } = jakartaMonthRange(raw);
+    return { start, end: new Date(end.getTime() - 1), label: raw };
   }
 
   return {
@@ -275,6 +270,7 @@ export async function seedTasks() {
   console.log(`\n🗂️  seed-tasks fast mode: ${range.label}`);
 
   const scheduleFilters: any[] = [];
+  if (process.env.SEED_ONLY_BEFORE_DATE) scheduleFilters.push(lt(schedules.date, jakartaDayStart(process.env.SEED_ONLY_BEFORE_DATE)));
   if (range.start && range.end) {
     scheduleFilters.push(
       gte(schedules.date, range.start),

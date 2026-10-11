@@ -21,13 +21,15 @@
 import { db } from '@/lib/db';
 import { isOpeningShift } from '@/lib/shift-tasks';
 import { SETORAN_SMALL_THRESHOLD } from '@/lib/setoran-review';
-import { and, desc, eq, gte, lt, lte } from 'drizzle-orm';
+import { jakartaDateKey, jakartaDayRange } from '@/lib/day-bucket';
+import { and, desc, eq, gte, lt, isNotNull } from 'drizzle-orm';
 import {
   setoranTasks,
   setoranMoneyStorage,
   shifts,
   attendance,
   schedules,
+  stores,
   type SetoranTask,
   type SetoranMoneyStorage,
 } from '@/lib/db/schema';
@@ -86,15 +88,7 @@ export interface SetoranWithStorage {
 }
 
 function startOfDay(d: Date): Date {
-  const r = new Date(d);
-  r.setHours(0, 0, 0, 0);
-  return r;
-}
-
-function endOfDay(d: Date): Date {
-  const r = new Date(d);
-  r.setHours(23, 59, 59, 999);
-  return r;
+  return jakartaDayRange(jakartaDateKey(d)).start;
 }
 
 /**
@@ -110,19 +104,36 @@ export async function resolveSetoranActorSchedule(
   storeId: number,
   date: Date,
 ): Promise<number | null> {
-  const [row] = await db
-    .select({ id: schedules.id })
+  const { start, end } = jakartaDayRange(jakartaDateKey(date));
+  const rows = await db
+    .select({ id: schedules.id, shiftCode: shifts.code, checkInTime: attendance.checkInTime })
     .from(schedules)
+    .innerJoin(shifts, eq(shifts.id, schedules.shiftId))
+    .leftJoin(attendance, and(eq(attendance.scheduleId, schedules.id), eq(attendance.userId, userId)))
     .where(and(
       eq(schedules.userId, userId),
       eq(schedules.storeId, storeId),
       eq(schedules.isHoliday, false),
-      gte(schedules.date, startOfDay(date)),
-      lte(schedules.date, endOfDay(date)),
+      gte(schedules.date, start),
+      lt(schedules.date, end),
     ))
-    .limit(1);
+    .orderBy(schedules.id);
 
-  return row?.id ?? null;
+  const opening = rows.filter((row) => isOpeningShift(row.shiftCode));
+  return (opening.find((row) => row.checkInTime) ?? opening[0])?.id ?? null;
+}
+
+/** Validate the acting employee, not the shared task's original creator. */
+export async function assertSetoranActor(scheduleId: number, userId: string, storeId?: number): Promise<string | null> {
+  const [schedule] = await db.select({ userId: schedules.userId, storeId: schedules.storeId, date: schedules.date, isHoliday: schedules.isHoliday, status: stores.status })
+    .from(schedules).innerJoin(stores, eq(stores.id, schedules.storeId))
+    .where(eq(schedules.id, scheduleId)).limit(1);
+  if (!schedule || schedule.userId !== userId || (storeId !== undefined && schedule.storeId !== storeId)) {
+    return 'Jadwal setoran tidak sesuai dengan pengguna atau toko.';
+  }
+  if (schedule.isHoliday || schedule.status !== 'active') return 'Setoran hanya tersedia untuk jadwal kerja di toko aktif.';
+  if (jakartaDateKey(schedule.date) !== jakartaDateKey(new Date())) return 'Setoran hanya dapat dikerjakan untuk jadwal hari ini.';
+  return await assertMorningSchedule(scheduleId) ?? await assertCheckedIn(scheduleId);
 }
 
 function parseAmount(raw: string | number | null | undefined): number {
@@ -179,7 +190,7 @@ async function assertMorningSchedule(scheduleId: number): Promise<string | null>
 
   // Opening shifts only: morning, JKP Pagi, full_day.
   if (!isOpeningShift(code)) {
-    return 'Setoran hanya tersedia untuk shift morning.';
+    return 'Setoran hanya tersedia untuk shift pembukaan.';
   }
 
   return null;
@@ -189,7 +200,7 @@ async function assertCheckedIn(scheduleId: number): Promise<string | null> {
   const [att] = await db
     .select({ checkInTime: attendance.checkInTime })
     .from(attendance)
-    .where(eq(attendance.scheduleId, scheduleId))
+    .where(and(eq(attendance.scheduleId, scheduleId), isNotNull(attendance.checkInTime)))
     .limit(1);
 
   if (!att?.checkInTime) {
@@ -276,7 +287,8 @@ export async function getOrCreateSetoranForSchedule(
       .from(setoranTasks)
       .where(and(
         eq(setoranTasks.storeId, sched.storeId),
-        eq(setoranTasks.date, dayStart),
+        gte(setoranTasks.date, dayStart),
+        lt(setoranTasks.date, jakartaDayRange(jakartaDateKey(sched.date)).end),
       ))
       .limit(1);
 
@@ -304,9 +316,12 @@ export async function getOrCreateSetoranForSchedule(
         createdAt: now,
         updatedAt: now,
       })
+      .onConflictDoNothing()
       .returning();
 
-    return { success: true, data: created };
+    const task = created ?? await getSetoranForStoreDate(sched.storeId, sched.date);
+    if (!task) return { success: false, error: 'Gagal memuat setoran. Silakan coba lagi.' };
+    return { success: true, data: task };
   } catch (err) {
     return { success: false, error: `getOrCreateSetoranForSchedule: ${err}` };
   }
@@ -321,7 +336,8 @@ export async function getSetoranForStoreDate(
     .from(setoranTasks)
     .where(and(
       eq(setoranTasks.storeId, storeId),
-      eq(setoranTasks.date, startOfDay(date)),
+      gte(setoranTasks.date, startOfDay(date)),
+      lt(setoranTasks.date, jakartaDayRange(jakartaDateKey(date)).end),
     ))
     .limit(1);
 
@@ -449,11 +465,8 @@ export async function submitSetoran(
   input: SubmitSetoranInput,
 ): Promise<TaskResult<SetoranTask>> {
   try {
-    const shiftErr = await assertMorningSchedule(input.scheduleId);
-    if (shiftErr) return { success: false, error: shiftErr };
-
-    const checkInErr = await assertCheckedIn(input.scheduleId);
-    if (checkInErr) return { success: false, error: checkInErr };
+    const actorErr = await assertSetoranActor(input.scheduleId, input.userId, input.storeId);
+    if (actorErr) return { success: false, error: actorErr };
 
     const ensured = await getOrCreateSetoranForSchedule(input.scheduleId);
     if (!ensured.success) return ensured;
@@ -612,6 +625,10 @@ export async function autoSaveSetoran(
   actor?: SetoranActorContext,
 ): Promise<TaskResult<{ saved: string[] }>> {
   try {
+    if (actor) {
+      const actorErr = await assertSetoranActor(scheduleId, actor.userId);
+      if (actorErr) return { success: false, error: actorErr };
+    }
     const shiftErr = await assertMorningSchedule(scheduleId);
     if (shiftErr) return { success: false, error: shiftErr };
 

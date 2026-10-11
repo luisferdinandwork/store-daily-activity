@@ -18,7 +18,12 @@
     "db:studio": "drizzle-kit studio",
     "db:reset": "tsx scripts/reset.ts",
     "db:seed": "dotenv -e .env.local -- tsx scripts/seed/index.ts",
-    "db:seed:prod": "dotenv -e .env.local -- tsx scripts/seed/production.ts"
+    "db:seed:prod": "dotenv -e .env.local -- tsx scripts/seed/production.ts",
+    "db:local:start": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local-db.ps1 start",
+    "db:local:stop": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local-db.ps1 stop",
+    "db:local:status": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local-db.ps1 status",
+    "db:seed:local": "dotenv -e .env.local -- tsx scripts/seed/local-demo.ts",
+    "test:setoran": "dotenv -e .env.local -- tsx scripts/test-setoran-access.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1121.0",

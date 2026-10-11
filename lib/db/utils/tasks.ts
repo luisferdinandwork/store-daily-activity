@@ -214,10 +214,10 @@ export interface StoreTaskSummary {
 // ─── Private helpers ──────────────────────────────────────────────────────────
 
 function startOfDay(d: Date): Date {
-  const r = new Date(d); r.setHours(0, 0, 0, 0); return r;
+  return jakartaDayRange(jakartaDateKey(d)).start;
 }
 function endOfDay(d: Date): Date {
-  const r = new Date(d); r.setHours(23, 59, 59, 999); return r;
+  return new Date(jakartaDayRange(jakartaDateKey(d)).end.getTime() - 1);
 }
 
 let shiftIdCache: Record<string, number> | null = null;
@@ -260,9 +260,11 @@ export async function getTaskAccessStatus(
   scheduleId: number,
   storeId:    number,
   geo:        GeoPoint | null,
+  requireGeo = true,
 ): Promise<TaskAccessStatus> {
   const checkInErr = await assertCheckedIn(scheduleId);
   if (checkInErr) return { status: 'not_checked_in' };
+  if (!requireGeo) return { status: 'ok' };
   if (!geo)       return { status: 'geo_unavailable' };
 
   const verdict = await checkStoreGeofence(storeId, geo);
@@ -510,14 +512,15 @@ export async function materialiseTasksForSchedule(
       () => db.select({ id: setoranTasks.id }).from(setoranTasks)
         .where(and(
           eq(setoranTasks.storeId, sched.storeId),
-          eq(setoranTasks.date, dayStart),
+          gte(setoranTasks.date, dayStart),
+          lt(setoranTasks.date, jakartaDayRange(jakartaDateKey(sched.date)).end),
         ))
         .limit(1).then(r => r[0]),
       () => db.insert(setoranTasks).values({
         ...base,
         carriedDeficit: '0',
         unpaidAmount: '0',
-      }));
+      }).onConflictDoNothing());
 
     await insertShared('cekBin',
       () => db.select({ id: cekBinTasks.id }).from(cekBinTasks)

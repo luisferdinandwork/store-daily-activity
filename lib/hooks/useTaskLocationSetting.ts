@@ -2,27 +2,32 @@
 // lib/hooks/useTaskLocationSetting.ts
 //
 // Reads the OPS-configured "does this task type require location?" map from
-// /api/employee/task-settings. Fetched once per session (module-level cache
-// shared across every task page that mounts) rather than once per page.
+// /api/employee/task-settings. A short-lived module cache is shared across
+// task pages; failed requests are retried and IT changes are refreshed.
 
 import { useEffect, useState } from 'react';
+import { TASK_CATALOG } from '@/lib/shift-tasks';
 
 type SettingsMap = Record<string, boolean>;
 
 let cache: SettingsMap | null = null;
-let inflight: Promise<SettingsMap> | null = null;
+let inflight: Promise<SettingsMap | null> | null = null;
+let cachedAt = 0;
+const CACHE_MS = 30_000;
 
-async function loadSettings(): Promise<SettingsMap> {
-  if (cache) return cache;
+async function loadSettings(): Promise<SettingsMap | null> {
+  if (cache && Date.now() - cachedAt < CACHE_MS) return cache;
   if (!inflight) {
-    inflight = fetch('/api/employee/task-settings')
-      .then((r) => r.json())
+    inflight = fetch('/api/employee/task-settings', { cache: 'no-store', signal: AbortSignal.timeout(15_000) })
+      .then((r) => { if (!r.ok) throw new Error('Task settings unavailable'); return r.json(); })
       .then((json) => {
-        cache = json?.success && json.settings ? (json.settings as SettingsMap) : {};
+        if (!json?.success || !json.settings) throw new Error('Task settings unavailable');
+        cache = json.settings as SettingsMap;
+        cachedAt = Date.now();
         return cache;
       })
       .catch(() => {
-        cache = {};
+        // A transient failure must never become a permanent location policy.
         return cache;
       })
       .finally(() => {
@@ -34,9 +39,8 @@ async function loadSettings(): Promise<SettingsMap> {
 
 /**
  * Returns whether `taskCode` requires location, per OPS's Task Management
- * settings. Defaults to `true` (require location) until the setting has
- * loaded, so a slow fetch never causes a page to under-enforce a check it
- * should have had.
+ * settings. Uses the task catalog default while unavailable; successful
+ * settings are refreshed every 30 seconds and failures are retried.
  */
 export function useTaskLocationSetting(taskCode: string) {
   // Lazy initial state already reflects a warm cache — the effect below only
@@ -45,20 +49,27 @@ export function useTaskLocationSetting(taskCode: string) {
   const [ready, setReady] = useState(() => cache !== null);
 
   useEffect(() => {
-    if (cache) return;
+    if (!taskCode) return;
     let cancelled = false;
-    loadSettings().then((s) => {
-      if (!cancelled) {
+    const refresh = () => loadSettings().then((s) => {
+      if (!cancelled && s) {
         setSettings(s);
         setReady(true);
       }
     });
+    void refresh();
+    // Retry failed loads and pick up IT changes while a task remains open.
+    const timer = setInterval(refresh, 5_000);
+    window.addEventListener('focus', refresh);
     return () => {
       cancelled = true;
+      clearInterval(timer);
+      window.removeEventListener('focus', refresh);
     };
-  }, []);
+  }, [taskCode]);
 
-  const requiresLocation = ready && taskCode in settings ? settings[taskCode] : true;
+  const requiresLocation = ready && taskCode in settings ? settings[taskCode]
+    : TASK_CATALOG.find((task) => task.code === taskCode)?.requiresLocation ?? true;
 
   return { requiresLocation, ready };
 }

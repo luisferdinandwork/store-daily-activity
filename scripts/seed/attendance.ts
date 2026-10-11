@@ -14,7 +14,8 @@ import { config } from "dotenv";
 config({ path: ".env.local" });
 config({ path: ".env" });
 
-import { and, eq, gte, inArray, lte } from "drizzle-orm";
+import { and, eq, gte, inArray, lte, lt } from "drizzle-orm";
+import { jakartaDateKey, jakartaDayRange, jakartaDayStart, jakartaMonthRange, jakartaWallClock } from '@/lib/day-bucket';
 import { db } from "@/lib/db";
 import {
   schedules,
@@ -104,19 +105,15 @@ const BREAK_CONFIG: Record<ShiftCode, BreakCfg[]> = {
 };
 
 function startOfDay(d: Date): Date {
-  const r = new Date(d);
-  r.setHours(0, 0, 0, 0);
-  return r;
+  return jakartaDayRange(jakartaDateKey(d)).start;
 }
 
 function endOfDay(d: Date): Date {
-  const r = new Date(d);
-  r.setHours(23, 59, 59, 999);
-  return r;
+  return new Date(jakartaDayRange(jakartaDateKey(d)).end.getTime() - 1);
 }
 
 function ymd(d: Date): string {
-  return startOfDay(d).toISOString().slice(0, 10);
+  return jakartaDateKey(d);
 }
 
 function resolveTargetMonth(defaultMode: "current" | "previous" = "current") {
@@ -149,9 +146,10 @@ function resolveTargetMonth(defaultMode: "current" | "previous" = "current") {
     );
   }
 
-  const start = new Date(year, monthIndex, 1, 0, 0, 0, 0);
-  const end = new Date(year, monthIndex + 1, 0, 23, 59, 59, 999);
   const yearMonth = `${year}-${String(monthIndex + 1).padStart(2, "0")}`;
+  const range = jakartaMonthRange(yearMonth);
+  const start = range.start;
+  const end = new Date(range.end.getTime() - 1);
 
   return { year, monthIndex, start, end, yearMonth };
 }
@@ -178,17 +176,7 @@ function dateWithTime(
   time: string | null | undefined,
   fallback: string,
 ): Date {
-  const [h, m, s] = (time || fallback)
-    .split(":")
-    .map((part) => parseInt(part, 10));
-  const r = new Date(date);
-  r.setHours(
-    Number.isFinite(h) ? h : 0,
-    Number.isFinite(m) ? m : 0,
-    Number.isFinite(s) ? s : 0,
-    0,
-  );
-  return r;
+  return jakartaWallClock(jakartaDateKey(date), time || fallback);
 }
 
 function parseNum(value: unknown): number {
@@ -325,6 +313,7 @@ export async function seedAttendance() {
         gte(schedules.date, startOfDay(target.start)),
         lte(schedules.date, endOfDay(target.end)),
         eq(schedules.isHoliday, false),
+        process.env.SEED_ONLY_BEFORE_DATE ? lt(schedules.date, jakartaDayStart(process.env.SEED_ONLY_BEFORE_DATE)) : undefined,
       ),
     )
     .orderBy(schedules.date, shifts.sortOrder);
@@ -487,8 +476,7 @@ export async function seedAttendance() {
     for (const cfg of BREAK_CONFIG[code]) {
       if (!chance(code === "full_day" ? 0.75 : 0.8)) continue;
 
-      const breakStart = new Date(sched.date);
-      breakStart.setHours(cfg.hour, rand(cfg.minuteMin, cfg.minuteMax), 0, 0);
+      const breakStart = jakartaWallClock(jakartaDateKey(sched.date), `${cfg.hour}:${rand(cfg.minuteMin, cfg.minuteMax)}:00`);
       const breakEnd = new Date(breakStart);
       breakEnd.setMinutes(
         breakEnd.getMinutes() + rand(cfg.durationMin, cfg.durationMax),
