@@ -29,6 +29,7 @@ import { schedules, stores } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { resolveSetoranActorSchedule } from '@/lib/db/utils/setoran';
 import { taskRequiresLocation } from '@/lib/db/utils/task-location';
+import { resolveCekUangModalActor } from '@/lib/db/utils/cek-uang-modal';
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
@@ -40,17 +41,25 @@ export async function GET(req: Request) {
   let scheduleId = Number(searchParams.get('scheduleId'));
   const storeId = Number(searchParams.get('storeId'));
   const taskType = searchParams.get('taskType');
+  const taskId = Number(searchParams.get('taskId'));
   const latStr     = searchParams.get('lat');
   const lngStr     = searchParams.get('lng');
   const accStr     = searchParams.get('acc');
 
-  if (!Number.isSafeInteger(scheduleId) || scheduleId <= 0 || !Number.isSafeInteger(storeId) || storeId <= 0) {
+  const modalById = taskType === 'cek_uang_modal' && Number.isSafeInteger(taskId) && taskId > 0;
+  if ((!modalById && (!Number.isSafeInteger(scheduleId) || scheduleId <= 0)) || !Number.isSafeInteger(storeId) || storeId <= 0) {
     return NextResponse.json({ error: 'scheduleId and storeId are required.' }, { status: 400 });
   }
 
   const geo = parseGeoPoint(latStr, lngStr, accStr);
 
   try {
+    if (modalById) {
+      const actor = await resolveCekUangModalActor(taskId, session.user.id);
+      if (!actor.success) return NextResponse.json({ ...actor, status: 'validation_unavailable' }, { status: actor.status });
+      if (actor.data.task.storeId !== storeId) return NextResponse.json({ success: false, status: 'validation_unavailable', error: 'Toko tidak sesuai dengan task.' }, { status: 403 });
+      scheduleId = actor.data.scheduleId;
+    }
     const [schedule] = await db.select({ userId: schedules.userId, storeId: schedules.storeId, date: schedules.date, status: stores.status })
       .from(schedules).innerJoin(stores, eq(stores.id, schedules.storeId))
       .where(eq(schedules.id, scheduleId)).limit(1);

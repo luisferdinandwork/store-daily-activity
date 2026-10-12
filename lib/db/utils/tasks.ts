@@ -563,11 +563,11 @@ export async function materialiseTasksForSchedule(
         .where(and(
           eq(cekUangModalTasks.storeId, sched.storeId),
           eq(cekUangModalTasks.shiftId, morningId),
-          eq(cekUangModalTasks.date, dayStart),
-          inArray(cekUangModalTasks.status, ACTIVE_STATUSES),
+          gte(cekUangModalTasks.date, dayStart),
+          lt(cekUangModalTasks.date, jakartaDayRange(jakartaDateKey(sched.date)).end),
         ))
         .limit(1).then(r => r[0]),
-      () => db.insert(cekUangModalTasks).values({ ...base, totalAmount: '0' }));
+      () => db.insert(cekUangModalTasks).values({ ...base, totalAmount: '0' }).onConflictDoNothing());
 
     // Briefing — now available on morning and evening shift.
     await insertShared('briefingMorning',

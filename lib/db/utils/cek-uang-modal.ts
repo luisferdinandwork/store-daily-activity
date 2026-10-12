@@ -20,7 +20,9 @@ import {
   startOfDay,
   endOfDay,
   taskShiftIdFor,
+  resolveActorScheduleId,
 } from '@/lib/db/utils/shift-lookup';
+import { jakartaDateKey, jakartaTodayKey } from '@/lib/day-bucket';
 
 /**
  * Daily maximum uang modal / cashier float.
@@ -75,6 +77,21 @@ export interface CekUangModalWithDenominations {
   task: CekUangModalTask;
   denominations: CekUangModalDenomination[];
   summary: CekUangModalSummary;
+}
+
+/** Finance keeps shared rows when their creator's schedule is deleted. */
+export async function resolveCekUangModalActor(taskId: number, userId: string): Promise<
+  | { success: true; data: { task: CekUangModalTask; scheduleId: number } }
+  | { success: false; error: string; status: number }
+> {
+  const [task] = await db.select().from(cekUangModalTasks).where(eq(cekUangModalTasks.id, taskId)).limit(1);
+  if (!task) return { success: false, error: 'Task Cek Uang Modal tidak ditemukan.', status: 404 };
+  if (jakartaDateKey(task.date) !== jakartaTodayKey()) return { success: false, error: 'Task ini bukan untuk jadwal hari ini. Buka ulang daftar task.', status: 403 };
+  const [store] = await db.select({ status: stores.status }).from(stores).where(eq(stores.id, task.storeId)).limit(1);
+  if (store?.status !== 'active') return { success: false, error: 'Task hanya tersedia di toko aktif.', status: 403 };
+  const scheduleId = await resolveActorScheduleId(userId, task.storeId, task.shiftId, task.date);
+  if (!scheduleId) return { success: false, error: 'Tidak ada jadwal yang sesuai untuk kamu di toko ini.', status: 403 };
+  return { success: true, data: { task, scheduleId } };
 }
 
 function formatRupiah(value: number): string {
@@ -265,6 +282,11 @@ export async function submitCekUangModal(
   input: SubmitCekUangModalInput,
 ): Promise<TaskResult<CekUangModalWithDenominations>> {
   try {
+    if (input.taskId) {
+      const actor = await resolveCekUangModalActor(input.taskId, input.userId);
+      if (!actor.success) return actor;
+      input = { ...input, scheduleId: actor.data.scheduleId, storeId: actor.data.task.storeId };
+    }
     const gateErr = await assertCanProgressTask(input.scheduleId, input.storeId, input.geo, input.skipGeo);
     if (gateErr) return { success: false, error: gateErr };
 
@@ -338,7 +360,9 @@ export async function submitCekUangModal(
         userId: input.userId,
         storeId: input.storeId,
         shiftId: existing.shiftId,
-        date: startOfDay(existing.date ?? now),
+        // Preserve either supported day-bucket encoding; normalizing an old
+        // row can collide with another retained Finance row for that day.
+        date: existing.date,
         totalAmount: String(summary.totalAmount),
         maxAmount: String(summary.maxAmount),
         remainingAmount: String(summary.remainingAmount),

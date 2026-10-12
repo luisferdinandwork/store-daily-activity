@@ -3,7 +3,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useGeo } from '@/lib/hooks/useGeo';
-import type { GeoPoint } from '@/lib/geo';
+import { useAccessStatus } from '@/lib/hooks/useAccessStatus';
 import { useParams, useRouter } from 'next/navigation';
 import { CheckCircle2, CloudOff, Save } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -28,12 +28,6 @@ type TaskStatus =
   | 'verified'
   | 'rejected';
 
-type AccessStatus =
-  | { status: 'ok' }
-  | { status: 'not_checked_in' }
-  | { status: 'outside_geofence'; distanceM: number; radiusM: number }
-  | { status: 'geo_unavailable' };
-
 interface CekUangModalDenomination {
   id?: string;
   taskId?: string;
@@ -48,7 +42,7 @@ interface CekUangModalDenomination {
 
 interface CekUangModalData {
   id: string;
-  scheduleId: string;
+  scheduleId: string | null;
   userId: string;
   storeId: string;
   shift: 'morning' | 'evening' | 'full_day' | string;
@@ -150,54 +144,6 @@ function fmt(iso: string | null | undefined) {
     hour: '2-digit',
     minute: '2-digit',
   });
-}
-
-// ─── Access hook ──────────────────────────────────────────────────────────────
-
-function useAccessStatus(
-  scheduleId: string,
-  storeId: string,
-  geo: GeoPoint | null,
-  geoReady: boolean,
-  taskStatus: TaskStatus | undefined,
-) {
-  const [accessStatus, setAccessStatus] = useState<AccessStatus | null>(null);
-  const [accessLoading, setAccessLoading] = useState(true);
-
-  const fetchAccess = useCallback(async () => {
-    if (taskStatus && ['completed', 'verified', 'rejected'].includes(taskStatus)) {
-      setAccessStatus({ status: 'ok' });
-      setAccessLoading(false);
-      return;
-    }
-
-    if (!scheduleId || !storeId) return;
-
-    setAccessLoading(true);
-
-    try {
-      const params = new URLSearchParams({ scheduleId, storeId });
-
-      if (geo) {
-        params.set('lat', String(geo.lat));
-        params.set('lng', String(geo.lng)); if (geo.accuracy != null) params.set('acc', String(geo.accuracy));
-      }
-
-      const res = await fetch(`/api/employee/tasks/access?${params}`);
-      const data = (await res.json()) as AccessStatus;
-      setAccessStatus(data);
-    } catch {
-      setAccessStatus({ status: 'geo_unavailable' });
-    } finally {
-      setAccessLoading(false);
-    }
-  }, [scheduleId, storeId, geo, taskStatus]);
-
-  useEffect(() => {
-    if (geoReady) void fetchAccess();
-  }, [geoReady, fetchAccess]);
-
-  return { accessStatus, accessLoading, refreshAccess: fetchAccess };
 }
 
 // ─── Small UI components ──────────────────────────────────────────────────────
@@ -318,9 +264,10 @@ export default function CekUangModalDetailPage() {
     geo,
     geoReady,
     taskData?.status,
+    'cek_uang_modal',
+    taskData?.id,
   );
 
-  const scheduleId = taskData ? parseInt(taskData.scheduleId, 10) : 0;
   const storeId = taskData ? parseInt(taskData.storeId, 10) : 0;
   const taskIdNum = taskData ? parseInt(taskData.id, 10) : 0;
 
@@ -339,9 +286,8 @@ export default function CekUangModalDetailPage() {
   const readonly = taskStatus === 'completed' || taskStatus === 'verified';
   const locked =
     !readonly &&
-    !!accessStatus &&
-    (accessStatus.status === 'not_checked_in' ||
-      accessStatus.status === 'outside_geofence');
+    (accessLoading || !accessStatus || accessStatus.status !== 'ok' ||
+      (requiresLocation && (!geoReady || !geo)));
 
   const disabled = readonly || locked;
   const maxAmount = parseMoney(taskData?.maxAmount, MAX_UANG_MODAL_TOTAL);
@@ -360,16 +306,17 @@ export default function CekUangModalDetailPage() {
   const isPartial = readonly
     ? taskData?.isPartial === true
     : (!isEmpty && !isOverLimit && totalAmount < maxAmount);
-  const canSubmit = !locked && !isEmpty && !isOverLimit;
+  const canSubmit = !disabled && Number.isSafeInteger(taskIdNum) && taskIdNum > 0 && !isEmpty && !isOverLimit;
 
   const submitHint = (() => {
-    if (locked) return '';
+    if (locked) return 'Selesaikan validasi akses di atas sebelum submit.';
     if (isEmpty) return 'Isi minimal satu pecahan uang modal.';
     if (isOverLimit) return `Total uang modal maksimal ${formatRupiah(maxAmount)}.`;
     return '';
   })();
 
   function updateQuantity(denominationValue: number, quantity: number) {
+    if (disabled) return;
     setRows((prev) => {
       const otherTotal = prev.reduce((sum, row) => {
         if (row.denominationValue === denominationValue) return sum;
@@ -406,7 +353,7 @@ export default function CekUangModalDetailPage() {
   }
 
   async function handleSubmit() {
-    if (!taskData) return;
+    if (!taskData || !canSubmit) return;
 
     setSubmitError(null);
     setSubmitting(true);
@@ -417,12 +364,10 @@ export default function CekUangModalDetailPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           taskId: taskIdNum,
-          scheduleId,
           storeId,
           lat: geo?.lat,
           lng: geo?.lng,
           accuracy: geo?.accuracy,
-          skipGeo: geo === null,
           denominations: payloadRows(rows),
           notes: notes || undefined,
         }),
@@ -484,7 +429,6 @@ export default function CekUangModalDetailPage() {
             onRefreshGeo={refreshGeo}
             onRefreshAccess={refreshAccess}
             requireGeo={requiresLocation}
-            allowWithoutGeo
           />
         )}
 
@@ -510,7 +454,7 @@ export default function CekUangModalDetailPage() {
           <EmptyState title="Task tidak ditemukan" description="Task ini mungkin sudah tidak tersedia untuk jadwalmu hari ini." />
         ) : (
           <div className="relative">
-            {!readonly && <LockedOverlay accessStatus={accessStatus} requireGeo={requiresLocation} allowWithoutGeo />}
+            {!readonly && <LockedOverlay accessStatus={accessStatus} requireGeo={requiresLocation} />}
 
             <div className="space-y-5">
               {/* ─── Summary ─────────────────────────────────────────────── */}

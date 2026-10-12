@@ -10,22 +10,38 @@ import {
   type AutoSaveCekUangModalPatch,
   type GeoPoint,
   type UangModalDenominationInput,
+  resolveCekUangModalActor,
+  getCekUangModalBySchedule,
 } from '@/lib/db/utils/cek-uang-modal';
-import { parseAccuracy } from '@/lib/geo';
+import { parseGeoPoint } from '@/lib/geo';
+import { taskRequiresLocation } from '@/lib/db/utils/task-location';
+import { db } from '@/lib/db';
+import { schedules } from '@/lib/db/schema';
+import { eq } from 'drizzle-orm';
 
 function toInt(val: unknown, field: string): number {
-  const n = parseInt(String(val ?? ''), 10);
-  if (isNaN(n)) throw new Error(`${field} must be a valid integer, got: ${JSON.stringify(val)}`);
+  const n = typeof val === 'number' || typeof val === 'string' ? Number(val) : NaN;
+  if (!Number.isSafeInteger(n) || n <= 0) throw new Error(`${field} tidak valid. Buka ulang daftar task.`);
   return n;
 }
 
-function readGeo(body: Record<string, unknown>): GeoPoint {
-  const lat = Number(body.lat ?? body.latitude);
-  const lng = Number(body.lng ?? body.longitude);
-  if (!isFinite(lat) || !isFinite(lng)) {
-    throw new Error('Geolokasi tidak valid. Aktifkan GPS dan coba lagi.');
+function readGeo(body: Record<string, unknown>): GeoPoint | null {
+  return parseGeoPoint(body.lat ?? body.latitude, body.lng ?? body.longitude, body.accuracy);
+}
+
+async function resolveActorFromBody(body: Record<string, unknown>, userId: string) {
+  let taskId: number;
+  if (body.taskId != null) {
+    taskId = toInt(body.taskId, 'taskId');
+  } else {
+    const scheduleId = toInt(body.scheduleId, 'scheduleId');
+    const [schedule] = await db.select().from(schedules).where(eq(schedules.id, scheduleId)).limit(1);
+    if (!schedule || schedule.userId !== userId) return { success: false as const, error: 'Jadwal bukan milik kamu.', status: 403 };
+    const task = await getCekUangModalBySchedule(scheduleId);
+    if (!task) return { success: false as const, error: 'Task tidak ditemukan. Buka ulang daftar task.', status: 404 };
+    taskId = task.id;
   }
-  return { lat, lng, accuracy: parseAccuracy(body.accuracy) };
+  return resolveCekUangModalActor(taskId, userId);
 }
 
 function readDenominations(v: unknown): UangModalDenominationInput[] {
@@ -59,13 +75,17 @@ export async function POST(req: NextRequest) {
   catch { return NextResponse.json({ success: false, error: 'Invalid JSON body' }, { status: 400 }); }
 
   try {
-    const scheduleId = toInt(body.scheduleId, 'scheduleId');
-    const storeId = toInt(body.storeId, 'storeId');
-    const geo = readGeo(body);
-    const skipGeo = Boolean(body.skipGeo);
     const userId = session.user.id as string;
+    const actor = await resolveActorFromBody(body, userId);
+    if (!actor.success) return NextResponse.json(actor, { status: actor.status });
+    const { scheduleId, task } = actor.data;
+    const storeId = task.storeId;
+    const skipGeo = !(await taskRequiresLocation('cek_uang_modal'));
+    const point = readGeo(body);
+    if (!skipGeo && !point) return NextResponse.json({ success: false, error: 'Lokasi wajib aktif. Perbarui lokasi lalu coba lagi.' }, { status: 400 });
+    const geo = point ?? { lat: 0, lng: 0 };
     const denominations = readDenominations(body.denominations);
-    const taskId = body.taskId != null ? toInt(body.taskId, 'taskId') : undefined;
+    const taskId = task.id;
 
     const result = await submitCekUangModal({
       taskId,
@@ -81,8 +101,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(result, { status: result.success ? 200 : 400 });
   } catch (err) {
     console.error('[POST /api/employee/tasks/cek-uang-modal]', err);
-    const isGeoErr = err instanceof Error && err.message.startsWith('Geolokasi');
-    return NextResponse.json({ success: false, error: String(err) }, { status: isGeoErr ? 400 : 500 });
+    const isInputError = err instanceof Error && err.message.includes('tidak valid.');
+    return NextResponse.json({ success: false, error: isInputError ? (err as Error).message : 'Gagal memvalidasi task. Silakan coba lagi.' }, { status: isInputError ? 400 : 500 });
   }
 }
 
@@ -105,6 +125,8 @@ export async function PATCH(req: NextRequest) {
   if ('notes' in body) patch.notes = typeof body.notes === 'string' ? body.notes : undefined;
 
   try {
+    const actor = await resolveCekUangModalActor(taskId, session.user.id);
+    if (!actor.success) return NextResponse.json(actor, { status: actor.status });
     const result = await autoSaveCekUangModalById(taskId, patch);
     return NextResponse.json(result, { status: result.success ? 200 : 400 });
   } catch (err) {

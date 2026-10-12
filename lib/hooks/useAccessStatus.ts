@@ -17,6 +17,7 @@ export function useAccessStatus(
   geoReady: boolean,
   taskStatus: string | undefined,
   taskType?: string,
+  taskId?: string,
 ) {
   const [accessStatus, setAccessStatus] = useState<AccessStatus | null>(null);
   const [accessLoading, setAccessLoading] = useState(true);
@@ -30,7 +31,7 @@ export function useAccessStatus(
       return;
     }
 
-    if (!scheduleId || !storeId) {
+    if ((!scheduleId && !taskId) || !storeId) {
       setAccessStatus({ status: 'validation_unavailable', error: 'Jadwal belum tersedia.' });
       setAccessLoading(false);
       return;
@@ -41,6 +42,7 @@ export function useAccessStatus(
     try {
       const params = new URLSearchParams({ scheduleId, storeId });
       if (taskType) params.set('taskType', taskType);
+      if (taskId) params.set('taskId', taskId);
 
       if (geo) {
         params.set('lat', String(geo.lat));
@@ -61,7 +63,7 @@ export function useAccessStatus(
     } finally {
       if (id === requestId.current) setAccessLoading(false);
     }
-  }, [scheduleId, storeId, geo, taskStatus, taskType]);
+  }, [scheduleId, storeId, geo, taskStatus, taskType, taskId]);
 
   useEffect(() => {
     const counter = requestId;

@@ -5,6 +5,7 @@ import { authOptions } from "@/lib/auth";
 import { db } from "@/lib/db";
 import {
   schedules,
+  attendance,
   stores,
   shifts,
   shiftTasks,
@@ -299,9 +300,11 @@ export async function GET(request: NextRequest) {
         id: schedules.id,
         shiftId: schedules.shiftId,
         storeId: schedules.storeId,
+        checkInTime: attendance.checkInTime,
       })
       .from(schedules)
       .innerJoin(stores, eq(stores.id, schedules.storeId))
+      .leftJoin(attendance, eq(attendance.scheduleId, schedules.id))
       .where(
         and(
           eq(schedules.userId, userId),
@@ -348,10 +351,10 @@ export async function GET(request: NextRequest) {
     // employee from the same store/day. For AccessGuard + submit guards, the scheduleId
     // sent to the task detail page must be the logged-in employee's own scheduleId.
     const buildPreferredScheduleByStoreId = (preferredShiftCodes: string[]) => {
-      const rank = (shiftId: number) => {
+      const rank = (shiftId: number, checkedIn: boolean) => {
         const code = shiftCodeMap[shiftId] ?? "";
         const idx = preferredShiftCodes.indexOf(code);
-        return idx === -1 ? preferredShiftCodes.length + 1 : idx;
+        return idx === -1 ? 100 + preferredShiftCodes.length : idx + (checkedIn ? 0 : preferredShiftCodes.length);
       };
 
       const map = new Map<number, (typeof todaySchedules)[number]>();
@@ -359,7 +362,7 @@ export async function GET(request: NextRequest) {
       for (const schedule of todaySchedules) {
         const current = map.get(schedule.storeId);
 
-        if (!current || rank(schedule.shiftId) < rank(current.shiftId)) {
+        if (!current || rank(schedule.shiftId, !!schedule.checkInTime) < rank(current.shiftId, !!current.checkInTime)) {
           map.set(schedule.storeId, schedule);
         }
       }
@@ -1188,7 +1191,8 @@ export async function GET(request: NextRequest) {
             shift,
             data: {
               id: String(t.id),
-              scheduleId: String(t.scheduleId),
+              scheduleId: String(morningScheduleByStoreId.get(t.storeId)?.id ?? ''),
+              originalScheduleId: t.scheduleId == null ? null : String(t.scheduleId),
               userId: t.userId,
               storeId: String(t.storeId),
               shift,

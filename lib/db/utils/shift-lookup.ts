@@ -4,8 +4,9 @@
 import { and, eq, gte, lte } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
-import { schedules, shifts } from '@/lib/db/schema';
+import { schedules, shifts, attendance } from '@/lib/db/schema';
 import { SHIFT_BASE_CODE } from '@/lib/shift-tasks';
+import { jakartaDateKey, jakartaDayRange } from '@/lib/day-bucket';
 
 type ShiftCode = 'morning' | 'evening' | 'full_day';
 
@@ -60,15 +61,11 @@ export async function taskShiftIdFor(shiftId: number): Promise<number> {
 }
 
 export function startOfDay(d: Date): Date {
-  const r = new Date(d);
-  r.setHours(0, 0, 0, 0);
-  return r;
+  return jakartaDayRange(jakartaDateKey(d)).start;
 }
 
 export function endOfDay(d: Date): Date {
-  const r = new Date(d);
-  r.setHours(23, 59, 59, 999);
-  return r;
+  return new Date(jakartaDayRange(jakartaDateKey(d)).end.getTime() - 1);
 }
 
 export function addDays(d: Date, n: number): Date {
@@ -100,8 +97,9 @@ export async function resolveActorScheduleId(
   const dayEnd   = endOfDay(date);
 
   const candidates = await db
-    .select({ id: schedules.id, shiftId: schedules.shiftId })
+    .select({ id: schedules.id, shiftId: schedules.shiftId, checkInTime: attendance.checkInTime })
     .from(schedules)
+    .leftJoin(attendance, and(eq(attendance.scheduleId, schedules.id), eq(attendance.userId, userId)))
     .where(
       and(
         eq(schedules.userId, userId),
@@ -110,18 +108,11 @@ export async function resolveActorScheduleId(
         gte(schedules.date, dayStart),
         lte(schedules.date, dayEnd),
       ),
-    );
+    ).orderBy(schedules.id);
 
-  const exact = candidates.find((c) => c.shiftId === targetShiftId);
-  if (exact) return exact.id;
-
-  // A JKP schedule works its base shift's rows (JP → morning, JS → evening).
+  const eligible: typeof candidates = [];
   for (const c of candidates) {
-    if ((await taskShiftIdFor(c.shiftId)) === targetShiftId) return c.id;
+    if ((await taskShiftIdFor(c.shiftId)) === targetShiftId || c.shiftId === fullDayShiftId) eligible.push(c);
   }
-
-  const fullDay = candidates.find((c) => c.shiftId === fullDayShiftId);
-  if (fullDay) return fullDay.id;
-
-  return null;
+  return (eligible.find((c) => c.checkInTime) ?? eligible.find((c) => c.shiftId === targetShiftId) ?? eligible[0])?.id ?? null;
 }
