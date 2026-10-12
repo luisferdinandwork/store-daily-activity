@@ -17,6 +17,7 @@ import {
   marketingCheckTasks,
   briefingTasks,
   storeClosingTasks,
+  storeClosingEdcEntries,
   groomingTasks,
   cekUangModalTasks,
   cekUangModalDenominations,
@@ -1329,6 +1330,30 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
     return map;
   }
 
+  /** Store Closing's EDC summary cells (bank × payment method) per task. */
+  async function loadEdcEntriesByTaskId(taskIds: number[]) {
+    const map = new Map<number, Array<{ bank: string; method: string; amount: number }>>();
+    if (!taskIds.length) return map;
+
+    const rows = await db
+      .select({
+        taskId: storeClosingEdcEntries.taskId,
+        bank: storeClosingEdcEntries.bank,
+        method: storeClosingEdcEntries.method,
+        amount: storeClosingEdcEntries.amount,
+      })
+      .from(storeClosingEdcEntries)
+      .where(inArray(storeClosingEdcEntries.taskId, taskIds));
+
+    for (const row of rows) {
+      const bucket = map.get(row.taskId) ?? [];
+      bucket.push({ bank: row.bank, method: row.method, amount: Number(row.amount) });
+      map.set(row.taskId, bucket);
+    }
+
+    return map;
+  }
+
   const [
     storeOpening,
     setoran,
@@ -1398,6 +1423,14 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
     };
   });
 
+  // Store Closing: the money of the EDC summary rides along as extra.edcEntries
+  // (opMeVoucherAmount / indodanaDashboardPhoto are plain task columns).
+  const edcEntriesByTaskId = await loadEdcEntriesByTaskId(storeClosing.map((task) => task.id));
+  const storeClosingWithEdc: FlatTask[] = storeClosing.map((task) => ({
+    ...task,
+    extra: { ...task.extra, edcEntries: edcEntriesByTaskId.get(task.id) ?? [] },
+  }));
+
   const all = [
     ...storeOpening,
     ...setoran,
@@ -1407,7 +1440,7 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
     ...marketingCheck,
     ...cekUangModalWithDenominations,
     ...briefing,
-    ...storeClosing,
+    ...storeClosingWithEdc,
     ...grooming,
   ];
 

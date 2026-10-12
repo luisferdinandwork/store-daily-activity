@@ -25,6 +25,16 @@ import {
   X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import {
+  EDC_METHODS,
+  EDC_METHOD_LABELS,
+  INDODANA_PHOTO_LABEL,
+  OP_ME_VOUCHER_LABEL,
+  banksMissingPhoto,
+  summariseEdc,
+  type EdcEntryLike,
+  type EdcSummary,
+} from '@/lib/store-closing-edc';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -940,9 +950,75 @@ function BriefingDetail({ task }: { task: FlatTask }) {
   );
 }
 
+const fmtNum = (n: number) => n.toLocaleString('id-ID');
+
+/** The EDC summary of a Store Closing as the store typed it: bank × QRIS / Debit / Credit. */
+export function edcSummaryOf(extra: Record<string, unknown>): EdcSummary {
+  return summariseEdc(
+    Array.isArray(extra.edcEntries) ? (extra.edcEntries as EdcEntryLike[]) : [],
+    extra.opMeVoucherAmount as number | string | null | undefined,
+  );
+}
+
+function EdcSummaryTable({ summary }: { summary: EdcSummary }) {
+  const th = 'px-2 py-1.5 text-right text-[10px] font-bold uppercase tracking-wide text-slate-400';
+  const td = 'whitespace-nowrap px-2 py-1.5 text-right tabular-nums';
+
+  return (
+    <div className="overflow-x-auto rounded-lg border border-slate-100">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="bg-slate-50">
+            <th className={cn(th, 'pl-2.5 text-left')}>Bank (Rp)</th>
+            {EDC_METHODS.map((m) => <th key={m} className={th}>{EDC_METHOD_LABELS[m]}</th>)}
+            <th className={cn(th, 'pr-2.5')}>Total</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {summary.banks.map((b) => (
+            <tr key={b.code}>
+              <td className="whitespace-nowrap py-1.5 pl-2.5 pr-2 font-semibold text-slate-700">{b.label}</td>
+              {b.filled ? (
+                EDC_METHODS.map((m) => (
+                  <td key={m} className={cn(td, b.cells[m] === undefined ? 'text-slate-300' : 'text-slate-600')}>
+                    {b.cells[m] === undefined ? '—' : fmtNum(b.cells[m])}
+                  </td>
+                ))
+              ) : (
+                <td colSpan={EDC_METHODS.length} className="px-2 py-1.5 text-right font-semibold text-amber-600">
+                  Belum diisi
+                </td>
+              )}
+              <td className={cn(td, 'pr-2.5 font-bold', b.filled ? 'text-slate-800' : 'text-slate-300')}>
+                {b.filled ? fmtNum(b.total) : '—'}
+              </td>
+            </tr>
+          ))}
+          <tr className="bg-slate-50/70">
+            <td colSpan={EDC_METHODS.length + 1} className="py-1.5 pl-2.5 pr-2 font-semibold text-slate-700">
+              {OP_ME_VOUCHER_LABEL}
+            </td>
+            <td className={cn(td, 'pr-2.5 font-bold', summary.opMeVoucher === null ? 'text-amber-600' : 'text-slate-800')}>
+              {summary.opMeVoucher === null ? 'Belum diisi' : fmtNum(summary.opMeVoucher)}
+            </td>
+          </tr>
+          <tr className="bg-emerald-50/60">
+            <td colSpan={EDC_METHODS.length + 1} className="py-1.5 pl-2.5 pr-2 font-bold text-emerald-800">
+              Total
+            </td>
+            <td className={cn(td, 'pr-2.5 font-bold text-emerald-800')}>{fmtNum(summary.total)}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // Store Closing — replaces edc_reconciliation + eod_z_report + open_statement.
 // Order per OPS request: EOD Z-Report → EDC Summary → EDC Settlement → evidence
-// photo → Open Statement.
+// photo → Open Statement. The EDC Summary is money per bank × payment method
+// (+ OP/ME/VOUCHER, + the Indodana dashboard photo); a closing made before that
+// format only has the old checklist tick.
 function StoreClosingDetail({ task }: { task: FlatTask }) {
   const e = task.extra;
 
@@ -951,6 +1027,12 @@ function StoreClosingDetail({ task }: { task: FlatTask }) {
   const heldAt      = (e.heldAt as string | null | undefined) ?? null;
   const holdReason  = (e.openStatementHoldReason as string | null | undefined) ?? null;
   const reopenedAt  = (e.reopenedAt as string | null | undefined) ?? null;
+
+  const edc            = edcSummaryOf(e);
+  const indodanaPhoto  = typeof e.indodanaDashboardPhoto === 'string' ? e.indodanaDashboardPhoto : null;
+  const indodanaMissing = banksMissingPhoto(edc, indodanaPhoto).length > 0;
+  const edcBy          = actorName(e, 'edcSummary');
+  const edcAt          = actorAt(e, 'edcSummary');
 
   const edcSummaryNotes    = typeof e.edcSummaryNotes === 'string' ? e.edcSummaryNotes.trim() : '';
   const edcSettlementNotes = typeof e.edcSettlementNotes === 'string' ? e.edcSettlementNotes.trim() : '';
@@ -991,14 +1073,31 @@ function StoreClosingDetail({ task }: { task: FlatTask }) {
 
       {/* 2 · EDC Summary (shown before Settlement) */}
       <p className="mb-1 mt-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">EDC Summary</p>
-      <div className="divide-y divide-slate-100">
-        <CheckRow
-          label="EDC Summary selesai"
-          done={!!e.edcSummaryDone}
-          by={actorName(e, 'edcSummary')}
-          at={actorAt(e, 'edcSummary')}
-        />
-      </div>
+      {edc.hasData ? (
+        <>
+          <EdcSummaryTable summary={edc} />
+          {edcBy && (
+            <p className="mt-1 text-right text-[10px] text-slate-400">
+              Diisi {edcBy}{edcAt ? ` · ${fmtTime(edcAt)}` : ''}
+            </p>
+          )}
+          <PhotoGrid
+            label={INDODANA_PHOTO_LABEL}
+            photos={indodanaPhoto}
+            columns={2}
+            emptyHint={indodanaMissing ? 'Belum ada foto dashboard Indodana — wajib karena ada transaksi Indodana.' : undefined}
+          />
+        </>
+      ) : (
+        <div className="divide-y divide-slate-100">
+          <CheckRow
+            label={e.edcSummaryDone ? 'EDC Summary selesai (format lama: checklist)' : 'Rekap EDC belum diisi'}
+            done={!!e.edcSummaryDone}
+            by={edcBy}
+            at={edcAt}
+          />
+        </div>
+      )}
       {edcSummaryNotes && (
         <p className="mt-1 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">{edcSummaryNotes}</p>
       )}

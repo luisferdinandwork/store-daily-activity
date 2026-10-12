@@ -2,10 +2,13 @@
 // Shapes and rules for Finance's Store Closing page — client-safe, no DB
 // imports. Shared by the page and its API.
 //
-// Finance only needs two things from a store's closing: the photo of the
-// Z-Report + EDC settlement together, and whether the Open Statement was
-// POSTED or put ON HOLD — and, for a hold, to flip it to posted once it has
-// been fixed.
+// Finance needs three things from a store's closing: the photo of the
+// Z-Report + EDC settlement together, the EDC summary (money per bank × payment
+// method, OP/ME/VOUCHER and the Indodana dashboard photo — lib/store-closing-edc.ts),
+// and whether the Open Statement was POSTED or put ON HOLD — and, for a hold,
+// to flip it to posted once it has been fixed.
+
+import type { EdcEntry } from '@/lib/store-closing-edc';
 
 export { storeCodeOf } from '@/lib/petty-cash-report';
 export { groupRowsByCode, type CodeGroup } from '@/lib/finance/code-groups';
@@ -37,6 +40,18 @@ export interface StoreClosingRow {
 
   /** The one photo of the Z-Report and EDC settlement together. */
   zReportPhoto: string | null;
+
+  // EDC summary — feed edcEntries + opMeVoucher to summariseEdc() for the totals.
+  /** Filled cells only (a blank cell has no entry). Empty for a closing made before the money format. */
+  edcEntries: EdcEntry[];
+  /** OP/ME/VOUCHER in Rupiah; null = not filled in. */
+  opMeVoucher: number | null;
+  /** Photo of the Indodana dashboard. */
+  indodanaPhoto: string | null;
+  edcNotes: string | null;
+  /** Who last filled in the EDC summary, and when. */
+  edcBy: string | null;
+  edcAt: string | null;
 
   // Open Statement
   decision: 'post_statement' | 'on_hold' | null;

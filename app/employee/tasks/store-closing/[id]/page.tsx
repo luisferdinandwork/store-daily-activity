@@ -1,7 +1,7 @@
 'use client';
 // app/employee/tasks/store-closing/[id]/page.tsx
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
   Check, CloudOff, Save, Clock, Lock, Receipt,
@@ -17,6 +17,22 @@ import {
 } from '@/components/employee/ui';
 import ChecklistPhotoModal from '@/components/tasks/ChecklistPhotoModal';
 import AccessGuard from '@/components/employee/tasks/AccessGuard';
+import EdcSummaryFields, {
+  edcDigitsToAmount,
+  edcEntriesFromState,
+  edcStateFromEntries,
+  edcSummaryFromState,
+  type EdcAmountState,
+} from '@/components/employee/tasks/EdcSummary';
+import {
+  EDC_BANKS,
+  INDODANA_PHOTO_LABEL,
+  edcCellKey,
+  edcSubmitProblem,
+  type EdcBankCode,
+  type EdcEntryLike,
+  type EdcMethod,
+} from '@/lib/store-closing-edc';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -42,8 +58,12 @@ interface StoreClosingData {
   storefrontLockedPhoto:   string | null;
   edcSettlementDone:       boolean;
   edcSettlementNotes:      string | null;
+  /** Old checklist tick — the only EDC summary record of closings made before the money format. */
   edcSummaryDone:          boolean;
   edcSummaryNotes:         string | null;
+  edcEntries:              EdcEntryLike[];
+  opMeVoucherAmount:       number | null;
+  indodanaDashboardPhoto:  string | null;
   openStatementDecision:   OpenStatementDecision | null;
   openStatementHoldReason: string | null;
   isOnHold:                boolean;
@@ -57,6 +77,8 @@ interface StoreClosingData {
 const PHOTO_RULES = {
   eodEdcSettlement: { min: 1, max: 1 },
   storefrontLocked: { min: 1, max: 1 },
+  // Required only once Indodana has an amount (edcSubmitProblem); the modal itself accepts 0–1.
+  indodanaDashboard: { min: 1, max: 1 },
 } as const;
 
 // ─── Collapsible notes row (sits inside a ListGroup under its checklist row) ─
@@ -204,6 +226,7 @@ export default function StoreClosingDetailPage() {
 
   const [eodEdcSettlementModalOpen, setEodEdcSettlementModalOpen] = useState(false);
   const [storefrontLockedModalOpen, setStorefrontLockedModalOpen] = useState(false);
+  const [indodanaModalOpen,         setIndodanaModalOpen]         = useState(false);
 
   // Form state
   const [eodZReportDone,        setEodZReportDone]        = useState(false);
@@ -211,8 +234,13 @@ export default function StoreClosingDetailPage() {
   const [storefrontLockedPhoto, setStorefrontLockedPhoto] = useState<string | null>(null);
   const [edcSettlementDone,     setEdcSettlementDone]     = useState(false);
   const [edcSettlementNotes,    setEdcSettlementNotes]    = useState('');
-  const [edcSummaryDone,        setEdcSummaryDone]        = useState(false);
+  // EDC summary: digits per bank × method cell, OP/ME/VOUCHER, Indodana dashboard photo.
+  const [edcAmounts,            setEdcAmounts]            = useState<EdcAmountState>({});
+  const [opMeVoucher,           setOpMeVoucher]           = useState('');
+  const [indodanaPhoto,         setIndodanaPhoto]         = useState<string | null>(null);
   const [edcSummaryNotes,       setEdcSummaryNotes]       = useState('');
+  // EDC cells this page has edited (what the auto-save sends — see saveEdcAmounts).
+  const edcEdited = useRef(new Set<string>());
   const [openStatementDecision, setOpenStatementDecision] = useState<OpenStatementDecision | null>(null);
   const [holdReason,            setHoldReason]            = useState('');
   const [notes,                 setNotes]                 = useState('');
@@ -233,7 +261,10 @@ export default function StoreClosingDetailPage() {
         setStorefrontLockedPhoto(d.storefrontLockedPhoto ?? null);
         setEdcSettlementDone(d.edcSettlementDone);
         setEdcSettlementNotes(d.edcSettlementNotes ?? '');
-        setEdcSummaryDone(d.edcSummaryDone);
+        setEdcAmounts(edcStateFromEntries(d.edcEntries));
+        edcEdited.current.clear();
+        setOpMeVoucher(d.opMeVoucherAmount == null ? '' : String(d.opMeVoucherAmount));
+        setIndodanaPhoto(d.indodanaDashboardPhoto ?? null);
         setEdcSummaryNotes(d.edcSummaryNotes ?? '');
         setOpenStatementDecision(d.openStatementDecision ?? null);
         setHoldReason(d.openStatementHoldReason ?? '');
@@ -289,6 +320,39 @@ export default function StoreClosingDetailPage() {
     autoSave({ edcSummaryNotes: v || null });
   }
 
+  // The store closing is one row the whole shift shares. Each EDC save carries
+  // every cell THIS page has edited (patches merged by the debounce can't lose
+  // an earlier edit) and nothing else, so a colleague's figures entered since
+  // this page loaded are never blanked out. The submit sends what is on screen.
+  function saveEdcAmounts(next: EdcAmountState, editedKeys: string[]) {
+    setEdcAmounts(next);
+    for (const key of editedKeys) edcEdited.current.add(key);
+    autoSave({ edcEntries: edcEntriesFromState(next, edcEdited.current) });
+  }
+
+  function handleEdcAmount(bank: EdcBankCode, method: EdcMethod, digits: string) {
+    const key = edcCellKey(bank, method);
+    saveEdcAmounts({ ...edcAmounts, [key]: digits }, [key]);
+  }
+
+  function handleEdcBankZero(bank: EdcBankCode) {
+    const next = { ...edcAmounts };
+    const keys = (EDC_BANKS.find(b => b.code === bank)?.methods ?? []).map(m => edcCellKey(bank, m));
+    for (const key of keys) next[key] = '0';
+    saveEdcAmounts(next, keys);
+  }
+
+  function handleOpMeVoucher(digits: string) {
+    setOpMeVoucher(digits);
+    autoSave({ opMeVoucherAmount: edcDigitsToAmount(digits) });
+  }
+
+  function syncIndodanaPhoto(photos: string[]) {
+    const next = Array.isArray(photos) && photos.length > 0 ? photos[0] : null;
+    setIndodanaPhoto(next);
+    autoSave({ indodanaDashboardPhoto: next }, { immediate: true });
+  }
+
   function handleOpenStatementDecision(v: OpenStatementDecision) {
     setOpenStatementDecision(v);
     if (v !== 'on_hold') setHoldReason('');
@@ -327,7 +391,9 @@ export default function StoreClosingDetailPage() {
           storefrontLockedPhoto,
           edcSettlementDone,
           edcSettlementNotes: edcSettlementNotes || undefined,
-          edcSummaryDone,
+          edcEntries: edcEntriesFromState(edcAmounts),
+          opMeVoucherAmount: edcDigitsToAmount(opMeVoucher),
+          indodanaDashboardPhoto: indodanaPhoto,
           edcSummaryNotes: edcSummaryNotes || undefined,
           openStatementDecision,
           openStatementHoldReason: holdReason || undefined,
@@ -384,25 +450,32 @@ export default function StoreClosingDetailPage() {
           openStatementDecision === 'post_statement' ||
           openStatementDecision === 'on_hold';
 
+        // EDC summary: every bank counted, OP/ME/VOUCHER filled, Indodana photo when it has an amount.
+        const edcSummary = edcSummaryFromState(edcAmounts, opMeVoucher);
+        const edcProblem = edcSubmitProblem(edcSummary, indodanaPhoto);
+        // A closing made before the money format only has the old checklist tick.
+        const legacyEdc = readonly && !edcSummary.hasData && !!taskData?.edcSummaryDone;
+
         const canSubmit =
           !locked &&
           !isOnHold &&
           !!geo &&
           zReportSatisfied &&
+          !edcProblem &&
           edcSettlementDone &&
           evidencePhotoSatisfied &&
           storefrontLockedSatisfied &&
-          edcSummaryDone &&
           !!openStatementDecision &&
           openStmtSatisfied;
 
+        // Same order as the page.
         const submitHint = (() => {
           if (locked || isOnHold) return '';
           if (!zReportSatisfied) return 'Centang checklist EOD Z-Report.';
+          if (edcProblem) return edcProblem;
           if (!edcSettlementDone) return 'Centang checklist EDC Settlement.';
           if (!evidencePhotoSatisfied) return 'Upload foto Z-Report & EDC Settlement.';
           if (!storefrontLockedSatisfied) return 'Upload foto storefront terkunci.';
-          if (!edcSummaryDone)       return 'Centang checklist EDC Summary.';
           if (!openStatementDecision) return 'Pilih status Open Statement.';
           return '';
         })();
@@ -482,23 +555,46 @@ export default function StoreClosingDetailPage() {
                       </ListGroup>
                     </Section>
 
-                    <Section title="2 · EDC Summary">
-                      <ListGroup>
-                        <CheckRow
-                          label="EDC Summary selesai"
-                          hint="Laporan summary EDC sudah dicetak/dicatat."
-                          checked={edcSummaryDone}
-                          onToggle={() => { const v = !edcSummaryDone; setEdcSummaryDone(v); autoSave({ edcSummaryDone: v }); }}
-                          disabled={dis}
-                        />
-                        <NotesInput
-                          label="Catatan EDC Summary (opsional)"
-                          value={edcSummaryNotes}
-                          onChange={handleEdcSummaryNotes}
-                          disabled={dis}
-                          placeholder="Tambahkan catatan summary jika ada…"
-                        />
-                      </ListGroup>
+                    <Section
+                      title="2 · EDC Summary"
+                      meta={legacyEdc ? undefined : `${EDC_BANKS.length - edcSummary.missingBanks.length}/${EDC_BANKS.length} bank`}
+                    >
+                      <div className="space-y-3">
+                        {legacyEdc ? (
+                          <Notice tone="neutral">
+                            EDC Summary untuk closing ini dicatat dengan format lama (hanya checklist),
+                            sebelum nominal per bank dihitung.
+                          </Notice>
+                        ) : (
+                          <>
+                            {!dis && (
+                              <p className="px-0.5 text-xs text-muted-foreground">
+                                Hitung total tiap bank dari EDC, per metode pembayaran. Tekan
+                                &ldquo;Tidak ada transaksi&rdquo; bila bank itu tidak dipakai hari ini.
+                              </p>
+                            )}
+                            <EdcSummaryFields
+                              amounts={edcAmounts}
+                              onAmountChange={handleEdcAmount}
+                              onBankZero={handleEdcBankZero}
+                              opMeVoucher={opMeVoucher}
+                              onOpMeVoucherChange={handleOpMeVoucher}
+                              indodanaPhoto={indodanaPhoto}
+                              onIndodanaPhotoClick={() => setIndodanaModalOpen(true)}
+                              disabled={dis}
+                            />
+                          </>
+                        )}
+                        <ListGroup>
+                          <NotesInput
+                            label="Catatan EDC Summary (opsional)"
+                            value={edcSummaryNotes}
+                            onChange={handleEdcSummaryNotes}
+                            disabled={dis}
+                            placeholder="Tambahkan catatan summary jika ada…"
+                          />
+                        </ListGroup>
+                      </div>
                     </Section>
 
                     <Section title="3 · EDC Settlement">
@@ -588,6 +684,22 @@ export default function StoreClosingDetailPage() {
               onConfirm={syncEodEdcSettlementPhoto}
               onChange={syncEodEdcSettlementPhoto}
               onClear={() => syncEodEdcSettlementPhoto([])}
+              disabled={dis}
+            />
+
+            {/* Indodana dashboard photo modal */}
+            <ChecklistPhotoModal
+              open={indodanaModalOpen}
+              onClose={() => setIndodanaModalOpen(false)}
+              title={INDODANA_PHOTO_LABEL}
+              description="Upload 1 foto / screenshot dashboard Indodana yang menampilkan transaksi hari ini."
+              photoType="indodana_dashboard"
+              min={PHOTO_RULES.indodanaDashboard.min}
+              max={PHOTO_RULES.indodanaDashboard.max}
+              initialPhotos={indodanaPhoto ? [indodanaPhoto] : []}
+              onConfirm={syncIndodanaPhoto}
+              onChange={syncIndodanaPhoto}
+              onClear={() => syncIndodanaPhoto([])}
               disabled={dis}
             />
 

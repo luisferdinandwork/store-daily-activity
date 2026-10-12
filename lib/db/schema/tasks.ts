@@ -900,7 +900,8 @@ export const serahTerimaTasks = pgTable('serah_terima_tasks', {
  * Sections:
  *   1. EOD Z-Report photo evidence
  *   2. EDC Settlement checklist
- *   3. EDC Summary checklist
+ *   3. EDC Summary — money per bank × payment method + OP/ME/VOUCHER, and the
+ *      Indodana dashboard photo (store_closing_edc_entries below)
  *   4. Open Statement decision: post statement / on hold
  *
  * On Hold:
@@ -943,11 +944,22 @@ export const storeClosingTasks = pgTable('store_closing_tasks', {
   edcSettlementBy:    text('edc_settlement_by').references(() => users.id),
   edcSettlementAt:    timestamp('edc_settlement_at'),
 
-  // 4. EDC Summary
+  // 4. EDC Summary — money per bank × payment method (store_closing_edc_entries,
+  // lib/store-closing-edc.ts) plus the two single values below. `edcSummaryDone`
+  // is the old checklist tick: submit sets it once the summary is complete, and
+  // closings made before the money format keep it as their only EDC summary
+  // record. `edcSummaryBy/At` = who/when last touched any of the figures.
   edcSummaryDone:  boolean('edc_summary_done').default(false).notNull(),
   edcSummaryNotes: text('edc_summary_notes'),
   edcSummaryBy:    text('edc_summary_by').references(() => users.id),
   edcSummaryAt:    timestamp('edc_summary_at'),
+
+  /** OP/ME/VOUCHER — the one EDC-summary amount that is not a bank. NULL = not filled in. */
+  opMeVoucherAmount: decimal('op_me_voucher_amount', { precision: 14, scale: 2 }),
+
+  /** Photo of the Indodana dashboard — required once Indodana has an amount. */
+  indodanaDashboardPhoto:   text('indodana_dashboard_photo'),
+  indodanaDashboardPhotoAt: timestamp('indodana_dashboard_photo_at'),
 
   // 5. Open Statement
   openStatementDecision:   text('open_statement_decision').$type<'post_statement' | 'on_hold' | null>(),
@@ -982,6 +994,24 @@ export const storeClosingTasks = pgTable('store_closing_tasks', {
   storeDateIdx:    index('store_closing_tasks_store_date_idx').on(t.storeId, t.date),
   holdIssueIdx:    index('store_closing_tasks_hold_issue_idx').on(t.holdIssueId),
   statusIdx:       index('store_closing_tasks_status_idx').on(t.status),
+}));
+
+/**
+ * One cell of a Store Closing's EDC summary: the day's amount for a bank and a
+ * payment method (BCA · QRIS, Mandiri · Debit, …). A cell the store left blank has
+ * no row. Which banks/methods exist is decided in lib/store-closing-edc.ts, so
+ * adding one needs no migration. Rows go with their task (cascade).
+ */
+export const storeClosingEdcEntries = pgTable('store_closing_edc_entries', {
+  id:        serial('id').primaryKey(),
+  taskId:    integer('task_id').references(() => storeClosingTasks.id, { onDelete: 'cascade' }).notNull(),
+  bank:      text('bank').notNull(),
+  method:    text('method').notNull(),
+  amount:    decimal('amount', { precision: 14, scale: 2 }).default('0').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => ({
+  uniqueCell: unique('store_closing_edc_entries_cell_unique').on(t.taskId, t.bank, t.method),
 }));
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1070,6 +1100,8 @@ export type SerahTerimaTask       = typeof serahTerimaTasks.$inferSelect;
 export type NewSerahTerimaTask    = typeof serahTerimaTasks.$inferInsert;
 export type StoreClosingTask      = typeof storeClosingTasks.$inferSelect;
 export type NewStoreClosingTask   = typeof storeClosingTasks.$inferInsert;
+export type StoreClosingEdcEntry  = typeof storeClosingEdcEntries.$inferSelect;
+export type NewStoreClosingEdcEntry = typeof storeClosingEdcEntries.$inferInsert;
 export type GroomingTask          = typeof groomingTasks.$inferSelect;
 export type NewGroomingTask       = typeof groomingTasks.$inferInsert;
 export type MarketingCheckTask    = typeof marketingCheckTasks.$inferSelect;

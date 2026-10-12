@@ -194,7 +194,7 @@ export default function FinanceDashboardPage() {
               { href: '/finance/setoran',        label: 'Setoran Review',         icon: WalletCards, desc: 'Review, verify and export daily setoran' },
               { href: '/finance/uang-modal',     label: 'Uang Modal Review',      icon: Coins,       desc: 'Review and verify daily uang modal counts' },
               { href: '/finance/petty-cash',     label: 'Petty Cash Monitoring',  icon: Wallet,      desc: 'Balances, requests and refills per store' },
-              { href: '/finance/store-closing',  label: 'Store Closing',          icon: Store,       desc: 'Z-Report & EDC photos and Statement On Hold' },
+              { href: '/finance/store-closing',  label: 'Store Closing',          icon: Store,       desc: 'EDC per bank, Z-Report & EDC photos and Statement On Hold' },
             ].map(({ href, label, icon: Icon, desc }) => (
               <Link
                 key={href}

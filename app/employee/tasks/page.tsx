@@ -247,10 +247,16 @@ export interface StoreClosingData extends TaskBase {
   edcSettlementBy?: string | null;
   edcSettlementAt?: string | null;
 
+  /** Old checklist tick; submit now sets it once the money summary below is complete. */
   edcSummaryDone: boolean;
   edcSummaryNotes: string | null;
   edcSummaryBy?: string | null;
   edcSummaryAt?: string | null;
+  /** EDC summary: amount per bank × payment method, OP/ME/VOUCHER, Indodana dashboard photo. */
+  edcEntries?: Array<{ bank: string; method: string; amount: number }>;
+  opMeVoucherAmount?: number | null;
+  indodanaDashboardPhoto?: string | null;
+  indodanaDashboardPhotoAt?: string | null;
 
   openStatementDecision: "post_statement" | "on_hold" | null;
   openStatementHoldReason: string | null;
@@ -416,7 +422,7 @@ const TASK_META: Record<
   store_closing: {
     title: "Store Closing",
     description:
-      "Checklist EOD Z-Report, EDC settlement & summary, foto Z-Report + EDC dan storefront terkunci, dan Open Statement.",
+      "EOD Z-Report, rekap EDC per bank (QRIS, Debit, Credit) + OP/ME/VOUCHER, EDC settlement, foto bukti, dan Open Statement.",
     Icon: CreditCard,
     hasPhoto: true,
   },

@@ -10,7 +10,7 @@ import {
   type GeoPoint,
   type StoreClosingOpenStatementDecision,
 } from '@/lib/db/utils/store-closing';
-
+import type { EdcEntryInput } from '@/lib/store-closing-edc';
 
 function normalizeOpenStatementDecision(
   value: unknown,
@@ -83,8 +83,11 @@ export async function POST(req: NextRequest) {
 
       edcSettlementDone?: boolean;
       edcSettlementNotes?: string;
-      edcSummaryDone?: boolean;
       edcSummaryNotes?: string;
+      // EDC summary — validated in submitStoreClosing (lib/store-closing-edc.ts).
+      edcEntries?: EdcEntryInput[];
+      opMeVoucherAmount?: number | null;
+      indodanaDashboardPhoto?: string | null;
       openStatementDecision?: StoreClosingOpenStatementDecision;
       openStatementHoldReason?: string;
       notes?: string;
@@ -132,8 +135,10 @@ export async function POST(req: NextRequest) {
       storefrontLockedPhoto: body.storefrontLockedPhoto ?? null,
       edcSettlementDone: !!body.edcSettlementDone,
       edcSettlementNotes: body.edcSettlementNotes,
-      edcSummaryDone: !!body.edcSummaryDone,
       edcSummaryNotes: body.edcSummaryNotes,
+      edcEntries: body.edcEntries ?? [],
+      opMeVoucherAmount: body.opMeVoucherAmount ?? null,
+      indodanaDashboardPhoto: body.indodanaDashboardPhoto ?? null,
       openStatementDecision,
       openStatementHoldReason: body.openStatementHoldReason,
       notes: body.notes,

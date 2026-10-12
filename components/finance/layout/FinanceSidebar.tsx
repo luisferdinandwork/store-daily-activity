@@ -20,7 +20,7 @@
 //                 ▸ Report      /finance/uang-modal/report   (monthly fill rate per store, Excel)
 //
 //   Operations
-//     Store Closing             /finance/store-closing       (Z-Report & EDC photo, statement posted / on hold)
+//     Store Closing             /finance/store-closing       (EDC per bank × method, Indodana photo, Z-Report & EDC photo, statement posted / on hold)
 //     Sales Return              /finance/sales-returns       (receipt number + photos the stores filed, by store / period)
 //
 //   Issues

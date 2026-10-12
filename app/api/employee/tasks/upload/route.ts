@@ -43,6 +43,7 @@ type PhotoType =
   // Store Closing task
   | 'eod_edc_settlement_photo'
   | 'storefront_locked'
+  | 'indodana_dashboard'
 
   // Serah Terima — optional proof photo when resolving a board item (Done or On Hold)
   | 'serah_terima'
@@ -84,6 +85,7 @@ const PHOTO_FOLDER: Record<PhotoType, string> = {
   // Store Closing task folders
   eod_edc_settlement_photo: 'store-closing/eod-edc-settlement',
   storefront_locked: 'store-closing/storefront-locked',
+  indodana_dashboard: 'store-closing/indodana-dashboard',
 
   // Serah Terima proof photo
   serah_terima: 'serah-terima/proof',
@@ -120,6 +122,7 @@ const PHOTO_LIMITS: Record<PhotoType, number> = {
   // Store Closing only needs 1 required side-by-side image.
   eod_edc_settlement_photo: 1,
   storefront_locked: 1,
+  indodana_dashboard: 1,
 
   serah_terima: 1,
 
@@ -137,6 +140,8 @@ function normalizePhotoType(value: string): PhotoType | null {
   if (value === 'store_closing') return 'eod_edc_settlement_photo';
   if (value === 'storefrontLockedPhoto') return 'storefront_locked';
   if (value === 'storefront_locked_photo') return 'storefront_locked';
+  if (value === 'indodanaDashboardPhoto') return 'indodana_dashboard';
+  if (value === 'indodana_dashboard_photo') return 'indodana_dashboard';
 
   return null;
 }

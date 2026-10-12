@@ -4,10 +4,17 @@
 //
 // Store Closing replaces the separate evening tasks:
 //   1. EOD Z-Report       → checklist only
-//   2. EDC settlement     → checklist
-//   3. EDC summary        → checklist
+//   2. EDC summary        → money per bank × payment method (QRIS / Debit /
+//                           Credit) + OP/ME/VOUCHER, with a dashboard photo for
+//                           Indodana — lib/store-closing-edc.ts holds the rules
+//   3. EDC settlement     → checklist
 //   4. Evidence photo     → EOD + EDC settlement side by side
 //   5. Open statement     → post statement, or on hold
+//
+// The EDC amounts live in store_closing_edc_entries (one row per filled cell,
+// saved with autoSaveStoreClosing and again with the submit) and
+// store_closing_tasks.op_me_voucher_amount. `edcSummaryDone` is no longer a
+// tick the employee sets: submit turns it on once the summary is complete.
 //
 // On Hold behavior:
 //   • Submit with openStatementDecision = 'on_hold' creates an Issue in Bahasa.
@@ -35,12 +42,14 @@ import {
   lte,
   ne,
   or,
+  sql,
 } from 'drizzle-orm';
 import {
   attendance,
   issues,
   schedules,
   shifts,
+  storeClosingEdcEntries,
   storeClosingTasks,
   stores,
   type Issue,
@@ -51,6 +60,13 @@ import {
   getStoreClosingHoldIssueRoleIds,
   notifyIssueEvent,
 } from '@/lib/db/utils/issues';
+import {
+  edcSubmitProblem,
+  parseEdcAmount,
+  parseEdcEntries,
+  summariseEdc,
+  type EdcEntryInput,
+} from '@/lib/store-closing-edc';
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -78,8 +94,17 @@ export interface SubmitStoreClosingInput {
   eodZReportDone: boolean;
   edcSettlementDone: boolean;
   edcSettlementNotes?: string;
-  edcSummaryDone: boolean;
   edcSummaryNotes?: string;
+
+  /**
+   * EDC summary: every cell the store typed in (blank cells may be omitted or
+   * `amount: null`). Untrusted — checked with parseEdcEntries before use.
+   */
+  edcEntries: EdcEntryInput[];
+  /** OP/ME/VOUCHER amount in Rupiah; null = not filled in. */
+  opMeVoucherAmount: number | null;
+  /** Photo of the Indodana dashboard — required once Indodana has an amount. */
+  indodanaDashboardPhoto: string | null;
 
   /** Required evidence: photo of the Z-Report and EDC settlement together. */
   eodEdcSettlementPhoto: string | null;
@@ -95,8 +120,13 @@ export interface AutoSaveStoreClosingPatch {
   eodZReportDone?: boolean;
   edcSettlementDone?: boolean;
   edcSettlementNotes?: string | null;
+  /** Legacy checklist tick — only an old, still-open tab sends it. */
   edcSummaryDone?: boolean;
   edcSummaryNotes?: string | null;
+  /** Cells to set (`amount: null` clears one); cells not mentioned stay as they are. */
+  edcEntries?: EdcEntryInput[];
+  opMeVoucherAmount?: number | null;
+  indodanaDashboardPhoto?: string | null;
   eodEdcSettlementPhoto?: string | null;
   storefrontLockedPhoto?: string | null;
   openStatementDecision?: StoreClosingOpenStatementDecision | null;
@@ -202,17 +232,97 @@ async function assertCanProgressTask(
   return null;
 }
 
-function validateSubmitPayload(input: SubmitStoreClosingInput): string | null {
+type EdcSummaryRead =
+  | {
+      ok: true;
+      entries: EdcEntryInput[];
+      opMeVoucher: number | null;
+      /** Why the summary can't be submitted yet (see edcSubmitProblem), or null. */
+      problem: string | null;
+    }
+  | { ok: false; error: string };
+
+/** Parses the untrusted EDC part of a submit and applies the "every bank counted" rule. */
+function readEdcSummary(
+  input: Pick<SubmitStoreClosingInput, 'edcEntries' | 'opMeVoucherAmount' | 'indodanaDashboardPhoto'>,
+): EdcSummaryRead {
+  const entries = parseEdcEntries(input.edcEntries ?? []);
+  if (!entries.ok) return { ok: false, error: entries.error };
+
+  const opMeVoucher = parseEdcAmount(input.opMeVoucherAmount);
+  if (!opMeVoucher.ok) return { ok: false, error: opMeVoucher.error };
+
+  const summary = summariseEdc(
+    entries.value.filter((e): e is EdcEntryInput & { amount: number } => e.amount !== null),
+    opMeVoucher.value,
+  );
+
+  return {
+    ok: true,
+    entries: entries.value,
+    opMeVoucher: opMeVoucher.value,
+    problem: edcSubmitProblem(summary, input.indodanaDashboardPhoto),
+  };
+}
+
+/**
+ * Sets the given cells of a task's EDC summary: a filled cell is upserted, a
+ * blank one (`amount: null`) is removed. Cells that aren't mentioned are left
+ * alone, and re-sending the same cells is harmless.
+ */
+async function applyEdcEntries(taskId: number, entries: EdcEntryInput[]): Promise<void> {
+  const now = new Date();
+  const filled = entries.filter((e): e is EdcEntryInput & { amount: number } => e.amount !== null);
+  const cleared = entries.filter((e) => e.amount === null);
+
+  if (filled.length) {
+    await db
+      .insert(storeClosingEdcEntries)
+      .values(
+        filled.map((e) => ({
+          taskId,
+          bank: e.bank,
+          method: e.method,
+          amount: String(e.amount),
+          createdAt: now,
+          updatedAt: now,
+        })),
+      )
+      .onConflictDoUpdate({
+        target: [storeClosingEdcEntries.taskId, storeClosingEdcEntries.bank, storeClosingEdcEntries.method],
+        set: { amount: sql`excluded.amount`, updatedAt: now },
+      });
+  }
+
+  if (cleared.length) {
+    await db.delete(storeClosingEdcEntries).where(
+      and(
+        eq(storeClosingEdcEntries.taskId, taskId),
+        or(
+          ...cleared.map((e) =>
+            and(eq(storeClosingEdcEntries.bank, e.bank), eq(storeClosingEdcEntries.method, e.method)),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+function validateSubmitPayload(
+  input: SubmitStoreClosingInput,
+  edcProblem: string | null,
+): string | null {
+  // Same order as the page: Z-Report, EDC summary, EDC settlement, photos.
   if (!input.eodZReportDone) {
     return 'Checklist EOD Z-Report wajib diselesaikan.';
   }
 
-  if (!input.edcSettlementDone) {
-    return 'Checklist EDC settlement wajib diselesaikan.';
+  if (edcProblem) {
+    return edcProblem;
   }
 
-  if (!input.edcSummaryDone) {
-    return 'Checklist EDC summary wajib diselesaikan.';
+  if (!input.edcSettlementDone) {
+    return 'Checklist EDC settlement wajib diselesaikan.';
   }
 
   if (!isFilled(input.eodEdcSettlementPhoto)) {
@@ -477,6 +587,33 @@ export async function autoSaveStoreClosing(
       update.edcSummaryNotes = input.patch.edcSummaryNotes ?? null;
     }
 
+    // EDC summary figures. Validated before anything is written, so a bad
+    // patch saves nothing; the cells go in first, then the task row below.
+    let edcCells: EdcEntryInput[] | null = null;
+
+    if ('edcEntries' in input.patch) {
+      const parsed = parseEdcEntries(input.patch.edcEntries ?? []);
+      if (!parsed.ok) return { success: false, error: parsed.error };
+      edcCells = parsed.value;
+    }
+
+    if ('opMeVoucherAmount' in input.patch) {
+      const parsed = parseEdcAmount(input.patch.opMeVoucherAmount);
+      if (!parsed.ok) return { success: false, error: parsed.error };
+      update.opMeVoucherAmount = parsed.value === null ? null : String(parsed.value);
+    }
+
+    if ('indodanaDashboardPhoto' in input.patch) {
+      const photo = input.patch.indodanaDashboardPhoto;
+      update.indodanaDashboardPhoto = isFilled(photo) ? photo.trim() : null;
+      update.indodanaDashboardPhotoAt = isFilled(photo) ? now : null;
+    }
+
+    if (edcCells || 'opMeVoucherAmount' in input.patch || 'indodanaDashboardPhoto' in input.patch) {
+      update.edcSummaryBy = input.userId;
+      update.edcSummaryAt = now;
+    }
+
     if ('eodEdcSettlementPhoto' in input.patch) {
       update.eodEdcSettlementPhoto = input.patch.eodEdcSettlementPhoto ?? null;
       update.eodEdcSettlementPhotoBy = input.userId;
@@ -507,15 +644,17 @@ export async function autoSaveStoreClosing(
       update.status = 'in_progress';
     }
 
+    if (edcCells) await applyEdcEntries(existing.id, edcCells);
+
     await db
       .update(storeClosingTasks)
       .set(update)
       .where(eq(storeClosingTasks.id, existing.id));
 
-    return {
-      success: true,
-      data: { saved: Object.keys(update).filter((k) => k !== 'updatedAt') },
-    };
+    const saved = Object.keys(update).filter((k) => k !== 'updatedAt');
+    if (edcCells) saved.push('edcEntries');
+
+    return { success: true, data: { saved } };
   } catch (err) {
     return { success: false, error: `autoSaveStoreClosing: ${err}` };
   }
@@ -536,7 +675,10 @@ export async function submitStoreClosing(
     );
     if (gateErr) return { success: false, error: gateErr };
 
-    const validationErr = validateSubmitPayload(input);
+    const edc = readEdcSummary(input);
+    if (!edc.ok) return { success: false, error: edc.error };
+
+    const validationErr = validateSubmitPayload(input, edc.problem);
     if (validationErr) return { success: false, error: validationErr };
 
     let existing: StoreClosingTask | undefined;
@@ -606,6 +748,7 @@ export async function submitStoreClosing(
     const now = new Date();
     const sideBySidePhoto = input.eodEdcSettlementPhoto?.trim() ?? null;
     const storefrontLockedPhoto = input.storefrontLockedPhoto?.trim() ?? null;
+    const indodanaPhoto = isFilled(input.indodanaDashboardPhoto) ? input.indodanaDashboardPhoto.trim() : null;
     const holdReason =
       input.openStatementDecision === 'on_hold'
         ? input.openStatementHoldReason?.trim() || 'Tidak ada alasan tambahan dari employee.'
@@ -625,10 +768,14 @@ export async function submitStoreClosing(
       edcSettlementBy: input.userId,
       edcSettlementAt: now,
 
-      edcSummaryDone: input.edcSummaryDone,
+      // Complete by now (readEdcSummary + validateSubmitPayload passed).
+      edcSummaryDone: true,
       edcSummaryNotes: input.edcSummaryNotes,
       edcSummaryBy: input.userId,
       edcSummaryAt: now,
+      opMeVoucherAmount: edc.opMeVoucher === null ? null : String(edc.opMeVoucher),
+      indodanaDashboardPhoto: indodanaPhoto,
+      indodanaDashboardPhotoAt: indodanaPhoto ? now : null,
 
       eodEdcSettlementPhoto: sideBySidePhoto,
       eodEdcSettlementPhotoBy: input.userId,
@@ -648,6 +795,10 @@ export async function submitStoreClosing(
       notes: input.notes,
       updatedAt: now,
     };
+
+    // The cells go in before the row flips to completed / on hold, so a closing
+    // is never completed without its figures; re-sending them is harmless.
+    await applyEdcEntries(existing.id, edc.entries);
 
     if (input.openStatementDecision === 'on_hold') {
       // A task reopened after its hold issue was completed still points at that

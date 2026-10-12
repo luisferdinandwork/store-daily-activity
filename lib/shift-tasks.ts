@@ -349,7 +349,7 @@ export const TASK_CATALOG: TaskCatalogEntry[] = [
   {
     code: 'store_closing',
     label: 'Store Closing',
-    description: 'Checklist closing toko: EOD Z-Report, EDC settlement, EDC summary, dan Open Statement.',
+    description: 'Closing toko: EOD Z-Report, rekap EDC per bank (QRIS, Debit, Credit, OP/ME/VOUCHER), EDC settlement, dan Open Statement.',
     icon: 'MoonStar',
     accent: 'violet',
     isPersonal: false,

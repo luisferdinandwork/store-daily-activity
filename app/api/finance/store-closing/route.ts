@@ -3,9 +3,10 @@
 // GET /api/finance/store-closing?date=YYYY-MM-DD
 //
 // { rows, holds } — `rows` are the stores scheduled to close that day (with the
-// Z-Report & EDC Settlement photo and whether the Open Statement was posted or
-// put on hold); `holds` are every statement still on hold, whatever its date.
-// Finance/IT only.
+// EDC summary — amount per bank × payment method, OP/ME/VOUCHER, Indodana
+// dashboard photo — the Z-Report & EDC Settlement photo and whether the Open
+// Statement was posted or put on hold); `holds` are every statement still on
+// hold, whatever its date. Finance/IT only.
 
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveFinanceScope } from '@/lib/finance/scope';

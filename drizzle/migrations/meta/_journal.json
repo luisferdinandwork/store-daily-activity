@@ -225,6 +225,13 @@
       "when": 1791532041609,
       "tag": "0031_bizarre_wallop",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1791773737801,
+      "tag": "0032_store_closing_edc_summary",
+      "breakpoints": true
     }
   ]
 }

@@ -22,6 +22,7 @@ import {
   serahTerimaEntries,
   serahTerimaTasks,
   storeClosingTasks,
+  storeClosingEdcEntries,
   groomingTasks,
   cekUangModalTasks,
   cekUangModalDenominations,
@@ -712,8 +713,9 @@ export async function GET(request: NextRequest) {
     ]);
 
     const cekBinTaskIds = cekBinRows.map((r) => r.id);
+    const storeClosingTaskIds = storeClosingRows.map((r) => r.id);
 
-    const [availableBinRows, checkedBinRows] = await Promise.all([
+    const [availableBinRows, checkedBinRows, edcEntryRows] = await Promise.all([
       shouldLoadTask("cek_bin")
         ? db
             .select({
@@ -752,7 +754,27 @@ export async function GET(request: NextRequest) {
             .where(inArray(cekBinTaskBins.taskId, cekBinTaskIds))
             .orderBy(asc(cekBinTaskBins.bin))
         : Promise.resolve([]),
+
+      // Store Closing's EDC summary cells (bank × payment method).
+      storeClosingTaskIds.length
+        ? db
+            .select({
+              taskId: storeClosingEdcEntries.taskId,
+              bank: storeClosingEdcEntries.bank,
+              method: storeClosingEdcEntries.method,
+              amount: storeClosingEdcEntries.amount,
+            })
+            .from(storeClosingEdcEntries)
+            .where(inArray(storeClosingEdcEntries.taskId, storeClosingTaskIds))
+        : Promise.resolve([]),
     ]);
+
+    const edcEntriesByTaskId = new Map<number, { bank: string; method: string; amount: number }[]>();
+    for (const row of edcEntryRows) {
+      const bucket = edcEntriesByTaskId.get(row.taskId) ?? [];
+      bucket.push({ bank: row.bank, method: row.method, amount: Number(row.amount) });
+      edcEntriesByTaskId.set(row.taskId, bucket);
+    }
 
     const uangModalDenominationsByTaskId = new Map<number, typeof cekUangModalDenominationRows>();
     for (const row of cekUangModalDenominationRows) {
@@ -1346,6 +1368,11 @@ export async function GET(request: NextRequest) {
               edcSummaryNotes: t.edcSummaryNotes,
               edcSummaryBy: t.edcSummaryBy,
               edcSummaryAt: toIso(t.edcSummaryAt),
+              edcEntries: edcEntriesByTaskId.get(t.id) ?? [],
+              opMeVoucherAmount:
+                t.opMeVoucherAmount === null ? null : Number(t.opMeVoucherAmount),
+              indodanaDashboardPhoto: t.indodanaDashboardPhoto,
+              indodanaDashboardPhotoAt: toIso(t.indodanaDashboardPhotoAt),
 
               openStatementDecision: t.openStatementDecision,
               openStatementHoldReason: t.openStatementHoldReason,

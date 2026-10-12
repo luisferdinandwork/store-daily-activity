@@ -58,6 +58,7 @@ import {
   setoranMoneyStorage,
   setoranTasks,
   shifts,
+  storeClosingEdcEntries,
   storeClosingTasks,
   storeFrontTasks,
   storeOpeningTasks,
@@ -66,6 +67,7 @@ import {
   users,
   vmChecklistTasks,
 } from '@/lib/db/schema';
+import { EDC_BANKS } from '@/lib/store-closing-edc';
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -439,7 +441,18 @@ async function seedStore(target: Target, ctx: Ctx): Promise<Counts> {
   };
   const setoranLedgerPlans: Array<{ day: number; row: Omit<typeof setoranMoneyStorage.$inferInsert, 'taskId'> }> = [];
   const uangModalPlans: Array<{ day: number; userId: string; qty: Record<number, number> }> = [];
+  const closingEdcPlans: Array<{ day: number; cells: Array<{ bank: string; method: string; amount: number }> }> = [];
   let lastUnpaid = 0;
+
+  /** A closing's EDC summary: every bank counted, BCA/Mandiri always busy, the rest only some days. */
+  const demoEdc = () => {
+    const cells = EDC_BANKS.flatMap((bank) => {
+      const busy = bank.code === 'bca' || bank.code === 'mandiri' || rng.chance(0.4);
+      return bank.methods.map((method) => ({ bank: bank.code as string, method: method as string, amount: busy ? rng.int(0, 2_500) * 1_000 : 0 }));
+    });
+    const indodana = cells.filter((c) => c.bank === 'indodana').reduce((sum, c) => sum + c.amount, 0);
+    return { cells, indodana, opMe: rng.chance(0.5) ? rng.int(0, 600) * 1_000 : 0 };
+  };
 
   /** A moment inside the shift for a task: maps the task's window onto the right half of the day. */
   const at = (a: Attended, half: Half, [lo, hi]: readonly [number, number]): Date => {
@@ -637,13 +650,17 @@ async function seedStore(target: Target, ctx: Ctx): Promise<Counts> {
         const st = status(); const done = st === 'completed' ? at(a, 'evening', EVENING_WINDOW.store_closing) : null;
         if (done) {
           const t = (m: number) => addMin(done, -m);
+          const edc = demoEdc();
+          closingEdcPlans.push({ day, cells: edc.cells });
           T.closing.push({
             ...base(a, eveningId, st, done),
             eodZReportDone: true, eodZReportBy: a.userId, eodZReportAt: t(8),
             eodEdcSettlementPhoto: pick('zReport'), eodEdcSettlementPhotoBy: a.userId, eodEdcSettlementPhotoAt: t(7),
             storefrontLockedPhoto: pick('storeLocked'), storefrontLockedPhotoBy: a.userId, storefrontLockedPhotoAt: t(1),
             edcSettlementDone: true, edcSettlementBy: a.userId, edcSettlementAt: t(6),
-            edcSummaryDone: true, edcSummaryBy: a.userId, edcSummaryAt: t(4),
+            // The Indodana dashboard photo is only required (and only seeded) when Indodana had an amount.
+            edcSummaryDone: true, edcSummaryBy: a.userId, edcSummaryAt: t(4), opMeVoucherAmount: String(edc.opMe),
+            indodanaDashboardPhoto: edc.indodana > 0 ? pick('zReport') : null, indodanaDashboardPhotoAt: edc.indodana > 0 ? t(5) : null,
             openStatementDecision: 'post_statement', openStatementBy: a.userId, openStatementAt: t(3), isOnHold: false, ...who, ...geo(),
           });
         } else {
@@ -663,7 +680,17 @@ async function seedStore(target: Target, ctx: Ctx): Promise<Counts> {
   await insertMany(marketingCheckTasks, T.marketing);
   await insertMany(briefingTasks, T.briefing);
   await insertMany(serahTerimaTasks, T.serah);
-  await insertMany(storeClosingTasks, T.closing);
+  const closingInserted = await insertManyReturning(storeClosingTasks, T.closing);
+
+  const closingIdByDay = new Map(closingInserted.map((c) => [(c.date as Date).getUTCDate(), c.id]));
+  await insertMany(
+    storeClosingEdcEntries,
+    closingEdcPlans.flatMap((p) =>
+      p.cells.map((c): typeof storeClosingEdcEntries.$inferInsert => ({
+        taskId: closingIdByDay.get(p.day)!, bank: c.bank, method: c.method, amount: String(c.amount),
+      })),
+    ),
+  );
 
   const setoranIdByDay = new Map(setoranInserted.map((s) => [(s.date as Date).getUTCDate(), s.id]));
   counts.setoranLedger = await insertMany(

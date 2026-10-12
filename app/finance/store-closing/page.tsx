@@ -3,9 +3,11 @@
 //
 // Finance · Store Closing
 //
-// A read-mostly view of how stores closed, built for two questions:
+// A read-mostly view of how stores closed, built for three questions:
 //   1. Where is the photo of the Z-Report and EDC Settlement?
-//   2. Was the Open Statement POSTED or put ON HOLD?
+//   2. What did each bank's EDC count? Per bank, by QRIS / Debit / Credit, plus
+//      OP/ME/VOUCHER and — for Indodana — the photo of its dashboard.
+//   3. Was the Open Statement POSTED or put ON HOLD?
 //
 // Statements that are ON HOLD stay in a panel at the top whatever the date —
 // they don't go away when the day changes — with the reason and the state of
@@ -13,7 +15,9 @@
 // the statement to posted, completes the closing and closes that issue.
 //
 // Same sheet layout as the other Finance pages: one row per store scheduled to
-// close on the chosen day; click a row for the checklist and hold history.
+// close on the chosen day, one column per bank (all methods added up) with a
+// totals row underneath; click a row for the bank × method breakdown, the
+// photos, the checklist and the hold history.
 
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
@@ -46,23 +50,44 @@ import {
   type StoreClosingRow,
 } from '@/lib/store-closing-review';
 import {
+  EDC_BANKS,
+  EDC_METHODS,
+  EDC_METHOD_LABELS,
+  INDODANA_PHOTO_LABEL,
+  OP_ME_VOUCHER_LABEL,
+  banksMissingPhoto,
+  summariseEdc,
+  type EdcSummary,
+} from '@/lib/store-closing-edc';
+import {
   SHEET_ROW_HEAD as ROW_HEAD,
   SHEET_TD as TD,
   SHEET_TH as TH,
+  num,
+  rp,
 } from '@/components/finance/petty-cash/shared';
 import {
   CodeChips,
   DayNavigator,
   KpiStrip,
   PhotoLightbox,
+  type LightboxPhoto,
 } from '@/components/finance/shared/sheet-kit';
 
-const COLS = 8;
+// No · Kode · Nama · Foto · Open Statement · one per bank · OP/ME/VOUCHER · Total · Alasan · Aksi · chevron
+const COLS = 10 + EDC_BANKS.length;
+
+const ZREPORT_LABEL = 'Z-Report & EDC Settlement';
 
 interface Line {
   row: StoreClosingRow;
   state: StatementState;
+  edc: EdcSummary;
+  /** Indodana has an amount but no dashboard photo. */
+  indodanaMissing: boolean;
 }
+
+type PhotoKind = 'zreport' | 'indodana';
 
 // ─── Cells ───────────────────────────────────────────────────────────────────
 
@@ -81,13 +106,15 @@ function StatementBadge({ state }: { state: StatementState }) {
   );
 }
 
-/** The Z-Report & EDC settlement photo; degrades to an icon when the URL no longer loads. */
+/** A closing photo; degrades to an icon when the URL no longer loads. */
 function ClosingPhoto({
   url,
+  label,
   size,
   onOpen,
 }: {
   url: string | null;
+  label: string;
   size: 'sm' | 'lg';
   onOpen: () => void;
 }) {
@@ -97,7 +124,7 @@ function ClosingPhoto({
   if (!url) {
     return (
       <span
-        title="Foto Z-Report & EDC Settlement belum ada"
+        title={`Foto ${label} belum ada`}
         className={cn('flex shrink-0 flex-col items-center justify-center gap-1 rounded-md border border-dashed border-slate-300 bg-slate-50 text-slate-400', dim)}
       >
         <Camera className={size === 'sm' ? 'h-4 w-4' : 'h-6 w-6'} />
@@ -110,7 +137,7 @@ function ClosingPhoto({
     <button
       type="button"
       onClick={(e) => { e.stopPropagation(); onOpen(); }}
-      title="Lihat foto Z-Report & EDC Settlement"
+      title={`Lihat foto ${label}`}
       className={cn('shrink-0 overflow-hidden rounded-md border border-slate-300 bg-slate-100 transition hover:border-emerald-500', dim)}
     >
       {failed ? (
@@ -119,10 +146,34 @@ function ClosingPhoto({
         </span>
       ) : (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={url} alt="Z-Report & EDC Settlement" loading="lazy" onError={() => setFailed(true)} className="h-full w-full object-cover" />
+        <img src={url} alt={label} loading="lazy" onError={() => setFailed(true)} className="h-full w-full object-cover" />
       )}
     </button>
   );
+}
+
+/** Next to an Indodana amount: the dashboard photo, or a warning when it should be there and isn't. */
+function IndodanaPhotoMark({ line, onOpen }: { line: Line; onOpen: () => void }) {
+  if (line.row.indodanaPhoto) {
+    return (
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onOpen(); }}
+        title={`Lihat ${INDODANA_PHOTO_LABEL.toLowerCase()}`}
+        className="inline-flex h-5 w-5 items-center justify-center rounded text-emerald-600 hover:bg-emerald-50"
+      >
+        <Camera className="h-3.5 w-3.5" />
+      </button>
+    );
+  }
+  if (line.indodanaMissing) {
+    return (
+      <span title={`${INDODANA_PHOTO_LABEL} belum ada`} className="inline-flex h-5 w-5 items-center justify-center text-amber-500">
+        <AlertTriangle className="h-3.5 w-3.5" />
+      </span>
+    );
+  }
+  return null;
 }
 
 /** "Tandai Posted" with an inline confirm — the flip can't be undone from here. */
@@ -217,7 +268,7 @@ function HoldsPanel({
   onAsk: (id: number) => void;
   onCancel: () => void;
   onConfirm: (row: StoreClosingRow) => void;
-  onOpenPhoto: (row: StoreClosingRow) => void;
+  onOpenPhoto: (row: StoreClosingRow, kind: PhotoKind) => void;
 }) {
   if (holds.length === 0) return null;
 
@@ -255,7 +306,7 @@ function HoldsPanel({
                   <p className="font-mono text-[11px] text-slate-500">{row.storeNo}</p>
                 </td>
                 <td className="border-b border-slate-100 px-3 py-2">
-                  <ClosingPhoto url={row.zReportPhoto} size="sm" onOpen={() => onOpenPhoto(row)} />
+                  <ClosingPhoto url={row.zReportPhoto} label={ZREPORT_LABEL} size="sm" onOpen={() => onOpenPhoto(row, 'zreport')} />
                 </td>
                 <td className="max-w-sm border-b border-slate-100 px-3 py-2 text-slate-700">
                   {row.holdReason ?? <span className="italic text-slate-400">Tanpa alasan</span>}
@@ -301,31 +352,131 @@ function CheckLine({ done, label }: { done: boolean; label: string }) {
   );
 }
 
+/** Bank × QRIS / Debit / Credit, then the sum per method, OP/ME/VOUCHER and the grand total. */
+function EdcMatrix({ summary }: { summary: EdcSummary }) {
+  const th = 'border-b border-slate-200 bg-slate-50 px-2.5 py-1.5 text-right text-[11px] font-semibold uppercase tracking-wide text-slate-500';
+  const td = 'whitespace-nowrap border-b border-slate-100 px-2.5 py-1.5 text-right tabular-nums';
+
+  return (
+    <div className="overflow-x-auto rounded-md border border-slate-200">
+      <table className="w-full min-w-[420px] border-collapse text-xs">
+        <thead>
+          <tr>
+            <th className={cn(th, 'text-left')}>Bank (Rp)</th>
+            {EDC_METHODS.map((m) => <th key={m} className={th}>{EDC_METHOD_LABELS[m]}</th>)}
+            <th className={th}>Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {summary.banks.map((b) => (
+            <tr key={b.code}>
+              <td className={cn(td, 'text-left font-semibold text-slate-800')}>{b.label}</td>
+              {b.filled ? (
+                EDC_METHODS.map((m) => (
+                  <td key={m} className={cn(td, b.cells[m] === undefined ? 'text-slate-300' : 'text-slate-700')}>
+                    {b.cells[m] === undefined ? '–' : num(b.cells[m])}
+                  </td>
+                ))
+              ) : (
+                <td colSpan={EDC_METHODS.length} className={cn(td, 'font-semibold text-amber-600')}>Belum diisi</td>
+              )}
+              <td className={cn(td, 'font-bold', b.filled ? 'text-slate-900' : 'text-slate-300')}>
+                {b.filled ? num(b.total) : '–'}
+              </td>
+            </tr>
+          ))}
+          <tr className="bg-slate-50">
+            <td className={cn(td, 'text-left font-semibold text-slate-700')}>Total EDC</td>
+            {EDC_METHODS.map((m) => (
+              <td key={m} className={cn(td, 'font-semibold text-slate-700')}>{num(summary.byMethod[m])}</td>
+            ))}
+            <td className={cn(td, 'font-bold text-slate-900')}>{num(summary.banksTotal)}</td>
+          </tr>
+          <tr>
+            <td colSpan={EDC_METHODS.length + 1} className={cn(td, 'text-left font-semibold text-slate-800')}>
+              {OP_ME_VOUCHER_LABEL}
+            </td>
+            <td className={cn(td, 'font-bold', summary.opMeVoucher === null ? 'text-amber-600' : 'text-slate-900')}>
+              {summary.opMeVoucher === null ? 'Belum diisi' : num(summary.opMeVoucher)}
+            </td>
+          </tr>
+          <tr className="bg-emerald-50">
+            <td colSpan={EDC_METHODS.length + 1} className={cn(td, 'border-b-0 text-left font-bold text-emerald-800')}>Total</td>
+            <td className={cn(td, 'border-b-0 font-bold text-emerald-800')}>{num(summary.total)}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function DetailPanel({
   line,
   onOpenPhoto,
   fix,
 }: {
   line: Line;
-  onOpenPhoto: () => void;
+  onOpenPhoto: (kind: PhotoKind) => void;
   fix: React.ReactNode;
 }) {
-  const { row, state } = line;
+  const { row, state, edc } = line;
+  // Closings made before the money format only have the old EDC summary tick.
+  const edcComplete = edc.hasData ? edc.missingBanks.length === 0 && edc.opMeVoucher !== null : row.edcSummaryDone;
 
   return (
-    <div className="grid gap-px bg-slate-300 lg:grid-cols-[auto_minmax(0,1fr)_minmax(0,1.2fr)]">
+    <div className="grid gap-px bg-slate-300 lg:grid-cols-2">
       <section className="bg-white p-4">
-        <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Z-Report & EDC Settlement</h3>
-        <ClosingPhoto url={row.zReportPhoto} size="lg" onOpen={onOpenPhoto} />
-        {row.photoAt && <p className="mt-1.5 text-[11px] text-slate-500">Diunggah {fmtDateTime(row.photoAt)}</p>}
+        <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Rekap EDC</h3>
+        {edc.hasData ? (
+          <>
+            <EdcMatrix summary={edc} />
+            {row.edcBy && (
+              <p className="mt-1.5 text-[11px] text-slate-500">
+                Diisi {row.edcBy}{row.edcAt ? ` · ${fmtDateTime(row.edcAt)}` : ''}
+              </p>
+            )}
+          </>
+        ) : (
+          <p className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-4 text-xs text-slate-500">
+            {row.edcSummaryDone
+              ? 'Closing ini dibuat sebelum rekap EDC per bank — hanya checklist “EDC summary selesai” yang tercatat.'
+              : 'Toko belum mengisi rekap EDC.'}
+          </p>
+        )}
+        {row.edcNotes && (
+          <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+            <span className="font-semibold text-slate-800">Catatan EDC: </span>
+            {row.edcNotes}
+          </div>
+        )}
+      </section>
+
+      <section className="bg-white p-4">
+        <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Foto bukti</h3>
+        <div className="flex flex-wrap gap-5">
+          <figure>
+            <ClosingPhoto url={row.zReportPhoto} label={ZREPORT_LABEL} size="lg" onOpen={() => onOpenPhoto('zreport')} />
+            <figcaption className="mt-1.5 text-[11px] font-medium text-slate-600">{ZREPORT_LABEL}</figcaption>
+            {row.photoAt && <p className="text-[11px] text-slate-400">Diunggah {fmtDateTime(row.photoAt)}</p>}
+          </figure>
+          <figure>
+            <ClosingPhoto url={row.indodanaPhoto} label={INDODANA_PHOTO_LABEL} size="lg" onOpen={() => onOpenPhoto('indodana')} />
+            <figcaption className="mt-1.5 text-[11px] font-medium text-slate-600">Dashboard Indodana</figcaption>
+            {line.indodanaMissing ? (
+              <p className="text-[11px] font-semibold text-amber-600">Wajib — ada transaksi Indodana</p>
+            ) : !row.indodanaPhoto ? (
+              <p className="text-[11px] text-slate-400">Tidak wajib — tanpa transaksi Indodana</p>
+            ) : null}
+          </figure>
+        </div>
       </section>
 
       <section className="bg-white p-4">
         <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Checklist toko</h3>
         <ul className="divide-y divide-slate-100">
           <CheckLine done={row.eodZReportDone} label="EOD Z-Report" />
+          <CheckLine done={edcComplete} label={edc.hasData ? 'Rekap EDC (semua bank + OP/ME/VOUCHER)' : 'EDC summary (format lama)'} />
           <CheckLine done={row.edcSettlementDone} label="EDC settlement" />
-          <CheckLine done={row.edcSummaryDone} label="EDC summary" />
         </ul>
         <p className="mt-3 text-xs text-slate-600">
           Jadwal tutup: {row.scheduledStaff.length > 0 ? row.scheduledStaff.map((s) => s.name).join(', ') : '–'}
@@ -412,9 +563,9 @@ function StoreLine({
   onAsk: () => void;
   onCancel: () => void;
   onConfirm: () => void;
-  onOpenPhoto: () => void;
+  onOpenPhoto: (kind: PhotoKind) => void;
 }) {
-  const { row, state } = line;
+  const { row, state, edc } = line;
   const tint =
     state === 'on_hold' ? 'bg-amber-50/60 hover:bg-amber-50'
     : state === 'not_submitted' ? 'bg-rose-50/60 hover:bg-rose-50'
@@ -424,6 +575,8 @@ function StoreLine({
   const fix = (
     <FixButton row={row} busy={busy} confirming={confirming} onAsk={onAsk} onCancel={onCancel} onConfirm={onConfirm} />
   );
+
+  const amountCell = 'whitespace-nowrap text-right tabular-nums';
 
   return (
     <>
@@ -438,11 +591,33 @@ function StoreLine({
           </p>
         </td>
         <td className={cn(TD, 'w-24')}>
-          <ClosingPhoto url={row.zReportPhoto} size="sm" onOpen={onOpenPhoto} />
+          <ClosingPhoto url={row.zReportPhoto} label={ZREPORT_LABEL} size="sm" onOpen={() => onOpenPhoto('zreport')} />
         </td>
         <td className={cn(TD, 'w-44')}>
           <StatementBadge state={state} />
         </td>
+
+        {edc.banks.map((b) => (
+          <td key={b.code} className={cn(TD, amountCell, 'w-28')}>
+            {b.dashboardPhoto ? (
+              <span className="inline-flex items-center justify-end gap-1">
+                <IndodanaPhotoMark line={line} onOpen={() => onOpenPhoto('indodana')} />
+                <BankAmount filled={b.filled} total={b.total} />
+              </span>
+            ) : (
+              <BankAmount filled={b.filled} total={b.total} />
+            )}
+          </td>
+        ))}
+        <td className={cn(TD, amountCell, 'w-32')}>
+          {edc.opMeVoucher === null ? <span className="text-slate-300">–</span> : (
+            <span className={edc.opMeVoucher === 0 ? 'text-slate-400' : 'text-slate-800'}>{num(edc.opMeVoucher)}</span>
+          )}
+        </td>
+        <td className={cn(TD, amountCell, 'w-32 font-bold')}>
+          {edc.hasData ? <span className="text-slate-900">{num(edc.total)}</span> : <span className="font-normal text-slate-300">–</span>}
+        </td>
+
         <td className={cn(TD, 'min-w-56 max-w-xs')}>
           {row.isOnHold || (row.holdReason && row.holdResolvedAt) ? (
             <span className="line-clamp-2 text-xs text-slate-700" title={row.holdReason ?? undefined}>
@@ -482,6 +657,12 @@ function StoreLine({
   );
 }
 
+/** A bank's day total (all methods); a typed 0 reads grey, a bank nobody counted a dash. */
+function BankAmount({ filled, total }: { filled: boolean; total: number }) {
+  if (!filled) return <span className="text-slate-300">–</span>;
+  return <span className={total === 0 ? 'text-slate-400' : 'text-slate-800'}>{num(total)}</span>;
+}
+
 // ─── Page ────────────────────────────────────────────────────────────────────
 
 export default function FinanceStoreClosingPage() {
@@ -499,7 +680,7 @@ export default function FinanceStoreClosingPage() {
 
   const [confirmId, setConfirmId] = useState<number | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
-  const [lightbox, setLightbox] = useState<{ title: string; url: string } | null>(null);
+  const [lightbox, setLightbox] = useState<{ title: string; photos: LightboxPhoto[]; index: number } | null>(null);
 
   const today = todayJakarta();
   const isPast = date < today;
@@ -533,7 +714,16 @@ export default function FinanceStoreClosingPage() {
   }
 
   const lines: Line[] = useMemo(
-    () => rows.map((row) => ({ row, state: deriveStatement(row, isPast) })),
+    () =>
+      rows.map((row) => {
+        const edc = summariseEdc(row.edcEntries, row.opMeVoucher);
+        return {
+          row,
+          state: deriveStatement(row, isPast),
+          edc,
+          indodanaMissing: banksMissingPhoto(edc, row.indodanaPhoto).length > 0,
+        };
+      }),
     [rows, isPast],
   );
 
@@ -556,10 +746,24 @@ export default function FinanceStoreClosingPage() {
     });
   }, [lines, code, stateFilter, search]);
 
+  // The totals row under the sheet adds up exactly what is listed.
+  const totals = useMemo(
+    () => ({
+      banks: EDC_BANKS.map((_, i) => visible.reduce((sum, l) => sum + l.edc.banks[i].total, 0)),
+      opMeVoucher: visible.reduce((sum, l) => sum + (l.edc.opMeVoucher ?? 0), 0),
+      total: visible.reduce((sum, l) => sum + l.edc.total, 0),
+      counted: visible.filter((l) => l.edc.hasData).length,
+    }),
+    [visible],
+  );
+
   const submitted = rows.filter((r) => r.status === 'completed').length;
   const posted = lines.filter((l) => l.state === 'posted' || l.state === 'posted_after_hold').length;
   const notSubmitted = lines.filter((l) => l.state === 'not_submitted').length;
-  const noPhoto = rows.filter((r) => r.status === 'completed' && !r.zReportPhoto).length;
+  // A submitted closing is missing evidence: no Z-Report & EDC photo, or Indodana has an amount but no dashboard photo.
+  const noPhoto = lines.filter((l) => l.row.status === 'completed' && (!l.row.zReportPhoto || l.indodanaMissing)).length;
+  const dayEdcTotal = lines.reduce((sum, l) => sum + l.edc.total, 0);
+  const dayEdcStores = lines.filter((l) => l.edc.hasData).length;
   const filtered = Boolean(code || search || stateFilter);
 
   const toggleExpanded = (id: number) =>
@@ -586,17 +790,26 @@ export default function FinanceStoreClosingPage() {
     }
   }
 
-  const openPhoto = (row: StoreClosingRow) =>
-    row.zReportPhoto && setLightbox({ title: `${row.storeNo} · ${row.storeName}`, url: row.zReportPhoto });
+  /** Opens the viewer on the clicked photo; the store's other photo is one arrow away. */
+  const openPhoto = (row: StoreClosingRow, kind: PhotoKind) => {
+    const photos: LightboxPhoto[] = [];
+    let index = 0;
+    if (row.zReportPhoto) photos.push({ url: row.zReportPhoto, label: ZREPORT_LABEL });
+    if (row.indodanaPhoto) {
+      if (kind === 'indodana') index = photos.length;
+      photos.push({ url: row.indodanaPhoto, label: INDODANA_PHOTO_LABEL });
+    }
+    if (photos.length > 0) setLightbox({ title: `${row.storeNo} · ${row.storeName}`, photos, index });
+  };
 
   return (
     <div className="min-h-full bg-slate-50">
       {lightbox && (
         <PhotoLightbox
           title={lightbox.title}
-          photos={[{ url: lightbox.url, label: 'Z-Report & EDC Settlement' }]}
-          index={0}
-          onIndex={() => {}}
+          photos={lightbox.photos}
+          index={lightbox.index}
+          onIndex={(i) => setLightbox((l) => (l ? { ...l, index: i } : l))}
           onClose={() => setLightbox(null)}
         />
       )}
@@ -637,7 +850,8 @@ export default function FinanceStoreClosingPage() {
               { label: 'Statement Posted', value: String(posted), sub: 'pada hari ini yang dipilih' },
               { label: 'Statement On Hold', value: String(holds.length), sub: 'semua tanggal, belum diperbaiki', warn: holds.length > 0 },
               { label: 'Belum submit', value: String(notSubmitted), sub: isPast ? 'hari sudah lewat' : 'akan ditandai setelah hari berganti', warn: notSubmitted > 0 },
-              { label: 'Foto belum ada', value: String(noPhoto), sub: 'sudah submit tanpa foto Z-Report & EDC', warn: noPhoto > 0 },
+              { label: 'Foto belum ada', value: String(noPhoto), sub: 'sudah submit tanpa foto Z-Report & EDC atau dashboard Indodana', warn: noPhoto > 0 },
+              { label: 'Total EDC', value: rp(dayEdcTotal), sub: `${dayEdcStores} toko sudah isi rekap · termasuk ${OP_ME_VOUCHER_LABEL}` },
             ]}
           />
         )}
@@ -719,7 +933,7 @@ export default function FinanceStoreClosingPage() {
         ) : (
           <>
             <div className="@container max-h-[68vh] overflow-auto [scrollbar-gutter:stable] rounded-md border border-slate-300 bg-white">
-              <table className="w-full min-w-[1000px] border-separate border-spacing-0 text-left">
+              <table className="w-full min-w-[1700px] border-separate border-spacing-0 text-left">
                 <thead>
                   <tr>
                     <th className={cn(TH, 'w-11 text-center')}>No</th>
@@ -727,6 +941,11 @@ export default function FinanceStoreClosingPage() {
                     <th className={cn(TH, 'text-left')}>Nama Toko</th>
                     <th className={cn(TH, 'text-left')}>Foto Z-Report & EDC</th>
                     <th className={cn(TH, 'text-left')}>Open Statement</th>
+                    {EDC_BANKS.map((b) => (
+                      <th key={b.code} className={cn(TH, 'text-right')}>{b.label}</th>
+                    ))}
+                    <th className={cn(TH, 'text-right')}>{OP_ME_VOUCHER_LABEL}</th>
+                    <th className={cn(TH, 'text-right')}>Total</th>
                     <th className={cn(TH, 'text-left')}>Alasan Hold</th>
                     <th className={cn(TH, 'text-left')}>Aksi / Disubmit</th>
                     <th className={cn(TH, 'w-9')} />
@@ -745,10 +964,35 @@ export default function FinanceStoreClosingPage() {
                       onAsk={() => l.row.taskId != null && setConfirmId(l.row.taskId)}
                       onCancel={() => setConfirmId(null)}
                       onConfirm={() => void fix(l.row)}
-                      onOpenPhoto={() => openPhoto(l.row)}
+                      onOpenPhoto={(kind) => openPhoto(l.row, kind)}
                     />
                   ))}
                 </tbody>
+                <tfoot>
+                  <tr>
+                    <td
+                      colSpan={5}
+                      className="sticky bottom-0 z-10 border-r border-t border-slate-300 bg-slate-100 px-2.5 py-2 text-xs font-semibold text-slate-600"
+                    >
+                      Total · {visible.length} toko{filtered ? ' (sesuai filter)' : ''} · {totals.counted} sudah isi rekap EDC
+                    </td>
+                    {totals.banks.map((total, i) => (
+                      <td
+                        key={EDC_BANKS[i].code}
+                        className="sticky bottom-0 z-10 whitespace-nowrap border-r border-t border-slate-300 bg-slate-100 px-2.5 py-2 text-right text-xs font-bold tabular-nums text-slate-700"
+                      >
+                        {num(total)}
+                      </td>
+                    ))}
+                    <td className="sticky bottom-0 z-10 whitespace-nowrap border-r border-t border-slate-300 bg-slate-100 px-2.5 py-2 text-right text-xs font-bold tabular-nums text-slate-700">
+                      {num(totals.opMeVoucher)}
+                    </td>
+                    <td className="sticky bottom-0 z-10 whitespace-nowrap border-r border-t border-slate-300 bg-emerald-100 px-2.5 py-2 text-right text-xs font-bold tabular-nums text-emerald-900">
+                      {num(totals.total)}
+                    </td>
+                    <td colSpan={3} className="sticky bottom-0 z-10 border-t border-slate-300 bg-slate-100" />
+                  </tr>
+                </tfoot>
               </table>
             </div>
 
@@ -759,6 +1003,12 @@ export default function FinanceStoreClosingPage() {
                 <span className="font-semibold text-amber-700">On Hold</span> = ditahan toko dan menunggu perbaikan
                 (Ops menerima issue-nya); <span className="font-semibold text-sky-700">Menunggu posting</span> = Ops sudah
                 menyelesaikan issue, toko tinggal memposting.
+              </p>
+              <p>
+                Kolom bank = total QRIS + Debit + Credit dari rekap EDC toko (Rp); buka barisnya untuk melihat per metode.
+                Tanda <Camera className="inline h-3 w-3 text-emerald-600" /> di Indodana = foto dashboard tersedia,{' '}
+                <AlertTriangle className="inline h-3 w-3 text-amber-500" /> = ada transaksi Indodana tapi foto dashboard
+                belum diupload. Closing yang dibuat sebelum rekap per bank hanya punya checklist, jadi kolom nominalnya kosong (–).
               </p>
               <p>
                 Setelah masalahnya beres, tekan <span className="font-semibold">Tandai Posted</span> — statement menjadi

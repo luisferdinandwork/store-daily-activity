@@ -15,6 +15,7 @@ import {
   areas,
   issues,
   schedules,
+  storeClosingEdcEntries,
   storeClosingTasks,
   stores,
   users,
@@ -30,6 +31,7 @@ import {
   storeCodeOf,
   type StoreClosingRow,
 } from '@/lib/store-closing-review';
+import { toEdcEntries, type EdcEntry } from '@/lib/store-closing-edc';
 
 const iso = (d: Date | null | undefined): string | null =>
   d instanceof Date && !Number.isNaN(d.getTime()) ? d.toISOString() : null;
@@ -49,11 +51,12 @@ async function toRows(
 
   const userIds = new Set<string>();
   for (const t of tasks) {
-    for (const id of [t.userId, t.completedBy, t.heldBy, t.verifiedBy]) if (id) userIds.add(id);
+    for (const id of [t.userId, t.completedBy, t.heldBy, t.verifiedBy, t.edcSummaryBy]) if (id) userIds.add(id);
   }
   const issueIds = tasks.map((t) => t.holdIssueId).filter((id): id is number => id != null);
+  const taskIds = tasks.map((t) => t.id);
 
-  const [storeRows, userRows, issueRows] = await Promise.all([
+  const [storeRows, userRows, issueRows, edcRows] = await Promise.all([
     db
       .select({ id: stores.id, name: stores.name, storeNo: stores.storeNo, areaName: areas.name })
       .from(stores)
@@ -65,7 +68,29 @@ async function toRows(
     issueIds.length
       ? db.select({ id: issues.id, status: issues.status }).from(issues).where(inArray(issues.id, issueIds))
       : Promise.resolve([]),
+    // The EDC summary cells (bank × payment method) of these closings.
+    taskIds.length
+      ? db
+          .select({
+            taskId: storeClosingEdcEntries.taskId,
+            bank: storeClosingEdcEntries.bank,
+            method: storeClosingEdcEntries.method,
+            amount: storeClosingEdcEntries.amount,
+          })
+          .from(storeClosingEdcEntries)
+          .where(inArray(storeClosingEdcEntries.taskId, taskIds))
+      : Promise.resolve([]),
   ]);
+
+  const edcCellsByTask = new Map<number, { taskId: number; bank: string; method: string; amount: string }[]>();
+  for (const row of edcRows) {
+    const cells = edcCellsByTask.get(row.taskId);
+    if (cells) cells.push(row);
+    else edcCellsByTask.set(row.taskId, [row]);
+  }
+  const edcByTask = new Map<number, EdcEntry[]>(
+    [...edcCellsByTask].map(([taskId, cells]) => [taskId, toEdcEntries(cells)]),
+  );
 
   const storeMap = new Map(storeRows.map((s) => [s.id, s]));
   const nameOf = new Map(userRows.map((u) => [u.id, u.name]));
@@ -92,6 +117,13 @@ async function toRows(
       status: !task ? 'no_data' : task.status === 'on_hold' ? 'pending' : task.status,
 
       zReportPhoto: task?.eodEdcSettlementPhoto ?? null,
+
+      edcEntries: task ? edcByTask.get(task.id) ?? [] : [],
+      opMeVoucher: task?.opMeVoucherAmount != null ? Number(task.opMeVoucherAmount) : null,
+      indodanaPhoto: task?.indodanaDashboardPhoto ?? null,
+      edcNotes: task?.edcSummaryNotes ?? null,
+      edcBy: name(task?.edcSummaryBy),
+      edcAt: iso(task?.edcSummaryAt),
 
       decision: task?.openStatementDecision ?? null,
       isOnHold,
