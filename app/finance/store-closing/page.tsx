@@ -55,7 +55,6 @@ import {
   EDC_METHOD_LABELS,
   INDODANA_PHOTO_LABEL,
   OP_ME_VOUCHER_LABEL,
-  banksMissingPhoto,
   summariseEdc,
   type EdcSummary,
 } from '@/lib/store-closing-edc';
@@ -83,8 +82,6 @@ interface Line {
   row: StoreClosingRow;
   state: StatementState;
   edc: EdcSummary;
-  /** Indodana has an amount but no dashboard photo. */
-  indodanaMissing: boolean;
 }
 
 type PhotoKind = 'zreport' | 'indodana';
@@ -152,7 +149,7 @@ function ClosingPhoto({
   );
 }
 
-/** Next to an Indodana amount: the dashboard photo, or a warning when it should be there and isn't. */
+/** Next to an Indodana amount: the dashboard photo, when the store attached one (it's optional). */
 function IndodanaPhotoMark({ line, onOpen }: { line: Line; onOpen: () => void }) {
   if (line.row.indodanaPhoto) {
     return (
@@ -164,13 +161,6 @@ function IndodanaPhotoMark({ line, onOpen }: { line: Line; onOpen: () => void })
       >
         <Camera className="h-3.5 w-3.5" />
       </button>
-    );
-  }
-  if (line.indodanaMissing) {
-    return (
-      <span title={`${INDODANA_PHOTO_LABEL} belum ada`} className="inline-flex h-5 w-5 items-center justify-center text-amber-500">
-        <AlertTriangle className="h-3.5 w-3.5" />
-      </span>
     );
   }
   return null;
@@ -421,7 +411,7 @@ function DetailPanel({
 }) {
   const { row, state, edc } = line;
   // Closings made before the money format only have the old EDC summary tick.
-  const edcComplete = edc.hasData ? edc.missingBanks.length === 0 && edc.opMeVoucher !== null : row.edcSummaryDone;
+  const edcComplete = edc.hasData || row.edcSummaryDone;
 
   return (
     <div className="grid gap-px bg-slate-300 lg:grid-cols-2">
@@ -462,11 +452,7 @@ function DetailPanel({
           <figure>
             <ClosingPhoto url={row.indodanaPhoto} label={INDODANA_PHOTO_LABEL} size="lg" onOpen={() => onOpenPhoto('indodana')} />
             <figcaption className="mt-1.5 text-[11px] font-medium text-slate-600">Dashboard Indodana</figcaption>
-            {line.indodanaMissing ? (
-              <p className="text-[11px] font-semibold text-amber-600">Wajib — ada transaksi Indodana</p>
-            ) : !row.indodanaPhoto ? (
-              <p className="text-[11px] text-slate-400">Tidak wajib — tanpa transaksi Indodana</p>
-            ) : null}
+            {!row.indodanaPhoto && <p className="text-[11px] text-slate-400">Opsional — tidak dilampirkan</p>}
           </figure>
         </div>
       </section>
@@ -721,7 +707,6 @@ export default function FinanceStoreClosingPage() {
           row,
           state: deriveStatement(row, isPast),
           edc,
-          indodanaMissing: banksMissingPhoto(edc, row.indodanaPhoto).length > 0,
         };
       }),
     [rows, isPast],
@@ -760,8 +745,7 @@ export default function FinanceStoreClosingPage() {
   const submitted = rows.filter((r) => r.status === 'completed').length;
   const posted = lines.filter((l) => l.state === 'posted' || l.state === 'posted_after_hold').length;
   const notSubmitted = lines.filter((l) => l.state === 'not_submitted').length;
-  // A submitted closing is missing evidence: no Z-Report & EDC photo, or Indodana has an amount but no dashboard photo.
-  const noPhoto = lines.filter((l) => l.row.status === 'completed' && (!l.row.zReportPhoto || l.indodanaMissing)).length;
+  const noPhoto = lines.filter((l) => l.row.status === 'completed' && !l.row.zReportPhoto).length;
   const dayEdcTotal = lines.reduce((sum, l) => sum + l.edc.total, 0);
   const dayEdcStores = lines.filter((l) => l.edc.hasData).length;
   const filtered = Boolean(code || search || stateFilter);
@@ -850,7 +834,7 @@ export default function FinanceStoreClosingPage() {
               { label: 'Statement Posted', value: String(posted), sub: 'pada hari ini yang dipilih' },
               { label: 'Statement On Hold', value: String(holds.length), sub: 'semua tanggal, belum diperbaiki', warn: holds.length > 0 },
               { label: 'Belum submit', value: String(notSubmitted), sub: isPast ? 'hari sudah lewat' : 'akan ditandai setelah hari berganti', warn: notSubmitted > 0 },
-              { label: 'Foto belum ada', value: String(noPhoto), sub: 'sudah submit tanpa foto Z-Report & EDC atau dashboard Indodana', warn: noPhoto > 0 },
+              { label: 'Foto belum ada', value: String(noPhoto), sub: 'sudah submit tanpa foto Z-Report & EDC', warn: noPhoto > 0 },
               { label: 'Total EDC', value: rp(dayEdcTotal), sub: `${dayEdcStores} toko sudah isi rekap · termasuk ${OP_ME_VOUCHER_LABEL}` },
             ]}
           />
@@ -1006,9 +990,8 @@ export default function FinanceStoreClosingPage() {
               </p>
               <p>
                 Kolom bank = total QRIS + Debit + Credit dari rekap EDC toko (Rp); buka barisnya untuk melihat per metode.
-                Tanda <Camera className="inline h-3 w-3 text-emerald-600" /> di Indodana = foto dashboard tersedia,{' '}
-                <AlertTriangle className="inline h-3 w-3 text-amber-500" /> = ada transaksi Indodana tapi foto dashboard
-                belum diupload. Closing yang dibuat sebelum rekap per bank hanya punya checklist, jadi kolom nominalnya kosong (–).
+                Tanda <Camera className="inline h-3 w-3 text-emerald-600" /> di Indodana = foto dashboard dilampirkan (opsional).
+                Kolom yang tidak diisi toko tampil – . Closing yang dibuat sebelum rekap per bank hanya punya checklist, jadi kolom nominalnya kosong (–).
               </p>
               <p>
                 Setelah masalahnya beres, tekan <span className="font-semibold">Tandai Posted</span> — statement menjadi

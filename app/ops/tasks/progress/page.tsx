@@ -35,7 +35,7 @@ import {
   TaskDetailView,
   SerahTerimaPanel,
 } from './task-detail';
-import { EDC_BANKS, banksMissingPhoto } from '@/lib/store-closing-edc';
+import { EDC_BANKS } from '@/lib/store-closing-edc';
 
 // ─── Store/area list: minimize preference ─────────────────────────────────────
 //
@@ -298,8 +298,7 @@ function TaskRow({ task, onSelect }: { task: FlatTask; onSelect: () => void }) {
     task.extra.hasMarketingCheck === false;
 
   // Store Closing: the EDC summary's money as far as the store has typed it —
-  // a running "x/5 bank" while the closing is open, the total once submitted —
-  // and a flag when Indodana has an amount but its dashboard photo is missing.
+  // a running "x/5 bank" while the closing is open, the total once submitted.
   const closingEdc =
     task.type === 'store_closing' && !task.isPlaceholder ? edcSummaryOf(task.extra) : null;
   const closingEdcLine = (() => {
@@ -309,9 +308,6 @@ function TaskRow({ task, onSelect }: { task: FlatTask; onSelect: () => void }) {
     const counted = EDC_BANKS.length - closingEdc.missingBanks.length;
     return `Rekap EDC ${counted}/${EDC_BANKS.length} bank · ${total}`;
   })();
-  const indodanaPhotoMissing =
-    closingEdc !== null &&
-    banksMissingPhoto(closingEdc, task.extra.indodanaDashboardPhoto as string | null | undefined).length > 0;
 
   const accentClass =
     status === 'completed'   ? 'bg-emerald-500' :
@@ -351,11 +347,6 @@ function TaskRow({ task, onSelect }: { task: FlatTask; onSelect: () => void }) {
               {marketingSkipped && (
                 <span className="inline-flex items-center gap-0.5 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-600">
                   Tidak ada promo
-                </span>
-              )}
-              {indodanaPhotoMissing && (
-                <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700">
-                  <AlertTriangle className="h-2.5 w-2.5" /> Foto Indodana belum ada
                 </span>
               )}
             </div>

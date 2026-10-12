@@ -48,10 +48,10 @@ function SessionExpiryRedirect() {
 
 export function SessionProvider({ children, session }: SessionProviderProps) {
   return (
-    // With the 15-minute session maxAge (see lib/auth.ts), an active client
-    // must poll often enough to keep rolling the JWT forward. Poll every 5
-    // minutes and on window focus; next-auth pauses the poll while the tab is
-    // hidden, so a genuinely idle session still lapses after 15 minutes.
+    // With the idle window of lib/auth/session-policy.ts (15 min, 2 h for IT), an
+    // active client must poll often enough to keep rolling the JWT forward. Poll
+    // every 5 minutes and on window focus; next-auth pauses the poll while the tab
+    // is hidden, so a genuinely idle session still lapses.
     <NextAuthSessionProvider session={session} refetchInterval={5 * 60} refetchOnWindowFocus>
       <IdleLogoutWatcher />
       <SessionExpiryRedirect />

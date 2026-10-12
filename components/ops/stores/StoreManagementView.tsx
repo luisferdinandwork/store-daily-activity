@@ -43,6 +43,7 @@ import {
   Power,
   Search,
   Store,
+  RotateCcw,
   Trash2,
   UserMinus,
   UserPlus,
@@ -57,6 +58,7 @@ import { Sheet, SheetContent, SheetTitle, SheetDescription, SheetHeader } from '
 import StoreEditSheet from '@/components/ops/stores/StoreEditSheet';
 import StoreStatusSheet from '@/components/ops/stores/StoreStatusSheet';
 import StoreDeleteDialog from '@/components/ops/stores/StoreDeleteDialog';
+import StoreTaskResetDialog from '@/components/ops/stores/StoreTaskResetDialog';
 import { STORE_STATUSES, STORE_STATUS_BADGE, STORE_STATUS_LABEL } from '@/lib/store-status';
 import { findDuplicatePic1, PIC_1_TYPE_CODE } from '@/lib/store-pic1';
 import { showedUp } from '@/lib/attendance-health';
@@ -448,6 +450,7 @@ function StoreTableRow({
   onEdit,
   onChangeStatus,
   onDelete,
+  onResetTasks,
   onAssignClick,
   onRemove,
 }: {
@@ -461,6 +464,7 @@ function StoreTableRow({
   onEdit: () => void;
   onChangeStatus: () => void;
   onDelete: () => void;
+  onResetTasks: () => void;
   onAssignClick: () => void;
   onRemove: (userId: string) => void;
 }) {
@@ -620,6 +624,17 @@ function StoreTableRow({
                 <Power className="h-3.5 w-3.5" />
               </button>
             )}
+            {isIt && store.status === 'active' && (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onResetTasks(); }}
+                aria-label={`Reset today's tasks of ${store.name}`}
+                title="Reset today's tasks (keeps attendance)"
+                className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-amber-50 hover:text-amber-600"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+              </button>
+            )}
             {isIt && (
               <button
                 type="button"
@@ -663,6 +678,7 @@ function AreaSection({
   onEditStore,
   onChangeStatus,
   onDeleteStore,
+  onResetStoreTasks,
   onAddStore,
   onAssignClick,
   onRemove,
@@ -678,6 +694,7 @@ function AreaSection({
   onEditStore: (store: StoreRow) => void;
   onChangeStatus: (store: StoreRow) => void;
   onDeleteStore: (store: StoreRow) => void;
+  onResetStoreTasks: (store: StoreRow) => void;
   onAddStore: (areaId: number) => void;
   onAssignClick: (store: StoreRow) => void;
   onRemove: (userId: string) => void;
@@ -761,6 +778,7 @@ function AreaSection({
                   onEdit={() => onEditStore(store)}
                   onChangeStatus={() => onChangeStatus(store)}
                   onDelete={() => onDeleteStore(store)}
+                  onResetTasks={() => onResetStoreTasks(store)}
                   onAssignClick={() => onAssignClick(store)}
                   onRemove={onRemove}
                 />
@@ -906,6 +924,7 @@ export default function StoreManagementView({
   const [assigningStore, setAssigningStore] = useState<StoreRow | null>(null);
   const [statusStore, setStatusStore] = useState<StoreRow | null>(null);
   const [deleteStoreTarget, setDeleteStoreTarget] = useState<StoreRow | null>(null);
+  const [resetTasksTarget, setResetTasksTarget] = useState<StoreRow | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
 
   const [search, setSearch] = useState('');
@@ -1223,6 +1242,7 @@ export default function StoreManagementView({
               onEditStore={(store) => setEditing({ mode: 'edit', store })}
               onChangeStatus={(store) => setStatusStore(store)}
               onDeleteStore={(store) => setDeleteStoreTarget(store)}
+              onResetStoreTasks={(store) => setResetTasksTarget(store)}
               onAddStore={(areaId) => setEditing({ mode: 'create', fixedAreaId: areaId })}
               onAssignClick={(store) => setAssigningStore(store)}
               onRemove={handleRemove}
@@ -1255,6 +1275,14 @@ export default function StoreManagementView({
           store={deleteStoreTarget}
           onClose={() => setDeleteStoreTarget(null)}
           onDeleted={loadData}
+        />
+      )}
+
+      {resetTasksTarget && (
+        <StoreTaskResetDialog
+          store={resetTasksTarget}
+          onClose={() => setResetTasksTarget(null)}
+          onDone={loadData}
         />
       )}
 

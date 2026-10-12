@@ -5,9 +5,9 @@
 //
 // At closing the store reads the day's total off each bank's EDC, per payment
 // method, and types it in: BCA, Mandiri, BRI, OCBC and Indodana, each split by
-// QRIS / Debit / Credit, plus one extra amount, OP/ME/VOUCHER. Indodana has no
-// EDC slip — its figure comes from the Indodana dashboard, so a photo of that
-// dashboard is required whenever Indodana has an amount.
+// QRIS / Debit / Credit, plus one extra amount, OP/ME/VOUCHER. Every field is
+// optional — a blank cell is simply "nothing counted". Indodana has no EDC slip;
+// its figure comes from the Indodana dashboard, whose photo is optional too.
 //
 // Rows are stored per (bank, method) in store_closing_edc_entries, so adding a
 // bank or changing which methods a bank has is a one-line edit of EDC_BANKS
@@ -208,26 +208,3 @@ export function summariseEdc(
   };
 }
 
-/** Banks that have an amount but still need their dashboard photo (Indodana). */
-export function banksMissingPhoto(summary: EdcSummary, photo: string | null | undefined): EdcBankSummary[] {
-  if (photo && photo.trim()) return [];
-  return summary.banks.filter((b) => b.dashboardPhoto && b.total > 0);
-}
-
-/**
- * Why the EDC summary can't be submitted yet, or null when it can. One rule for
- * the employee page (as the hint) and the server (as the error).
- */
-export function edcSubmitProblem(summary: EdcSummary, photo: string | null | undefined): string | null {
-  if (summary.missingBanks.length > 0) {
-    return `Isi rekap EDC ${summary.missingBanks.map((b) => b.label).join(', ')} — isi 0 bila tidak ada transaksi.`;
-  }
-  if (summary.opMeVoucher === null) {
-    return `Isi nominal ${OP_ME_VOUCHER_LABEL} — isi 0 bila tidak ada.`;
-  }
-  const noPhoto = banksMissingPhoto(summary, photo);
-  if (noPhoto.length > 0) {
-    return `Upload foto dashboard ${noPhoto.map((b) => b.label).join(', ')} — wajib karena ada transaksi.`;
-  }
-  return null;
-}

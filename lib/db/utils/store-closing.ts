@@ -61,10 +61,8 @@ import {
   notifyIssueEvent,
 } from '@/lib/db/utils/issues';
 import {
-  edcSubmitProblem,
   parseEdcAmount,
   parseEdcEntries,
-  summariseEdc,
   type EdcEntryInput,
 } from '@/lib/store-closing-edc';
 
@@ -237,12 +235,10 @@ type EdcSummaryRead =
       ok: true;
       entries: EdcEntryInput[];
       opMeVoucher: number | null;
-      /** Why the summary can't be submitted yet (see edcSubmitProblem), or null. */
-      problem: string | null;
     }
   | { ok: false; error: string };
 
-/** Parses the untrusted EDC part of a submit and applies the "every bank counted" rule. */
+/** Parses the untrusted EDC part of a submit. Every field is optional; only the format is checked. */
 function readEdcSummary(
   input: Pick<SubmitStoreClosingInput, 'edcEntries' | 'opMeVoucherAmount' | 'indodanaDashboardPhoto'>,
 ): EdcSummaryRead {
@@ -252,17 +248,7 @@ function readEdcSummary(
   const opMeVoucher = parseEdcAmount(input.opMeVoucherAmount);
   if (!opMeVoucher.ok) return { ok: false, error: opMeVoucher.error };
 
-  const summary = summariseEdc(
-    entries.value.filter((e): e is EdcEntryInput & { amount: number } => e.amount !== null),
-    opMeVoucher.value,
-  );
-
-  return {
-    ok: true,
-    entries: entries.value,
-    opMeVoucher: opMeVoucher.value,
-    problem: edcSubmitProblem(summary, input.indodanaDashboardPhoto),
-  };
+  return { ok: true, entries: entries.value, opMeVoucher: opMeVoucher.value };
 }
 
 /**
@@ -308,17 +294,10 @@ async function applyEdcEntries(taskId: number, entries: EdcEntryInput[]): Promis
   }
 }
 
-function validateSubmitPayload(
-  input: SubmitStoreClosingInput,
-  edcProblem: string | null,
-): string | null {
-  // Same order as the page: Z-Report, EDC summary, EDC settlement, photos.
+function validateSubmitPayload(input: SubmitStoreClosingInput): string | null {
+  // Same order as the page: Z-Report, EDC settlement, photos.
   if (!input.eodZReportDone) {
     return 'Checklist EOD Z-Report wajib diselesaikan.';
-  }
-
-  if (edcProblem) {
-    return edcProblem;
   }
 
   if (!input.edcSettlementDone) {
@@ -678,7 +657,7 @@ export async function submitStoreClosing(
     const edc = readEdcSummary(input);
     if (!edc.ok) return { success: false, error: edc.error };
 
-    const validationErr = validateSubmitPayload(input, edc.problem);
+    const validationErr = validateSubmitPayload(input);
     if (validationErr) return { success: false, error: validationErr };
 
     let existing: StoreClosingTask | undefined;
@@ -768,7 +747,7 @@ export async function submitStoreClosing(
       edcSettlementBy: input.userId,
       edcSettlementAt: now,
 
-      // Complete by now (readEdcSummary + validateSubmitPayload passed).
+      // Submitted (every EDC field is optional, so this just marks the summary as handed in).
       edcSummaryDone: true,
       edcSummaryNotes: input.edcSummaryNotes,
       edcSummaryBy: input.userId,

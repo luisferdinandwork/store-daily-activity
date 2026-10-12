@@ -270,6 +270,32 @@ export async function collectStoreImageUrls(storeId: number): Promise<string[]> 
 }
 
 /**
+ * Managed task photo URLs a store has for one day range [start, end) — read
+ * before IT resets the store's day (lib/db/utils/store-task-reset.ts).
+ */
+export async function collectStoreDayImageUrls(storeId: number, start: Date, end: Date): Promise<string[]> {
+  const urls = new Set<string>();
+
+  for (const target of SIMPLE_TARGETS) {
+    const columnList = sql.join(target.photoColumns.map(ident), sql`, `);
+    const result = await db.execute(sql`
+      SELECT ${columnList} FROM ${ident(target.table)}
+      WHERE store_id = ${storeId} AND ${ident(target.dateColumn)} >= ${start} AND ${ident(target.dateColumn)} < ${end}`);
+    for (const row of extractRows<Record<string, unknown>>(result)) {
+      for (const c of target.photoColumns) for (const u of parsePhotoUrls(row[c])) if (isManagedImageUrl(u)) urls.add(u);
+    }
+  }
+
+  const counts = await db.execute(sql`
+    SELECT selfie_photo FROM store_cash_counts WHERE store_id = ${storeId} AND date >= ${start} AND date < ${end}`);
+  for (const row of extractRows<Record<string, unknown>>(counts)) {
+    for (const u of parsePhotoUrls(row.selfie_photo)) if (isManagedImageUrl(u)) urls.add(u);
+  }
+
+  return [...urls];
+}
+
+/**
  * Managed task photo URLs on the rows of `tables` that belong to these working
  * days (schedule_id) — read before a schedule removal deletes those rows
  * (lib/schedule-utils.ts). Runs on `db` or inside a transaction.

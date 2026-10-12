@@ -4,14 +4,17 @@
 import { useEffect, useRef } from 'react';
 import { signOut, useSession } from 'next-auth/react';
 
-const IDLE_TIMEOUT_MS = 15 * 60 * 1000;
+import { sessionIdleMs } from '@/lib/auth/session-policy';
+
 const ACTIVITY_EVENTS = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'wheel'] as const;
 // Avoid clearing/resetting the timeout on every single mousemove/scroll event.
 const RESET_THROTTLE_MS = 30 * 1000;
 
 /** Signs the user out after IDLE_TIMEOUT_MS of no interaction with the page. */
 export function useIdleLogout() {
-  const { status } = useSession();
+  const { data: session, status } = useSession();
+  // 15 minutes, 2 hours for IT (also while previewing another role).
+  const IDLE_TIMEOUT_MS = sessionIdleMs(session?.user?.role, session?.user?.switchedFromRoleCode);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const lastResetRef = useRef(0);
 
@@ -56,5 +59,5 @@ export function useIdleLogout() {
       );
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [status]);
+  }, [status, IDLE_TIMEOUT_MS]);
 }

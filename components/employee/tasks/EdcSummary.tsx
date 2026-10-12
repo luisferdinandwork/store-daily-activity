@@ -16,10 +16,10 @@ import { Chip, FieldHint, PhotoRow, SummaryBox, SummaryStat } from '@/components
 import {
   EDC_BANKS,
   EDC_MAX_AMOUNT,
+  EDC_METHODS,
   EDC_METHOD_LABELS,
   INDODANA_PHOTO_LABEL,
   OP_ME_VOUCHER_LABEL,
-  banksMissingPhoto,
   edcCellKey,
   summariseEdc,
   type EdcBank,
@@ -106,14 +106,12 @@ function AmountInput({
 }
 
 function BankCard({
-  bank, state, subtotal, filled, needsPhoto, onChange, onZero, indodanaPhoto, onPhotoClick, disabled,
+  bank, state, subtotal, filled, onChange, onZero, indodanaPhoto, onPhotoClick, disabled,
 }: {
   bank: EdcBank;
   state: EdcAmountState;
   subtotal: number;
   filled: boolean;
-  /** Has an amount but no dashboard photo yet. */
-  needsPhoto: boolean;
   onChange: (method: EdcMethod, digits: string) => void;
   onZero: () => void;
   indodanaPhoto: string | null;
@@ -170,17 +168,12 @@ function BankCard({
         <div className="border-t border-border">
           <PhotoRow
             title={INDODANA_PHOTO_LABEL}
-            hint="Foto / screenshot dashboard Indodana hari ini"
+            hint="Opsional — foto / screenshot dashboard Indodana hari ini"
             photo={indodanaPhoto}
             onClick={onPhotoClick}
             disabled={disabled}
             icon={<LayoutDashboard className="h-4 w-4" />}
           />
-          {needsPhoto && (
-            <p className="bg-amber-50 px-3.5 py-2 text-[11px] font-medium text-amber-700">
-              Foto wajib diupload karena ada transaksi {bank.label}.
-            </p>
-          )}
         </div>
       )}
     </div>
@@ -206,7 +199,6 @@ export default function EdcSummaryFields({
   disabled?: boolean;
 }) {
   const summary = edcSummaryFromState(amounts, opMeVoucher);
-  const needsPhoto = new Set(banksMissingPhoto(summary, indodanaPhoto).map((b) => b.code));
 
   return (
     <div className="space-y-3">
@@ -219,7 +211,6 @@ export default function EdcSummaryFields({
             state={amounts}
             subtotal={s.total}
             filled={s.filled}
-            needsPhoto={needsPhoto.has(bank.code)}
             onChange={(method, digits) => onAmountChange(bank.code, method, digits)}
             onZero={() => onBankZero(bank.code)}
             indodanaPhoto={indodanaPhoto}
@@ -233,7 +224,7 @@ export default function EdcSummaryFields({
         <div className="flex items-center gap-3">
           <div className="min-w-0 flex-1">
             <p className="text-sm font-bold text-foreground">{OP_ME_VOUCHER_LABEL}</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">Isi 0 bila tidak ada</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">Boleh dikosongkan</p>
           </div>
           {summary.opMeVoucher === null && <Chip tone="neutral">Belum diisi</Chip>}
         </div>
@@ -264,10 +255,64 @@ export default function EdcSummaryFields({
         />
         <FieldHint>
           {summary.missingBanks.length > 0
-            ? `Belum diisi: ${summary.missingBanks.map((b) => b.label).join(', ')}`
+            ? `Belum diisi (boleh dikosongkan): ${summary.missingBanks.map((b) => b.label).join(', ')}`
             : 'Semua bank sudah dihitung.'}
         </FieldHint>
       </SummaryBox>
+    </div>
+  );
+}
+
+// ─── Confirmation table ──────────────────────────────────────────────────────
+
+/**
+ * The same bank × QRIS / Debit / Credit table Ops and Finance see, shown to the
+ * employee before a "Post Statement" submit. Blank fields read as a dash.
+ */
+export function EdcConfirmTable({ summary, indodanaPhoto }: { summary: EdcSummary; indodanaPhoto: string | null }) {
+  const th = 'px-2 py-1.5 text-right text-[10px] font-bold uppercase tracking-wide text-muted-foreground';
+  const td = 'whitespace-nowrap px-2 py-1.5 text-right tabular-nums';
+  const num = (n: number) => n.toLocaleString('id-ID');
+
+  return (
+    <div className="space-y-2">
+      <div className="overflow-x-auto rounded-xl border border-border">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="bg-secondary">
+              <th className={cn(th, 'pl-3 text-left')}>Bank (Rp)</th>
+              {EDC_METHODS.map((m) => <th key={m} className={th}>{EDC_METHOD_LABELS[m]}</th>)}
+              <th className={cn(th, 'pr-3')}>Total</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {summary.banks.map((b) => (
+              <tr key={b.code}>
+                <td className="whitespace-nowrap py-1.5 pl-3 pr-2 font-semibold text-foreground">{b.label}</td>
+                {EDC_METHODS.map((m) => (
+                  <td key={m} className={cn(td, b.cells[m] === undefined ? 'text-muted-foreground/50' : 'text-foreground')}>
+                    {b.cells[m] === undefined ? '–' : num(b.cells[m])}
+                  </td>
+                ))}
+                <td className={cn(td, 'pr-3 font-bold', b.filled ? 'text-foreground' : 'text-muted-foreground/50')}>
+                  {b.filled ? num(b.total) : '–'}
+                </td>
+              </tr>
+            ))}
+            <tr className="bg-secondary/60">
+              <td colSpan={EDC_METHODS.length + 1} className="py-1.5 pl-3 pr-2 font-semibold text-foreground">{OP_ME_VOUCHER_LABEL}</td>
+              <td className={cn(td, 'pr-3 font-bold')}>{summary.opMeVoucher === null ? '–' : num(summary.opMeVoucher)}</td>
+            </tr>
+            <tr className="bg-primary/5">
+              <td colSpan={EDC_METHODS.length + 1} className="py-1.5 pl-3 pr-2 font-bold text-foreground">Total</td>
+              <td className={cn(td, 'pr-3 font-bold text-foreground')}>{num(summary.total)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p className="px-0.5 text-[11px] text-muted-foreground">
+        {INDODANA_PHOTO_LABEL}: {indodanaPhoto ? 'ada' : 'tidak dilampirkan'}
+      </p>
     </div>
   );
 }

@@ -30,7 +30,6 @@ import {
   EDC_METHOD_LABELS,
   INDODANA_PHOTO_LABEL,
   OP_ME_VOUCHER_LABEL,
-  banksMissingPhoto,
   summariseEdc,
   type EdcEntryLike,
   type EdcSummary,
@@ -1030,7 +1029,6 @@ function StoreClosingDetail({ task }: { task: FlatTask }) {
 
   const edc            = edcSummaryOf(e);
   const indodanaPhoto  = typeof e.indodanaDashboardPhoto === 'string' ? e.indodanaDashboardPhoto : null;
-  const indodanaMissing = banksMissingPhoto(edc, indodanaPhoto).length > 0;
   const edcBy          = actorName(e, 'edcSummary');
   const edcAt          = actorAt(e, 'edcSummary');
 
@@ -1085,7 +1083,6 @@ function StoreClosingDetail({ task }: { task: FlatTask }) {
             label={INDODANA_PHOTO_LABEL}
             photos={indodanaPhoto}
             columns={2}
-            emptyHint={indodanaMissing ? 'Belum ada foto dashboard Indodana — wajib karena ada transaksi Indodana.' : undefined}
           />
         </>
       ) : (

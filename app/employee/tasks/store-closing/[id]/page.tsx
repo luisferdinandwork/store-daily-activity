@@ -12,12 +12,13 @@ import { toast } from 'sonner';
 import { useAutoSave } from '@/lib/hooks/useAutoSave';
 import { TaskDateCard, TaskHeader, TaskSubmitBar, SaveIndicator, shiftLabel } from '@/components/employee/tasks';
 import {
-  CheckRow, EmptyState, ListGroup, Notice, NotesField, PageBody, PhotoRow, Section,
+  ActionButton, BottomSheet, CheckRow, EmptyState, ListGroup, Notice, NotesField, PageBody, PhotoRow, Section,
   SkeletonBlocks, TaskReviewNotices,
 } from '@/components/employee/ui';
 import ChecklistPhotoModal from '@/components/tasks/ChecklistPhotoModal';
 import AccessGuard from '@/components/employee/tasks/AccessGuard';
 import EdcSummaryFields, {
+  EdcConfirmTable,
   edcDigitsToAmount,
   edcEntriesFromState,
   edcStateFromEntries,
@@ -28,7 +29,6 @@ import {
   EDC_BANKS,
   INDODANA_PHOTO_LABEL,
   edcCellKey,
-  edcSubmitProblem,
   type EdcBankCode,
   type EdcEntryLike,
   type EdcMethod,
@@ -77,7 +77,7 @@ interface StoreClosingData {
 const PHOTO_RULES = {
   eodEdcSettlement: { min: 1, max: 1 },
   storefrontLocked: { min: 1, max: 1 },
-  // Required only once Indodana has an amount (edcSubmitProblem); the modal itself accepts 0–1.
+  // Optional — the Indodana dashboard photo is never required.
   indodanaDashboard: { min: 1, max: 1 },
 } as const;
 
@@ -227,6 +227,8 @@ export default function StoreClosingDetailPage() {
   const [eodEdcSettlementModalOpen, setEodEdcSettlementModalOpen] = useState(false);
   const [storefrontLockedModalOpen, setStorefrontLockedModalOpen] = useState(false);
   const [indodanaModalOpen,         setIndodanaModalOpen]         = useState(false);
+  // "Post Statement" shows the EDC table for a last look before it is submitted.
+  const [confirmOpen,               setConfirmOpen]               = useState(false);
 
   // Form state
   const [eodZReportDone,        setEodZReportDone]        = useState(false);
@@ -450,9 +452,8 @@ export default function StoreClosingDetailPage() {
           openStatementDecision === 'post_statement' ||
           openStatementDecision === 'on_hold';
 
-        // EDC summary: every bank counted, OP/ME/VOUCHER filled, Indodana photo when it has an amount.
+        // EDC summary: every field is optional, so it never blocks the submit.
         const edcSummary = edcSummaryFromState(edcAmounts, opMeVoucher);
-        const edcProblem = edcSubmitProblem(edcSummary, indodanaPhoto);
         // A closing made before the money format only has the old checklist tick.
         const legacyEdc = readonly && !edcSummary.hasData && !!taskData?.edcSummaryDone;
 
@@ -461,7 +462,6 @@ export default function StoreClosingDetailPage() {
           !isOnHold &&
           !!geo &&
           zReportSatisfied &&
-          !edcProblem &&
           edcSettlementDone &&
           evidencePhotoSatisfied &&
           storefrontLockedSatisfied &&
@@ -472,7 +472,6 @@ export default function StoreClosingDetailPage() {
         const submitHint = (() => {
           if (locked || isOnHold) return '';
           if (!zReportSatisfied) return 'Centang checklist EOD Z-Report.';
-          if (edcProblem) return edcProblem;
           if (!edcSettlementDone) return 'Centang checklist EDC Settlement.';
           if (!evidencePhotoSatisfied) return 'Upload foto Z-Report & EDC Settlement.';
           if (!storefrontLockedSatisfied) return 'Upload foto storefront terkunci.';
@@ -663,7 +662,9 @@ export default function StoreClosingDetailPage() {
             {taskData && (
               <TaskSubmitBar
                 label={openStatementDecision === 'on_hold' ? 'Submit — On Hold' : 'Submit Store Closing'}
-                onSubmit={() => handleSubmit(geo)}
+                // On Hold goes straight out (the issue reports it to Ops, Finance, IT);
+                // Post Statement first shows the EDC table to confirm.
+                onSubmit={() => (openStatementDecision === 'post_statement' ? setConfirmOpen(true) : handleSubmit(geo))}
                 submitting={submitting}
                 disabled={!canSubmit}
                 hidden={readonly || isOnHold}
@@ -686,6 +687,31 @@ export default function StoreClosingDetailPage() {
               onClear={() => syncEodEdcSettlementPhoto([])}
               disabled={dis}
             />
+
+            {/* Post Statement: look over the EDC figures before submitting */}
+            <BottomSheet
+              open={confirmOpen}
+              onClose={() => setConfirmOpen(false)}
+              dismissible={!submitting}
+              title="Konfirmasi Store Closing"
+              description="Periksa rekap EDC sebelum Open Statement diposting."
+              footer={
+                <>
+                  <ActionButton variant="secondary" className="flex-1" onClick={() => setConfirmOpen(false)} disabled={submitting}>
+                    Kembali
+                  </ActionButton>
+                  <ActionButton
+                    className="flex-1"
+                    loading={submitting}
+                    onClick={async () => { await handleSubmit(geo); setConfirmOpen(false); }}
+                  >
+                    Ya, Submit
+                  </ActionButton>
+                </>
+              }
+            >
+              <EdcConfirmTable summary={edcSummary} indodanaPhoto={indodanaPhoto} />
+            </BottomSheet>
 
             {/* Indodana dashboard photo modal */}
             <ChecklistPhotoModal

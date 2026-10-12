@@ -90,5 +90,7 @@ declare module 'next-auth/jwt' {
 
     /** epoch ms of the last DB re-validation of this account — see the jwt callback in lib/auth.ts. */
     authCheckedAt?: number;
+    /** epoch ms of the last time this token was seen active — idle cut-off, see lib/auth/session-policy.ts. */
+    activeAt?: number;
   }
 }

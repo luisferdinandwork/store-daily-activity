@@ -8,6 +8,7 @@ import { alias } from 'drizzle-orm/pg-core';
 import bcrypt from 'bcryptjs';
 
 import { db } from '@/lib/db';
+import { IT_IDLE_MS, sessionIdleMs } from '@/lib/auth/session-policy';
 import { users, userRoles, employeeTypes } from '@/lib/db/schema';
 import {
   clearLoginFailures,
@@ -343,7 +344,9 @@ export const authOptions: NextAuthOptions = {
 
   session: {
     strategy: 'jwt',
-    // 15-minute idle timeout. The JWT expires 15 min after it was last
+    // Idle timeout: 15 minutes, or 2 hours for IT (lib/auth/session-policy.ts).
+    // The cookie itself lives for the longer IT window; the `jwt` callback below
+    // cuts everyone else off after 15 minutes idle. The JWT expires that long after it was last
     // issued; an active client re-issues it (extending the window) via the
     // SessionProvider's `refetchInterval` poll + refetch-on-focus (every
     // /api/auth/session read re-encodes the JWT with a fresh expiry). Once the
@@ -352,7 +355,7 @@ export const authOptions: NextAuthOptions = {
     // idle cut-off on the client. Because the window slides, the `jwt`
     // callback below re-validates the account against the DB every
     // REVALIDATE_AFTER_MS so a stolen/stale cookie can't outlive its account.
-    maxAge: 15 * 60,
+    maxAge: IT_IDLE_MS / 1000,
     updateAge: 60,
   },
 
@@ -364,11 +367,19 @@ export const authOptions: NextAuthOptions = {
         token.nik = user.nik;
         copyAuthFields(token, user);
         token.authCheckedAt = Date.now();
+        token.activeAt = Date.now();
         return token;
       }
 
       // A token without an id can't be tied to an account.
       if (!token.id) throw new Error('SessionRevoked');
+
+      // Idle cut-off per role. `activeAt` only moves forward when the client's
+      // session poll re-issues the cookie, so a closed tab lapses on schedule.
+      if (typeof token.activeAt === 'number' && Date.now() - token.activeAt > sessionIdleMs(token.role, token.switchedFromRoleCode)) {
+        throw new Error('SessionRevoked');
+      }
+      token.activeAt = Date.now();
 
       // Re-validate against the DB when (a) the client called useSession().update() —
       // used by the IT role-switch to reflect a DB-side role change immediately — or
