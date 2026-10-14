@@ -6,7 +6,7 @@
 //   OpsMobileTopBar   brand + bell + profile (the desktop sidebar/navbar hide)
 //   OpsDesktopHint    "Buka di desktop untuk pengalaman lebih baik" — a banner that
 //                     stays put on every page not built for phones
-//   OpsMobileTabBar   Dashboard · Issues · Petty Cash (with "waiting" badges) ·
+//   OpsMobileTabBar   Dashboard · Issues · Petty Cash (with "waiting" badges) · Visit Toko ·
 //                     Menu (the full sidebar in a drawer)
 //
 // Which pages count as phone-ready: lib/ops-mobile.ts.
@@ -141,7 +141,7 @@ export function OpsMobileTabBar() {
   const onDashboard = pathname === '/ops';
   const onIssues = pathname === '/ops/issues' || pathname.startsWith('/ops/issues/');
   const onPettyCash = pathname === '/ops/petty-cash' || pathname.startsWith('/ops/petty-cash/');
-  const onVisitResults = pathname === '/ops/impact-visits/results' || pathname.startsWith('/ops/impact-visits/results/');
+  const onVisits = pathname === '/ops/store-visits' || pathname.startsWith('/ops/store-visits/');
 
   return (
     <>
@@ -177,8 +177,8 @@ export function OpsMobileTabBar() {
             </Link>
           </li>
           <li>
-            <Link href="/ops/impact-visits/results" aria-current={onVisitResults ? 'page' : undefined} className={TAB_LINK}>
-              <TabItem label="Hasil Visit" icon={ClipboardCheck} active={onVisitResults} />
+            <Link href="/ops/store-visits" aria-current={onVisits ? 'page' : undefined} className={TAB_LINK}>
+              <TabItem label="Visit Toko" icon={ClipboardCheck} active={onVisits} />
             </Link>
           </li>
           <li>

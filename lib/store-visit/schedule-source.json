@@ -1,0 +1,452 @@
+[
+  {
+    "manager": "AWAN",
+    "brand": "Fisik",
+    "storeNo": "FS033",
+    "storeName": "Fisik - Living World Denpasar",
+    "city": "BALI",
+    "category": "out_city",
+    "intervalDays": 90,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "AWAN",
+    "brand": "Our Daily Dose",
+    "storeNo": "OD011",
+    "storeName": "ODD - Beachwalk Bali",
+    "city": "BALI",
+    "category": "out_city",
+    "intervalDays": 90,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "AWAN",
+    "brand": "Fisik",
+    "storeNo": "FF001",
+    "storeName": "Fisik Football - Daan Mogot",
+    "city": "JAKARTA",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "AWAN",
+    "brand": "Fisik",
+    "storeNo": "FF002",
+    "storeName": "Fisik Football - Senayan City",
+    "city": "JAKARTA",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "AWAN",
+    "brand": "Fisik",
+    "storeNo": "FF003",
+    "storeName": "Fisik Football - Gandaria City",
+    "city": "JAKARTA",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "AWAN",
+    "brand": "Fisik",
+    "storeNo": "FF009",
+    "storeName": "Fisik Football - Grand Indonesia",
+    "city": "JAKARTA",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "AWAN",
+    "brand": "Fisik",
+    "storeNo": "FF010",
+    "storeName": "Fisik Football - Pondok Indah Mall 3",
+    "city": "JAKARTA",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "AWAN",
+    "brand": "Fisik",
+    "storeNo": "FO001",
+    "storeName": "Factory Outlet - Daan Mogot",
+    "city": "JAKARTA",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "AWAN",
+    "brand": "Our Daily Dose",
+    "storeNo": "OD002",
+    "storeName": "ODD - Senayan City",
+    "city": "JAKARTA",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "AWAN",
+    "brand": "Our Daily Dose",
+    "storeNo": "OD004",
+    "storeName": "ODD - Kota Kasablanka",
+    "city": "JAKARTA",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "AWAN",
+    "brand": "Our Daily Dose",
+    "storeNo": "OD005",
+    "storeName": "ODD - Pik Avenue",
+    "city": "JAKARTA",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "AWAN",
+    "brand": "Our Daily Dose",
+    "storeNo": "OD008",
+    "storeName": "ODD - Pondok Indah Mall 2",
+    "city": "JAKARTA",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "AWAN",
+    "brand": "Our Daily Dose",
+    "storeNo": "OD012",
+    "storeName": "ODD - Grand Indonesia",
+    "city": "JAKARTA",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "AWAN",
+    "brand": "Our Daily Dose",
+    "storeNo": "OD022",
+    "storeName": "ODD - Gandaria City",
+    "city": "JAKARTA",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "ELI",
+    "brand": "Fisik",
+    "storeNo": "FS001",
+    "storeName": "Fisik - Margo City",
+    "city": "DEPOK",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "ELI",
+    "brand": "Our Daily Dose",
+    "storeNo": "OD018",
+    "storeName": "ODD - Margo City Mall Depok",
+    "city": "DEPOK",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "ELI",
+    "brand": "Fisik",
+    "storeNo": "FF013",
+    "storeName": "Fisik Football - Bintaro Xchange",
+    "city": "TANGGERANG",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "ELI",
+    "brand": "Fisik",
+    "storeNo": "FO002",
+    "storeName": "Factory Outlet - Cokroaminoto",
+    "city": "TANGGERANG",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "ELI",
+    "brand": "Fisik",
+    "storeNo": "FS003",
+    "storeName": "Fisik - Tangerang City",
+    "city": "TANGGERANG",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "ELI",
+    "brand": "Fisik",
+    "storeNo": "FS012",
+    "storeName": "Fisik - Summarecon Mal Serpong",
+    "city": "TANGGERANG",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "ELI",
+    "brand": "Fisik",
+    "storeNo": "FS025",
+    "storeName": "Fisik - Bintaro Xchange Mall 2",
+    "city": "TANGGERANG",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "ELI",
+    "brand": "Our Daily Dose",
+    "storeNo": "OD009",
+    "storeName": "ODD - Summarecon Mal Serpong",
+    "city": "TANGGERANG",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "ELI",
+    "brand": "Our Daily Dose",
+    "storeNo": "OD016",
+    "storeName": "ODD - Bintaro Jaya Xchange Mall",
+    "city": "TANGGERANG",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "JAYANTI",
+    "brand": "Fisik",
+    "storeNo": "FS014",
+    "storeName": "Fisik - Bandung Indah Plaza",
+    "city": "BANDUNG",
+    "category": "out_city",
+    "intervalDays": 60,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "JAYANTI",
+    "brand": "Fisik",
+    "storeNo": "FF016",
+    "storeName": "Fisik Football-Summarecon Mal Bandung",
+    "city": "BANDUNG",
+    "category": "out_city",
+    "intervalDays": 60,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "JAYANTI",
+    "brand": "Fisik",
+    "storeNo": "FS036",
+    "storeName": "Fisik - 23 Paskal Shopping Center",
+    "city": "BANDUNG",
+    "category": "out_city",
+    "intervalDays": 60,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "JAYANTI",
+    "brand": "Fisik",
+    "storeNo": "FF012",
+    "storeName": "Fisik Football-Summarecon Mall Bekasi",
+    "city": "BEKASI",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "JAYANTI",
+    "brand": "Fisik",
+    "storeNo": "FF014",
+    "storeName": "Fisik Football - Pakuwon Mall Bekasi",
+    "city": "BEKASI",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "JAYANTI",
+    "brand": "Our Daily Dose",
+    "storeNo": "OD017",
+    "storeName": "ODD - Summarecon Mal Bekasi",
+    "city": "BEKASI",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "JAYANTI",
+    "brand": "Fisik",
+    "storeNo": "FS008",
+    "storeName": "Fisik - Ruko Padjajaran Bogor",
+    "city": "BOGOR",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "JAYANTI",
+    "brand": "Fisik",
+    "storeNo": "FS006",
+    "storeName": "Fisik - Cirebon Superblock",
+    "city": "CIREBON",
+    "category": "out_city",
+    "intervalDays": 60,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "JAYANTI",
+    "brand": "Specs",
+    "storeNo": "SS002",
+    "storeName": "Specs Store - Ruko Kartini Cirebon",
+    "city": "CIREBON",
+    "category": "out_city",
+    "intervalDays": 60,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "JAYANTI",
+    "brand": "Fisik",
+    "storeNo": "FS020",
+    "storeName": "Fisik - Plaza Medan Fair",
+    "city": "MEDAN",
+    "category": "out_city",
+    "intervalDays": 90,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "JAYANTI",
+    "brand": "Specs",
+    "storeNo": "SS003",
+    "storeName": "Specs Store - Plaza Medan Fair",
+    "city": "MEDAN",
+    "category": "out_city",
+    "intervalDays": 90,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "RIDO",
+    "brand": "Fisik",
+    "storeNo": "FS028",
+    "storeName": "Fisik - Ewalk Mall Balikpapan",
+    "city": "BALIKPAPAN",
+    "category": "out_city",
+    "intervalDays": 90,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "RIDO",
+    "brand": "Fisik",
+    "storeNo": "FS027",
+    "storeName": "Fisik - Duta Mall Banjarmasin",
+    "city": "BANJARMASIN",
+    "category": "out_city",
+    "intervalDays": 90,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "RIDO",
+    "brand": "Fisik",
+    "storeNo": "FS007",
+    "storeName": "Fisik - Ruko Seturan Square",
+    "city": "JOGJAKARTA",
+    "category": "out_city",
+    "intervalDays": 60,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "RIDO",
+    "brand": "Fisik",
+    "storeNo": "FS029",
+    "storeName": "Fisik - Mall Olympic Garden",
+    "city": "MALANG",
+    "category": "out_city",
+    "intervalDays": 60,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "RIDO",
+    "brand": "Fisik",
+    "storeNo": "FS005",
+    "storeName": "Fisik - Ayani MegaMall",
+    "city": "PONTIANAK",
+    "category": "out_city",
+    "intervalDays": 90,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "RIDO",
+    "brand": "Fisik",
+    "storeNo": "FS031",
+    "storeName": "Fisik - Pakuwon Mall Solo",
+    "city": "SOLO",
+    "category": "out_city",
+    "intervalDays": 60,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "RIDO",
+    "brand": "Fisik",
+    "storeNo": "FF004",
+    "storeName": "Fisik Football - Tunjungan Plaza 5",
+    "city": "SURABAYA",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "RIDO",
+    "brand": "Fisik",
+    "storeNo": "FF015",
+    "storeName": "Fisik Football -Pakuwon Mall Surabaya",
+    "city": "SURABAYA",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "RIDO",
+    "brand": "Fisik",
+    "storeNo": "FS002",
+    "storeName": "Fisik - Tunjungan Plaza 1",
+    "city": "SURABAYA",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "RIDO",
+    "brand": "Our Daily Dose",
+    "storeNo": "OD010",
+    "storeName": "ODD - Tunjungan Plaza 4 SBY",
+    "city": "SURABAYA",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  },
+  {
+    "manager": "RIDO",
+    "brand": "Specs",
+    "storeNo": "SS001",
+    "storeName": "Specs Store - Tunjungan Plaza 3",
+    "city": "SURABAYA",
+    "category": "in_city",
+    "intervalDays": 7,
+    "minimumVisits": 1
+  }
+]

@@ -142,6 +142,7 @@ const NAV: NavSection[] = [
     section: 'Operations',
     items: [
       { href: '/ops/issues',               label: 'Issues',               icon: AlertTriangle },
+      { href: '/ops/store-visits', label: 'Visit Toko', icon: MapPinned },
       IMPACT_VISIT_ITEM,
       PETTY_CASH_ITEM,
       { href: '/ops/sales-returns',          label: 'Sales Return',         icon: ReceiptText },
@@ -477,7 +478,7 @@ export default function OpsSidebar({ storeName = 'Ops', collapsed = false, drawe
                     {session?.user?.name ?? 'Ops'}
                   </p>
                   <p className="truncate text-[10px] text-muted-foreground">
-                    {(session?.user as any)?.nik ? `NIK ${(session?.user as any).nik}` : 'Ops'}
+                    {session?.user?.nik ? `NIK ${session.user.nik}` : 'Ops'}
                   </p>
                 </div>
                 <button

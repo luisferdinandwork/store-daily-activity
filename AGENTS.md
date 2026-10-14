@@ -91,6 +91,8 @@ Stores/users added later (e.g. via the IT Users import) get demo activity with `
 
 ## Working notes
 
+- Visit Toko (`/ops/store-visits`, mobile) is a simple Ops Area checklist with camera photos and geofence validation, independent of scored Impact Visits. IT settings: `/it/store-visits`; policies use store codes from `lib/store-visit/schedule-source.json` (7/60/90 days), count distinct WIB days in the trailing interval, and retain unmatched codes. Submitted visits snapshot their task list. See `docs/store-visits.md`.
+
 - Don't commit or push unless asked. Branch off `main` first if you do.
 - After editing `lib/db/utils/shift-lookup.ts`-cached data (shifts) via a reseed, restart the dev server.
 - The hosted DB in `.env.local` is shared — `db:reset` wipes real data. Confirm before destructive DB ops.

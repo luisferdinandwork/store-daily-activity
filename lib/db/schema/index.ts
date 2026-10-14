@@ -14,6 +14,7 @@ export * from './item-transfers';      // ← NEW: BC transfer order pipeline
 export * from './password-reset';      // "Lupa password" requests
 export * from './feature-switches';    // IT on/off switches
 export * from './sales-returns';       // Sales Return receipts
+export * from './store-visits';
 
 import * as enums            from './enums';
 import * as lookups          from './lookups';
@@ -30,6 +31,7 @@ import * as itemTransfers    from './item-transfers';        // ← NEW
 import * as passwordReset    from './password-reset';
 import * as featureSwitches  from './feature-switches';
 import * as salesReturns     from './sales-returns';
+import * as storeVisits      from './store-visits';
 
 export const schema = {
   ...enums,
@@ -47,4 +49,5 @@ export const schema = {
   ...passwordReset,
   ...featureSwitches,
   ...salesReturns,
+  ...storeVisits,
 };

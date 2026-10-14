@@ -3,16 +3,17 @@
 //
 // Store Closing · EDC Summary. The store counts the day's money off each bank's
 // EDC — one card per bank (BCA, Mandiri, BRI, OCBC, Indodana) with an amount per
-// payment method (QRIS / Debit / Credit) — plus one OP/ME/VOUCHER amount. Indodana
-// also needs a photo of its dashboard once it has an amount. The rules (banks,
+// payment method (QRIS / Debit / Credit) — plus one OP/ME/VOUCHER amount. (The
+// optional Indodana dashboard photo sits with the other photos, in "Foto bukti" on
+// the page.) The rules (banks,
 // methods, what blocks a submit) live in lib/store-closing-edc.ts; this file is
 // only the form. The page owns the state and the auto-save; each save carries
 // every cell the page has edited so far, so a debounced patch can never drop an
 // earlier edit.
 
-import { Check, Landmark, LayoutDashboard } from 'lucide-react';
+import { Check, Landmark } from 'lucide-react';
 import { cn, formatRupiah } from '@/lib/utils';
-import { Chip, FieldHint, PhotoRow, SummaryBox, SummaryStat } from '@/components/employee/ui';
+import { Chip, FieldHint, SummaryBox, SummaryStat } from '@/components/employee/ui';
 import {
   EDC_BANKS,
   EDC_MAX_AMOUNT,
@@ -106,7 +107,7 @@ function AmountInput({
 }
 
 function BankCard({
-  bank, state, subtotal, filled, onChange, onZero, indodanaPhoto, onPhotoClick, disabled,
+  bank, state, subtotal, filled, onChange, onZero, disabled,
 }: {
   bank: EdcBank;
   state: EdcAmountState;
@@ -114,8 +115,6 @@ function BankCard({
   filled: boolean;
   onChange: (method: EdcMethod, digits: string) => void;
   onZero: () => void;
-  indodanaPhoto: string | null;
-  onPhotoClick: () => void;
   disabled?: boolean;
 }) {
   return (
@@ -164,18 +163,6 @@ function BankCard({
         ))}
       </div>
 
-      {bank.dashboardPhoto && (
-        <div className="border-t border-border">
-          <PhotoRow
-            title={INDODANA_PHOTO_LABEL}
-            hint="Opsional — foto / screenshot dashboard Indodana hari ini"
-            photo={indodanaPhoto}
-            onClick={onPhotoClick}
-            disabled={disabled}
-            icon={<LayoutDashboard className="h-4 w-4" />}
-          />
-        </div>
-      )}
     </div>
   );
 }
@@ -185,7 +172,6 @@ function BankCard({
 export default function EdcSummaryFields({
   amounts, onAmountChange, onBankZero,
   opMeVoucher, onOpMeVoucherChange,
-  indodanaPhoto, onIndodanaPhotoClick,
   disabled,
 }: {
   amounts: EdcAmountState;
@@ -194,8 +180,6 @@ export default function EdcSummaryFields({
   onBankZero: (bank: EdcBankCode) => void;
   opMeVoucher: string;
   onOpMeVoucherChange: (digits: string) => void;
-  indodanaPhoto: string | null;
-  onIndodanaPhotoClick: () => void;
   disabled?: boolean;
 }) {
   const summary = edcSummaryFromState(amounts, opMeVoucher);
@@ -213,8 +197,6 @@ export default function EdcSummaryFields({
             filled={s.filled}
             onChange={(method, digits) => onAmountChange(bank.code, method, digits)}
             onZero={() => onBankZero(bank.code)}
-            indodanaPhoto={indodanaPhoto}
-            onPhotoClick={onIndodanaPhotoClick}
             disabled={disabled}
           />
         );

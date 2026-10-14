@@ -1,7 +1,7 @@
 // lib/ops-mobile.ts
 //
-// Ops on a phone. Four pages are built for it and sit in the bottom tab bar —
-// Dashboard, Issues, Petty Cash, Hasil Visit; every other Ops page still opens, under a
+// Ops on a phone. Dashboard, Issues, Petty Cash, and Visit Toko sit in the
+// bottom tab bar. Hasil Visit is also phone-ready; other Ops pages open under a
 // banner that stays put: "Buka di desktop untuk pengalaman lebih baik".
 // Shell: app/ops/OpsShell.tsx (components/ops/layout/OpsMobile*.tsx).
 
@@ -13,6 +13,7 @@ const MOBILE_READY: { href: string; exact?: boolean }[] = [
   { href: '/ops/issues' },
   { href: '/ops/petty-cash' },
   { href: '/ops/impact-visits/results' },
+  { href: '/ops/store-visits' },
 ];
 
 export function isOpsMobileReady(pathname: string): boolean {

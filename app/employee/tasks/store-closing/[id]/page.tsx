@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
-  Check, CloudOff, Save, Clock, Lock, Receipt,
+  Check, CloudOff, Save, Clock, Lock, Receipt, LayoutDashboard,
   AlertTriangle, CheckCircle2, ChevronDown, StickyNote,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -578,8 +578,6 @@ export default function StoreClosingDetailPage() {
                               onBankZero={handleEdcBankZero}
                               opMeVoucher={opMeVoucher}
                               onOpMeVoucherChange={handleOpMeVoucher}
-                              indodanaPhoto={indodanaPhoto}
-                              onIndodanaPhotoClick={() => setIndodanaModalOpen(true)}
                               disabled={dis}
                             />
                           </>
@@ -632,6 +630,14 @@ export default function StoreClosingDetailPage() {
                           onClick={() => setStorefrontLockedModalOpen(true)}
                           disabled={dis}
                           icon={<Lock className="h-4 w-4" />}
+                        />
+                        <PhotoRow
+                          title={INDODANA_PHOTO_LABEL}
+                          hint="Opsional — foto / screenshot dashboard Indodana hari ini"
+                          photo={indodanaPhoto}
+                          onClick={() => setIndodanaModalOpen(true)}
+                          disabled={dis}
+                          icon={<LayoutDashboard className="h-4 w-4" />}
                         />
                       </ListGroup>
                     </Section>

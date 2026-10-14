@@ -116,6 +116,7 @@ const NAV: NavSection[] = [
     section: 'Configuration',
     items: [
       { href: '/it/task-management', label: 'Task Management', icon: ClipboardCheck },
+      { href: '/it/store-visits', label: 'Pengaturan Visit', icon: MapPinned },
       { href: '/it/shift-tasks', label: 'Shift & Tasks', icon: Layers },
       { href: '/it/bc-credentials', label: 'BC Credentials', icon: KeyRound },
       { href: '/it/target-allocation', label: 'Performance Target Defaults', icon: Percent },

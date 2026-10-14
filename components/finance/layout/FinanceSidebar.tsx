@@ -20,7 +20,8 @@
 //                 ▸ Report      /finance/uang-modal/report   (monthly fill rate per store, Excel)
 //
 //   Operations
-//     Store Closing             /finance/store-closing       (EDC per bank × method, Indodana photo, Z-Report & EDC photo, statement posted / on hold)
+//     Store Closing ▸ Review    /finance/store-closing       (EDC per bank × method, Indodana photo, Z-Report & EDC photo, statement posted / on hold)
+//                   ▸ Report    /finance/store-closing/report (daily money per store: cash from Setoran + card from the closing, Excel)
 //     Sales Return              /finance/sales-returns       (receipt number + photos the stores filed, by store / period)
 //
 //   Issues
@@ -123,7 +124,14 @@ const NAV: NavSection[] = [
   {
     section: 'Operations',
     items: [
-      { href: '/finance/store-closing', label: 'Store Closing', icon: Store },
+      {
+        label: 'Store Closing',
+        icon: Store,
+        children: [
+          { href: '/finance/store-closing', label: 'Review', exact: true },
+          { href: '/finance/store-closing/report', label: 'Report' },
+        ],
+      },
       { href: '/finance/sales-returns', label: 'Sales Return', icon: ReceiptText },
     ],
   },
