@@ -16,7 +16,7 @@ export function StatTile({ label, value, tone = 'slate', hint }: { label: string
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-3 sm:p-4">
       <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">{label}</p>
-      <p className={cn('mt-1 text-2xl font-bold tabular-nums sm:text-3xl', tone === 'amber' ? 'text-amber-600' : tone === 'emerald' ? 'text-emerald-600' : tone === 'indigo' ? 'text-indigo-600' : 'text-slate-900')}>{value}</p>
+      <p className={cn('mt-1 text-2xl font-bold tabular-nums sm:text-3xl', tone === 'amber' ? 'text-amber-600' : tone === 'emerald' ? 'text-emerald-600' : tone === 'indigo' ? 'text-indigo-600' : tone === 'rose' ? 'text-rose-600' : 'text-slate-900')}>{value}</p>
       {hint && <p className="mt-0.5 truncate text-xs text-slate-500">{hint}</p>}
     </div>
   );

@@ -1,4 +1,6 @@
 'use client';
+
+import PanelPageHeader from '@/components/shared/PanelPageHeader';
 // app/it/page.tsx — IT dashboard landing page.
 
 import { useEffect, useState, useCallback } from 'react';
@@ -103,15 +105,13 @@ export default function ItDashboardPage() {
 
   return (
     <div className="min-h-full bg-slate-50">
-      <div className="border-b border-slate-200 bg-white px-6 py-5 lg:px-8">
-        <div className="mx-auto max-w-7xl">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-cyan-600">IT</p>
-          <h1 className="text-xl font-bold text-slate-900">Dashboard</h1>
-          <p className="mt-0.5 text-xs text-slate-400">Super-admin — full access across every role.</p>
-        </div>
-      </div>
+      <PanelPageHeader
+        scope="IT"
+        title="Dashboard"
+        subtitle="Super-admin — full access across every role."
+      />
 
-      <div className="mx-auto max-w-7xl space-y-8 p-6 lg:p-8">
+      <div className="space-y-8 p-6 lg:p-8">
         <section>
           <p className="mb-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">
             IT issue queue {loading ? '' : `· ${issues.length} total`}

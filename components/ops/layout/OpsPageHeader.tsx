@@ -2,8 +2,8 @@
 // components/ops/layout/OpsPageHeader.tsx
 //
 // Reusable page header for Ops pages.
-// Use it inside app/ops/* pages. The shared app/ops/layout.tsx already renders
-// OpsNavbar above this header, so this header only owns the page title/actions.
+// All panel shells project the live title/actions into their shared top navbar.
+// The standalone layout remains available outside a panel shell.
 
 import { useMemo, useState, type ElementType, type ReactNode } from 'react';
 import {
@@ -18,6 +18,7 @@ import {
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Calendar } from '@/components/ui/calendar';
+import PanelPageHeader, { usePanelPageHeader } from '@/components/shared/PanelPageHeader';
 import {
   Popover,
   PopoverContent,
@@ -52,6 +53,7 @@ interface OpsPageHeaderProps {
   tabs?: ReactNode;
   className?: string;
   contentClassName?: string;
+  display?: 'all' | 'desktop' | 'mobile';
 }
 
 // ─── Date helpers ─────────────────────────────────────────────────────────────
@@ -226,10 +228,12 @@ function RangeNavigator({
   period,
   date,
   setDate,
+  compact = false,
 }: {
   period: Period;
   date: string;
   setDate: (dateKey: string) => void;
+  compact?: boolean;
 }) {
   const [calOpen, setCalOpen] = useState(false);
   const cur = fromKey(date);
@@ -237,9 +241,9 @@ function RangeNavigator({
   const label = useMemo(() => {
     if (period === 'daily') {
       return cur.toLocaleDateString('id-ID', {
-        weekday: 'long',
+        weekday: compact ? undefined : 'long',
         day: '2-digit',
-        month: 'long',
+        month: compact ? 'short' : 'long',
         year: 'numeric',
       });
     }
@@ -261,7 +265,7 @@ function RangeNavigator({
     }
 
     return fmtMonthLabel(cur);
-  }, [period, cur]);
+  }, [period, cur, compact]);
 
   const goPrev = () => {
     if (period === 'daily') setDate(toKey(addDays(cur, -1)));
@@ -342,7 +346,7 @@ function RangeNavigator({
         <button
           type="button"
           onClick={goToday}
-          className="whitespace-nowrap rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-500 transition hover:bg-slate-200"
+          className={cn('whitespace-nowrap rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-slate-500 transition hover:bg-slate-200', compact && 'hidden @xl:block')}
         >
           {todayLabel}
         </button>
@@ -373,8 +377,10 @@ export function OpsPageHeader({
   tabs,
   className,
   contentClassName,
+  display = 'all',
 }: OpsPageHeaderProps) {
   const [internalDate, setInternalDate] = useState(todayKey());
+  const panelHeader = usePanelPageHeader();
 
   const hasPeriod = !!periodProps;
   const period: Period = periodProps?.period ?? 'daily';
@@ -384,6 +390,21 @@ export function OpsPageHeader({
     if (periodProps?.onDateChange) periodProps.onDateChange(dateKey);
     else setInternalDate(dateKey);
   };
+
+  if (panelHeader) {
+    return (
+      <PanelPageHeader scope={scope} title={title} subtitle={subtitle} tabs={tabs} display={display} wideActions={hasPeriod} actions={(hasPeriod || onRefresh || actions) ? (
+        <>
+          {hasPeriod && periodProps?.onPeriodChange && <PeriodTabs value={period} onChange={periodProps.onPeriodChange} periods={periodProps.periods} />}
+          {hasPeriod && <RangeNavigator period={period} date={date} setDate={handleDateChange} compact />}
+          {onRefresh && <Button type="button" variant="outline" size="sm" onClick={onRefresh} disabled={refreshing} className="h-10 gap-2 rounded-lg text-xs font-semibold">
+            <RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} />Muat ulang
+          </Button>}
+          {actions}
+        </>
+      ) : undefined} />
+    );
+  }
 
   return (
     <div className={cn('sticky top-0 z-10 border-b border-slate-200 bg-white/90 backdrop-blur', className)}>

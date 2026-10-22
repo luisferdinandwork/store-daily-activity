@@ -156,7 +156,7 @@ export default function FeatureSwitchesPage() {
         refreshing={loading}
       />
 
-      <div className="mx-auto max-w-3xl space-y-3 px-4 py-5 sm:px-6 lg:px-8">
+      <div className="space-y-3 px-4 py-5 sm:px-6 lg:px-8">
         <p className="text-xs text-slate-500">
           Turn features on or off for everyone. A change takes effect right away.
         </p>

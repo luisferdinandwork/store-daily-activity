@@ -1,5 +1,7 @@
 'use client';
 
+import PanelPageHeader from '@/components/shared/PanelPageHeader';
+
 // app/ops/impact-visits/[id]/page.tsx — fill/view an Impact Visit.
 //
 // Three sections (Checklist / Cash Money / VM Checklist) in a tab strip.
@@ -710,25 +712,21 @@ export default function ImpactVisitDetailPage() {
   return (
     <div ref={rootRef} className="min-h-full bg-slate-50 pb-16">
       {/*
-        Everything ops needs while filling this out — identity/status, the
-        period fields, the section tabs, and the running score — lives in one
-        floating panel so it's always in view while scrolling a long
-        checklist. z-10 keeps it *below* OpsNavbar (z-20 in app/ops/layout),
+        Identity and visit status live in the shared top bar. Form fields,
+        section tabs and the running score stay in this compact toolbar
+        while scrolling the checklist. z-10 keeps it *below* OpsNavbar (z-20 in app/ops/layout),
         which is what actually contains the notification bell's dropdown —
         going any higher here would let this panel paint over that dropdown.
       */}
-      <div ref={setHeaderEl} className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 backdrop-blur">
-        <div className={cn('mx-auto px-4 py-2.5', docked ? 'max-w-[1320px]' : 'max-w-4xl')}>
-          <div className="flex items-center gap-3">
-            <button onClick={() => router.push('/ops/impact-visits')} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200">
+      <PanelPageHeader
+        scope="OPS · Impact Visit"
+        title={visit.store.name}
+        subtitle={<>{visit.store.storeNo} {visit.areaName && `· ${visit.areaName}`} · {new Date(visit.visitDate).toLocaleDateString('id-ID')}</>}
+        actions={
+          <>
+            <button type="button" aria-label="Kembali ke daftar Impact Visit" onClick={() => router.push('/ops/impact-visits')} className="flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100">
               <ArrowLeft className="h-4 w-4" />
             </button>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-bold text-slate-900">{visit.store.name}</p>
-              <p className="text-[11px] text-slate-400">
-                {visit.store.storeNo} {visit.areaName && `· ${visit.areaName}`} · {new Date(visit.visitDate).toLocaleDateString('id-ID')}
-              </p>
-            </div>
             <span className={cn(
               'shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold',
               visit.status === 'submitted' ? 'bg-indigo-50 text-indigo-700' : 'bg-amber-50 text-amber-700',
@@ -751,26 +749,23 @@ export default function ImpactVisitDetailPage() {
                 aria-pressed={docked}
                 title={`${history.length} visit sebelumnya di toko ini`}
                 className={cn(
-                  'flex h-8 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-bold transition-colors',
-                  docked
-                    ? 'border-indigo-600 bg-indigo-600 text-white hover:bg-indigo-700'
-                    : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50',
+                  'flex h-10 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-bold transition-colors',
+                  docked ? 'border-indigo-600 bg-indigo-600 text-white hover:bg-indigo-700' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50',
                 )}
               >
-                <History className="h-3.5 w-3.5" />
-                Riwayat
+                <History className="h-3.5 w-3.5" />Riwayat
                 {historyFixCount > 0 && (
-                  <span className={cn(
-                    'rounded-full px-1.5 text-[10px] tabular-nums',
-                    docked ? 'bg-white/20 text-white' : 'bg-rose-100 text-rose-700',
-                  )}>
+                  <span className={cn('rounded-full px-1.5 text-[10px] tabular-nums', docked ? 'bg-white/20 text-white' : 'bg-rose-100 text-rose-700')}>
                     {historyFixCount}
                   </span>
                 )}
               </button>
             )}
-          </div>
-
+          </>
+        }
+      />
+      <div ref={setHeaderEl} className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 backdrop-blur">
+        <div className="px-4 py-2.5 lg:px-6">
           {/* Target / Estimasi Achievement — compact inline fields */}
           <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">
             <label className="flex items-center gap-1.5">
@@ -851,7 +846,7 @@ export default function ImpactVisitDetailPage() {
         </div>
       </div>
 
-      <div className={cn('mx-auto flex items-start gap-6', docked ? 'max-w-[1320px] px-4' : 'max-w-4xl')}>
+      <div className={cn('flex items-start gap-6', docked && 'px-4 lg:px-6')}>
         <div className={cn('min-w-0 flex-1 space-y-4', docked ? 'py-4' : 'p-4')}>
           {actionError && (
             <div className="flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">

@@ -18,6 +18,7 @@ import { AttendanceCountsLine } from '@/components/ops/AttendanceStatus';
 import { EMPTY_COUNTS, showedUp } from '@/lib/attendance-health';
 import { RATE_WORD, rateTone, storesBehind, type DashboardData } from '@/lib/ops-dashboard';
 import { MobileSectionTitle, Ring } from './MobileKit';
+import TrendChart from '@/components/ops/dashboard/TrendChart';
 
 const TONE_HEX = { emerald: '#10b981', amber: '#f59e0b', rose: '#e11d48' } as const;
 const TONE_TEXT = { emerald: 'text-emerald-600', amber: 'text-amber-600', rose: 'text-rose-600' } as const;
@@ -234,6 +235,11 @@ export default function DashboardMobile({
           </div>
         </div>
       </div>
+
+      {/* ── Trend ─────────────────────────────────────────────────────────── */}
+      <section className="px-4 pt-6">
+        <TrendChart className="p-4" />
+      </section>
 
       {/* ── Needs attention ──────────────────────────────────────────────── */}
       <section className="px-4 pt-6">

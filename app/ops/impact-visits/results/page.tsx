@@ -106,7 +106,7 @@ export default function ImpactResultsPage() {
         onRefresh={() => setRevision((r) => r + 1)}
         refreshing={loading}
       />
-      <div className="relative z-0 mx-auto max-w-7xl space-y-5 p-4 lg:p-6 @container">
+      <div className="relative z-0 space-y-5 p-4 lg:p-6 @container">
         <div className="flex items-start gap-3 rounded-2xl border border-indigo-100 bg-indigo-50 p-4">
           <CalendarCheck className="mt-0.5 h-5 w-5 shrink-0 text-indigo-600" />
           <div>

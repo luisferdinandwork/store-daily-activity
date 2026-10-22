@@ -110,6 +110,18 @@ const IMPACT_VISIT_ITEM: NavItem = {
   ],
 };
 
+// Visit Toko: the visit list (fill a visit), and the report of which stores
+// were / weren't visited in their current cycle and what each Ops did.
+const STORE_VISIT_ITEM: NavItem = {
+  href: '/ops/store-visits',
+  label: 'Visit Toko',
+  icon: MapPinned,
+  children: [
+    { href: '/ops/store-visits', label: 'Visits' },
+    { href: '/ops/store-visits/report', label: 'Report' },
+  ],
+};
+
 // Petty Cash is two pages: spending requests and top-up (refill) requests.
 const PETTY_CASH_ITEM: NavItem = {
   href: '/ops/petty-cash',
@@ -142,7 +154,7 @@ const NAV: NavSection[] = [
     section: 'Operations',
     items: [
       { href: '/ops/issues',               label: 'Issues',               icon: AlertTriangle },
-      { href: '/ops/store-visits', label: 'Visit Toko', icon: MapPinned },
+      STORE_VISIT_ITEM,
       IMPACT_VISIT_ITEM,
       PETTY_CASH_ITEM,
       { href: '/ops/sales-returns',          label: 'Sales Return',         icon: ReceiptText },
@@ -370,7 +382,7 @@ export default function OpsSidebar({ storeName = 'Ops', collapsed = false, drawe
                       : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
                   );
 
-                  // ── Accordion group (Impact Visit ▸ Visits / Monthly Report, Petty Cash ▸ Requests / Refills) ──
+                  // ── Accordion group (Visit Toko ▸ Visits / Report, Impact Visit ▸ Visits / Monthly Report, Petty Cash ▸ Requests / Refills) ──
                   if (children) {
                     // The icon-only rail has no room for a sub-menu: the icon goes
                     // straight to the group's first page.

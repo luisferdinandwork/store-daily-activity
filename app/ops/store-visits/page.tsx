@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { ChevronRight, MapPinOff, CheckCircle2, AlertCircle, History } from 'lucide-react';
+import { ChevronRight, MapPinOff, CheckCircle2, AlertCircle, BarChart3, History } from 'lucide-react';
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
 import { OpsListSkeleton } from '@/components/ops/layout/OpsList';
 import { OpsSearchInput, OpsFilterSelect, OpsChipTabs } from '@/components/ops/layout/OpsToolbar';
@@ -48,7 +48,7 @@ export default function StoreVisitsPage() {
   return (
     <div className="min-h-full bg-slate-50">
       <OpsPageHeader title="Visit Toko" scope="OPS · Kunjungan Area" subtitle="Checklist, foto toko, dan geotag dalam satu kunjungan." onRefresh={load} refreshing={loading} className="max-md:[&_h1]:text-xl" />
-      <div className="mx-auto max-w-5xl space-y-4 p-4 pb-8 sm:space-y-5 sm:p-6">
+      <div className="space-y-4 p-4 pb-8 sm:space-y-5 sm:p-6">
         {!error && (
           <section aria-label="Ringkasan visit" className="space-y-3">
             <div className="rounded-2xl bg-gradient-to-br from-indigo-600 to-indigo-700 p-4 text-white shadow-sm sm:p-5">
@@ -61,7 +61,7 @@ export default function StoreVisitsPage() {
                   <p className="pb-1 text-right text-sm font-semibold text-indigo-50">{counts.due ? `${counts.due} toko perlu dikunjungi` : 'Semua target terpenuhi'}</p>
                 </div>
                 <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/20"><div className="h-full rounded-full bg-white transition-all" style={{ width: `${counts.withPolicy ? Math.round((counts.done / counts.withPolicy) * 100) : 0}%` }} /></div>
-                <p className="mt-3 text-xs leading-5 text-indigo-100">Dihitung dari jumlah hari visit berbeda dalam interval terakhir (WIB). Beberapa visit di hari yang sama dihitung sekali.</p>
+                <p className="mt-3 text-xs leading-5 text-indigo-100">Periode visit berjalan berurutan (7 hari = Senin–Minggu); kunjungi toko kapan saja sebelum periode berakhir. Beberapa visit di hari yang sama dihitung sekali.</p>
               </>}
             </div>
             <div className="grid grid-cols-3 gap-2 sm:gap-3">
@@ -103,6 +103,9 @@ export default function StoreVisitsPage() {
           </ul>
         )}
 
+        <Link href="/ops/store-visits/report" className="flex min-h-11 items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-indigo-700 hover:bg-slate-50">
+          <BarChart3 className="h-4 w-4" />Lihat report visit<ChevronRight className="ml-auto h-4 w-4 text-slate-300" />
+        </Link>
         <Link href="/ops/impact-visits/results" className="flex min-h-11 items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-indigo-700 hover:bg-slate-50">
           <History className="h-4 w-4" />Lihat hasil Impact Visit<ChevronRight className="ml-auto h-4 w-4 text-slate-300" />
         </Link>

@@ -1,32 +1,22 @@
 'use client';
-// components/pic/layout/PicShell.tsx
-//
-// Wires PicSidebar ↔ PicNavbar via shared `collapsed` state.
-// Mirrors components/ops/layout's OpsLayout pattern.
 
-import { ReactNode, useState } from 'react';
+import type { ReactNode } from 'react';
 import PicSidebar from './PicSidebar';
-import PicNavbar from './PicNavbar';
+import PanelShell from '@/components/shared/PanelShell';
 import HeaderProfileButton from '@/components/shared/HeaderProfileButton';
 import RoleSwitchBanner from '@/components/shared/RoleSwitchBanner';
 import PasswordExpiryBanner from '@/components/shared/PasswordExpiryBanner';
 
 export default function PicShell({ children }: { children: ReactNode }) {
-  const [collapsed, setCollapsed] = useState(false);
-
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
-      <PicSidebar collapsed={collapsed} />
-      <div className="flex flex-1 flex-col overflow-hidden">
-        <RoleSwitchBanner />
-        <PasswordExpiryBanner />
-        <PicNavbar
-          collapsed={collapsed}
-          onToggle={() => setCollapsed((v) => !v)}
-          right={<HeaderProfileButton />}
-        />
-        <main className="flex-1 overflow-y-auto">{children}</main>
-      </div>
-    </div>
+    <PanelShell
+      name="PIC"
+      tone="indigo"
+      sidebar={(collapsed) => <PicSidebar collapsed={collapsed} />}
+      banners={<><RoleSwitchBanner /><PasswordExpiryBanner /></>}
+      right={<HeaderProfileButton />}
+    >
+      {children}
+    </PanelShell>
   );
 }

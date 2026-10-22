@@ -1,4 +1,6 @@
 'use client';
+
+import PanelPageHeader from '@/components/shared/PanelPageHeader';
 // app/it/setoran-correction/page.tsx — IT only.
 //
 // "Koreksi Setoran": pick a store and see every day — submitted, draft, or nothing
@@ -706,15 +708,11 @@ export default function ItSetoranCorrectionPage() {
 
   return (
     <div className="min-h-full bg-slate-50">
-      <div className="border-b border-slate-200 bg-white px-6 py-5 lg:px-8">
-        <div className="mx-auto flex max-w-5xl items-center justify-between">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-cyan-600">IT</p>
-            <h1 className="text-xl font-bold text-slate-900">Koreksi Setoran</h1>
-            <p className="mt-0.5 text-xs text-slate-400">
-              Perbaiki nominal satu hari, atau isi hari yang belum ada setorannya — sisa hari-hari berikutnya dihitung ulang otomatis.
-            </p>
-          </div>
+      <PanelPageHeader
+        scope="IT"
+        title="Koreksi Setoran"
+        subtitle="Perbaiki nominal satu hari, atau isi hari yang belum ada setorannya — sisa hari-hari berikutnya dihitung ulang otomatis."
+        actions={
           <Link
             href="/it"
             className="flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-600 hover:bg-slate-50"
@@ -722,10 +720,10 @@ export default function ItSetoranCorrectionPage() {
             <ArrowLeft className="h-4 w-4" />
             Dashboard
           </Link>
-        </div>
-      </div>
+        }
+      />
 
-      <div className="mx-auto max-w-5xl space-y-4 px-4 py-5 sm:px-6 lg:px-8">
+      <div className="space-y-4 px-4 py-5 sm:px-6 lg:px-8">
         <div className="space-y-1.5">
           <span className="block text-xs font-bold text-slate-600">Toko</span>
           <StoreCombobox stores={stores} value={storeId} loading={loadingStores} onChange={pickStore} />

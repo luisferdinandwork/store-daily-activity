@@ -707,7 +707,7 @@ export default function OpsAttendancePage() {
           }
         />
 
-        <div className="mx-auto max-w-7xl p-6 lg:p-8">
+        <div className="p-6 lg:p-8">
           <StoreAttendanceDetail storeId={String(detailStore)} date={jakartaDayStart(selectedKey)} />
         </div>
       </div>
@@ -735,7 +735,7 @@ export default function OpsAttendancePage() {
         }}
         onRefresh={load}
         refreshing={loading}
-        contentClassName="max-w-7xl"
+        contentClassName="w-full"
         actions={
           <>
             <StoreCombobox
@@ -759,7 +759,7 @@ export default function OpsAttendancePage() {
         }
       />
 
-      <div className="mx-auto max-w-7xl space-y-4 p-6 lg:p-8">
+      <div className="space-y-4 p-6 lg:p-8">
         {monthTotals.total > 0 && <SummaryBar totals={monthTotals} />}
 
         {!loading && data && monthTotals.total === 0 && (

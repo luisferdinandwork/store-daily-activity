@@ -245,7 +245,7 @@ export default function ImpactVisitsPage() {
         contentClassName="w-full"
       />
 
-      <div className="mx-auto max-w-5xl space-y-6 p-6 lg:p-8">
+      <div className="space-y-6 p-6 lg:p-8">
         {/* New visit */}
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <p className="mb-3 text-sm font-bold text-slate-800">Start a new visit</p>

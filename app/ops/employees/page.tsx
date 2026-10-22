@@ -186,7 +186,7 @@ export default function OpsEmployeesPage() {
         contentClassName="w-full"
       />
 
-      <div className="mx-auto max-w-[1400px] space-y-4 p-6 lg:p-8">
+      <div className="space-y-4 p-6 lg:p-8">
         {/* ── Filter bar ── */}
         <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
           <div className="relative min-w-[220px] flex-1">

@@ -1,19 +1,23 @@
-import { addDaysKey, jakartaDateKey, jakartaTodayKey } from '@/lib/day-bucket';
+import { addDaysKey, jakartaTodayKey } from '@/lib/day-bucket';
+import { cycleContaining, distinctVisitDays } from './cycles';
 import type { VisitPolicy, VisitTask } from './types';
 
-// Count distinct WIB visit days. Repeated submissions on one day cannot meet
-// a multi-visit obligation. Only completed, geofence-validated visits are fed in.
+// Where a store stands in its CURRENT visit cycle (see cycles.ts: back-to-back
+// cycles, e.g. Monday–Sunday for 7 days). Counts distinct WIB visit days, so
+// repeated submissions on one day cannot meet a multi-visit obligation. Only
+// completed, geofence-validated visits are fed in.
+// dueDate: the cycle's last day while visits are still owed, otherwise the day
+// the next cycle starts.
 export function visitProgress(policy: VisitPolicy | null, visitDates: (Date | string)[], today = jakartaTodayKey()) {
-  const days = [...new Set(visitDates.map(jakartaDateKey).filter((d) => d && d <= today))].sort().reverse();
+  const days = distinctVisitDays(visitDates, today);
   if (!policy) return { completed: 0, remaining: 0, dueDate: null, lastVisit: days[0] ?? null };
-  const start = addDaysKey(today, 1 - policy.intervalDays);
-  const recent = days.filter((d) => d >= start);
-  const remaining = Math.max(0, policy.minimumVisits - recent.length);
-  const boundary = recent[policy.minimumVisits - 1];
+  const cycle = cycleContaining(today, policy.intervalDays);
+  const completed = days.filter((d) => d >= cycle.start && d <= cycle.end).length;
+  const remaining = Math.max(0, policy.minimumVisits - completed);
   return {
-    completed: recent.length,
+    completed,
     remaining,
-    dueDate: remaining > 0 ? today : addDaysKey(boundary, policy.intervalDays),
+    dueDate: remaining > 0 ? cycle.end : addDaysKey(cycle.end, 1),
     lastVisit: days[0] ?? null,
   };
 }

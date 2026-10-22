@@ -6,13 +6,13 @@
 
 import ChangePasswordCard from '@/components/shared/ChangePasswordCard';
 import ProfilePictureCard from '@/components/shared/ProfilePictureCard';
+import PanelPageHeader from '@/components/shared/PanelPageHeader';
 
 export default function PicSettingsPage() {
   return (
-    <div className="mx-auto max-w-3xl px-4 py-8 sm:px-6 lg:px-8">
-      <h1 className="text-2xl font-bold tracking-tight text-foreground">Profil &amp; Keamanan</h1>
-      <p className="mt-1 text-sm text-muted-foreground">Kelola foto profil dan kata sandi akun Anda.</p>
-      <div className="mt-6 space-y-6">
+    <div className="px-4 py-8 sm:px-6 lg:px-8">
+      <PanelPageHeader scope="PIC" title="Profil & Keamanan" subtitle="Kelola foto profil dan kata sandi akun Anda." />
+      <div className="grid items-start gap-6 xl:grid-cols-2">
         <ProfilePictureCard />
         <ChangePasswordCard />
       </div>

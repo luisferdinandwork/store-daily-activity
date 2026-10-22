@@ -1,4 +1,6 @@
 'use client';
+
+import PanelPageHeader from '@/components/shared/PanelPageHeader';
 // app/it/target-allocation/page.tsx — IT-only editor for the default
 // PIC1/PIC2/SA1-5 × "Man Power" percentage grid (target_allocation_templates).
 // This is where the defaults Ops's monthly roster percentages come from
@@ -227,16 +229,11 @@ export default function TargetAllocationPage() {
 
   return (
     <div className="min-h-full bg-slate-50">
-      <div className="border-b border-slate-200 bg-white px-6 py-5 lg:px-8">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-4">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-cyan-600">IT · Settings</p>
-            <h1 className="text-xl font-bold text-slate-900">Performance Target Defaults</h1>
-            <p className="mt-0.5 text-xs text-slate-400">
-              Default PIC1/PIC2/SA split by store headcount (&quot;Man Power&quot;). Ops uses this as the
-              starting point for each store&apos;s monthly percentages.
-            </p>
-          </div>
+      <PanelPageHeader
+        scope="IT · Settings"
+        title="Performance Target Defaults"
+        subtitle="Default PIC1/PIC2/SA split by store headcount (&quot;Man Power&quot;). Ops uses this as the\n              starting point for each store&apos;s monthly percentages."
+        actions={
           <div className="flex gap-2">
             <Button variant="outline" onClick={addSaRow} className="gap-1.5">
               <Plus className="h-4 w-4" />
@@ -247,10 +244,10 @@ export default function TargetAllocationPage() {
               Headcount column
             </Button>
           </div>
-        </div>
-      </div>
+        }
+      />
 
-      <div className="mx-auto max-w-6xl space-y-4 p-6 lg:p-8">
+      <div className="space-y-4 p-6 lg:p-8">
         {loading ? (
           <div className="flex items-center justify-center py-20"><Loader2 className="h-8 w-8 animate-spin text-cyan-400" /></div>
         ) : headcounts.length === 0 ? (

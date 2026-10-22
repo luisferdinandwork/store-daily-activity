@@ -3,7 +3,7 @@
 //
 // The Ops panel on a phone (below `md`), wired up in app/ops/OpsShell.tsx:
 //
-//   OpsMobileTopBar   brand + bell + profile (the desktop sidebar/navbar hide)
+//   The shared PanelShell owns the top bar on both mobile and desktop.
 //   OpsDesktopHint    "Buka di desktop untuk pengalaman lebih baik" — a banner that
 //                     stays put on every page not built for phones
 //   OpsMobileTabBar   Dashboard · Issues · Petty Cash (with "waiting" badges) · Visit Toko ·
@@ -18,25 +18,8 @@ import { AlertTriangle, ClipboardCheck, LayoutDashboard, LayoutGrid, Monitor, Wa
 
 import { cn } from '@/lib/utils';
 import { OPS_DESKTOP_HINT, isOpsMobileReady } from '@/lib/ops-mobile';
-import EmployeeLogoMark from '@/components/employee/EmployeeLogoMark';
 import OpsSidebar from '@/components/ops/layout/OpsSidebar';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
-
-// ─── Top bar ─────────────────────────────────────────────────────────────────
-
-export function OpsMobileTopBar({ right }: { right?: ReactNode }) {
-  return (
-    <header className="flex h-14 shrink-0 items-center gap-2 border-b border-slate-200 bg-white px-3 md:hidden">
-      <Link href="/ops" aria-label="Ops Dashboard" className="flex items-center gap-2">
-        <EmployeeLogoMark variant="color" className="w-[84px]" />
-        <span className="rounded-md bg-indigo-50 px-1.5 py-0.5 text-[10px] font-black tracking-wider text-indigo-600">
-          OPS
-        </span>
-      </Link>
-      <div className="ml-auto flex items-center gap-1.5">{right}</div>
-    </header>
-  );
-}
 
 // ─── "Open on desktop" banner ────────────────────────────────────────────────
 

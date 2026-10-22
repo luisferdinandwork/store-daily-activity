@@ -1,4 +1,6 @@
 'use client';
+
+import PanelPageHeader from '@/components/shared/PanelPageHeader';
 // app/it/users/page.tsx — IT user management (create/edit/delete accounts, assign roles).
 //
 // The list sorts by any column header and filters by role / employee type /
@@ -981,15 +983,13 @@ function ItUsersContent() {
 
   return (
     <div className="min-h-full bg-slate-50">
-      <div className="border-b border-slate-200 bg-white px-6 py-5 lg:px-8">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-cyan-600">IT</p>
-            <h1 className="text-xl font-bold text-slate-900">Users</h1>
-            <p className="mt-0.5 text-xs text-slate-400">
+      <PanelPageHeader
+        scope="IT"
+        title="Users"
+        subtitle={<>
               {rows.length} account{rows.length !== 1 ? 's' : ''} · {filtered.length} shown
-            </p>
-          </div>
+            </>}
+        actions={
           <div className="flex flex-wrap items-center gap-2">
             <Button
               variant="outline"
@@ -1039,10 +1039,10 @@ function ItUsersContent() {
               Add User
             </Button>
           </div>
-        </div>
-      </div>
+        }
+      />
 
-      <div className="mx-auto max-w-7xl space-y-4 p-6 lg:p-8">
+      <div className="space-y-4 p-6 lg:p-8">
         {/* One PIC 1 per store */}
         {conflictList.length > 0 && (
           <div className="rounded-2xl border border-rose-300 bg-rose-50 p-4 shadow-sm">

@@ -1,1478 +1,317 @@
 'use client';
 // app/ops/tasks/progress/page.tsx
-
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
-import {
-  AlertCircle,
-  AlertTriangle,
-  ArrowLeft,
-  ArrowRight,
-  ChevronDown,
-  ChevronRight,
-  ClipboardList,
-  History,
-  Loader2,
-  MapPin,
-  PanelLeftClose,
-  PanelLeftOpen,
-  Search,
-  Store,
-  User,
-} from 'lucide-react';
-import { cn } from '@/lib/utils';
-import OpsPageHeader, { type Period } from '@/components/ops/layout/OpsPageHeader';
-import { OpsList, OpsListRow, OpsListSkeleton } from '@/components/ops/layout/OpsList';
-import {
-  type FlatTask,
-  type TaskStatus,
-  type SerahTerimaBoardView,
-  TASK_LABELS,
-  TASK_ICONS,
-  fmtTime,
-  statusBadgeClass,
-  statusLabel,
-  edcSummaryOf,
-  TaskDetailView,
-  SerahTerimaPanel,
-} from './task-detail';
-import { EDC_BANKS } from '@/lib/store-closing-edc';
-
-// ─── Store/area list: minimize preference ─────────────────────────────────────
 //
-// Lets Ops hide the store & area list and give the whole width to one store's
-// tasks. Remembered per browser; read via useSyncExternalStore (localStorage is
-// external state) so the server-rendered pass never mismatches the client.
+// Task Progress — the Ops task board.
+//
+//   • Harian: one row per store, one column per task, a status square per cell
+//     (components/tasks/TaskBoard). The whole day on one screen: who is behind,
+//     on which task, and — on hover — who did what and when. A square opens the
+//     task; a store opens its day (store-day.tsx: tasks by shift, who did each).
+//   • Mingguan / Bulanan: one row per store, one column per day, the day's
+//     completion % per square (components/tasks/HeatGrid). A square opens that day.
+//
+// Stores furthest behind come first. Data: GET /api/ops/tasks/board (day) and
+// /api/ops/tasks/progress/range (week / month).
 
-const LIST_MINIMIZED_KEY = 'ops-task-progress:list-minimized';
-const listMinimizedListeners = new Set<() => void>();
+import { useMemo, useState } from 'react';
+import { AlertCircle } from 'lucide-react';
 
-function readListMinimized(): boolean {
-  try {
-    return window.localStorage.getItem(LIST_MINIMIZED_KEY) === '1';
-  } catch {
-    return false;
-  }
-}
+import { cn } from '@/lib/utils';
+import { useApi } from '@/lib/client/use-api';
+import { jakartaTodayKey } from '@/lib/day-bucket';
+import OpsPageHeader, { type Period } from '@/components/ops/layout/OpsPageHeader';
+import { OpsFilterSelect, OpsSearchInput } from '@/components/ops/layout/OpsToolbar';
+import TaskBoard, { boardRowSummary } from '@/components/tasks/TaskBoard';
+import HeatGrid, { PctLegend, type HeatRow } from '@/components/tasks/HeatGrid';
+import { CellLegend } from '@/components/tasks/TaskCell';
+import {
+  PROGRESS_TASKS,
+  isPastDay,
+  periodDays,
+  summariseStore,
+  type BoardResponse,
+  type BoardStore,
+} from '@/lib/task-progress';
+import StoreDaySheet, { type StoreDayTarget } from './store-day';
 
-function subscribeToListMinimized(listener: () => void) {
-  listMinimizedListeners.add(listener);
-  return () => { listMinimizedListeners.delete(listener); };
-}
-
-function useListMinimized() {
-  const minimized = useSyncExternalStore(subscribeToListMinimized, readListMinimized, () => false);
-  const setMinimized = useCallback((next: boolean) => {
-    try {
-      window.localStorage.setItem(LIST_MINIMIZED_KEY, next ? '1' : '0');
-    } catch {
-      // Non-critical — the list still toggles for this visit, it just won't be remembered.
-    }
-    for (const listener of listMinimizedListeners) listener();
-  }, []);
-  return [minimized, setMinimized] as const;
-}
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-type StoreSummary = {
-  notStarted: number;
-  inProgress: number;
-  completed: number;
-  pending: number;
-  verified: number;
-  rejected: number;
-  total: number;
-  completionRate: number;
-};
-
-type StoreRow = {
-  id: string;
-  name: string;
-  storeNo: string;
-  address: string;
-  areaId?: string | null;
-  areaName?: string | null;
-  summary: StoreSummary;
-};
-
-type OverviewResponse = {
-  success: boolean;
-  error?: string;
-  mode?: 'overview';
-  scope?: 'area' | 'all_areas';
-  date: string;
-  area: { id: string; name: string } | null;
-  summary: StoreSummary;
-  stores: StoreRow[];
-};
-
-type DetailResponse = {
-  success: boolean;
-  error?: string;
-  mode?: 'detail';
-  scope?: 'area' | 'all_areas';
-  date: string;
-  store: { id: string; name: string; storeNo: string; address: string; areaId?: string | null };
-  summary: StoreSummary;
-  tasks: FlatTask[];
-  serahTerima: SerahTerimaBoardView;
-};
-
-type RangeSummaryRow = {
-  storeId: string;
-  date: string;
-  notStarted: number;
-  inProgress: number;
-  completed: number;
-  pending: number;
-  verified?: number;
-  rejected?: number;
-  total: number;
-};
+type SortKey = 'attention' | 'name' | 'progress';
 
 type RangeResponse = {
   success: boolean;
   error?: string;
-  startDate: string;
-  endDate: string;
   stores: { id: string; name: string; storeNo: string; address: string; areaId: string | null; areaName: string | null }[];
-  summaries: RangeSummaryRow[];
+  summaries: { storeId: string; date: string; completed: number; total: number; pending: number }[];
 };
 
-type DayMatrixRow = {
-  date: string;
-  weekdayLabel: string;
-  dayLabel: string;
-  isToday: boolean;
-  aggregate: StoreSummary;
-};
-
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-const ID_WEEKDAY_SHORT = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function taskKey(t: Pick<FlatTask, 'type' | 'id'>): string {
-  return `${t.type}-${t.id}`;
-}
-
-function toKey(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-function fromKey(key: string): Date {
-  return new Date(`${key}T00:00:00`);
-}
-
-function todayKey(): string {
-  return toKey(new Date());
-}
-
-function addDays(d: Date, n: number): Date {
-  const r = new Date(d);
-  r.setDate(r.getDate() + n);
-  return r;
-}
-
-function isSameDay(a: Date, b: Date): boolean {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-}
-
-function startOfISOWeek(d: Date): Date {
-  const r = new Date(d);
-  const day = r.getDay();
-  r.setDate(r.getDate() + (day === 0 ? -6 : 1 - day));
-  r.setHours(0, 0, 0, 0);
-  return r;
-}
-
-function startOfMonth(d: Date): Date {
-  return new Date(d.getFullYear(), d.getMonth(), 1);
-}
-
-function endOfMonth(d: Date): Date {
-  return new Date(d.getFullYear(), d.getMonth() + 1, 0);
-}
+// Severity of a task cell when the board is sorted by that task.
+const COLUMN_RANK: Record<string, number> = { pending: 0, not_started: 1, partial: 2, in_progress: 3, completed: 4, none: 5 };
 
 function fmtDateLabel(date: string): string {
-  return new Date(`${date}T00:00:00`).toLocaleDateString('id-ID', {
-    weekday: 'long', day: '2-digit', month: 'long', year: 'numeric',
-  });
+  return new Date(`${date}T00:00:00`).toLocaleDateString('id-ID', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
 }
 
-function fmtMonthLabel(date: Date): string {
-  return date.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
+function rangeLabel(days: string[]): string {
+  const f = (k: string, withYear = false) =>
+    new Date(`${k}T00:00:00Z`).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', ...(withYear ? { year: 'numeric' } : {}), timeZone: 'UTC' });
+  return `${f(days[0])} – ${f(days[days.length - 1], true)}`;
 }
 
-function progressBarClass(rate: number): string {
-  if (rate === 0) return 'bg-amber-300';
-  if (rate >= 100) return 'bg-emerald-500';
-  return 'bg-indigo-500';
+function storeMatches(s: { name: string; storeNo: string; areaName: string | null }, area: string, query: string): boolean {
+  if (area !== 'all' && s.areaName !== area) return false;
+  const q = query.trim().toLowerCase();
+  return !q || `${s.name} ${s.storeNo} ${s.areaName ?? ''}`.toLowerCase().includes(q);
 }
 
-function progressTextClass(rate: number): string {
-  if (rate === 0) return 'text-amber-500';
-  if (rate >= 100) return 'text-emerald-600';
-  return 'text-indigo-600';
+/** Hold the last good response while a new day / period loads (no flash, no jump). */
+function useHeld<T extends { success: boolean }>(data: T | undefined): T | null {
+  const [held, setHeld] = useState<T | null>(null);
+  if (data?.success && data !== held) setHeld(data);
+  return data?.success ? data : held;
 }
-
-function progressRingColor(rate: number): string {
-  if (rate === 0) return '#fbbf24';
-  if (rate >= 100) return '#10b981';
-  return '#6366f1';
-}
-
-function emptySummary(): StoreSummary {
-  return { notStarted: 0, inProgress: 0, completed: 0, pending: 0, verified: 0, rejected: 0, total: 0, completionRate: 0 };
-}
-
-// ─── Shared atoms ─────────────────────────────────────────────────────────────
-
-function ProgressRing({ pct, size = 52, stroke = 5 }: { pct: number; size?: number; stroke?: number }) {
-  const r    = (size - stroke) / 2;
-  const c    = 2 * Math.PI * r;
-  const dash = (Math.min(100, Math.max(0, pct)) / 100) * c;
-  const color = progressRingColor(pct);
-  return (
-    <div className="relative shrink-0" style={{ width: size, height: size }}>
-      <svg width={size} height={size} className="-rotate-90">
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#e2e8f0" strokeWidth={stroke} />
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={stroke}
-          strokeDasharray={`${dash} ${c}`} strokeLinecap="round" className="transition-all duration-300" />
-      </svg>
-      <div className="absolute inset-0 flex items-center justify-center">
-        <span className="text-xs font-black tabular-nums" style={{ color }}>{pct}%</span>
-      </div>
-    </div>
-  );
-}
-
-function ProgressBar({ pct, className }: { pct: number; className?: string }) {
-  return (
-    <div className={cn('h-1.5 overflow-hidden rounded-full bg-slate-100', className)}>
-      <div className={cn('h-full rounded-full transition-all duration-500', progressBarClass(pct))} style={{ width: `${pct}%` }} />
-    </div>
-  );
-}
-
-function BackButton({ label, onClick }: { label: string; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="mb-3 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200"
-    >
-      <ArrowLeft className="h-3.5 w-3.5" />
-      {label}
-    </button>
-  );
-}
-
-// ─── TaskRow ──────────────────────────────────────────────────────────────────
-
-function TaskRow({ task, onSelect }: { task: FlatTask; onSelect: () => void }) {
-  const label    = TASK_LABELS[task.type] ?? task.type.replaceAll('_', ' ');
-  const status   = task.status ?? 'not_started';
-  const TaskIcon = TASK_ICONS[task.type] ?? ClipboardList;
-
-  // Cek Uang Modal: mark a completed float that's below the daily max or has
-  // denominations left at 0 (employees no longer have to fully stock it).
-  // Words match Finance Uang Modal Review ("Belum penuh") and the task detail.
-  const cekUangModalIncomplete = (() => {
-    if (task.type !== 'cek_uang_modal') return null;
-    if (status !== 'completed' && status !== 'verified') return null;
-    const e = task.extra;
-    const total = Number(e.totalAmount ?? 0);
-    if (total <= 0) return null;
-    const denomCount = Number(e.denominationCount ?? 0);
-    const filled = Number(e.filledDenominationCount ?? 0);
-    if (e.isPartial === true) return 'Belum penuh';
-    return denomCount > 0 && filled < denomCount ? 'Pecahan belum lengkap' : null;
-  })();
-
-  // Marketing Check submitted as "tidak ada marketing / promo baru".
-  const marketingSkipped =
-    task.type === 'marketing_check' &&
-    (status === 'completed' || status === 'verified') &&
-    task.extra.hasMarketingCheck === false;
-
-  // Store Closing: the EDC summary's money as far as the store has typed it —
-  // a running "x/5 bank" while the closing is open, the total once submitted.
-  const closingEdc =
-    task.type === 'store_closing' && !task.isPlaceholder ? edcSummaryOf(task.extra) : null;
-  const closingEdcLine = (() => {
-    if (!closingEdc?.hasData) return null;
-    const total = `Rp ${closingEdc.total.toLocaleString('id-ID')}`;
-    if (status === 'completed' || status === 'verified') return `EDC ${total}`;
-    const counted = EDC_BANKS.length - closingEdc.missingBanks.length;
-    return `Rekap EDC ${counted}/${EDC_BANKS.length} bank · ${total}`;
-  })();
-
-  const accentClass =
-    status === 'completed'   ? 'bg-emerald-500' :
-    status === 'in_progress' ? 'bg-indigo-500' :
-    status === 'pending'     ? 'bg-amber-400 animate-pulse' :
-    'bg-amber-300';
-
-  const iconBg =
-    status === 'completed'   ? 'bg-emerald-50 text-emerald-600' :
-    status === 'in_progress' ? 'bg-indigo-50 text-indigo-600' :
-    status === 'pending'     ? 'bg-amber-50 text-amber-600' :
-    'bg-amber-50 text-amber-500';
-
-  return (
-    <button type="button" onClick={onSelect}
-      className="relative flex w-full items-start gap-3 overflow-hidden rounded-xl border border-slate-100 bg-white px-4 py-3 text-left transition hover:bg-slate-50"
-    >
-      <div className={cn('absolute left-0 top-0 bottom-0 w-1 rounded-l-xl', accentClass)} />
-      <div className={cn('mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg pl-1', iconBg)}>
-        <TaskIcon className="h-4 w-4" strokeWidth={2} />
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-start justify-between gap-2">
-          <div>
-            <div className="flex flex-wrap items-center gap-1.5">
-              <p className="text-sm font-bold text-slate-900">{label}</p>
-              {task.parentTaskId != null && (
-                <span className="inline-flex items-center gap-0.5 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-indigo-600">
-                  <History className="h-2.5 w-2.5" /> Lanjutan
-                </span>
-              )}
-              {cekUangModalIncomplete && (
-                <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700">
-                  <AlertTriangle className="h-2.5 w-2.5" /> {cekUangModalIncomplete}
-                </span>
-              )}
-              {marketingSkipped && (
-                <span className="inline-flex items-center gap-0.5 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-slate-600">
-                  Tidak ada promo
-                </span>
-              )}
-            </div>
-            <p className="mt-0.5 text-[11px] text-slate-400">
-              {task.isPlaceholder ? 'Terjadwal' : 'PIC'}: {task.userName ?? task.userId}
-            </p>
-            {closingEdcLine && (
-              <p className="mt-0.5 text-[11px] font-semibold text-slate-600">{closingEdcLine}</p>
-            )}
-            {task.type === 'setoran' && task.extra.actualReceivedAmount != null && (
-              <p className="mt-0.5 text-[11px] font-semibold text-slate-600">
-                Diterima Rp {Number(task.extra.actualReceivedAmount).toLocaleString('id-ID')}
-              </p>
-            )}
-          </div>
-          <div className="flex shrink-0 flex-col items-end gap-1">
-            <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-bold', statusBadgeClass(status))}>
-              {statusLabel(status)}
-            </span>
-            {task.completedAt && (
-              <span className="text-[10px] text-slate-400">{fmtTime(task.completedAt)}</span>
-            )}
-          </div>
-        </div>
-      </div>
-      <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-slate-300" />
-    </button>
-  );
-}
-
-// ─── GroomingGroupCard ────────────────────────────────────────────────────────
-
-function GroomingGroupCard({ tasks, onSelectEmployee }: {
-  tasks: FlatTask[];
-  onSelectEmployee?: (taskKey: string) => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-
-  const totalEmployees = tasks.length;
-  const doneEmployees  = tasks.filter(t => t.status === 'completed').length;
-  const activeCount    = tasks.filter(t => t.status === 'in_progress').length;
-  const issueCount     = tasks.filter(t => t.status === 'pending').length;
-
-  const aggregateStatus: TaskStatus =
-    doneEmployees === totalEmployees ? 'completed' :
-    activeCount > 0 ? 'in_progress' :
-    issueCount > 0  ? 'pending' : 'not_started';
-
-  const accentClass =
-    aggregateStatus === 'completed'   ? 'bg-emerald-500' :
-    aggregateStatus === 'in_progress' ? 'bg-indigo-500' :
-    aggregateStatus === 'pending'     ? 'bg-amber-400 animate-pulse' :
-    'bg-amber-300';
-
-  const iconBg =
-    aggregateStatus === 'completed'   ? 'bg-emerald-50 text-emerald-600' :
-    aggregateStatus === 'in_progress' ? 'bg-indigo-50 text-indigo-600' :
-    aggregateStatus === 'pending'     ? 'bg-amber-50 text-amber-600' :
-    'bg-amber-50 text-amber-500';
-
-  return (
-    <div className="overflow-hidden rounded-xl border border-slate-100 bg-white">
-      <button type="button" onClick={() => setExpanded(v => !v)}
-        className="relative flex w-full items-start gap-3 px-4 py-3 text-left transition hover:bg-slate-50"
-      >
-        <div className={cn('absolute left-0 top-0 bottom-0 w-1 rounded-l-xl', accentClass)} />
-        <div className={cn('mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg pl-1', iconBg)}>
-          <User className="h-4 w-4" strokeWidth={2} />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-2">
-            <div>
-              <p className="text-sm font-bold text-slate-900">Grooming Karyawan</p>
-              <p className="mt-0.5 text-[11px] text-slate-400">
-                {doneEmployees}/{totalEmployees} karyawan selesai
-                <span className="ml-1.5 rounded-full bg-violet-50 px-1.5 py-0.5 text-[10px] font-bold text-violet-600">Personal</span>
-              </p>
-            </div>
-            <div className="flex shrink-0 flex-col items-end gap-1">
-              <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-bold', statusBadgeClass(aggregateStatus))}>
-                {statusLabel(aggregateStatus)}
-              </span>
-              <span className="text-[10px] text-slate-400">
-                {activeCount > 0 && <span className="text-indigo-500">{activeCount} aktif</span>}
-                {activeCount > 0 && issueCount > 0 && ' · '}
-                {issueCount > 0 && <span className="text-amber-600">{issueCount} pending</span>}
-              </span>
-            </div>
-          </div>
-          <ProgressBar pct={totalEmployees > 0 ? Math.round((doneEmployees / totalEmployees) * 100) : 0} className="mt-2" />
-        </div>
-        <ChevronDown className={cn('mt-1 h-4 w-4 shrink-0 text-slate-300 transition-transform', expanded && 'rotate-180')} />
-      </button>
-
-      {expanded && (
-        <div className="border-t border-slate-100 bg-slate-50/70 p-3">
-          <div className="space-y-2">
-            {tasks.map(task => {
-              const empStatus = task.status ?? 'not_started';
-              return (
-                <button key={task.id} type="button" onClick={() => onSelectEmployee?.(taskKey(task))}
-                  className="flex w-full items-center gap-3 overflow-hidden rounded-lg border border-slate-200 bg-white px-3 py-2 text-left transition hover:bg-slate-50"
-                >
-                  <div className={cn(
-                    'flex h-7 w-7 shrink-0 items-center justify-center rounded-md',
-                    empStatus === 'completed'   ? 'bg-emerald-50 text-emerald-600' :
-                    empStatus === 'in_progress' ? 'bg-indigo-50 text-indigo-600' :
-                    empStatus === 'pending'     ? 'bg-amber-50 text-amber-600' :
-                    'bg-amber-50 text-amber-500',
-                  )}>
-                    <User className="h-3.5 w-3.5" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-xs font-bold text-slate-900">{task.userName ?? task.userId}</p>
-                    {task.completedAt && (
-                      <p className="text-[10px] text-slate-400">Selesai {fmtTime(task.completedAt)}</p>
-                    )}
-                  </div>
-                  <span className={cn('shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-bold', statusBadgeClass(empStatus))}>
-                    {statusLabel(empStatus)}
-                  </span>
-                  <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-300" />
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── SummaryBreakdown ─────────────────────────────────────────────────────────
-
-function SummaryBreakdown({ summary }: { summary: StoreSummary }) {
-  const rows = [
-    { label: 'Selesai',     value: summary.completed,   cls: 'text-emerald-600' },
-    { label: 'Aktif',       value: summary.inProgress,  cls: 'text-indigo-600'  },
-    { label: 'Belum mulai', value: summary.notStarted,  cls: 'text-amber-500'   },
-    { label: 'Pending',     value: summary.pending,     cls: 'text-amber-600'   },
-  ];
-  return (
-    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-      {rows.map(row => (
-        <div key={row.label} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{row.label}</p>
-          <p className={cn('mt-0.5 text-2xl font-black', row.cls)}>{row.value}</p>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ─── StoreProgressCard ────────────────────────────────────────────────────────
-
-function StoreProgressCard({ store, active, onOpen, rangeSummary, loadingRange }: {
-  store: StoreRow;
-  active: boolean;
-  onOpen: () => void;
-  rangeSummary?: StoreSummary;
-  loadingRange?: boolean;
-}) {
-  const summary = rangeSummary ?? store.summary;
-  const rate    = summary.completionRate;
-
-  return (
-    <button type="button" onClick={onOpen}
-      className={cn('flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-slate-50', active && 'bg-indigo-50')}
-    >
-      <div className={cn(
-        'flex h-9 w-9 shrink-0 items-center justify-center rounded-xl',
-        active ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500',
-      )}>
-        <Store className="h-4 w-4" />
-      </div>
-
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center justify-between gap-2">
-          <p className={cn('truncate text-sm font-bold', active ? 'text-indigo-900' : 'text-slate-900')}>
-            {store.name}
-          </p>
-          {loadingRange ? (
-            <div className="h-3 w-8 animate-pulse rounded bg-slate-100" />
-          ) : (
-            <span className={cn('shrink-0 text-xs font-black tabular-nums', progressTextClass(rate))}>{rate}%</span>
-          )}
-        </div>
-        <p className={cn('truncate font-mono text-[10px] font-semibold', active ? 'text-indigo-500' : 'text-slate-400')}>{store.storeNo}</p>
-
-        {loadingRange ? (
-          <div className="mt-1.5 h-1.5 w-full animate-pulse rounded-full bg-slate-100" />
-        ) : rangeSummary ? (
-          <>
-            <ProgressBar pct={rate} className="mt-1.5" />
-            <p className="mt-1 text-[10px] text-slate-400">
-              {rangeSummary.completed}/{rangeSummary.total} task selesai
-              {rangeSummary.inProgress > 0 && <span className="ml-1.5 text-indigo-500">{rangeSummary.inProgress} aktif</span>}
-              {rangeSummary.pending > 0 && <span className="ml-1.5 text-amber-500">{rangeSummary.pending} pending</span>}
-            </p>
-          </>
-        ) : null}
-      </div>
-
-      <ChevronRight className={cn('h-4 w-4 shrink-0', active ? 'text-indigo-500' : 'text-slate-300')} />
-    </button>
-  );
-}
-
-// ─── AreaStoreGroup ───────────────────────────────────────────────────────────
-
-function AreaStoreGroup({
-  areaName, areaId, stores, selectedStoreId, selectedAreaId,
-  isHo, initiallyOpen, onToggleStore, onSelectArea,
-  rangeOverviewMap, loadingRange,
-}: {
-  areaName: string;
-  areaId: string;
-  stores: StoreRow[];
-  selectedStoreId: string | null;
-  selectedAreaId: string | null;
-  isHo: boolean;
-  initiallyOpen: boolean;
-  onToggleStore: (storeId: string) => void;
-  onSelectArea?: (areaId: string) => void;
-  rangeOverviewMap?: Record<string, StoreSummary>;
-  loadingRange?: boolean;
-}) {
-  const [open, setOpen] = useState(initiallyOpen);
-
-  const areaAggregate = useMemo(() => {
-    const sum = stores.reduce(
-      (acc, s) => {
-        const src = rangeOverviewMap?.[s.id] ?? s.summary;
-        acc.completed   += src.completed;
-        acc.total       += src.total;
-        acc.notStarted  += src.notStarted;
-        acc.inProgress  += src.inProgress;
-        acc.pending     += src.pending;
-        return acc;
-      },
-      { completed: 0, total: 0, notStarted: 0, inProgress: 0, pending: 0 },
-    );
-    const rate = sum.total > 0 ? Math.round((sum.completed / sum.total) * 100) : 0;
-    return { ...sum, rate };
-  }, [stores, rangeOverviewMap]);
-
-  const isAreaActive = selectedAreaId === areaId;
-
-  return (
-    <div className="border-b border-slate-100 last:border-b-0">
-      <div className={cn('flex w-full items-center gap-2 bg-slate-50 px-4 py-2 transition', isAreaActive && isHo && 'bg-indigo-50')}>
-        <button type="button" onClick={() => setOpen(v => !v)}
-          className="flex h-5 w-5 shrink-0 items-center justify-center rounded hover:bg-slate-200"
-          aria-label={open ? 'Collapse area' : 'Expand area'}
-        >
-          <ChevronDown className={cn('h-3.5 w-3.5 text-slate-400 transition-transform', !open && '-rotate-90')} />
-        </button>
-
-        {isHo && onSelectArea ? (
-          <button type="button" onClick={() => onSelectArea(areaId)}
-            className={cn('flex flex-1 items-center gap-2 text-left transition', isAreaActive ? 'text-indigo-700' : 'text-slate-500 hover:text-slate-700')}
-          >
-            <MapPin className={cn('h-3 w-3', isAreaActive ? 'text-indigo-500' : 'text-slate-400')} />
-            <p className="text-[11px] font-bold uppercase tracking-widest">{areaName}</p>
-            {loadingRange ? (
-              <span className="h-4 w-8 animate-pulse rounded-full bg-slate-200" />
-            ) : (
-              <span className={cn(
-                'rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums',
-                isAreaActive ? 'bg-indigo-200 text-indigo-700' : progressTextClass(areaAggregate.rate),
-              )}>
-                {areaAggregate.rate}%
-              </span>
-            )}
-          </button>
-        ) : (
-          <div className="flex flex-1 items-center gap-2">
-            <p className="text-[11px] font-bold uppercase tracking-widest text-slate-500">{areaName}</p>
-            {loadingRange ? (
-              <span className="h-4 w-8 animate-pulse rounded-full bg-slate-200" />
-            ) : rangeOverviewMap ? (
-              <span className={cn('rounded-full px-1.5 py-0.5 text-[10px] font-bold tabular-nums', progressTextClass(areaAggregate.rate))}>
-                {areaAggregate.rate}%
-              </span>
-            ) : null}
-          </div>
-        )}
-
-        <span className="ml-auto rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-bold text-slate-500">
-          {stores.length}
-        </span>
-      </div>
-
-      {open && (
-        <div className="divide-y divide-slate-100 bg-white">
-          {stores.map(store => (
-            <StoreProgressCard
-              key={store.id}
-              store={store}
-              active={selectedStoreId === store.id}
-              onOpen={() => onToggleStore(store.id)}
-              rangeSummary={rangeOverviewMap?.[store.id]}
-              loadingRange={loadingRange}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── StoreProgressRow ─────────────────────────────────────────────────────────
-//
-// One store in the area / weekly / monthly overview panels — a list row with the
-// store, its completion bar, task counts and any active / pending flags.
-
-function StoreProgressRow({ store, summary, onOpen }: {
-  store: StoreRow;
-  /** Undefined while a range summary hasn't loaded for this store. */
-  summary: StoreSummary | undefined;
-  onOpen: () => void;
-}) {
-  const rate       = summary?.completionRate ?? 0;
-  const inProgress = summary?.inProgress ?? 0;
-  const pending    = summary?.pending ?? 0;
-
-  return (
-    <OpsListRow onClick={onOpen} className="hover:bg-indigo-50/30">
-      <div className="order-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-500 transition group-hover:bg-indigo-100 group-hover:text-indigo-600">
-        <Store className="h-4 w-4" />
-      </div>
-
-      <div className="order-2 min-w-0 flex-1 basis-40">
-        <p className="truncate text-sm font-bold text-slate-900">{store.name}</p>
-        <p className="truncate text-[11px] text-slate-400">
-          <span className="font-mono font-semibold text-slate-500">{store.storeNo}</span>
-          {store.address && ` · ${store.address}`}
-        </p>
-      </div>
-
-      <div className="order-4 min-w-[7rem] flex-1 md:w-36 md:flex-none">
-        <ProgressBar pct={rate} />
-      </div>
-
-      <div className="order-5 flex shrink-0 items-center justify-between gap-2 text-[11px] font-semibold md:w-36">
-        {summary ? (
-          <span className="text-slate-500">{summary.completed}/{summary.total} task</span>
-        ) : (
-          <span className="text-slate-300">—</span>
-        )}
-        <div className="flex items-center gap-2">
-          {inProgress > 0 && <span className="text-indigo-500">{inProgress} aktif</span>}
-          {pending > 0 && (
-            <span className="flex items-center gap-0.5 text-amber-600">
-              <AlertTriangle className="h-3 w-3" />{pending}
-            </span>
-          )}
-        </div>
-      </div>
-
-      <div className="order-3 shrink-0 md:order-6">
-        <ProgressRing pct={rate} size={36} stroke={3} />
-      </div>
-    </OpsListRow>
-  );
-}
-
-// ─── AreaGridPanel (daily HO right panel) ────────────────────────────────────
-
-function AreaGridPanel({ areaName, stores, onSelectStore, onBack }: {
-  areaName: string;
-  stores: StoreRow[];
-  onSelectStore: (storeId: string) => void;
-  onBack?: () => void;
-}) {
-  const aggregate = useMemo(() => {
-    const sum = stores.reduce(
-      (acc, s) => {
-        acc.completed   += s.summary.completed;
-        acc.total       += s.summary.total;
-        acc.inProgress  += s.summary.inProgress;
-        acc.pending     += s.summary.pending;
-        acc.notStarted  += s.summary.notStarted;
-        return acc;
-      },
-      { completed: 0, total: 0, inProgress: 0, pending: 0, notStarted: 0 },
-    );
-    return { ...sum, rate: sum.total > 0 ? Math.round((sum.completed / sum.total) * 100) : 0 };
-  }, [stores]);
-
-  return (
-    <article className="flex max-h-[calc(100vh-9rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="shrink-0 border-b border-slate-100 p-4 sm:p-5">
-        {onBack && <BackButton label="Semua area" onClick={onBack} />}
-        <div className="flex items-center gap-4">
-          <ProgressRing pct={aggregate.rate} size={64} stroke={6} />
-          <div className="min-w-0 flex-1">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-500">Area Overview</p>
-            <h2 className="mt-0.5 truncate text-lg font-bold text-slate-900">{areaName}</h2>
-            <p className="mt-0.5 text-xs text-slate-500">{stores.length} toko di area ini</p>
-            <p className="mt-1.5 text-xs font-semibold text-slate-600">
-              <span className="text-emerald-600">{aggregate.completed} task selesai</span>
-              <span className="text-slate-300"> · </span>
-              <span className={aggregate.inProgress > 0 ? 'text-indigo-600' : 'text-slate-400'}>{aggregate.inProgress} aktif</span>
-              {aggregate.pending > 0 && <><span className="text-slate-300"> · </span><span className="text-amber-600">{aggregate.pending} pending</span></>}
-            </p>
-          </div>
-        </div>
-      </div>
-      <div className="flex-1 overflow-y-auto p-4">
-        {stores.length === 0 ? (
-          <div className="p-8 text-center text-sm text-slate-400">Tidak ada toko di area ini.</div>
-        ) : (
-          <OpsList className="rounded-xl shadow-none">
-            {stores.map(store => (
-              <StoreProgressRow key={store.id} store={store} summary={store.summary} onOpen={() => onSelectStore(store.id)} />
-            ))}
-          </OpsList>
-        )}
-      </div>
-    </article>
-  );
-}
-
-// ─── RangeOverviewPanel (weekly/monthly right panel, no store selected) ────────
-
-function RangeOverviewPanel({ stores, rangeOverviewMap, loading, periodLabel, areaName, onSelectStore, onBack }: {
-  stores: StoreRow[];
-  rangeOverviewMap: Record<string, StoreSummary>;
-  loading: boolean;
-  periodLabel: string;
-  areaName?: string;
-  onSelectStore: (storeId: string) => void;
-  onBack?: () => void;
-}) {
-  const aggregate = useMemo(() => {
-    const sum = stores.reduce(
-      (acc, s) => {
-        const src = rangeOverviewMap[s.id];
-        if (!src) return acc;
-        acc.completed   += src.completed;
-        acc.total       += src.total;
-        acc.inProgress  += src.inProgress;
-        acc.pending     += src.pending;
-        acc.notStarted  += src.notStarted;
-        return acc;
-      },
-      { completed: 0, total: 0, inProgress: 0, pending: 0, notStarted: 0 },
-    );
-    return { ...sum, rate: sum.total > 0 ? Math.round((sum.completed / sum.total) * 100) : 0 };
-  }, [stores, rangeOverviewMap]);
-
-  const sorted = useMemo(
-    () => [...stores].sort((a, b) => (rangeOverviewMap[b.id]?.completionRate ?? 0) - (rangeOverviewMap[a.id]?.completionRate ?? 0)),
-    [stores, rangeOverviewMap],
-  );
-
-  return (
-    <article className="flex max-h-[calc(100vh-9rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="shrink-0 border-b border-slate-100 p-4 sm:p-5">
-        {onBack && <BackButton label="Semua area" onClick={onBack} />}
-        <div className="flex items-center gap-4">
-          {loading ? (
-            <div className="h-16 w-16 animate-pulse rounded-full bg-slate-100" />
-          ) : (
-            <ProgressRing pct={aggregate.rate} size={64} stroke={6} />
-          )}
-          <div className="min-w-0 flex-1">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-500">{periodLabel}</p>
-            <h2 className="mt-0.5 text-lg font-bold text-slate-900">{areaName ?? 'Semua toko'}</h2>
-            <p className="mt-0.5 text-xs text-slate-500">{stores.length} toko</p>
-            {!loading && (
-              <p className="mt-1.5 text-xs font-semibold text-slate-600">
-                <span className="text-emerald-600">{aggregate.completed} task selesai</span>
-                <span className="text-slate-300"> · </span>
-                <span className={aggregate.inProgress > 0 ? 'text-indigo-600' : 'text-slate-400'}>{aggregate.inProgress} aktif</span>
-                {aggregate.pending > 0 && <><span className="text-slate-300"> · </span><span className="text-amber-600">{aggregate.pending} pending</span></>}
-              </p>
-            )}
-          </div>
-        </div>
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-4">
-        {loading ? (
-          <OpsListSkeleton rows={6} />
-        ) : stores.length === 0 ? (
-          <div className="p-8 text-center text-sm text-slate-400">Tidak ada toko.</div>
-        ) : (
-          <OpsList className="rounded-xl shadow-none">
-            {sorted.map(store => (
-              <StoreProgressRow key={store.id} store={store} summary={rangeOverviewMap[store.id]} onOpen={() => onSelectStore(store.id)} />
-            ))}
-          </OpsList>
-        )}
-      </div>
-    </article>
-  );
-}
-
-// ─── StoreRangeMatrixPanel ────────────────────────────────────────────────────
-
-function StoreRangeMatrixPanel({ storeName, storeNo, storeAddress, rows, loading, periodLabel, onBack, backLabel, onSelectDay }: {
-  storeName: string;
-  storeNo: string;
-  storeAddress: string;
-  rows: DayMatrixRow[];
-  loading: boolean;
-  periodLabel: string;
-  onBack: () => void;
-  backLabel: string;
-  /** Open that day's full task report for this store. */
-  onSelectDay: (dateKey: string) => void;
-}) {
-  const aggregate = useMemo(() => {
-    const sum = rows.reduce((acc, r) => ({ completed: acc.completed + r.aggregate.completed, total: acc.total + r.aggregate.total }), { completed: 0, total: 0 });
-    return { ...sum, rate: sum.total > 0 ? Math.round((sum.completed / sum.total) * 100) : 0 };
-  }, [rows]);
-
-  const visibleRows = rows.filter(r => r.aggregate.total > 0);
-
-  return (
-    <article className="flex max-h-[calc(100vh-9rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="shrink-0 border-b border-slate-100 p-4 sm:p-5">
-        <BackButton label={backLabel} onClick={onBack} />
-        <div className="flex items-center gap-4">
-          <ProgressRing pct={aggregate.rate} size={64} stroke={6} />
-          <div className="min-w-0 flex-1">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-500">{periodLabel}</p>
-            <h2 className="mt-0.5 truncate text-lg font-bold text-slate-900">{storeName}</h2>
-            <p className="mt-0.5 text-xs text-slate-500">
-              {storeNo && <span className="font-mono font-semibold text-slate-600">{storeNo}</span>}
-              {storeNo && storeAddress && ' · '}
-              {storeAddress}
-            </p>
-            <p className="mt-1.5 text-xs font-semibold text-slate-600">
-              <span className="text-emerald-600">{aggregate.completed} task selesai</span>
-              <span className="text-slate-300"> dari </span>
-              <span className="text-slate-700">{aggregate.total} task</span>
-              <span className="text-slate-300"> · </span>
-              <span className="text-slate-500">{visibleRows.length} hari ada data — klik hari untuk detail</span>
-            </p>
-          </div>
-        </div>
-      </div>
-      <div className="flex-1 overflow-y-auto">
-        {loading ? (
-          <div className="flex h-full items-center justify-center p-8">
-            <div className="flex items-center gap-2 text-sm text-slate-400">
-              <Loader2 className="h-4 w-4 animate-spin" /> Memuat data periode…
-            </div>
-          </div>
-        ) : visibleRows.length === 0 ? (
-          <div className="p-8 text-center text-sm text-slate-400">Tidak ada task pada periode yang dipilih.</div>
-        ) : (
-          <div className="divide-y divide-slate-100">
-            {visibleRows.map(row => {
-              const rate = row.aggregate.completionRate;
-              return (
-                <button
-                  key={row.date}
-                  type="button"
-                  onClick={() => onSelectDay(row.date)}
-                  title="Lihat laporan task hari ini"
-                  className={cn('flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-slate-50 focus:outline-none focus-visible:bg-slate-50', row.isToday && 'bg-indigo-50/40')}
-                >
-                  <div className={cn(
-                    'flex h-11 w-11 shrink-0 flex-col items-center justify-center rounded-xl',
-                    row.isToday ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600',
-                  )}>
-                    <span className="text-[9px] font-bold uppercase leading-none">{row.weekdayLabel}</span>
-                    <span className="mt-0.5 text-base font-black leading-none">{row.dayLabel}</span>
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-baseline justify-between gap-2">
-                      <p className="text-xs font-semibold text-slate-500">
-                        {row.aggregate.completed}/{row.aggregate.total} task selesai
-                        {row.aggregate.pending > 0 && <span className="text-amber-600"> · {row.aggregate.pending} pending</span>}
-                      </p>
-                      <span className={cn('shrink-0 text-sm font-black tabular-nums', progressTextClass(rate))}>{rate}%</span>
-                    </div>
-                    <ProgressBar pct={rate} className="mt-1.5 h-2" />
-                  </div>
-                  <ChevronRight className="h-4 w-4 shrink-0 text-slate-300" />
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    </article>
-  );
-}
-
-// ─── StoreDetailPanel (daily) ─────────────────────────────────────────────────
-
-function StoreDetailPanel({ detail, loading, emptyMessage, onSelectTask, onBack, backLabel }: {
-  detail: DetailResponse | null;
-  loading: boolean;
-  emptyMessage?: string;
-  onSelectTask?: (taskKey: string) => void;
-  onBack?: () => void;
-  backLabel?: string;
-}) {
-  const groupedTasks = useMemo(() => {
-    const groups: Record<string, { regular: FlatTask[]; grooming: FlatTask[] }> = {
-      morning: { regular: [], grooming: [] }, middle: { regular: [], grooming: [] },
-      full_day: { regular: [], grooming: [] }, evening: { regular: [], grooming: [] },
-      other: { regular: [], grooming: [] },
-    };
-    for (const task of detail?.tasks ?? []) {
-      // JKP rows already arrive under their base shift (getFlatTasksForStoreDate).
-      const s = task.shift as string | null;
-      const k = s === 'morning' || s === 'middle' || s === 'full_day' || s === 'evening' ? s : 'other';
-      if (task.type === 'grooming') groups[k].grooming.push(task);
-      else groups[k].regular.push(task);
-    }
-    return groups;
-  }, [detail?.tasks]);
-
-  if (loading) {
-    return (
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-        {onBack && <BackButton label={backLabel ?? 'Kembali'} onClick={onBack} />}
-        <div className="flex min-h-[240px] items-center justify-center p-4">
-          <div className="flex items-center gap-2 text-sm text-slate-400">
-            <Loader2 className="h-4 w-4 animate-spin" /> Memuat detail task…
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (!detail) {
-    return (
-      <div className="flex min-h-[320px] items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-white p-8 text-center">
-        <div>
-          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-400">
-            <ArrowRight className="h-5 w-5" />
-          </div>
-          <p className="font-semibold text-slate-700">{emptyMessage ?? 'Pilih toko untuk lihat detail'}</p>
-          <p className="mt-1 text-xs text-slate-400">Klik salah satu toko di kiri untuk melihat semua task progress-nya.</p>
-        </div>
-      </div>
-    );
-  }
-
-  const shiftSections = [
-    { key: 'morning',  label: 'Morning Shift' },
-    { key: 'middle',   label: 'Middle Shift' },
-    { key: 'full_day', label: 'Full Day Shift' },
-    { key: 'evening',  label: 'Evening Shift' },
-    { key: 'other',    label: 'Other' },
-  ] as const;
-
-  return (
-    <article className="flex max-h-[calc(100vh-9rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="shrink-0 border-b border-slate-100 p-4 sm:p-5">
-        {onBack && <BackButton label={backLabel ?? 'Kembali'} onClick={onBack} />}
-        <div className="flex items-center gap-4">
-          <ProgressRing pct={detail.summary.completionRate} size={64} stroke={6} />
-          <div className="min-w-0 flex-1">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-500">{fmtDateLabel(detail.date)}</p>
-            <h2 className="truncate text-lg font-bold text-slate-900">{detail.store.name}</h2>
-            <p className="mt-0.5 text-xs text-slate-500">
-              <span className="font-mono font-semibold text-slate-600">{detail.store.storeNo}</span>
-              {detail.store.address && ` · ${detail.store.address}`}
-            </p>
-            <p className="mt-1.5 text-xs font-semibold text-slate-600">
-              <span className="text-emerald-600">{detail.summary.completed} selesai</span>
-              <span className="text-slate-300"> · </span>
-              <span className={detail.summary.inProgress > 0 ? 'text-indigo-600' : 'text-slate-400'}>{detail.summary.inProgress} aktif</span>
-              {detail.summary.pending > 0 && <><span className="text-slate-300"> · </span><span className="text-amber-600">{detail.summary.pending} pending</span></>}
-            </p>
-          </div>
-        </div>
-      </div>
-      <div className="shrink-0 border-b border-slate-100 p-4">
-        <SummaryBreakdown summary={detail.summary} />
-      </div>
-      <div className="flex-1 overflow-y-auto">
-        <div className="p-4">
-          <SerahTerimaPanel board={detail.serahTerima} />
-        </div>
-        {detail.tasks.length === 0 ? (
-          <div className="p-8 text-center text-sm text-slate-400">Tidak ada task untuk toko ini pada tanggal yang dipilih.</div>
-        ) : (
-          <div className="divide-y divide-slate-100">
-            {shiftSections.map(section => {
-              const { regular, grooming } = groupedTasks[section.key];
-              const totalCount = regular.length + (grooming.length > 0 ? 1 : 0);
-              if (totalCount === 0) return null;
-              return (
-                <div key={section.key} className="p-4">
-                  <div className="mb-3 flex items-center justify-between">
-                    <h3 className="text-xs font-bold uppercase tracking-widest text-slate-400">{section.label}</h3>
-                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-500">{totalCount} task</span>
-                  </div>
-                  <div className="space-y-2">
-                    {grooming.length > 0 && <GroomingGroupCard tasks={grooming} onSelectEmployee={onSelectTask} />}
-                    {regular.map(task => (
-                      <TaskRow key={taskKey(task)} task={task} onSelect={() => onSelectTask?.(taskKey(task))} />
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    </article>
-  );
-}
-
-// ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function OpsTaskProgressPage() {
-  const [date, setDate]                       = useState(todayKey());
-  const [period, setPeriod]                   = useState<Period>('daily');
-  const [search, setSearch]                   = useState('');
-  const [overview, setOverview]               = useState<OverviewResponse | null>(null);
-  const [detail, setDetail]                   = useState<DetailResponse | null>(null);
-  const [rangeData, setRangeData]             = useState<RangeResponse | null>(null);
-  const [selectedStoreId, setSelectedStoreId] = useState<string | null>(null);
-  const [selectedAreaId, setSelectedAreaId]   = useState<string | null>(null);
-  const [selectedTaskKey, setSelectedTaskKey] = useState<string | null>(null);
-  const [loadingOverview, setLoadingOverview] = useState(true);
-  const [loadingDetail, setLoadingDetail]     = useState(false);
-  const [loadingRange, setLoadingRange]       = useState(false);
-  const [error, setError]                     = useState<string | null>(null);
-  const [listMinimized, setListMinimized]     = useListMinimized();
-  // Set when a day was opened from a weekly/monthly view, so Back can return there.
-  const [returnTo, setReturnTo]               = useState<{ period: Period; date: string } | null>(null);
+  const [date, setDate] = useState(jakartaTodayKey());
+  const [period, setPeriod] = useState<Period>('daily');
+  const [search, setSearch] = useState('');
+  const [area, setArea] = useState('all');
+  const [sort, setSort] = useState<SortKey>('attention');
+  const [taskSort, setTaskSort] = useState<string | null>(null);
+  const [onlyBehind, setOnlyBehind] = useState(false);
+  const [sheet, setSheet] = useState<StoreDayTarget | null>(null);
 
-  const rangeDays = useMemo((): Date[] => {
-    if (period === 'daily') return [];
-    const cur = fromKey(date);
-    if (period === 'weekly') {
-      const start = startOfISOWeek(cur);
-      return Array.from({ length: 7 }, (_, i) => addDays(start, i));
-    }
-    const start = startOfMonth(cur);
-    const end   = endOfMonth(cur);
-    const out: Date[] = [];
-    for (let d = new Date(start); d <= end; d = addDays(d, 1)) out.push(new Date(d));
-    return out;
-  }, [period, date]);
+  const today = jakartaTodayKey();
+  const days = useMemo(() => periodDays(period, date), [period, date]);
+  const isPast = isPastDay(date);
 
-  const overviewDate = useMemo(() => {
-    if (period === 'daily') return date;
-    const today = new Date();
-    if (period === 'weekly') {
-      const start = startOfISOWeek(fromKey(date));
-      const end   = addDays(start, 6);
-      return (today >= start && today <= end) ? todayKey() : toKey(start);
-    }
-    const start = startOfMonth(fromKey(date));
-    const end   = endOfMonth(fromKey(date));
-    return (today >= start && today <= end) ? todayKey() : toKey(start);
-  }, [date, period]);
+  const boardApi = useApi<BoardResponse>(period === 'daily' ? `/api/ops/tasks/board?date=${date}` : null);
+  const rangeApi = useApi<RangeResponse>(
+    period === 'daily' ? null : `/api/ops/tasks/progress/range?startDate=${days[0]}&endDate=${days[days.length - 1]}`,
+  );
+  const board = useHeld(boardApi.data);
+  const range = useHeld(rangeApi.data);
+  const api = period === 'daily' ? boardApi : rangeApi;
+  const error = api.data && !api.data.success ? (api.data.error ?? 'Gagal memuat data.') : api.error?.message ?? null;
+  const reloading = api.validating;
+  const firstLoad = period === 'daily' ? !board : !range;
 
-  const loadOverview = useCallback(async () => {
-    setLoadingOverview(true);
-    setError(null);
-    try {
-      const res  = await fetch(`/api/ops/tasks/progress?date=${overviewDate}`, { cache: 'no-store' });
-      const json = (await res.json()) as OverviewResponse;
-      if (!res.ok || !json.success) throw new Error(json.error ?? 'Failed to load task progress.');
-      setOverview(json);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load task progress.');
-      setOverview(null);
-    } finally {
-      setLoadingOverview(false);
-    }
-  }, [overviewDate]);
-
-  const loadDetail = useCallback(async (storeId: string, forDate: string) => {
-    setLoadingDetail(true);
-    setError(null);
-    try {
-      const params = new URLSearchParams({ date: forDate, storeId });
-      const res    = await fetch(`/api/ops/tasks/progress?${params}`, { cache: 'no-store' });
-      const json   = (await res.json()) as DetailResponse;
-      if (!res.ok || !json.success) throw new Error(json.error ?? 'Failed to load store detail.');
-      setDetail(json);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load store detail.');
-      setDetail(null);
-    } finally {
-      setLoadingDetail(false);
-    }
-  }, []);
-
-  const loadRangeData = useCallback(async (start: Date, end: Date) => {
-    setLoadingRange(true);
-    setError(null);
-    try {
-      const params = new URLSearchParams({ startDate: toKey(start), endDate: toKey(end) });
-      const res    = await fetch(`/api/ops/tasks/progress/range?${params}`, { cache: 'no-store' });
-      const json   = (await res.json()) as RangeResponse;
-      if (!res.ok || !json.success) throw new Error(json.error ?? 'Failed to load range data.');
-      setRangeData(json);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load range data.');
-      setRangeData(null);
-    } finally {
-      setLoadingRange(false);
-    }
-  }, []);
-
-  useEffect(() => { void loadOverview(); }, [loadOverview]);
-
-  useEffect(() => {
-    if (period === 'daily' || !rangeDays.length) { setRangeData(null); return; }
-    void loadRangeData(rangeDays[0], rangeDays[rangeDays.length - 1]);
-  }, [period, rangeDays, loadRangeData]);
-
-  useEffect(() => {
+  // ── Stores, one list for both views ────────────────────────────────────────
+  const storeList = useMemo(() => {
     if (period === 'daily') {
-      if (selectedStoreId) void loadDetail(selectedStoreId, date);
-      else setDetail(null);
+      return (board?.stores ?? []).map((s) => ({ id: s.storeId, name: s.name, storeNo: s.storeNo, areaName: s.areaName }));
     }
-  }, [selectedStoreId, date, period, loadDetail]);
+    return (range?.stores ?? []).map((s) => ({ id: Number(s.id), name: s.name, storeNo: s.storeNo, areaName: s.areaName }));
+  }, [period, board, range]);
 
-  useEffect(() => { setSelectedTaskKey(null); }, [selectedStoreId, date, period]);
+  const areaOptions = useMemo(
+    () => [...new Set(storeList.map((s) => s.areaName).filter((a): a is string => !!a))].sort(),
+    [storeList],
+  );
+  const activeArea = area !== 'all' && areaOptions.includes(area) ? area : 'all';
+  const scopeLabel = board?.scope === 'area' ? (board.areaName ?? 'Area') : activeArea !== 'all' ? activeArea : 'Semua area';
 
-  // Derive per-store aggregated StoreSummary from the single range response
-  const rangeOverviewMap = useMemo((): Record<string, StoreSummary> => {
-    if (!rangeData) return {};
-    const map = new Map<string, StoreSummary>();
-    for (const row of rangeData.summaries) {
-      const existing = map.get(row.storeId) ?? emptySummary();
-      existing.notStarted  += row.notStarted;
-      existing.inProgress  += row.inProgress;
-      existing.completed   += row.completed;
-      existing.pending     += row.pending;
-      existing.verified    += row.verified ?? 0;
-      existing.rejected    += row.rejected ?? 0;
-      existing.total       += row.total;
-      map.set(row.storeId, existing);
-    }
-    map.forEach(s => { s.completionRate = s.total > 0 ? Math.round((s.completed / s.total) * 100) : 0; });
-    return Object.fromEntries(map);
-  }, [rangeData]);
-
-  // Derive per-day matrix rows for the selected store
-  const rangeMatrixRows = useMemo((): DayMatrixRow[] => {
-    if (!selectedStoreId || !rangeData || !rangeDays.length) return [];
-    const today = new Date();
-    return rangeDays.map(d => {
-      const dateKey = toKey(d);
-      const row     = rangeData.summaries.find(s => s.storeId === selectedStoreId && s.date === dateKey);
-      const completed   = row?.completed   ?? 0;
-      const total       = row?.total       ?? 0;
-      const inProgress  = row?.inProgress  ?? 0;
-      const notStarted  = row?.notStarted  ?? 0;
-      const pending     = row?.pending     ?? 0;
-      const verified    = row?.verified    ?? 0;
-      const rejected    = row?.rejected    ?? 0;
-      return {
-        date: dateKey,
-        weekdayLabel: ID_WEEKDAY_SHORT[d.getDay()],
-        dayLabel: String(d.getDate()),
-        isToday: isSameDay(d, today),
-        aggregate: {
-          completed, total, inProgress, notStarted, pending,
-          verified, rejected,
-          completionRate: total > 0 ? Math.round((completed / total) * 100) : 0,
-        },
-      };
-    });
-  }, [rangeData, selectedStoreId, rangeDays]);
-
-  const isHo = overview?.scope === 'all_areas';
-
-  const filteredStores = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return overview?.stores ?? [];
-    return (overview?.stores ?? []).filter(s =>
-      s.name.toLowerCase().includes(q) ||
-      s.storeNo.toLowerCase().includes(q) ||
-      s.address.toLowerCase().includes(q),
-    );
-  }, [overview?.stores, search]);
-
-  const groupedStores = useMemo(() => {
-    const groups = new Map<string, { areaId: string; stores: StoreRow[] }>();
-    for (const store of filteredStores) {
-      const areaName = store.areaName?.trim() || overview?.area?.name || 'Tanpa Area';
-      const areaId   = (store.areaId ?? overview?.area?.id ?? 'no-area') + '';
-      const cur      = groups.get(areaName);
-      if (cur) cur.stores.push(store);
-      else groups.set(areaName, { areaId, stores: [store] });
-    }
-    return Array.from(groups.entries())
-      .map(([areaName, g]) => ({ areaName, areaId: g.areaId, stores: g.stores.sort((a, b) => a.name.localeCompare(b.name)) }))
-      .sort((a, b) => a.areaName.localeCompare(b.areaName));
-  }, [filteredStores, overview?.area?.id, overview?.area?.name]);
-
-  const handleSelectArea  = (areaId: string) => { setSelectedAreaId(cur => cur === areaId ? null : areaId); setSelectedStoreId(null); setReturnTo(null); };
-  const handleSelectStore = (storeId: string) => { setSelectedStoreId(cur => cur === storeId ? null : storeId); setReturnTo(null); };
-  const handlePeriodChange = (next: Period) => { setReturnTo(null); setPeriod(next); };
-
-  // A day in the weekly/monthly breakdown → that day's full report for the same store.
-  const handleSelectDay = (dateKey: string) => {
-    setReturnTo({ period, date });
-    setDate(dateKey);
-    setPeriod('daily');
-  };
-
-  const selectedAreaGroup = useMemo(() => groupedStores.find(g => g.areaId === selectedAreaId) ?? null, [groupedStores, selectedAreaId]);
-
-  const headingScope = isHo ? 'All areas' : (overview?.area?.name ?? 'Area');
-  const selectedStoreRow  = selectedStoreId ? overview?.stores.find(s => s.id === selectedStoreId) : undefined;
-  const selectedStoreName = selectedStoreRow ? `${selectedStoreRow.storeNo} · ${selectedStoreRow.name}` : null;
-
-  const headingRangeLabel = useMemo(() => {
-    if (period === 'daily') return fmtDateLabel(date);
-    if (period === 'weekly') {
-      const start = startOfISOWeek(fromKey(date));
-      const end   = addDays(start, 6);
-      return `${start.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' })} – ${end.toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })}`;
-    }
-    return fmtMonthLabel(fromKey(date));
-  }, [period, date]);
-
-  const rangePeriodLabel = period === 'weekly' ? 'Tinjauan Mingguan' : 'Tinjauan Bulanan';
-
-  // Back from a store: to the weekly/monthly view it was opened from, else up to
-  // the area it sits in (HO), else to the all-stores overview.
-  const areaBackName = isHo && selectedAreaGroup ? selectedAreaGroup.areaName : null;
-  const storeBackLabel = returnTo
-    ? `Kembali ke ${returnTo.period === 'weekly' ? 'Mingguan' : 'Bulanan'}`
-    : areaBackName ? `Kembali ke ${areaBackName}` : 'Semua toko';
-  const handleStoreBack = () => {
-    if (returnTo) {
-      const { period: p, date: d } = returnTo;
-      setReturnTo(null);
-      setDate(d);
-      setPeriod(p);
-      return;
-    }
-    setSelectedStoreId(null);
-  };
-
-  const renderRightPanel = () => {
-    if (selectedStoreId) {
-      if (period === 'daily') {
-        const selectedTask = selectedTaskKey ? (detail?.tasks.find(t => taskKey(t) === selectedTaskKey) ?? null) : null;
-        if (selectedTask) return <TaskDetailView task={selectedTask} onBack={() => setSelectedTaskKey(null)} />;
-        return (
-          <StoreDetailPanel
-            detail={detail}
-            loading={loadingDetail}
-            onSelectTask={setSelectedTaskKey}
-            onBack={handleStoreBack}
-            backLabel={storeBackLabel}
-          />
-        );
+  // ── Daily board rows ───────────────────────────────────────────────────────
+  const boardRows = useMemo(() => {
+    const rows = (board?.stores ?? []).filter((s) => storeMatches(s, activeArea, search)).map((store) => ({ store, summary: boardRowSummary(store, isPast) }));
+    const behind = (r: (typeof rows)[number]) => r.summary.total > 0 && r.summary.done < r.summary.total;
+    const list = onlyBehind ? rows.filter(behind) : rows;
+    const columnRank = (s: BoardStore) => COLUMN_RANK[summariseStore(s.tasks[taskSort!] ?? [], isPast).key] ?? 5;
+    return [...list].sort((a, b) => {
+      if (taskSort) {
+        const d = columnRank(a.store) - columnRank(b.store);
+        if (d) return d;
       }
-      const selectedStore = overview?.stores.find(s => s.id === selectedStoreId);
-      return (
-        <StoreRangeMatrixPanel
-          storeName={selectedStore?.name ?? '—'}
-          storeNo={selectedStore?.storeNo ?? ''}
-          storeAddress={selectedStore?.address ?? ''}
-          rows={rangeMatrixRows}
-          loading={loadingRange}
-          periodLabel={rangePeriodLabel}
-          onBack={handleStoreBack}
-          backLabel={storeBackLabel}
-          onSelectDay={handleSelectDay}
-        />
-      );
-    }
+      if (sort === 'name') return a.store.name.localeCompare(b.store.name);
+      const noA = a.summary.total === 0 ? 1 : 0;
+      const noB = b.summary.total === 0 ? 1 : 0;
+      if (noA !== noB) return noA - noB;
+      if (sort === 'progress') return b.summary.rate - a.summary.rate || a.store.name.localeCompare(b.store.name);
+      return a.summary.rate - b.summary.rate || a.store.name.localeCompare(b.store.name);
+    }).map((r) => r.store);
+  }, [board, search, activeArea, sort, taskSort, onlyBehind, isPast]);
 
-    if (period !== 'daily') {
-      const panelStores = isHo && selectedAreaGroup ? selectedAreaGroup.stores : filteredStores;
-      return (
-        <RangeOverviewPanel
-          stores={panelStores}
-          rangeOverviewMap={rangeOverviewMap}
-          loading={loadingRange}
-          periodLabel={rangePeriodLabel}
-          areaName={isHo && selectedAreaGroup ? selectedAreaGroup.areaName : undefined}
-          onSelectStore={handleSelectStore}
-          onBack={isHo && selectedAreaGroup ? () => setSelectedAreaId(null) : undefined}
-        />
-      );
-    }
+  const dayTotals = useMemo(() => {
+    let done = 0;
+    let total = 0;
+    for (const s of boardRows) { const r = boardRowSummary(s, isPast); done += r.done; total += r.total; }
+    return { done, total, rate: total ? Math.round((done / total) * 100) : 0 };
+  }, [boardRows, isPast]);
 
-    if (isHo && selectedAreaGroup) {
-      return (
-        <AreaGridPanel
-          areaName={selectedAreaGroup.areaName}
-          stores={selectedAreaGroup.stores}
-          onSelectStore={handleSelectStore}
-          onBack={() => setSelectedAreaId(null)}
-        />
-      );
-    }
+  // ── Week / month grid rows ─────────────────────────────────────────────────
+  const rangeCells = useMemo(() => {
+    const map = new Map<string, { completed: number; total: number; pending: number }>();
+    for (const s of range?.summaries ?? []) map.set(`${s.storeId}|${s.date}`, s);
+    return map;
+  }, [range]);
 
-    return (
-      <StoreDetailPanel
-        detail={null}
-        loading={false}
-        emptyMessage={isHo ? 'Pilih area atau toko untuk lihat detail' : 'Pilih toko untuk lihat detail'}
-      />
-    );
+  const heatRows = useMemo<HeatRow[]>(() => {
+    const rows = (range?.stores ?? []).filter((s) => storeMatches(s, activeArea, search)).map((s) => {
+      let done = 0;
+      let total = 0;
+      for (const d of days) { const c = rangeCells.get(`${s.id}|${d}`); if (c) { done += c.completed; total += c.total; } }
+      return { key: s.id, label: s.name, sublabel: `${s.storeNo}${s.areaName ? ` · ${s.areaName}` : ''}`, summary: total ? { done, total } : null };
+    });
+    const rate = (r: HeatRow) => (r.summary ? r.summary.done / r.summary.total : null);
+    const list = onlyBehind ? rows.filter((r) => r.summary && r.summary.done < r.summary.total) : rows;
+    return [...list].sort((a, b) => {
+      if (sort === 'name') return a.label.localeCompare(b.label);
+      const ra = rate(a);
+      const rb = rate(b);
+      if (ra === null || rb === null) return (ra === null ? 1 : 0) - (rb === null ? 1 : 0) || a.label.localeCompare(b.label);
+      return (sort === 'progress' ? rb - ra : ra - rb) || a.label.localeCompare(b.label);
+    });
+  }, [range, rangeCells, days, search, activeArea, sort, onlyBehind]);
+
+  const rangeTotals = useMemo(() => {
+    let done = 0;
+    let total = 0;
+    for (const r of heatRows) if (r.summary) { done += r.summary.done; total += r.summary.total; }
+    return { done, total, rate: total ? Math.round((done / total) * 100) : 0 };
+  }, [heatRows]);
+
+  const totals = period === 'daily' ? dayTotals : rangeTotals;
+  const storeCount = period === 'daily' ? boardRows.length : heatRows.length;
+
+  const changePeriod = (next: Period) => { setPeriod(next); setTaskSort(null); };
+  const openDay = (storeId: number, day: string) => {
+    const s = storeList.find((x) => x.id === storeId);
+    if (!s) return;
+    setPeriod('daily');
+    setDate(day);
+    setSheet({ storeId, name: s.name, storeNo: s.storeNo, date: day });
   };
+
+  const subtitle = period === 'daily' ? fmtDateLabel(date) : rangeLabel(days);
 
   return (
     <div className="min-h-full bg-slate-50">
       <OpsPageHeader
         scope="OPS · Task Monitor"
         title="Task Progress"
-        subtitle={`${headingScope} · ${headingRangeLabel}`}
-        periodProps={{ period, onPeriodChange: handlePeriodChange, date, onDateChange: setDate }}
-        onRefresh={() => {
-          void loadOverview();
-          if (period === 'daily' && selectedStoreId) void loadDetail(selectedStoreId, date);
-          if (period !== 'daily' && rangeDays.length) void loadRangeData(rangeDays[0], rangeDays[rangeDays.length - 1]);
-        }}
-        refreshing={loadingOverview || loadingDetail || loadingRange}
+        subtitle={`${scopeLabel} · ${subtitle}`}
+        periodProps={{ period, onPeriodChange: changePeriod, date, onDateChange: setDate }}
+        onRefresh={() => void api.refresh()}
+        refreshing={reloading}
+        contentClassName="w-full"
       />
 
-      <div className="mx-auto space-y-5 px-4 py-5 sm:px-6 lg:px-8">
+      <div className="space-y-4 px-4 py-5 sm:px-6 lg:px-8">
+        {/* Filters scope everything below them */}
+        <div className="flex flex-wrap items-center gap-2">
+          <OpsSearchInput value={search} onChange={setSearch} placeholder="Cari nama / kode toko…" className="max-w-sm" />
+          {board?.scope !== 'area' && areaOptions.length > 1 && (
+            <OpsFilterSelect label="Area" value={activeArea} onChange={setArea}>
+              <option value="all">Semua area</option>
+              {areaOptions.map((a) => <option key={a} value={a}>{a}</option>)}
+            </OpsFilterSelect>
+          )}
+          <OpsFilterSelect label="Urutkan" value={sort} onChange={(v) => { setSort(v as SortKey); setTaskSort(null); }} highlight={false}>
+            <option value="attention">Urut: Paling tertinggal</option>
+            <option value="progress">Urut: Progress tertinggi</option>
+            <option value="name">Urut: Nama toko</option>
+          </OpsFilterSelect>
+          <button
+            type="button"
+            onClick={() => setOnlyBehind((v) => !v)}
+            aria-pressed={onlyBehind}
+            className={cn(
+              'h-10 rounded-xl border px-3.5 text-sm font-semibold transition',
+              onlyBehind ? 'border-indigo-300 bg-indigo-50 text-indigo-800' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50',
+            )}
+          >
+            Belum selesai saja
+          </button>
+          {taskSort && (
+            <button type="button" onClick={() => setTaskSort(null)} className="h-10 rounded-xl px-3 text-sm font-semibold text-indigo-700 hover:bg-indigo-50">
+              Urut per task: {PROGRESS_TASKS.find((t) => t.code === taskSort)?.label} ✕
+            </button>
+          )}
+        </div>
+
+        {/* One line: how far the visible stores are */}
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
+          <div className="min-w-[220px] flex-1">
+            <div className="flex items-baseline justify-between gap-3">
+              <p className="text-sm font-semibold text-slate-800">
+                {period === 'daily' ? 'Progress harian' : period === 'weekly' ? 'Progress mingguan' : 'Progress bulanan'}
+                <span className="ml-2 font-normal text-slate-400">{storeCount} toko</span>
+              </p>
+              <p className="text-sm tabular-nums text-slate-500">
+                <span className="text-lg font-semibold text-slate-900">{firstLoad ? '–' : `${totals.rate}%`}</span>
+                <span className="ml-2">{totals.done}/{totals.total} task</span>
+              </p>
+            </div>
+            <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
+              <div
+                className={cn('h-full rounded-full transition-all duration-500', totals.rate >= 80 ? 'bg-emerald-500' : totals.rate >= 50 ? 'bg-amber-400' : 'bg-rose-500')}
+                style={{ width: `${totals.rate}%` }}
+              />
+            </div>
+          </div>
+          {period === 'daily' ? <CellLegend className="max-w-[640px]" /> : <PctLegend />}
+        </div>
+
         {error && (
           <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-700">
             <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-            <div>
-              <p className="text-sm font-bold">Gagal memuat data</p>
-              <p className="mt-0.5 text-xs">{error}</p>
-            </div>
+            <div><p className="text-sm font-bold">Gagal memuat data</p><p className="mt-0.5 text-xs">{error}</p></div>
           </div>
         )}
 
-        <div className={cn('grid items-start gap-5', listMinimized ? 'lg:grid-cols-[52px_1fr]' : 'lg:grid-cols-[380px_1fr]')}>
-          {listMinimized ? (
-            <aside className="lg:sticky lg:top-[6.5rem]">
-              <button
-                type="button"
-                onClick={() => setListMinimized(false)}
-                aria-expanded={false}
-                aria-label="Tampilkan daftar toko dan area"
-                title="Tampilkan daftar toko & area"
-                className="flex w-full items-center gap-2.5 rounded-2xl border border-slate-200 bg-white px-3 py-2.5 text-left shadow-sm transition-colors hover:border-indigo-300 hover:bg-indigo-50/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200 lg:flex-col lg:gap-3 lg:px-0 lg:py-3"
-              >
-                <PanelLeftOpen className="h-4 w-4 shrink-0 text-slate-500" />
-                <span className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-600 lg:max-h-48 lg:flex-none lg:[writing-mode:vertical-rl]">
-                  {selectedStoreName ?? 'Daftar toko & area'}
-                </span>
-                <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-slate-500">{filteredStores.length}</span>
-              </button>
-            </aside>
-          ) : (
-          <aside className="flex max-h-[calc(100vh-9rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm lg:sticky lg:top-[6.5rem]">
-            <div className="flex shrink-0 items-center gap-2 border-b border-slate-100 p-3">
-              <label className="relative block min-w-0 flex-1">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Cari nama / kode toko…"
-                  className="h-9 w-full rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3 text-sm focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
-                />
-              </label>
-              <button
-                type="button"
-                onClick={() => setListMinimized(true)}
-                aria-expanded={true}
-                aria-label="Sembunyikan daftar toko dan area"
-                title="Sembunyikan daftar"
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-200 text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-200"
-              >
-                <PanelLeftClose className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="flex shrink-0 items-center gap-3 border-b border-slate-100 px-4 py-2">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">{filteredStores.length} toko</p>
-              <div className="ml-auto flex items-center gap-2.5 text-[10px] font-semibold text-slate-400">
-                <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-full bg-amber-300" />Belum mulai</span>
-                <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-full bg-indigo-500" />Aktif</span>
-                <span className="flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />Selesai</span>
-              </div>
-            </div>
-
-            <div className="flex-1 overflow-y-auto">
-              {loadingOverview
-                ? Array.from({ length: 6 }).map((_, i) => (
-                    <div key={i} className="border-b border-slate-100 px-4 py-3">
-                      <div className="h-14 animate-pulse rounded-xl bg-slate-100" />
-                    </div>
-                  ))
-                : filteredStores.length === 0
-                  ? (
-                    <div className="p-8 text-center">
-                      <p className="text-sm font-semibold text-slate-700">Tidak ada toko</p>
-                      <p className="mt-1 text-xs text-slate-400">Coba ubah tanggal atau kata kunci pencarian.</p>
-                    </div>
-                  )
-                  : groupedStores.map(group => (
-                      <AreaStoreGroup
-                        key={group.areaId}
-                        areaName={group.areaName}
-                        areaId={group.areaId}
-                        stores={group.stores}
-                        selectedStoreId={selectedStoreId}
-                        selectedAreaId={selectedAreaId}
-                        isHo={isHo}
-                        initiallyOpen={!isHo}
-                        onToggleStore={handleSelectStore}
-                        onSelectArea={isHo ? handleSelectArea : undefined}
-                        rangeOverviewMap={period !== 'daily' ? rangeOverviewMap : undefined}
-                        loadingRange={period !== 'daily' ? loadingRange : undefined}
-                      />
-                    ))
-              }
-            </div>
-          </aside>
-          )}
-
-          <div className="min-w-0 lg:sticky lg:top-[6.5rem]">
-            {renderRightPanel()}
+        {firstLoad ? (
+          <div className="h-[420px] animate-pulse rounded-2xl border border-slate-200 bg-white" />
+        ) : storeCount === 0 ? (
+          <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center">
+            <p className="text-sm font-semibold text-slate-700">Tidak ada toko</p>
+            <p className="mt-1 text-xs text-slate-400">Coba ubah tanggal, area, atau kata kunci pencarian.</p>
           </div>
-        </div>
+        ) : period === 'daily' ? (
+          <div className={cn('transition-opacity', reloading && 'opacity-60')}>
+            <TaskBoard
+              stores={boardRows}
+              columns={PROGRESS_TASKS}
+              isPast={isPast}
+              activeColumn={taskSort}
+              onColumnClick={(code) => setTaskSort((cur) => (cur === code ? null : code))}
+              onOpenStore={(s) => setSheet({ storeId: s.storeId, name: s.name, storeNo: s.storeNo, date })}
+              onOpenCell={(s, type, slots) => setSheet({
+                storeId: s.storeId,
+                name: s.name,
+                storeNo: s.storeNo,
+                date,
+                // One slot → straight to that task; several (briefing per shift, grooming per person) → the day.
+                ...(slots.length === 1 && type !== 'serah_terima'
+                  ? { focusType: type, focusId: slots[0].id, focusShift: slots[0].shift }
+                  : {}),
+              })}
+            />
+            <p className="mt-2 text-xs text-slate-400">Klik judul kolom untuk mengurutkan toko berdasarkan task itu. Arahkan kursor ke kotak untuk melihat siapa yang mengerjakan.</p>
+          </div>
+        ) : (
+          <div className={cn('transition-opacity', reloading && 'opacity-60')}>
+            <HeatGrid
+              rows={heatRows}
+              days={days}
+              today={today}
+              rowHeader="Toko"
+              cell={(row, day) => {
+                const c = rangeCells.get(`${row.key}|${day}`);
+                if (!c || !c.total) return null;
+                return {
+                  kind: 'pct',
+                  done: c.completed,
+                  total: c.total,
+                  title: `${row.label} · ${new Date(`${day}T00:00:00Z`).toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'short', timeZone: 'UTC' })}`,
+                  lines: c.pending ? [`${c.pending} task pending`] : [],
+                };
+              }}
+              onCellClick={(row, day) => openDay(Number(row.key), day)}
+            />
+            <p className="mt-2 text-xs text-slate-400">Angka = % task selesai hari itu. Klik kotak untuk membuka task toko pada hari tersebut.</p>
+          </div>
+        )}
       </div>
+
+      <StoreDaySheet target={sheet} onClose={() => setSheet(null)} />
     </div>
   );
 }

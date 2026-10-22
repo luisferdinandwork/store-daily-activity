@@ -1,4 +1,6 @@
 'use client';
+
+import PanelPageHeader from '@/components/shared/PanelPageHeader';
 // app/finance/petty-cash/page.tsx
 //
 // Finance · Petty Cash Monitoring
@@ -652,37 +654,27 @@ export default function FinancePettyCashPage() {
       {lightboxUrl && <Lightbox src={lightboxUrl} onClose={() => setLightboxUrl(null)} />}
 
       {/* Header */}
-      <div className="border-b border-slate-200 bg-white">
-        <div className="mx-auto max-w-[1400px] px-6 pt-4 lg:px-8">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">
-                Finance · Petty Cash
-              </p>
-              <h1 className="mt-0.5 text-2xl font-bold tracking-tight text-slate-900">Petty Cash Monitoring</h1>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <MonthNavigator month={month} onChange={setMonth} />
-              <button
-                type="button"
-                onClick={() => { void load(month); void loadRefillRequests(); }}
-                disabled={loading}
-                className="flex h-9 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-60"
-              >
-                <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
-                Refresh
-              </button>
-            </div>
+      <PanelPageHeader
+        scope="Finance · Petty Cash"
+        title="Petty Cash Monitoring"
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <MonthNavigator month={month} onChange={setMonth} />
+            <button
+              type="button"
+              onClick={() => { void load(month); void loadRefillRequests(); }}
+              disabled={loading}
+              className="flex h-9 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-60"
+            >
+              <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
+              Refresh
+            </button>
           </div>
+        }
+        tabs={<PettyCashTabs />}
+      />
 
-          <div className="mt-3">
-            <PettyCashTabs />
-          </div>
-        </div>
-      </div>
-
-      <div className="mx-auto max-w-[1400px] space-y-4 px-6 py-5 lg:px-8">
+      <div className="space-y-4 px-6 py-5 lg:px-8">
         {/* Key numbers — a plain strip, not cards */}
         {!loading && !error && (
           <dl className="grid grid-cols-2 divide-x divide-slate-200 overflow-hidden rounded-md border border-slate-300 bg-white sm:grid-cols-4">

@@ -1,4 +1,6 @@
 'use client';
+
+import PanelPageHeader from '@/components/shared/PanelPageHeader';
 // app/finance/page.tsx
 //
 // Finance Dashboard — entry point for the Finance panel.
@@ -114,31 +116,23 @@ export default function FinanceDashboardPage() {
   return (
     <div className="min-h-full bg-slate-50">
       {/* Page header */}
-      <div className="sticky top-0 z-10 border-b border-slate-200 bg-white/90 backdrop-blur">
-        <div className="mx-auto max-w-5xl px-6 py-4 lg:px-8">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">
-                Finance · Overview
-              </p>
-              <h1 className="mt-0.5 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
-                Dashboard
-              </h1>
-              <p className="mt-1 text-sm text-slate-500">{now}</p>
-            </div>
-            <button
-              onClick={load}
-              disabled={loading}
-              className="flex h-9 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50 disabled:opacity-60"
-            >
-              <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
-              Refresh
-            </button>
-          </div>
-        </div>
-      </div>
+      <PanelPageHeader
+        scope="Finance · Overview"
+        title="Dashboard"
+        subtitle={now}
+        actions={
+          <button
+            onClick={load}
+            disabled={loading}
+            className="flex h-9 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50 disabled:opacity-60"
+          >
+            <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
+            Refresh
+          </button>
+        }
+      />
 
-      <div className="mx-auto max-w-5xl space-y-8 px-6 py-8 lg:px-8">
+      <div className="space-y-8 px-6 py-8 lg:px-8">
 
         {error && (
           <div className="flex items-center gap-3 rounded-xl border border-rose-200 bg-rose-50 px-5 py-4">

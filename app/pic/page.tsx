@@ -1,4 +1,6 @@
 'use client';
+
+import PanelPageHeader from '@/components/shared/PanelPageHeader';
 // app/pic/page.tsx — PIC Panel home: view the store's schedule and upload one
 // via Excel.
 //
@@ -458,59 +460,48 @@ export default function PicPanelPage() {
   return (
     <div className="min-h-full bg-slate-50">
       {/* ── Header ── */}
-      <div className="sticky top-0 z-10 border-b border-slate-200 bg-white/90 backdrop-blur">
-        <div className="mx-auto px-6 py-4 lg:px-8">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-500">PIC Panel</p>
-              <h1 className="mt-0.5 text-2xl font-bold tracking-tight text-slate-900">Store Schedule</h1>
-              {schedule ? (
-                <p className="mt-1 text-sm text-slate-500">
-                  {totalEmployees} staff · {workingDays} work shifts · {leaveDays} leave days
-                </p>
-              ) : (
-                <p className="mt-1 text-sm text-slate-500">
-                  Belum ada jadwal bulan ini — import Excel untuk membuatnya.
-                </p>
-              )}
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="inline-flex h-10 items-center rounded-xl border border-slate-200 bg-white">
-                <button onClick={() => goToMonth(-1)} className="flex h-full w-9 items-center justify-center rounded-l-xl text-slate-500 hover:bg-slate-50">
-                  <ChevronLeft className="h-4 w-4" />
-                </button>
-                <span className="whitespace-nowrap px-2 text-sm font-bold text-slate-700">{MONTHS[m - 1]} {y}</span>
-                <button onClick={() => goToMonth(1)} className="flex h-full w-9 items-center justify-center rounded-r-xl text-slate-500 hover:bg-slate-50">
-                  <ChevronRight className="h-4 w-4" />
-                </button>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => loadSchedule(selectedMonth)}
-                disabled={loading}
-                className="flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-60"
-              >
-                <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
-                Refresh
+      <PanelPageHeader
+        scope="PIC Panel"
+        title="Store Schedule"
+        subtitle={schedule
+          ? `${totalEmployees} staff · ${workingDays} work shifts · ${leaveDays} leave days`
+          : 'Belum ada jadwal bulan ini — import Excel untuk membuatnya.'}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex h-10 items-center rounded-xl border border-slate-200 bg-white">
+              <button type="button" aria-label="Bulan sebelumnya" onClick={() => goToMonth(-1)} className="flex h-full w-9 items-center justify-center rounded-l-xl text-slate-500 hover:bg-slate-50">
+                <ChevronLeft className="h-4 w-4" />
               </button>
-
-              <ImportButton onImported={() => loadSchedule(selectedMonth)} lockedReason={importLockedReason} />
-
-              <button
-                type="button"
-                onClick={handleDownloadTemplate}
-                disabled={downloading}
-                className="flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-60"
-              >
-                {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                Template
+              <span className="whitespace-nowrap px-2 text-sm font-bold text-slate-700">{MONTHS[m - 1]} {y}</span>
+              <button type="button" aria-label="Bulan berikutnya" onClick={() => goToMonth(1)} className="flex h-full w-9 items-center justify-center rounded-r-xl text-slate-500 hover:bg-slate-50">
+                <ChevronRight className="h-4 w-4" />
               </button>
             </div>
+
+            <button
+              type="button"
+              onClick={() => loadSchedule(selectedMonth)}
+              disabled={loading}
+              className="flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-60"
+            >
+              <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
+              Refresh
+            </button>
+
+            <ImportButton onImported={() => loadSchedule(selectedMonth)} lockedReason={importLockedReason} />
+
+            <button
+              type="button"
+              onClick={handleDownloadTemplate}
+              disabled={downloading}
+              className="flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-60"
+            >
+              {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+              Template
+            </button>
           </div>
-        </div>
-      </div>
+        }
+      />
 
       {/* ── Body ── */}
       <div className="mx-auto space-y-5 px-6 py-6 lg:px-8">

@@ -20,6 +20,7 @@ import {
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
 import { AttendanceCountsLine } from '@/components/ops/AttendanceStatus';
 import DashboardMobile from '@/components/ops/mobile/DashboardMobile';
+import TrendChart from '@/components/ops/dashboard/TrendChart';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { EMPTY_COUNTS, showedUp } from '@/lib/attendance-health';
 import { RATE_WORD, rateTone, storesBehind, type DashboardData } from '@/lib/ops-dashboard';
@@ -316,7 +317,10 @@ export default function OpsDashboardPage() {
           contentClassName="w-full"
         />
 
-        <div className="mx-auto max-w-[1400px] space-y-10 p-6 lg:p-10">
+        <div className="space-y-10 p-6 lg:p-10">
+          {/* ── Trend: task completion + attendance over a period ─────────── */}
+          <TrendChart />
+
           {/* ── Snapshot ─────────────────────────────────────────────────────── */}
           <section>
             <SectionHeading

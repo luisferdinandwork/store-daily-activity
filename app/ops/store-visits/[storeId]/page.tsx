@@ -33,7 +33,7 @@ export default function StoreVisitPage({ params }: { params: Promise<{ storeId: 
 
   return <div className="min-h-full bg-slate-50">
     <OpsPageHeader title={store?.name || 'Visit Toko'} scope="OPS · Visit Toko" subtitle={store?.storeNo || 'Checklist kunjungan'} className="[&_h1]:whitespace-normal [&_h1]:overflow-visible [&_h1]:text-clip max-md:[&_h1]:text-xl" />
-    <div className="mx-auto max-w-3xl space-y-5 p-4 pb-6 sm:p-6">
+    <div className="space-y-5 p-4 pb-6 sm:p-6">
       <Link href="/ops/store-visits" className="inline-flex min-h-11 items-center gap-2 text-sm font-semibold text-indigo-700"><ArrowLeft className="h-4 w-4" />Daftar toko</Link>
       {error && <div role="alert" className="flex items-start gap-3 rounded-2xl border border-rose-200 bg-white p-4 text-rose-700"><AlertCircle className="mt-0.5 h-5 w-5 shrink-0" /><div><p className="font-semibold">{error}</p><button onClick={load} className="mt-1 min-h-11 text-sm font-semibold underline">Coba lagi</button></div></div>}
       {loading ? <div className="flex justify-center p-10"><Loader2 className="h-6 w-6 animate-spin text-slate-400" /></div> : detail && store && <>
@@ -47,7 +47,7 @@ export default function StoreVisitPage({ params }: { params: Promise<{ storeId: 
             <dl className="grid grid-cols-3 gap-2 text-center">
               <div className="rounded-xl bg-slate-50 p-2.5"><dt className="text-[11px] font-semibold text-slate-500">Hari visit</dt><dd className="mt-0.5 font-bold tabular-nums text-slate-900">{store.progress.completed}<span className="text-slate-400"> / {policy.minimumVisits}</span></dd></div>
               <div className="rounded-xl bg-slate-50 p-2.5"><dt className="text-[11px] font-semibold text-slate-500">Terakhir</dt><dd className="mt-0.5 text-sm font-bold text-slate-900">{daysAgoLabel(store.progress.lastVisit)}</dd></div>
-              <div className="rounded-xl bg-slate-50 p-2.5"><dt className="text-[11px] font-semibold text-slate-500">{state === 'done' ? 'Berikutnya' : 'Jatuh tempo'}</dt><dd className="mt-0.5 text-sm font-bold text-slate-900">{state === 'done' ? shortDate(store.progress.dueDate) : 'Hari ini'}</dd></div>
+              <div className="rounded-xl bg-slate-50 p-2.5"><dt className="text-[11px] font-semibold text-slate-500">{state === 'done' ? 'Periode berikutnya' : 'Batas periode'}</dt><dd className="mt-0.5 text-sm font-bold text-slate-900">{shortDate(store.progress.dueDate)}</dd></div>
             </dl>
           </>}
           {!store.hasCoordinates && <p role="alert" className="flex items-start gap-2 rounded-xl bg-amber-50 p-3 text-sm text-amber-800"><MapPinOff className="mt-0.5 h-4 w-4 shrink-0" />Koordinat toko belum diatur. Hubungi IT untuk mengatur lokasi toko sebelum melakukan visit.</p>}

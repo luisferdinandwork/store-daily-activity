@@ -273,7 +273,7 @@ export default function ImpactResultPage() {
           </Link>
         }
       />
-      <div className="relative z-0 mx-auto max-w-6xl space-y-5 p-4 lg:p-6 @container">
+      <div className="relative z-0 space-y-5 p-4 lg:p-6 @container">
         {loading ? (
           <Loader2
             aria-label="Memuat hasil"

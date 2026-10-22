@@ -398,7 +398,7 @@ export default function ItIssuesPage() {
         refreshing={loading}
       />
 
-      <div className="mx-auto max-w-7xl space-y-3 px-4 py-5 sm:px-6 lg:px-8">
+      <div className="space-y-3 px-4 py-5 sm:px-6 lg:px-8">
         {/* Filters */}
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative min-w-[220px] flex-1">

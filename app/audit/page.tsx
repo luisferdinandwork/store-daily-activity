@@ -1,4 +1,6 @@
 'use client';
+
+import PanelPageHeader from '@/components/shared/PanelPageHeader';
 // app/audit/page.tsx — Audit dashboard landing page.
 
 import { useEffect, useState, useCallback } from 'react';
@@ -73,17 +75,17 @@ export default function AuditDashboardPage() {
 
   return (
     <div className="min-h-full bg-slate-50">
-      <div className="border-b border-slate-200 bg-white px-6 py-5 lg:px-8">
-        <div className="mx-auto max-w-7xl">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-amber-600">Audit</p>
-          <h1 className="text-xl font-bold text-slate-900">Dashboard</h1>
-          <p className="mt-0.5 text-xs text-slate-400">
-            {issues.length} issue{issues.length !== 1 ? 's' : ''} routed to Audit
-          </p>
-        </div>
-      </div>
+      <PanelPageHeader
+        scope="Audit"
+        title="Dashboard"
+        subtitle={<>
 
-      <div className="mx-auto max-w-7xl space-y-6 p-6 lg:p-8">
+            {issues.length} issue{issues.length !== 1 ? 's' : ''} routed to Audit
+
+        </>}
+      />
+
+      <div className="space-y-6 p-6 lg:p-8">
         {loading ? (
           <div className="flex items-center justify-center py-20"><Loader2 className="h-8 w-8 animate-spin text-amber-400" /></div>
         ) : (

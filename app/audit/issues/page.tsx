@@ -1,5 +1,7 @@
 'use client';
 
+import PanelPageHeader from '@/components/shared/PanelPageHeader';
+
 // app/audit/issues/page.tsx — Audit issue inbox (desktop)
 //
 // Adapted from app/ops/issues/page.tsx: same list + detail-drawer mechanics,
@@ -359,15 +361,15 @@ export default function AuditIssuesPage() {
   return (
     <div className="min-h-full bg-slate-50">
       {/* Header */}
-      <div className="border-b border-slate-200 bg-white px-6 py-5 lg:px-8">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-amber-600">Audit</p>
-            <h1 className="text-xl font-bold text-slate-900">Issue Reports</h1>
-            <p className="mt-0.5 text-xs text-slate-400">
+      <PanelPageHeader
+        scope="Audit"
+        title="Issue Reports"
+        subtitle={<>
+
               {issuesList.length} issue{issuesList.length !== 1 ? 's' : ''} routed to Audit
-            </p>
-          </div>
+
+        </>}
+        actions={
           <button
             onClick={() => load(true)}
             disabled={refreshing}
@@ -376,10 +378,10 @@ export default function AuditIssuesPage() {
             <RefreshCw className={cn('h-3.5 w-3.5', refreshing && 'animate-spin')} />
             Refresh
           </button>
-        </div>
-      </div>
+        }
+      />
 
-      <div className="mx-auto max-w-7xl space-y-6 p-6 lg:p-8">
+      <div className="space-y-6 p-6 lg:p-8">
 
         {/* Store filter */}
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">

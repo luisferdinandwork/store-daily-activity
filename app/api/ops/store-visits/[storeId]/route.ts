@@ -29,7 +29,7 @@ export async function GET(_req: NextRequest, ctx: Context) {
   if (!guard.ok) return guard.response;
   try {
     const [list, config, visits] = await Promise.all([
-      visitStores(guard.actor.isHO ? null : guard.actor.areaId), visitConfiguration(), visitHistory(guard.store.id),
+      visitStores(guard.actor.isHO ? null : guard.actor.areaId), visitConfiguration(), visitHistory(guard.store.id, guard.actor),
     ]);
     return NextResponse.json({ success: true, store: list.find((s) => s.id === guard.store.id), tasks: config.tasks, version: config.version, canSubmit: guard.canSubmit, visits });
   } catch (error) {

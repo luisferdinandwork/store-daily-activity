@@ -596,7 +596,7 @@ export default function OpsItemTransfersPage() {
         contentClassName="w-full"
       />
 
-      <div className="mx-auto max-w-7xl space-y-6 p-6 lg:p-8">
+      <div className="space-y-6 p-6 lg:p-8">
         {syncWarnings.length > 0 && (
           <div className="flex items-start gap-2.5 rounded-2xl border border-red-200 bg-red-50 px-4 py-3.5">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />

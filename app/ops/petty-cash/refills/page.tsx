@@ -459,6 +459,7 @@ export default function OpsPettyCashRefillsPage() {
 
       {/* ── Desktop ────────────────────────────────────────────────────────── */}
       <OpsPageHeader
+        display="desktop"
         className="hidden md:block"
         scope={isHo ? 'OPS HO · All areas' : 'OPS · Area Approval'}
         title="Petty Cash"

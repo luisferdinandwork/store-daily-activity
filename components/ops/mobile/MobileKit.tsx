@@ -9,6 +9,7 @@
 import type { ElementType, ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import PanelPageHeader, { usePanelPageHeader } from '@/components/shared/PanelPageHeader';
 
 // ─── Page header ─────────────────────────────────────────────────────────────
 
@@ -28,6 +29,12 @@ export function MobilePageHeader({
   refreshing?: boolean;
   children?: ReactNode;
 }) {
+  const panelHeader = usePanelPageHeader();
+  if (panelHeader) return <PanelPageHeader display="mobile" scope={eyebrow} title={title} subtitle={subtitle} tabs={children} actions={onRefresh && (
+    <button type="button" onClick={onRefresh} disabled={refreshing} aria-label="Muat ulang" className="flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-60">
+      <RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} />Muat ulang
+    </button>
+  )} />;
   return (
     <div className="sticky top-0 z-10 border-b border-slate-200/80 bg-slate-50/95 px-4 pb-3 pt-3 backdrop-blur">
       <div className="flex items-start gap-3">

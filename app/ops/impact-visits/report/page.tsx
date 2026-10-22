@@ -203,7 +203,7 @@ export default function ImpactVisitReportPage() {
         refreshing={loading}
       />
       {/* This stacking context keeps every frozen table cell below the page header. */}
-      <div className="relative z-0 mx-auto max-w-[1600px] space-y-5 p-4 lg:p-6">
+      <div className="relative z-0 space-y-5 p-4 lg:p-6">
         <section className="flex flex-wrap items-end gap-4 rounded-2xl border border-slate-200 bg-white p-4">
           <div className="min-w-56 flex-1">
             <p className="mb-2 text-xs font-semibold text-slate-500">Toko</p>

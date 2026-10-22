@@ -1374,7 +1374,7 @@ export default function OpsSchedulesPage() {
         }
       />
 
-      <div className="mx-auto max-w-7xl space-y-6 p-6 lg:p-8">
+      <div className="space-y-6 p-6 lg:p-8">
 
         {/* ── Store picker ── */}
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">

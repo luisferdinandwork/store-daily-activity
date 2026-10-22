@@ -1,4 +1,6 @@
 'use client';
+
+import PanelPageHeader from '@/components/shared/PanelPageHeader';
 // app/it/switch-role/page.tsx — IT self-service role preview.
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
@@ -261,15 +263,13 @@ export default function SwitchRolePage() {
 
   return (
     <div className="min-h-full bg-slate-50">
-      <div className="border-b border-slate-200 bg-white px-6 py-5 lg:px-8">
-        <div className="mx-auto max-w-3xl">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-cyan-600">IT</p>
-          <h1 className="text-xl font-bold text-slate-900">Switch Role</h1>
-          <p className="mt-0.5 text-xs text-slate-400">Preview the app as another role. You can switch back any time.</p>
-        </div>
-      </div>
+      <PanelPageHeader
+        scope="IT"
+        title="Switch Role"
+        subtitle="Preview the app as another role. You can switch back any time."
+      />
 
-      <div className="mx-auto max-w-3xl space-y-6 p-6 lg:p-8">
+      <div className="space-y-6 p-6 lg:p-8">
         {loading ? (
           <div className="flex items-center justify-center py-20"><Loader2 className="h-8 w-8 animate-spin text-cyan-400" /></div>
         ) : (

@@ -1,4 +1,6 @@
 'use client';
+
+import PanelPageHeader from '@/components/shared/PanelPageHeader';
 // app/it/petty-cash-categories/page.tsx — IT only.
 //
 // Manage the categories a PIC picks when requesting petty cash (Galon, ATK, …,
@@ -434,15 +436,13 @@ export default function ItPettyCashCategoriesPage() {
 
   return (
     <div className="min-h-full bg-slate-50">
-      <div className="border-b border-slate-200 bg-white px-6 py-5 lg:px-8">
-        <div className="mx-auto flex max-w-4xl items-center justify-between">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-cyan-600">IT</p>
-            <h1 className="text-xl font-bold text-slate-900">Petty Cash Categories</h1>
-            <p className="mt-0.5 text-xs text-slate-400">
+      <PanelPageHeader
+        scope="IT"
+        title="Petty Cash Categories"
+        subtitle={<>
               {categories.length} kategori · {activeCount} tampil di form Request PIC
-            </p>
-          </div>
+            </>}
+        actions={
           <Link
             href="/it"
             className="flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-600 hover:bg-slate-50"
@@ -450,10 +450,10 @@ export default function ItPettyCashCategoriesPage() {
             <ArrowLeft className="h-4 w-4" />
             Dashboard
           </Link>
-        </div>
-      </div>
+        }
+      />
 
-      <div className="mx-auto max-w-4xl space-y-3 px-4 py-5 sm:px-6 lg:px-8">
+      <div className="space-y-3 px-4 py-5 sm:px-6 lg:px-8">
         <p className="text-xs text-slate-500">
           PIC memilih kategori saat mengirim Request Petty Cash. Alasan default mengisi Keterangan
           otomatis (PIC masih bisa mengubahnya); kategori bertanda <span className="font-semibold text-amber-700">Alasan ditulis PIC</span> wajib

@@ -229,7 +229,7 @@ export default function PerformanceTargetsPage() {
         refreshing={inflight > 0}
       />
 
-      <div className="mx-auto max-w-6xl space-y-4 px-4 py-5 sm:px-6 lg:px-8">
+      <div className="space-y-4 px-4 py-5 sm:px-6 lg:px-8">
         {overviewError && (
           <div className="flex items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-700">
             <CircleAlert className="h-4 w-4 shrink-0" />

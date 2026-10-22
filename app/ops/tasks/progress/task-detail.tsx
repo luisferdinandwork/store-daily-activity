@@ -141,6 +141,51 @@ export function statusBadgeClass(status: string | null | undefined): string {
   }
 }
 
+// ─── Who did the task ────────────────────────────────────────────────────────
+//
+// The task list names the person behind the work, not the PIC: a finished task
+// is credited to whoever completed it (falling back to whoever opened it — the
+// vm / briefing / cek-uang-modal rows keep no separate "completed by"), a task
+// in the works to whoever opened it, and a task nobody has started names nobody.
+
+export type TaskDoer = {
+  /** "Dikerjakan oleh", "Sedang dikerjakan oleh" or "Belum dikerjakan". */
+  label: string;
+  /** The person, when somebody has started it. */
+  who: string | null;
+  /** When it was finished ("14:32"), if it was. */
+  time: string | null;
+};
+
+export function taskDoer(
+  task: Pick<FlatTask, 'status' | 'isPlaceholder' | 'userName' | 'userId' | 'completedByName' | 'completedAt'>,
+): TaskDoer {
+  const status = task.status ?? 'not_started';
+  if (task.isPlaceholder || status === 'not_started') return { label: 'Belum dikerjakan', who: null, time: null };
+
+  const opener = task.userName ?? task.userId;
+  if (status === 'in_progress') return { label: 'Sedang dikerjakan oleh', who: opener, time: null };
+
+  const finished = status === 'completed' || status === 'verified' || status === 'rejected';
+  return {
+    label: 'Dikerjakan oleh',
+    who: finished ? (task.completedByName ?? opener) : opener,
+    time: finished && task.completedAt ? fmtTime(task.completedAt) : null,
+  };
+}
+
+/** "Dikerjakan oleh Budi · 14:32" — the person in bold, the rest quiet. */
+export function DoerLine({ task, className }: { task: Parameters<typeof taskDoer>[0]; className?: string }) {
+  const { label, who, time } = taskDoer(task);
+  return (
+    <p className={cn('truncate text-slate-400', className)}>
+      {label}
+      {who && <> <span className="font-semibold text-slate-700">{who}</span></>}
+      {time && <> · {time}</>}
+    </p>
+  );
+}
+
 // ─── Actor-name resolution ───────────────────────────────────────────────────
 //
 // For a checklist key like `loginPos`, the server stores `loginPosBy` (id) and
@@ -1262,9 +1307,7 @@ export function TaskDetailView({
             <div className="flex items-center gap-2">
               <h2 className="truncate text-lg font-bold text-slate-900">{label}</h2>
             </div>
-            <p className="mt-0.5 text-[11px] text-slate-400">
-              {task.isPlaceholder ? 'Terjadwal' : 'PIC'}: {task.userName ?? task.userId}
-            </p>
+            <DoerLine task={task} className="mt-0.5 text-[11px]" />
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1">
             <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-bold', statusBadgeClass(status))}>

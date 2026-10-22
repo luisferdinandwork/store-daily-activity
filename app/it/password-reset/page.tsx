@@ -1,4 +1,6 @@
 'use client';
+
+import PanelPageHeader from '@/components/shared/PanelPageHeader';
 // app/it/password-reset/page.tsx — IT only.
 //
 // "Lupa password" queue. Staff ask from the login screen with NIK + store
@@ -551,18 +553,14 @@ export default function ItPasswordResetPage() {
 
   return (
     <div className="min-h-full bg-slate-50">
-      <div className="border-b border-slate-200 bg-white px-6 py-5 lg:px-8">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-cyan-600">IT</p>
-            <h1 className="flex items-center gap-2 text-xl font-bold text-slate-900">
+      <PanelPageHeader
+        scope="IT"
+        title={<>
               <KeyRound className="h-5 w-5 text-cyan-600" />
               Reset Password
-            </h1>
-            <p className="mt-0.5 text-xs text-slate-400">
-              Permintaan &quot;Lupa password&quot; dari staf toko — verifikasi, lalu kirim link sekali pakai ke email toko.
-            </p>
-          </div>
+            </>}
+        subtitle="Permintaan &quot;Lupa password&quot; dari staf toko — verifikasi, lalu kirim link sekali pakai ke email toko."
+        actions={
           <div className="flex items-center gap-2">
             {mail && (
               <span
@@ -581,10 +579,10 @@ export default function ItPasswordResetPage() {
               Muat ulang
             </Button>
           </div>
-        </div>
-      </div>
+        }
+      />
 
-      <div className="mx-auto max-w-7xl space-y-6 p-6 lg:p-8">
+      <div className="space-y-6 p-6 lg:p-8">
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           {tiles.map(({ label, value, Icon, color }) => (
             <div key={label} className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm">

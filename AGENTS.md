@@ -58,6 +58,7 @@ Guidance for AI assistants working in this repo. Keep this file short and curren
 - Neon-HTTP-safe DB style (a holdover): avoid `db.transaction()`; prefer `onConflictDo*` + batched inserts over SELECT-then-INSERT; keep `IN (...)` lists well under the Postgres 65535-param limit.
 - Money is stored as integer Rupiah in `decimal`/`text` columns; format with `toLocaleString('id-ID')`.
 - User-facing strings are Indonesian. Server/log strings and code are English.
+- IT/Ops/Finance/Audit/PIC share `components/shared/PanelShell.tsx`. Page titles, descriptions, actions and report tabs belong in its top navbar via `PanelPageHeader` (or `OpsPageHeader` for period/date controls); don't add a second page-title band. Use the header's `display` prop for alternate mobile/desktop views. Task-specific form toolbars can remain with their form.
 - Store pickers/filters on IT pages use the searchable `components/shared/store-combobox.tsx` (pass `modal` inside a Sheet/Dialog).
 - Ops pages that browse stores/orders/visits/issues use **list rows** (`components/ops/layout/OpsList.tsx`: `OpsList` + `OpsListRow`), not multi-column card grids. KPI tiles, calendars and form fields stay grids. Their search / filter / sort bar uses `components/ops/layout/OpsToolbar.tsx` (`OpsSearchInput`, `OpsFilterSelect`, `OpsSortControl`, `OpsChipTabs`); lay rows out by container width (`@container` + `@4xl:`), not viewport — the Ops sidebar takes a quarter of the screen.
 - Route handlers return `{ success: boolean, ... }` JSON; utils return `{ success: true, data } | { success: false, error }`.

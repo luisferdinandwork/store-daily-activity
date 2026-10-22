@@ -1,4 +1,6 @@
 'use client';
+
+import PanelPageHeader from '@/components/shared/PanelPageHeader';
 // app/it/areas/page.tsx — IT Area Management.
 //
 // Thin page wrapper (IT chrome) around the shared area-management body in
@@ -42,22 +44,18 @@ export default function ItAreasPage() {
 
   return (
     <div className="min-h-full bg-slate-50">
-      <div className="border-b border-slate-200 bg-white px-6 py-5 lg:px-8">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4">
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-widest text-cyan-600">IT</p>
-            <h1 className="flex items-center gap-2 text-xl font-bold text-slate-900">
+      <PanelPageHeader
+        scope="IT"
+        title={<>
               <MapPinned className="h-5 w-5 text-cyan-600" />
               Area Management
-            </h1>
-            <p className="mt-0.5 text-xs text-slate-400">
+            </>}
+        subtitle={<>
               {info.areaCount} area · {info.storeCount} toko
-            </p>
-          </div>
-        </div>
-      </div>
+            </>}
+      />
 
-      <div className="mx-auto max-w-7xl space-y-5 p-6 lg:p-8">
+      <div className="space-y-5 p-6 lg:p-8">
         <AreaManagementView onReady={setInfo} />
       </div>
     </div>

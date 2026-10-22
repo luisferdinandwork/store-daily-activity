@@ -381,7 +381,7 @@ export default function PicTasksPage() {
         refreshing={loading || loadingRange}
       />
 
-      <div className="mx-auto max-w-5xl space-y-5 p-6 lg:p-8">
+      <div className="space-y-5 p-6 lg:p-8">
         {error ? (
           <div className="rounded-2xl border border-rose-200 bg-rose-50 px-6 py-10 text-center">
             <AlertTriangle className="mx-auto mb-2 h-8 w-8 text-rose-400" />

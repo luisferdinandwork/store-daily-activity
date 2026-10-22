@@ -440,7 +440,7 @@ export function OpsUserManagementClient() {
     <main className="min-h-screen bg-slate-50 text-slate-900">
       {/* ── Header ── */}
       <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-[1400px] flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+        <div className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-600 text-white shadow-sm">
               <Users className="h-5 w-5" strokeWidth={2.2} />
@@ -468,7 +468,7 @@ export function OpsUserManagementClient() {
 
       {/* ── Alerts ── */}
       {(error || success) && (
-        <div className="mx-auto max-w-[1400px] space-y-2 px-4 pt-3 sm:px-6">
+        <div className="space-y-2 px-4 pt-3 sm:px-6">
           {error && (
             <div className="flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-rose-700">
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -497,7 +497,7 @@ export function OpsUserManagementClient() {
       )}
 
       {/* ── Two-pane layout: Stores | Grid + Detail ── */}
-      <div className="mx-auto max-w-[1400px] p-4 sm:p-6">
+      <div className="p-4 sm:p-6">
         <div className="flex h-[calc(100vh-9rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm lg:grid lg:grid-cols-[280px_1fr]">
           {/* ── Left: Store panel with search ── */}
           <section className="flex min-h-0 max-h-[40vh] flex-col border-b border-slate-200 lg:max-h-none lg:border-b-0 lg:border-r">

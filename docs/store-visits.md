@@ -11,3 +11,14 @@
 Migration `0033_clean_jamie_braddock` adds three tables and inserts the initial checklist/policies. Run staging migration before testing. For production follow the repository staging → production migration flow before code deployment.
 
 Checks: `npx tsc --noEmit`, `npx tsx scripts/test-store-visit-rules.ts`; staging API checks: `npx dotenv -e .env.local -- tsx scripts/test-store-visit-api.ts`. API checks use existing test accounts, avoid updating settings, and clean up only their own visit evidence.
+
+Report access: Ops Area sees only visits they submitted within their assigned area, including calendar, cycle/history counts, latest visit and activity. Store-detail history also hides colleagues' evidence. HO/IT see all active areas and all visitors. Test with `npx tsx scripts/test-store-visit-report.ts` against the local dev server after seeding; it reads staging and does not change visit data.
+
+Staging report demo (each seed previews by default; append `--apply` to write):
+
+```bash
+npx tsx scripts/seed/sync-production-stores.ts
+npx tsx scripts/seed/store-visit-demo.ts --today=2026-10-22
+```
+
+The master sync reads production through a read-only connection, matches area names and store codes, preserves staging IDs/history/balances, and saves a staging master backup in the system temp directory before writing. It copies store metadata and areas only. Demo visits use deterministic IDs, labeled notes and `/demo/store-visit.svg`; rerunning the same date adds no duplicate visits. Fixtures cover met/missed cycles, same-day repeats, missing policies and same-area colleagues. New `VISIT-DEMO-AREA-<staging area ID>` Ops Area accounts use `password123`; existing accounts/passwords and visit settings are preserved. Dates default to today's WIB date when `--today` is omitted.
