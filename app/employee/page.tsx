@@ -1,7 +1,7 @@
 "use client";
 // app/employee/page.tsx
 
-import { useState } from "react";
+import { useState, type ElementType } from "react";
 import { useApi } from "@/lib/client/use-api";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
@@ -13,16 +13,15 @@ import {
   Moon,
   LogIn,
   CalendarDays,
-  CheckCircle2,
   Clock,
-  XCircle,
   AlertCircle,
   Zap,
   CalendarOff,
   Receipt,
   CircleDollarSign,
 } from "lucide-react";
-import { attendanceStatusLabel, type AttendanceStatus } from "@/lib/attendance-status";
+import { ATTENDANCE_STATUSES, type AttendanceStatus } from "@/lib/attendance-status";
+import { STATUS } from "@/components/status/AttendanceStatus";
 import { cn } from "@/lib/utils";
 import { shiftLabel } from "@/components/employee/tasks";
 import { Chip, ListGroup, NavRow, SectionLabel, SkeletonBlocks } from "@/components/employee/ui";
@@ -221,62 +220,15 @@ function fmtCompactRp(value: number | null | undefined): string {
   return `Rp ${Math.round(n)}`;
 }
 
-const ATT_CFG = {
-  present: {
-    Icon: CheckCircle2,
-    label: "Present",
-    textClass: "text-green-400",
+// On the dark hero: label + icon + the status's on-dark colour, all from components/status/AttendanceStatus.tsx.
+const ATT_CFG = Object.fromEntries(
+  ATTENDANCE_STATUSES.map((status) => [status, {
+    Icon: STATUS[status].Icon,
+    label: STATUS[status].label,
+    textClass: STATUS[status].onDark,
     bg: "bg-white/10",
-  },
-  late: {
-    Icon: Clock,
-    label: "Late",
-    textClass: "text-amber-300",
-    bg: "bg-white/10",
-  },
-  absent: {
-    Icon: XCircle,
-    label: "Absent",
-    textClass: "text-red-400",
-    bg: "bg-white/10",
-  },
-  excused: {
-    Icon: AlertCircle,
-    label: attendanceStatusLabel("excused"),
-    textClass: "text-white/60",
-    bg: "bg-white/10",
-  },
-  dinas: {
-    Icon: AlertCircle,
-    label: attendanceStatusLabel("dinas"),
-    textClass: "text-white/60",
-    bg: "bg-white/10",
-  },
-  cuti: {
-    Icon: AlertCircle,
-    label: attendanceStatusLabel("cuti"),
-    textClass: "text-white/60",
-    bg: "bg-white/10",
-  },
-  sakit_tanpa_surat: {
-    Icon: AlertCircle,
-    label: attendanceStatusLabel("sakit_tanpa_surat"),
-    textClass: "text-white/60",
-    bg: "bg-white/10",
-  },
-  sakit_dengan_surat: {
-    Icon: AlertCircle,
-    label: attendanceStatusLabel("sakit_dengan_surat"),
-    textClass: "text-white/60",
-    bg: "bg-white/10",
-  },
-  backup: {
-    Icon: AlertCircle,
-    label: attendanceStatusLabel("backup"),
-    textClass: "text-white/60",
-    bg: "bg-white/10",
-  },
-} satisfies Record<AttendanceStatus, unknown>;
+  }]),
+) as Record<AttendanceStatus, { Icon: ElementType; label: string; textClass: string; bg: string }>;
 
 // ─── PeriodToggle ─────────────────────────────────────────────────────────────
 

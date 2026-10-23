@@ -19,9 +19,10 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { TONES, rateTone } from '@/lib/status-theme';
 import type { AreaGroup } from '@/app/api/ops/stores/route';
 import type { AreaSettingsRow, AreaStoreRow, OpsAreaUserRow, StorePic } from '@/app/api/ops/areas/route';
-import { AttendanceCountsLine } from '@/components/ops/AttendanceStatus';
+import { AttendanceCountsLine } from '@/components/status/AttendanceStatus';
 import { OpsSearchInput } from '@/components/ops/layout/OpsToolbar';
 import IndonesiaAreaMap, { type MapArea } from '@/components/ops/areas/IndonesiaAreaMap';
 import { EMPTY_COUNTS, addCounts, showedUp, type AttendanceCounts } from '@/lib/attendance-health';
@@ -37,10 +38,8 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 // ─── Shared bits ──────────────────────────────────────────────────────────────
 
 function rateColor(rate: number, total: number) {
-  if (total === 0) return { text: 'text-slate-400', bar: 'bg-slate-300' };
-  if (rate >= 80) return { text: 'text-emerald-600', bar: 'bg-emerald-500' };
-  if (rate >= 50) return { text: 'text-amber-600', bar: 'bg-amber-400' };
-  return { text: 'text-rose-600', bar: 'bg-rose-500' };
+  const t = TONES[total === 0 ? 'muted' : rateTone(rate)];
+  return { text: t.text, bar: t.dot };
 }
 
 function MiniBar({ pct, total }: { pct: number; total: number }) {

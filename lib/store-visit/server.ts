@@ -109,7 +109,7 @@ export async function visitReport(actor: OpsActorRecord, month?: string): Promis
   // What each Ops did in the last OPS_ACTIVITY_DAYS days — assigned Ops Area users with no
   // visit at all still get a row (that is the point), plus anyone else who visited.
   const since = addDaysKey(today, 1 - OPS_ACTIVITY_DAYS);
-  const activity = new Map<string, ReportOps>(opsRows.map((o) => [o.id, { id: o.id, name: o.name, areaName: o.areaName, visits: 0, stores: 0, lastVisitAt: null }]));
+  const activity = new Map<string, ReportOps>(opsRows.map((o) => [o.id, { id: o.id, name: o.name, areaId: o.areaId, areaName: o.areaName, visits: 0, stores: 0, lastVisitAt: null }]));
   const storesSeen = new Map<string, Set<number>>();
   for (const v of visitRows) {
     const day = jakartaDateKey(v.at);
@@ -137,6 +137,7 @@ export async function visitReport(actor: OpsActorRecord, month?: string): Promis
     .sort((a, b) => a.at.localeCompare(b.at));
 
   return {
+    scope: actor.isHO ? 'all' : 'area',
     today,
     trackedFrom,
     activityDays: OPS_ACTIVITY_DAYS,

@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import { AttendanceCountsLine } from '@/components/ops/AttendanceStatus';
+import { AttendanceCountsLine } from '@/components/status/AttendanceStatus';
 import { EMPTY_COUNTS, showedUp } from '@/lib/attendance-health';
 import { RATE_WORD, rateTone, storesBehind, type DashboardData } from '@/lib/ops-dashboard';
 import { MobileSectionTitle, Ring } from './MobileKit';

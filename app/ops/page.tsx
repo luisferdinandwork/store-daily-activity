@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
-import { AttendanceCountsLine } from '@/components/ops/AttendanceStatus';
+import { AttendanceCountsLine } from '@/components/status/AttendanceStatus';
 import DashboardMobile from '@/components/ops/mobile/DashboardMobile';
 import TrendChart from '@/components/ops/dashboard/TrendChart';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';

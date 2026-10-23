@@ -26,11 +26,13 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import {
   CheckCircle2, Clock, LogIn, LogOut, Sun, Moon, Sunrise,
-  AlertCircle, Loader2, XCircle, CalendarX, Info,
+  AlertCircle, Loader2, CalendarX, Info,
   Coffee, UtensilsCrossed, RotateCcw, Zap, AlertTriangle,
   Navigation, NavigationOff, RefreshCw,
 } from 'lucide-react';
 import { attendanceStatusLabel, type AttendanceStatus } from '@/lib/attendance-status';
+import { BREAK_TONE, TONES } from '@/lib/status-theme';
+import { STATUS } from '@/components/status/AttendanceStatus';
 import { cn, formatRupiah } from '@/lib/utils';
 import { toast } from 'sonner';
 import CashCountCard, { type CashCountPayload } from '@/components/employee/CashCountCard';
@@ -139,19 +141,10 @@ const breaksOf   = (s: ScheduleMeta): ShiftBreakDef[] =>
 
 // ─── Status config ────────────────────────────────────────────────────────────
 
-const STATUS_CFG: Record<AttStatus, { label: string; Icon: React.ElementType; text: string; tile: string; dot: string }> = {
-  present: { label: 'Present', Icon: CheckCircle2, text: 'text-emerald-600', tile: 'bg-emerald-50', dot: 'bg-emerald-500' },
-  late:    { label: 'Late',    Icon: Clock,        text: 'text-amber-600',   tile: 'bg-amber-50',   dot: 'bg-amber-500'   },
-  absent:  { label: 'Absent',  Icon: XCircle,      text: 'text-red-600',     tile: 'bg-red-50',     dot: 'bg-red-500'     },
-  excused: { label: attendanceStatusLabel('excused'), Icon: AlertCircle,  text: 'text-muted-foreground', tile: 'bg-secondary', dot: 'bg-muted-foreground' },
-  dinas:              { label: attendanceStatusLabel('dinas'),              Icon: AlertCircle, text: 'text-indigo-600', tile: 'bg-indigo-50', dot: 'bg-indigo-500' },
-  cuti:               { label: attendanceStatusLabel('cuti'),               Icon: AlertCircle, text: 'text-violet-600', tile: 'bg-violet-50', dot: 'bg-violet-500' },
-  sakit_tanpa_surat:  { label: attendanceStatusLabel('sakit_tanpa_surat'),  Icon: AlertCircle, text: 'text-orange-600', tile: 'bg-orange-50', dot: 'bg-orange-500' },
-  sakit_dengan_surat: { label: attendanceStatusLabel('sakit_dengan_surat'), Icon: AlertCircle, text: 'text-teal-600',   tile: 'bg-teal-50',   dot: 'bg-teal-500'   },
-  backup:             { label: attendanceStatusLabel('backup'),             Icon: CheckCircle2, text: 'text-cyan-600',  tile: 'bg-cyan-50',   dot: 'bg-cyan-500'   },
-};
-const BREAK_TILE = 'bg-amber-50';
-const BREAK_TEXT = 'text-amber-600';
+// Names, icons and colours are the shared ones (components/status/AttendanceStatus.tsx).
+const STATUS_CFG = STATUS;
+const BREAK_TILE = TONES.warning.tint;
+const BREAK_TEXT = TONES.warning.text;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -349,7 +342,7 @@ function ShiftCard({ slot, cashCountMissing, location, onRefreshLocation, onActi
   const cashInNum   = parseFloat(cashInInput);
   const cashInValid = cashInInput !== '' && !isNaN(cashInNum) && cashInNum >= 0;
 
-  const statusTile = onBreak ? BREAK_TILE : (cfg?.tile ?? 'bg-secondary');
+  const statusTile = onBreak ? BREAK_TILE : (cfg?.tint ?? 'bg-secondary');
   const statusText = onBreak ? BREAK_TEXT : (cfg?.text ?? 'text-foreground');
   const StatusIcon = onBreak ? Coffee : (cfg?.Icon ?? Clock);
   const statusLabel = onBreak
@@ -375,8 +368,8 @@ function ShiftCard({ slot, cashCountMissing, location, onRefreshLocation, onActi
             </p>
           </div>
           {cfg && (
-            <span className={cn('inline-flex flex-shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold', onBreak ? 'bg-amber-50 text-amber-700' : `${cfg.tile} ${cfg.text}`)}>
-              <span className={cn('h-1.5 w-1.5 rounded-full', onBreak ? 'bg-amber-500' : cfg.dot)} />
+            <span className={cn('inline-flex flex-shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold', onBreak ? `${TONES.warning.tint} ${TONES.warning.strong}` : `${cfg.tint} ${cfg.text}`)}>
+              <span className={cn('h-1.5 w-1.5 rounded-full', onBreak ? TONES.warning.dot : cfg.dot)} />
               {onBreak ? 'On Break' : cfg.label}
             </span>
           )}
@@ -663,11 +656,7 @@ export default function EmployeeAttendancePage() {
                       <span className="opacity-40">·</span>
                       <span className={cn(
                         'font-semibold',
-                        att.onBreak                ? 'text-amber-300'
-                        : att.status === 'present' ? 'text-green-300'
-                        : att.status === 'late'    ? 'text-amber-300'
-                        : att.status === 'absent'  ? 'text-red-300'
-                        : 'text-primary-foreground/70',
+                        att.onBreak ? TONES[BREAK_TONE].onDark : STATUS[att.status].onDark,
                       )}>
                         {att.onBreak ? 'On Break' : attendanceStatusLabel(att.status)}
                       </span>

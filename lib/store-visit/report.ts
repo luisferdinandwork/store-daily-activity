@@ -49,6 +49,7 @@ export interface ReportStore {
 export interface ReportOps {
   id: string;
   name: string;
+  areaId?: number | null;
   areaName: string | null;
   /** Visits in the last OPS_ACTIVITY_DAYS days. */
   visits: number;
@@ -70,6 +71,8 @@ export interface CalendarVisit {
 }
 
 export interface VisitReport {
+  /** 'area' = one Ops Area's own planner; 'all' = Ops HO / IT watching every area. */
+  scope: 'area' | 'all';
   today: string;
   trackedFrom: string | null;
   activityDays: number;

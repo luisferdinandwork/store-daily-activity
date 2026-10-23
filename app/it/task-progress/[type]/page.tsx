@@ -248,7 +248,7 @@ export default function ItTaskProgressPage({
               <MetricTile
                 label={board ? 'Toko tanpa antrean' : 'Toko selesai'}
                 value={firstLoad ? '–' : `${dayRate}%`}
-                tone={dayRate >= 80 ? 'emerald' : dayRate >= 50 ? 'amber' : 'rose'}
+                tone={dayRate >= 80 ? 'success' : dayRate >= 50 ? 'warning' : 'danger'}
                 hint={`${dayDone}/${scheduled} toko${counts.none ? ` · ${counts.none} tidak terjadwal` : ''}`}
                 footer={<RateBar rate={dayRate} />}
                 active={group === 'done'}
@@ -257,7 +257,7 @@ export default function ItTaskProgressPage({
               <MetricTile
                 label="Perlu perhatian"
                 value={firstLoad ? '–' : counts.attention}
-                tone={counts.attention ? (isPast ? 'rose' : 'amber') : 'emerald'}
+                tone={counts.attention ? (isPast ? 'danger' : 'warning') : 'success'}
                 hint={board ? 'item tertahan / > 1 hari' : isPast ? 'tidak dikerjakan / pending' : 'belum mulai / pending'}
                 active={group === 'attention'}
                 onClick={() => toggleGroup('attention')}
@@ -265,7 +265,7 @@ export default function ItTaskProgressPage({
               <MetricTile
                 label={board ? 'Menunggu diterima' : 'Sedang berjalan'}
                 value={firstLoad ? '–' : counts.running}
-                tone="indigo"
+                tone="active"
                 hint={board ? 'item baru' : 'dimulai, belum selesai'}
                 active={group === 'running'}
                 onClick={() => toggleGroup('running')}
@@ -283,16 +283,16 @@ export default function ItTaskProgressPage({
               <MetricTile
                 label="Progress periode"
                 value={firstLoad ? '–' : `${rangeStats.rate}%`}
-                tone={rangeStats.rate >= 80 ? 'emerald' : rangeStats.rate >= 50 ? 'amber' : 'rose'}
+                tone={rangeStats.rate >= 80 ? 'success' : rangeStats.rate >= 50 ? 'warning' : 'danger'}
                 hint={`${rangeStats.done}/${rangeStats.total} hari-toko selesai`}
                 footer={<RateBar rate={rangeStats.rate} />}
               />
-              <MetricTile label="Hari terlewat" value={firstLoad ? '–' : rangeStats.missed} tone={rangeStats.missed ? 'rose' : 'emerald'} hint="hari-toko tidak dikerjakan" />
-              <MetricTile label="Toko 100%" value={firstLoad ? '–' : rangeStats.perfect} tone="emerald" hint="selesai setiap hari terjadwal" />
+              <MetricTile label="Hari terlewat" value={firstLoad ? '–' : rangeStats.missed} tone={rangeStats.missed ? 'danger' : 'success'} hint="hari-toko tidak dikerjakan" />
+              <MetricTile label="Toko 100%" value={firstLoad ? '–' : rangeStats.perfect} tone="success" hint="selesai setiap hari terjadwal" />
               <MetricTile
                 label="Toko di bawah 50%"
                 value={firstLoad ? '–' : rangeStats.low}
-                tone={rangeStats.low ? 'rose' : 'emerald'}
+                tone={rangeStats.low ? 'danger' : 'success'}
                 hint={onlyBehind ? 'Klik untuk tampilkan semua' : 'Klik: belum selesai saja'}
                 active={onlyBehind}
                 onClick={() => setOnlyBehind((v) => !v)}

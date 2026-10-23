@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import { useHydrated } from '@/lib/hooks/useHydrated';
 import { Button } from '@/components/ui/button';
 import { Calendar } from '@/components/ui/calendar';
 import PanelPageHeader, { usePanelPageHeader } from '@/components/shared/PanelPageHeader';
@@ -381,6 +382,7 @@ export function OpsPageHeader({
 }: OpsPageHeaderProps) {
   const [internalDate, setInternalDate] = useState(todayKey());
   const panelHeader = usePanelPageHeader();
+  const hydrated = useHydrated();
 
   const hasPeriod = !!periodProps;
   const period: Period = periodProps?.period ?? 'daily';
@@ -391,14 +393,18 @@ export function OpsPageHeader({
     else setInternalDate(dateKey);
   };
 
+  // Inside a panel shell the header is portalled into the navbar (client only); outside it renders
+  // inline. Pick between the two only once hydrated so the server HTML and the first client render agree.
+  if (!hydrated) return null;
+
   if (panelHeader) {
     return (
-      <PanelPageHeader scope={scope} title={title} subtitle={subtitle} tabs={tabs} display={display} wideActions={hasPeriod} actions={(hasPeriod || onRefresh || actions) ? (
+      <PanelPageHeader scope={scope} title={title} subtitle={subtitle} tabs={tabs} display={display} wideActions={hasPeriod} compactActions={!hasPeriod && !actions && !!onRefresh} actions={(hasPeriod || onRefresh || actions) ? (
         <>
           {hasPeriod && periodProps?.onPeriodChange && <PeriodTabs value={period} onChange={periodProps.onPeriodChange} periods={periodProps.periods} />}
           {hasPeriod && <RangeNavigator period={period} date={date} setDate={handleDateChange} compact />}
-          {onRefresh && <Button type="button" variant="outline" size="sm" onClick={onRefresh} disabled={refreshing} className="h-10 gap-2 rounded-lg text-xs font-semibold">
-            <RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} />Muat ulang
+          {onRefresh && <Button type="button" variant="outline" size="sm" onClick={onRefresh} disabled={refreshing} aria-label="Muat ulang" className={cn('h-10 gap-2 rounded-lg text-xs font-semibold', !hasPeriod && !actions && 'max-md:w-11 max-md:rounded-full max-md:border-transparent max-md:px-0 max-md:text-slate-500')}>
+            <RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} /><span className={cn(!hasPeriod && !actions && 'max-md:hidden')}>Muat ulang</span>
           </Button>}
           {actions}
         </>

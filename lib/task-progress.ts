@@ -6,6 +6,7 @@
 
 import { SHIFT_LABELS, TASK_CATALOG, type ShiftCode, type TaskCatalogEntry } from '@/lib/shift-tasks';
 import { jakartaTodayKey } from '@/lib/day-bucket';
+import { TONES, storeProgressTone } from '@/lib/status-theme';
 
 // ─── Shapes shared by the API and the pages ──────────────────────────────────
 
@@ -156,15 +157,9 @@ export function storeProgressLabel(p: StoreProgress, isPast: boolean, board = fa
   }
 }
 
+/** Bordered badge classes for a store's roll-up — the colours are lib/status-theme.ts. */
 export function storeProgressBadgeClass(key: StoreProgressKey, isPast: boolean): string {
-  switch (key) {
-    case 'pending': return 'bg-amber-50 text-amber-700 border-amber-300';
-    case 'not_started': return isPast ? 'bg-rose-50 text-rose-700 border-rose-200' : 'bg-amber-50 text-amber-600 border-amber-200';
-    case 'partial': return isPast ? 'bg-rose-50 text-rose-700 border-rose-200' : 'bg-indigo-50 text-indigo-700 border-indigo-200';
-    case 'in_progress': return 'bg-indigo-50 text-indigo-700 border-indigo-200';
-    case 'completed': return 'bg-emerald-50 text-emerald-700 border-emerald-200';
-    default: return 'bg-slate-50 text-slate-400 border-slate-200';
-  }
+  return TONES[storeProgressTone(key, isPast)].chip;
 }
 
 export function shiftLabel(shift: string | null | undefined): string {

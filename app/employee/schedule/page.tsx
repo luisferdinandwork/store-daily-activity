@@ -14,6 +14,7 @@ import {
   LogIn, LogOut, Clock, CircleAlert, CircleCheck, CalendarOff, CalendarDays,
 } from 'lucide-react';
 import { attendanceStatusLabel, isLeaveAttendanceStatus } from '@/lib/attendance-status';
+import { ATTENDANCE_TONE, BREAK_TONE, TONES, type Tone } from '@/lib/status-theme';
 import { SHIFT_ROSTER_CODE } from '@/lib/shift-tasks';
 import { jakartaDateKey, jakartaTodayKey } from '@/lib/day-bucket';
 import { cn } from '@/lib/utils';
@@ -122,8 +123,8 @@ function formatYearMonth(ym: string | null | undefined): string {
 type AttendanceBadge = {
   label: string;
   sub:   string;
-  color: string;
-  bg:    string;
+  /** Colours come from the shared attendance palette (lib/status-theme.ts). */
+  tone:  Tone;
   Icon:  typeof LogIn;
 } | null;
 
@@ -132,35 +133,36 @@ function attendanceBadge(entry: DayEntry, dateKey: string, todayKey: string): At
   if (dateKey > todayKey) return null; // future shift — nothing to report yet
 
   const att = entry.attendance;
+  const onTime = att?.status === 'late' ? ATTENDANCE_TONE.late : ATTENDANCE_TONE.present;
 
   // Ops can record Dinas / Cuti / Sakit even over a check-in — that decision wins.
   if (isLeaveAttendanceStatus(att?.status)) {
-    return { label: attendanceStatusLabel(att?.status), sub: 'Recorded by Ops.', color: '#6d28d9', bg: '#f5f3ff', Icon: Clock };
+    return { label: attendanceStatusLabel(att?.status), sub: 'Recorded by Ops.', tone: ATTENDANCE_TONE[att.status], Icon: Clock };
   }
   if (att?.checkInTime && att?.checkOutTime) {
     return {
       label: att.status === 'late' ? 'Late, then completed' : 'Completed',
       sub:   `${formatClock(att.checkInTime)} – ${formatClock(att.checkOutTime)}`,
-      color: '#15803d', bg: '#f0fdf4', Icon: LogOut,
+      tone: onTime, Icon: LogOut,
     };
   }
   if (att?.checkInTime) {
     return {
       label: att.status === 'late' ? 'Checked in late' : 'Checked in',
       sub:   `${formatClock(att.checkInTime)}${att.onBreak ? ' · on break' : ' · not checked out yet'}`,
-      color: '#c2410c', bg: '#fff7ed', Icon: LogIn,
+      tone: att.onBreak ? BREAK_TONE : onTime, Icon: LogIn,
     };
   }
   if (att?.status === 'excused') {
-    return { label: 'Excused', sub: 'Marked excused by Ops.', color: '#1d4ed8', bg: '#eff6ff', Icon: Clock };
+    return { label: 'Excused', sub: 'Marked excused by Ops.', tone: ATTENDANCE_TONE.excused, Icon: Clock };
   }
   if (att?.status === 'absent') {
-    return { label: 'Absent', sub: 'Marked absent.', color: '#b91c1c', bg: '#fef2f2', Icon: CircleAlert };
+    return { label: 'Absent', sub: 'Marked absent.', tone: ATTENDANCE_TONE.absent, Icon: CircleAlert };
   }
   if (dateKey === todayKey) {
-    return { label: 'Not checked in yet', sub: 'Shift is today.', color: '#64748b', bg: '#f8fafc', Icon: Clock };
+    return { label: 'Not checked in yet', sub: 'Shift is today.', tone: ATTENDANCE_TONE.pending, Icon: Clock };
   }
-  return { label: 'No check-in recorded', sub: 'Nothing logged for this shift.', color: '#b91c1c', bg: '#fef2f2', Icon: CircleAlert };
+  return { label: 'No check-in recorded', sub: 'Nothing logged for this shift.', tone: ATTENDANCE_TONE.absent, Icon: CircleAlert };
 }
 
 // ─── DayRow ───────────────────────────────────────────────────────────────────
@@ -226,9 +228,9 @@ function DayRow({
         {timeRange && <p className="text-[11px] font-medium tabular-nums text-muted-foreground">{timeRange}</p>}
 
         {badge && (
-          <div className="mt-1.5 flex items-center gap-1.5 rounded-lg px-2 py-1" style={{ background: badge.bg }}>
-            <badge.Icon className="h-3 w-3 shrink-0" style={{ color: badge.color }} />
-            <p className="truncate text-[10px] font-semibold" style={{ color: badge.color }}>
+          <div className={cn('mt-1.5 flex items-center gap-1.5 rounded-lg px-2 py-1', TONES[badge.tone].soft)}>
+            <badge.Icon className="h-3 w-3 shrink-0" />
+            <p className="truncate text-[10px] font-semibold">
               {badge.label}{badge.sub ? ` · ${badge.sub}` : ''}
             </p>
           </div>

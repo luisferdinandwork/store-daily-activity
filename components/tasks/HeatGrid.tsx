@@ -10,6 +10,7 @@ import { useRef, useState } from 'react';
 import { ChevronRight } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import { HEAT_STEPS, TONES, heatStep, rateTone } from '@/lib/status-theme';
 import { CELL_META, CellGlyph, type CellState } from './TaskCell';
 
 export interface HeatRow {
@@ -26,22 +27,10 @@ export type HeatCell =
 
 const WEEKDAY = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
 
-function pctBox(pct: number): string {
-  if (pct >= 100) return 'bg-emerald-500 text-white';
-  if (pct >= 80) return 'bg-emerald-200 text-emerald-900';
-  if (pct >= 50) return 'bg-amber-300 text-amber-950';
-  if (pct > 0) return 'bg-rose-300 text-rose-950';
-  return 'bg-rose-500 text-white';
-}
+const pctBox = (pct: number): string => heatStep(pct).cell;
 
 export function PctLegend({ className }: { className?: string }) {
-  const items = [
-    { box: 'bg-emerald-500', label: '100%' },
-    { box: 'bg-emerald-200', label: '80–99%' },
-    { box: 'bg-amber-300', label: '50–79%' },
-    { box: 'bg-rose-300', label: '1–49%' },
-    { box: 'bg-rose-500', label: '0%' },
-  ];
+  const items = HEAT_STEPS.map((s) => ({ box: s.swatch, label: s.label }));
   return (
     <div className={cn('flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-slate-500', className)}>
       {items.map((i) => (
@@ -155,7 +144,7 @@ export default function HeatGrid({
                           <span className="tabular-nums text-slate-400">{row.summary!.done}/{row.summary!.total}</span>
                         </div>
                         <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100">
-                          <div className={cn('h-full rounded-full', rate >= 80 ? 'bg-emerald-500' : rate >= 50 ? 'bg-amber-400' : 'bg-rose-500')} style={{ width: `${rate}%` }} />
+                          <div className={cn('h-full rounded-full', TONES[rateTone(rate)].dot)} style={{ width: `${rate}%` }} />
                         </div>
                       </div>
                     )}

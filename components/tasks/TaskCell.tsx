@@ -10,19 +10,21 @@ import { AlertTriangle, Check, Clock3, Minus, X } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import type { StoreProgress, StoreProgressKey } from '@/lib/task-progress';
+import { CELL_BOX, type CellState } from '@/lib/status-theme';
 
-export type CellState = 'done' | 'partial' | 'active' | 'flagged' | 'todo' | 'missed' | 'none' | 'clear' | 'waiting';
+export type { CellState };
 
+// Words here; the colours of every state are in lib/status-theme.ts (CELL_BOX).
 export const CELL_META: Record<CellState, { label: string; box: string }> = {
-  done: { label: 'Selesai', box: 'bg-emerald-500 text-white' },
-  partial: { label: 'Sebagian', box: 'bg-indigo-50 text-indigo-700 ring-1 ring-inset ring-indigo-200' },
-  active: { label: 'Sedang dikerjakan', box: 'bg-indigo-500 text-white' },
-  flagged: { label: 'Pending', box: 'bg-amber-400 text-amber-950' },
-  todo: { label: 'Belum dikerjakan', box: 'bg-white text-slate-300 ring-1 ring-inset ring-slate-300' },
-  missed: { label: 'Tidak dikerjakan', box: 'bg-rose-500 text-white' },
-  none: { label: 'Tidak terjadwal', box: 'bg-transparent text-slate-200' },
-  clear: { label: 'Tidak ada yang menunggu', box: 'bg-emerald-50 text-emerald-600' },
-  waiting: { label: 'Serah terima menunggu', box: 'bg-amber-400 text-amber-950' },
+  done: { label: 'Selesai', box: CELL_BOX.done },
+  partial: { label: 'Sebagian', box: CELL_BOX.partial },
+  active: { label: 'Sedang dikerjakan', box: CELL_BOX.active },
+  flagged: { label: 'Pending', box: CELL_BOX.flagged },
+  todo: { label: 'Belum dikerjakan', box: CELL_BOX.todo },
+  missed: { label: 'Tidak dikerjakan', box: CELL_BOX.missed },
+  none: { label: 'Tidak terjadwal', box: CELL_BOX.none },
+  clear: { label: 'Tidak ada yang menunggu', box: CELL_BOX.clear },
+  waiting: { label: 'Serah terima menunggu', box: CELL_BOX.waiting },
 };
 
 /** Legend order for the board and the grids. */

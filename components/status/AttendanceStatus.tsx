@@ -1,11 +1,12 @@
-// components/ops/AttendanceStatus.tsx
+// components/status/AttendanceStatus.tsx
 //
-// The one place Ops attendance statuses are defined and drawn. Every screen that
-// shows attendance — Dashboard, Attendance (calendar, day panel, store detail),
-// Stores, Areas — takes its name, icon and colours from here, so "Pending" can't
-// be "Belum hadir" on one page and "Not checked in" on another.
+// The one place attendance statuses are defined and drawn — Ops (Dashboard, Attendance,
+// Stores, Areas) and the employee app alike take their name, icon and colours from here,
+// so "Pending" can't be "Belum hadir" on one page and "Not checked in" on another, and
+// "Late" can't be amber here and fuchsia there. The colours themselves come from the shared
+// palette (lib/status-theme.ts: ATTENDANCE_TONE / HEALTH_TONE → TONES) — retune them there.
 //
-//   STATUS                      per-status look (label, icon, chip / dot / text colours)
+//   STATUS                      per-status look (label, icon, tone + chip / dot / text / tile colours)
 //   AttendanceStatusBadge/Dot   one person's status
 //   ATTENDANCE_COUNT_ITEMS      the standard order + names for a store / day's counts
 //   AttendanceCountsLine        "12 Present · 2 Late · 1 Absent · 1 Dinas · 3 Pending · 2 Not scheduled"
@@ -28,6 +29,7 @@ import {
   attendanceStatusLabel, isLeaveAttendanceStatus, type AttendanceStatus,
 } from '@/lib/attendance-status';
 import type { AttendanceCounts, AttendanceHealth } from '@/lib/attendance-health';
+import { ATTENDANCE_TONE, HEALTH_TONE, TONES, type AttendanceTag, type Tone } from '@/lib/status-theme';
 
 /** What a scheduled shift can read as: a recorded status, or pending (nothing recorded yet). */
 export type RowStatus = AttendanceStatus | 'pending';
@@ -39,37 +41,56 @@ export type RowStatus = AttendanceStatus | 'pending';
  *   not_scheduled  no shift today
  *   not_recording  the store isn't active, so nothing is recorded
  */
-export type AttendanceTag = RowStatus | 'leave' | 'off' | 'not_scheduled' | 'not_recording';
+export type { AttendanceTag };
 
 export interface StatusStyle {
   label: string;
   Icon:  ElementType;
+  tone:  Tone;
   /** Border + fill + text, for a chip. */
   chip:  string;
   /** Solid dot. */
   dot:   string;
   /** Text only, for a figure or word in running text. */
   text:  string;
+  /** Soft fill + text, for an icon tile. */
+  soft:  string;
+  /** Very light fill only (a card tile behind `text`). */
+  tint:  string;
+  /** Text colour on a dark hero banner. */
+  onDark: string;
 }
 
-// Whole class names so Tailwind sees them.
-// green = present, fuchsia = late, red = absent, blue = pending, violet = on leave.
-export const STATUS: Record<AttendanceTag, StatusStyle> = {
-  present: { label: attendanceStatusLabel('present'), Icon: CheckCircle2, chip: 'border-emerald-200 bg-emerald-50 text-emerald-700', dot: 'bg-emerald-500', text: 'text-emerald-600' },
-  late:    { label: attendanceStatusLabel('late'),    Icon: Clock,        chip: 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700', dot: 'bg-fuchsia-500', text: 'text-fuchsia-600' },
-  absent:  { label: attendanceStatusLabel('absent'),  Icon: XCircle,      chip: 'border-red-200 bg-red-50 text-red-700',             dot: 'bg-red-500',     text: 'text-red-600'     },
-  excused: { label: attendanceStatusLabel('excused'), Icon: AlertCircle,  chip: 'border-border bg-secondary text-muted-foreground',  dot: 'bg-slate-400',   text: 'text-slate-500'   },
-  dinas:              { label: attendanceStatusLabel('dinas'),              Icon: Briefcase,   chip: 'border-indigo-200 bg-indigo-50 text-indigo-700', dot: 'bg-indigo-500', text: 'text-indigo-600' },
-  cuti:               { label: attendanceStatusLabel('cuti'),               Icon: Palmtree,    chip: 'border-violet-200 bg-violet-50 text-violet-700', dot: 'bg-violet-500', text: 'text-violet-600' },
-  sakit_tanpa_surat:  { label: attendanceStatusLabel('sakit_tanpa_surat'),  Icon: Thermometer, chip: 'border-orange-200 bg-orange-50 text-orange-700', dot: 'bg-orange-500', text: 'text-orange-600' },
-  sakit_dengan_surat: { label: attendanceStatusLabel('sakit_dengan_surat'), Icon: Stethoscope, chip: 'border-teal-200 bg-teal-50 text-teal-700',       dot: 'bg-teal-500',   text: 'text-teal-600'   },
-  backup:             { label: attendanceStatusLabel('backup'),             Icon: UserPlus,    chip: 'border-cyan-200 bg-cyan-50 text-cyan-700',       dot: 'bg-cyan-500',   text: 'text-cyan-600'   },
-  pending: { label: PENDING_LABEL,  Icon: HelpCircle, chip: 'border-sky-200 bg-sky-50 text-sky-700',             dot: 'bg-sky-400',   text: 'text-sky-600'   },
-  leave:   { label: ON_LEAVE_LABEL, Icon: CalendarOff, chip: 'border-violet-200 bg-violet-50 text-violet-700',   dot: 'bg-violet-500', text: 'text-violet-600' },
-  off:           { label: 'Off',           Icon: MinusCircle,  chip: 'border-border bg-secondary text-muted-foreground', dot: 'bg-slate-300', text: 'text-slate-500' },
-  not_scheduled: { label: 'Not scheduled', Icon: CircleDashed, chip: 'border-slate-200 bg-slate-50 text-slate-400',      dot: 'border border-dashed border-slate-300', text: 'text-slate-500' },
-  not_recording: { label: 'Not recording', Icon: CircleSlash,  chip: 'border-slate-200 bg-slate-50 text-slate-400',      dot: 'border border-dashed border-slate-300', text: 'text-slate-400' },
+const STATUS_DEF: Record<AttendanceTag, { label: string; Icon: ElementType }> = {
+  present: { label: attendanceStatusLabel('present'), Icon: CheckCircle2 },
+  late:    { label: attendanceStatusLabel('late'),    Icon: Clock },
+  absent:  { label: attendanceStatusLabel('absent'),  Icon: XCircle },
+  excused: { label: attendanceStatusLabel('excused'), Icon: AlertCircle },
+  dinas:              { label: attendanceStatusLabel('dinas'),              Icon: Briefcase },
+  cuti:               { label: attendanceStatusLabel('cuti'),               Icon: Palmtree },
+  sakit_tanpa_surat:  { label: attendanceStatusLabel('sakit_tanpa_surat'),  Icon: Thermometer },
+  sakit_dengan_surat: { label: attendanceStatusLabel('sakit_dengan_surat'), Icon: Stethoscope },
+  backup:             { label: attendanceStatusLabel('backup'),             Icon: UserPlus },
+  pending: { label: PENDING_LABEL,  Icon: HelpCircle },
+  leave:   { label: ON_LEAVE_LABEL, Icon: CalendarOff },
+  off:           { label: 'Off',           Icon: MinusCircle },
+  not_scheduled: { label: 'Not scheduled', Icon: CircleDashed },
+  not_recording: { label: 'Not recording', Icon: CircleSlash },
 };
+
+// Colours: lib/status-theme.ts. A dashed dot marks "nothing expected" (not scheduled / not recording).
+const DASHED_DOT = 'border border-dashed border-slate-300';
+export const STATUS = Object.fromEntries(
+  (Object.keys(STATUS_DEF) as AttendanceTag[]).map((tag) => {
+    const tone = ATTENDANCE_TONE[tag];
+    const t = TONES[tone];
+    return [tag, {
+      ...STATUS_DEF[tag], tone,
+      chip: t.chip, text: t.text, soft: t.soft, tint: t.tint, onDark: t.onDark,
+      dot: tag === 'not_scheduled' || tag === 'not_recording' ? DASHED_DOT : t.dot,
+    } satisfies StatusStyle];
+  }),
+) as Record<AttendanceTag, StatusStyle>;
 
 export function isAttendanceTag(value: string): value is AttendanceTag {
   return Object.prototype.hasOwnProperty.call(STATUS, value);
@@ -170,21 +191,20 @@ export function AttendanceCountsLine({
 }
 
 // ─── Health tones (store / day level) ────────────────────────────────────────
-// `bg` = solid dot/bar, `light` + `border` = tinted card, `text` = figures,
-// `ring` = selected outline.
+// `bg` = solid dot/bar, `solid` = filled pill, `light` + `border` = tinted card,
+// `text` = figures, `ring` = selected outline.
 export interface HealthStyle {
   bg: string;
+  solid: string;
   ring: string;
   text: string;
   light: string;
   border: string;
 }
 
-export const HEALTH_STYLE: Record<AttendanceHealth, HealthStyle> = {
-  good:     { bg: 'bg-emerald-500', ring: 'ring-emerald-300', text: 'text-emerald-700', light: 'bg-emerald-50', border: 'border-emerald-200' },
-  late:     { bg: 'bg-fuchsia-500', ring: 'ring-fuchsia-300', text: 'text-fuchsia-700', light: 'bg-fuchsia-50', border: 'border-fuchsia-200' },
-  risk:     { bg: 'bg-amber-400',   ring: 'ring-amber-300',   text: 'text-amber-700',   light: 'bg-amber-50',   border: 'border-amber-200'   },
-  critical: { bg: 'bg-red-500',     ring: 'ring-red-300',     text: 'text-red-700',     light: 'bg-red-50',     border: 'border-red-200'     },
-  pending:  { bg: 'bg-sky-400',     ring: 'ring-sky-300',     text: 'text-sky-700',     light: 'bg-sky-50',     border: 'border-sky-200'     },
-  none:     { bg: 'bg-slate-300',   ring: 'ring-slate-200',   text: 'text-slate-400',   light: 'bg-slate-50',   border: 'border-slate-100'   },
-};
+export const HEALTH_STYLE = Object.fromEntries(
+  (Object.keys(HEALTH_TONE) as AttendanceHealth[]).map((health) => {
+    const t = TONES[HEALTH_TONE[health]];
+    return [health, { bg: t.dot, solid: t.solid, ring: t.ring, text: t.strong, light: t.tint, border: t.border } satisfies HealthStyle];
+  }),
+) as Record<AttendanceHealth, HealthStyle>;

@@ -8,20 +8,18 @@
 import type { ReactNode } from 'react';
 
 import { cn } from '@/lib/utils';
+import { TONES, type Tone } from '@/lib/status-theme';
+import { RateBar } from '@/components/status/TaskStatus';
 
-const TONE = {
-  slate: 'text-slate-900',
-  emerald: 'text-emerald-600',
-  indigo: 'text-indigo-600',
-  amber: 'text-amber-600',
-  rose: 'text-rose-600',
-} as const;
+// The figure's colour is a shared tone (lib/status-theme.ts); `default` = plain ink.
+export type MetricTone = Tone | 'default';
+const toneText = (tone: MetricTone) => (tone === 'default' ? 'text-slate-900' : TONES[tone].text);
 
 export function MetricTile({
   label,
   value,
   hint,
-  tone = 'slate',
+  tone = 'default',
   active,
   onClick,
   footer,
@@ -29,7 +27,7 @@ export function MetricTile({
   label: string;
   value: ReactNode;
   hint?: ReactNode;
-  tone?: keyof typeof TONE;
+  tone?: MetricTone;
   active?: boolean;
   onClick?: () => void;
   footer?: ReactNode;
@@ -37,7 +35,7 @@ export function MetricTile({
   const body = (
     <>
       <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">{label}</p>
-      <p className={cn('mt-1.5 text-3xl font-semibold leading-none tracking-tight', TONE[tone])}>{value}</p>
+      <p className={cn('mt-1.5 text-3xl font-semibold leading-none tracking-tight', toneText(tone))}>{value}</p>
       {hint && <p className="mt-2 line-clamp-2 text-xs text-slate-500">{hint}</p>}
       {footer && <div className="mt-3">{footer}</div>}
     </>
@@ -54,16 +52,7 @@ export function MetricTile({
   );
 }
 
-export function RateBar({ rate, className }: { rate: number; className?: string }) {
-  return (
-    <div className={cn('h-1.5 overflow-hidden rounded-full bg-slate-100', className)}>
-      <div
-        className={cn('h-full rounded-full transition-all duration-500', rate >= 80 ? 'bg-emerald-500' : rate >= 50 ? 'bg-amber-400' : 'bg-rose-500')}
-        style={{ width: `${Math.max(0, Math.min(100, rate))}%` }}
-      />
-    </div>
-  );
-}
+export { RateBar };
 
 export function AreaBreakdown({
   items,

@@ -25,6 +25,8 @@ import {
   X,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { TONES, taskStatusTone } from '@/lib/status-theme';
+import { taskStatusInfo, taskStatusTile } from '@/components/status/TaskStatus';
 import {
   EDC_METHODS,
   EDC_METHOD_LABELS,
@@ -119,26 +121,13 @@ function fmtRupiah(val: unknown): string {
   return `Rp ${n.toLocaleString('id-ID')}`;
 }
 
+// Words and colours of a task status are shared (components/status/TaskStatus.tsx, lib/status-theme.ts).
 export function statusLabel(status: string | null | undefined): string {
-  switch (status) {
-    case 'completed':   return 'Selesai';
-    case 'verified':    return 'Terverifikasi';
-    case 'rejected':    return 'Ditolak';
-    case 'in_progress': return 'Aktif';
-    case 'pending':     return 'Pending';
-    default:            return 'Belum mulai';
-  }
+  return taskStatusInfo(status).label;
 }
 
 export function statusBadgeClass(status: string | null | undefined): string {
-  switch (status) {
-    case 'completed':   return 'bg-emerald-50 text-emerald-700 border-emerald-200';
-    case 'verified':    return 'bg-teal-50 text-teal-700 border-teal-200';
-    case 'rejected':    return 'bg-red-50 text-red-700 border-red-200';
-    case 'in_progress': return 'bg-indigo-50 text-indigo-700 border-indigo-200';
-    case 'pending':     return 'bg-amber-50 text-amber-700 border-amber-300';
-    default:            return 'bg-amber-50 text-amber-600 border-amber-200';
-  }
+  return TONES[taskStatusTone(status)].chip;
 }
 
 // ─── Who did the task ────────────────────────────────────────────────────────
@@ -1279,12 +1268,7 @@ export function TaskDetailView({
   const TaskIcon = TASK_ICONS[task.type] ?? ClipboardList;
   const status = task.status ?? 'not_started';
 
-  const iconBg =
-    status === 'completed'   ? 'bg-emerald-50 text-emerald-600' :
-    status === 'verified'    ? 'bg-teal-50 text-teal-600' :
-    status === 'in_progress' ? 'bg-indigo-50 text-indigo-600' :
-    status === 'pending'     ? 'bg-amber-50 text-amber-600' :
-    'bg-amber-50 text-amber-500';
+  const iconBg = taskStatusTile(status);
 
   return (
     <article className="flex max-h-[calc(100vh-9rem)] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">

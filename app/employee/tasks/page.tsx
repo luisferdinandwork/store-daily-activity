@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { TONES, taskStatusTone } from "@/lib/status-theme";
 import {
   CheckCircle2,
   Circle,
@@ -310,57 +311,15 @@ type Filter = "all" | "not_started" | "in_progress" | "completed";
 
 // ─── Config ────────────────────────────────────────────────────────────────────
 
-const STATUS_CFG: Record<
-  TaskStatus,
-  {
-    Icon: ElementType;
-    label: string;
-    badgeCls: string;
-    accentCls: string;
-  }
-> = {
-  pending: {
-    Icon: AlertTriangle,
-    label: "Pending",
-    badgeCls: "bg-amber-100 text-amber-700 hover:bg-amber-100",
-    accentCls: "bg-amber-400",
-  },
-  in_progress: {
-    Icon: Clock,
-    label: "Active",
-    badgeCls: "bg-primary/10 text-primary hover:bg-primary/10",
-    accentCls: "bg-primary",
-  },
-  not_started: {
-    Icon: Circle,
-    label: "Not Started",
-    badgeCls: "bg-amber-50 text-amber-600 hover:bg-amber-50",
-    accentCls: "bg-amber-200",
-  },
-  completed: {
-    Icon: CheckCircle2,
-    label: "Done",
-    badgeCls: "bg-green-50 text-green-700 hover:bg-green-50",
-    accentCls: "bg-green-500",
-  },
-  verified: {
-    Icon: CheckCircle2,
-    label: "Verified",
-    badgeCls: "bg-green-100 text-green-800 hover:bg-green-100",
-    accentCls: "bg-green-600",
-  },
-  rejected: {
-    Icon: XCircle,
-    label: "Rejected",
-    badgeCls: "bg-red-50 text-red-600 hover:bg-red-50",
-    accentCls: "bg-red-500",
-  },
-  on_hold: {
-    Icon: PauseCircle,
-    label: "Ditahan",
-    badgeCls: "bg-amber-50 text-amber-700 hover:bg-amber-50",
-    accentCls: "bg-amber-400",
-  },
+// Icon + words per status; the colours are the shared task palette (lib/status-theme.ts → taskStatusTone).
+const STATUS_CFG: Record<TaskStatus, { Icon: ElementType; label: string }> = {
+  pending: { Icon: AlertTriangle, label: "Pending" },
+  in_progress: { Icon: Clock, label: "Active" },
+  not_started: { Icon: Circle, label: "Not Started" },
+  completed: { Icon: CheckCircle2, label: "Done" },
+  verified: { Icon: CheckCircle2, label: "Verified" },
+  rejected: { Icon: XCircle, label: "Rejected" },
+  on_hold: { Icon: PauseCircle, label: "Ditahan" },
 };
 
 const STATUS_PRIORITY: Record<TaskStatus, number> = {
@@ -1647,6 +1606,7 @@ function TaskCard({
   };
 
   const cfg = STATUS_CFG[status] ?? STATUS_CFG.not_started;
+  const statusTone = TONES[taskStatusTone(status)];
 
   const meta = TASK_META[item.type] ?? {
     title: item.type.replaceAll("_", " "),
@@ -1773,7 +1733,7 @@ function TaskCard({
       <div
         className={cn(
           "absolute left-0 top-0 bottom-0 w-1",
-          cfg.accentCls,
+          statusTone.dot,
           status === "in_progress" && "animate-pulse",
           isDiscrepancy && "animate-pulse",
         )}
@@ -1849,7 +1809,7 @@ function TaskCard({
               <Badge
                 className={cn(
                   "h-[18px] gap-1 px-1.5 text-[10px] font-semibold",
-                  cfg.badgeCls,
+                  statusTone.soft,
                 )}
               >
                 <StatusIcon className="h-2.5 w-2.5" />

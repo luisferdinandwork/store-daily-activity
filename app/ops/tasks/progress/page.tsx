@@ -17,6 +17,7 @@ import { useMemo, useState } from 'react';
 import { AlertCircle } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import { TONES, rateTone } from '@/lib/status-theme';
 import { useApi } from '@/lib/client/use-api';
 import { jakartaTodayKey } from '@/lib/day-bucket';
 import OpsPageHeader, { type Period } from '@/components/ops/layout/OpsPageHeader';
@@ -242,7 +243,7 @@ export default function OpsTaskProgressPage() {
             </div>
             <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
               <div
-                className={cn('h-full rounded-full transition-all duration-500', totals.rate >= 80 ? 'bg-emerald-500' : totals.rate >= 50 ? 'bg-amber-400' : 'bg-rose-500')}
+                className={cn('h-full rounded-full transition-all duration-500', TONES[rateTone(totals.rate)].dot)}
                 style={{ width: `${totals.rate}%` }}
               />
             </div>

@@ -9,6 +9,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, AlertTriangle, ChevronDown, ChevronRight, ClipboardList, History, Loader2, User } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import { TONES, TONE_HEX, rateTone } from '@/lib/status-theme';
+import { taskStatusTile } from '@/components/status/TaskStatus';
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet';
 import { EDC_BANKS } from '@/lib/store-closing-edc';
 import {
@@ -56,11 +58,7 @@ function fmtDateLabel(date: string): string {
   return new Date(`${date}T00:00:00`).toLocaleDateString('id-ID', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' });
 }
 
-function rateColor(rate: number): string {
-  if (rate >= 100) return '#10b981';
-  if (rate === 0) return '#fbbf24';
-  return '#6366f1';
-}
+const rateColor = (rate: number): string => TONE_HEX[rateTone(rate)];
 
 function ProgressRing({ pct, size = 56, stroke = 5 }: { pct: number; size?: number; stroke?: number }) {
   const r = (size - stroke) / 2;
@@ -117,11 +115,7 @@ function TaskRow({ task, onSelect }: { task: FlatTask; onSelect: () => void }) {
     return `Rekap EDC ${EDC_BANKS.length - closingEdc.missingBanks.length}/${EDC_BANKS.length} bank · ${total}`;
   })();
 
-  const tone =
-    isFinished(status) ? 'bg-emerald-50 text-emerald-600' :
-    status === 'in_progress' ? 'bg-indigo-50 text-indigo-600' :
-    status === 'pending' ? 'bg-amber-50 text-amber-600' :
-    'bg-slate-100 text-slate-400';
+  const tone = taskStatusTile(status);
 
   return (
     <button type="button" onClick={onSelect} className="flex w-full items-center gap-3 rounded-xl border border-slate-100 bg-white px-3.5 py-3 text-left transition hover:border-slate-200 hover:bg-slate-50">
@@ -171,7 +165,7 @@ function GroomingGroupCard({ tasks, onSelect }: { tasks: FlatTask[]; onSelect: (
   return (
     <div className="overflow-hidden rounded-xl border border-slate-100 bg-white">
       <button type="button" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded} className="flex w-full items-center gap-3 px-3.5 py-3 text-left transition hover:bg-slate-50">
-        <span className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-lg', aggregate === 'completed' ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-400')}>
+        <span className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-lg', aggregate === 'completed' ? TONES.success.soft : TONES.muted.soft)}>
           <User className="h-4 w-4" />
         </span>
         <span className="min-w-0 flex-1">

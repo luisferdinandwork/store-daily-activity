@@ -4,6 +4,8 @@
 // (app/ops/page.tsx) and its phone layout (components/ops/mobile/DashboardMobile.tsx),
 // plus the one colour rule both use. Client-safe.
 
+import { rateTone as sharedRateTone } from '@/lib/status-theme';
+
 export type TaskBucket = {
   notStarted: number;
   inProgress: number;
@@ -98,9 +100,8 @@ export type DashboardData = {
 
 /** Same bands (80 / 50) as the Stores page's task-progress legend. */
 export function rateTone(rate: number): 'emerald' | 'amber' | 'rose' {
-  if (rate >= 80) return 'emerald';
-  if (rate >= 50) return 'amber';
-  return 'rose';
+  const tone = sharedRateTone(rate); // the bands live in lib/status-theme.ts
+  return tone === 'success' ? 'emerald' : tone === 'warning' ? 'amber' : 'rose';
 }
 
 export const RATE_WORD: Record<'emerald' | 'amber' | 'rose', string> = {

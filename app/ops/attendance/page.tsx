@@ -14,7 +14,7 @@ import AttendanceExportModal from '@/components/ops/AttendanceExportModal';
 import {
   ATTENDANCE_COUNT_ITEMS, AttendanceCountsLine, AttendanceStatusBadge, AttendanceStatusDot,
   HEALTH_STYLE, type RowStatus,
-} from '@/components/ops/AttendanceStatus';
+} from '@/components/status/AttendanceStatus';
 import {
   ATTENDANCE_GOOD_PCT, ATTENDANCE_RISK_PCT, LATE_HEAVY_MIN, LATE_HEAVY_RATE,
   EMPTY_COUNTS, HEALTH_LABEL,
@@ -83,9 +83,9 @@ function buildDay(key: string, stores: StoreDayCounts[]): DayInfo {
 
 type PillTone = 'critical' | 'risk' | 'late';
 const PILL: Record<PillTone, string> = {
-  critical: 'bg-red-500 text-white',
-  risk:     'bg-amber-400 text-amber-950',
-  late:     'bg-fuchsia-500 text-white',
+  critical: HEALTH_STYLE.critical.solid,
+  risk:     HEALTH_STYLE.risk.solid,
+  late:     HEALTH_STYLE.late.solid,
 };
 
 function Pill({ tone, title, children }: { tone: PillTone; title: string; children: React.ReactNode }) {
@@ -267,7 +267,7 @@ function IssueDays({
                 <span className="font-semibold text-foreground">{fmtKey(d.key, { weekday: 'short', day: 'numeric' })}</span>
                 <span className={cn('font-extrabold tabular-nums', hs.text)}>{d.rate}%</span>
                 {d.health === 'late'
-                  ? <span className="text-[10px] font-medium text-fuchsia-700">{d.totals.late} late</span>
+                  ? <span className={cn('text-[10px] font-medium', HEALTH_STYLE.late.text)}>{d.totals.late} late</span>
                   : d.totals.absent > 0 && <span className="text-[10px] font-medium text-muted-foreground">{d.totals.absent} absent</span>}
               </button>
             );

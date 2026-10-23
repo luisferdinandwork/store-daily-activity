@@ -65,7 +65,7 @@ import { showedUp } from '@/lib/attendance-health';
 import {
   AttendanceCountsLine, AttendanceStatusBadge, AttendanceStatusDot, isAttendanceTag,
   type AttendanceTag,
-} from '@/components/ops/AttendanceStatus';
+} from '@/components/status/AttendanceStatus';
 import { jakartaTime } from '@/lib/day-bucket';
 import { cn } from '@/lib/utils';
 import type { AreaGroup, EmployeeRow, StoreRow, TaskColorStatus } from '@/app/api/ops/stores/route';

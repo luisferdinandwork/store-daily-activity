@@ -34,7 +34,7 @@ import { CASH_COUNT_SESSION_INFO, type CashCountSession } from '@/lib/cash-count
 import {
   ATTENDANCE_COUNT_ITEMS, AttendanceStatusBadge, AttendanceStatusDot,
   STATUS, HEALTH_STYLE, type RowStatus,
-} from '@/components/ops/AttendanceStatus';
+} from '@/components/status/AttendanceStatus';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type AttStatus = AttendanceStatus;

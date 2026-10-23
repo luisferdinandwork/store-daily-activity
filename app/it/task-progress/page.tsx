@@ -211,14 +211,14 @@ export default function ItTaskProgressOverviewPage() {
               <MetricTile
                 label="Progress"
                 value={firstLoad ? '–' : `${daily.rate}%`}
-                tone={daily.rate >= 80 ? 'emerald' : daily.rate >= 50 ? 'amber' : 'rose'}
+                tone={daily.rate >= 80 ? 'success' : daily.rate >= 50 ? 'warning' : 'danger'}
                 hint={`${daily.done}/${daily.total} task selesai`}
                 footer={<RateBar rate={daily.rate} />}
               />
               <MetricTile
                 label="Toko belum selesai"
                 value={firstLoad ? '–' : daily.behind}
-                tone={daily.behind ? 'amber' : 'emerald'}
+                tone={daily.behind ? 'warning' : 'success'}
                 hint={onlyBehind ? 'Klik untuk tampilkan semua' : 'Klik untuk tampilkan saja'}
                 active={onlyBehind}
                 onClick={() => setOnlyBehind((v) => !v)}
@@ -226,14 +226,14 @@ export default function ItTaskProgressOverviewPage() {
               <MetricTile
                 label="Task paling tertinggal"
                 value={firstLoad ? '–' : daily.worst ? `${daily.worst.rate}%` : '—'}
-                tone={daily.worst && daily.worst.rate < 50 ? 'rose' : 'slate'}
+                tone={daily.worst && daily.worst.rate < 50 ? 'danger' : 'default'}
                 hint={daily.worst ? `${PROGRESS_TASKS.find((t) => t.code === daily.worst!.code)?.label} · ${daily.worst.done}/${daily.worst.total} toko` : 'Tidak ada task'}
                 onClick={daily.worst ? () => router.push(`${progressTaskHref(daily.worst!.code)}?date=${date}`) : undefined}
               />
               <MetricTile
                 label="Serah terima menunggu"
                 value={firstLoad ? '–' : daily.handover}
-                tone={daily.handover ? 'amber' : 'emerald'}
+                tone={daily.handover ? 'warning' : 'success'}
                 hint="toko dengan item belum diterima"
                 onClick={() => router.push(progressTaskHref(BOARD_TASK))}
               />
@@ -250,20 +250,20 @@ export default function ItTaskProgressOverviewPage() {
             <MetricTile
               label="Progress periode"
               value={firstLoad ? '–' : `${rangeStats.rate}%`}
-              tone={rangeStats.rate >= 80 ? 'emerald' : rangeStats.rate >= 50 ? 'amber' : 'rose'}
+              tone={rangeStats.rate >= 80 ? 'success' : rangeStats.rate >= 50 ? 'warning' : 'danger'}
               hint={`${rangeStats.done}/${rangeStats.total} task selesai`}
               footer={<RateBar rate={rangeStats.rate} />}
             />
             <MetricTile
               label="Task paling tertinggal"
               value={firstLoad ? '–' : rangeStats.worstTask ? `${rangeStats.worstTask.rate}%` : '—'}
-              tone={rangeStats.worstTask && rangeStats.worstTask.rate < 50 ? 'rose' : 'slate'}
+              tone={rangeStats.worstTask && rangeStats.worstTask.rate < 50 ? 'danger' : 'default'}
               hint={rangeStats.worstTask?.label ?? 'Tidak ada task'}
             />
             <MetricTile
               label="Hari terendah"
               value={firstLoad ? '–' : rangeStats.worstDay ? `${rangeStats.worstDay.rate}%` : '—'}
-              tone={rangeStats.worstDay && rangeStats.worstDay.rate < 50 ? 'rose' : 'slate'}
+              tone={rangeStats.worstDay && rangeStats.worstDay.rate < 50 ? 'danger' : 'default'}
               hint={rangeStats.worstDay ? dayShort(rangeStats.worstDay.d) : 'Belum ada data'}
             />
             <MetricTile label="Hari tercatat" value={firstLoad ? '–' : rangeStats.daysWithData} hint={`dari ${days.length} hari`} />

@@ -10,6 +10,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, ChevronRight, ClipboardList, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { TONES, rateTone } from '@/lib/status-theme';
+import { taskStatusTile } from '@/components/status/TaskStatus';
 import OpsPageHeader, { type Period } from '@/components/ops/layout/OpsPageHeader';
 import {
   type FlatTask,
@@ -126,12 +128,7 @@ function TaskRow({ task, onSelect }: { task: FlatTask; onSelect: () => void }) {
   const Icon = TASK_ICONS[task.type] ?? ClipboardList;
   const status = task.status ?? 'not_started';
 
-  const iconBg =
-    status === 'completed'   ? 'bg-emerald-50 text-emerald-600' :
-    status === 'verified'    ? 'bg-teal-50 text-teal-600' :
-    status === 'in_progress' ? 'bg-indigo-50 text-indigo-600' :
-    status === 'pending'     ? 'bg-amber-50 text-amber-600' :
-    'bg-amber-50 text-amber-500';
+  const iconBg = taskStatusTile(status);
 
   return (
     <button
@@ -168,16 +165,13 @@ function SummaryPill({ label, value, cls }: { label: string; value: number; cls:
   );
 }
 
+// Same completion bands as Ops (≥ 80 green · ≥ 50 amber · else red).
 function progressBarClass(rate: number): string {
-  if (rate === 0) return 'bg-amber-300';
-  if (rate >= 100) return 'bg-emerald-500';
-  return 'bg-indigo-500';
+  return TONES[rateTone(rate)].dot;
 }
 
 function progressTextClass(rate: number): string {
-  if (rate === 0) return 'text-amber-500';
-  if (rate >= 100) return 'text-emerald-600';
-  return 'text-indigo-600';
+  return TONES[rateTone(rate)].text;
 }
 
 function ProgressBar({ pct }: { pct: number }) {
@@ -207,7 +201,7 @@ function RangeMatrixPanel({ rows, loading, periodLabel }: {
       <div className="border-b border-slate-100 p-4 sm:p-5">
         <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-500">{periodLabel}</p>
         <p className="mt-1 text-sm font-semibold text-slate-600">
-          <span className="text-emerald-600">{aggregate.completed} task selesai</span>
+          <span className={TONES.success.text}>{aggregate.completed} task selesai</span>
           <span className="text-slate-300"> dari </span>
           <span className="text-slate-700">{aggregate.total} task</span>
           <span className="text-slate-300"> · </span>
@@ -237,7 +231,7 @@ function RangeMatrixPanel({ rows, loading, periodLabel }: {
                 <div className="flex items-baseline justify-between gap-2">
                   <p className="text-xs font-semibold text-slate-500">
                     {row.completed}/{row.total} task selesai
-                    {row.pending > 0 && <span className="text-amber-600"> · {row.pending} pending</span>}
+                    {row.pending > 0 && <span className={TONES.warning.text}> · {row.pending} pending</span>}
                   </p>
                   <span className={cn('shrink-0 text-sm font-black tabular-nums', progressTextClass(row.rate))}>{row.rate}%</span>
                 </div>
@@ -403,10 +397,10 @@ export default function PicTasksPage() {
         ) : data ? (
           <>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              <SummaryPill label="Completed" value={data.summary.completed} cls="text-emerald-600" />
-              <SummaryPill label="In Progress" value={data.summary.inProgress} cls="text-indigo-600" />
-              <SummaryPill label="Not Started" value={data.summary.notStarted} cls="text-amber-500" />
-              <SummaryPill label="Pending" value={data.summary.pending} cls="text-amber-600" />
+              <SummaryPill label="Completed" value={data.summary.completed} cls={TONES.success.text} />
+              <SummaryPill label="In Progress" value={data.summary.inProgress} cls={TONES.active.text} />
+              <SummaryPill label="Not Started" value={data.summary.notStarted} cls={TONES.neutral.text} />
+              <SummaryPill label="Pending" value={data.summary.pending} cls={TONES.warning.text} />
             </div>
 
             {data.tasks.length === 0 ? (

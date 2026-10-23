@@ -9,6 +9,7 @@ import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import { TONES, type Tone } from '@/lib/status-theme';
 import { jakartaTime } from '@/lib/day-bucket';
 import { statusBadgeClass, statusLabel } from '@/app/ops/tasks/progress/task-detail';
 import {
@@ -33,12 +34,10 @@ export interface TableGroup {
   rows: TableRow[];
 }
 
-const GROUP_STYLE: Record<StoreGroup, { dot: string; text: string }> = {
-  attention: { dot: 'bg-amber-400', text: 'text-amber-700' },
-  running: { dot: 'bg-indigo-500', text: 'text-indigo-700' },
-  done: { dot: 'bg-emerald-500', text: 'text-emerald-700' },
-  none: { dot: 'bg-slate-300', text: 'text-slate-500' },
-};
+const GROUP_TONE: Record<StoreGroup, Tone> = { attention: 'warning', running: 'active', done: 'success', none: 'muted' };
+const GROUP_STYLE: Record<StoreGroup, { dot: string; text: string }> = Object.fromEntries(
+  (Object.keys(GROUP_TONE) as StoreGroup[]).map((g) => [g, { dot: TONES[GROUP_TONE[g]].dot, text: TONES[GROUP_TONE[g]].strong }]),
+) as Record<StoreGroup, { dot: string; text: string }>;
 
 const GRID = 'md:grid md:grid-cols-[minmax(0,1.7fr)_minmax(0,9.5rem)_minmax(0,1.4fr)_minmax(0,7rem)_4.5rem_1.25rem] md:items-center md:gap-4';
 
@@ -131,7 +130,7 @@ function StoreRow({
         aria-expanded={multi ? open : undefined}
         className={cn('group relative flex w-full flex-col gap-1.5 px-4 py-3 text-left transition-colors hover:bg-slate-50 focus:outline-none focus-visible:bg-slate-50 sm:px-5', GRID)}
       >
-        {progress.group === 'attention' && <span aria-hidden className={cn('absolute inset-y-0 left-0 w-1', progress.key === 'pending' ? 'bg-amber-400' : isPast ? 'bg-rose-400' : 'bg-amber-300')} />}
+        {progress.group === 'attention' && <span aria-hidden className={cn('absolute inset-y-0 left-0 w-1', TONES[progress.key === 'pending' ? 'warning' : isPast ? 'danger' : 'warning'].dot)} />}
 
         <div className="min-w-0">
           <p className="truncate text-sm font-bold text-slate-900">{store.name}</p>
@@ -179,7 +178,7 @@ function StoreRow({
                   {board ? 'Item serah terima' : shiftLabel(slot.shift)}
                 </p>
                 <div>
-                  <span className={cn('whitespace-nowrap rounded-full border px-2 py-0.5 text-[10px] font-bold', missed(slot) ? 'border-rose-200 bg-rose-50 text-rose-700' : statusBadgeClass(slot.status))}>
+                  <span className={cn('whitespace-nowrap rounded-full border px-2 py-0.5 text-[10px] font-bold', missed(slot) ? TONES.danger.chip : statusBadgeClass(slot.status))}>
                     {board ? (slot.status === 'pending' ? 'Tertahan' : 'Menunggu') : missed(slot) ? 'Tidak dikerjakan' : statusLabel(slot.status)}
                   </span>
                 </div>

@@ -9,6 +9,7 @@
 import type { ElementType, ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useHydrated } from '@/lib/hooks/useHydrated';
 import PanelPageHeader, { usePanelPageHeader } from '@/components/shared/PanelPageHeader';
 
 // ─── Page header ─────────────────────────────────────────────────────────────
@@ -30,9 +31,11 @@ export function MobilePageHeader({
   children?: ReactNode;
 }) {
   const panelHeader = usePanelPageHeader();
-  if (panelHeader) return <PanelPageHeader display="mobile" scope={eyebrow} title={title} subtitle={subtitle} tabs={children} actions={onRefresh && (
-    <button type="button" onClick={onRefresh} disabled={refreshing} aria-label="Muat ulang" className="flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-60">
-      <RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} />Muat ulang
+  const hydrated = useHydrated();
+  if (!hydrated) return null; // layout depends on the shell's context — see OpsPageHeader
+  if (panelHeader) return <PanelPageHeader display="mobile" scope={eyebrow} title={title} subtitle={subtitle} tabs={children} compactActions actions={onRefresh && (
+    <button type="button" onClick={onRefresh} disabled={refreshing} aria-label="Muat ulang" className="flex h-10 w-11 items-center justify-center gap-2 rounded-full text-xs font-semibold text-slate-500 transition hover:bg-slate-100 disabled:opacity-60 md:w-auto md:rounded-lg md:border md:border-slate-200 md:bg-white md:px-3 md:text-slate-600">
+      <RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} /><span className="max-md:hidden">Muat ulang</span>
     </button>
   )} />;
   return (

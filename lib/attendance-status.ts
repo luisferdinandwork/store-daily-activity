@@ -56,7 +56,7 @@ export const ATTENDANCE_STATUS_LABELS: Record<AttendanceStatus, string> = {
 
 /**
  * Names for the two states that aren't a recorded status. Every Ops screen reads
- * them from here (via components/ops/AttendanceStatus.tsx), so rename them here
+ * them from here (via components/status/AttendanceStatus.tsx), so rename them here
  * and nowhere else.
  *
  *   PENDING_LABEL   a scheduled shift with no attendance record yet

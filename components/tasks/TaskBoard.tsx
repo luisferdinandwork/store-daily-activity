@@ -12,6 +12,7 @@ import Link from 'next/link';
 import { ChevronRight } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import { TONES, rateTone } from '@/lib/status-theme';
 import { jakartaTime } from '@/lib/day-bucket';
 import type { TaskCatalogEntry } from '@/lib/shift-tasks';
 import {
@@ -60,11 +61,7 @@ export function boardRowSummary(store: BoardStore, isPast: boolean): BoardRowSum
   return { done, total, rate: total ? Math.round((done / total) * 100) : 0 };
 }
 
-function rateColor(rate: number): string {
-  if (rate >= 80) return 'bg-emerald-500';
-  if (rate >= 50) return 'bg-amber-400';
-  return 'bg-rose-500';
-}
+const rateColor = (rate: number): string => TONES[rateTone(rate)].dot;
 
 function slotLine(slot: TaskProgressSlot, isPast: boolean): string {
   const where = slot.shift ? `${shiftLabel(slot.shift)} · ` : '';
