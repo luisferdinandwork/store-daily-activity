@@ -99,7 +99,7 @@ export default function VisitQueue({
                   {counts.map((c) => <TonePill key={c.u} tone={urgencyTone(c.u)} className="px-2 py-0.5">{c.n} {URGENCY_LABEL[c.u].toLowerCase()}</TonePill>)}
                 </span>
               </div>
-              <ul className="grid gap-2.5 2xl:grid-cols-2">
+              <ul className="grid grid-cols-[minmax(0,1fr)] gap-2.5 2xl:grid-cols-2">
                 {byUrgency(list).flatMap((g) => g.rows).map(({ store, slot }) => <QueueRow key={store.id} store={store} slot={slot} today={today} showArea={false} />)}
               </ul>
             </section>
@@ -119,7 +119,7 @@ export default function VisitQueue({
             <TonePill tone={group.tone} className="px-2 py-0.5">{group.rows.length}</TonePill>
             <span className="truncate text-xs text-slate-500">{group.hint}</span>
           </div>
-          <ul className="grid gap-2.5 2xl:grid-cols-2">
+          <ul className="grid grid-cols-[minmax(0,1fr)] gap-2.5 2xl:grid-cols-2">
             {group.rows.map(({ store, slot }) => <QueueRow key={store.id} store={store} slot={slot} today={today} showArea={showArea} />)}
           </ul>
         </section>
@@ -146,11 +146,12 @@ function QueueRow({ store, slot, today, showArea }: { store: ReportStore; slot: 
   const cycle = store.cycle;
   const policy = store.policy;
   const latest = store.visits[0] ?? null;
-  const visitLine = latest
-    ? `Dikunjungi ${dayLabel(latest.at)}${latest.by ? ` oleh ${latest.by}` : ''}${store.visits.length > 1 ? ` · +${store.visits.length - 1} visit lain` : ''}`
-    : store.lastVisit
-      ? `Terakhir ${daysAgoLabel(jakartaDateKey(store.lastVisit.at)).toLowerCase()}${store.lastVisit.by ? ` · ${store.lastVisit.by}` : ''}`
-      : 'Belum pernah dikunjungi';
+  // `visitMore` (who, how many) gives way on a phone — the history strip needs the room.
+  const visitMain = latest ? `Dikunjungi ${dayLabel(latest.at)}` : store.lastVisit ? `Terakhir ${daysAgoLabel(jakartaDateKey(store.lastVisit.at)).toLowerCase()}` : 'Belum pernah dikunjungi';
+  const visitMore = latest
+    ? `${latest.by ? ` oleh ${latest.by}` : ''}${store.visits.length > 1 ? ` · +${store.visits.length - 1} visit lain` : ''}`
+    : store.lastVisit?.by ? ` · ${store.lastVisit.by}` : '';
+  const visitLine = visitMain + visitMore;
 
   return (
     <li>
@@ -161,19 +162,20 @@ function QueueRow({ store, slot, today, showArea }: { store: ReportStore; slot: 
       >
         <span aria-hidden className={cn('w-1.5 shrink-0', TONE[tone].dot)} />
         <div className="min-w-0 flex-1 space-y-2.5 p-3.5 sm:p-4">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="flex items-center gap-1.5 font-bold leading-snug text-slate-900">
-                <span className="truncate">{store.name}</span>
-                {policy?.category === 'out_city' && <Plane aria-label="Luar kota" className="h-3.5 w-3.5 shrink-0 text-slate-400" />}
-              </p>
-              <p className="mt-0.5 truncate text-sm text-slate-500">
+          {/* The name keeps its own line; the status pill sits beside the code / city */}
+          <div className="space-y-1">
+            <p className="flex items-center gap-1.5 font-bold leading-snug text-slate-900">
+              <span className="line-clamp-2">{store.name}</span>
+              {policy?.category === 'out_city' && <Plane aria-label="Luar kota" className="h-3.5 w-3.5 shrink-0 text-slate-400" />}
+            </p>
+            <div className="flex items-center justify-between gap-2">
+              <p className="min-w-0 truncate text-sm text-slate-500">
                 {store.storeNo} · {policy?.city || store.areaName}
                 {showArea && policy?.city && ` · ${store.areaName}`}
                 {showArea && store.opsNames.length > 0 && ` · Ops: ${store.opsNames.join(', ')}`}
               </p>
+              <TonePill tone={tone} className="shrink-0 px-2 py-0.5 text-[11px] sm:px-2.5 sm:py-1 sm:text-xs">{urgency === 'open' && !slot ? 'Belum waktunya' : URGENCY_LABEL[urgency]}</TonePill>
             </div>
-            <TonePill tone={tone}>{urgency === 'open' && !slot ? 'Belum waktunya' : URGENCY_LABEL[urgency]}</TonePill>
           </div>
 
           {cycle && policy ? (
@@ -201,9 +203,9 @@ function QueueRow({ store, slot, today, showArea }: { store: ReportStore; slot: 
                   {(urgency === 'overdue' || urgency === 'soon') && <span className={cn('font-semibold', TONE[tone].text)}>{planReason(store, slot)}</span>}
                 </p>
               )}
-              <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-                <p className={cn('flex min-w-0 items-center gap-1.5 text-xs', latest ? 'font-semibold text-slate-700' : 'text-slate-500')}>
-                  <UserRound className="h-3.5 w-3.5 shrink-0 text-slate-400" /><span className="truncate">{visitLine}</span>
+              <div className="flex items-center justify-between gap-3 border-t border-slate-100 pt-2.5">
+                <p className={cn('flex min-w-0 flex-1 items-center gap-1.5 text-xs', latest ? 'font-semibold text-slate-700' : 'text-slate-500')}>
+                  <UserRound className="h-3.5 w-3.5 shrink-0 text-slate-400" /><span className="truncate">{visitMain}<span className="hidden sm:inline">{visitMore}</span></span>
                 </p>
                 <HistoryStrip store={store} />
               </div>
@@ -223,14 +225,14 @@ function HistoryStrip({ store }: { store: ReportStore }) {
   if (!cycle) return null;
   const label = (start: string, end: string, count: number) => `${cycleRangeLabel({ start, end })}: ${count} visit`;
   return (
-    <div className="flex items-center gap-1" role="img" aria-label={`Riwayat ${store.history.length + 1} periode terakhir; paling kanan periode berjalan`}>
-      {store.history.length === 0 && <span className="mr-1 text-[11px] text-slate-400">Riwayat mulai periode ini</span>}
+    <div className="flex shrink-0 items-center gap-[3px] sm:gap-1" role="img" aria-label={`Riwayat ${store.history.length + 1} periode terakhir; paling kanan periode berjalan`}>
+      {store.history.length === 0 && <span className="mr-1 hidden text-[11px] text-slate-400 sm:inline">Riwayat mulai periode ini</span>}
       {store.history.map((c) => (
-        <span key={c.start} title={label(c.start, c.end, c.count)} className={cn('h-3.5 w-3.5 rounded-[4px]', c.met ? TONE.done.dot : TONE.overdue.dot)} />
+        <span key={c.start} title={label(c.start, c.end, c.count)} className={cn('h-3 w-3 rounded-[3px] sm:h-3.5 sm:w-3.5 sm:rounded-[4px]', c.met ? TONE.done.dot : TONE.overdue.dot)} />
       ))}
       <span
         title={`${label(cycle.start, cycle.end, cycle.count)} (berjalan)`}
-        className={cn('h-3.5 w-3.5 rounded-[4px] ring-2 ring-inset', cycle.met ? 'bg-emerald-500 ring-emerald-500' : 'bg-white ring-amber-400')}
+        className={cn('h-3 w-3 rounded-[3px] ring-2 ring-inset sm:h-3.5 sm:w-3.5 sm:rounded-[4px]', cycle.met ? 'bg-emerald-500 ring-emerald-500' : 'bg-white ring-amber-400')}
       />
     </div>
   );

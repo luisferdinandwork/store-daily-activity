@@ -112,18 +112,18 @@ export default function VisitPlanCalendar({
 
   return (
     <section aria-label={`Kalender visit ${monthLabel(month)}`} className={cn('@container overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition-opacity', loading && 'opacity-60')}>
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3">
+      <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-2 py-2 sm:px-4 sm:py-3">
         <div className="flex items-center gap-1">
-          <button type="button" onClick={() => onMonthChange(shiftMonth(month, -1))} aria-label="Bulan sebelumnya" className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100">
-            <ChevronLeft className="h-4 w-4" />
+          <button type="button" onClick={() => onMonthChange(shiftMonth(month, -1))} aria-label="Bulan sebelumnya" className="flex h-11 w-11 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 active:bg-slate-100 sm:h-9 sm:w-9 sm:rounded-lg">
+            <ChevronLeft className="h-5 w-5 sm:h-4 sm:w-4" />
           </button>
-          <h2 className="min-w-[150px] text-center text-base font-semibold capitalize text-slate-900">{monthLabel(month)}</h2>
-          <button type="button" onClick={() => onMonthChange(shiftMonth(month, 1))} aria-label="Bulan berikutnya" className="flex h-9 w-9 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100">
-            <ChevronRight className="h-4 w-4" />
+          <h2 className="min-w-[130px] text-center text-base font-semibold capitalize text-slate-900 sm:min-w-[150px]">{monthLabel(month)}</h2>
+          <button type="button" onClick={() => onMonthChange(shiftMonth(month, 1))} aria-label="Bulan berikutnya" className="flex h-11 w-11 items-center justify-center rounded-xl text-slate-500 hover:bg-slate-100 active:bg-slate-100 sm:h-9 sm:w-9 sm:rounded-lg">
+            <ChevronRight className="h-5 w-5 sm:h-4 sm:w-4" />
           </button>
         </div>
         {month !== thisMonth && (
-          <button type="button" onClick={() => onMonthChange(thisMonth)} className="h-8 rounded-lg bg-slate-100 px-3 text-xs font-semibold text-slate-600 hover:bg-slate-200">
+          <button type="button" onClick={() => onMonthChange(thisMonth)} className="h-9 shrink-0 rounded-lg bg-slate-100 px-3 text-xs font-semibold text-slate-600 hover:bg-slate-200 sm:h-8">
             Bulan ini
           </button>
         )}
@@ -159,7 +159,7 @@ export default function VisitPlanCalendar({
                   aria-pressed={picked}
                   aria-label={`${longDay(day)}: ${planned.length} dijadwalkan, ${done} visit`}
                   className={cn(
-                    'group relative flex min-h-[64px] flex-col items-stretch gap-1 border-slate-100 p-1.5 text-left transition-colors hover:bg-indigo-50/40 focus:outline-none focus-visible:bg-indigo-50 @2xl:min-h-[124px] @2xl:p-2',
+                    'group relative flex min-h-[54px] flex-col items-stretch gap-1 border-slate-100 p-1 text-left transition-colors hover:bg-indigo-50/40 focus:outline-none focus-visible:bg-indigo-50 @2xl:min-h-[124px] @2xl:p-2',
                     i < 6 && 'border-r',
                     !inMonth && 'bg-slate-50/60',
                     day < today && 'bg-slate-50/40',
@@ -167,18 +167,18 @@ export default function VisitPlanCalendar({
                     picked && 'bg-indigo-50 ring-2 ring-inset ring-indigo-400',
                   )}
                 >
-                  <span className="flex items-center justify-between gap-1">
-                    <span className={cn('flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold tabular-nums', isToday ? 'bg-slate-900 text-white' : inMonth ? 'text-slate-700' : 'text-slate-300')}>
+                  <span className="flex items-center justify-center gap-1 @2xl:justify-between">
+                    <span className={cn('flex h-7 w-7 items-center justify-center rounded-full text-[13px] font-semibold tabular-nums @2xl:h-6 @2xl:w-6 @2xl:text-xs', isToday ? 'bg-slate-900 text-white' : picked ? 'bg-indigo-600 text-white @2xl:bg-transparent @2xl:text-slate-700' : inMonth ? 'text-slate-700' : 'text-slate-300')}>
                       {Number(day.slice(8))}
                     </span>
-                    <span className="flex items-center gap-1">
+                    <span className="hidden items-center gap-1 @2xl:flex">
                       {worst && <span title={`${planned.length} dijadwalkan`} className={cn('rounded-full px-1.5 text-[10px] font-bold tabular-nums leading-4', TONE[worst].badge)}>{planned.length}</span>}
                       {done > 0 && <span title={`${done} visit`} className={cn('flex items-center gap-0.5 rounded-full px-1.5 text-[10px] font-bold tabular-nums leading-4', TONE.done.badge)}><Check className="h-2.5 w-2.5" strokeWidth={3} />{done}</span>}
                     </span>
                   </span>
-                  {/* Phones: one coloured dot per entry; wider screens: the stores themselves */}
-                  <span className="flex flex-wrap gap-0.5 @2xl:hidden">
-                    {entries.slice(0, 6).map((e) => <span key={e.key} className={cn('h-1.5 w-1.5 rounded-full', TONE[entryTone(e)].dot)} />)}
+                  {/* Phones: one coloured dot per entry (worst first); wider screens: the stores themselves */}
+                  <span className="flex min-h-1.5 flex-wrap justify-center gap-[3px] @2xl:hidden">
+                    {entries.slice(0, 6).map((e) => <span key={e.key} className={cn('h-1.5 w-1.5 rounded-full', inMonth ? TONE[entryTone(e)].dot : 'bg-slate-300')} />)}
                   </span>
                   <span className="hidden min-w-0 flex-col gap-0.5 @2xl:flex">
                     {entries.slice(0, 3).map((e) => (
@@ -198,7 +198,7 @@ export default function VisitPlanCalendar({
               onClick={() => onPick({ kind: 'week', week })}
               aria-pressed={weekPicked}
               className={cn(
-                'col-span-7 flex items-center gap-3 border-t border-slate-100 bg-slate-50/70 px-3 py-2 text-left transition-colors hover:bg-indigo-50/50 focus:outline-none focus-visible:bg-indigo-50 @4xl:col-span-1 @4xl:flex-col @4xl:items-stretch @4xl:justify-center @4xl:gap-1.5 @4xl:border-l @4xl:border-t-0',
+                'col-span-7 hidden items-center gap-3 border-t border-slate-100 bg-slate-50/70 px-3 py-2 text-left @2xl:flex transition-colors hover:bg-indigo-50/50 focus:outline-none focus-visible:bg-indigo-50 @4xl:col-span-1 @4xl:flex-col @4xl:items-stretch @4xl:justify-center @4xl:gap-1.5 @4xl:border-l @4xl:border-t-0',
                 weekPicked && 'bg-indigo-50 ring-2 ring-inset ring-indigo-400',
               )}
             >
@@ -249,6 +249,8 @@ export function VisitPlanPanel({
   today,
   trackedFrom,
   showArea,
+  weeks,
+  onPick,
 }: {
   pick: CalendarPick | null;
   visits: CalendarVisit[];
@@ -258,11 +260,15 @@ export function VisitPlanPanel({
   trackedFrom: string | null;
   /** HO: group by area and name the Ops responsible. */
   showArea: boolean;
+  /** With `onPick`: phones get a Hari / Minggu switch here (the calendar has no week-summary row there). */
+  weeks?: string[][];
+  onPick?: (pick: CalendarPick) => void;
 }) {
   const storeById = new Map(stores.map((s) => [s.id, s]));
   if (!pick) {
     return <aside className="rounded-2xl border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500">Pilih tanggal atau ringkasan minggu di kalender.</aside>;
   }
+  const switcher = weeks && onPick ? <PickSwitch pick={pick} weeks={weeks} today={today} onPick={onPick} /> : null;
 
   if (pick.kind === 'day') {
     const day = pick.day;
@@ -271,15 +277,18 @@ export function VisitPlanPanel({
     const heading = day === today ? 'Hari ini' : day < today ? 'Riwayat tanggal ini' : relativeDay(day, today);
     return (
       <aside className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="border-b border-slate-100 px-4 py-3">
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-indigo-500">{heading}</p>
-          <h3 className="mt-0.5 text-sm font-semibold capitalize text-slate-900">{longDay(day)}</h3>
-          <p className="text-xs text-slate-500">{planned.length} dijadwalkan · {made.length} sudah dikunjungi</p>
+        <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-indigo-500">{heading}</p>
+            <h3 className="mt-0.5 text-sm font-semibold capitalize text-slate-900">{longDay(day)}</h3>
+            <p className="text-xs text-slate-500">{planned.length} dijadwalkan · {made.length} sudah dikunjungi</p>
+          </div>
+          {switcher}
         </div>
         {planned.length === 0 && made.length === 0 ? (
           <p className="p-6 text-center text-sm text-slate-400">{day < today ? 'Tidak ada visit pada hari ini.' : 'Tidak ada jadwal visit.'}</p>
         ) : (
-          <div className="max-h-[620px] overflow-y-auto">
+          <div className="xl:max-h-[620px] xl:overflow-y-auto">
             {planned.length > 0 && (
               <PanelGroup title="Perlu dikunjungi" count={planned.length}>
                 {groupByArea(planned.map((p) => ({ store: storeById.get(p.storeId), p })), showArea).map(({ area, rows }) => (
@@ -330,15 +339,18 @@ export function VisitPlanPanel({
 
   return (
     <aside className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="border-b border-slate-100 px-4 py-3">
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-indigo-500">Minggu {cycleRangeLabel({ start, end })}</p>
-        <h3 className="mt-0.5 text-sm font-semibold text-slate-900">
-          {cov.untracked ? 'Sebelum visit dicatat' : cov.future ? `${[...planByStore.values()].flat().length} visit dijadwalkan` : `${cov.visited} dari ${cov.total} toko mingguan dikunjungi`}
-        </h3>
-        <p className="text-xs text-slate-500">Toko 60/90 hari dinilai per periodenya sendiri; yang batasnya jatuh minggu ini ada di bawah.</p>
+      <div className="flex items-start justify-between gap-3 border-b border-slate-100 px-4 py-3">
+        <div className="min-w-0">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-indigo-500">Minggu {cycleRangeLabel({ start, end })}</p>
+          <h3 className="mt-0.5 text-sm font-semibold text-slate-900">
+            {cov.untracked ? 'Sebelum visit dicatat' : cov.future ? `${[...planByStore.values()].flat().length} visit dijadwalkan` : `${cov.visited} dari ${cov.total} toko mingguan dikunjungi`}
+          </h3>
+          <p className="text-xs text-slate-500">Toko 60/90 hari dinilai per periodenya sendiri; yang batasnya jatuh minggu ini ada di bawah.</p>
+        </div>
+        {switcher}
       </div>
       {!cov.untracked && (
-        <div className="max-h-[620px] overflow-y-auto">
+        <div className="xl:max-h-[620px] xl:overflow-y-auto">
           <PanelGroup title="Terlewat" count={missed.length} tone="overdue">
             {missed.map(({ store }) => <StoreLine key={store.id} store={store} tone="overdue" meta={`${store.storeNo} · ${store.policy?.city || store.areaName} · ${store.lastVisit ? 'terakhir ' + dayName(store.lastVisit.at.slice(0, 10)) : 'belum pernah dikunjungi'}`} />)}
           </PanelGroup>
@@ -360,6 +372,32 @@ export function VisitPlanPanel({
         </div>
       )}
     </aside>
+  );
+}
+
+/** Hari / Minggu — phones only; from md up the calendar's own week column does this job. */
+function PickSwitch({ pick, weeks, today, onPick }: { pick: CalendarPick; weeks: string[][]; today: string; onPick: (pick: CalendarPick) => void }) {
+  const week = pick.kind === 'week' ? pick.week : weeks.find((w) => w.includes(pick.day));
+  if (!week) return null;
+  const items = [
+    { kind: 'day' as const, label: 'Hari', go: () => onPick({ kind: 'day', day: week.includes(today) ? today : week[0] }) },
+    { kind: 'week' as const, label: 'Minggu', go: () => onPick({ kind: 'week', week }) },
+  ];
+  return (
+    <div role="tablist" aria-label="Rentang" className="inline-flex shrink-0 rounded-lg bg-slate-100 p-0.5 md:hidden">
+      {items.map((i) => (
+        <button
+          key={i.kind}
+          type="button"
+          role="tab"
+          aria-selected={pick.kind === i.kind}
+          onClick={i.go}
+          className={cn('h-8 rounded-md px-3 text-xs font-bold transition', pick.kind === i.kind ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500')}
+        >
+          {i.label}
+        </button>
+      ))}
+    </div>
   );
 }
 

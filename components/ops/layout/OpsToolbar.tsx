@@ -56,6 +56,7 @@ export function OpsFilterSelect({
   value,
   onChange,
   highlight = value !== 'all',
+  className,
   children,
 }: {
   label: string;
@@ -63,10 +64,12 @@ export function OpsFilterSelect({
   onChange: (value: string) => void;
   /** Tint the control while it narrows the list (default: value !== 'all'). */
   highlight?: boolean;
+  /** Extra classes for the wrapper (e.g. `min-w-0 flex-1 [&>select]:w-full` to share a phone row). */
+  className?: string;
   children: ReactNode;
 }) {
   return (
-    <div className="relative">
+    <div className={cn('relative', className)}>
       <select
         aria-label={label}
         value={value}
@@ -158,7 +161,7 @@ export function OpsChipTabs<T extends string>({
             onClick={() => onChange(item.key)}
             aria-pressed={active}
             className={cn(
-              'inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-xs font-bold transition',
+              'inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 text-xs font-bold transition',
               active
                 ? 'bg-indigo-600 text-white shadow-sm'
                 : 'bg-white text-slate-600 ring-1 ring-inset ring-slate-200 hover:bg-slate-50',

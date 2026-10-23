@@ -15,7 +15,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import {
-  AlertTriangle, ArrowLeft, ArrowRight, BadgeCheck, Check, History, Loader2, Pencil, Plus, Shield, X,
+  AlertTriangle, ArrowLeft, ArrowRight, BadgeCheck, Check, ChevronDown, History, Loader2, Pencil, Plus, Shield, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -24,12 +24,12 @@ import { StoreCombobox } from '@/components/shared/store-combobox';
 import { KpiStrip } from '@/components/finance/shared/sheet-kit';
 import { StatusBadge } from '@/components/finance/setoran/shared';
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet';
 import { SETORAN_SHORT_THRESHOLD, type ReviewStatus } from '@/lib/setoran-review';
 import {
   CORRECTION_REASON_MAX,
@@ -218,16 +218,20 @@ function SetoranDialog({
   }
 
   return (
-    <Dialog open onOpenChange={(next) => { if (!next && !busy) onClose(); }}>
-      <DialogContent className="max-h-[92vh] overflow-y-auto rounded-2xl border-slate-200 bg-white sm:max-w-xl">
-        <DialogHeader>
-          <DialogTitle className="text-slate-900">{isAdd ? 'Tambah setoran' : 'Koreksi setoran'}</DialogTitle>
-          <DialogDescription className="text-slate-500">
+    // A panel that slides in from the left; the figures scroll, the buttons stay in view.
+    <Sheet open onOpenChange={(next) => { if (!next && !busy) onClose(); }}>
+      <SheetContent
+        side="left"
+        className="flex w-full flex-col gap-0 border-slate-200 bg-white p-0 sm:max-w-xl"
+      >
+        <SheetHeader className="border-b border-slate-100 px-5 py-4 pr-12">
+          <SheetTitle className="text-base text-slate-900">{isAdd ? 'Tambah setoran' : 'Koreksi setoran'}</SheetTitle>
+          <SheetDescription className="text-slate-500">
             {store.storeNo} · {store.name} — {fmtDay(day.date)}
-          </DialogDescription>
-        </DialogHeader>
+          </SheetDescription>
+        </SheetHeader>
 
-        <div className="space-y-4">
+        <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
           {!isAdd && day.verifiedAt && (
             <p className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
               <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
@@ -372,7 +376,7 @@ function SetoranDialog({
           )}
         </div>
 
-        <div className="flex justify-end gap-2 pt-1">
+        <div className="flex justify-end gap-2 border-t border-slate-100 bg-white px-5 py-3">
           <button
             type="button"
             onClick={onClose}
@@ -391,8 +395,8 @@ function SetoranDialog({
             {isAdd ? 'Simpan setoran' : 'Simpan koreksi'}
           </button>
         </div>
-      </DialogContent>
-    </Dialog>
+      </SheetContent>
+    </Sheet>
   );
 }
 
@@ -439,17 +443,17 @@ function DayList({
   onAdd: (row: SetoranDayRow) => void;
 }) {
   return (
-    <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
-      <table className="w-full min-w-[640px] text-[13px]">
-        <thead className="border-b border-slate-200 bg-slate-50 text-[10px] uppercase tracking-wide text-slate-500">
-          <tr>
-            <th className="px-4 py-2 text-left font-semibold">Tanggal</th>
-            <th className="px-3 py-2 text-left font-semibold">Status</th>
-            <th className="hidden px-3 py-2 text-right font-semibold md:table-cell">Sisa kemarin</th>
-            <th className="px-3 py-2 text-right font-semibold">Diterima</th>
-            <th className="px-3 py-2 text-right font-semibold">Disetor</th>
-            <th className="px-3 py-2 text-right font-semibold">Sisa</th>
-            <th className="w-20 px-3 py-2" />
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[680px] text-[13px]">
+        <thead className="text-[11px] font-semibold text-slate-500">
+          <tr className="border-b border-slate-200">
+            <th className="px-5 py-3 text-left font-semibold">Tanggal</th>
+            <th className="px-3 py-3 text-left font-semibold">Status</th>
+            <th className="hidden px-3 py-3 text-right font-semibold md:table-cell">Sisa kemarin</th>
+            <th className="px-3 py-3 text-right font-semibold">Diterima</th>
+            <th className="px-3 py-3 text-right font-semibold">Disetor</th>
+            <th className="px-3 py-3 text-right font-semibold">Sisa</th>
+            <th className="w-24 px-5 py-3" />
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
@@ -460,15 +464,18 @@ function DayList({
             const dash = <span className="text-slate-300">–</span>;
 
             return (
-              <tr key={r.date} className={cn('hover:bg-slate-50/70', missed && 'bg-rose-50/40')}>
+              <tr
+                key={r.date}
+                className={cn('group transition-colors hover:bg-slate-50', missed && 'bg-rose-50/50 hover:bg-rose-50')}
+              >
                 <td
                   title={fmtDay(r.date)}
-                  className={cn('whitespace-nowrap px-4 py-1.5 font-medium', quiet ? 'text-slate-400' : 'text-slate-800')}
+                  className={cn('whitespace-nowrap px-5 py-3 font-medium', quiet ? 'text-slate-400' : 'text-slate-900')}
                 >
                   {fmtDayShort(r.date)}
-                  {r.date === today && <span className="ml-1.5 rounded bg-cyan-50 px-1 py-px text-[10px] font-bold text-cyan-700">Hari ini</span>}
+                  {r.date === today && <span className="ml-2 rounded-full bg-cyan-50 px-1.5 py-px text-[10px] font-bold text-cyan-700">Hari ini</span>}
                 </td>
-                <td className="px-3 py-1.5">
+                <td className="px-3 py-3">
                   <div className="flex flex-wrap items-center gap-1">
                     <DayStatus row={r} today={today} />
                     {r.verifiedAt && (
@@ -487,26 +494,26 @@ function DayList({
                     )}
                   </div>
                 </td>
-                <td className="hidden px-3 py-1.5 text-right tabular-nums text-slate-400 md:table-cell">
+                <td className="hidden px-3 py-3 text-right tabular-nums text-slate-400 md:table-cell">
                   {rp(r.carryIn)}
                 </td>
-                <td className={cn('px-3 py-1.5 text-right tabular-nums', submitted ? 'text-slate-800' : 'italic text-slate-400')}>
+                <td className={cn('px-3 py-3 text-right tabular-nums', submitted ? 'text-slate-800' : 'italic text-slate-400')}>
                   {r.received != null ? rp(r.received) : dash}
                 </td>
-                <td className={cn('px-3 py-1.5 text-right tabular-nums', submitted ? 'text-slate-800' : 'italic text-slate-400')}>
+                <td className={cn('px-3 py-3 text-right tabular-nums', submitted ? 'text-slate-800' : 'italic text-slate-400')}>
                   {r.stored != null ? rp(r.stored) : dash}
                 </td>
                 <td
                   className={cn(
-                    'px-3 py-1.5 text-right tabular-nums',
-                    submitted ? 'font-bold' : 'text-slate-400',
+                    'px-3 py-3 text-right tabular-nums',
+                    submitted ? 'font-semibold' : 'text-slate-400',
                     submitted && r.balance > SETORAN_SHORT_THRESHOLD ? 'text-amber-600' : submitted && 'text-slate-900',
                   )}
                   title={submitted ? undefined : 'Sisa yang dibawa — belum ada setoran hari ini'}
                 >
                   {rp(r.balance)}
                 </td>
-                <td className="px-3 py-1.5 text-right">
+                <td className="px-5 py-3 text-right">
                   {submitted ? (
                     <button
                       type="button"
@@ -545,50 +552,96 @@ function DayList({
 
 // ─── Change history ───────────────────────────────────────────────────────────
 
-function HistoryList({ corrections }: { corrections: SetoranCorrectionEntry[] }) {
+/** Every correction / addition IT made for the store, newest first, as a table at the bottom of the page. */
+function HistoryPanel({ corrections }: { corrections: SetoranCorrectionEntry[] }) {
+  const [open, setOpen] = useState(true);
+
   return (
-    <ul className="divide-y divide-slate-100 rounded-2xl border border-slate-200 bg-white">
-      {corrections.map((c) => (
-        <li key={c.id} className="space-y-1 px-4 py-3">
-          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
-            <p className="flex items-center gap-1.5 text-sm font-bold text-slate-900">
-              {fmtDay(c.date)}
-              <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-500">
-                {c.kind === 'create' ? 'Ditambahkan' : 'Dikoreksi'}
-              </span>
-            </p>
-            <p className="text-[11px] text-slate-400">{c.correctedBy} · {fmtStamp(c.createdAt)}</p>
-          </div>
-          <p className="text-xs text-slate-500">
-            {c.kind === 'create' ? (
-              <>
-                Diterima <span className="tabular-nums text-slate-700">{rp(c.after.received)}</span>
-                <span className="mx-1.5 text-slate-300">·</span>
-                Disetor <span className="tabular-nums text-slate-700">{rp(c.after.stored)}</span>
-                <span className="mx-1.5 text-slate-300">·</span>
-                Sisa <span className="tabular-nums text-slate-700">{rp(c.after.unpaid)}</span>
-              </>
-            ) : (
-              <>
-                Diterima <Delta before={c.before.received} after={c.after.received} />
-                <span className="mx-1.5 text-slate-300">·</span>
-                Disetor <Delta before={c.before.stored} after={c.after.stored} />
-                <span className="mx-1.5 text-slate-300">·</span>
-                Sisa <Delta before={c.before.unpaid} after={c.after.unpaid} />
-              </>
-            )}
+    <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center justify-between gap-3 px-5 py-3 text-left hover:bg-slate-50"
+      >
+        <span className="flex items-center gap-2 text-sm font-bold text-slate-900">
+          <History className="h-4 w-4 text-slate-400" />
+          Riwayat koreksi
+          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-slate-500">
+            {corrections.length}
+          </span>
+        </span>
+        <ChevronDown className={cn('h-4 w-4 text-slate-400 transition-transform', open && 'rotate-180')} />
+      </button>
+
+      {open && (
+        corrections.length === 0 ? (
+          <p className="border-t border-slate-100 p-8 text-center text-sm text-slate-500">
+            Belum ada koreksi atau penambahan setoran untuk toko ini.
           </p>
-          <p className="text-xs text-slate-700">“{c.reason}”</p>
-          {(c.affectedDays > 0 || c.wasVerified) && (
-            <p className="text-[11px] text-slate-400">
-              {c.affectedDays > 0 && `${c.affectedDays} hari setelahnya dihitung ulang`}
-              {c.affectedDays > 0 && c.wasVerified && ' · '}
-              {c.wasVerified && 'verifikasi Finance direset'}
-            </p>
-          )}
-        </li>
-      ))}
-    </ul>
+        ) : (
+          <div className="max-h-[420px] overflow-auto border-t border-slate-100">
+            <table className="w-full min-w-[820px] text-[13px]">
+              <thead className="sticky top-0 bg-white text-[11px] font-semibold text-slate-500 shadow-[0_1px_0_0_rgb(226_232_240)]">
+                <tr>
+                  <th className="px-5 py-3 text-left font-semibold">Tanggal setoran</th>
+                  <th className="px-3 py-3 text-left font-semibold">Jenis</th>
+                  <th className="px-3 py-3 text-right font-semibold">Diterima</th>
+                  <th className="px-3 py-3 text-right font-semibold">Disetor</th>
+                  <th className="px-3 py-3 text-right font-semibold">Sisa</th>
+                  <th className="px-3 py-3 text-left font-semibold">Alasan</th>
+                  <th className="px-5 py-3 text-left font-semibold">Oleh</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {corrections.map((c) => (
+                  <tr key={c.id} className="align-top hover:bg-slate-50">
+                    <td className="whitespace-nowrap px-5 py-3 font-medium text-slate-900">{fmtDay(c.date)}</td>
+                    <td className="px-3 py-3">
+                      <span
+                        className={cn(
+                          'inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold',
+                          c.kind === 'create' ? 'bg-cyan-50 text-cyan-700' : 'bg-amber-50 text-amber-700',
+                        )}
+                      >
+                        {c.kind === 'create' ? 'Ditambahkan' : 'Dikoreksi'}
+                      </span>
+                    </td>
+                    {c.kind === 'create' ? (
+                      <>
+                        <td className="px-3 py-3 text-right tabular-nums text-slate-700">{rp(c.after.received)}</td>
+                        <td className="px-3 py-3 text-right tabular-nums text-slate-700">{rp(c.after.stored)}</td>
+                        <td className="px-3 py-3 text-right tabular-nums text-slate-700">{rp(c.after.unpaid)}</td>
+                      </>
+                    ) : (
+                      <>
+                        <td className="px-3 py-3 text-right"><Delta before={c.before.received} after={c.after.received} /></td>
+                        <td className="px-3 py-3 text-right"><Delta before={c.before.stored} after={c.after.stored} /></td>
+                        <td className="px-3 py-3 text-right"><Delta before={c.before.unpaid} after={c.after.unpaid} /></td>
+                      </>
+                    )}
+                    <td className="min-w-56 max-w-sm px-3 py-3 text-slate-700">
+                      <p>{c.reason}</p>
+                      {(c.affectedDays > 0 || c.wasVerified) && (
+                        <p className="mt-0.5 text-[11px] text-slate-400">
+                          {c.affectedDays > 0 && `${c.affectedDays} hari setelahnya dihitung ulang`}
+                          {c.affectedDays > 0 && c.wasVerified && ' · '}
+                          {c.wasVerified && 'verifikasi Finance direset'}
+                        </p>
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap px-5 py-3 text-xs text-slate-500">
+                      <p className="font-medium text-slate-700">{c.correctedBy}</p>
+                      <p>{fmtStamp(c.createdAt)}</p>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      )}
+    </section>
   );
 }
 
@@ -758,61 +811,63 @@ export default function ItSetoranCorrectionPage() {
               ]}
             />
 
-            <div className="flex flex-wrap items-center gap-1.5" role="tablist" aria-label="Filter hari">
-              {FILTERS.map((f) => (
-                <button
-                  key={f.key}
-                  type="button"
-                  role="tab"
-                  aria-selected={filter === f.key}
-                  onClick={() => setFilter(f.key)}
-                  className={cn(
-                    'h-8 rounded-full border px-3 text-xs font-bold transition',
-                    filter === f.key
-                      ? 'border-cyan-600 bg-cyan-600 text-white'
-                      : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50',
-                  )}
-                >
-                  {f.label} <span className={cn('tabular-nums', filter === f.key ? 'text-cyan-100' : 'text-slate-400')}>{counts[f.key]}</span>
-                </button>
-              ))}
-              {loadingLedger && <Loader2 className="ml-1 h-4 w-4 animate-spin text-cyan-500" />}
-            </div>
-
-            {visible.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-8 text-center text-sm text-slate-500">
-                Tidak ada hari untuk filter ini dalam {days} hari terakhir.
-              </div>
-            ) : (
-              <div className={cn('transition-opacity', loadingLedger && 'opacity-60')}>
-                <DayList
-                  rows={visible}
-                  today={today}
-                  onCorrect={(r) => setDialog({ mode: 'correct', date: r.date })}
-                  onAdd={(r) => setDialog({ mode: 'add', date: r.date })}
-                />
-              </div>
-            )}
-
-            <div className="flex justify-center">
-              <button
-                type="button"
-                disabled={loadingLedger}
-                onClick={() => setDays((d) => d + 30)}
-                className="text-xs font-bold text-cyan-600 hover:underline disabled:opacity-50"
-              >
-                Muat 30 hari lebih lama
-              </button>
-            </div>
-
-            {ledger.corrections.length > 0 && (
-              <section className="space-y-2 pt-2">
-                <h2 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-slate-500">
-                  <History className="h-3.5 w-3.5" /> Riwayat perubahan
+            <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-3">
+                <h2 className="text-sm font-bold text-slate-900">
+                  Setoran per hari
+                  <span className="ml-2 text-xs font-medium text-slate-400">{days} hari terakhir</span>
                 </h2>
-                <HistoryList corrections={ledger.corrections} />
-              </section>
-            )}
+                <div className="flex flex-wrap items-center gap-1.5" role="tablist" aria-label="Filter hari">
+                  {FILTERS.map((f) => (
+                    <button
+                      key={f.key}
+                      type="button"
+                      role="tab"
+                      aria-selected={filter === f.key}
+                      onClick={() => setFilter(f.key)}
+                      className={cn(
+                        'h-7 rounded-full px-3 text-xs font-semibold transition',
+                        filter === f.key
+                          ? 'bg-slate-900 text-white'
+                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200',
+                      )}
+                    >
+                      {f.label} <span className={cn('tabular-nums', filter === f.key ? 'text-slate-300' : 'text-slate-400')}>{counts[f.key]}</span>
+                    </button>
+                  ))}
+                  {loadingLedger && <Loader2 className="ml-1 h-4 w-4 animate-spin text-cyan-500" />}
+                </div>
+              </div>
+
+              {visible.length === 0 ? (
+                <p className="p-8 text-center text-sm text-slate-500">
+                  Tidak ada hari untuk filter ini dalam {days} hari terakhir.
+                </p>
+              ) : (
+                <div className={cn('transition-opacity', loadingLedger && 'opacity-60')}>
+                  <DayList
+                    rows={visible}
+                    today={today}
+                    onCorrect={(r) => setDialog({ mode: 'correct', date: r.date })}
+                    onAdd={(r) => setDialog({ mode: 'add', date: r.date })}
+                  />
+                </div>
+              )}
+
+              <div className="border-t border-slate-100 px-5 py-2.5 text-center">
+                <button
+                  type="button"
+                  disabled={loadingLedger}
+                  onClick={() => setDays((d) => d + 30)}
+                  className="text-xs font-bold text-cyan-600 hover:underline disabled:opacity-50"
+                >
+                  Muat 30 hari lebih lama
+                </button>
+              </div>
+            </section>
+
+            {/* History of every correction IT made for this store — always at the bottom. */}
+            <HistoryPanel corrections={ledger.corrections} />
           </>
         )}
       </div>

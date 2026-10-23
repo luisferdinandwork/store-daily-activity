@@ -46,6 +46,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import type { IssueTemplateDto } from '@/lib/issue-templates';
 import {
   ActionButton, BottomSheet, EmptyState, Notice, SkeletonBlocks, inputClass,
 } from '@/components/employee/ui';
@@ -58,6 +59,7 @@ import {
   STATUS_COLORS,
   fetchIssues,
   fetchAssignableRoles,
+  fetchIssueTemplates,
   createIssue,
   updateIssue,
   sendDraftIssue,
@@ -395,6 +397,10 @@ function IssueForm({
   const [rolesLoading, setRolesLoading] = useState(true);
   const [selectedRoleIds, setSelectedRoleIds] = useState<number[]>(issue ? roleIdsFromIssue(issue) : []);
 
+  // Report presets managed by IT (/it/issue-templates) — only offered for a new issue.
+  const [templates, setTemplates] = useState<IssueTemplateDto[]>([]);
+  const [templateId, setTemplateId] = useState<number | null>(null);
+
   const [cameraOpen, setCameraOpen] = useState(false);
   const galleryInputRef = useRef<HTMLInputElement>(null);
 
@@ -422,6 +428,27 @@ function IssueForm({
       alive = false;
     };
   }, [issue]);
+
+  useEffect(() => {
+    if (mode !== 'create') return;
+    let alive = true;
+    // A failed load just means no presets — the form still works.
+    fetchIssueTemplates()
+      .then((loaded) => { if (alive) setTemplates(loaded); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [mode]);
+
+  const pickTemplate = (template: IssueTemplateDto) => {
+    // Tapping the chosen one again only un-highlights it; the typed text stays.
+    if (templateId === template.id) { setTemplateId(null); return; }
+    setTemplateId(template.id);
+    if (template.title) setTitle(template.title.slice(0, 120));
+    if (template.description) setDescription(template.description.slice(0, 2000));
+    const allowed = new Set(roles.map((r) => r.id));
+    const ids = template.assignedRoleIds.filter((id) => allowed.has(id));
+    if (ids.length) setSelectedRoleIds(ids);
+  };
 
   const addImage = useCallback((file: File) => {
     const remainingSlots = Math.max(0, 5 - existingUrls.length);
@@ -507,6 +534,33 @@ function IssueForm({
 
       <form className="mx-auto flex w-full max-w-md flex-col gap-5 px-4 pb-8 pt-4" onSubmit={(event) => event.preventDefault()}>
         {error && <Notice tone="error">{error}</Notice>}
+
+        {mode === 'create' && templates.length > 0 && (
+          <div className="flex flex-col gap-2">
+            <label className="px-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Pilih template <span className="font-normal normal-case tracking-normal text-muted-foreground/50">(opsional)</span>
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {templates.map((template) => {
+                const active = templateId === template.id;
+                return (
+                  <button
+                    key={template.id}
+                    type="button"
+                    onClick={() => pickTemplate(template)}
+                    className={cn(
+                      'rounded-full border px-3.5 py-2 text-xs font-bold transition-all active:scale-[0.98]',
+                      active ? 'border-primary bg-primary/5 text-primary' : 'border-border bg-card text-foreground hover:border-primary/30',
+                    )}
+                  >
+                    {template.name}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="px-0.5 text-[11px] text-muted-foreground">Mengisi judul dan deskripsi otomatis — tetap bisa kamu ubah.</p>
+          </div>
+        )}
 
         <RolePicker
           roles={roles}

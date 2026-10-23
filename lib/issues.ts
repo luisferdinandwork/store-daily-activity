@@ -1,6 +1,8 @@
 // lib/issues.ts
 // Client-side utilities for the issue report feature.
 
+import type { IssueTemplateDto } from '@/lib/issue-templates';
+
 export type IssueStatus = 'draft' | 'reported' | 'in_review' | 'completed' | 'solved';
 
 /** A department/role an employee can route an issue to (ops, finance, it, …). */
@@ -105,6 +107,14 @@ export async function fetchAssignableRoles(): Promise<AssignableRole[]> {
   if (!res.ok) throw new Error('Failed to load destinations');
   const data = await res.json();
   return (data.roles ?? []) as AssignableRole[];
+}
+
+/** Active issue templates (report presets managed by IT) for the "Report an Issue" form. */
+export async function fetchIssueTemplates(): Promise<IssueTemplateDto[]> {
+  const res = await fetch('/api/issues/templates', { cache: 'no-store' });
+  if (!res.ok) throw new Error('Failed to load templates');
+  const data = await res.json();
+  return (data.templates ?? []) as IssueTemplateDto[];
 }
 
 function parseUrls(v: unknown): string[] {

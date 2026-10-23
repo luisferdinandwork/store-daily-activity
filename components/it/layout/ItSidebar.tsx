@@ -23,6 +23,8 @@
 //     BC Credentials           /it/bc-credentials
 //     Performance Target Defaults /it/target-allocation (PIC1/PIC2/SA % grid)
 //     Petty Cash Categories   /it/petty-cash-categories
+//     Issue Templates         /it/issue-templates (report presets employees pick)
+//     Email Templates         /it/email-templates (subject + HTML of outgoing emails)
 //     Feature Switches        /it/feature-switches (on/off for risky features, e.g. schedule "Delete everything")
 //
 //   Data Correction (IT-only)
@@ -52,8 +54,10 @@ import {
   ClipboardCheck,
   Eraser,
   FileCheck2,
+  ClipboardList,
   KeyRound,
   Layers,
+  Mail,
   LayoutDashboard,
   LockKeyhole,
   LogOut,
@@ -147,6 +151,8 @@ const NAV: NavSection[] = [
       { href: '/it/bc-credentials', label: 'BC Credentials', icon: KeyRound },
       { href: '/it/target-allocation', label: 'Performance Target Defaults', icon: Percent },
       { href: '/it/petty-cash-categories', label: 'Petty Cash Categories', icon: Tags },
+      { href: '/it/issue-templates', label: 'Issue Templates', icon: ClipboardList },
+      { href: '/it/email-templates', label: 'Email Templates', icon: Mail },
       { href: '/it/feature-switches', label: 'Feature Switches', icon: ToggleRight },
     ],
   },

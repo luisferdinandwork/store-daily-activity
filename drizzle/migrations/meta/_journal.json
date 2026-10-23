@@ -246,6 +246,20 @@
       "when": 1792719414710,
       "tag": "0034_users_email",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1792725871441,
+      "tag": "0035_issue_email_templates",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1792728078548,
+      "tag": "0036_email_template_mode",
+      "breakpoints": true
     }
   ]
 }

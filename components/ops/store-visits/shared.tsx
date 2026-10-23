@@ -57,9 +57,9 @@ export function visitState(store: VisitStore): VisitState {
   return store.progress.remaining > 0 ? 'due' : 'done';
 }
 
-export function VisitStatusPill({ store }: { store: VisitStore }) {
+export function VisitStatusPill({ store, className }: { store: VisitStore; className?: string }) {
   const state = visitState(store);
-  if (state === 'unset') return <Pill tone="slate">Belum diatur</Pill>;
-  if (state === 'due') return <Pill tone="amber">Kurang {store.progress.remaining} visit</Pill>;
-  return <Pill tone="emerald">Terpenuhi</Pill>;
+  if (state === 'unset') return <Pill tone="slate" className={className}>Belum diatur</Pill>;
+  if (state === 'due') return <Pill tone="amber" className={className}>Kurang {store.progress.remaining} visit</Pill>;
+  return <Pill tone="emerald" className={className}>Terpenuhi</Pill>;
 }

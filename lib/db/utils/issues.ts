@@ -25,7 +25,8 @@
 import { db } from '@/lib/db';
 import { appBaseUrl } from '@/lib/email/app-url';
 import { sendMail } from '@/lib/email/graph-mail';
-import { issueNotificationEmail } from '@/lib/email/issue-emails';
+import { issueEmailVars, renderIssueEmail } from '@/lib/email/issue-emails';
+import { getEmailTemplate } from '@/lib/db/utils/email-templates';
 import {
   areas,
   employeeTypes,
@@ -518,14 +519,19 @@ async function emailIssueRecipients(
     .limit(1);
 
   const base = appBaseUrl();
-  const message = issueNotificationEmail({
-    title,
-    body,
-    storeLabel: store ? `${store.storeNo} · ${store.name}` : null,
-    areaName: store?.areaName ?? null,
-    at: new Date(),
-    link: base ? `${base}/ops/issues` : null,
-  });
+  // Subject + HTML are IT-editable (email_templates, /it/email-templates).
+  const template = await getEmailTemplate('issue_notification');
+  const message = renderIssueEmail(
+    template,
+    issueEmailVars({
+      title,
+      body,
+      storeLabel: store ? `${store.storeNo} · ${store.name}` : null,
+      areaName: store?.areaName ?? null,
+      at: new Date(),
+      link: base ? `${base}/ops/issues` : null,
+    }),
+  );
 
   for (const to of addresses) {
     const result = await sendMail({ to, ...message });

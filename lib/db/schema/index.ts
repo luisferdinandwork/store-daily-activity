@@ -15,6 +15,7 @@ export * from './password-reset';      // "Lupa password" requests
 export * from './feature-switches';    // IT on/off switches
 export * from './sales-returns';       // Sales Return receipts
 export * from './store-visits';
+export * from './templates';           // IT-managed issue + email templates
 
 import * as enums            from './enums';
 import * as lookups          from './lookups';
@@ -32,6 +33,7 @@ import * as passwordReset    from './password-reset';
 import * as featureSwitches  from './feature-switches';
 import * as salesReturns     from './sales-returns';
 import * as storeVisits      from './store-visits';
+import * as templates        from './templates';
 
 export const schema = {
   ...enums,
@@ -50,4 +52,5 @@ export const schema = {
   ...featureSwitches,
   ...salesReturns,
   ...storeVisits,
+  ...templates,
 };
