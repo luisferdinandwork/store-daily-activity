@@ -17,6 +17,7 @@ import {
 } from '@/lib/db/schema';
 import { resolveItScope } from '@/lib/auth/it-scope';
 import { setUserHomeStore } from '@/lib/db/utils/user-store-assignment';
+import { parseOptionalEmail } from '@/lib/email-address';
 
 const SALT_ROUNDS = 10;
 
@@ -32,6 +33,7 @@ export async function GET() {
         id: users.id,
         nik: users.nik,
         name: users.name,
+        email: users.email,
         isActive: users.isActive,
 
         roleId: users.roleId,
@@ -78,6 +80,7 @@ export async function GET() {
       id: u.id,
       nik: u.nik,
       name: u.name,
+      email: u.email,
       isActive: u.isActive,
       roleId: u.roleId,
       roleCode: u.roleCode,
@@ -114,6 +117,9 @@ export async function POST(req: Request) {
   const employeeTypeId = body?.employeeTypeId ? Number(body.employeeTypeId) : null;
   const homeStoreId = body?.homeStoreId ? Number(body.homeStoreId) : null;
   let areaId = body?.areaId ? Number(body.areaId) : null;
+
+  const email = parseOptionalEmail(body?.email);
+  if (!email.ok) return NextResponse.json({ success: false, error: email.error }, { status: 400 });
 
   if (!nik) return NextResponse.json({ success: false, error: 'NIK is required.' }, { status: 400 });
   if (!name) return NextResponse.json({ success: false, error: 'Name is required.' }, { status: 400 });
@@ -157,6 +163,7 @@ export async function POST(req: Request) {
     .values({
       nik,
       name,
+      email: email.value,
       password: hashed,
       roleId,
       employeeTypeId,

@@ -29,6 +29,7 @@ import {
 } from "@/lib/db/schema";
 import { eq, and, gte, lte, desc, inArray, asc } from "drizzle-orm";
 import { todayInStoreTimezone } from "@/lib/schedule-utils";
+import { isFeatureEnabled } from "@/lib/db/utils/feature-switches";
 import { isDayKey, jakartaDateKey, jakartaDayRange } from "@/lib/day-bucket";
 import { getOrCreateSetoranForSchedule } from "@/lib/db/utils/setoran";
 import { getOrCreateStoreOpeningForSchedule } from "@/lib/db/utils/store-opening";
@@ -715,6 +716,9 @@ export async function GET(request: NextRequest) {
     const cekBinTaskIds = cekBinRows.map((r) => r.id);
     const storeClosingTaskIds = storeClosingRows.map((r) => r.id);
 
+    // IT switch: the Store Closing money part (EDC summary + Indodana photo).
+    const storeClosingUpdate = storeClosingRows.length > 0 && (await isFeatureEnabled("store_closing_update"));
+
     const [availableBinRows, checkedBinRows, edcEntryRows] = await Promise.all([
       shouldLoadTask("cek_bin")
         ? db
@@ -1364,6 +1368,7 @@ export async function GET(request: NextRequest) {
               edcSettlementBy: t.edcSettlementBy,
               edcSettlementAt: toIso(t.edcSettlementAt),
 
+              storeClosingUpdate,
               edcSummaryDone: t.edcSummaryDone,
               edcSummaryNotes: t.edcSummaryNotes,
               edcSummaryBy: t.edcSummaryBy,

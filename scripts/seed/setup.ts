@@ -433,6 +433,7 @@ export async function seedSetup() {
       id: def.id,
       nik: def.nik,
       name: def.name,
+      email: def.email ?? null,
       password: pwd,
       roleId: roleId[def.roleCode],
       employeeTypeId: def.empTypeCode ? empTypeId[def.empTypeCode] : null,

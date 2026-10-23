@@ -11,6 +11,10 @@
 //   4. Evidence photo     → EOD + EDC settlement side by side
 //   5. Open statement     → post statement, or on hold
 //
+// Step 2 (the EDC summary money) and the Indodana photo exist only while the IT
+// feature switch `store_closing_update` is on (off by default). With it off the
+// EDC fields of a save / submit are ignored and nothing about money is stored.
+//
 // The EDC amounts live in store_closing_edc_entries (one row per filled cell,
 // saved with autoSaveStoreClosing and again with the submit) and
 // store_closing_tasks.op_me_voucher_amount. `edcSummaryDone` is no longer a
@@ -60,6 +64,7 @@ import {
   getStoreClosingHoldIssueRoleIds,
   notifyIssueEvent,
 } from '@/lib/db/utils/issues';
+import { isFeatureEnabled } from '@/lib/db/utils/feature-switches';
 import {
   parseEdcAmount,
   parseEdcEntries,
@@ -556,41 +561,44 @@ export async function autoSaveStoreClosing(
       update.edcSettlementNotes = input.patch.edcSettlementNotes ?? null;
     }
 
-    if ('edcSummaryDone' in input.patch) {
-      update.edcSummaryDone = !!input.patch.edcSummaryDone;
-      update.edcSummaryBy = input.userId;
-      update.edcSummaryAt = now;
-    }
-
-    if ('edcSummaryNotes' in input.patch) {
-      update.edcSummaryNotes = input.patch.edcSummaryNotes ?? null;
-    }
-
     // EDC summary figures. Validated before anything is written, so a bad
     // patch saves nothing; the cells go in first, then the task row below.
+    // Only while the `store_closing_update` switch is on — otherwise ignored.
     let edcCells: EdcEntryInput[] | null = null;
 
-    if ('edcEntries' in input.patch) {
-      const parsed = parseEdcEntries(input.patch.edcEntries ?? []);
-      if (!parsed.ok) return { success: false, error: parsed.error };
-      edcCells = parsed.value;
-    }
+    if (await isFeatureEnabled('store_closing_update')) {
+      if ('edcSummaryDone' in input.patch) {
+        update.edcSummaryDone = !!input.patch.edcSummaryDone;
+        update.edcSummaryBy = input.userId;
+        update.edcSummaryAt = now;
+      }
 
-    if ('opMeVoucherAmount' in input.patch) {
-      const parsed = parseEdcAmount(input.patch.opMeVoucherAmount);
-      if (!parsed.ok) return { success: false, error: parsed.error };
-      update.opMeVoucherAmount = parsed.value === null ? null : String(parsed.value);
-    }
+      if ('edcSummaryNotes' in input.patch) {
+        update.edcSummaryNotes = input.patch.edcSummaryNotes ?? null;
+      }
 
-    if ('indodanaDashboardPhoto' in input.patch) {
-      const photo = input.patch.indodanaDashboardPhoto;
-      update.indodanaDashboardPhoto = isFilled(photo) ? photo.trim() : null;
-      update.indodanaDashboardPhotoAt = isFilled(photo) ? now : null;
-    }
+      if ('edcEntries' in input.patch) {
+        const parsed = parseEdcEntries(input.patch.edcEntries ?? []);
+        if (!parsed.ok) return { success: false, error: parsed.error };
+        edcCells = parsed.value;
+      }
 
-    if (edcCells || 'opMeVoucherAmount' in input.patch || 'indodanaDashboardPhoto' in input.patch) {
-      update.edcSummaryBy = input.userId;
-      update.edcSummaryAt = now;
+      if ('opMeVoucherAmount' in input.patch) {
+        const parsed = parseEdcAmount(input.patch.opMeVoucherAmount);
+        if (!parsed.ok) return { success: false, error: parsed.error };
+        update.opMeVoucherAmount = parsed.value === null ? null : String(parsed.value);
+      }
+
+      if ('indodanaDashboardPhoto' in input.patch) {
+        const photo = input.patch.indodanaDashboardPhoto;
+        update.indodanaDashboardPhoto = isFilled(photo) ? photo.trim() : null;
+        update.indodanaDashboardPhotoAt = isFilled(photo) ? now : null;
+      }
+
+      if (edcCells || 'opMeVoucherAmount' in input.patch || 'indodanaDashboardPhoto' in input.patch) {
+        update.edcSummaryBy = input.userId;
+        update.edcSummaryAt = now;
+      }
     }
 
     if ('eodEdcSettlementPhoto' in input.patch) {
@@ -654,7 +662,9 @@ export async function submitStoreClosing(
     );
     if (gateErr) return { success: false, error: gateErr };
 
-    const edc = readEdcSummary(input);
+    // Switch off: the money fields are not part of a closing, whatever the client sent.
+    const moneyOn = await isFeatureEnabled('store_closing_update');
+    const edc = moneyOn ? readEdcSummary(input) : { ok: true as const, entries: [], opMeVoucher: null };
     if (!edc.ok) return { success: false, error: edc.error };
 
     const validationErr = validateSubmitPayload(input);
@@ -748,13 +758,18 @@ export async function submitStoreClosing(
       edcSettlementAt: now,
 
       // Submitted (every EDC field is optional, so this just marks the summary as handed in).
-      edcSummaryDone: true,
-      edcSummaryNotes: input.edcSummaryNotes,
-      edcSummaryBy: input.userId,
-      edcSummaryAt: now,
-      opMeVoucherAmount: edc.opMeVoucher === null ? null : String(edc.opMeVoucher),
-      indodanaDashboardPhoto: indodanaPhoto,
-      indodanaDashboardPhotoAt: indodanaPhoto ? now : null,
+      // Left out entirely while the switch is off, so a reopened closing keeps its old figures.
+      ...(moneyOn
+        ? {
+            edcSummaryDone: true,
+            edcSummaryNotes: input.edcSummaryNotes,
+            edcSummaryBy: input.userId,
+            edcSummaryAt: now,
+            opMeVoucherAmount: edc.opMeVoucher === null ? null : String(edc.opMeVoucher),
+            indodanaDashboardPhoto: indodanaPhoto,
+            indodanaDashboardPhotoAt: indodanaPhoto ? now : null,
+          }
+        : {}),
 
       eodEdcSettlementPhoto: sideBySidePhoto,
       eodEdcSettlementPhotoBy: input.userId,
@@ -777,7 +792,7 @@ export async function submitStoreClosing(
 
     // The cells go in before the row flips to completed / on hold, so a closing
     // is never completed without its figures; re-sending them is harmless.
-    await applyEdcEntries(existing.id, edc.entries);
+    if (moneyOn) await applyEdcEntries(existing.id, edc.entries);
 
     if (input.openStatementDecision === 'on_hold') {
       // A task reopened after its hold issue was completed still points at that

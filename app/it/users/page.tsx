@@ -50,6 +50,7 @@ interface UserRow {
   id: string;
   nik: string;
   name: string;
+  email: string | null;
   isActive: boolean;
   roleId: number;
   roleCode: string;
@@ -96,6 +97,7 @@ function UserFormSheet({
 }) {
   const [nik, setNik] = useState(user?.nik ?? '');
   const [name, setName] = useState(user?.name ?? '');
+  const [email, setEmail] = useState(user?.email ?? '');
   const [password, setPassword] = useState('');
   const [roleId, setRoleId] = useState<string>(user ? String(user.roleId) : String(roles[0]?.id ?? ''));
   const [employeeTypeId, setEmployeeTypeId] = useState<string>(user?.employeeTypeId ? String(user.employeeTypeId) : '');
@@ -133,6 +135,7 @@ function UserFormSheet({
           ? {
               nik: nik.trim(),
               name: name.trim(),
+              email: email.trim() || null,
               password,
               roleId: Number(roleId),
               employeeTypeId: employeeTypeId ? Number(employeeTypeId) : null,
@@ -141,6 +144,7 @@ function UserFormSheet({
             }
           : {
               name: name.trim(),
+              email: email.trim() || null,
               roleId: Number(roleId),
               employeeTypeId: employeeTypeId ? Number(employeeTypeId) : null,
               homeStoreId: homeStoreId ? Number(homeStoreId) : null,
@@ -203,6 +207,21 @@ function UserFormSheet({
           <div className="space-y-1.5">
             <Label htmlFor="name">Name</Label>
             <Input id="name" value={name} onChange={(e) => setName(e.target.value)} disabled={saving} />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="email">Email (optional)</Label>
+            <Input
+              id="email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="name@pri.co.id"
+              disabled={saving}
+            />
+            <p className="text-[11px] text-slate-500">
+              Back-office accounts get an email copy of the issues routed to them.
+            </p>
           </div>
 
           <div className="space-y-1.5">
@@ -934,6 +953,7 @@ function ItUsersContent() {
       if (!q) return true;
       return u.name.toLowerCase().includes(q)
         || u.nik.toLowerCase().includes(q)
+        || (u.email ?? '').toLowerCase().includes(q)
         || (u.storeNo ?? '').toLowerCase().includes(q)
         || (u.storeName ?? '').toLowerCase().includes(q);
     });

@@ -81,6 +81,7 @@ async function seedItUser() {
     .values({
       nik,
       name,
+      email: process.env.SEED_IT_EMAIL?.trim() || 'it@pri.co.id',
       password: await hash(password, SALT_ROUNDS),
       roleId: itRole.id,
       employeeTypeId: null,

@@ -105,6 +105,13 @@ export const users = pgTable('users', {
   name:     text('name').notNull(),
   password: text('password').notNull(),
 
+  /**
+   * Work mailbox, optional for every account. Back-office users get an email
+   * copy of every issue routed to them (lib/db/utils/issue-emails.ts); a user
+   * without one is notified in-app only.
+   */
+  email: text('email'),
+
   /** Self-service profile picture (Biznet NOS URL). Null = show initials. */
   avatarUrl: text('avatar_url'),
 

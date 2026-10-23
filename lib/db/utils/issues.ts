@@ -23,7 +23,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { db } from '@/lib/db';
+import { appBaseUrl } from '@/lib/email/app-url';
+import { sendMail } from '@/lib/email/graph-mail';
+import { issueNotificationEmail } from '@/lib/email/issue-emails';
 import {
+  areas,
   employeeTypes,
   issueRoleAssignments,
   issues,
@@ -480,6 +484,53 @@ export async function notifyIssueEvent(input: {
     body: input.body,
     link: '/ops/issues',
   });
+
+  // The email copy never holds up (or fails) the request that raised the event.
+  void emailIssueRecipients(userIds, input.storeId, input.title, input.body).catch((err) =>
+    console.error('[issues] email notification failed:', err),
+  );
+}
+
+/**
+ * Mails the same recipients as the in-app notification — the ones who have an
+ * email set (users.email, optional). The recipients are already scoped: Ops Area
+ * only for their own area's stores (Ops HO for all), Finance / IT / Audit as a
+ * whole role. One mail per address, so a shared mailbox is not mailed twice.
+ */
+async function emailIssueRecipients(
+  userIds: string[],
+  storeId: number,
+  title: string,
+  body: string | undefined,
+): Promise<void> {
+  const rows = await db
+    .select({ email: users.email })
+    .from(users)
+    .where(and(inArray(users.id, userIds), isNotNull(users.email)));
+  const addresses = [...new Set(rows.map((r) => r.email?.trim().toLowerCase()).filter((e): e is string => !!e))];
+  if (!addresses.length) return;
+
+  const [store] = await db
+    .select({ storeNo: stores.storeNo, name: stores.name, areaName: areas.name })
+    .from(stores)
+    .leftJoin(areas, eq(areas.id, stores.areaId))
+    .where(eq(stores.id, storeId))
+    .limit(1);
+
+  const base = appBaseUrl();
+  const message = issueNotificationEmail({
+    title,
+    body,
+    storeLabel: store ? `${store.storeNo} · ${store.name}` : null,
+    areaName: store?.areaName ?? null,
+    at: new Date(),
+    link: base ? `${base}/ops/issues` : null,
+  });
+
+  for (const to of addresses) {
+    const result = await sendMail({ to, ...message });
+    if (!result.success) console.error(`[issues] email to ${to} failed: ${result.error}`);
+  }
 }
 
 export async function canRoleAccessIssueDestination(input: {

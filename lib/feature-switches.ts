@@ -24,6 +24,16 @@ export const FEATURE_SWITCHES = {
     appliesTo: 'Ops · Schedules',
     defaultEnabled: false,
   },
+  store_closing_update: {
+    title: 'Store Closing update',
+    description:
+      'Brings back the money part of the employee Store Closing: the EDC summary (amount per bank × QRIS / ' +
+      'Debit / Credit, plus OP/ME/VOUCHER) and the optional Indodana dashboard photo. When off, a store closing ' +
+      'is only EOD Z-Report, EDC Settlement, the evidence photos and Open Statement; nothing about money is ' +
+      'asked or saved. Closings already saved with figures keep them (Ops and Finance still show those).',
+    appliesTo: 'Employee · Store Closing',
+    defaultEnabled: false,
+  },
 } as const satisfies Record<string, FeatureSwitchDef>;
 
 export type FeatureSwitchKey = keyof typeof FEATURE_SWITCHES;

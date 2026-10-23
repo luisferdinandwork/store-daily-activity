@@ -1103,9 +1103,12 @@ function StoreClosingDetail({ task }: { task: FlatTask }) {
         />
       </div>
 
-      {/* 2 · EDC Summary (shown before Settlement) */}
-      <p className="mb-1 mt-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">EDC Summary</p>
-      {edc.hasData ? (
+      {/* 2 · EDC Summary (shown before Settlement). Without figures or the old tick the
+          closing was made without the money part (IT switch `store_closing_update` off). */}
+      {(edc.hasData || !!e.edcSummaryDone || !!e.storeClosingUpdate) && (
+        <p className="mb-1 mt-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">EDC Summary</p>
+      )}
+      {!edc.hasData && !e.edcSummaryDone && !e.storeClosingUpdate ? null : edc.hasData ? (
         <>
           <EdcSummaryTable summary={edc} />
           {edcBy && (

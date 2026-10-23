@@ -32,6 +32,7 @@ import {
 } from '@/lib/db/schema';
 import { users, areas }      from '@/lib/db/schema';
 import { getOrCreateMarketingCheckForSchedule } from '@/lib/db/utils/marketing-check';
+import { isFeatureEnabled } from '@/lib/db/utils/feature-switches';
 import { getExpectedTaskSlots, missingTaskSlots, storeDayKey } from '@/lib/db/utils/task-expectations';
 import { getShiftCodeById } from '@/lib/db/utils/shift-lookup';
 import { jakartaDateKey, jakartaDayRange, jakartaDaysRange } from '@/lib/day-bucket';
@@ -1426,9 +1427,11 @@ export async function getFlatTasksForStoreDate(storeId: number, date: Date): Pro
   // Store Closing: the money of the EDC summary rides along as extra.edcEntries
   // (opMeVoucherAmount / indodanaDashboardPhoto are plain task columns).
   const edcEntriesByTaskId = await loadEdcEntriesByTaskId(storeClosing.map((task) => task.id));
+  // storeClosingUpdate = the IT switch for the money part: Ops hides the EDC Summary block without it.
+  const storeClosingUpdate = storeClosing.length > 0 && (await isFeatureEnabled('store_closing_update'));
   const storeClosingWithEdc: FlatTask[] = storeClosing.map((task) => ({
     ...task,
-    extra: { ...task.extra, edcEntries: edcEntriesByTaskId.get(task.id) ?? [] },
+    extra: { ...task.extra, edcEntries: edcEntriesByTaskId.get(task.id) ?? [], storeClosingUpdate },
   }));
 
   const all = [

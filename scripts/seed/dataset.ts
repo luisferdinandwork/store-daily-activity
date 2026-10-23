@@ -57,6 +57,8 @@ export interface SeedBackOfficeUser {
   roleCode: 'ops' | 'finance' | 'it' | 'audit';
   empTypeCode: 'ops_ho' | 'ops_area' | null;
   areaName: string | null;
+  /** Optional work mailbox (issue emails). Others are set later in IT Users. */
+  email?: string;
 }
 
 // ─── Areas ──────────────────────────────────────────────────────────────────
@@ -68,10 +70,10 @@ export const AREAS = ['DKI - BALI', 'DUMMY AREA'] as const;
 export const BACK_OFFICE_USERS: SeedBackOfficeUser[] = [
   { id: 'OPS-HO-001',       nik: 'OPS-HO-001',       name: 'Ops Head Office', roleCode: 'ops',     empTypeCode: 'ops_ho',   areaName: null },
   // Real DKI - BALI area manager (the "INDRIAWAN" on the target sheets).
-  { id: 'OPS-DKI-BALI-001', nik: 'A11040401',        name: 'Indriawan',       roleCode: 'ops',     empTypeCode: 'ops_area', areaName: 'DKI - BALI' },
+  { id: 'OPS-DKI-BALI-001', nik: 'A11040401',        name: 'Indriawan',       roleCode: 'ops',     empTypeCode: 'ops_area', areaName: 'DKI - BALI', email: 'indriawan@pri.co.id' },
   { id: 'OPS-DUMMY-001',    nik: 'OPS-DUMMY-001',    name: 'Dummy Ops',       roleCode: 'ops',     empTypeCode: 'ops_area', areaName: 'DUMMY AREA' },
   { id: 'FIN-001',          nik: 'FIN-001',          name: 'Finance',         roleCode: 'finance', empTypeCode: null,       areaName: null },
-  { id: 'IT-001',           nik: 'IT-001',           name: 'IT',              roleCode: 'it',      empTypeCode: null,       areaName: null },
+  { id: 'IT-001',           nik: 'IT-001',           name: 'IT',              roleCode: 'it',      empTypeCode: null,       areaName: null, email: 'it@pri.co.id' },
   { id: 'AUDIT-001',        nik: 'AUDIT-001',        name: 'Audit',           roleCode: 'audit',   empTypeCode: null,       areaName: null },
 ];
 

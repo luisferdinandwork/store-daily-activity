@@ -29,6 +29,7 @@ import { db } from '@/lib/db';
 import { passwordResetRequests, stores, users } from '@/lib/db/schema';
 import { validateNewPassword } from '@/lib/auth/password';
 import { clearLoginFailures } from '@/lib/auth/rate-limit';
+import { appBaseUrl } from '@/lib/email/app-url';
 import { sendMail } from '@/lib/email/graph-mail';
 import {
   itNotifyEmail,
@@ -72,12 +73,6 @@ function hashToken(token: string): string {
 
 function newToken(): string {
   return crypto.randomBytes(32).toString('base64url');
-}
-
-/** Public origin for links in emails. NEXTAUTH_URL is the deployment's canonical URL. */
-function appBaseUrl(fallbackOrigin?: string): string {
-  const base = process.env.APP_URL?.trim() || process.env.NEXTAUTH_URL?.trim() || fallbackOrigin || '';
-  return base.replace(/\/+$/, '');
 }
 
 function storeLabel(storeNo: string | null, storeName: string | null): string {

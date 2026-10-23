@@ -6,16 +6,16 @@
 
 import { maskNik, RESET_LINK_TTL_HOURS, RESET_MAX_NIK_ATTEMPTS } from '@/lib/password-reset';
 
-const BRAND = '#7A5AF8';
-const APP_NAME = 'PRISM';
+export const BRAND = '#7A5AF8';
+export const APP_NAME = 'PRISM';
 
-interface Rendered {
+export interface Rendered {
   subject: string;
   html: string;
   text: string;
 }
 
-function esc(value: string): string {
+export function esc(value: string): string {
   return value
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -35,9 +35,9 @@ export function formatWib(date: Date): string {
   })} WIB`;
 }
 
-type Row = [label: string, value: string];
+export type Row = [label: string, value: string];
 
-function detailRows(rows: Row[]): string {
+export function detailRows(rows: Row[]): string {
   return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:16px 0;border:1px solid #e2e8f0;border-radius:10px;border-collapse:separate;">
 ${rows
   .map(
@@ -50,7 +50,7 @@ ${rows
 </table>`;
 }
 
-function layout(opts: { heading: string; bodyHtml: string; footnote?: string }): string {
+export function layout(opts: { heading: string; bodyHtml: string; footnote?: string }): string {
   return `<!doctype html>
 <html lang="id">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(opts.heading)}</title></head>
@@ -76,7 +76,7 @@ function layout(opts: { heading: string; bodyHtml: string; footnote?: string }):
 </html>`;
 }
 
-const p = (html: string) => `<p style="margin:0 0 12px;font-size:14px;line-height:1.6;color:#334155;">${html}</p>`;
+export const p = (html: string) => `<p style="margin:0 0 12px;font-size:14px;line-height:1.6;color:#334155;">${html}</p>`;
 
 export interface ResetEmailPerson {
   name: string;

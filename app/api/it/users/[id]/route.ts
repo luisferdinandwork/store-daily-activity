@@ -17,6 +17,7 @@ import { users, userRoles, employeeTypes, stores } from '@/lib/db/schema';
 import { resolveItScope } from '@/lib/auth/it-scope';
 import { setUserHomeStore } from '@/lib/db/utils/user-store-assignment';
 import { deleteUserAccount } from '@/lib/db/utils/user-deletion';
+import { parseOptionalEmail } from '@/lib/email-address';
 
 const SALT_ROUNDS = 10;
 
@@ -43,6 +44,12 @@ export async function PATCH(
     const name = body.name.trim();
     if (!name) return NextResponse.json({ success: false, error: 'Name cannot be empty.' }, { status: 400 });
     updates.name = name;
+  }
+
+  if ('email' in (body ?? {})) {
+    const email = parseOptionalEmail(body.email);
+    if (!email.ok) return NextResponse.json({ success: false, error: email.error }, { status: 400 });
+    updates.email = email.value;
   }
 
   if (typeof body?.isActive === 'boolean') {

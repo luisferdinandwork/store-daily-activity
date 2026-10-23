@@ -58,6 +58,8 @@ interface StoreClosingData {
   storefrontLockedPhoto:   string | null;
   edcSettlementDone:       boolean;
   edcSettlementNotes:      string | null;
+  /** IT switch `store_closing_update`: the EDC money summary + Indodana photo are part of the closing. */
+  storeClosingUpdate:      boolean;
   /** Old checklist tick — the only EDC summary record of closings made before the money format. */
   edcSummaryDone:          boolean;
   edcSummaryNotes:         string | null;
@@ -393,10 +395,15 @@ export default function StoreClosingDetailPage() {
           storefrontLockedPhoto,
           edcSettlementDone,
           edcSettlementNotes: edcSettlementNotes || undefined,
-          edcEntries: edcEntriesFromState(edcAmounts),
-          opMeVoucherAmount: edcDigitsToAmount(opMeVoucher),
-          indodanaDashboardPhoto: indodanaPhoto,
-          edcSummaryNotes: edcSummaryNotes || undefined,
+          // The money part only exists while the Store Closing update switch is on.
+          ...(taskData.storeClosingUpdate
+            ? {
+                edcEntries: edcEntriesFromState(edcAmounts),
+                opMeVoucherAmount: edcDigitsToAmount(opMeVoucher),
+                indodanaDashboardPhoto: indodanaPhoto,
+                edcSummaryNotes: edcSummaryNotes || undefined,
+              }
+            : {}),
           openStatementDecision,
           openStatementHoldReason: holdReason || undefined,
           notes: notes || undefined,
@@ -451,6 +458,11 @@ export default function StoreClosingDetailPage() {
         const openStmtSatisfied =
           openStatementDecision === 'post_statement' ||
           openStatementDecision === 'on_hold';
+
+        // Store Closing update switch: EDC money summary + Indodana photo. Off = not on the page at all.
+        const moneyOn = !!taskData?.storeClosingUpdate;
+        let sectionNo = 1;
+        const nextTitle = (title: string) => `${sectionNo++} · ${title}`;
 
         // EDC summary: every field is optional, so it never blocks the submit.
         const edcSummary = edcSummaryFromState(edcAmounts, opMeVoucher);
@@ -542,7 +554,7 @@ export default function StoreClosingDetailPage() {
                   {!isOnHold && lockedOverlay}
 
                   <div className="space-y-5">
-                    <Section title="1 · EOD Z-Report">
+                    <Section title={nextTitle('EOD Z-Report')}>
                       <ListGroup>
                         <CheckRow
                           label="EOD Z-Report selesai"
@@ -554,8 +566,9 @@ export default function StoreClosingDetailPage() {
                       </ListGroup>
                     </Section>
 
+                    {moneyOn && (
                     <Section
-                      title="2 · EDC Summary"
+                      title={nextTitle('EDC Summary')}
                       meta={legacyEdc ? undefined : `${EDC_BANKS.length - edcSummary.missingBanks.length}/${EDC_BANKS.length} bank`}
                     >
                       <div className="space-y-3">
@@ -593,8 +606,9 @@ export default function StoreClosingDetailPage() {
                         </ListGroup>
                       </div>
                     </Section>
+                    )}
 
-                    <Section title="3 · EDC Settlement">
+                    <Section title={nextTitle('EDC Settlement')}>
                       <ListGroup>
                         <CheckRow
                           label="EDC Settlement selesai"
@@ -613,7 +627,7 @@ export default function StoreClosingDetailPage() {
                       </ListGroup>
                     </Section>
 
-                    <Section title="4 · Foto bukti" meta={`${(evidencePhotoSatisfied ? 1 : 0) + (storefrontLockedSatisfied ? 1 : 0)}/2`}>
+                    <Section title={nextTitle('Foto bukti')} meta={`${(evidencePhotoSatisfied ? 1 : 0) + (storefrontLockedSatisfied ? 1 : 0)}/2`}>
                       <ListGroup>
                         <PhotoRow
                           title="Z-Report & EDC Settlement"
@@ -631,18 +645,20 @@ export default function StoreClosingDetailPage() {
                           disabled={dis}
                           icon={<Lock className="h-4 w-4" />}
                         />
-                        <PhotoRow
-                          title={INDODANA_PHOTO_LABEL}
-                          hint="Opsional — foto / screenshot dashboard Indodana hari ini"
-                          photo={indodanaPhoto}
-                          onClick={() => setIndodanaModalOpen(true)}
-                          disabled={dis}
-                          icon={<LayoutDashboard className="h-4 w-4" />}
-                        />
+                        {moneyOn && (
+                          <PhotoRow
+                            title={INDODANA_PHOTO_LABEL}
+                            hint="Opsional — foto / screenshot dashboard Indodana hari ini"
+                            photo={indodanaPhoto}
+                            onClick={() => setIndodanaModalOpen(true)}
+                            disabled={dis}
+                            icon={<LayoutDashboard className="h-4 w-4" />}
+                          />
+                        )}
                       </ListGroup>
                     </Section>
 
-                    <Section title="5 · Open Statement">
+                    <Section title={nextTitle('Open Statement')}>
                       <OpenStatementSelector
                         value={openStatementDecision}
                         onChange={handleOpenStatementDecision}
@@ -670,7 +686,7 @@ export default function StoreClosingDetailPage() {
                 label={openStatementDecision === 'on_hold' ? 'Submit — On Hold' : 'Submit Store Closing'}
                 // On Hold goes straight out (the issue reports it to Ops, Finance, IT);
                 // Post Statement first shows the EDC table to confirm.
-                onSubmit={() => (openStatementDecision === 'post_statement' ? setConfirmOpen(true) : handleSubmit(geo))}
+                onSubmit={() => (moneyOn && openStatementDecision === 'post_statement' ? setConfirmOpen(true) : handleSubmit(geo))}
                 submitting={submitting}
                 disabled={!canSubmit}
                 hidden={readonly || isOnHold}
@@ -695,6 +711,7 @@ export default function StoreClosingDetailPage() {
             />
 
             {/* Post Statement: look over the EDC figures before submitting */}
+            {moneyOn && (
             <BottomSheet
               open={confirmOpen}
               onClose={() => setConfirmOpen(false)}
@@ -718,8 +735,10 @@ export default function StoreClosingDetailPage() {
             >
               <EdcConfirmTable summary={edcSummary} indodanaPhoto={indodanaPhoto} />
             </BottomSheet>
+            )}
 
             {/* Indodana dashboard photo modal */}
+            {moneyOn && (
             <ChecklistPhotoModal
               open={indodanaModalOpen}
               onClose={() => setIndodanaModalOpen(false)}
@@ -734,6 +753,7 @@ export default function StoreClosingDetailPage() {
               onClear={() => syncIndodanaPhoto([])}
               disabled={dis}
             />
+            )}
 
             {/* Storefront locked photo modal */}
             <ChecklistPhotoModal
