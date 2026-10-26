@@ -72,7 +72,7 @@ export interface SetoranStoreRow {
   canVerify: boolean;
 
   /** Latest IT change to this day (Koreksi Setoran): its figures corrected, or the whole day filled in. */
-  correction: { by: string; at: string; reason: string; kind: 'correct' | 'create' } | null;
+  correction: { by: string; byRole: string; at: string; reason: string; kind: 'correct' | 'create' } | null;
 
   /** Staff on an opening shift that day. */
   scheduledStaff: { userId: string; name: string }[];
@@ -141,7 +141,9 @@ export interface EvidenceSlot {
  * bank receipt + a selfie with the ATM card. Before an amount is entered we
  * just list whichever photos exist.
  */
-export function evidenceSlots(row: SetoranStoreRow): EvidenceSlot[] {
+export function evidenceSlots(
+  row: Pick<SetoranStoreRow, 'resiPhoto' | 'atmCardSelfiePhoto' | 'cashierPhoto' | 'atmCardPhoto' | 'received' | 'stored'>,
+): EvidenceSlot[] {
   const resi:      EvidenceSlot = { key: 'resi',      label: 'Foto resi',        url: row.resiPhoto };
   const atmSelfie: EvidenceSlot = { key: 'atmSelfie', label: 'Selfie kartu ATM', url: row.atmCardSelfiePhoto };
   const cashier:   EvidenceSlot = { key: 'cashier',   label: 'Foto sisa setoran', url: row.cashierPhoto };

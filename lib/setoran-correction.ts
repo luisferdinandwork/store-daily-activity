@@ -25,6 +25,9 @@ export function suggestedDeposit(drawerTotal: number): number {
   return Math.floor(drawerTotal / SETORAN_DEPOSIT_STEP) * SETORAN_DEPOSIT_STEP;
 }
 
+/** "IT" / "Finance" — who made a correction, from the corrector's role code. */
+export const correctorLabel = (role: string | null | undefined) => (role === 'finance' ? 'Finance' : 'IT');
+
 export const CORRECTION_REASON_MIN = 5;
 export const CORRECTION_REASON_MAX = 500;
 
@@ -63,6 +66,16 @@ export interface SetoranDayRow {
   stored: number | null;
   unpaid: number | null;
   isNoSetoran: boolean;
+  // Evidence photos uploaded with the setoran (a day IT/Finance filled in has none).
+  resiPhoto: string | null;
+  atmCardSelfiePhoto: string | null;
+  cashierPhoto: string | null;
+  atmCardPhoto: string | null;
+  /** Who recorded uang diterima / disetor on the task, and when. */
+  receivedBy: string | null;
+  receivedAt: string | null;
+  storedBy: string | null;
+  storedAt: string | null;
   submittedBy: string | null;
   submittedAt: string | null;
   verifiedBy: string | null;
@@ -81,6 +94,8 @@ export interface SetoranCorrectionEntry {
   date: string;
   reason: string;
   correctedBy: string;
+  /** Role code of the corrector — 'it' or 'finance'. */
+  correctedByRole: string;
   createdAt: string;
   before: { received: number; stored: number; unpaid: number };
   after: { received: number; stored: number; unpaid: number };

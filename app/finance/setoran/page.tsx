@@ -1,6 +1,7 @@
 'use client';
 
 import PanelPageHeader from '@/components/shared/PanelPageHeader';
+import { correctorLabel } from '@/lib/setoran-correction';
 // app/finance/setoran/page.tsx
 //
 // Finance · Setoran Review (daily)
@@ -346,7 +347,7 @@ function DetailPanel({
           <TrailLine label="Diverifikasi" who={row.verifiedAt ? row.verifiedBy ?? 'Finance' : null} at={row.verifiedAt} />
           {row.correction && (
             <TrailLine
-              label={row.correction.kind === 'create' ? 'Ditambahkan IT' : 'Dikoreksi IT'}
+              label={`${row.correction.kind === 'create' ? 'Ditambahkan' : 'Dikoreksi'} ${correctorLabel(row.correction.byRole)}`}
               who={row.correction.by}
               at={row.correction.at}
             />
@@ -356,7 +357,9 @@ function DetailPanel({
         {row.correction && (
           <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
             <span className="font-semibold">
-              {row.correction.kind === 'create' ? 'Setoran diisi IT (tanpa foto bukti): ' : 'Nominal dikoreksi: '}
+              {row.correction.kind === 'create'
+                ? `Setoran diisi ${correctorLabel(row.correction.byRole)} (tanpa foto bukti): `
+                : 'Nominal dikoreksi: '}
             </span>
             {row.correction.reason}
           </div>

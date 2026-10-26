@@ -30,6 +30,7 @@ import {
   setoranMoneyStorage,
   setoranTasks,
   stores,
+  userRoles,
   users,
 } from '@/lib/db/schema';
 import { shifts } from '@/lib/db/schema/lookups';
@@ -144,19 +145,19 @@ export async function getSetoranLedger(
 
   const userIds = new Set<string>();
   for (const t of taskRows) {
-    for (const id of [t.completedBy, t.verifiedBy]) if (id) userIds.add(id);
+    for (const id of [t.completedBy, t.verifiedBy, t.actualReceivedAmountBy, t.storedAmountBy]) if (id) userIds.add(id);
   }
   for (const c of correctionRows) userIds.add(c.correctedBy);
 
-  const nameOf = new Map(
-    userIds.size === 0
-      ? []
-      : (await db
-          .select({ id: users.id, name: users.name })
-          .from(users)
-          .where(inArray(users.id, [...userIds]))
-        ).map((u) => [u.id, u.name] as const),
-  );
+  const userRows = userIds.size === 0
+    ? []
+    : await db
+        .select({ id: users.id, name: users.name, role: userRoles.code })
+        .from(users)
+        .innerJoin(userRoles, eq(userRoles.id, users.roleId))
+        .where(inArray(users.id, [...userIds]));
+  const nameOf = new Map(userRows.map((u) => [u.id, u.name] as const));
+  const roleOf = new Map(userRows.map((u) => [u.id, u.role] as const));
   const name = (id: string | null | undefined) => (id ? nameOf.get(id) ?? id : null);
 
   const ledgerByDay = new Map(ledgerRows.map((l) => [dayKey(l.date), l]));
@@ -186,6 +187,14 @@ export async function getSetoranLedger(
       taskId: task?.id ?? null,
       carryIn,
       isNoSetoran: false,
+      resiPhoto: task?.resiPhoto ?? null,
+      atmCardSelfiePhoto: task?.atmCardSelfiePhoto ?? null,
+      cashierPhoto: task?.cashierPhoto ?? null,
+      atmCardPhoto: task?.atmCardPhoto ?? null,
+      receivedBy: name(task?.actualReceivedAmountBy),
+      receivedAt: iso(task?.actualReceivedAmountAt),
+      storedBy: name(task?.storedAmountBy),
+      storedAt: iso(task?.storedAmountAt),
       submittedBy: null as string | null,
       submittedAt: null as string | null,
       verifiedBy: name(task?.verifiedBy),
@@ -234,6 +243,7 @@ export async function getSetoranLedger(
     date: dayKey(c.date),
     reason: c.reason,
     correctedBy: name(c.correctedBy) ?? c.correctedBy,
+    correctedByRole: roleOf.get(c.correctedBy) ?? 'it',
     createdAt: c.createdAt.toISOString(),
     before: { received: toInt(c.beforeReceived), stored: toInt(c.beforeStored), unpaid: toInt(c.beforeUnpaid) },
     after: { received: toInt(c.afterReceived), stored: toInt(c.afterStored), unpaid: toInt(c.afterUnpaid) },
@@ -250,7 +260,7 @@ export async function getSetoranLedger(
  */
 export async function getLatestCorrectionsByTask(
   taskIds: number[],
-): Promise<Map<number, { by: string; at: string; reason: string; kind: 'correct' | 'create' }>> {
+): Promise<Map<number, { by: string; byRole: string; at: string; reason: string; kind: 'correct' | 'create' }>> {
   if (taskIds.length === 0) return new Map();
 
   const rows = await db
@@ -260,16 +270,18 @@ export async function getLatestCorrectionsByTask(
       reason: setoranCorrections.reason,
       createdAt: setoranCorrections.createdAt,
       by: users.name,
+      byRole: userRoles.code,
     })
     .from(setoranCorrections)
     .innerJoin(users, eq(users.id, setoranCorrections.correctedBy))
+    .innerJoin(userRoles, eq(userRoles.id, users.roleId))
     .where(inArray(setoranCorrections.taskId, taskIds))
     .orderBy(desc(setoranCorrections.createdAt));
 
-  const latest = new Map<number, { by: string; at: string; reason: string; kind: 'correct' | 'create' }>();
+  const latest = new Map<number, { by: string; byRole: string; at: string; reason: string; kind: 'correct' | 'create' }>();
   for (const r of rows) {
     if (!latest.has(r.taskId)) {
-      latest.set(r.taskId, { by: r.by, at: r.createdAt.toISOString(), reason: r.reason, kind: r.kind });
+      latest.set(r.taskId, { by: r.by, byRole: r.byRole, at: r.createdAt.toISOString(), reason: r.reason, kind: r.kind });
     }
   }
   return latest;

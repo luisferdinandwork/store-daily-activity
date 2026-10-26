@@ -16,6 +16,7 @@
 //                 ▸ Report      /finance/petty-cash/report   (usage + refill bank account, Excel)
 //     Setoran     ▸ Review      /finance/setoran             (daily review: photos, verify, Excel)
 //                 ▸ Report      /finance/setoran/report      (monthly totals per store, Excel)
+//     Koreksi Setoran           /finance/setoran-correction  (fix one day's amounts, carry-over recalculated)
 //     Uang Modal  ▸ Review      /finance/uang-modal          (daily opening-float check, verify, Excel)
 //                 ▸ Report      /finance/uang-modal/report   (monthly fill rate per store, Excel)
 //
@@ -39,6 +40,7 @@ import {
   ChevronDown,
   ChevronRight,
   Coins,
+  Eraser,
   KeyRound,
   LayoutDashboard,
   LogOut,
@@ -111,6 +113,7 @@ const NAV: NavSection[] = [
           { href: '/finance/setoran/report', label: 'Report' },
         ],
       },
+      { href: '/finance/setoran-correction', label: 'Koreksi Setoran', icon: Eraser },
       {
         label: 'Uang Modal',
         icon: Coins,
