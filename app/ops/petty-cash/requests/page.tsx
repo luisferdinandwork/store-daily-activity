@@ -19,10 +19,20 @@
 // approve / reject (components/ops/mobile/PettyCashMobile.tsx).
 
 import { useState } from 'react';
-import { AlertTriangle, Wallet } from 'lucide-react';
+import { AlertTriangle, Trash2, Wallet } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { cn } from '@/lib/utils';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
 import { OpsChipTabs, OpsFilterSelect, OpsSearchInput, OpsSortControl } from '@/components/ops/layout/OpsToolbar';
 import { KpiStrip, PhotoLightbox, type KpiItem } from '@/components/finance/shared/sheet-kit';
@@ -94,6 +104,7 @@ export default function OpsPettyCashRequestsPage() {
   const [page, setPage] = useState(1);
 
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [toDelete, setToDelete] = useState<OpsRequestRow | null>(null);
   const [lightbox, setLightbox] = useState<{ title: string; url: string } | null>(null);
 
   const feed = useJsonFeed<OpsRequestsResponse>(`/api/ops/petty-cash?month=${month}`);
@@ -101,6 +112,8 @@ export default function OpsPettyCashRequestsPage() {
 
   const rows = feed.data?.data ?? [];
   const isHo = feed.data?.scope === 'all_areas';
+  // IT only: remove a double entry / mistaken request.
+  const canDelete = feed.data?.canDelete === true;
   const loadingFirst = feed.loading && !feed.data;
 
   // HO sees every area and can narrow to one; an Area OPS has a single area, so
@@ -161,6 +174,26 @@ export default function OpsPettyCashRequestsPage() {
       refreshPending();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Action failed.');
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function remove(row: OpsRequestRow) {
+    setBusyId(row.id);
+    try {
+      const res = await fetch(`/api/ops/petty-cash/${row.id}`, { method: 'DELETE' });
+      const body = await res.json();
+      if (!res.ok || !body.success) throw new Error(body.error ?? 'Delete failed.');
+
+      toast.success(
+        body.balanceRestored
+          ? `Deleted — ${row.storeName}, ${rp(row.actualAmount ?? row.amount)} returned to the balance.`
+          : `Deleted — ${row.storeName}, ${rp(row.amount)}.`,
+      );
+      refreshAll();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Delete failed.');
     } finally {
       setBusyId(null);
     }
@@ -301,6 +334,7 @@ export default function OpsPettyCashRequestsPage() {
                     busy={busyId === r.id}
                     onApprove={() => void decide(r, 'approve')}
                     onReject={(reason) => void decide(r, 'reject', reason)}
+                    onDelete={canDelete ? () => setToDelete(r) : undefined}
                     onOpenReceipt={(url) => setLightbox({ title: `${r.storeNo} · ${r.storeName}`, url })}
                   />
                 ))}
@@ -521,8 +555,22 @@ export default function OpsPettyCashRequestsPage() {
                               onApprove={() => void decide(r, 'approve')}
                               onReject={(reason) => void decide(r, 'reject', reason)}
                             />
-                          ) : (
+                          ) : canDelete ? null : (
                             <span className="block text-right text-slate-300">–</span>
+                          )}
+                          {canDelete && (
+                            <span className={cn('flex justify-end', waiting && 'mt-1.5')}>
+                              <button
+                                type="button"
+                                disabled={busyId === r.id}
+                                title="Delete (IT)"
+                                aria-label="Delete request"
+                                onClick={() => setToDelete(r)}
+                                className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-60"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            </span>
                           )}
                         </td>
                       </tr>
@@ -550,6 +598,38 @@ export default function OpsPettyCashRequestsPage() {
           </>
         ) : null}
       </div>
+
+      <AlertDialog open={!!toDelete} onOpenChange={(open) => { if (!open) setToDelete(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this petty cash request?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {toDelete && (
+                <>
+                  {toDelete.storeName} · {toDelete.description} · {rp(toDelete.actualAmount ?? toDelete.amount)}.{' '}
+                </>
+              )}
+              The request is removed for good
+              {toDelete?.status === 'completed'
+                ? ' and the amount already used is returned to the store’s petty cash balance'
+                : ''}
+              .
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-rose-600 hover:bg-rose-700"
+              onClick={() => {
+                if (toDelete) void remove(toDelete);
+                setToDelete(null);
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -71,6 +71,8 @@ export interface OpsRequestsResponse {
   month: string;
   scope: 'area' | 'all_areas';
   areaId: number | null;
+  /** IT only — may delete a request (double entry / mistake). */
+  canDelete: boolean;
   data: OpsRequestRow[];
 }
 

@@ -16,7 +16,7 @@ import { useId, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
-  ArrowDown, ArrowUp, CheckCircle2, ChevronDown, ImageOff, Loader2, Receipt, Search, X, XCircle,
+  ArrowDown, ArrowUp, CheckCircle2, ChevronDown, ImageOff, Loader2, Receipt, Search, Trash2, X, XCircle,
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
@@ -357,6 +357,7 @@ export function RequestCard({
   busy,
   onApprove,
   onReject,
+  onDelete,
   onOpenReceipt,
 }: {
   row: OpsRequestRow;
@@ -364,6 +365,8 @@ export function RequestCard({
   busy: boolean;
   onApprove: () => void;
   onReject: (reason: string) => void;
+  /** IT only — undefined hides the delete button. */
+  onDelete?: () => void;
   onOpenReceipt: (url: string) => void;
 }) {
   const waiting = row.status === 'pending_ops';
@@ -428,6 +431,20 @@ export function RequestCard({
       {waiting && (
         <div className="border-t border-amber-100 bg-amber-50/50 p-3">
           <CardDecision busy={busy} onApprove={onApprove} onReject={onReject} />
+        </div>
+      )}
+
+      {onDelete && (
+        <div className="border-t border-slate-100 p-2">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onDelete}
+            className="flex h-9 w-full items-center justify-center gap-1.5 rounded-lg text-xs font-bold text-rose-600 transition-colors hover:bg-rose-50 disabled:opacity-60"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            Delete request
+          </button>
         </div>
       )}
     </article>

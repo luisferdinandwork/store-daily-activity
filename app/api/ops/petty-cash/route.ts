@@ -38,6 +38,7 @@ export async function GET(req: NextRequest) {
     month,
     scope: scope.scope,
     areaId: scope.areaId,
+    canDelete: scope.isIt,
     data,
   });
 }

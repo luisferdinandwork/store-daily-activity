@@ -1,12 +1,12 @@
 // app/api/ops/petty-cash/[txId]/route.ts
 
 import { NextRequest, NextResponse } from 'next/server';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
 import { stores } from '@/lib/db/schema/core';
-import { pettyCashTransactions } from '@/lib/db/schema/petty-cash';
+import { pettyCashPeriods, pettyCashTransactions } from '@/lib/db/schema/petty-cash';
 
 type Params = {
   params: Promise<{
@@ -167,5 +167,82 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     success: true,
     txId: approved.id,
     status: approved.status,
+  });
+}
+
+/**
+ * DELETE — IT only. Removes a petty cash request outright, for double entries
+ * or mistakes by Ops / the PIC. A completed request had already cut its actual
+ * amount from the store's balance, so that amount is put back on the period
+ * (when it is still open; a closed period's balance was already rolled over).
+ */
+export async function DELETE(_req: NextRequest, { params }: Params) {
+  const scope = await resolveOpsScope();
+
+  if (!scope.ok) {
+    return NextResponse.json(
+      { success: false, error: scope.error },
+      { status: scope.status },
+    );
+  }
+
+  if (!scope.isIt) {
+    return NextResponse.json(
+      { success: false, error: 'Only IT can delete petty cash requests.' },
+      { status: 403 },
+    );
+  }
+
+  const { txId: txIdStr } = await params;
+  const txId = Number(txIdStr);
+
+  if (!Number.isInteger(txId) || txId <= 0) {
+    return NextResponse.json(
+      { success: false, error: 'Invalid txId.' },
+      { status: 400 },
+    );
+  }
+
+  const result = await db.transaction(async (trx) => {
+    const [deleted] = await trx
+      .delete(pettyCashTransactions)
+      .where(eq(pettyCashTransactions.id, txId))
+      .returning({
+        id: pettyCashTransactions.id,
+        status: pettyCashTransactions.status,
+        periodId: pettyCashTransactions.periodId,
+        actualAmount: pettyCashTransactions.actualAmount,
+      });
+
+    if (!deleted) return null;
+
+    let balanceRestored = false;
+
+    if (deleted.status === 'completed' && deleted.periodId != null && deleted.actualAmount != null) {
+      const restored = await trx
+        .update(pettyCashPeriods)
+        .set({
+          currentBalance: sql`${pettyCashPeriods.currentBalance} + ${deleted.actualAmount}::numeric`,
+        })
+        .where(and(eq(pettyCashPeriods.id, deleted.periodId), eq(pettyCashPeriods.status, 'open')))
+        .returning({ id: pettyCashPeriods.id });
+
+      balanceRestored = restored.length > 0;
+    }
+
+    return { id: deleted.id, balanceRestored };
+  });
+
+  if (!result) {
+    return NextResponse.json(
+      { success: false, error: 'Petty cash request not found.' },
+      { status: 404 },
+    );
+  }
+
+  return NextResponse.json({
+    success: true,
+    txId: result.id,
+    balanceRestored: result.balanceRestored,
   });
 }
