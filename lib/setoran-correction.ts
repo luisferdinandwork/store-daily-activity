@@ -176,12 +176,6 @@ export function planSetoranCorrection(
   // sisa counts too, so a day deposits the accumulated balance even when little
   // was received that day.)
   const required = received + target.carryIn;
-  if (required < SETORAN_SMALL_THRESHOLD && stored > 0) {
-    return {
-      ok: false,
-      error: `Uang di laci (diterima + sisa kemarin = ${rp(required)}) di bawah ${rp(SETORAN_SMALL_THRESHOLD)} tidak disetor — nominal disetor harus 0.`,
-    };
-  }
   if (stored > required) {
     return {
       ok: false,

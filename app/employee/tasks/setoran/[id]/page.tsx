@@ -5,24 +5,26 @@
 // requests a fix and the submit API validates it using the same store fence.
 //
 // UI: a single calm column —
-//   • purple summary box: "Total uang Cash Drawer" (uang aktual diterima + sisa
-//     belum disetor) and "Total wajib disetor" (that, rounded DOWN to the
-//     nearest Rp 50.000). Tapping "Total wajib disetor" opens a modal to
+//   • purple summary box: "Jumlah yang harus disetor" (Jumlah Sales Cash + sisa
+//     belum disetor) and "Jumlah setoran Tunai" (that, rounded DOWN to the
+//     nearest Rp 50.000). Tapping "Jumlah setoran Tunai" opens a modal to
 //     override it; a "Hitung otomatis" button in the modal restores the auto value.
-//   • "Uang aktual diterima kemarin" input
-//   • "Kurang" field — the remainder that carries to the next setoran
+//   • "Jumlah Sales Cash" input
+//   • "Jumlah yang tidak disetor" field — the remainder that carries to the next setoran
 //   • two slim photo rows + a note
 //
-// Small setoran: Total uang Cash Drawer (diterima + sisa kemarin) between Rp 0
-// and Rp 49.999 → nothing is deposited (Total wajib disetor fixed at 0,
-// everything carries over as "Kurang"); resi + ATM selfie are replaced by two
-// photos: "Foto Sisa Setoran"
-// (cashierPhoto) and "Foto Kartu ATM" (atmCardPhoto).
+// Small setoran: Jumlah yang harus disetor (diterima + sisa kemarin) between Rp 0
+// and Rp 49.999 AND Jumlah setoran Tunai = 0 → nothing is deposited
+// (everything carries over as "Jumlah yang tidak disetor"); resi + ATM selfie
+// are replaced by two photos: "Foto Sisa Setoran" (cashierPhoto) and "Foto
+// Kartu ATM" (atmCardPhoto). Jumlah setoran Tunai stays editable below Rp
+// 50.000: typing an amount > 0 makes it a normal setoran (resi + selfie).
 // All business logic (autosave, no-geo guard, upload, submit gating) is
 // unchanged from the previous version.
 //
-// Naming ↔ DB: "Total uang Cash Drawer" = expectedAmount + carriedDeficit;
-// "Total wajib disetor" = amount (the deposit); "Kurang" = unpaidAmount.
+// Naming ↔ DB: "Jumlah yang harus disetor" = expectedAmount + carriedDeficit;
+// "Jumlah Sales Cash" = expectedAmount; "Jumlah setoran Tunai" = amount (the
+// deposit); "Jumlah yang tidak disetor" = unpaidAmount.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
@@ -154,7 +156,7 @@ export default function SetoranTaskPage() {
       setStoredAmount(String(savedStored));
       // A previously saved deposit is treated as a manual value so the auto
       // recompute doesn't clobber it on load.
-      setStoredManual(Boolean(savedStored));
+      setStoredManual(toNumber(String(savedStored)) > 0);
       setResiPhoto(d.resiPhoto ?? null);
       setAtmCardSelfiePhoto(d.atmCardSelfiePhoto ?? null);
       setCashierPhoto(d.cashierPhoto ?? null);
@@ -179,31 +181,33 @@ export default function SetoranTaskPage() {
   // "Total uang Cash Drawer" = uang aktual diterima + sisa belum disetor.
   const cashDrawerTotal = actualReceivedNumber + previousUnpaidAmount;
 
+  // Auto-suggested deposit: that total rounded DOWN to the nearest Rp 50.000
+  // (0 when the drawer is under Rp 50.000).
+  const autoStored = roundDownToStep(cashDrawerTotal);
+  // "Jumlah setoran Tunai" — always editable, also when the drawer is under
+  // Rp 50.000.
+  const storedNumber = toNumber(storedAmount);
   // "Setoran kecil" — the whole cash drawer (received + sisa kemarin) is under
-  // Rp 50.000 (0 included). Nothing is deposited; a cashier photo replaces the
+  // Rp 50.000 (0 included) and nothing is deposited; a cashier photo replaces the
   // resi + ATM selfie. Judged on the drawer total, NOT on uang diterima alone:
   // Rp 47.800 received + Rp 49.551 carried over is Rp 97.351 and still has to be
-  // deposited.
+  // deposited. Typing a deposit > 0 turns it into a normal setoran (resi + selfie).
   const isSmallSetoran =
-    actualReceivedAmount.trim() !== '' && cashDrawerTotal < SMALL_SETORAN_THRESHOLD;
+    actualReceivedAmount.trim() !== '' && cashDrawerTotal < SMALL_SETORAN_THRESHOLD && storedNumber === 0;
   // "Tidak ada setoran" — employee typed 0 for uang aktual diterima and there is
   // no carried balance big enough to deposit either.
   const isNoSetoran = isSmallSetoran && actualReceivedNumber === 0;
-  const noDeposit = isSmallSetoran;
-  // Auto-suggested deposit: that total rounded DOWN to the nearest Rp 50.000.
-  const autoStored = noDeposit ? 0 : roundDownToStep(cashDrawerTotal);
-  const storedNumber = noDeposit ? 0 : toNumber(storedAmount);
-  // "Kurang" — the odd remainder that carries into the next setoran.
-  const kurang = noDeposit ? cashDrawerTotal : Math.max(0, cashDrawerTotal - storedNumber);
-  const isOverStored = !noDeposit && storedNumber > cashDrawerTotal && cashDrawerTotal > 0;
+  // "Jumlah yang tidak disetor" — the remainder that carries into the next setoran.
+  const kurang = Math.max(0, cashDrawerTotal - storedNumber);
+  const isOverStored = storedNumber > cashDrawerTotal;
 
-  // Keep "Total wajib disetor" tracking the auto value until the employee
+  // Keep "Jumlah setoran Tunai" tracking the auto value until the employee
   // overrides it (or presses "Hitung otomatis" to clear the override).
   useEffect(() => {
-    if (storedManual || noDeposit) return;
+    if (storedManual) return;
     const next = autoStored > 0 ? String(autoStored) : '';
     setStoredAmount((prev) => (prev === next ? prev : next));
-  }, [autoStored, storedManual, noDeposit]);
+  }, [autoStored, storedManual]);
 
   // ─── Render ──────────────────────────────────────────────────────────────
   if (loading) return <TaskLoadingScreen title="Setoran" />;
@@ -323,7 +327,6 @@ function SetoranPageBody(props: BodyProps) {
 
   const [editOpen, setEditOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
-  const noDeposit = isSmallSetoran;
   // A blank "uang aktual diterima" must not silently record Rp 0 — even when the
   // carried sisa alone is enough to deposit.
   const hasReceived = actualReceivedAmount.trim() !== '';
@@ -409,11 +412,11 @@ function SetoranPageBody(props: BodyProps) {
       }
     } else {
       if (!hasReceived || storedNumber <= 0) {
-        setSubmitError('Total wajib disetor belum terisi. Isi uang aktual diterima kemarin terlebih dahulu.');
+        setSubmitError('Jumlah setoran Tunai belum terisi. Isi Jumlah Sales Cash terlebih dahulu.');
         return;
       }
       if (storedNumber > cashDrawerTotal) {
-        setSubmitError('Total wajib disetor tidak boleh lebih besar dari total uang cash drawer.');
+        setSubmitError('Jumlah setoran Tunai tidak boleh lebih besar dari Jumlah yang harus disetor.');
         return;
       }
       if (!resiPhoto) {
@@ -491,8 +494,8 @@ function SetoranPageBody(props: BodyProps) {
       if (!atmCardPhoto) return 'Foto kartu ATM belum diupload.';
       return undefined;
     }
-    if (!hasReceived || storedNumber <= 0) return 'Isi uang aktual diterima kemarin terlebih dahulu.';
-    if (isOverStored) return 'Total wajib disetor melebihi total uang cash drawer.';
+    if (!hasReceived || storedNumber <= 0) return 'Isi Jumlah Sales Cash terlebih dahulu.';
+    if (isOverStored) return 'Jumlah setoran Tunai melebihi Jumlah yang harus disetor.';
     if (!resiPhoto) return 'Foto resi belum diupload.';
     if (!atmCardSelfiePhoto) return 'Foto selfie dengan kartu ATM belum diupload.';
     return undefined;
@@ -525,13 +528,13 @@ function SetoranPageBody(props: BodyProps) {
 
           <div className="space-y-5">
             {/* ─── Summary box ──────────────────────────────────────────────
-                Total uang Cash Drawer  = uang aktual diterima + sisa belum disetor
-                Total wajib disetor     = that, rounded down to kelipatan 50.000.
-                Tap "Total wajib disetor" to override it.  */}
+                Jumlah yang harus disetor = uang aktual diterima + sisa belum disetor
+                Jumlah setoran Tunai      = that, rounded down to kelipatan 50.000.
+                Tap "Jumlah setoran Tunai" to override it (also under Rp 50.000).  */}
             <div className="space-y-2.5 rounded-2xl border border-primary/20 bg-primary/5 px-4 py-4">
               <div>
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-primary/80">
-                  Total uang Cash Drawer
+                  Jumlah yang harus disetor
                 </p>
                 <p className="mt-0.5 text-2xl font-bold tabular-nums text-foreground">
                   {rupiah(cashDrawerTotal)}
@@ -541,26 +544,26 @@ function SetoranPageBody(props: BodyProps) {
               <button
                 type="button"
                 onClick={() => setEditOpen(true)}
-                disabled={dis || noDeposit}
+                disabled={dis}
                 className="flex w-full items-center justify-between gap-2 rounded-xl border-t border-primary/15 pt-3 text-left transition-opacity disabled:opacity-100"
               >
                 <span className="text-[11px] font-semibold uppercase tracking-wide text-primary/80">
-                  Total wajib disetor
+                  Jumlah setoran Tunai
                 </span>
                 <span className="flex items-center gap-1.5">
                   <span className="text-xl font-bold tabular-nums text-primary">
                     {rupiah(storedNumber)}
                   </span>
-                  {!dis && !noDeposit && <Pencil className="h-3.5 w-3.5 text-primary/60" />}
+                  {!dis && <Pencil className="h-3.5 w-3.5 text-primary/60" />}
                 </span>
               </button>
 
               {!dis && (
                 <p className="text-[11px] text-primary/60">
                   {isNoSetoran
-                    ? 'Tidak ada setoran hari ini.'
+                    ? 'Tidak ada setoran hari ini · ketuk untuk isi jika tetap menyetor'
                     : isSmallSetoran
-                      ? `Total cash drawer di bawah ${rupiah(SMALL_SETORAN_THRESHOLD)} — tidak perlu disetor hari ini.`
+                      ? `Jumlah yang harus disetor di bawah ${rupiah(SMALL_SETORAN_THRESHOLD)} — tidak disetor hari ini · ketuk untuk isi jika tetap menyetor`
                       : storedManual
                       ? `Diubah manual · ketuk untuk ubah · otomatis ${rupiah(autoStored)}`
                       : 'Otomatis kelipatan Rp 50.000 · ketuk untuk ubah'}
@@ -571,7 +574,7 @@ function SetoranPageBody(props: BodyProps) {
             {/* ─── Inputs ─────────────────────────────────────────────────── */}
             <div className="space-y-3">
               <AmountField
-                label="Uang aktual diterima kemarin"
+                label="Jumlah Sales Cash"
                 value={actualReceivedAmount}
                 onChange={setActualReceivedAmount}
                 onBlur={() => autoSave({ actualReceivedAmount })}
@@ -581,7 +584,7 @@ function SetoranPageBody(props: BodyProps) {
                   isNoSetoran
                     ? 'Tidak ada setoran hari ini — tetap wajib foto sisa setoran & foto kartu ATM.'
                     : isSmallSetoran
-                      ? `Total cash drawer di bawah ${rupiah(SMALL_SETORAN_THRESHOLD)}: tidak perlu resi & selfie ATM, cukup foto sisa setoran & foto kartu ATM.`
+                      ? `Jumlah yang harus disetor di bawah ${rupiah(SMALL_SETORAN_THRESHOLD)}: tidak perlu resi & selfie ATM, cukup foto sisa setoran & foto kartu ATM.`
                       : undefined
                 }
               />
@@ -589,7 +592,7 @@ function SetoranPageBody(props: BodyProps) {
               <KurangField
                 amount={kurang}
                 isOver={isOverStored}
-                pending={!noDeposit && storedNumber <= 0}
+                pending={!isSmallSetoran && storedNumber <= 0}
                 isNoSetoran={isNoSetoran}
                 isSmallSetoran={isSmallSetoran}
               />
@@ -719,8 +722,8 @@ function SetoranPageBody(props: BodyProps) {
 
 // ─── Local UI pieces ────────────────────────────────────────────────────────
 
-// Read-only "Kurang" field — the odd remainder (Total uang Cash Drawer −
-// Total wajib disetor) that carries into the next setoran.
+// Read-only "Jumlah yang tidak disetor" field — the remainder (Jumlah yang harus
+// disetor − Jumlah setoran Tunai) that carries into the next setoran.
 function KurangField({
   amount, isOver, pending, isNoSetoran, isSmallSetoran,
 }: {
@@ -739,12 +742,12 @@ function KurangField({
         ? 'Tidak ada setoran hari ini — sisa kemarin tetap dibawa ke setoran berikutnya.'
         : 'Tidak ada setoran hari ini.')
     : isSmallSetoran
-      ? `Total cash drawer di bawah ${rupiah(SMALL_SETORAN_THRESHOLD)} — seluruhnya dibawa ke setoran berikutnya.`
+      ? `Jumlah yang harus disetor di bawah ${rupiah(SMALL_SETORAN_THRESHOLD)} — seluruhnya dibawa ke setoran berikutnya.`
       : {
-        neutral: 'Isi uang aktual diterima kemarin dulu.',
+        neutral: 'Isi Jumlah Sales Cash dulu.',
         ok: 'Setoran pas.',
         warn: 'Otomatis ditagihkan di setoran berikutnya.',
-        error: 'Perbaiki nominal Total wajib disetor di atas.',
+        error: 'Perbaiki nominal Jumlah setoran Tunai di atas.',
       }[tone];
 
   const box = {
@@ -756,7 +759,7 @@ function KurangField({
 
   return (
     <div className="space-y-1.5">
-      <FieldLabel>Kurang</FieldLabel>
+      <FieldLabel>Jumlah yang tidak disetor</FieldLabel>
       <div className={cn(
         'flex h-12 w-full items-center gap-1.5 rounded-xl border px-3.5 text-base font-bold tabular-nums',
         box,
@@ -771,8 +774,8 @@ function KurangField({
   );
 }
 
-// Bottom-sheet modal for overriding "Total wajib disetor". "Hitung otomatis"
-// restores the kelipatan-50.000 value derived from the Cash Drawer total.
+// Bottom-sheet modal for overriding "Jumlah setoran Tunai". "Hitung otomatis"
+// restores the kelipatan-50.000 value derived from "Jumlah yang harus disetor".
 // Mounted only while open (see call site), so `current` seeds the draft once.
 function StoredAmountModal({
   onClose, cashDrawerTotal, autoStored, current, onSave,
@@ -788,16 +791,17 @@ function StoredAmountModal({
 
   const draftNum = toNumber(draft);
   const effective = useAuto ? autoStored : draftNum;
-  const over = effective > cashDrawerTotal && cashDrawerTotal > 0;
+  const over = effective > cashDrawerTotal;
   const previewKurang = Math.max(0, cashDrawerTotal - effective);
-  const canSave = !over && effective > 0;
+  // "Hitung otomatis" may legitimately be 0 (drawer under Rp 50.000 → no deposit).
+  const canSave = !over && (useAuto || effective > 0);
 
   return (
     <BottomSheet
       open
       onClose={onClose}
-      title="Total wajib disetor"
-      description={`Total uang Cash Drawer ${rupiah(cashDrawerTotal)}`}
+      title="Jumlah setoran Tunai"
+      description={`Jumlah yang harus disetor ${rupiah(cashDrawerTotal)}`}
       footer={
         <>
           <ActionButton variant="secondary" className="flex-1" onClick={onClose}>Batal</ActionButton>
@@ -815,7 +819,7 @@ function StoredAmountModal({
         label="Nominal yang disetor"
         value={useAuto ? String(autoStored) : draft}
         onChange={(v) => { setDraft(v); setUseAuto(false); }}
-        error={over ? 'Tidak boleh melebihi total uang cash drawer.' : undefined}
+        error={over ? 'Tidak boleh melebihi Jumlah yang harus disetor.' : undefined}
         placeholder="1.750.000"
       />
 
@@ -834,7 +838,7 @@ function StoredAmountModal({
       </button>
 
       <div className="flex items-center justify-between rounded-xl bg-secondary px-3.5 py-2.5 text-xs">
-        <span className="text-muted-foreground">Kurang</span>
+        <span className="text-muted-foreground">Jumlah yang tidak disetor</span>
         <span className="font-bold tabular-nums text-foreground">{rupiah(previewKurang)}</span>
       </div>
     </BottomSheet>
@@ -885,16 +889,16 @@ function ConfirmSubmitModal({
 
       {isSmallSetoran && !isNoSetoran && (
         <Notice tone="warning" icon={AlertCircle}>
-          Total uang cash drawer di bawah <span className="font-bold">{rupiah(SMALL_SETORAN_THRESHOLD)}</span> —
+          Jumlah yang harus disetor di bawah <span className="font-bold">{rupiah(SMALL_SETORAN_THRESHOLD)}</span> —
           hari ini <span className="font-bold">tidak disetor</span>, cukup dengan foto sisa setoran dan
           foto kartu ATM. Seluruh uang dibawa ke setoran berikutnya.
         </Notice>
       )}
 
       <ListGroup>
-        <InfoRow label="Uang aktual diterima" value={rupiah(actualReceivedNumber)} />
-        <InfoRow label="Total wajib disetor" value={rupiah(storedNumber)} />
-        <InfoRow label="Kurang" value={rupiah(kurang)} />
+        <InfoRow label="Jumlah Sales Cash" value={rupiah(actualReceivedNumber)} />
+        <InfoRow label="Jumlah setoran Tunai" value={rupiah(storedNumber)} />
+        <InfoRow label="Jumlah yang tidak disetor" value={rupiah(kurang)} />
       </ListGroup>
     </BottomSheet>
   );

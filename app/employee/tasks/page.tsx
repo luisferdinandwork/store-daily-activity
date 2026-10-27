@@ -352,7 +352,7 @@ const TASK_META: Record<
   },
   setoran: {
     title: "Setoran Penjualan",
-    description: "Total uang cash drawer, total wajib disetor, dan bukti setor.",
+    description: "Jumlah Sales Cash, jumlah setoran Tunai, dan bukti setor.",
     Icon: Wallet,
     hasPhoto: true,
   },

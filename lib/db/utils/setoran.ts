@@ -442,12 +442,10 @@ function validateSetoranPayload(input: SubmitSetoranInput, cashDrawerTotal: numb
   const stored = parseAmount(input.storedAmount ?? input.amount);
 
   // Setoran kecil (total cash drawer < Rp 50.000, termasuk 0 / "tidak ada
-  // setoran") — tidak disetor ke bank, tanpa resi + selfie ATM, cukup foto sisa
-  // setoran + foto kartu ATM.
-  if (isSmallSetoranAmount(cashDrawerTotal)) {
-    if (stored > 0) {
-      return `Total uang cash drawer (Rp ${cashDrawerTotal.toLocaleString('id-ID')}) di bawah Rp ${SETORAN_SMALL_THRESHOLD.toLocaleString('id-ID')} tidak perlu disetor. Nominal disetor harus 0.`;
-    }
+  // setoran") dan tidak ada yang disetor — tanpa resi + selfie ATM, cukup foto
+  // sisa setoran + foto kartu ATM. Jumlah setoran tunai boleh diisi walau di
+  // bawah Rp 50.000; kalau > 0 berlaku setoran biasa (resi + selfie ATM).
+  if (isSmallSetoranAmount(cashDrawerTotal) && stored === 0) {
     if (!input.cashierPhoto?.trim()) return 'Foto sisa setoran wajib diupload.';
     if (!input.atmCardPhoto?.trim()) return 'Foto kartu ATM wajib diupload.';
     return null;
@@ -486,7 +484,8 @@ export async function submitSetoran(
     if (validationErr) return { success: false, error: validationErr };
 
     const stored = parseAmount(input.storedAmount ?? input.amount);
-    const isSmallSetoran = isSmallSetoranAmount(requiredStoreAmount);
+    // Small = drawer under the threshold AND nothing deposited (validated above).
+    const isSmallSetoran = isSmallSetoranAmount(requiredStoreAmount) && stored === 0;
     // "Tidak ada setoran" = nothing received AND no carried balance big enough to
     // deposit; a day that deposits the carried sisa is a normal setoran.
     const isNoSetoran = actualReceived === 0 && isSmallSetoran;
