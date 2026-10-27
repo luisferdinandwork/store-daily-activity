@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Bell, CheckCheck, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 
 interface NotificationRow {
@@ -41,14 +42,36 @@ export default function EmployeeNotificationBell() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  // Ids seen at the last poll. null until the first answer, so what is already in the
+  // bell when the app opens never toasts — only notices that arrive while it is open.
+  const seenIds = useRef<Set<number> | null>(null);
 
   const load = useCallback(async () => {
+    // Nobody is looking while the app is in the background — skip the poll;
+    // the visibilitychange handler below refreshes the moment it returns.
+    if (document.visibilityState === 'hidden') return;
     setLoading(true);
     try {
       const res = await fetch('/api/employee/notifications', { cache: 'no-store' });
       const json = await res.json();
       if (json.success) {
-        setItems(json.notifications ?? []);
+        const rows: NotificationRow[] = json.notifications ?? [];
+        // A Transfer Order notice that arrived since the last poll: say so right away (the
+        // bell badge alone is easy to miss on a phone). At most two toasts per poll.
+        if (seenIds.current) {
+          const fresh = rows
+            .filter((n) => !seenIds.current!.has(n.id) && !n.isRead && n.type.startsWith('transfer_order'))
+            .slice(0, 2);
+          for (const n of fresh) {
+            toast(n.title, {
+              description: n.body ?? undefined,
+              duration: 9000,
+              action: n.link ? { label: 'Buka', onClick: () => router.push(n.link!) } : undefined,
+            });
+          }
+        }
+        seenIds.current = new Set(rows.map((n) => n.id));
+        setItems(rows);
         setUnreadCount(json.unreadCount ?? 0);
       }
     } catch {
@@ -56,12 +79,20 @@ export default function EmployeeNotificationBell() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [router]);
 
   useEffect(() => {
+    function onVisible() {
+      if (document.visibilityState === 'visible') void load();
+    }
+
     void load();
     const interval = setInterval(load, POLL_INTERVAL_MS);
-    return () => clearInterval(interval);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [load]);
 
   useEffect(() => {

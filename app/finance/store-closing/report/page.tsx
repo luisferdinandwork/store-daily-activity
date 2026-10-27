@@ -25,6 +25,7 @@ import {
   fmtDateShort,
   fmtRange,
   groupRowsByCode,
+  hasSalesFigure,
   sumMoney,
   totalSales,
   type ClosingMoneyRow,
@@ -80,7 +81,7 @@ function MoneyRow({ row, index, newStore }: { row: ClosingMoneyRow; index: numbe
       </td>
       <td className={cn(TD, top, AMOUNT, 'w-32 bg-emerald-50/50 font-bold')}>
         {/* A day with nothing on either side has no sales figure yet — a dash, not a 0. */}
-        <Amount value={row.setoran || (row.hasClosing && (row.opMeVoucher !== null || Object.values(row.banks).some((v) => v !== null))) ? totalSales(row) : null} strong />
+        <Amount value={hasSalesFigure(row) ? totalSales(row) : null} strong />
       </td>
       <td className={cn(TD, top, 'w-28 whitespace-nowrap text-center text-xs text-slate-700')}>{fmtDateShort(row.salesDate)}</td>
       <td className={cn(TD, top, 'w-28 whitespace-nowrap text-center text-xs text-slate-700')}>{fmtDateShort(row.setoranDate)}</td>

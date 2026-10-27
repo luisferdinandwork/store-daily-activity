@@ -9,6 +9,11 @@
 
 CRON_SECRET=change-me-to-match-.env.local
 
+# Transfer orders: pull BC, record detection times, close received ones, notify stores.
+# Runs all day on purpose: it is cheap when nothing changed, and a store can be
+# staffed at any hour. (-m 120 caps a hung BC call so runs can't pile up.)
+*/5 * * * * curl -fsS -m 120 -H "Authorization: Bearer $CRON_SECRET" http://127.0.0.1:3000/api/cron/transfer-orders > /dev/null
+
  5 0 * * *  curl -fsS -H "Authorization: Bearer $CRON_SECRET" http://127.0.0.1:3000/api/cron/revert-transfers      > /dev/null
 30 0 * * *  curl -fsS -H "Authorization: Bearer $CRON_SECRET" http://127.0.0.1:3000/api/cron/cleanup-task-images   > /dev/null
 45 0 * * *  curl -fsS -H "Authorization: Bearer $CRON_SECRET" http://127.0.0.1:3000/api/cron/auto-checkout         > /dev/null

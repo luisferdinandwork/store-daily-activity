@@ -9,7 +9,7 @@
 // Day buckets are read/queried the Jakarta way (lib/day-bucket.ts), so both stored
 // encodings of a day land on the right row.
 
-import { and, eq, gte, inArray, lt } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lt } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import {
   areas,
@@ -21,13 +21,16 @@ import {
 import { addDaysKey, jakartaDateKey, jakartaDaysRange } from '@/lib/day-bucket';
 import { toEdcEntries } from '@/lib/store-closing-edc';
 import {
+  bankCells,
   bankTotals,
   emptyBanks,
+  emptyCells,
   storeCodeOf,
   type ClosingMoneyReport,
   type ClosingMoneyRow,
   type ClosingMoneySetoran,
 } from '@/lib/store-closing-money';
+import type { StoreMoneySheet } from '@/lib/store-money-sheet';
 
 const toInt = (v: string | number | null | undefined): number =>
   v == null || v === '' || !Number.isFinite(Number(v)) ? 0 : Math.round(Number(v));
@@ -35,10 +38,12 @@ const toInt = (v: string | number | null | undefined): number =>
 const byStoreThenDate = (a: ClosingMoneyRow, b: ClosingMoneyRow) =>
   a.storeNo.localeCompare(b.storeNo, undefined, { numeric: true }) || a.salesDate.localeCompare(b.salesDate);
 
+/** `detail` also puts every bank's QRIS / Debit / Credit cells on the rows (`cells`). */
 export async function getClosingMoneyReport(
   from: string,
   to: string,
   storeId: number | null,
+  { detail = false }: { detail?: boolean } = {},
 ): Promise<ClosingMoneyReport> {
   // Sales days from..to; their setoran is filed on the following days.
   const closingRange = jakartaDaysRange(from, to);
@@ -103,7 +108,7 @@ export async function getClosingMoneyReport(
   // Card side, keyed by store + sales day. The same day can sit in the table under
   // both encodings; keep the one that actually holds figures.
   const sideKey = (id: number, day: string) => `${id}:${day}`;
-  type Card = Pick<ClosingMoneyRow, 'banks' | 'opMeVoucher'> & { weight: number };
+  type Card = Pick<ClosingMoneyRow, 'banks' | 'opMeVoucher'> & { cells: ReturnType<typeof bankCells>; weight: number };
   const cards = new Map<string, Card>();
   for (const t of closingRows) {
     const entries = toEdcEntries(edcByTask.get(t.id) ?? []);
@@ -113,7 +118,12 @@ export async function getClosingMoneyReport(
     if (!hasFigures && t.status !== 'completed' && t.status !== 'pending') continue;
 
     const key = sideKey(t.storeId, jakartaDateKey(t.date));
-    const card: Card = { banks: bankTotals(entries), opMeVoucher, weight: entries.length + (opMeVoucher !== null ? 1 : 0) };
+    const card: Card = {
+      banks: bankTotals(entries),
+      cells: bankCells(entries),
+      opMeVoucher,
+      weight: entries.length + (opMeVoucher !== null ? 1 : 0),
+    };
     const prev = cards.get(key);
     if (!prev || card.weight > prev.weight) cards.set(key, card);
   }
@@ -165,6 +175,7 @@ export async function getClosingMoneyReport(
       setoranDate: addDaysKey(salesDate, 1),
       hasClosing: Boolean(card),
       banks: card?.banks ?? emptyBanks(),
+      ...(detail ? { cells: card?.cells ?? emptyCells() } : {}),
       opMeVoucher: card?.opMeVoucher ?? null,
       setoran: cash.get(key) ?? null,
     });
@@ -176,4 +187,42 @@ export async function getClosingMoneyReport(
     .sort((a, b) => a.storeNo.localeCompare(b.storeNo, undefined, { numeric: true }));
 
   return { from, to, rows, stores: stores_ };
+}
+
+/**
+ * Finance's per-store sheet: every store for the picker, and — once a store is chosen —
+ * its days in the period with the per-method EDC cells. Days nobody submitted anything
+ * for are simply missing from `rows` (the page lists them as blank lines).
+ */
+export async function getStoreMoneySheet(
+  storeId: number | null,
+  from: string,
+  to: string,
+): Promise<StoreMoneySheet | null> {
+  const all = await db
+    .select({ id: stores.id, storeNo: stores.storeNo, name: stores.name })
+    .from(stores);
+  all.sort((a, b) => a.storeNo.localeCompare(b.storeNo, undefined, { numeric: true }));
+
+  if (storeId == null) return { from, to, stores: all, store: null, rows: [], openingSisa: 0 };
+
+  const store = all.find((s) => s.id === storeId);
+  if (!store) return null;
+
+  // The first sales day's setoran is filed the day after `from`; whatever the last setoran
+  // before that left unpaid is what the period starts out carrying.
+  const [report, [prior]] = await Promise.all([
+    getClosingMoneyReport(from, to, storeId, { detail: true }),
+    db
+      .select({ unpaid: setoranMoneyStorage.unpaidAmount })
+      .from(setoranMoneyStorage)
+      .where(and(
+        eq(setoranMoneyStorage.storeId, storeId),
+        lt(setoranMoneyStorage.date, jakartaDaysRange(addDaysKey(from, 1), addDaysKey(from, 1)).start),
+      ))
+      .orderBy(desc(setoranMoneyStorage.date))
+      .limit(1),
+  ]);
+
+  return { from, to, stores: all, store, rows: report.rows, openingSisa: prior ? toInt(prior.unpaid) : 0 };
 }

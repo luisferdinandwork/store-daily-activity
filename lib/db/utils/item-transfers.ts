@@ -4,10 +4,14 @@
 // transfer-order pipeline (see lib/db/schema/item-transfers.ts for the
 // 3-phase model this maintains).
 //
-// Sync functions are called live, on demand — there is no cron. Employee
-// task screens trigger the store-scoped sync every time they're opened;
-// the OPS dashboard triggers the store-agnostic registry + receiving sync
-// every time it's opened/refreshed.
+// Business Central is pulled company-wide by refreshTransferRegistry /
+// refreshReceivingStatus (transfer-order-refresh.ts): a 5-minute cron
+// (/api/cron/transfer-orders) keeps the registry warm, and the employee page,
+// the badge poll and the OPS dashboard trigger the same single-flight,
+// throttled refresh as a fallback — so a new transfer order is noticed (and
+// its time recorded) within minutes instead of whenever somebody happened to
+// open a page. The per-store functions below are database-only: they turn the
+// registry into entries on today's task.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { GeoPoint } from '@/lib/geo';
@@ -90,6 +94,12 @@ interface BcTransferOrderRow {
   no: string;
   transferFromCode: string;
   transferToCode: string;
+  /**
+   * NOT in ppQueryTransferOrders today (it only carries dates). If BC's team
+   * adds the field to that query, "TO created" becomes exact on its own — see
+   * the returnDetectedAt handling in batchUpsertTransferOrdersFromToRows.
+   */
+  systemCreatedAt?: string;
   postingDate?: string;
   status?: string;
   totalQtyOrder?: number;
@@ -110,6 +120,8 @@ interface BcWhseShipmentRow {
   transferOrderNo: string;
   transferFromCode: string;
   transferToCode: string;
+  /** BC's own creation instant (UTC, e.g. "2026-10-22T02:59:08.68Z"). */
+  systemCreatedAt?: string;
   itemNo?: string;
   variantCode?: string;
   description?: string;
@@ -151,6 +163,8 @@ interface WhseShipmentGroup {
   transferToCode: string;
   qty: number;
   lines: WhseShipmentLine[];
+  /** Earliest BC `systemCreatedAt` among the shipment's lines, if BC sent one. */
+  createdAt: Date | null;
 }
 
 // ─── BC fetchers ────────────────────────────────────────────────────────────
@@ -176,27 +190,21 @@ function bcRequestUrl(apiUrl: string, filter?: string): string {
 }
 
 /**
- * `storeNo` narrows the query to transfer orders where that store is the
- * ORIGIN (transferFromCode) — the Item Return leg. Omit it for the OPS-wide
- * registry sync, which pulls every recent transfer order company-wide.
- *
- * NOTE: this tenant's OData rejects `OR` across distinct fields
- * ("501 The 'OR' operator is not supported on distinct fields"), so a
- * store's INBOUND transfers are covered separately — by the shipment feed
- * (fetchWhseShipments) and by the company-wide registry sync.
+ * Every transfer order company-wide (any status — Open ones matter to OPS)
+ * posted in the recency window. There is deliberately no per-store variant:
+ * the store-filtered query (`transferFromCode eq '<storeNo>'`) was shown to
+ * drop rows this unscoped feed returns, and this tenant's OData rejects `OR`
+ * across distinct fields, so one company-wide pull (shared by every store, see
+ * refreshTransferRegistry) is both the most complete and the cheapest option.
  */
-async function fetchTransferOrders(storeNo?: string): Promise<BcTransferOrderRow[]> {
+async function fetchTransferOrders(lookbackDays: number): Promise<BcTransferOrderRow[]> {
   const settings = await getActiveBusinessCentralSettings('transfer_orders');
   if (!settings) {
     throw new Error(
       'BC Transfer Orders belum dikonfigurasi. Tambahkan business_central_settings dengan code=transfer_orders (OPS → BC Credentials).',
     );
   }
-  const filter = storeNo
-    ? `transferFromCode eq '${escapeODataString(storeNo)}'`
-    // Registry: every transfer order (any status — Open ones matter to OPS)
-    // posted in the recency window.
-    : `postingDate ge ${lookbackDate()}`;
+  const filter = `postingDate ge ${lookbackDate(lookbackDays)}`;
   const rows = await fetchAllBusinessCentralRows(bcRequestUrl(settings.apiUrl, filter), settings);
   return rows.filter(isBcTransferOrderRow);
 }
@@ -211,27 +219,27 @@ async function fetchTransferOrders(storeNo?: string): Promise<BcTransferOrderRow
 // specific transfer orders it is still waiting on (see fetchWhseReceiptsFor).
 const RECEIPT_FILTER_CHUNK = 15;
 
-// The store-agnostic registry/receiving syncs only care about transfers that
-// could still be in flight. Anything posted more than this many days ago is
-// long since received — bounding the company-wide pulls by postingDate keeps
-// the OPS dashboard fast (the store-scoped employee syncs stay unbounded, a
-// single store has few enough rows).
-const REGISTRY_LOOKBACK_DAYS = 90;
+// The registry/receiving syncs only care about transfers that could still be
+// in flight. Anything posted more than this many days ago is long since
+// received — bounding the company-wide pulls by postingDate keeps them fast.
+// The frequent "light" refresh (see transfer-order-refresh.ts) looks back
+// only LIGHT_LOOKBACK_DAYS: it exists to notice NEW orders/shipments quickly,
+// the full window is what reconciles (prunes) old ones.
+export const REGISTRY_LOOKBACK_DAYS = 90;
+export const LIGHT_LOOKBACK_DAYS = 14;
 
-function lookbackDate(days = REGISTRY_LOOKBACK_DAYS): string {
+function lookbackDate(days: number): string {
   return new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
 }
 
-async function fetchWhseShipments(storeNo?: string): Promise<BcWhseShipmentRow[]> {
+async function fetchWhseShipments(lookbackDays: number): Promise<BcWhseShipmentRow[]> {
   const settings = await getActiveBusinessCentralSettings('whse_shipments');
   if (!settings) {
     throw new Error(
       'BC Posted Whse Shipments belum dikonfigurasi. Tambahkan business_central_settings dengan code=whse_shipments (OPS → BC Credentials).',
     );
   }
-  const filters = [`startswith(transferOrderNo,'TOA')`];
-  if (storeNo) filters.push(`transferToCode eq '${escapeODataString(storeNo)}'`);
-  else filters.push(`postingDate ge ${lookbackDate()}`);
+  const filters = [`startswith(transferOrderNo,'TOA')`, `postingDate ge ${lookbackDate(lookbackDays)}`];
   const rows = await fetchAllBusinessCentralRows(
     bcRequestUrl(settings.apiUrl, filters.join(' and ')),
     settings,
@@ -245,11 +253,30 @@ function chunk<T>(items: T[], size: number): T[][] {
   return out;
 }
 
+/** Runs `fn` over `items` with at most `limit` calls in flight, keeping order. */
+async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) {
+        const i = next++;
+        out[i] = await fn(items[i]);
+      }
+    }),
+  );
+  return out;
+}
+
+const RECEIPT_FETCH_CONCURRENCY = 4;
+
 /**
  * Fetches Posted Whse Receipts for a specific set of transfer-order numbers
  * only — `sourceNo eq 'TOA…' or sourceNo eq 'TOA…'`, chunked so no single
- * OData URL gets unreasonably long. This replaces the old unbounded
- * "every TOA receipt in the last N days" pull.
+ * OData URL gets unreasonably long (and fetched a few chunks at a time — with
+ * a few hundred shipped orders open this used to be 20+ sequential round
+ * trips). This replaces the old unbounded "every TOA receipt in the last N
+ * days" pull.
  */
 async function fetchWhseReceiptsFor(sourceNos: string[]): Promise<BcWhseReceiptRow[]> {
   const unique = [...new Set(sourceNos.filter(Boolean))];
@@ -262,13 +289,24 @@ async function fetchWhseReceiptsFor(sourceNos: string[]): Promise<BcWhseReceiptR
     );
   }
 
-  const all: BcWhseReceiptRow[] = [];
-  for (const group of chunk(unique, RECEIPT_FILTER_CHUNK)) {
+  const perChunk = await mapPool(chunk(unique, RECEIPT_FILTER_CHUNK), RECEIPT_FETCH_CONCURRENCY, async (group) => {
     const filter = group.map((n) => `sourceNo eq '${escapeODataString(n)}'`).join(' or ');
     const rows = await fetchAllBusinessCentralRows(bcRequestUrl(settings.apiUrl, filter), settings);
-    all.push(...rows.filter(isBcWhseReceiptRow));
-  }
-  return all;
+    return rows.filter(isBcWhseReceiptRow);
+  });
+  return perChunk.flat();
+}
+
+function parseBcInstant(value: unknown): Date | null {
+  if (typeof value !== 'string' || !value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function earlierOf(a: Date | null, b: Date | null): Date | null {
+  if (!a) return b;
+  if (!b) return a;
+  return a.getTime() <= b.getTime() ? a : b;
 }
 
 function groupWhseShipments(rows: BcWhseShipmentRow[]): Map<string, WhseShipmentGroup> {
@@ -282,10 +320,12 @@ function groupWhseShipments(rows: BcWhseShipmentRow[]): Map<string, WhseShipment
       description: r.description,
       quantity: r.quantity ?? 0,
     };
+    const createdAt = parseBcInstant(r.systemCreatedAt);
 
     if (existing) {
       existing.qty += line.quantity;
       existing.lines.push(line);
+      existing.createdAt = earlierOf(existing.createdAt, createdAt);
     } else {
       groups.set(r.whseShipmentNo, {
         whseShipmentNo: r.whseShipmentNo,
@@ -294,6 +334,7 @@ function groupWhseShipments(rows: BcWhseShipmentRow[]): Map<string, WhseShipment
         transferToCode: r.transferToCode,
         qty: line.quantity,
         lines: [line],
+        createdAt,
       });
     }
   }
@@ -301,65 +342,25 @@ function groupWhseShipments(rows: BcWhseShipmentRow[]): Map<string, WhseShipment
   return groups;
 }
 
-// ─── Upsert helpers ─────────────────────────────────────────────────────────
-
-async function upsertTransferOrderFromToRow(
-  row: BcTransferOrderRow,
-  storeIdByCode: Map<string, number>,
-): Promise<ItemTransferOrder> {
-  const now = new Date();
-  const fromStoreId = storeIdByCode.get(row.transferFromCode) ?? null;
-  const toStoreId = storeIdByCode.get(row.transferToCode) ?? null;
-
-  const [existing] = await db
-    .select()
-    .from(itemTransferOrders)
-    .where(eq(itemTransferOrders.toaNo, row.no))
-    .limit(1);
-
-  const postingDate = row.postingDate ? new Date(row.postingDate) : null;
-
-  if (existing) {
-    const [updated] = await db
-      .update(itemTransferOrders)
-      .set({
-        transferFromCode: row.transferFromCode,
-        transferToCode: row.transferToCode,
-        qtyOrdered: row.totalQtyOrder ?? existing.qtyOrdered,
-        bcStatus: row.status ?? existing.bcStatus,
-        postingDate: postingDate ?? existing.postingDate,
-        fromStoreId: fromStoreId ?? existing.fromStoreId,
-        toStoreId: toStoreId ?? existing.toStoreId,
-        // BUG FIX: this row can already exist as a stub created by the
-        // dropping/shipment leg (upsertTransferOrderFromShipmentGroup), which
-        // never sets returnDetectedAt. Without this fallback, the "TO
-        // created" timestamp stays null forever whenever the Warehouse
-        // Shipment is detected before the Transfer Order itself — a very
-        // real race once both legs sync independently per store/visit.
-        returnDetectedAt: existing.returnDetectedAt ?? now,
-        updatedAt: now,
-      })
-      .where(eq(itemTransferOrders.id, existing.id))
-      .returning();
-    return updated;
-  }
-
-  const [created] = await db
-    .insert(itemTransferOrders)
-    .values({
-      toaNo: row.no,
-      transferFromCode: row.transferFromCode,
-      transferToCode: row.transferToCode,
-      fromStoreId,
-      toStoreId,
-      qtyOrdered: row.totalQtyOrder ?? 0,
-      bcStatus: row.status ?? null,
-      postingDate,
-      returnDetectedAt: now,
-    })
-    .returning();
-  return created;
-}
+// ─── Upserts ────────────────────────────────────────────────────────────────
+// Every sync (the 5-minute cron, an OPS dashboard load, an employee opening
+// the page) can touch hundreds of transfer orders. A SELECT + INSERT/UPDATE
+// per row turned the OPS dashboard into hundreds of sequential round trips, so
+// both feeds go in as ONE statement each via ON CONFLICT ... DO UPDATE.
+//
+// Timestamps:
+//  • createdAt/updatedAt are always set from JS (`new Date()`), never left to
+//    `defaultNow()`: the DB session runs in Asia/Jakarta and a timestamp
+//    WITHOUT time zone then reads back 7h ahead through Drizzle (confirmed on
+//    staging: created_at 09:42 vs return_detected_at 02:42 for the same
+//    instant), which also scrambled the OPS "latest first" ordering.
+//  • Detected-at columns are frozen once set and may only move EARLIER:
+//    droppingDetectedAt = BC's own shipment creation time, so a row first
+//    seen late is healed down to the truth; returnDetectedAt is clamped to it
+//    (a shipment cannot predate its order).
+//  • `setWhere` skips rows that did not change, so a 5-minute sweep of the
+//    whole window rewrites nothing in the steady state and `updatedAt` keeps
+//    meaning "last real change" for the OPS ordering.
 
 /** Every store's code → id, for resolving BC transferFrom/ToCode. */
 async function storeIdByCodeMap(): Promise<Map<string, number>> {
@@ -367,68 +368,9 @@ async function storeIdByCodeMap(): Promise<Map<string, number>> {
   return new Map(rows.map((s) => [s.storeNo, s.id]));
 }
 
-async function upsertTransferOrderFromShipmentGroup(
-  group: WhseShipmentGroup,
-  toStoreId: number | null,
-): Promise<ItemTransferOrder> {
-  const now = new Date();
-  const [existing] = await db
-    .select()
-    .from(itemTransferOrders)
-    .where(eq(itemTransferOrders.toaNo, group.transferOrderNo))
-    .limit(1);
-
-  const linesJson = JSON.stringify(group.lines);
-
-  if (existing) {
-    const [updated] = await db
-      .update(itemTransferOrders)
-      .set({
-        whseShipmentNo: group.whseShipmentNo,
-        whseShipmentLines: linesJson,
-        toStoreId: toStoreId ?? existing.toStoreId,
-        droppingDetectedAt: existing.droppingDetectedAt ?? now,
-        updatedAt: now,
-      })
-      .where(eq(itemTransferOrders.id, existing.id))
-      .returning();
-    return updated;
-  }
-
-  // The dropping (Posted Whse Shipments) leg can appear before we've ever
-  // synced the matching Transfer Order — create a stub row from what we know.
-  const [created] = await db
-    .insert(itemTransferOrders)
-    .values({
-      toaNo: group.transferOrderNo,
-      transferFromCode: group.transferFromCode,
-      transferToCode: group.transferToCode,
-      toStoreId,
-      qtyOrdered: group.qty,
-      whseShipmentNo: group.whseShipmentNo,
-      whseShipmentLines: linesJson,
-      droppingDetectedAt: now,
-    })
-    .returning();
-  return created;
-}
-
-// ─── Batch upserts (registry sync only) ────────────────────────────────────
-// The company-wide registry sync can touch hundreds of transfer orders per
-// run. Doing a SELECT + INSERT/UPDATE per row (as the single-row helpers
-// above do, fine for a store-scoped sync of a handful of rows) turned every
-// OPS dashboard load/refresh into hundreds of sequential round trips against
-// Neon's HTTP driver — this is what made the page "loading so long". These
-// batch variants do the same upsert semantics (create fresh, freeze
-// detected-at timestamps once set) in one statement each via
-// ON CONFLICT ... DO UPDATE, using SQL COALESCE so a fresh INSERT and an
-// UPDATE-that-preserves-existing-timestamps both fall out of the same query
-// regardless of row ordering.
-
 /** Last-one-wins de-dupe by key — a single INSERT ... ON CONFLICT statement
  *  errors out ("ON CONFLICT DO UPDATE command cannot affect row a second
- *  time") if the same conflict target appears twice, which the per-row
- *  sequential loop this replaces never had to worry about. */
+ *  time") if the same conflict target appears twice. */
 function dedupeByKey<T>(items: T[], key: (item: T) => string): T[] {
   const map = new Map<string, T>();
   for (const item of items) map.set(key(item), item);
@@ -455,7 +397,10 @@ async function batchUpsertTransferOrdersFromToRows(
     qtyOrdered: row.totalQtyOrder ?? 0,
     bcStatus: row.status ?? null,
     postingDate: row.postingDate ? new Date(row.postingDate) : null,
-    returnDetectedAt: now,
+    // BC's own creation instant when the feed has one, else "first seen".
+    returnDetectedAt: parseBcInstant(row.systemCreatedAt) ?? now,
+    createdAt: now,
+    updatedAt: now,
   }));
 
   await db
@@ -472,10 +417,28 @@ async function batchUpsertTransferOrdersFromToRows(
         bcStatus: sql`excluded.bc_status`,
         postingDate: sql`coalesce(excluded.posting_date, item_transfer_orders.posting_date)`,
         // Freeze-once: keep whatever was already recorded, only fall back to
-        // this sync's "now" the first time the row is ever seen.
-        returnDetectedAt: sql`coalesce(item_transfer_orders.return_detected_at, excluded.return_detected_at)`,
+        // this sync's "now" the first time the row is ever seen. A row that
+        // began life as a shipment-first stub already has droppingDetectedAt
+        // (BC's real shipment time) — `least` ignores NULLs, so the order can
+        // never be recorded as created after its own shipment.
+        // Like droppingDetectedAt it only ever moves earlier, so an exact BC
+        // instant (if the feed ever carries one) replaces a "first seen" guess
+        // while a later "first seen" never overwrites anything.
+        returnDetectedAt: sql`least(item_transfer_orders.return_detected_at, excluded.return_detected_at, item_transfer_orders.dropping_detected_at)`,
         updatedAt: now,
       },
+      setWhere: sql`(
+        item_transfer_orders.transfer_from_code is distinct from excluded.transfer_from_code
+        or item_transfer_orders.transfer_to_code is distinct from excluded.transfer_to_code
+        or item_transfer_orders.qty_ordered is distinct from excluded.qty_ordered
+        or item_transfer_orders.bc_status is distinct from excluded.bc_status
+        or item_transfer_orders.posting_date is distinct from coalesce(excluded.posting_date, item_transfer_orders.posting_date)
+        or (excluded.from_store_id is not null and item_transfer_orders.from_store_id is distinct from excluded.from_store_id)
+        or (excluded.to_store_id is not null and item_transfer_orders.to_store_id is distinct from excluded.to_store_id)
+        or item_transfer_orders.return_detected_at is null
+        or excluded.return_detected_at < item_transfer_orders.return_detected_at
+        or item_transfer_orders.return_detected_at > item_transfer_orders.dropping_detected_at
+      )`,
     });
 }
 
@@ -483,13 +446,21 @@ async function batchUpsertTransferOrdersFromShipmentGroups(
   groupsIn: WhseShipmentGroup[],
   storeIdByCode: Map<string, number>,
 ): Promise<void> {
+  if (!groupsIn.length) return;
+  const now = new Date();
+
   // A single TO can have multiple partial Warehouse Shipments (distinct
   // whseShipmentNo, same transferOrderNo) — itemTransferOrders only has room
-  // for one whseShipmentNo/whseShipmentLines pair, so (matching the previous
-  // sequential loop's behavior) the last one processed wins.
+  // for one whseShipmentNo/whseShipmentLines pair, so the last one processed
+  // wins for those. The TIME, though, is when the FIRST shipment appeared.
+  const firstCreated = new Map<string, Date>();
+  for (const g of groupsIn) {
+    const prev = firstCreated.get(g.transferOrderNo) ?? null;
+    const best = earlierOf(prev, g.createdAt);
+    if (best) firstCreated.set(g.transferOrderNo, best);
+  }
+
   const groups = dedupeByKey(groupsIn, (g) => g.transferOrderNo);
-  if (!groups.length) return;
-  const now = new Date();
 
   const values = groups.map((group) => ({
     toaNo: group.transferOrderNo,
@@ -498,12 +469,15 @@ async function batchUpsertTransferOrdersFromShipmentGroups(
     toStoreId: storeIdByCode.get(group.transferToCode) ?? null,
     // Only used as the initial value when this row doesn't exist yet (a
     // shipment-first stub) — an existing row's own qtyOrdered (from the
-    // Transfer Order itself) is left untouched on conflict, matching the
-    // single-row helper's behavior.
+    // Transfer Order itself) is left untouched on conflict.
     qtyOrdered: group.qty,
     whseShipmentNo: group.whseShipmentNo,
     whseShipmentLines: JSON.stringify(group.lines),
-    droppingDetectedAt: now,
+    // BC's own "Warehouse Shipment created" instant; the sync time only if BC
+    // sent none.
+    droppingDetectedAt: firstCreated.get(group.transferOrderNo) ?? now,
+    createdAt: now,
+    updatedAt: now,
   }));
 
   await db
@@ -515,9 +489,21 @@ async function batchUpsertTransferOrdersFromShipmentGroups(
         whseShipmentNo: sql`excluded.whse_shipment_no`,
         whseShipmentLines: sql`excluded.whse_shipment_lines`,
         toStoreId: sql`coalesce(excluded.to_store_id, item_transfer_orders.to_store_id)`,
-        droppingDetectedAt: sql`coalesce(item_transfer_orders.dropping_detected_at, excluded.dropping_detected_at)`,
+        // Only ever moves earlier (see the header note). `least` ignores NULL.
+        droppingDetectedAt: sql`least(item_transfer_orders.dropping_detected_at, excluded.dropping_detected_at)`,
+        // Never leave the order "created" after its shipment — but don't
+        // invent a creation time for a stub the TO feed has not shown yet.
+        returnDetectedAt: sql`case when item_transfer_orders.return_detected_at is null then null else least(item_transfer_orders.return_detected_at, excluded.dropping_detected_at) end`,
         updatedAt: now,
       },
+      setWhere: sql`(
+        item_transfer_orders.whse_shipment_no is distinct from excluded.whse_shipment_no
+        or item_transfer_orders.whse_shipment_lines is distinct from excluded.whse_shipment_lines
+        or (excluded.to_store_id is not null and item_transfer_orders.to_store_id is distinct from excluded.to_store_id)
+        or item_transfer_orders.dropping_detected_at is null
+        or excluded.dropping_detected_at < item_transfer_orders.dropping_detected_at
+        or item_transfer_orders.return_detected_at > excluded.dropping_detected_at
+      )`,
     });
 }
 
@@ -571,7 +557,7 @@ async function recomputeItemDroppingStatus(taskId: number): Promise<void> {
     .where(eq(itemDroppingTasks.id, taskId));
 }
 
-// ─── Store-scoped sync (employee task screens) ─────────────────────────────
+// ─── Store-scoped backfill (employee task screens) ─────────────────────────
 
 export interface SyncContext {
   scheduleId: number;
@@ -588,123 +574,128 @@ export interface SyncContext {
 
 /**
  * THE single definition of "still open" for a store, on both sides of the
- * pipeline. `pending-count/route.ts` (the header badge) and the two sync
- * functions below (what actually gets an entry on the employee's page) both
- * call this — they can no longer drift apart from each other, because
- * they're no longer two independently-maintained queries.
+ * pipeline. The header badge (`pending-count`), the entry backfill below, and
+ * the "new transfer order" notification (transfer-order-notifications.ts) all
+ * build on these two predicates — they cannot drift apart from each other.
+ *
+ * `receivedAt` closes BOTH legs: once BC has posted the receipt (or the
+ * warehouse-bound return was handed over) there is nothing left for either
+ * store to do. Before, only the dropping leg checked it, so a transfer the
+ * destination had already received kept the ORIGIN store's badge lit forever
+ * while the employee page (which already treats receivedAt as done) showed it
+ * under "Sudah dikonfirmasi".
+ *
+ * Pass no `storeId` for "any managed store" (the notification sweep).
  */
+export function returnOpenWhere(storeId?: number) {
+  return and(
+    storeId != null ? eq(itemTransferOrders.fromStoreId, storeId) : isNotNull(itemTransferOrders.fromStoreId),
+    isNull(itemTransferOrders.returnSubmittedAt),
+    isNull(itemTransferOrders.receivedAt),
+  );
+}
+
+export function droppingOpenWhere(storeId?: number) {
+  return and(
+    storeId != null ? eq(itemTransferOrders.toStoreId, storeId) : isNotNull(itemTransferOrders.toStoreId),
+    isNotNull(itemTransferOrders.whseShipmentNo),
+    isNull(itemTransferOrders.droppingSubmittedAt),
+    isNull(itemTransferOrders.receivedAt),
+  );
+}
+
 export async function getOpenTransferOrdersForStore(storeId: number): Promise<{
   returnOpen: ItemTransferOrder[];
   droppingOpen: ItemTransferOrder[];
 }> {
   const [returnOpen, droppingOpen] = await Promise.all([
-    db.select().from(itemTransferOrders).where(and(
-      eq(itemTransferOrders.fromStoreId, storeId),
-      isNull(itemTransferOrders.returnSubmittedAt),
-    )),
-    db.select().from(itemTransferOrders).where(and(
-      eq(itemTransferOrders.toStoreId, storeId),
-      isNotNull(itemTransferOrders.whseShipmentNo),
-      isNull(itemTransferOrders.droppingSubmittedAt),
-      isNull(itemTransferOrders.receivedAt),
-    )),
+    db.select().from(itemTransferOrders).where(returnOpenWhere(storeId)),
+    db.select().from(itemTransferOrders).where(droppingOpenWhere(storeId)),
   ]);
   return { returnOpen, droppingOpen };
 }
 
+/**
+ * Counts only — what the header badge polls. Same predicates as
+ * getOpenTransferOrdersForStore, but `count(*)` instead of dragging every
+ * column (including the whseShipmentLines JSON blob) over the wire once per
+ * employee per minute.
+ */
+export async function countOpenTransferOrdersForStore(storeId: number): Promise<{
+  returnOpen: number;
+  droppingOpen: number;
+}> {
+  const [[r], [d]] = await Promise.all([
+    db.select({ n: sql<number>`count(*)::int` }).from(itemTransferOrders).where(returnOpenWhere(storeId)),
+    db.select({ n: sql<number>`count(*)::int` }).from(itemTransferOrders).where(droppingOpenWhere(storeId)),
+  ]);
+  return { returnOpen: r?.n ?? 0, droppingOpen: d?.n ?? 0 };
+}
+
+/**
+ * Ensures an Item Return entry on today's task for EVERY transfer order that
+ * is open for this store (getOpenTransferOrdersForStore) — database only.
+ * Business Central is NOT called here any more: the company-wide registry
+ * refresh (transfer-order-refresh.ts, kept warm by cron) already pulled
+ * everything, and its feed is more complete than the per-store filtered
+ * query this function used to run on every page open.
+ */
 export async function syncItemReturnForStore(
   storeId: number,
   ctx: SyncContext,
 ): Promise<TaskResult<{ synced: number }>> {
   try {
-    const [store] = await db
-      .select({ id: stores.id, storeNo: stores.storeNo })
-      .from(stores)
-      .where(eq(stores.id, storeId))
-      .limit(1);
-    if (!store) return { success: false, error: 'Toko tidak ditemukan.' };
-
-    // Best-effort freshness pass: pulls in brand-new TOs and refreshes
-    // bcStatus/qty for whatever this store-filtered OData query does return.
-    // This filter has proven unreliable at returning EVERY row that
-    // transferFromCode eq '<storeNo>' actually matches (confirmed against
-    // live data: the unscoped registry sync, and other stores' own syncs,
-    // routinely resolve fromStoreId for TOs this filtered query never
-    // surfaces) — so it is no longer the thing that decides what the
-    // employee sees. The backfill below is.
-    let bcError: string | null = null;
-    try {
-      const matched = await fetchTransferOrders(store.storeNo);
-      if (matched.length) {
-        const codeMap = await storeIdByCodeMap();
-        for (const row of matched) {
-          await upsertTransferOrderFromToRow(row, codeMap);
-        }
-      }
-    } catch (err) {
-      bcError = `${err}`;
-    }
-
-    // Authoritative pass: ensure/re-home an entry for EVERY transfer order
-    // already on record (item_transfer_orders) with this store as the
-    // origin and not yet returned — regardless of whether the BC fetch just
-    // above happened to return it this time. A row can get its fromStoreId
-    // resolved by this store's own past sync, another store's shipment
-    // sync, or the OPS-wide registry sync; this is the exact same query
-    // getOpenTransferOrdersForStore/pending-count use, so the employee page
-    // can never again show fewer open items than the header badge counts.
     const { returnOpen } = await getOpenTransferOrdersForStore(storeId);
+    if (returnOpen.length === 0) return { success: true, data: { synced: 0 } };
 
-    let synced = 0;
-    for (const toRow of returnOpen) {
-      // INSERT ... ON CONFLICT instead of SELECT-then-INSERT: the employee
-      // page's own React effect can fire this sync twice in a row
-      // (StrictMode/fast re-navigation), and a full_day schedule syncs the
-      // SAME store's morning + evening task rows concurrently via
-      // Promise.all — both hit this loop for the same toRow.id at the same
-      // time. A separate existence check can't see the other in-flight
-      // insert, so both pass it and the second insert throws a
-      // unique-constraint violation on transferOrderId. Let Postgres itself
-      // resolve the race atomically.
-      //
-      // On conflict, RE-HOME rather than no-op: a TO not confirmed the same
-      // day it was first synced would otherwise keep its entry pinned to
-      // that earlier day's task forever (transferOrderId is unique, so every
-      // later day's insert would just no-op) — it silently vanishes from the
-      // employee's page from the next day on. setWhere leaves an
-      // already-confirmed entry untouched.
-      const inserted = await db
-        .insert(itemReturnEntries)
-        .values({
+    const now = new Date();
+
+    // One INSERT ... ON CONFLICT for all of them. Postgres resolves the race
+    // atomically when the page's effect fires twice (StrictMode / fast
+    // re-navigation) or a full_day schedule syncs the same store from two
+    // task rows at once — a separate existence check can't see the other
+    // in-flight insert.
+    //
+    // On conflict, RE-HOME rather than no-op: a TO not confirmed the day it
+    // was first synced would otherwise stay pinned to that earlier day's task
+    // (transferOrderId is unique) and vanish from the employee's page from
+    // the next day on. `setWhere` leaves a confirmed entry untouched and
+    // skips an entry that is already on today's task, so reopening the page
+    // writes nothing.
+    const inserted = await db
+      .insert(itemReturnEntries)
+      .values(returnOpen.map((toRow) => ({
+        taskId: ctx.taskId,
+        userId: ctx.userId,
+        storeId,
+        returnNumber: toRow.toaNo,
+        quantity: toRow.qtyOrdered,
+        returnTime: now,
+        transferOrderId: toRow.id,
+        qtyOrdered: toRow.qtyOrdered,
+        createdAt: now,
+        updatedAt: now,
+      })))
+      .onConflictDoUpdate({
+        target: itemReturnEntries.transferOrderId,
+        set: {
           taskId: ctx.taskId,
           userId: ctx.userId,
           storeId,
-          returnNumber: toRow.toaNo,
-          quantity: toRow.qtyOrdered,
-          returnTime: new Date(),
-          transferOrderId: toRow.id,
-          qtyOrdered: toRow.qtyOrdered,
-        })
-        .onConflictDoUpdate({
-          target: itemReturnEntries.transferOrderId,
-          set: {
-            taskId: ctx.taskId,
-            userId: ctx.userId,
-            storeId,
-            quantity: toRow.qtyOrdered,
-            qtyOrdered: toRow.qtyOrdered,
-            updatedAt: new Date(),
-          },
-          setWhere: isNull(itemReturnEntries.submittedAt),
-        })
-        .returning({ id: itemReturnEntries.id });
-      if (inserted.length > 0) synced += 1;
-    }
+          quantity: sql`excluded.quantity`,
+          qtyOrdered: sql`excluded.qty_ordered`,
+          updatedAt: now,
+        },
+        setWhere: sql`${itemReturnEntries.submittedAt} is null and (
+          ${itemReturnEntries.taskId} is distinct from excluded.task_id
+          or ${itemReturnEntries.storeId} is distinct from excluded.store_id
+          or ${itemReturnEntries.qtyOrdered} is distinct from excluded.qty_ordered
+        )`,
+      })
+      .returning({ id: itemReturnEntries.id });
 
-    if (synced > 0) await recomputeItemReturnStatus(ctx.taskId);
-
-    if (bcError) return { success: false, error: `syncItemReturnForStore: ${bcError}` };
-    return { success: true, data: { synced } };
+    if (inserted.length > 0) await recomputeItemReturnStatus(ctx.taskId);
+    return { success: true, data: { synced: inserted.length } };
   } catch (err) {
     return { success: false, error: `syncItemReturnForStore: ${err}` };
   }
@@ -715,84 +706,73 @@ export async function syncItemDroppingForStore(
   ctx: SyncContext,
 ): Promise<TaskResult<{ synced: number }>> {
   try {
-    const [store] = await db
-      .select({ id: stores.id, storeNo: stores.storeNo })
-      .from(stores)
-      .where(eq(stores.id, storeId))
-      .limit(1);
-    if (!store) return { success: false, error: 'Toko tidak ditemukan.' };
-
-    // See the matching comment in syncItemReturnForStore — best-effort
-    // freshness pass, no longer what decides what the employee sees.
-    let bcError: string | null = null;
-    try {
-      const matched = await fetchWhseShipments(store.storeNo);
-      if (matched.length) {
-        const groups = groupWhseShipments(matched);
-        for (const group of groups.values()) {
-          await upsertTransferOrderFromShipmentGroup(group, storeId);
-        }
-      }
-    } catch (err) {
-      bcError = `${err}`;
-    }
-
-    // Authoritative pass — see the matching comment in syncItemReturnForStore.
+    // See syncItemReturnForStore — same database-only backfill.
     const { droppingOpen } = await getOpenTransferOrdersForStore(storeId);
+    if (droppingOpen.length === 0) return { success: true, data: { synced: 0 } };
 
-    let synced = 0;
-    for (const toRow of droppingOpen) {
-      const inserted = await db
-        .insert(itemDroppingEntries)
-        .values({
+    const now = new Date();
+
+    const inserted = await db
+      .insert(itemDroppingEntries)
+      .values(droppingOpen.map((toRow) => ({
+        taskId: ctx.taskId,
+        userId: ctx.userId,
+        storeId,
+        toNumber: toRow.toaNo,
+        quantity: toRow.qtyOrdered,
+        dropTime: now,
+        transferOrderId: toRow.id,
+        qtyOrdered: toRow.qtyOrdered,
+        createdAt: now,
+        updatedAt: now,
+      })))
+      .onConflictDoUpdate({
+        target: itemDroppingEntries.transferOrderId,
+        set: {
           taskId: ctx.taskId,
           userId: ctx.userId,
           storeId,
-          toNumber: toRow.toaNo,
-          quantity: toRow.qtyOrdered,
-          dropTime: new Date(),
-          transferOrderId: toRow.id,
-          qtyOrdered: toRow.qtyOrdered,
-        })
-        .onConflictDoUpdate({
-          target: itemDroppingEntries.transferOrderId,
-          set: {
-            taskId: ctx.taskId,
-            userId: ctx.userId,
-            storeId,
-            quantity: toRow.qtyOrdered,
-            qtyOrdered: toRow.qtyOrdered,
-            updatedAt: new Date(),
-          },
-          setWhere: isNull(itemDroppingEntries.submittedAt),
-        })
-        .returning({ id: itemDroppingEntries.id });
-      if (inserted.length > 0) synced += 1;
-    }
+          quantity: sql`excluded.quantity`,
+          qtyOrdered: sql`excluded.qty_ordered`,
+          updatedAt: now,
+        },
+        setWhere: sql`${itemDroppingEntries.submittedAt} is null and (
+          ${itemDroppingEntries.taskId} is distinct from excluded.task_id
+          or ${itemDroppingEntries.storeId} is distinct from excluded.store_id
+          or ${itemDroppingEntries.qtyOrdered} is distinct from excluded.qty_ordered
+        )`,
+      })
+      .returning({ id: itemDroppingEntries.id });
 
-    if (synced > 0) await recomputeItemDroppingStatus(ctx.taskId);
-
-    if (bcError) return { success: false, error: `syncItemDroppingForStore: ${bcError}` };
-    return { success: true, data: { synced } };
+    if (inserted.length > 0) await recomputeItemDroppingStatus(ctx.taskId);
+    return { success: true, data: { synced: inserted.length } };
   } catch (err) {
     return { success: false, error: `syncItemDroppingForStore: ${err}` };
   }
 }
 
-// ─── Store-agnostic sync (OPS dashboard) ───────────────────────────────────
+// ─── Store-agnostic sync (cron / OPS dashboard) ────────────────────────────
 // Upserts itemTransferOrders across every known store WITHOUT touching any
 // task/entry rows (those only get created when an employee actually opens
-// their Item Return / Item Dropping task for their own store) — this just
-// keeps the dashboard's registry current, including transfer orders no
-// employee has looked at yet.
+// their Item Return / Item Dropping page for their own store) — this just
+// keeps the registry current, including transfer orders no employee has
+// looked at yet. Callers go through refreshTransferRegistry() (single-flight +
+// throttle) rather than calling this directly.
 
-export async function syncTransferOrderRegistry(): Promise<TaskResult<{ synced: number; pruned: number }>> {
+export async function syncTransferOrderRegistry(
+  opts: { lookbackDays?: number; prune?: boolean } = {},
+): Promise<TaskResult<{ synced: number; pruned: number }>> {
+  const lookbackDays = opts.lookbackDays ?? REGISTRY_LOOKBACK_DAYS;
+  // Pruning compares the DB against the feeds, so it is only sound over the
+  // FULL window — the light, frequent refresh never prunes.
+  const prune = opts.prune ?? true;
+
   try {
     const storeIdByCode = await storeIdByCodeMap();
 
     const [toRows, shipmentRows] = await Promise.all([
-      fetchTransferOrders(),
-      fetchWhseShipments(),
+      fetchTransferOrders(lookbackDays),
+      fetchWhseShipments(lookbackDays),
     ]);
 
     const shipmentGroups = [...groupWhseShipments(shipmentRows).values()];
@@ -804,56 +784,58 @@ export async function syncTransferOrderRegistry(): Promise<TaskResult<{ synced: 
     await batchUpsertTransferOrdersFromToRows(toRows, storeIdByCode);
     await batchUpsertTransferOrdersFromShipmentGroups(shipmentGroups, storeIdByCode);
 
-    // Reconcile: drop rows BC no longer knows about in EITHER feed, as long as
-    // nobody has acted on them and they aren't already received. This clears
-    // "shows on the website but not in BC" ghosts (e.g. a TO deleted in BC
-    // after its stub was created from a posted shipment).
-    const seen = new Set<string>([
-      ...toRows.map((r) => r.no),
-      ...shipmentGroups.map((g) => g.transferOrderNo),
-    ]);
-    const candidates = await db
-      .select({ id: itemTransferOrders.id, toaNo: itemTransferOrders.toaNo })
-      .from(itemTransferOrders)
-      .where(
-        and(
-          isNull(itemTransferOrders.receivedAt),
-          isNull(itemTransferOrders.returnSubmittedAt),
-          isNull(itemTransferOrders.droppingSubmittedAt),
-        ),
-      );
-    const maybeStale = candidates.filter((c) => !seen.has(c.toaNo)).map((c) => c.id);
     let pruned = 0;
-    if (maybeStale.length) {
-      // Never delete one an employee has actually CONFIRMED (submittedAt
-      // set — real qty/photo/timestamp, genuine audit trail). An
-      // unconfirmed entry is just an empty placeholder no one ever acted
-      // on — same reasoning as syncReceivingStatus's delete path — so it's
-      // deleted alongside the parent (no onDelete cascade on
-      // transferOrderId, so it has to go first or the parent delete fails).
-      const [returnRefs, droppingRefs] = await Promise.all([
-        db.select({ id: itemReturnEntries.transferOrderId, confirmed: itemReturnEntries.submittedAt })
-          .from(itemReturnEntries).where(inArray(itemReturnEntries.transferOrderId, maybeStale)),
-        db.select({ id: itemDroppingEntries.transferOrderId, confirmed: itemDroppingEntries.submittedAt })
-          .from(itemDroppingEntries).where(inArray(itemDroppingEntries.transferOrderId, maybeStale)),
+    if (prune) {
+      // Reconcile: drop rows BC no longer knows about in EITHER feed, as long
+      // as nobody has acted on them and they aren't already received. This
+      // clears "shows on the website but not in BC" ghosts (e.g. a TO deleted
+      // in BC after its stub was created from a posted shipment).
+      const seen = new Set<string>([
+        ...toRows.map((r) => r.no),
+        ...shipmentGroups.map((g) => g.transferOrderNo),
       ]);
-      const confirmed = new Set<number>([
-        ...returnRefs.filter((r) => r.confirmed != null).map((r) => r.id).filter((v): v is number => v != null),
-        ...droppingRefs.filter((r) => r.confirmed != null).map((r) => r.id).filter((v): v is number => v != null),
-      ]);
-      const staleIds = maybeStale.filter((id) => !confirmed.has(id));
-      if (staleIds.length) {
-        await Promise.all([
-          db.delete(itemReturnEntries)
-            .where(and(inArray(itemReturnEntries.transferOrderId, staleIds), isNull(itemReturnEntries.submittedAt))),
-          db.delete(itemDroppingEntries)
-            .where(and(inArray(itemDroppingEntries.transferOrderId, staleIds), isNull(itemDroppingEntries.submittedAt))),
+      const candidates = await db
+        .select({ id: itemTransferOrders.id, toaNo: itemTransferOrders.toaNo })
+        .from(itemTransferOrders)
+        .where(
+          and(
+            isNull(itemTransferOrders.receivedAt),
+            isNull(itemTransferOrders.returnSubmittedAt),
+            isNull(itemTransferOrders.droppingSubmittedAt),
+          ),
+        );
+      const maybeStale = candidates.filter((c) => !seen.has(c.toaNo)).map((c) => c.id);
+      if (maybeStale.length) {
+        // Never delete one an employee has actually CONFIRMED (submittedAt
+        // set — real qty/photo/timestamp, genuine audit trail). An
+        // unconfirmed entry is just an empty placeholder no one ever acted
+        // on — same reasoning as syncReceivingStatus's delete path — so it's
+        // deleted alongside the parent (no onDelete cascade on
+        // transferOrderId, so it has to go first or the parent delete fails).
+        const [returnRefs, droppingRefs] = await Promise.all([
+          db.select({ id: itemReturnEntries.transferOrderId, confirmed: itemReturnEntries.submittedAt })
+            .from(itemReturnEntries).where(inArray(itemReturnEntries.transferOrderId, maybeStale)),
+          db.select({ id: itemDroppingEntries.transferOrderId, confirmed: itemDroppingEntries.submittedAt })
+            .from(itemDroppingEntries).where(inArray(itemDroppingEntries.transferOrderId, maybeStale)),
         ]);
-        const deleted = await db
-          .delete(itemTransferOrders)
-          .where(inArray(itemTransferOrders.id, staleIds))
-          .returning({ id: itemTransferOrders.id });
-        pruned = deleted.length;
+        const confirmed = new Set<number>([
+          ...returnRefs.filter((r) => r.confirmed != null).map((r) => r.id).filter((v): v is number => v != null),
+          ...droppingRefs.filter((r) => r.confirmed != null).map((r) => r.id).filter((v): v is number => v != null),
+        ]);
+        const staleIds = maybeStale.filter((id) => !confirmed.has(id));
+        if (staleIds.length) {
+          await Promise.all([
+            db.delete(itemReturnEntries)
+              .where(and(inArray(itemReturnEntries.transferOrderId, staleIds), isNull(itemReturnEntries.submittedAt))),
+            db.delete(itemDroppingEntries)
+              .where(and(inArray(itemDroppingEntries.transferOrderId, staleIds), isNull(itemDroppingEntries.submittedAt))),
+          ]);
+          const deleted = await db
+            .delete(itemTransferOrders)
+            .where(inArray(itemTransferOrders.id, staleIds))
+            .returning({ id: itemTransferOrders.id });
+          pruned = deleted.length;
+        }
       }
     }
 
@@ -879,7 +861,8 @@ export async function syncTransferOrderRegistry(): Promise<TaskResult<{ synced: 
  *    there is no destination store to ever confirm receiving, and BC may
  *    never post a matching receipt the way a store-to-store leg does — the
  *    origin store's photo-verified return submission (returnSubmittedAt) IS
- *    the completion event instead.
+ *    the completion event instead, so receivedAt is stamped with THAT
+ *    moment, not with whenever this sweep happened to run.
  *
  * Either way, once BC confirms a TO is done: if a real employee already
  * confirmed their own leg (a submitted item_return_entries/
@@ -916,7 +899,7 @@ export async function syncReceivingStatus(
     if (warehouseIds.length > 0) {
       const warehouseClosed = await db
         .update(itemTransferOrders)
-        .set({ receivedAt: now, updatedAt: now })
+        .set({ receivedAt: sql`${itemTransferOrders.returnSubmittedAt}`, updatedAt: now })
         .where(inArray(itemTransferOrders.id, warehouseIds))
         .returning({ id: itemTransferOrders.id });
       closed += warehouseClosed.length;
@@ -1048,8 +1031,12 @@ export async function confirmItemReturn(
         submittedBy: input.userId,
         updatedAt: now,
       })
-      .where(eq(itemReturnEntries.id, input.entryId))
+      // `submittedAt IS NULL` makes the confirm atomic: two employees (or one
+      // double-tap) passing the check above can no longer both "win" and
+      // overwrite the first one's qty, photo and timestamp.
+      .where(and(eq(itemReturnEntries.id, input.entryId), isNull(itemReturnEntries.submittedAt)))
       .returning();
+    if (!updated) return { success: false, error: 'Item return ini sudah dikonfirmasi.' };
 
     if (entry.transferOrderId) {
       await db
@@ -1095,8 +1082,9 @@ export async function confirmItemDropping(
         submittedBy: input.userId,
         updatedAt: now,
       })
-      .where(eq(itemDroppingEntries.id, input.entryId))
+      .where(and(eq(itemDroppingEntries.id, input.entryId), isNull(itemDroppingEntries.submittedAt)))
       .returning();
+    if (!updated) return { success: false, error: 'Item dropping ini sudah dikonfirmasi.' };
 
     if (entry.transferOrderId) {
       await db

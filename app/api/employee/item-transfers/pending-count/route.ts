@@ -1,30 +1,31 @@
 // app/api/employee/item-transfers/pending-count/route.ts
 //
-// Lightweight, DB-only count for the header badge — deliberately does NOT
-// trigger a live Business Central sync (see app/api/employee/item-transfers
-// for that), so it's cheap enough to poll every minute. Reads straight off
-// the store-agnostic item_transfer_orders registry (kept warm by the OPS
-// dashboard's own sync) rather than the employee's own container rows, so a
-// fresh delivery still shows up here even before the employee has opened
-// the Item Transfers page for the first time today.
+// Lightweight count for the header badge, polled by every employee with the
+// app open — so it must stay cheap: two `count(*)` queries against the
+// registry (no Business Central call, no row payloads).
 //
-// Uses the exact same getOpenTransferOrdersForStore query the sync functions
-// backfill entries from (lib/db/utils/item-transfers.ts) — this count and
-// what actually shows up as an open entry on the employee's own page can no
-// longer drift apart, because they're the same query, not two independently
-// maintained ones.
+// It uses the same predicates the entry backfill and the "new transfer order"
+// notification use (returnOpenWhere / droppingOpenWhere in
+// lib/db/utils/item-transfers.ts), so the number here, the list on the page
+// and the notification can never disagree.
+//
+// The registry itself is kept warm by /api/cron/transfer-orders. As a safety
+// net — cron not installed yet, or the server just restarted — a poll that
+// finds the registry stale kicks off the same throttled, single-flight refresh
+// in the background (never awaited: the response stays instant, and however
+// many employees poll, BC is swept at most once per window).
 
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
-import { and, eq, gte, lte } from 'drizzle-orm';
-import { schedules } from '@/lib/db/schema';
-import { todayInStoreTimezone } from '@/lib/schedule-utils';
-import { getOpenTransferOrdersForStore } from '@/lib/db/utils/item-transfers';
+import { and, eq, gte, lt } from 'drizzle-orm';
+import { schedules, stores } from '@/lib/db/schema';
+import { jakartaDayRange, jakartaTodayKey } from '@/lib/day-bucket';
+import { countOpenTransferOrdersForStore } from '@/lib/db/utils/item-transfers';
+import { refreshTransferRegistry } from '@/lib/db/utils/transfer-order-refresh';
 
-function startOfDay(d: Date): Date { const r = new Date(d); r.setHours(0, 0, 0, 0); return r; }
-function endOfDay(d: Date): Date { const r = new Date(d); r.setHours(23, 59, 59, 999); return r; }
+const LAZY_REFRESH_MAX_AGE_MS = 5 * 60_000;
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -33,26 +34,36 @@ export async function GET() {
   }
   const userId = session.user.id as string;
 
-  const today = todayInStoreTimezone();
-  const dayStart = startOfDay(today);
-  const dayEnd = endOfDay(today);
+  // Jakarta calendar day, whatever zone the server runs in.
+  const { start, end } = jakartaDayRange(jakartaTodayKey());
 
   const [schedule] = await db
     .select({ storeId: schedules.storeId })
     .from(schedules)
+    .innerJoin(stores, eq(stores.id, schedules.storeId))
     .where(and(
       eq(schedules.userId, userId),
       eq(schedules.isHoliday, false),
-      gte(schedules.date, dayStart),
-      lte(schedules.date, dayEnd),
+      // Same scope as the page (GET /api/employee/item-transfers): prep /
+      // closed stores have no Transfer Orders page, so no badge either.
+      eq(stores.status, 'active'),
+      gte(schedules.date, start),
+      lt(schedules.date, end),
     ))
     .limit(1);
 
   if (!schedule) {
-    return NextResponse.json({ success: true, count: 0 });
+    return NextResponse.json({ success: true, count: 0, returnCount: 0, droppingCount: 0 });
   }
 
-  const { returnOpen, droppingOpen } = await getOpenTransferOrdersForStore(schedule.storeId);
+  void refreshTransferRegistry({ maxAgeMs: LAZY_REFRESH_MAX_AGE_MS });
 
-  return NextResponse.json({ success: true, count: returnOpen.length + droppingOpen.length });
+  const { returnOpen, droppingOpen } = await countOpenTransferOrdersForStore(schedule.storeId);
+
+  return NextResponse.json({
+    success: true,
+    count: returnOpen + droppingOpen,
+    returnCount: returnOpen,
+    droppingCount: droppingOpen,
+  });
 }

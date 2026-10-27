@@ -9,7 +9,7 @@ import { isIsoDay, shiftDate, todayJakarta } from '@/lib/finance/dates';
 // ─── Upload limits ───────────────────────────────────────────────────────────
 
 export const SALES_RETURN_MAX_PHOTOS = 3;
-/** Per photo, after the phone has already shrunk it (lib/image-compress.ts). */
+/** Per photo — a camera shot is already under 1 MB (useCameraCapture), this is only the server's guard. */
 export const SALES_RETURN_MAX_PHOTO_BYTES = 5 * 1024 * 1024;
 /** One request carries every photo; proxy.ts buffers at most 10 MB of a body. */
 export const SALES_RETURN_MAX_TOTAL_BYTES = 9 * 1024 * 1024;

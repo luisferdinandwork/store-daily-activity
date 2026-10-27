@@ -7,8 +7,12 @@
 // tracking 3 phases end-to-end across two stores:
 //
 //   1. Item Return   (pickup at the FROM store)
-//        start: returnDetectedAt  — first time our sync saw this TOA against
-//                                   a matched store's transferFromCode
+//        start: returnDetectedAt  — first time our sync saw this TOA (BC's
+//                                   transfer-order feed carries only a date,
+//                                   so this is as exact as the sync cadence —
+//                                   see /api/cron/transfer-orders). Never later
+//                                   than droppingDetectedAt: a shipment can't
+//                                   exist before its order.
 //        end:   returnSubmittedAt — employee confirms hand-off to courier
 //   2. Shipping       (in transit) — derived, no separate columns:
 //        start: returnSubmittedAt
@@ -17,7 +21,13 @@
 //        start: droppingSubmittedAt — employee confirms drop-off from courier
 //        end:   receivedAt          — BC Posted Whse Receipts confirms
 //                                     put-away (sourceNo match); no employee
-//                                     action, closed by sync only.
+//                                     action, closed by sync only. The receipt
+//                                     feed has no timestamp either, so this is
+//                                     the sync that first saw it.
+//
+// `droppingDetectedAt` is "Warehouse Shipment created" — taken from BC's own
+// `systemCreatedAt` on the shipment lines (exact), falling back to the sync
+// time only if BC omits it.
 //
 // `itemReturnEntries`/`itemDroppingEntries` (lib/db/schema/tasks.ts) hold the
 // per-employee confirmation (qty counted, courier-sign photo) for their leg
@@ -72,6 +82,14 @@ export const itemTransferOrders = pgTable('item_transfer_orders', {
 
   // ── Phase 3: Item Receiving — closed by sync only ────────────────────────
   receivedAt: timestamp('received_at', { mode: 'date' }),
+
+  // ── Push to the store's staff (in-app notification) ──────────────────────
+  // Stamped once the staff scheduled at the store were told this leg is
+  // waiting on them (lib/db/utils/transfer-order-notifications.ts), so a
+  // transfer order is announced exactly once per leg however often the sync
+  // runs. Left NULL while nobody was scheduled to hear it.
+  returnNotifiedAt:   timestamp('return_notified_at',   { mode: 'date' }),
+  droppingNotifiedAt: timestamp('dropping_notified_at', { mode: 'date' }),
 
   createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { mode: 'date' }).defaultNow().notNull(),

@@ -2,16 +2,16 @@
 // app/employee/sales-returns/page.tsx
 //
 // Sales Return — the employee files the POS receipt of a customer return: the
-// receipt number typed in + 1–3 photos of the receipt (picked from the gallery, a
-// scanner app's output or the phone camera — the OS file picker offers all three).
+// receipt number typed in + 1–3 photos of the receipt, taken with the in-app camera
+// (CameraCapture) — there is no gallery / file upload, like every other photo flow.
 // The date and the person filing are NOT asked: the server records the signed-in
 // user and the upload time (POST /api/employee/sales-returns). Below the form, the
 // store's latest returns so the team can see what is already in. Ops (own area) and
 // Finance (all stores) read the same rows at /ops/sales-returns and
 // /finance/sales-returns. Reached from the floating "More" menu.
 
-import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
-import { ChevronRight, ImageOff, ImagePlus, Images, Loader2, ReceiptText, Send, X } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Camera, ChevronRight, ImageOff, Images, ReceiptText, Send, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { cn } from '@/lib/utils';
@@ -29,8 +29,8 @@ import {
   SkeletonBlocks,
   inputClass,
 } from '@/components/employee/ui';
+import CameraCapture from '@/components/shared/CameraCapture';
 import { ImageLightbox, type LightboxImage } from '@/components/shared/ImageLightbox';
-import { compressImageFile } from '@/lib/image-compress';
 import {
   RECEIPT_NUMBER_MAX,
   SALES_RETURN_MAX_PHOTOS,
@@ -39,7 +39,7 @@ import {
   type EmployeeSalesReturn,
 } from '@/lib/sales-returns';
 
-interface PickedPhoto {
+interface CapturedPhoto {
   id: string;
   file: File;
   /** Object URL for the preview — revoked when the photo goes away. */
@@ -90,8 +90,8 @@ function ReturnRow({ item, onOpen }: { item: EmployeeSalesReturn; onOpen: () => 
 export default function SalesReturnsPage() {
   const [receipt, setReceipt] = useState('');
   const [touched, setTouched] = useState(false);
-  const [photos, setPhotos] = useState<PickedPhoto[]>([]);
-  const [processing, setProcessing] = useState(false);
+  const [photos, setPhotos] = useState<CapturedPhoto[]>([]);
+  const [cameraOpen, setCameraOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const [list, setList] = useState<EmployeeSalesReturn[]>([]);
@@ -100,7 +100,6 @@ export default function SalesReturnsPage() {
 
   const [lightbox, setLightbox] = useState<{ images: LightboxImage[]; index: number; title: string } | null>(null);
 
-  const fileInput = useRef<HTMLInputElement>(null);
   const photoUrls = useRef<string[]>([]);
 
   // Free the previews' memory when the page goes away.
@@ -131,27 +130,16 @@ export default function SalesReturnsPage() {
   const receiptError = touched && !check.ok ? check.error : undefined;
   // Best-effort: only the store's latest returns are loaded, so a miss proves nothing.
   const duplicate = check.ok ? list.find((r) => r.receiptNumber === check.value) : undefined;
-  const canSubmit = check.ok && photos.length > 0 && !processing && !submitting;
+  const canSubmit = check.ok && photos.length > 0 && !submitting;
 
-  async function onPick(e: ChangeEvent<HTMLInputElement>) {
-    const picked = Array.from(e.target.files ?? []);
-    e.target.value = ''; // the same photo can be picked again after removing it
-    if (picked.length === 0) return;
-
-    const room = SALES_RETURN_MAX_PHOTOS - photos.length;
-    if (picked.length > room) toast.error(`Maksimal ${SALES_RETURN_MAX_PHOTOS} foto per retur.`);
-
-    setProcessing(true);
-    try {
-      const added: PickedPhoto[] = [];
-      for (const file of picked.slice(0, room)) {
-        const small = await compressImageFile(file);
-        added.push({ id: `${Date.now()}-${added.length}`, file: small, url: URL.createObjectURL(small) });
-      }
-      setPhotos((prev) => [...prev, ...added].slice(0, SALES_RETURN_MAX_PHOTOS));
-    } finally {
-      setProcessing(false);
+  // The camera already shrinks each shot (useCameraCapture), so it goes straight into the list.
+  function onCapture(file: File) {
+    setCameraOpen(false);
+    if (photos.length >= SALES_RETURN_MAX_PHOTOS) {
+      toast.error(`Maksimal ${SALES_RETURN_MAX_PHOTOS} foto per retur.`);
+      return;
     }
+    setPhotos((prev) => [...prev, { id: `${Date.now()}-${prev.length}`, file, url: URL.createObjectURL(file) }]);
   }
 
   function removePhoto(id: string) {
@@ -289,36 +277,26 @@ export default function SalesReturnsPage() {
             {photos.length < SALES_RETURN_MAX_PHOTOS && (
               <button
                 type="button"
-                onClick={() => fileInput.current?.click()}
-                disabled={processing || submitting}
+                onClick={() => setCameraOpen(true)}
+                disabled={submitting}
                 className="flex aspect-square flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-border bg-secondary text-muted-foreground transition active:scale-[0.97] disabled:opacity-60"
               >
-                {processing ? (
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                ) : (
-                  <>
-                    <ImagePlus className="h-5 w-5 text-primary" />
-                    <span className="text-[11px] font-semibold">Tambah foto</span>
-                  </>
-                )}
+                <Camera className="h-5 w-5 text-primary" />
+                <span className="text-[11px] font-semibold">Ambil foto</span>
               </button>
             )}
           </div>
 
-          <input
-            ref={fileInput}
-            type="file"
-            accept="image/*"
-            multiple
-            onChange={onPick}
-            className="hidden"
-            tabIndex={-1}
-            aria-hidden="true"
-          />
-
           <p className="mt-2 px-0.5 text-[11px] text-muted-foreground">
-            Pilih dari galeri, hasil scan, atau ambil foto langsung. Pastikan nomor struk terbaca jelas.
+            Foto diambil langsung dengan kamera. Pastikan nomor struk terbaca jelas.
           </p>
+
+          <CameraCapture
+            open={cameraOpen}
+            onClose={() => setCameraOpen(false)}
+            onCapture={onCapture}
+            title="Foto struk"
+          />
         </div>
 
         <ActionButton

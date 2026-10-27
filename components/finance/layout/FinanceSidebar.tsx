@@ -23,6 +23,7 @@
 //   Operations
 //     Store Closing ▸ Review    /finance/store-closing       (EDC per bank × method, Indodana photo, Z-Report & EDC photo, statement posted / on hold)
 //                   ▸ Report    /finance/store-closing/report (daily money per store: cash from Setoran + card from the closing, Excel)
+//     Rekap per Toko            /finance/store-sheet         (pick a store → Excel-style daily sheet: Setoran cash, every bank × method, OP/ME/VOUCHER)
 //     Sales Return              /finance/sales-returns       (receipt number + photos the stores filed, by store / period)
 //
 //   Issues
@@ -46,6 +47,7 @@ import {
   LogOut,
   ReceiptText,
   Store,
+  Table2,
   Wallet,
   WalletCards,
 } from 'lucide-react';
@@ -135,6 +137,7 @@ const NAV: NavSection[] = [
           { href: '/finance/store-closing/report', label: 'Report' },
         ],
       },
+      { href: '/finance/store-sheet', label: 'Rekap per Toko', icon: Table2 },
       { href: '/finance/sales-returns', label: 'Sales Return', icon: ReceiptText },
     ],
   },

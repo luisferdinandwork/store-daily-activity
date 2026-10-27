@@ -14,8 +14,16 @@ import { desc, eq, inArray } from 'drizzle-orm';
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
 import { itemTransferOrders, itemReturnEntries, itemDroppingEntries, stores, areas } from '@/lib/db/schema';
-import { syncTransferOrderRegistry, syncReceivingStatus, isWarehouseCode } from '@/lib/db/utils/item-transfers';
+import { isWarehouseCode } from '@/lib/db/utils/item-transfers';
+import { effectiveToCreatedAt } from '@/lib/transfer-order-metrics';
+import { refreshReceivingStatus, refreshTransferRegistry } from '@/lib/db/utils/transfer-order-refresh';
 import { getOpsActor } from '@/app/api/ops/tasks/_helpers';
+
+// The cron (every 5 min) keeps both warm; a load only re-sweeps BC when the
+// last sweep is older than this, so OPS opening/refreshing the page no longer
+// costs 20+ BC round trips each time. `?fresh=1` forces one.
+const REGISTRY_MAX_AGE_MS = 60_000;
+const RECEIVING_MAX_AGE_MS = 3 * 60_000;
 
 type Phase = 'return' | 'shipping' | 'receiving' | 'received' | 'to_warehouse';
 
@@ -37,10 +45,18 @@ function resolvePhase(row: typeof itemTransferOrders.$inferSelect): Phase {
     const toIsWarehouse = row.toStoreId == null && isWarehouseCode(row.transferToCode);
     return toIsWarehouse ? 'to_warehouse' : 'shipping';
   }
+  // A DM warehouse origin has no employee to hand anything to a courier, so
+  // returnSubmittedAt will never be set — the transfer is in transit the moment
+  // BC creates its Warehouse Shipment. Without this every DM → store transfer
+  // sat under "Menunggu Diambil" until BC posted the receipt (on staging:
+  // 0 "Dalam Perjalanan" next to ~150 shipments that had already left).
+  if (row.fromStoreId == null && isWarehouseCode(row.transferFromCode) && row.whseShipmentNo) {
+    return 'shipping';
+  }
   return 'return';
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
@@ -51,10 +67,12 @@ export async function GET() {
     return NextResponse.json({ success: false, error: 'OPS only.' }, { status: 403 });
   }
 
-  const [registrySync, receivingSync] = await Promise.all([
-    syncTransferOrderRegistry(),
-    syncReceivingStatus('all'),
-  ]);
+  const force = new URL(req.url).searchParams.get('fresh') === '1';
+  // Registry first, then receiving: receiving works off the shipments the
+  // registry sweep just recorded, so running them side by side would leave a
+  // brand-new shipment waiting a full cycle to be checked.
+  const registrySync = await refreshTransferRegistry({ maxAgeMs: force ? 0 : REGISTRY_MAX_AGE_MS });
+  const receivingSync = await refreshReceivingStatus({ maxAgeMs: force ? 0 : RECEIVING_MAX_AGE_MS });
 
   // Left-joined to surface the employee's own confirmation photo/qty — both
   // transferOrderId FKs are unique, so each TO has at most one return entry
@@ -137,7 +155,8 @@ export async function GET() {
     phase: resolvePhase(r),
     fromIsWarehouse: r.fromStoreId == null && isWarehouseCode(r.transferFromCode),
     toIsWarehouse: r.toStoreId == null && isWarehouseCode(r.transferToCode),
-    returnDetectedAt: r.returnDetectedAt?.toISOString() ?? null,
+    // "TO Dibuat", never later than the shipment or the Item Return photo it led to.
+    returnDetectedAt: effectiveToCreatedAt(r.returnDetectedAt, r.droppingDetectedAt, r.returnSubmittedAt)?.toISOString() ?? null,
     returnSubmittedAt: r.returnSubmittedAt?.toISOString() ?? null,
     droppingDetectedAt: r.droppingDetectedAt?.toISOString() ?? null,
     droppingSubmittedAt: r.droppingSubmittedAt?.toISOString() ?? null,
@@ -148,10 +167,7 @@ export async function GET() {
     droppingQtyCounted: r.droppingQtyCounted ?? null,
   }));
 
-  const syncWarnings = [
-    registrySync.success ? null : registrySync.error,
-    receivingSync.success ? null : receivingSync.error,
-  ].filter((v): v is string => v != null);
+  const syncWarnings = [registrySync.error, receivingSync.error].filter((v): v is string => v != null);
 
   return NextResponse.json({
     success: true,

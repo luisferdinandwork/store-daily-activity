@@ -8,15 +8,15 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
-import { and, eq, gte, lte } from 'drizzle-orm';
+import { and, eq, gte, lt } from 'drizzle-orm';
 import { itemDroppingEntries, itemDroppingTasks, itemReturnEntries, itemReturnTasks, schedules } from '@/lib/db/schema';
 import { confirmItemDropping, confirmItemReturn, type GeoPoint } from '@/lib/db/utils/item-transfers';
+import { jakartaDateKey, jakartaDayRange } from '@/lib/day-bucket';
 import { parseAccuracy } from '@/lib/geo';
 
-function startOfDay(d: Date): Date { const r = new Date(d); r.setHours(0, 0, 0, 0); return r; }
-function endOfDay(d: Date): Date { const r = new Date(d); r.setHours(23, 59, 59, 999); return r; }
-
 async function findOwnScheduleForTask(userId: string, storeId: number, date: Date) {
+  // The task's Jakarta calendar day, whatever zone the server runs in.
+  const { start, end } = jakartaDayRange(jakartaDateKey(date));
   const [row] = await db
     .select({ id: schedules.id })
     .from(schedules)
@@ -24,8 +24,8 @@ async function findOwnScheduleForTask(userId: string, storeId: number, date: Dat
       eq(schedules.userId, userId),
       eq(schedules.storeId, storeId),
       eq(schedules.isHoliday, false),
-      gte(schedules.date, startOfDay(date)),
-      lte(schedules.date, endOfDay(date)),
+      gte(schedules.date, start),
+      lt(schedules.date, end),
     ))
     .limit(1);
   return row ?? null;

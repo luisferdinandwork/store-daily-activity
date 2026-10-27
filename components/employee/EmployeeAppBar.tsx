@@ -2,8 +2,8 @@
 // components/employee/EmployeeAppBar.tsx
 //
 // The one top bar of the employee app. Every page gets the same purple bar
-// with the Transfer Order (truck) shortcut and the notification bell on the
-// right — root tabs show the logo + profile avatar on the left/right, every
+// with the notification bell on the right (Transfer Orders has its own tab in
+// the bottom nav, with the pending badge) — root tabs show the logo + profile avatar on the left/right, every
 // drill-in page (incl. each task detail page, via TaskHeader) shows a back
 // button + title, and an optional `meta` line under the title (shift, task
 // status, autosave state). Rendered by EmployeeHeader (layout) and TaskHeader.
@@ -13,7 +13,6 @@ import { useRouter } from 'next/navigation';
 import { ChevronLeft } from 'lucide-react';
 import EmployeeLogoMark from './EmployeeLogoMark';
 import EmployeeNotificationBell from './EmployeeNotificationBell';
-import EmployeeItemTransfersBadge from './EmployeeItemTransfersBadge';
 import HeaderProfileButton from '@/components/shared/HeaderProfileButton';
 
 interface EmployeeAppBarProps {
@@ -62,7 +61,6 @@ export default function EmployeeAppBar({ title, meta, onBack, root = false }: Em
           )}
         </div>
 
-        <EmployeeItemTransfersBadge />
         <EmployeeNotificationBell />
         {root && (
           <HeaderProfileButton

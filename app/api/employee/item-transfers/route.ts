@@ -13,8 +13,9 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
-import { and, eq, gte, inArray, lte } from 'drizzle-orm';
+import { and, eq, gte, inArray, lt } from 'drizzle-orm';
 import { schedules, stores } from '@/lib/db/schema';
+import { jakartaDayRange, jakartaTodayKey } from '@/lib/day-bucket';
 import { todayInStoreTimezone } from '@/lib/schedule-utils';
 import { getOrCreateItemDroppingForSchedule } from '@/lib/db/utils/item-dropping';
 import { getOrCreateItemReturnForSchedule } from '@/lib/db/utils/item-return';
@@ -25,9 +26,11 @@ import {
   getItemDroppingEntriesWithTransferOrder,
   getItemReturnEntriesWithTransferOrder,
 } from '@/lib/db/utils/item-transfers';
+import { refreshTransferRegistry } from '@/lib/db/utils/transfer-order-refresh';
 
-function startOfDay(d: Date): Date { const r = new Date(d); r.setHours(0, 0, 0, 0); return r; }
-function endOfDay(d: Date): Date { const r = new Date(d); r.setHours(23, 59, 59, 999); return r; }
+// Opening the page reuses a registry sweep that finished this recently (cron
+// runs every 5 min) instead of every employee triggering their own BC pull.
+const PAGE_REFRESH_MAX_AGE_MS = 2 * 60_000;
 
 function parseWhseShipmentLines(raw: string | null): unknown[] {
   if (!raw) return [];
@@ -47,8 +50,8 @@ export async function GET() {
   const userId = session.user.id as string;
 
   const today = todayInStoreTimezone();
-  const dayStart = startOfDay(today);
-  const dayEnd = endOfDay(today);
+  // Jakarta calendar day, whatever zone the server runs in.
+  const { start: dayStart, end: dayEnd } = jakartaDayRange(jakartaTodayKey());
 
   // A cross-store employee could have more than one schedule today — this
   // view focuses on the primary (first) one, same scope a single BC-driven
@@ -63,7 +66,7 @@ export async function GET() {
       // Prep (ready_to_open) / closed stores create no task rows.
       eq(stores.status, 'active'),
       gte(schedules.date, dayStart),
-      lte(schedules.date, dayEnd),
+      lt(schedules.date, dayEnd),
     ))
     .limit(1);
 
@@ -83,6 +86,10 @@ export async function GET() {
     getOrCreateItemReturnForSchedule(schedule.id, userId, schedule.storeId, schedule.shiftId, today),
   ]);
 
+  // Business Central is swept company-wide (shared, single-flight, throttled);
+  // the per-store syncs below are database-only backfills of today's entries.
+  const registry = await refreshTransferRegistry({ maxAgeMs: PAGE_REFRESH_MAX_AGE_MS });
+
   const [droppingSync, returnSync] = await Promise.all([
     syncItemDroppingForStore(schedule.storeId, {
       scheduleId: schedule.id, userId, date: today, taskId: droppingTask.id,
@@ -92,8 +99,9 @@ export async function GET() {
     }),
   ]);
 
-  const droppingSyncWarning = droppingSync.success ? null : droppingSync.error;
-  const returnSyncWarning = returnSync.success ? null : returnSync.error;
+  const bcWarning = registry.error ? `Business Central: ${registry.error}` : null;
+  const droppingSyncWarning = droppingSync.success ? bcWarning : droppingSync.error;
+  const returnSyncWarning = returnSync.success ? bcWarning : returnSync.error;
 
   // Close phase 3 for this store's own transfers right away — BC's posted
   // Warehouse Receipt (store-bound legs) or this store's own just-submitted
@@ -133,13 +141,15 @@ export async function GET() {
     bcStatus: transferOrder?.bcStatus ?? null,
     whseShipmentNo: transferOrder?.whseShipmentNo ?? null,
     whseShipmentLines: parseWhseShipmentLines(transferOrder?.whseShipmentLines ?? null),
-    // Start = when the origin store actually submitted the Item Return on
-    // this website (returnSubmittedAt) — NOT when our sync first fetched/
-    // detected the shipment from BC. End = when BC's Posted Whse Receipts
-    // confirms the warehouse actually posted the receipt (receivedAt), not
-    // when this store's employee locally taps "confirm receiving" (that's
-    // just the physical hand-off scan, not the system-of-record event).
-    inTransitSince: transferOrder?.returnSubmittedAt?.toISOString() ?? null,
+    // Start = when the origin store submitted the Item Return on this
+    // website (returnSubmittedAt). A DM warehouse origin has no employee to
+    // submit one, so those start the clock at the Warehouse Shipment's own BC
+    // creation time (droppingDetectedAt) — before, they read "Menunggu
+    // dikirim" forever though the shipment had already left. End = when BC's
+    // Posted Whse Receipts confirms the warehouse actually posted the receipt
+    // (receivedAt), not when this store's employee locally taps "confirm
+    // receiving" (that's just the physical hand-off scan).
+    inTransitSince: (transferOrder?.returnSubmittedAt ?? transferOrder?.droppingDetectedAt)?.toISOString() ?? null,
     receivedAt: transferOrder?.receivedAt?.toISOString() ?? null,
   }));
 

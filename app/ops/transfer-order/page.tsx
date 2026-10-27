@@ -13,8 +13,13 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Package, Truck, PackageCheck, CheckCircle2, Store as StoreIcon,
   MapPin, ChevronDown, Loader2, X, Globe2, Shield, AlertTriangle,
-  Factory, Send, Inbox, Warehouse, Search, ArrowRightLeft,
+  Factory, Send, Inbox, Warehouse, Search, ArrowRightLeft, Maximize2, Camera, ClipboardCheck,
 } from 'lucide-react';
+import { ImageLightbox } from '@/components/shared/ImageLightbox';
+import {
+  buildTransferMetrics, durationBetween, finishedEarly, formatStamp,
+  type MetricKey, type TransferMetric,
+} from '@/lib/transfer-order-metrics';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
@@ -83,17 +88,6 @@ const PHASE_ORDER: Phase[] = ['return', 'shipping', 'receiving', 'received'];
 
 // ─── Time helpers ─────────────────────────────────────────────────────────────
 
-function durationBetween(startIso: string | null, endIso: string | null): string {
-  if (!startIso) return '—';
-  const end = endIso ? new Date(endIso).getTime() : Date.now();
-  const diffMin = Math.max(0, Math.round((end - new Date(startIso).getTime()) / 60_000));
-  const hours = Math.floor(diffMin / 60);
-  const minutes = diffMin % 60;
-  if (hours >= 24) return `${Math.floor(hours / 24)}h ${hours % 24}j`;
-  if (hours > 0) return `${hours}j ${minutes}m`;
-  return `${minutes}m`;
-}
-
 function useTicking(intervalMs: number | false = 30_000) {
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -103,68 +97,22 @@ function useTicking(intervalMs: number | false = 30_000) {
   }, [intervalMs]);
 }
 
-// ─── The 3 key timing metrics OPS needs on every transfer order ───────────────
-// See lib/db/schema/item-transfers.ts for the timestamp semantics.
+// ─── Timing metrics OPS needs on every transfer order ─────────────────────────
+// Rules + semantics live in lib/transfer-order-metrics.ts (pure, tested); this
+// page only adds the icons.
 
-interface Metric {
-  key: 'bcProcessing' | 'delivery' | 'bcReceiving';
-  label: string;
-  shortLabel: string;
-  ongoingLabel: string;
-  notStartedLabel: string;
-  Icon: typeof Factory;
-  start: string | null;
-  end: string | null;
-  /** false = this leg has no human on one end (a DM warehouse code), so the
-   *  metric will never start/finish the normal way — render as "N/A", not
-   *  as a perpetually "not started" or "ongoing" item needing attention. */
-  applicable: boolean;
-}
+type Metric = TransferMetric;
+
+const METRIC_ICON: Record<MetricKey, typeof Factory> = {
+  bcProcessing: Factory,
+  wsToReturn: Camera,
+  returnTotal: ClipboardCheck,
+  delivery: Send,
+  bcReceiving: Inbox,
+};
 
 function buildMetrics(t: Transfer): Metric[] {
-  // Delivery time needs a real employee submitting Item Return AND a real
-  // employee submitting Item Receiving — either end being a DM warehouse
-  // code means one of those two actions will never happen.
-  const deliveryApplicable = !t.fromIsWarehouse && !t.toIsWarehouse;
-  // BC receiving needs a real store to submit Item Receiving in the first
-  // place — a warehouse destination never gets that far.
-  const bcReceivingApplicable = !t.toIsWarehouse;
-
-  return [
-    {
-      key: 'bcProcessing',
-      label: 'TO Dibuat → WS Dibuat',
-      shortLabel: 'Proses BC',
-      ongoingLabel: 'menunggu WS dibuat',
-      notStartedLabel: 'TO belum terdeteksi',
-      Icon: Factory,
-      start: t.returnDetectedAt,
-      end: t.droppingDetectedAt,
-      applicable: true,
-    },
-    {
-      key: 'delivery',
-      label: 'Waktu Pengiriman (Delivery Time)',
-      shortLabel: 'Delivery',
-      ongoingLabel: 'dalam perjalanan',
-      notStartedLabel: 'belum diserahkan ke kurir',
-      Icon: Send,
-      start: t.returnSubmittedAt,
-      end: t.droppingSubmittedAt,
-      applicable: deliveryApplicable,
-    },
-    {
-      key: 'bcReceiving',
-      label: 'Terima Toko → WR Dibuat (BC)',
-      shortLabel: 'Terima BC',
-      ongoingLabel: 'menunggu WR dibuat',
-      notStartedLabel: 'belum diterima toko',
-      Icon: Inbox,
-      start: t.droppingSubmittedAt,
-      end: t.receivedAt,
-      applicable: bcReceivingApplicable,
-    },
-  ];
+  return buildTransferMetrics(t);
 }
 
 // ─── Store label ──────────────────────────────────────────────────────────────
@@ -207,11 +155,12 @@ function PhaseBadge({ phase }: { phase: Phase }) {
 
 function MetricPill({ metric }: { metric: Metric }) {
   useTicking(metric.applicable && metric.start && !metric.end ? 30_000 : false);
-  const { Icon, start, end } = metric;
+  const { start, end } = metric;
+  const Icon = METRIC_ICON[metric.key];
 
   if (!metric.applicable) {
     return (
-      <span className="flex items-center gap-1 rounded-lg bg-slate-50 px-2 py-1 text-slate-300" title={`${metric.label} — tidak berlaku (gudang)`}>
+      <span className="flex items-center gap-1 rounded-lg bg-slate-50 px-2 py-1 text-slate-300" title={`${metric.label} — ${metric.naReason}`}>
         <Icon className="h-3 w-3" />
         <span className="text-[10px] font-semibold">N/A</span>
       </span>
@@ -228,16 +177,17 @@ function MetricPill({ metric }: { metric: Metric }) {
   }
 
   const ongoing = !end;
+  const early = finishedEarly(metric);
   return (
     <span
       className={cn(
         'flex items-center gap-1 rounded-lg px-2 py-1',
-        ongoing ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700',
+        early ? 'bg-sky-50 text-sky-700' : ongoing ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700',
       )}
-      title={metric.label}
+      title={early ? `${metric.label} — ${metric.earlyNote}` : metric.label}
     >
       <Icon className="h-3 w-3" />
-      <span className="text-[10px] font-bold tabular-nums">{durationBetween(start, end)}</span>
+      <span className="text-[10px] font-bold tabular-nums">{durationBetween(start, end, { signed: metric.signed })}</span>
     </span>
   );
 }
@@ -246,9 +196,11 @@ function MetricPill({ metric }: { metric: Metric }) {
 
 function MetricCard({ metric }: { metric: Metric }) {
   useTicking(metric.applicable && metric.start && !metric.end ? 30_000 : false);
-  const { Icon, start, end } = metric;
+  const { start, end } = metric;
+  const Icon = METRIC_ICON[metric.key];
   const ongoing = Boolean(start) && !end;
-  const accent = !metric.applicable ? '#cbd5e1' : !start ? '#94a3b8' : ongoing ? '#f59e0b' : '#10b981';
+  const early = finishedEarly(metric);
+  const accent = !metric.applicable ? '#cbd5e1' : !start ? '#94a3b8' : early ? '#0ea5e9' : ongoing ? '#f59e0b' : '#10b981';
 
   return (
     <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
@@ -260,22 +212,21 @@ function MetricCard({ metric }: { metric: Metric }) {
           <p className="text-xs font-bold text-slate-700">{metric.label}</p>
           <p className="text-[11px] text-slate-400">
             {!metric.applicable
-              ? 'Tidak berlaku — tujuan/asal gudang (DM), tidak ada konfirmasi karyawan.'
+              ? metric.naReason
               : !start
                 ? metric.notStartedLabel
                 : (
                   <>
-                    {new Date(start).toLocaleString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
-                    {end
-                      ? ` → ${new Date(end).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}`
-                      : ` → ${metric.ongoingLabel}`}
+                    {formatStamp(start)}
+                    {end ? ` → ${formatStamp(end)}` : ` → ${metric.ongoingLabel}`}
+                    {early && ` · ${metric.earlyNote}`}
                   </>
                 )}
           </p>
         </div>
       </div>
       <p className="shrink-0 text-sm font-bold tabular-nums" style={{ color: accent }}>
-        {!metric.applicable ? 'N/A' : start ? durationBetween(start, end) : '—'}
+        {!metric.applicable ? 'N/A' : start ? durationBetween(start, end, { signed: metric.signed }) : '—'}
       </p>
     </div>
   );
@@ -287,6 +238,14 @@ function TransferDrawer({ transfer, onClose }: { transfer: Transfer; onClose: ()
   const cfg = PHASE_CFG[transfer.phase];
   const currentIdx = PHASE_ORDER.indexOf(transfer.phase);
   const metrics = buildMetrics(transfer);
+
+  // The employees' courier-sign photos, previewed in a modal (ImageLightbox)
+  // instead of a new tab; the two legs step through as one set.
+  const photos = [
+    transfer.returnPhoto && { label: 'Item Return', url: transfer.returnPhoto, qtyCounted: transfer.returnQtyCounted },
+    transfer.droppingPhoto && { label: 'Item Receiving', url: transfer.droppingPhoto, qtyCounted: transfer.droppingQtyCounted },
+  ].filter((p): p is { label: string; url: string; qtyCounted: number | null } => Boolean(p));
+  const [viewerIndex, setViewerIndex] = useState<number | null>(null);
 
   return (
     <div className="fixed inset-0 z-50 flex" onClick={onClose}>
@@ -376,48 +335,63 @@ function TransferDrawer({ transfer, onClose }: { transfer: Transfer; onClose: ()
             </div>
           </div>
 
-          {/* Key metrics — the 3 durations OPS actually needs to check */}
+          {/* Key metrics — the durations OPS actually needs to check (rules: lib/transfer-order-metrics.ts) */}
           <div>
-            <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Waktu Kunci</p>
+            <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Waktu Kunci · WIB</p>
             <div className="space-y-2">
               {metrics.map((m) => <MetricCard key={m.key} metric={m} />)}
             </div>
+            {/* BC's transfer-order feed carries no creation time, so be explicit
+                about what each end of the first range actually is. */}
+            <p className="mt-2 text-[10px] leading-snug text-slate-400">
+              TO Dibuat = saat sistem pertama kali mendeteksi TO di Business Central (BC tidak menyediakan jam pembuatan TO).
+              WS Diposting = jam Warehouse Shipment diposting di BC. Foto Serah Terima = saat toko mengirim konfirmasi serah terima ke kurir
+              beserta foto. Total Proses Item Return = TO Dibuat sampai Foto Serah Terima. Terima Fisik Barang di Toko = saat toko mengonfirmasi
+              barang diterima dari kurir. WR Diposting = saat sistem pertama kali melihat Warehouse Receipt diposting di BC.
+            </p>
           </div>
 
-          {(transfer.returnPhoto || transfer.droppingPhoto) && (
+          {photos.length > 0 && (
             <div>
               <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Bukti Foto Karyawan</p>
               <div className="grid grid-cols-2 gap-3">
-                {transfer.returnPhoto && (
-                  <a href={transfer.returnPhoto} target="_blank" rel="noopener noreferrer" className="block">
-                    <p className="mb-1 text-[10px] font-semibold text-slate-500">Item Return</p>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={transfer.returnPhoto}
-                      alt="Bukti foto Item Return"
-                      className="h-32 w-full rounded-xl border border-slate-200 object-cover"
-                    />
-                    {transfer.returnQtyCounted != null && (
-                      <p className="mt-1 text-[10px] text-slate-400">Qty dihitung: {transfer.returnQtyCounted}</p>
+                {photos.map((photo, i) => (
+                  <button
+                    key={photo.label}
+                    type="button"
+                    onClick={() => setViewerIndex(i)}
+                    className="group block text-left"
+                    aria-label={`Perbesar foto ${photo.label}`}
+                  >
+                    <p className="mb-1 text-[10px] font-semibold text-slate-500">{photo.label}</p>
+                    <span className="relative block overflow-hidden rounded-xl border border-slate-200">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={photo.url}
+                        alt={`Bukti foto ${photo.label}`}
+                        className="h-32 w-full object-cover transition duration-300 group-hover:scale-105"
+                      />
+                      <span className="absolute inset-0 flex items-center justify-center bg-black/0 text-white opacity-0 transition group-hover:bg-black/25 group-hover:opacity-100">
+                        <Maximize2 className="h-5 w-5" />
+                      </span>
+                    </span>
+                    {photo.qtyCounted != null && (
+                      <p className="mt-1 text-[10px] text-slate-400">Qty dihitung: {photo.qtyCounted}</p>
                     )}
-                  </a>
-                )}
-                {transfer.droppingPhoto && (
-                  <a href={transfer.droppingPhoto} target="_blank" rel="noopener noreferrer" className="block">
-                    <p className="mb-1 text-[10px] font-semibold text-slate-500">Item Receiving</p>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={transfer.droppingPhoto}
-                      alt="Bukti foto Item Receiving"
-                      className="h-32 w-full rounded-xl border border-slate-200 object-cover"
-                    />
-                    {transfer.droppingQtyCounted != null && (
-                      <p className="mt-1 text-[10px] text-slate-400">Qty dihitung: {transfer.droppingQtyCounted}</p>
-                    )}
-                  </a>
-                )}
+                  </button>
+                ))}
               </div>
             </div>
+          )}
+
+          {viewerIndex != null && (
+            <ImageLightbox
+              title={transfer.toaNo}
+              images={photos.map((p) => ({ url: p.url, label: p.label }))}
+              index={viewerIndex}
+              onIndexChange={setViewerIndex}
+              onClose={() => setViewerIndex(null)}
+            />
           )}
 
           {transfer.whseShipmentNo && (
@@ -490,7 +464,9 @@ export default function OpsItemTransfersPage() {
   const load = useCallback(async (isRefresh = false) => {
     isRefresh ? setRefreshing(true) : setLoading(true);
     try {
-      const res = await fetch('/api/ops/item-transfers', { cache: 'no-store' });
+      // The Refresh button forces a Business Central sweep; the first load /
+      // reload reuses the one the 5-minute cron (or a colleague) just did.
+      const res = await fetch(`/api/ops/item-transfers${isRefresh ? '?fresh=1' : ''}`, { cache: 'no-store' });
       const data = await res.json();
       setTransfers(data.transfers ?? []);
       setScope(data.scope ?? 'area');

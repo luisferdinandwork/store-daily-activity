@@ -19,6 +19,7 @@ import {
   CalendarOff,
   Receipt,
   CircleDollarSign,
+  Truck,
 } from "lucide-react";
 import { ATTENDANCE_STATUSES, type AttendanceStatus } from "@/lib/attendance-status";
 import { STATUS } from "@/components/status/AttendanceStatus";
@@ -29,6 +30,8 @@ import { Chip, ListGroup, NavRow, SectionLabel, SkeletonBlocks } from "@/compone
 import { EmployeeTargetGauge } from "@/components/employee/EmployeeTargetGauge";
 import { StoreContributionPie } from "@/components/employee/StoreContributionPie";
 import ImpactFixBar from "@/components/employee/ImpactFixBar";
+import WeekScheduleCard from "@/components/employee/WeekScheduleCard";
+import { useTransferPending } from "@/lib/client/use-transfer-pending";
 
 interface AttSlot {
   schedule: {
@@ -330,6 +333,8 @@ export default function EmployeeDashboard() {
   // attendance is a fast DB read, performance waits on Business Central, so
   // the header/attendance no longer sit behind the slow sales call.
   const signedIn = sessionStatus === "authenticated";
+  // Transfer Orders waiting on this store (shared poll — also feeds the nav badge).
+  const transfers = useTransferPending();
   const att = useApi<{ success?: boolean; shifts?: AttSlot[] }>(signedIn ? "/api/employee/attendance" : null);
   const perfRes = useApi<PerformanceData>(signedIn ? "/api/employee/performance" : null);
 
@@ -573,7 +578,7 @@ export default function EmployeeDashboard() {
       <ImpactFixBar enabled={signedIn} />
 
       {/* ── Quick actions ─────────────────────────────────────────────────── */}
-      <div className="mx-auto w-full max-w-md px-4 pt-5 pb-8">
+      <div className="mx-auto w-full max-w-md px-4 pt-5 pb-5">
         <SectionLabel>Quick Actions</SectionLabel>
 
         <ListGroup>
@@ -582,6 +587,23 @@ export default function EmployeeDashboard() {
             icon={ListChecks}
             title="My Tasks"
             description="Lihat dan selesaikan task shift hari ini"
+          />
+          <NavRow
+            href="/employee/item-transfers"
+            icon={Truck}
+            iconClassName={transfers.count > 0 ? "bg-sky-50 text-sky-600" : undefined}
+            title="Transfer Orders"
+            description={
+              !transfers.loaded
+                ? "Memuat…"
+                : transfers.count === 0
+                  ? "Tidak ada TO yang menunggu"
+                  : [
+                      transfers.returnCount > 0 ? `${transfers.returnCount} menunggu diserahkan ke kurir` : null,
+                      transfers.droppingCount > 0 ? `${transfers.droppingCount} kiriman menuju toko` : null,
+                    ].filter(Boolean).join(" · ")
+            }
+            trailing={transfers.count > 0 ? <Chip tone="warning">{transfers.count} menunggu</Chip> : undefined}
           />
           <NavRow
             href="/employee/attendance"
@@ -614,6 +636,9 @@ export default function EmployeeDashboard() {
           />
         </ListGroup>
       </div>
+
+      {/* ── This week's schedule, at a glance (the full month: More menu → Schedule) ── */}
+      <WeekScheduleCard enabled={signedIn} />
     </div>
   );
 }

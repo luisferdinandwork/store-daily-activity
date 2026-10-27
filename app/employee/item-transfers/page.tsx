@@ -23,6 +23,8 @@ import {
 } from '@/components/employee/ui';
 import { useTaskLocationSetting } from '@/lib/hooks/useTaskLocationSetting';
 import PhotoUploadGrid from '@/components/shared/PhotoUploadGrid';
+import { ImageLightbox } from '@/components/shared/ImageLightbox';
+import { refreshTransferPending } from '@/lib/client/use-transfer-pending';
 import { uploadTaskPhoto } from '@/lib/tasks-upload';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -336,6 +338,7 @@ function ConfirmedEntryCard({ kind, entry }: { kind: Kind; entry: EntryData }) {
   // receipt (receivedAt), not this store's local courier hand-off scan
   // (entry.submittedAt) — that scan just unlocks the confirm form. Keep
   // ticking until BC actually posts it.
+  const [previewOpen, setPreviewOpen] = useState(false);
   const isDropping = kind === 'dropping';
   const stillAwaitingBcReceive = isDropping && !entry.receivedAt;
   useTicking(stillAwaitingBcReceive ? 30_000 : false);
@@ -372,7 +375,7 @@ function ConfirmedEntryCard({ kind, entry }: { kind: Kind; entry: EntryData }) {
           <p className="text-xs font-bold text-green-700">{ownDuration}</p>
           <p className="text-[10px] text-muted-foreground">
             {entry.submittedAt
-              ? new Date(entry.submittedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
+              ? new Date(entry.submittedAt).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
               : ''}
           </p>
         </div>
@@ -401,12 +404,30 @@ function ConfirmedEntryCard({ kind, entry }: { kind: Kind; entry: EntryData }) {
       )}
 
       {entry.courierSignPhoto && (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={entry.courierSignPhoto}
-          alt="Bukti tanda tangan kurir"
-          className="mt-3 h-20 w-20 rounded-xl border border-border object-cover"
-        />
+        <>
+          <button
+            type="button"
+            onClick={() => setPreviewOpen(true)}
+            className="mt-3 block overflow-hidden rounded-xl border border-border active:scale-95"
+            aria-label="Perbesar foto bukti tanda tangan kurir"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={entry.courierSignPhoto}
+              alt="Bukti tanda tangan kurir"
+              className="h-20 w-20 object-cover"
+            />
+          </button>
+          {previewOpen && (
+            <ImageLightbox
+              title={entry.toaNo}
+              images={[{ url: entry.courierSignPhoto, label: 'Bukti tanda tangan kurir' }]}
+              index={0}
+              onIndexChange={() => {}}
+              onClose={() => setPreviewOpen(false)}
+            />
+          )}
+        </>
       )}
     </div>
   );
@@ -534,6 +555,8 @@ export default function ItemTransfersPage() {
       setNotScheduled(data.scheduleId == null);
       setDropping(data.dropping ?? { entries: [], syncWarning: null });
       setReturnData(data.return ?? { entries: [], syncWarning: null });
+      // Keep the nav badge / Home quick action in step with what this page now shows.
+      refreshTransferPending();
     } catch (e) {
       console.error('[ItemTransfersPage] load error:', e);
       toast.error('Gagal memuat data.');

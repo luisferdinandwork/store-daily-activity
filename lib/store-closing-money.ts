@@ -11,7 +11,7 @@
 //     Wajib disetor / Disetor / Sisa.
 // Total Sales = cash received + every bank + OP/ME/VOUCHER.
 
-import { EDC_BANKS, summariseEdc, type EdcBankCode, type EdcEntryLike } from '@/lib/store-closing-edc';
+import { EDC_BANKS, summariseEdc, type EdcBankCode, type EdcEntryLike, type EdcMethod } from '@/lib/store-closing-edc';
 
 export { storeCodeOf } from '@/lib/petty-cash-report';
 export { groupRowsByCode, type CodeGroup } from '@/lib/finance/code-groups';
@@ -36,6 +36,9 @@ export interface ClosingMoneySetoran {
   notes: string | null;
 }
 
+/** Per bank, the cells that were filled in by payment method (a blank cell has no key). */
+export type BankCells = Record<EdcBankCode, Partial<Record<EdcMethod, number>>>;
+
 export interface ClosingMoneyRow {
   /** `${storeId}:${salesDate}` */
   key: string;
@@ -55,6 +58,8 @@ export interface ClosingMoneyRow {
   hasClosing: boolean;
   /** Per bank: the day's total over all methods, null = the bank was left blank. */
   banks: Record<EdcBankCode, number | null>;
+  /** Per bank × method — only present when the report was asked for detail (the per-store sheet). */
+  cells?: BankCells;
   /** null = not filled in. */
   opMeVoucher: number | null;
 
@@ -86,6 +91,20 @@ export function bankTotals(entries: readonly EdcEntryLike[]): Record<EdcBankCode
 
 export const emptyBanks = (): Record<EdcBankCode, number | null> =>
   Object.fromEntries(EDC_BANKS.map((b) => [b.code, null])) as Record<EdcBankCode, number | null>;
+
+/** The filled cells of a Store Closing's EDC entries, per bank and method. */
+export function bankCells(entries: readonly EdcEntryLike[]): BankCells {
+  const summary = summariseEdc(entries, null);
+  return Object.fromEntries(summary.banks.map((b) => [b.code, b.cells])) as BankCells;
+}
+
+export const emptyCells = (): BankCells =>
+  Object.fromEntries(EDC_BANKS.map((b) => [b.code, {}])) as BankCells;
+
+/** Anything at all to show for the day — a setoran, or a Store Closing with a figure on it. */
+export function hasSalesFigure(row: ClosingMoneyRow): boolean {
+  return Boolean(row.setoran) || (row.hasClosing && (row.opMeVoucher !== null || Object.values(row.banks).some((v) => v !== null)));
+}
 
 // ─── Totals ──────────────────────────────────────────────────────────────────
 

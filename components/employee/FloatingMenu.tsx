@@ -14,7 +14,7 @@ import {
   ChevronRight,
   DollarSign,
   LayoutDashboard,
-  Truck,
+  CalendarDays,
   ClipboardCheck,
   ReceiptText,
 } from 'lucide-react';
@@ -31,9 +31,10 @@ interface MenuItem {
   color?: string; // Tailwind text color class
 }
 
+// Transfer Orders is a main-nav tab now (EmployeeMobileNav); Schedule moved here.
 const MORE_MENU_ITEMS: MenuItem[] = [
+  { label: 'Schedule', href: '/employee/schedule', icon: CalendarDays, color: 'text-violet-500' },
   { label: 'Petty Cash', href: '/employee/pettycash', icon: DollarSign, color: 'text-blue-500' },
-  { label: 'Transfer Orders', href: '/employee/item-transfers', icon: Truck, color: 'text-sky-500' },
   { label: 'Sales Return', href: '/employee/sales-returns', icon: ReceiptText, color: 'text-rose-500' },
   { label: 'Impact Visit Result', href: '/employee/impact-visits', icon: ClipboardCheck, color: 'text-emerald-500' },
   { label: 'Knowledge Base',   href: '/employee/knowledge', icon: BookOpen,    color: 'text-indigo-500' },

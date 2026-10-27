@@ -24,6 +24,16 @@ export const FEATURE_SWITCHES = {
     appliesTo: 'Ops · Schedules',
     defaultEnabled: false,
   },
+  transfer_order_notifications: {
+    title: 'Transfer Order notifications',
+    description:
+      'Tells the staff scheduled today at a store, through the bell in the employee app, when a Transfer Order is ' +
+      'waiting on that store: an Item Return to hand to the courier, or a shipment on its way to receive. One notice ' +
+      'per store per kind, sent once. Turn it off to stop new notices at once (the TO badge and the Transfer Order ' +
+      'page are not affected); notices already sent stay in the bell.',
+    appliesTo: 'Employee · Transfer Order',
+    defaultEnabled: true,
+  },
   store_closing_update: {
     title: 'Store Closing update',
     description:

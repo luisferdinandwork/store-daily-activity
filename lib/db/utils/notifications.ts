@@ -26,8 +26,13 @@ export interface CreateNotificationInput {
   relatedId?: number;
 }
 
+// createdAt is set from JS on purpose: the DB session runs in Asia/Jakarta, so
+// `defaultNow()` on this timestamp-without-time-zone column reads back through
+// Drizzle (which treats it as UTC) 7 hours ahead — the bell then showed "just
+// now" for seven hours and sorted new notifications above genuinely newer ones.
+
 export async function createNotification(input: CreateNotificationInput): Promise<void> {
-  await db.insert(notifications).values(input);
+  await db.insert(notifications).values({ ...input, createdAt: new Date() });
 }
 
 export async function createNotificationsForUsers(
@@ -35,7 +40,8 @@ export async function createNotificationsForUsers(
   input: Omit<CreateNotificationInput, 'userId'>,
 ): Promise<void> {
   if (!userIds.length) return;
-  await db.insert(notifications).values(userIds.map((userId) => ({ ...input, userId })));
+  const createdAt = new Date();
+  await db.insert(notifications).values(userIds.map((userId) => ({ ...input, userId, createdAt })));
 }
 
 /**

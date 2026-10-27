@@ -56,14 +56,6 @@ const PERFORMANCE_TARGETS_ITEM = {
   key: 'performance-targets',
 };
 
-// Item Return → Shipping → Item Receiving BC pipeline dashboard.
-const ITEM_TRANSFERS_ITEM = {
-  href: '/ops/transfer-order',
-  label: 'Transfer Orders',
-  icon: Truck,
-  key: 'item-transfers',
-};
-
 // OPS HO only — assign the one OPS Area user per area, rename areas, move
 // stores between areas, and monitor task/attendance rolled up per area.
 const AREA_MANAGEMENT_ITEM = {
@@ -122,6 +114,20 @@ const STORE_VISIT_ITEM: NavItem = {
   ],
 };
 
+// Item Return → Shipping → Item Receiving BC pipeline: the transfer list itself,
+// and the per-store report of how many TO processes each store had / finished.
+const TRANSFER_ORDER_ITEM: NavItem = {
+  href: '/ops/transfer-order',
+  label: 'Transfer Orders',
+  icon: Truck,
+  children: [
+    { href: '/ops/transfer-order', label: 'Transfers' },
+    { href: '/ops/transfer-order/report/return', label: 'Item Return' },
+    { href: '/ops/transfer-order/report/receiving', label: 'Item Receiving' },
+    { href: '/ops/transfer-order/report/delivery', label: 'Item Delivery' },
+  ],
+};
+
 // Petty Cash is two pages: spending requests and top-up (refill) requests.
 const PETTY_CASH_ITEM: NavItem = {
   href: '/ops/petty-cash',
@@ -158,7 +164,7 @@ const NAV: NavSection[] = [
       IMPACT_VISIT_ITEM,
       PETTY_CASH_ITEM,
       { href: '/ops/sales-returns',          label: 'Sales Return',         icon: ReceiptText },
-      { href: ITEM_TRANSFERS_ITEM.href,    label: ITEM_TRANSFERS_ITEM.label, icon: ITEM_TRANSFERS_ITEM.icon },
+      TRANSFER_ORDER_ITEM,
       { href: PERFORMANCE_TARGETS_ITEM.href, label: PERFORMANCE_TARGETS_ITEM.label, icon: PERFORMANCE_TARGETS_ITEM.icon },
     ],
   },

@@ -12,15 +12,18 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState, type TouchEvent } from 'react';
-import { Home, ListChecks, CalendarCheck2, CalendarDays, AlertTriangle } from 'lucide-react';
+import { Home, ListChecks, CalendarCheck2, Truck, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useTransferPending } from '@/lib/client/use-transfer-pending';
 
+// Transfer Orders took the Schedule tab's place; Schedule now lives in the floating
+// More menu (FloatingMenu) and as the "this week" card on Home.
 const NAV_ITEMS = [
-  { href: '/employee',            label: 'Home',       Icon: Home           },
-  { href: '/employee/tasks',      label: 'Tasks',      Icon: ListChecks     },
-  { href: '/employee/attendance', label: 'Attendance', Icon: CalendarCheck2 },
-  { href: '/employee/schedule',   label: 'Schedule',   Icon: CalendarDays   },
-  { href: '/employee/issues',     label: 'Issues',     Icon: AlertTriangle  },
+  { href: '/employee',                 label: 'Home',       Icon: Home           },
+  { href: '/employee/tasks',           label: 'Tasks',      Icon: ListChecks     },
+  { href: '/employee/attendance',      label: 'Attendance', Icon: CalendarCheck2 },
+  { href: '/employee/item-transfers',  label: 'Transfer',   Icon: Truck          },
+  { href: '/employee/issues',          label: 'Issues',     Icon: AlertTriangle  },
 ];
 
 // ── Tuning knobs ────────────────────────────────────────────────────────────
@@ -31,6 +34,8 @@ const SWIPE_THRESHOLD = 40;         // px of horizontal drag needed to switch ta
 export default function EmployeeMobileNav() {
   const pathname = usePathname();
   const router = useRouter();
+  // Transfer Orders still waiting on this store — a badge on the Transfer tab.
+  const { count: pendingTransfers } = useTransferPending();
 
   const activeIndex = NAV_ITEMS.findIndex(({ href }) =>
     href === '/employee' ? pathname === href : pathname.startsWith(href),
@@ -95,6 +100,7 @@ export default function EmployeeMobileNav() {
 
   const handleTouchMove = (e: TouchEvent) => {
     if (!touchStart.current || swiped.current) return;
+    if (activeIndex < 0) return; // not on a tab (e.g. Schedule, Profile): nothing to swipe between
     const dx = e.touches[0].clientX - touchStart.current.x;
     const dy = e.touches[0].clientY - touchStart.current.y;
     if (Math.abs(dx) < SWIPE_THRESHOLD || Math.abs(dx) < Math.abs(dy)) return;
@@ -148,6 +154,14 @@ export default function EmployeeMobileNav() {
                   )}
                 />
                 <Icon className="relative h-[22px] w-[22px]" strokeWidth={active ? 2.3 : 1.8} />
+                {href === '/employee/item-transfers' && pendingTransfers > 0 && (
+                  <span
+                    aria-label={`${pendingTransfers} Transfer Order menunggu`}
+                    className="absolute right-2 top-0 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-bold leading-none text-white ring-2 ring-card"
+                  >
+                    {pendingTransfers > 9 ? '9+' : pendingTransfers}
+                  </span>
+                )}
               </span>
               <span
                 className={cn(
