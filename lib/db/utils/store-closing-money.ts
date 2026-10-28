@@ -191,7 +191,7 @@ export async function getClosingMoneyReport(
 
 /**
  * Finance's per-store sheet: every store for the picker, and — once a store is chosen —
- * its days in the period with the per-method EDC cells. Days nobody submitted anything
+ * its days in the period with each bank's total. Days nobody submitted anything
  * for are simply missing from `rows` (the page lists them as blank lines).
  */
 export async function getStoreMoneySheet(
@@ -212,7 +212,7 @@ export async function getStoreMoneySheet(
   // The first sales day's setoran is filed the day after `from`; whatever the last setoran
   // before that left unpaid is what the period starts out carrying.
   const [report, [prior]] = await Promise.all([
-    getClosingMoneyReport(from, to, storeId, { detail: true }),
+    getClosingMoneyReport(from, to, storeId),
     db
       .select({ unpaid: setoranMoneyStorage.unpaidAmount })
       .from(setoranMoneyStorage)

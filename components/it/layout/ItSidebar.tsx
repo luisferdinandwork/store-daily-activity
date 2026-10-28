@@ -28,7 +28,8 @@
 //     Feature Switches        /it/feature-switches (on/off for risky features, e.g. schedule "Delete everything")
 //
 //   Data Correction (IT-only)
-//     Koreksi Setoran        /it/setoran-correction (fix one day's amounts, carry-over recalculated)
+//     Koreksi Setoran > Koreksi         /it/setoran-correction (fix one day's amounts, carry-over recalculated)
+//                       Riwayat Koreksi /it/setoran-correction/history (every correction, all stores)
 //
 //   Other Panels (IT keeps its role — a "Back to IT" banner shows on the way)
 //     Ops Panel             /ops
@@ -159,8 +160,16 @@ const NAV: NavSection[] = [
   {
     section: 'Data Correction',
     items: [
-      { href: '/it/setoran-correction', label: 'Koreksi Setoran', icon: Eraser },
-      // Ops pages — only IT may delete a visit (draft or submitted).
+      {
+        href: '/it/setoran-correction',
+        label: 'Koreksi Setoran',
+        icon: Eraser,
+        children: [
+          { href: '/it/setoran-correction', label: 'Koreksi' },
+          { href: '/it/setoran-correction/history', label: 'Riwayat Koreksi' },
+        ],
+      },
+      // Ops pages — Ops can delete a draft; only IT may delete a submitted visit.
       { href: '/ops/impact-visits', label: 'Impact Visits', icon: FileCheck2 },
     ],
   },

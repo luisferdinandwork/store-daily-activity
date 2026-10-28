@@ -2,7 +2,7 @@
 //
 // GET [?storeId=][&from=YYYY-MM-DD&to=YYYY-MM-DD]
 //
-// Behind "Rekap per Toko": every store for the picker, and once `storeId` is given, that
+// Behind "Daily Report All Store": every store for the picker, and once `storeId` is given, that
 // store's days in the period — the card money per bank × method from each day's Store
 // Closing plus the cash from the Setoran submitted the morning after (see
 // lib/store-closing-money.ts). Both days inclusive, at most MONEY_MAX_DAYS apart; defaults

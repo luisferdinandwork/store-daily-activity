@@ -1,10 +1,10 @@
 'use client';
 // components/finance/store-sheet/ExcelSheet.tsx
 //
-// "Rekap per Toko" drawn like the Excel Finance keeps it — lettered columns and numbered rows,
+// "Daily Report All Store" drawn like the Excel Finance keeps it — lettered columns and numbered rows,
 // thin gridlines, bold headers, accounting numbers, `d-mmm-yy` dates and freeze panes — but
-// neutral: white cells, grey headers, the Finance emerald only for the active row. The header rows
-// stay put when scrolling down and Kode · Store · Total Sales · Tanggal Sales stay put when
+// neutral: white cells, grey headers, the Finance emerald only for the active row. The header row
+// stays put when scrolling down and Kode · Store · Total Sales · Tanggal Sales stay put when
 // scrolling right. A row that has data opens its detail (setoran, store closing, photos) in the
 // panel the page shows; a day without data is a plain blank line.
 //
@@ -20,7 +20,6 @@ import {
   cellText,
   colLetter,
   columnTotal,
-  headerGroups,
   type SheetColumn,
   type SheetRow,
 } from '@/lib/store-money-sheet';
@@ -29,9 +28,9 @@ const FONT = '"Aptos Narrow", Calibri, "Segoe UI", Arial, sans-serif';
 
 const GUTTER = 48; // row-number column
 const H_LETTERS = 22; // column-letter bar
-const H_HEAD = 26; // each of the two header rows
+const H_HEAD = 26; // the header row
 const ROW_H = 24;
-const FIRST_DATA_ROW = 3; // rows 1 and 2 are the headers, like in Excel
+const FIRST_DATA_ROW = 2; // row 1 is the header, like in Excel
 
 /** Left offset of every frozen column: the gutter, then the widths before it. */
 const LEFTS = SHEET_COLUMNS.slice(0, SHEET_FROZEN_COLUMNS).reduce<number[]>((acc, col, i) => {
@@ -40,7 +39,6 @@ const LEFTS = SHEET_COLUMNS.slice(0, SHEET_FROZEN_COLUMNS).reduce<number[]>((acc
 }, []);
 
 const TABLE_WIDTH = GUTTER + SHEET_COLUMNS.reduce((sum, col) => sum + col.width, 0);
-const GROUPS = headerGroups(SHEET_COLUMNS);
 
 const frozen = (i: number) => i < SHEET_FROZEN_COLUMNS;
 const lastFrozen = (i: number) => i === SHEET_FROZEN_COLUMNS - 1;
@@ -55,15 +53,6 @@ const BAR_ACTIVE = 'bg-emerald-100 text-emerald-800';
 // ─── Header ──────────────────────────────────────────────────────────────────
 
 function SheetHead() {
-  const headCell = (i: number, extra?: string) =>
-    cn(
-      GRID,
-      'bg-slate-100 px-1.5 text-center text-[13px] font-bold leading-tight text-slate-800',
-      frozen(i) ? 'sticky z-30' : 'sticky z-20',
-      lastFrozen(i) && FREEZE_RIGHT,
-      extra,
-    );
-
   return (
     <thead>
       {/* A B C … */}
@@ -86,62 +75,31 @@ function SheetHead() {
         ))}
       </tr>
 
-      {/* Row 1: the headers; a bank's name is merged over its four columns */}
+      {/* Row 1: the headers — a bank is one column, its total */}
       <tr style={{ height: H_HEAD }}>
         <th
           style={{ left: 0, top: H_LETTERS }}
-          className={cn(GRID, BAR, 'sticky z-30 border-r-slate-300 text-center text-[11px] font-normal')}
+          className={cn(GRID, BAR, 'sticky z-30 border-r-slate-300 text-center text-[11px] font-normal', FREEZE_BOTTOM)}
         >
           1
         </th>
-        {GROUPS.map((g) => {
-          const col = SHEET_COLUMNS[g.first];
-          if (g.label === null) {
-            return (
-              <th
-                key={col.id}
-                rowSpan={2}
-                title={col.title}
-                style={{ top: H_LETTERS, ...leftOf(g.first) }}
-                className={headCell(g.first, cn('whitespace-nowrap', FREEZE_BOTTOM))}
-              >
-                {col.head}
-              </th>
-            );
-          }
-          return (
-            <th
-              key={g.label}
-              colSpan={g.span}
-              style={{ top: H_LETTERS }}
-              className={headCell(g.first, 'uppercase tracking-wide')}
-            >
-              {g.label}
-            </th>
-          );
-        })}
-      </tr>
-
-      {/* Row 2: QRIS · Debit · Credit · Total under each bank */}
-      <tr style={{ height: H_HEAD }}>
-        <th
-          style={{ left: 0, top: H_LETTERS + H_HEAD }}
-          className={cn(GRID, BAR, 'sticky z-30 border-r-slate-300 text-center text-[11px] font-normal', FREEZE_BOTTOM)}
-        >
-          2
-        </th>
-        {SHEET_COLUMNS.map((col, i) =>
-          col.group ? (
-            <th
-              key={col.id}
-              title={col.title}
-              style={{ top: H_LETTERS + H_HEAD }}
-              className={headCell(i, cn('whitespace-nowrap font-semibold', FREEZE_BOTTOM))}
-            >
-              {col.head}
-            </th>
-          ) : null,
-        )}
+        {SHEET_COLUMNS.map((col, i) => (
+          <th
+            key={col.id}
+            title={col.title}
+            style={{ top: H_LETTERS, ...leftOf(i) }}
+            className={cn(
+              GRID,
+              'bg-slate-100 px-1.5 text-center text-[13px] font-bold leading-tight text-slate-800',
+              frozen(i) ? 'sticky z-30' : 'sticky z-20',
+              lastFrozen(i) && FREEZE_RIGHT,
+              'whitespace-nowrap',
+              FREEZE_BOTTOM,
+            )}
+          >
+            {col.head}
+          </th>
+        ))}
       </tr>
     </thead>
   );

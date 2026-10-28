@@ -7,6 +7,14 @@
 /** Max length of a request's Keterangan / a category's default reason. */
 export const PETTY_CASH_REASON_MAX = 300;
 
+/**
+ * A request's Keterangan is always shown (and stored) in capitals — the same on
+ * the employee app, Ops and Finance. Apply it when typing, on save, and when
+ * reading rows written before this rule.
+ */
+export const pettyCashDescription = (text: string | null | undefined): string =>
+  (text ?? '').toLocaleUpperCase('id-ID');
+
 /** Max length of a category name. */
 export const PETTY_CASH_CATEGORY_NAME_MAX = 50;
 

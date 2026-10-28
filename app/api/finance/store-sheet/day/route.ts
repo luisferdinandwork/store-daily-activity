@@ -2,7 +2,7 @@
 //
 // GET ?storeId=&date=YYYY-MM-DD
 //
-// The detail behind one row of "Rekap per Toko": that store's Store Closing of the sales
+// The detail behind one row of "Daily Report All Store": that store's Store Closing of the sales
 // day `date` (who submitted, every bank × method, Z-Report + Indodana photos) and the Setoran
 // submitted the morning after (who, cash figures, proof photos, notes, verification).
 // See lib/store-money-detail.ts. Finance/IT only.

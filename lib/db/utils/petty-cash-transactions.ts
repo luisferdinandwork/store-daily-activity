@@ -11,6 +11,7 @@ import { and, desc, eq, gte, lt, sql, type SQL } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { pettyCashTransactions as tx, stores, users } from '@/lib/db/schema';
 import { jakartaRangeBounds } from '@/lib/finance/dates';
+import { pettyCashDescription } from '@/lib/petty-cash-categories';
 import {
   TX_STATUS_ORDER,
   isTxStatus,
@@ -62,6 +63,7 @@ async function selectTransactionRows(
 
   return rows.map((r) => ({
     ...r,
+    description: pettyCashDescription(r.description),
     amount: Number(r.amount),
     actualAmount: r.actualAmount == null ? null : Number(r.actualAmount),
     createdAt: new Date(r.createdAt).toISOString(),

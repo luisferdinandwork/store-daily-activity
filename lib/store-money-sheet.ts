@@ -1,10 +1,11 @@
 // lib/store-money-sheet.ts
-// The model behind Finance's "Rekap per Toko" (/finance/store-sheet) — client-safe, no DB imports.
+// The model behind Finance's "Daily Report All Store" (/finance/store-sheet) — client-safe, no DB imports.
 //
 // One store, one row per SALES day, laid out like the Excel Finance keeps:
 //   Kode · Store · Total Sales · Tanggal Sales · Tanggal Setoran
 //   Jumlah Yang Harus Disetor · Jumlah Sales Cash· Jumlah Yang Tidak Disetor · Jumlah Setoran Tunai · Catatan
-//   BCA · Mandiri · BRI · OCBC · Indodana — each QRIS / Debit / Credit / Total
+//   BCA · Mandiri · BRI · OCBC · Indodana — one column each, the bank's Total (QRIS + Debit + Credit
+//   are added up; the split is not shown)
 //   OP/ME/VOUCHER
 // The cash columns come from the Setoran filed the morning after (lib/store-closing-money.ts):
 //   Harus Disetor = Wajib disetor (Uang diterima + Sisa kemarin) · Sales Cash = Uang diterima ·
@@ -13,7 +14,7 @@
 // Tidak Disetor show the Sisa still being carried, exactly like the Excel's running balance — shown
 // muted so it is not mistaken for a submitted figure.
 
-import { EDC_BANKS, EDC_METHODS, EDC_METHOD_LABELS, OP_ME_VOUCHER_LABEL } from '@/lib/store-closing-edc';
+import { EDC_BANKS, OP_ME_VOUCHER_LABEL } from '@/lib/store-closing-edc';
 import { shiftDate } from '@/lib/finance/dates';
 import { hasSalesFigure, totalSales, type ClosingMoneyRow, type MoneyStoreOption } from '@/lib/store-closing-money';
 
@@ -76,10 +77,8 @@ export type SheetKind = 'text' | 'date' | 'money';
 
 export interface SheetColumn {
   id: string;
-  /** Header text (the lower header row for a grouped column). */
+  /** Header text. */
   head: string;
-  /** Bank name drawn merged over its columns; none = the header spans both header rows. */
-  group?: string;
   /** Tooltip on the header: where the figure comes from. */
   title?: string;
   /** Pixels — the Excel's own widths where the column exists there. */
@@ -154,28 +153,15 @@ const CASH: SheetColumn[] = [
   },
 ];
 
-const BANKS: SheetColumn[] = EDC_BANKS.flatMap((bank) => [
-  ...EDC_METHODS.map<SheetColumn>((method) => ({
-    id: `${bank.code}:${method}`,
-    head: EDC_METHOD_LABELS[method],
-    group: bank.label,
-    width: 100,
-    kind: 'money',
-    sum: true,
-    value: (r) => r.data?.cells?.[bank.code]?.[method] ?? null,
-  })),
-  {
-    id: `${bank.code}:total`,
-    head: 'Total',
-    group: bank.label,
-    title: `${bank.label}: QRIS + Debit + Credit`,
-    width: 112,
-    kind: 'money',
-    strong: true,
-    sum: true,
-    value: (r) => r.data?.banks[bank.code] ?? null,
-  },
-]);
+const BANKS: SheetColumn[] = EDC_BANKS.map<SheetColumn>((bank) => ({
+  id: `bank:${bank.code}`,
+  head: bank.label,
+  title: `${bank.label}: QRIS + Debit + Credit`,
+  width: 120,
+  kind: 'money',
+  sum: true,
+  value: (r) => r.data?.banks[bank.code] ?? null,
+}));
 
 const OTHER: SheetColumn[] = [
   {
@@ -185,17 +171,6 @@ const OTHER: SheetColumn[] = [
 ];
 
 export const SHEET_COLUMNS: readonly SheetColumn[] = [...LEADING, ...CASH, ...BANKS, ...OTHER];
-
-/** The top header row: consecutive columns of one bank merge under its name; the rest keep their own header. */
-export function headerGroups(columns: readonly SheetColumn[]): { label: string | null; span: number; first: number }[] {
-  const out: { label: string | null; span: number; first: number }[] = [];
-  columns.forEach((col, i) => {
-    const last = out[out.length - 1];
-    if (col.group && last?.label === col.group) last.span += 1;
-    else out.push({ label: col.group ?? null, span: 1, first: i });
-  });
-  return out;
-}
 
 // ─── Excel-style formatting ──────────────────────────────────────────────────
 

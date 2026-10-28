@@ -16,7 +16,8 @@ import PanelPageHeader from '@/components/shared/PanelPageHeader';
 // "Tidak" points (docked beside the form when there's room, a sheet otherwise),
 // and each checklist item that was "Tidak" last time is marked. Submitting
 // first warns (in Indonesian) how many isian are still empty, with "Simpan
-// sebagai Draft" as the way out. Only IT can delete a visit.
+// sebagai Draft" as the way out. Ops can delete a draft; only IT deletes a
+// submitted visit.
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
@@ -1058,8 +1059,9 @@ export default function ImpactVisitDetailPage() {
             />
           </div>
 
-          {/* Submit / draft live in the sticky header; only IT's destructive
-              Delete stays down here — for drafts and submitted visits alike. */}
+          {/* Submit / draft live in the sticky header; the destructive Delete
+              stays down here — a draft for its Ops owner, a submitted visit
+              for IT only. */}
           {visit.canDelete && (
             <button
               type="button"
@@ -1068,7 +1070,7 @@ export default function ImpactVisitDetailPage() {
               className="flex h-12 w-full items-center justify-center gap-2 rounded-2xl border border-rose-200 bg-rose-50 text-sm font-bold text-rose-600 transition-all hover:bg-rose-100 disabled:opacity-50"
             >
               {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-              Delete Visit (IT)
+              {visit.status === 'submitted' ? 'Delete Visit (IT)' : 'Delete Draft'}
             </button>
           )}
         </div>

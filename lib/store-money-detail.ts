@@ -1,5 +1,5 @@
 // lib/store-money-detail.ts
-// What Finance sees when it opens a row of "Rekap per Toko": one store on one sales day —
+// What Finance sees when it opens a row of "Daily Report All Store": one store on one sales day —
 // the Setoran filed the morning after (who, the cash figures, the proof photos) and the Store
 // Closing of the sales day (who, every bank × method, the Z-Report and Indodana photos).
 // Client-safe, no DB imports; the data comes from lib/db/utils/store-day-detail.ts.
@@ -8,7 +8,6 @@
 // storefront-locked photo, …) are deliberately left out.
 
 import type { EdcBankCode } from '@/lib/store-closing-edc';
-import type { BankCells } from '@/lib/store-closing-money';
 
 export interface DetailPerson {
   name: string;
@@ -69,8 +68,6 @@ export interface DayClosingDetail {
   /** ISO instant. */
   submittedAt: string | null;
 
-  /** The filled cells per bank and method; a blank cell has no key. */
-  cells: BankCells;
   /** Per bank, all methods added up; null = the bank was left blank. */
   banks: Record<EdcBankCode, number | null>;
   /** null = not filled in. */

@@ -54,7 +54,9 @@ import {
   type RefillState,
 } from '@/lib/petty-cash-report';
 import { TX_STATUS_LABEL } from '@/lib/petty-cash-transactions';
+import { FINANCE_REVIEW_LABEL, reviewOutcome, type RefillTransfer } from '@/lib/petty-cash-review';
 import { STORE_STATUS_LABEL } from '@/lib/store-status';
+import { TxDetailModal, type ReviewHandler } from '@/components/finance/petty-cash/TxDetailModal';
 import {
   CopyButton,
   MonthNavigator,
@@ -90,6 +92,8 @@ interface RefillRequestRow {
   bankName: string | null;
   accountNumber: string | null;
   accountHolderName: string | null;
+  /** What the store used, what Finance rejected and the cash to send (lib/petty-cash-review.ts). */
+  transfer: RefillTransfer | null;
 }
 
 const REFILL_CHIP: Record<RefillState, string> = {
@@ -264,6 +268,8 @@ function RefillPanel({ request, onViewImage }: { request: RefillRequestRow; onVi
         </div>
       </dl>
 
+      {request.transfer && request.status !== 'rejected' && <TransferLine transfer={request.transfer} />}
+
       {!hasBank && (
         <p className="border-t border-slate-100 bg-amber-50 px-3 py-1.5 text-[11px] text-amber-800">
           No bank details on this request — it was made before PIC 1 had to provide them.
@@ -292,18 +298,62 @@ function RefillPanel({ request, onViewImage }: { request: RefillRequestRow; onVi
   );
 }
 
+/** What the store used, minus the requests Finance rejected = the cash to send. */
+function TransferLine({ transfer: t }: { transfer: RefillTransfer }) {
+  return (
+    <dl className="grid gap-x-6 gap-y-2 border-t border-slate-100 px-3 py-2.5 text-[13px] sm:grid-cols-3">
+      <div>
+        <dt className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Dipakai toko</dt>
+        <dd className="font-medium tabular-nums text-slate-900">{rp(t.refill)}</dd>
+      </div>
+      <div>
+        <dt className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Ditolak Finance</dt>
+        <dd className={cn('font-medium tabular-nums', t.rejectedCount > 0 ? 'text-rose-600' : 'text-slate-400')}>
+          {t.rejectedCount > 0 ? `− ${rp(t.rejectedAmount)} · ${t.rejectedCount} request` : '–'}
+        </dd>
+      </div>
+      <div>
+        <dt className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+          Transfer {t.frozen ? '(terkunci)' : ''}
+        </dt>
+        <dd className="text-base font-bold tabular-nums text-slate-900">{rp(t.transfer)}</dd>
+      </div>
+    </dl>
+  );
+}
+
 function NoBank() {
   return <span className="text-xs italic text-amber-700">not provided</span>;
+}
+
+/** Finance's verdict on a request, under its status (nothing when it was not reviewed). */
+function ReviewTag({ tx }: { tx: PettyCashTxRow }) {
+  const outcome = reviewOutcome(tx.financeReview, tx.locked);
+  if (outcome === 'none') return null;
+  const tone =
+    outcome === 'accepted'
+      ? 'text-emerald-600'
+      : outcome === 'resubmitted'
+        ? 'text-amber-600'
+        : 'text-rose-600';
+  const label =
+    outcome === 'permanent'
+      ? 'Ditolak permanen'
+      : outcome === 'rejected'
+        ? FINANCE_REVIEW_LABEL.rejected
+        : FINANCE_REVIEW_LABEL[outcome];
+  return <span className={cn('block text-[10px] font-semibold', tone)}>{label}</span>;
 }
 
 function TxSheet({
   store,
   month,
-  onViewImage,
+  onOpenTx,
 }: {
   store: PettyCashStoreRow;
   month: string;
-  onViewImage: (url: string) => void;
+  /** Opens the request (by its position in the store's list) in the detail modal. */
+  onOpenTx: (index: number) => void;
 }) {
   if (store.transactions.length === 0) {
     return (
@@ -328,10 +378,22 @@ function TxSheet({
           </tr>
         </thead>
         <tbody>
-          {store.transactions.map((tx: PettyCashTxRow) => {
+          {store.transactions.map((tx: PettyCashTxRow, i) => {
             const meta = TX_STATUS_META[tx.status] ?? TX_STATUS_META.pending_ops;
             return (
-              <tr key={tx.id} className="bg-white">
+              <tr
+                key={tx.id}
+                onClick={() => onOpenTx(i)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onOpenTx(i);
+                  }
+                }}
+                tabIndex={0}
+                title="Klik untuk melihat detail dan foto struk"
+                className="cursor-pointer bg-white outline-none hover:bg-emerald-50/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-500"
+              >
                 <td className={cn(TD, 'whitespace-nowrap text-slate-500')}>{fmtDateTime(tx.createdAt)}</td>
                 <td className={cn(TD, 'whitespace-nowrap font-medium text-slate-700')}>{tx.categoryName ?? '–'}</td>
                 <td className={cn(TD, 'max-w-xs truncate text-slate-700')} title={tx.description}>{tx.description}</td>
@@ -341,10 +403,13 @@ function TxSheet({
                 </td>
                 <td className={cn(TD, 'py-1')}>
                   <span className="flex justify-center">
-                    <PhotoThumb url={tx.imageUrl} onView={onViewImage} label="Receipt" />
+                    <PhotoThumb url={tx.imageUrl} onView={() => onOpenTx(i)} label="Receipt" />
                   </span>
                 </td>
-                <td className={cn(TD, 'whitespace-nowrap text-xs font-semibold', meta.text)}>{meta.label}</td>
+                <td className={cn(TD, 'whitespace-nowrap text-xs font-semibold', meta.text)}>
+                  {meta.label}
+                  <ReviewTag tx={tx} />
+                </td>
               </tr>
             );
           })}
@@ -373,6 +438,7 @@ function StoreLines({
   refillBusy,
   onRefillAction,
   onViewImage,
+  onOpenTx,
 }: {
   store: PettyCashStoreRow;
   index: number;
@@ -383,6 +449,7 @@ function StoreLines({
   refillBusy: boolean;
   onRefillAction: (request: RefillRequestRow, action: 'verify' | 'unverify') => void;
   onViewImage: (url: string) => void;
+  onOpenTx: (index: number) => void;
 }) {
   const state = refillRequest ? refillStateOf(refillRequest) : null;
   const proofCount = refillRequest
@@ -474,7 +541,7 @@ function StoreLines({
           <td colSpan={10} className="border-b border-slate-300 bg-slate-50 p-3">
             <div className="space-y-3">
               {refillRequest && <RefillPanel request={refillRequest} onViewImage={onViewImage} />}
-              <TxSheet store={store} month={month} onViewImage={onViewImage} />
+              <TxSheet store={store} month={month} onOpenTx={onOpenTx} />
             </div>
           </td>
         </tr>
@@ -527,10 +594,13 @@ export default function FinancePettyCashPage() {
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' } | null>(null);
   const [refillRequests, setRefillRequests] = useState<RefillRequestRow[]>([]);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  // The request open in the detail modal: which store, and its position in that store's list.
+  const [detail, setDetail] = useState<{ storeId: number; index: number } | null>(null);
   const [busyRefillIds, setBusyRefillIds] = useState<Set<number>>(new Set());
 
-  const load = useCallback(async (m: string) => {
-    setLoading(true);
+  // `silent` refreshes in place (no skeleton) — used after a review, with the detail modal open.
+  const load = useCallback(async (m: string, silent = false) => {
+    if (!silent) setLoading(true);
     setError(null);
     try {
       const res = await fetch(`/api/finance/petty-cash?month=${m}`, { cache: 'no-store' });
@@ -556,6 +626,33 @@ export default function FinancePettyCashPage() {
 
   useEffect(() => { void load(month); }, [load, month]);
   useEffect(() => { void loadRefillRequests(); }, [loadRefillRequests]);
+
+  // Reject a request (comment optional) or accept PIC 1's correction; the refill's transfer follows.
+  const reviewTx: ReviewHandler = async (txId, action, comment) => {
+    try {
+      const res = await fetch(`/api/finance/petty-cash/transactions/${txId}/review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, comment }),
+      });
+      const body = await res.json();
+      if (!body.success) {
+        toast.error(body.error ?? 'Gagal memproses.');
+        await Promise.all([load(month, true), loadRefillRequests()]);
+        return false;
+      }
+      toast.success(
+        action === 'reject'
+          ? 'Request ditolak — PIC 1 diberi tahu dan nominalnya tidak ikut ditransfer.'
+          : 'Keputusan disimpan.',
+      );
+      await Promise.all([load(month, true), loadRefillRequests()]);
+      return true;
+    } catch {
+      toast.error('Network error.');
+      return false;
+    }
+  };
 
   async function handleRefillAction(request: RefillRequestRow, action: 'verify' | 'unverify') {
     setBusyRefillIds((prev) => new Set(prev).add(request.id));
@@ -648,10 +745,22 @@ export default function FinancePettyCashPage() {
   }).length;
 
   const filtered = Boolean(search || areaFilter || codeFilter);
+  const detailStore = detail ? allStores.find((s) => s.storeId === detail.storeId) ?? null : null;
 
   return (
     <div className="min-h-full bg-slate-50">
       {lightboxUrl && <Lightbox src={lightboxUrl} onClose={() => setLightboxUrl(null)} />}
+
+      {detail && detailStore && (
+        <TxDetailModal
+          store={detailStore}
+          transactions={detailStore.transactions}
+          index={Math.min(detail.index, detailStore.transactions.length - 1)}
+          onIndex={(index) => setDetail({ storeId: detail.storeId, index })}
+          onClose={() => setDetail(null)}
+          onReview={reviewTx}
+        />
+      )}
 
       {/* Header */}
       <PanelPageHeader
@@ -794,6 +903,7 @@ export default function FinancePettyCashPage() {
                     refillBusy={busyRefillIds.has(refillByStore.get(store.storeId)?.id ?? -1)}
                     onRefillAction={handleRefillAction}
                     onViewImage={setLightboxUrl}
+                    onOpenTx={(index) => setDetail({ storeId: store.storeId, index })}
                   />
                 ))}
               </tbody>
@@ -802,8 +912,9 @@ export default function FinancePettyCashPage() {
         )}
 
         <p className="text-[11px] text-slate-500">
-          Balance and Used are in Rupiah. Used counts completed requests only. Click a row for its requests and
-          refill details; the full usage + bank-account list for every store is under Report.
+          Balance and Used are in Rupiah. Used counts completed requests only. Click a store for its requests and
+          refill details, then a request for its receipt photo and what the staff filled in; the full usage +
+          bank-account list for every store is under Report.
         </p>
       </div>
     </div>

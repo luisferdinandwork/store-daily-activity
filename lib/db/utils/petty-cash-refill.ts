@@ -29,6 +29,8 @@ import {
   type PettyCashRefillRequest,
 } from '@/lib/db/schema';
 import { createNotificationsForUsers, getOpsUserIdsForArea } from './notifications';
+import { getRefillRowsByIds } from './petty-cash-ops';
+import { rejectedNote, type RefillTransfer } from '@/lib/petty-cash-review';
 import { addMonths, getActivePeriod, topUpPeriodToMax } from './petty-cash-period';
 import { PETTY_CASH_MAX_BALANCE } from '@/lib/db/schema/petty-cash';
 import type { BankDetails } from '@/lib/petty-cash-bank';
@@ -270,17 +272,38 @@ export async function verifyRefillRequests(ids: number[], actorUserId: string): 
       requestedBy: pettyCashRefillRequests.requestedBy,
     });
 
+  // Verifying locks the amount (reviews stop at this moment — see lib/petty-cash-review.ts), so
+  // what Finance sends is worked out now and frozen on the request: what the store used minus
+  // the requests Finance rejected.
+  const figures = new Map((await getRefillRowsByIds(rows.map((r) => r.id))).map((f) => [f.id, f.transfer]));
   await Promise.all(
-    rows.map((r) =>
-      createNotificationsForUsers([r.requestedBy], {
+    rows.map(async (r) => {
+      const t = figures.get(r.id);
+      if (t) {
+        await db
+          .update(pettyCashRefillRequests)
+          .set({
+            transferAmount: String(t.transfer),
+            rejectedCount: t.rejectedCount,
+            rejectedAmount: String(t.rejectedAmount),
+          })
+          .where(eq(pettyCashRefillRequests.id, r.id));
+      }
+
+      const rejected = t ? rejectedNote(t.rejectedCount, t.rejectedAmount) : null;
+      await createNotificationsForUsers([r.requestedBy], {
         type: 'petty_cash_refill_verified',
         title: 'Refill petty cash sudah diproses Finance',
-        body: 'Finance sudah memverifikasi Refill toko kamu. Setelah uangnya diterima, unggah foto laci petty cash dan Surat Terima.',
+        body:
+          'Finance sudah memverifikasi Refill toko kamu' +
+          (t ? `: Rp ${t.transfer.toLocaleString('id-ID')} ditransfer.` : '.') +
+          (rejected ? ` ${rejected} — penolakannya permanen, ajukan request baru bulan depan.` : '') +
+          ' Setelah uangnya diterima, unggah foto laci petty cash dan Surat Terima.',
         link: '/employee/pettycash',
         relatedType: 'petty_cash_refill_request',
         relatedId: r.id,
-      }),
-    ),
+      });
+    }),
   );
 
   return { changedIds: rows.map((r) => r.id), skipped: ids.length - rows.length };
@@ -296,7 +319,7 @@ export async function unverifyRefillRequests(ids: number[]): Promise<RefillVerif
 
   const rows = await db
     .update(pettyCashRefillRequests)
-    .set({ financeVerifiedBy: null, financeVerifiedAt: null })
+    .set({ financeVerifiedBy: null, financeVerifiedAt: null, transferAmount: null, rejectedCount: 0, rejectedAmount: null })
     .where(
       and(
         inArray(pettyCashRefillRequests.id, ids),
@@ -388,6 +411,8 @@ export interface RefillRequestWithContext extends PettyCashRefillRequest {
   storeName: string;
   storeAreaId: number | null;
   requestedByName: string | null;
+  /** What the store used, what Finance rejected and the cash to send — null for a request OPS rejected. */
+  transfer: RefillTransfer | null;
 }
 
 export async function listRefillRequestsForFinance(limit = 50): Promise<RefillRequestWithContext[]> {
@@ -404,6 +429,16 @@ export async function listRefillRequestsForFinance(limit = 50): Promise<RefillRe
     .orderBy(desc(pettyCashRefillRequests.requestedAt))
     .limit(limit);
 
-  return rows.map((r) => ({ ...r.request, storeName: r.storeName, storeAreaId: r.storeAreaId, requestedByName: r.requestedByName }));
+  // The figures behind each request that is (or was) going to be paid.
+  const live = rows.filter((r) => r.request.status !== 'rejected').map((r) => r.request.id);
+  const transfers = new Map((await getRefillRowsByIds(live)).map((f) => [f.id, f.transfer]));
+
+  return rows.map((r) => ({
+    ...r.request,
+    storeName: r.storeName,
+    storeAreaId: r.storeAreaId,
+    requestedByName: r.requestedByName,
+    transfer: transfers.get(r.request.id) ?? null,
+  }));
 }
 

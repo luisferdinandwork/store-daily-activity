@@ -1,6 +1,6 @@
 // lib/db/utils/store-day-detail.ts
 //
-// Data behind the detail panel of Finance's "Rekap per Toko": one store on one SALES day D —
+// Data behind the detail panel of Finance's "Daily Report All Store": one store on one SALES day D —
 // the Store Closing of D, and the Setoran submitted the morning after (D + 1), which is what
 // the sheet's cash columns come from (lib/store-closing-money.ts). Day buckets are read the
 // Jakarta way (lib/day-bucket.ts); the same day can sit in the tables under both encodings,
@@ -20,7 +20,7 @@ import {
 import { addDaysKey, jakartaDaysRange } from '@/lib/day-bucket';
 import { getLatestCorrectionsByTask } from '@/lib/db/utils/setoran-correction';
 import { toEdcEntries } from '@/lib/store-closing-edc';
-import { bankCells, bankTotals } from '@/lib/store-closing-money';
+import { bankTotals } from '@/lib/store-closing-money';
 import type {
   ClosingState,
   DayClosingDetail,
@@ -159,7 +159,6 @@ export async function getStoreDayDetail(storeId: number, salesDate: string): Pro
       submittedBy: person(submitter),
       submittedAt: iso(closing.completedAt ?? closing.heldAt ?? closing.edcSummaryAt),
 
-      cells: bankCells(entries),
       banks: bankTotals(entries),
       opMeVoucher: closing.opMeVoucherAmount != null ? Number(closing.opMeVoucherAmount) : null,
 

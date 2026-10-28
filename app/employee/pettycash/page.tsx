@@ -11,6 +11,7 @@ import {
   Clock3,
   Landmark,
   Loader2,
+  Pencil,
   ReceiptText,
   ShieldCheck,
   UploadCloud,
@@ -22,7 +23,16 @@ import {
 
 import { cn } from '@/lib/utils';
 import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet';
+import type { ReviewOutcome } from '@/lib/petty-cash-review';
+import {
   PETTY_CASH_REASON_MAX,
+  pettyCashDescription,
   type PettyCashCategoryOption,
 } from '@/lib/petty-cash-categories';
 import {
@@ -53,6 +63,10 @@ type TxRow = {
   rejectedAt: string | null;
   rejectionReason: string | null;
   createdAt: string;
+  /** Finance's review of the request, and whether PIC 1 can still correct it. */
+  reviewOutcome: ReviewOutcome;
+  financeComment: string | null;
+  resubmittedAt: string | null;
 };
 
 type PageData = {
@@ -956,16 +970,243 @@ function ConfirmAmountCard({
   );
 }
 
+// ─── Finance's review of a finished request ─────────────────────────────────
+// Finance may reject a request (with or without a comment) until it verifies the refill that covers
+// it. PIC 1 can correct it and send it back; once the refill is verified the rejection is permanent —
+// still readable here, and the request is simply filed again next month (lib/petty-cash-review.ts).
+
+function FinanceReviewNote({
+  tx,
+  isHolder,
+  onFix,
+}: {
+  tx: TxRow;
+  isHolder: boolean;
+  onFix: (tx: TxRow) => void;
+}) {
+  const outcome = tx.reviewOutcome;
+  if (outcome === 'none') return null;
+
+  const comment = tx.financeComment;
+
+  if (outcome === 'accepted') {
+    return (
+      <p className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-[11px] font-medium text-emerald-800 ring-1 ring-emerald-200">
+        Perbaikan diterima Finance — request ini ikut dihitung di Refill.
+      </p>
+    );
+  }
+
+  if (outcome === 'resubmitted') {
+    return (
+      <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-[11px] font-medium text-amber-800 ring-1 ring-amber-200">
+        Perbaikan sudah dikirim — menunggu Finance memeriksa ulang.
+      </p>
+    );
+  }
+
+  const permanent = outcome === 'permanent';
+  return (
+    <div className="mt-3 rounded-xl bg-rose-50 px-3 py-2.5 ring-1 ring-rose-200">
+      <p className="text-[11px] font-bold text-rose-700">
+        {permanent ? 'Ditolak Finance — permanen' : 'Ditolak Finance'}
+      </p>
+      <p className="mt-1 whitespace-pre-wrap break-words text-[12px] text-rose-900">
+        {comment ?? <span className="italic text-rose-700">Finance tidak menulis komentar.</span>}
+      </p>
+      <p className="mt-1.5 text-[11px] text-rose-700">
+        {permanent
+          ? 'Refill sudah diverifikasi Finance, jadi nominal ini tidak ditransfer dan tidak bisa diperbaiki lagi. Ajukan request baru bulan depan.'
+          : isHolder
+            ? 'Nominal ini tidak ikut ditransfer. Perbaiki dan kirim ulang sebelum Finance memverifikasi Refill.'
+            : 'Nominal ini tidak ikut ditransfer. PIC 1 perlu memperbaikinya sebelum Finance memverifikasi Refill.'}
+      </p>
+      {!permanent && isHolder && (
+        <button
+          type="button"
+          onClick={() => onFix(tx)}
+          className="mt-2.5 flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-rose-600 text-xs font-bold text-white transition active:scale-[0.99]"
+        >
+          <Pencil className="h-3.5 w-3.5" />
+          Perbaiki &amp; kirim ulang
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Bottom sheet: change Keterangan / jumlah / foto struk of a rejected request and resubmit it. */
+function FixRequestSheet({
+  tx,
+  storeName,
+  onClose,
+  onDone,
+}: {
+  tx: TxRow;
+  storeName: string;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [description, setDescription] = useState(pettyCashDescription(tx.description));
+  const [amount, setAmount] = useState(String(Math.round(Number(tx.actualAmount ?? tx.amount))));
+  const [photo, setPhoto] = useState<{ file: File; preview: string } | null>(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const amountNum = Number(amount.replace(/[^0-9]/g, ''));
+  const previewUrl = photo?.preview ?? tx.imageUrl;
+
+  // Free the object URL of a retaken / discarded photo.
+  useEffect(() => () => { if (photo) URL.revokeObjectURL(photo.preview); }, [photo]);
+
+  async function submit() {
+    setError(null);
+    if (!description.trim()) { setError('Keterangan wajib diisi.'); return; }
+    if (!amountNum) { setError('Masukkan jumlah terpakai yang valid.'); return; }
+
+    setBusy(true);
+    try {
+      let imageUrl: string | undefined;
+      let imageKey: string | undefined;
+      if (photo) {
+        if (photo.file.size > 5 * 1024 * 1024) throw new Error('Foto struk harus kurang dari 5 MB.');
+        const form = new FormData();
+        form.append('file', photo.file);
+        form.append('storeName', storeName);
+        const up = await fetch('/api/upload/petty-cash', { method: 'POST', body: form });
+        const upBody = await up.json();
+        if (!up.ok) throw new Error(upBody.error ?? 'Gagal mengunggah struk.');
+        imageUrl = upBody.url;
+        imageKey = upBody.key;
+      }
+
+      const res = await fetch(`/api/employee/petty-cash/${tx.id}/fix`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ description, actualAmount: amountNum, imageUrl, imageKey }),
+      });
+      const body = await res.json();
+      if (!res.ok || !body.success) throw new Error(body.error ?? 'Gagal mengirim perbaikan.');
+
+      onDone();
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Gagal mengirim perbaikan. Coba lagi.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Sheet open onOpenChange={(open) => { if (!open && !busy) onClose(); }}>
+      <SheetContent side="bottom" className="max-h-[92vh] gap-0 overflow-y-auto rounded-t-2xl p-0">
+        <SheetHeader className="border-b border-border px-4 py-3 pr-12">
+          <SheetTitle className="text-base">Perbaiki request</SheetTitle>
+          <SheetDescription>{tx.categoryName ?? 'Request petty cash'} · {fmtDate(tx.createdAt)}</SheetDescription>
+        </SheetHeader>
+
+        <div className="space-y-4 px-4 py-4">
+          <div className="rounded-xl bg-rose-50 px-3 py-2.5 ring-1 ring-rose-200">
+            <p className="text-[11px] font-bold text-rose-700">Alasan Finance</p>
+            <p className="mt-1 whitespace-pre-wrap break-words text-[12px] text-rose-900">
+              {tx.financeComment ?? <span className="italic text-rose-700">Finance tidak menulis komentar.</span>}
+            </p>
+          </div>
+
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">Keterangan</label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(pettyCashDescription(e.target.value))}
+              rows={3}
+              maxLength={PETTY_CASH_REASON_MAX}
+              className="w-full resize-none rounded-xl border border-border bg-background px-3.5 py-2.5 text-base text-foreground focus:border-primary focus:outline-none"
+            />
+          </div>
+
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">Jumlah terpakai (Rp)</label>
+            <div className="relative">
+              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm font-bold text-muted-foreground">Rp</span>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={amountNum ? amountNum.toLocaleString('id-ID') : ''}
+                onChange={(e) => setAmount(e.target.value.replace(/[^0-9]/g, ''))}
+                placeholder="0"
+                className="h-11 w-full rounded-xl border border-border bg-secondary/40 pl-10 pr-4 text-right text-base font-bold tabular-nums text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+              />
+            </div>
+          </div>
+
+          <div>
+            <p className="mb-1.5 text-xs font-semibold text-muted-foreground">Foto struk</p>
+            <div className="flex items-center gap-3">
+              {previewUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={previewUrl} alt="Foto struk" className="h-20 w-20 rounded-xl border border-border object-cover" />
+              ) : (
+                <div className="flex h-20 w-20 items-center justify-center rounded-xl border border-dashed border-border bg-secondary">
+                  <ReceiptText className="h-6 w-6 text-muted-foreground/50" />
+                </div>
+              )}
+              <div className="min-w-0 flex-1">
+                <button
+                  type="button"
+                  onClick={() => setCameraOpen(true)}
+                  disabled={busy}
+                  className="flex h-10 w-full items-center justify-center gap-2 rounded-xl border border-border bg-card text-xs font-bold text-foreground disabled:opacity-60"
+                >
+                  <Camera className="h-4 w-4" />
+                  {photo ? 'Ambil ulang foto' : 'Ganti foto struk'}
+                </button>
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  {photo ? 'Foto baru akan dikirim.' : 'Boleh dibiarkan kalau fotonya sudah benar.'}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {error && <Notice tone="error">{error}</Notice>}
+
+          <button
+            type="button"
+            onClick={submit}
+            disabled={busy}
+            className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 text-xs font-bold text-white transition active:scale-[0.99] disabled:opacity-60"
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pencil className="h-4 w-4" />}
+            Kirim ulang ke Finance
+          </button>
+        </div>
+
+        <CameraCapture
+          open={cameraOpen}
+          onClose={() => setCameraOpen(false)}
+          onCapture={(file) => {
+            setCameraOpen(false);
+            setPhoto({ file, preview: URL.createObjectURL(file) });
+          }}
+          title="Foto Struk"
+        />
+      </SheetContent>
+    </Sheet>
+  );
+}
+
 // ─── Transaction history item ─────────────────────────────────────────────────
 
 function TxItem({
   tx,
   isHolder,
   onViewImage,
+  onFix,
 }: {
   tx: TxRow;
   isHolder: boolean;
   onViewImage: (url: string) => void;
+  onFix: (tx: TxRow) => void;
 }) {
   const meta = statusMeta(tx, isHolder);
   const Icon = meta.icon;
@@ -1029,6 +1270,8 @@ function TxItem({
           −{idr(tx.actualAmount ?? tx.amount)}
         </span>
       </div>
+
+      <FinanceReviewNote tx={tx} isHolder={isHolder} onFix={onFix} />
     </div>
   );
 }
@@ -1059,6 +1302,8 @@ export default function EmployeePettyCashPage() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  // The request PIC 1 is correcting after Finance rejected it.
+  const [fixingTx, setFixingTx] = useState<TxRow | null>(null);
 
   const [refillRequest, setRefillRequest] = useState<RefillRequestRow | null>(null);
   const [lastBank, setLastBank] = useState<BankDetails | null>(null);
@@ -1073,9 +1318,12 @@ export default function EmployeePettyCashPage() {
   // the PIC already typed their own text (anything other than the previous
   // category's default), which is kept.
   function selectCategory(next: PettyCashCategoryOption) {
-    const untouched = !description.trim() || description === (selectedCategory?.defaultReason ?? '');
+    const untouched =
+      !description.trim() || description === pettyCashDescription(selectedCategory?.defaultReason);
     setCategoryId(next.id);
-    if (untouched) setDescription(next.requiresCustomReason ? '' : (next.defaultReason ?? ''));
+    if (untouched) {
+      setDescription(next.requiresCustomReason ? '' : pettyCashDescription(next.defaultReason));
+    }
     setFormError(null);
   }
 
@@ -1416,6 +1664,20 @@ export default function EmployeePettyCashPage() {
         <Lightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
       )}
 
+      {fixingTx && data && (
+        <FixRequestSheet
+          key={fixingTx.id}
+          tx={fixingTx}
+          storeName={data.storeName}
+          onClose={() => setFixingTx(null)}
+          onDone={() => {
+            setSuccessMessage('Perbaikan dikirim ke Finance.');
+            setTimeout(() => setSuccessMessage(null), 4000);
+            void load({ silent: true });
+          }}
+        />
+      )}
+
       <div className="px-4 pt-4">
         <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
           Request Petty Cash
@@ -1632,7 +1894,7 @@ export default function EmployeePettyCashPage() {
 
                   <textarea
                     value={description}
-                    onChange={(e) => setDescription(e.target.value)}
+                    onChange={(e) => setDescription(pettyCashDescription(e.target.value))}
                     rows={3}
                     maxLength={PETTY_CASH_REASON_MAX}
                     placeholder={
@@ -1693,7 +1955,7 @@ export default function EmployeePettyCashPage() {
 
             <div className="space-y-2.5">
               {historyTxs.map((tx) => (
-                <TxItem key={tx.id} tx={tx} isHolder={isHolder} onViewImage={setLightboxSrc} />
+                <TxItem key={tx.id} tx={tx} isHolder={isHolder} onViewImage={setLightboxSrc} onFix={setFixingTx} />
               ))}
             </div>
 

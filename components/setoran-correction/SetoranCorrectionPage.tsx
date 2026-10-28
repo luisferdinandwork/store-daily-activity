@@ -153,7 +153,7 @@ function MoneyField({
 }
 
 /** A figure, or "old → new" (old struck through) when the change alters it. */
-function Delta({ before, after }: { before: number; after: number }) {
+export function Delta({ before, after }: { before: number; after: number }) {
   if (before === after) return <span className="tabular-nums text-slate-600">{rp(after)}</span>;
   return (
     <span className="inline-flex flex-wrap items-center justify-end gap-x-1.5 tabular-nums">

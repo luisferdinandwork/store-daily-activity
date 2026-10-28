@@ -1,22 +1,23 @@
 'use client';
 // app/finance/store-sheet/page.tsx
 //
-// Finance · Rekap per Toko
+// Finance · Daily Report All Store
 //
 // Pick a store first; then every day of the period for that store, laid out like Finance's
 // Excel: Setoran cash (Harus Disetor / Sales Cash / Tidak Disetor / Setoran Tunai / Catatan),
-// then BCA, Mandiri, BRI, OCBC and Indodana — each QRIS / Debit / Credit / Total — and
-// OP/ME/VOUCHER. Clicking a row opens that day's detail (components/finance/store-sheet/
-// DayDetailPanel.tsx): who submitted the Setoran and the Store Closing, every bank × method,
-// the proof photos. The sheet itself is ExcelSheet.tsx, its columns lib/store-money-sheet.ts,
-// the data /api/finance/store-sheet (+ /day for the detail).
+// then BCA, Mandiri, BRI, OCBC and Indodana — one total each — and OP/ME/VOUCHER. Clicking a row
+// opens that day's detail (components/finance/store-sheet/DayDetailPanel.tsx): who submitted the
+// Setoran and the Store Closing, each bank's total, the proof photos. The sheet itself is
+// ExcelSheet.tsx, its columns lib/store-money-sheet.ts, the data /api/finance/store-sheet (+ /day
+// for the detail). "Export Excel" downloads the same sheet (/export, lib/store-money-sheet-xlsx.ts).
 
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, FileSpreadsheet, Loader2, MousePointerClick, RefreshCw } from 'lucide-react';
+import { toast } from 'sonner';
+import { AlertTriangle, Download, FileSpreadsheet, Loader2, MousePointerClick, RefreshCw } from 'lucide-react';
 
 import PanelPageHeader from '@/components/shared/PanelPageHeader';
 import { StoreCombobox } from '@/components/shared/store-combobox';
-import { RangePicker, thisMonthRange, type DateRangeValue } from '@/components/finance/shared/sheet-kit';
+import { RangePicker, downloadXlsx, thisMonthRange, type DateRangeValue } from '@/components/finance/shared/sheet-kit';
 import DayDetailPanel from '@/components/finance/store-sheet/DayDetailPanel';
 import ExcelSheet from '@/components/finance/store-sheet/ExcelSheet';
 import { fmtRange } from '@/lib/finance/dates';
@@ -29,6 +30,7 @@ export default function FinanceStoreSheetPage() {
   const [storeId, setStoreId] = useState<number | null>(null);
 
   const [reloadKey, setReloadKey] = useState(0);
+  const [exporting, setExporting] = useState(false);
   const [stores, setStores] = useState<MoneyStoreOption[]>([]);
   // The answer to one request; `loading` is simply "the answer in hand is for an older request".
   const [result, setResult] = useState<{ key: string; sheet: StoreMoneySheet | null; error: string | null } | null>(null);
@@ -67,6 +69,21 @@ export default function FinanceStoreSheetPage() {
     [current],
   );
 
+  async function exportExcel() {
+    if (!current?.store) return;
+    setExporting(true);
+    try {
+      await downloadXlsx(
+        `/api/finance/store-sheet/export?${new URLSearchParams({ storeId: String(current.store.id), from: current.from, to: current.to })}`,
+        `daily-report_${current.store.storeNo}_${current.from}_${current.to}.xlsx`,
+      );
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal mengekspor Excel.');
+    } finally {
+      setExporting(false);
+    }
+  }
+
   // The row whose detail is open, and the days ‹ › can step through (the ones that have data).
   const [openDate, setOpenDate] = useState<string | null>(null);
   const dataDays = useMemo(() => lines.filter((l) => l.data).map((l) => l.salesDate), [lines]);
@@ -80,7 +97,7 @@ export default function FinanceStoreSheetPage() {
     <div className="min-h-full bg-slate-50">
       <PanelPageHeader
         scope="Finance · Operations"
-        title="Daily Report All Stores"
+        title="Daily Report All Store"
         actions={
           storeId != null ? (
             <div className="flex flex-wrap items-center gap-2">
@@ -93,6 +110,16 @@ export default function FinanceStoreSheetPage() {
               >
                 <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
                 Refresh
+              </button>
+              <button
+                type="button"
+                onClick={exportExcel}
+                disabled={!current?.store || exporting}
+                title="Unduh sheet ini sebagai file Excel"
+                className="flex h-9 items-center gap-2 rounded-md bg-emerald-600 px-3 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+              >
+                {exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+                Export Excel
               </button>
             </div>
           ) : undefined
@@ -136,7 +163,7 @@ export default function FinanceStoreSheetPage() {
           !error && (
             <div className="flex h-64 items-center justify-center rounded-md border border-slate-300 bg-white text-sm text-slate-500">
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Memuat rekap toko…
+              Memuat daily report…
             </div>
           )
         ) : (
@@ -170,7 +197,7 @@ export default function FinanceStoreSheetPage() {
             <div className="space-y-1 text-[11px] text-slate-500">
               <p>
                 Satu baris = satu <span className="font-semibold">Tanggal Sales</span>. Kolom bank dan OP/ME/VOUCHER diambil dari Store
-                Closing hari itu (QRIS, Debit, Credit per bank; Total = ketiganya). Kolom cash diambil dari Setoran yang disubmit toko
+                Closing hari itu (satu kolom per bank = total QRIS + Debit + Credit). Kolom cash diambil dari Setoran yang disubmit toko
                 pagi berikutnya (<span className="font-semibold">Tanggal Setoran</span>).
               </p>
               <p>

@@ -14,8 +14,10 @@ import {
   getPettyCashCategory,
   listPettyCashCategories,
 } from '@/lib/db/utils/petty-cash-categories';
-import { PETTY_CASH_REASON_MAX } from '@/lib/petty-cash-categories';
+import { PETTY_CASH_REASON_MAX, pettyCashDescription } from '@/lib/petty-cash-categories';
 import { assertStoreOperational } from '@/lib/db/utils/store-status';
+import { getVerifiedCutoffs } from '@/lib/db/utils/petty-cash-review';
+import { isLockedByVerification, reviewOutcome } from '@/lib/petty-cash-review';
 
 function currentYearMonth() {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -135,6 +137,9 @@ export async function GET() {
       rejectedAt: pettyCashTransactions.rejectedAt,
       rejectionReason: pettyCashTransactions.rejectionReason,
       createdAt: pettyCashTransactions.createdAt,
+      financeReview: pettyCashTransactions.financeReview,
+      financeComment: pettyCashTransactions.financeComment,
+      resubmittedAt: pettyCashTransactions.resubmittedAt,
     })
     .from(pettyCashTransactions)
     .where(
@@ -144,6 +149,10 @@ export async function GET() {
       ),
     )
     .orderBy(desc(pettyCashTransactions.createdAt));
+
+  // Finance may reject a request until it verifies the refill that covers it; after that the
+  // rejection stands for good (lib/petty-cash-review.ts).
+  const verifiedCutoff = (await getVerifiedCutoffs([storeId])).get(storeId);
 
   return NextResponse.json({
     success: true,
@@ -167,7 +176,7 @@ export async function GET() {
       id: t.id,
       amount: t.amount,
       actualAmount: t.actualAmount,
-      description: t.description,
+      description: pettyCashDescription(t.description),
       categoryName: t.categoryName,
       status: t.status,
       imageUrl: t.imageUrl,
@@ -175,6 +184,10 @@ export async function GET() {
       rejectedAt: t.rejectedAt ? new Date(t.rejectedAt).toISOString() : null,
       rejectionReason: t.rejectionReason,
       createdAt: new Date(t.createdAt).toISOString(),
+      // Finance's review: what happened, its comment, and whether PIC 1 can still correct it.
+      reviewOutcome: reviewOutcome(t.financeReview, isLockedByVerification(t.createdAt, verifiedCutoff)),
+      financeComment: t.financeComment,
+      resubmittedAt: t.resubmittedAt ? new Date(t.resubmittedAt).toISOString() : null,
     })),
   });
 }
@@ -230,8 +243,9 @@ export async function POST(req: NextRequest) {
 
   const typedReason =
     typeof body.description === 'string' ? body.description.trim() : '';
-  const description =
-    typedReason || (category.requiresCustomReason ? '' : (category.defaultReason ?? ''));
+  const description = pettyCashDescription(
+    typedReason || (category.requiresCustomReason ? '' : (category.defaultReason ?? '')),
+  );
 
   if (!description) {
     return NextResponse.json(

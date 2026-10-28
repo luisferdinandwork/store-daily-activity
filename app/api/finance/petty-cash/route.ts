@@ -11,6 +11,14 @@ import {
   pettyCashRefills,
   pettyCashTransactions,
 } from '@/lib/db/schema/petty-cash';
+import { pettyCashDescription } from '@/lib/petty-cash-categories';
+import { getVerifiedCutoffs } from '@/lib/db/utils/petty-cash-review';
+import {
+  isFinanceReview,
+  isLockedByVerification,
+  type FinanceReview,
+} from '@/lib/petty-cash-review';
+import type { FinanceRejectedSnapshot } from '@/lib/db/schema/petty-cash';
 import type { StoreStatus } from '@/lib/store-status';
 
 function getJakartaMonth() {
@@ -44,6 +52,18 @@ export type PettyCashTxRow = {
   rejectedAt: string | null;
   rejectionReason: string | null;
   createdAt: string;
+
+  /** Finance's review of the request (lib/petty-cash-review.ts); null = not reviewed. */
+  financeReview: FinanceReview | null;
+  /** Finance's comment on the rejection, if it left one. */
+  financeComment: string | null;
+  financeReviewAt: string | null;
+  /** When PIC 1 corrected it. */
+  resubmittedAt: string | null;
+  /** The refill covering it has been verified: the amount is locked, a standing rejection is final. */
+  locked: boolean;
+  /** What the request looked like when Finance first rejected it. */
+  rejectedSnapshot: FinanceRejectedSnapshot | null;
 };
 
 export type PettyCashStoreRow = {
@@ -147,6 +167,11 @@ export async function GET(
       rejectedAt: pettyCashTransactions.rejectedAt,
       rejectionReason: pettyCashTransactions.rejectionReason,
       createdAt: pettyCashTransactions.createdAt,
+      financeReview: pettyCashTransactions.financeReview,
+      financeComment: pettyCashTransactions.financeComment,
+      financeReviewAt: pettyCashTransactions.financeReviewAt,
+      resubmittedAt: pettyCashTransactions.resubmittedAt,
+      financeRejectedSnapshot: pettyCashTransactions.financeRejectedSnapshot,
       submittedById: pettyCashTransactions.userId,
       submitterName: sql<string>`COALESCE((SELECT name FROM users WHERE id = ${pettyCashTransactions.userId}), 'Unknown')`,
     })
@@ -169,6 +194,9 @@ export async function GET(
     .where(eq(pettyCashRefills.yearMonth, month));
 
   const refillByStore = new Map(refillRows.map((refill) => [refill.storeId, refill]));
+
+  // Per store: when Finance last verified a refill — requests filed before that are locked.
+  const verifiedCutoffs = await getVerifiedCutoffs(storeIds);
 
   const txByStore = new Map<number, typeof txRows>();
 
@@ -253,7 +281,7 @@ export async function GET(
         id: tx.id,
         amount: tx.amount,
         actualAmount: tx.actualAmount,
-        description: tx.description,
+        description: pettyCashDescription(tx.description),
         categoryName: tx.categoryName,
         status: tx.status,
         imageUrl: tx.imageUrl,
@@ -263,6 +291,12 @@ export async function GET(
         rejectedAt: tx.rejectedAt ? new Date(tx.rejectedAt).toISOString() : null,
         rejectionReason: tx.rejectionReason,
         createdAt: new Date(tx.createdAt).toISOString(),
+        financeReview: isFinanceReview(tx.financeReview) ? tx.financeReview : null,
+        financeComment: tx.financeComment,
+        financeReviewAt: tx.financeReviewAt ? new Date(tx.financeReviewAt).toISOString() : null,
+        resubmittedAt: tx.resubmittedAt ? new Date(tx.resubmittedAt).toISOString() : null,
+        locked: isLockedByVerification(tx.createdAt, verifiedCutoffs.get(store.id)),
+        rejectedSnapshot: tx.financeRejectedSnapshot,
       })),
     };
   });

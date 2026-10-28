@@ -35,12 +35,14 @@ import {
 } from '@/lib/db/schema';
 import { shifts } from '@/lib/db/schema/lookups';
 import { getMorningShiftId } from '@/lib/db/utils/setoran';
-import { dayBounds, dayKey, shiftDate, todayJakarta } from '@/lib/finance/dates';
+import { dayBounds, dayKey, jakartaRangeBounds, shiftDate, todayJakarta } from '@/lib/finance/dates';
 import { OPENING_SHIFT_CODES } from '@/lib/shift-tasks';
 import {
+  CORRECTION_HISTORY_LIMIT,
   planSetoranCorrection,
   validateCorrectionReason,
   type CorrectableStore,
+  type CorrectionHistoryView,
   type LedgerChainRow,
   type PlannedRow,
   type SetoranCorrectionEntry,
@@ -252,6 +254,58 @@ export async function getSetoranLedger(
   }));
 
   return { store, today, rows, corrections };
+}
+
+/**
+ * Every correction / addition made on any store, newest first, optionally limited
+ * to those made within a range of Jakarta days (YYYY-MM-DD, inclusive). Capped at
+ * CORRECTION_HISTORY_LIMIT; `truncated` says there were more.
+ */
+export async function getCorrectionHistory(
+  range: { from?: string; to?: string } = {},
+): Promise<CorrectionHistoryView> {
+  const c = setoranCorrections;
+  const bounds = range.from && range.to ? jakartaRangeBounds(range.from, range.to) : null;
+
+  const rows = await db
+    .select({
+      c,
+      storeNo: stores.storeNo,
+      storeName: stores.name,
+      byName: users.name,
+      byRole: userRoles.code,
+    })
+    .from(c)
+    .innerJoin(stores, eq(stores.id, c.storeId))
+    .leftJoin(users, eq(users.id, c.correctedBy))
+    .leftJoin(userRoles, eq(userRoles.id, users.roleId))
+    .where(bounds ? and(gte(c.createdAt, bounds.start), lt(c.createdAt, bounds.end)) : undefined)
+    .orderBy(desc(c.createdAt), desc(c.id))
+    .limit(CORRECTION_HISTORY_LIMIT + 1);
+
+  const truncated = rows.length > CORRECTION_HISTORY_LIMIT;
+
+  return {
+    truncated,
+    rows: rows.slice(0, CORRECTION_HISTORY_LIMIT).map(({ c: r, storeNo, storeName, byName, byRole }) => ({
+      id: r.id,
+      taskId: r.taskId,
+      kind: r.kind,
+      date: dayKey(r.date),
+      reason: r.reason,
+      correctedBy: byName ?? r.correctedBy,
+      correctedById: r.correctedBy,
+      correctedByRole: byRole ?? 'it',
+      createdAt: r.createdAt.toISOString(),
+      before: { received: toInt(r.beforeReceived), stored: toInt(r.beforeStored), unpaid: toInt(r.beforeUnpaid) },
+      after: { received: toInt(r.afterReceived), stored: toInt(r.afterStored), unpaid: toInt(r.afterUnpaid) },
+      wasVerified: r.wasVerified,
+      affectedDays: r.cascade.length,
+      storeId: r.storeId,
+      storeNo,
+      storeName,
+    })),
+  };
 }
 
 /**

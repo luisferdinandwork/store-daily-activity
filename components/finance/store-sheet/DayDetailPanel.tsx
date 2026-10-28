@@ -1,9 +1,9 @@
 'use client';
 // components/finance/store-sheet/DayDetailPanel.tsx
 //
-// The detail of one row of "Rekap per Toko", in a panel on the right: the day's totals, the
+// The detail of one row of "Daily Report All Store", in a panel on the right: the day's totals, the
 // Setoran filed the next morning (who, the cash figures, proof photos, notes, verification) and
-// the Store Closing of the sales day (who, every bank × QRIS / Debit / Credit, OP/ME/VOUCHER,
+// the Store Closing of the sales day (who, each bank's total, OP/ME/VOUCHER,
 // the Z-Report and Indodana photos). Photos open in the shared lightbox, ‹ › step through the
 // days that have data. Only what Finance checks a day against — see lib/store-money-detail.ts.
 
@@ -15,7 +15,7 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/
 import { PhotoLightbox } from '@/components/finance/shared/sheet-kit';
 import { num, rp } from '@/components/finance/petty-cash/shared';
 import { fmtDateLong, fmtDateTime, fmtDateShort } from '@/lib/finance/dates';
-import { EDC_BANKS, EDC_METHODS, EDC_METHOD_LABELS, OP_ME_VOUCHER_LABEL } from '@/lib/store-closing-edc';
+import { EDC_BANKS, OP_ME_VOUCHER_LABEL } from '@/lib/store-closing-edc';
 import {
   CLOSING_STATE_LABEL,
   type DayClosingDetail,
@@ -253,10 +253,8 @@ function ClosingSection({ closing, detail, onOpenPhoto }: { closing: DayClosingD
   );
 }
 
-/** Every bank × method as typed by the store; a blank cell is a dash. */
+/** Each bank's total for the day (all methods added up); a bank left blank is a dash. */
 function EdcTable({ closing }: { closing: DayClosingDetail }) {
-  const cell = (v: number | undefined) =>
-    v === undefined ? <span className="text-slate-300">–</span> : num(v);
   const filled = Object.values(closing.banks).filter((v): v is number => v !== null);
   const grandTotal = filled.length > 0 || closing.opMeVoucher !== null
     ? filled.reduce((sum, v) => sum + v, 0) + (closing.opMeVoucher ?? 0)
@@ -269,9 +267,6 @@ function EdcTable({ closing }: { closing: DayClosingDetail }) {
         <thead>
           <tr className="bg-slate-50">
             <th className={cn(th, 'text-left')}>Bank</th>
-            {EDC_METHODS.map((m) => (
-              <th key={m} className={th}>{EDC_METHOD_LABELS[m]}</th>
-            ))}
             <th className={th}>Total</th>
           </tr>
         </thead>
@@ -281,21 +276,18 @@ function EdcTable({ closing }: { closing: DayClosingDetail }) {
             return (
               <tr key={bank.code} className={cn('border-t border-slate-100', total === null && 'text-slate-400')}>
                 <td className="px-2 py-1.5 text-left font-medium text-slate-800">{bank.label}</td>
-                {EDC_METHODS.map((m) => (
-                  <td key={m} className="px-2 py-1.5 text-right">{cell(closing.cells[bank.code]?.[m])}</td>
-                ))}
                 <td className="px-2 py-1.5 text-right font-semibold text-slate-900">{total === null ? <span className="text-slate-300">–</span> : num(total)}</td>
               </tr>
             );
           })}
           <tr className="border-t border-slate-200">
-            <td colSpan={EDC_METHODS.length + 1} className="px-2 py-1.5 font-medium text-slate-800">{OP_ME_VOUCHER_LABEL}</td>
+            <td className="px-2 py-1.5 font-medium text-slate-800">{OP_ME_VOUCHER_LABEL}</td>
             <td className="px-2 py-1.5 text-right font-semibold text-slate-900">
               {closing.opMeVoucher === null ? <span className="text-slate-300">–</span> : num(closing.opMeVoucher)}
             </td>
           </tr>
           <tr className="border-t-2 border-slate-300 bg-slate-50">
-            <td colSpan={EDC_METHODS.length + 1} className="px-2 py-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-600">Total bank + {OP_ME_VOUCHER_LABEL}</td>
+            <td className="px-2 py-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-600">Total bank + {OP_ME_VOUCHER_LABEL}</td>
             <td className="px-2 py-1.5 text-right font-bold text-slate-900">
               {grandTotal === null ? <span className="font-normal text-slate-300">–</span> : num(grandTotal)}
             </td>

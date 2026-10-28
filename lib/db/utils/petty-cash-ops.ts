@@ -16,7 +16,7 @@
 // received refill (or the store's first period if it never had one), and the
 // refill it needs is max − what is left there.
 
-import { and, asc, desc, eq, gte, inArray, isNotNull, lt, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNotNull, lt, or, sql, type SQL } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import {
@@ -35,6 +35,8 @@ import {
   type PettyCashPending,
   type RefillItem,
 } from '@/lib/ops-petty-cash';
+import { pettyCashDescription } from '@/lib/petty-cash-categories';
+import { isFinanceReview, leavesOutOfTransfer, refillTransfer } from '@/lib/petty-cash-review';
 import { refillStateOf } from '@/lib/petty-cash-report';
 import { addMonths } from './petty-cash-period';
 
@@ -88,7 +90,7 @@ export async function getOpsRequestRows(opts: { areaId: number | null; month: st
     id: r.id,
     amount: rupiah(r.amount),
     actualAmount: r.actualAmount == null ? null : rupiah(r.actualAmount),
-    description: r.description,
+    description: pettyCashDescription(r.description),
     categoryName: r.categoryName,
     status: r.status,
     imageUrl: r.imageUrl,
@@ -157,6 +159,23 @@ export async function getOpsRefillRows(opts: { areaId: number | null; month: str
   const { start, end } = jakartaMonthBounds(opts.month);
   const req = pettyCashRefillRequests;
 
+  return buildRefillRows(
+    and(
+      opts.areaId != null ? eq(stores.areaId, opts.areaId) : undefined,
+      or(and(gte(req.requestedAt, start), lt(req.requestedAt, end)), eq(req.status, 'pending')),
+    ),
+  );
+}
+
+/** The same rows for specific refill requests (Finance's monitor), whatever their month. */
+export async function getRefillRowsByIds(ids: number[]): Promise<OpsRefillRow[]> {
+  if (ids.length === 0) return [];
+  return buildRefillRows(inArray(pettyCashRefillRequests.id, ids));
+}
+
+async function buildRefillRows(where: SQL | undefined): Promise<OpsRefillRow[]> {
+  const req = pettyCashRefillRequests;
+
   const requestRows = await db
     .select({
       request: req,
@@ -170,12 +189,7 @@ export async function getOpsRefillRows(opts: { areaId: number | null; month: str
     .innerJoin(stores, eq(stores.id, req.storeId))
     .innerJoin(areas, eq(areas.id, stores.areaId))
     .leftJoin(users, eq(users.id, req.requestedBy))
-    .where(
-      and(
-        opts.areaId != null ? eq(stores.areaId, opts.areaId) : undefined,
-        or(and(gte(req.requestedAt, start), lt(req.requestedAt, end)), eq(req.status, 'pending')),
-      ),
-    )
+    .where(where)
     .orderBy(desc(req.requestedAt), desc(req.id));
 
   if (requestRows.length === 0) return [];
@@ -246,6 +260,7 @@ export async function getOpsRefillRows(opts: { areaId: number | null; month: str
         amount: tx.amount,
         actualAmount: tx.actualAmount,
         imageUrl: tx.imageUrl,
+        financeReview: tx.financeReview,
         createdAt: tx.createdAt,
       })
       .from(tx)
@@ -259,9 +274,10 @@ export async function getOpsRefillRows(opts: { areaId: number | null; month: str
         id: t.id,
         createdAt: new Date(t.createdAt).toISOString(),
         categoryName: t.categoryName,
-        description: t.description,
+        description: pettyCashDescription(t.description),
         amount: rupiah(t.actualAmount ?? t.amount),
         imageUrl: t.imageUrl,
+        financeReview: isFinanceReview(t.financeReview) ? t.financeReview : null,
       };
       const list = itemsByEnvelope.get(key);
       if (list) list.push(item);
@@ -293,6 +309,14 @@ export async function getOpsRefillRows(opts: { areaId: number | null; month: str
           ? rupiah(r.balanceBefore)
           : PETTY_CASH_MAX_BALANCE;
 
+    const refill = Math.max(0, PETTY_CASH_MAX_BALANCE - balance);
+
+    // What Finance sends: the refill minus the requests it rejected. Verifying freezes it.
+    const rejected = items.filter((i) => leavesOutOfTransfer(i.financeReview));
+    const frozen = r.transferAmount != null;
+    const rejectedCount = frozen ? r.rejectedCount : rejected.length;
+    const rejectedAmount = frozen ? rupiah(r.rejectedAmount) : rejected.reduce((sum, i) => sum + i.amount, 0);
+
     return {
       id: r.id,
       storeId: r.storeId,
@@ -312,7 +336,14 @@ export async function getOpsRefillRows(opts: { areaId: number | null; month: str
 
       balance,
       used,
-      refill: Math.max(0, PETTY_CASH_MAX_BALANCE - balance),
+      refill,
+      transfer: {
+        refill,
+        rejectedCount,
+        rejectedAmount,
+        transfer: frozen ? rupiah(r.transferAmount) : refillTransfer(refill, rejectedAmount),
+        frozen,
+      },
       items,
       sinceAt: iso(since),
     };

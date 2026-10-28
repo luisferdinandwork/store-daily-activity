@@ -104,6 +104,24 @@ export interface SetoranCorrectionEntry {
   affectedDays: number;
 }
 
+/** One correction / addition in the all-stores history list. */
+export interface CorrectionHistoryRow extends SetoranCorrectionEntry {
+  storeId: number;
+  storeNo: string;
+  storeName: string;
+  correctedById: string;
+}
+
+export interface CorrectionHistoryView {
+  /** Newest first. */
+  rows: CorrectionHistoryRow[];
+  /** More matched than `rows` holds (the list is capped). */
+  truncated: boolean;
+}
+
+/** The most rows the history list returns in one call. */
+export const CORRECTION_HISTORY_LIMIT = 5000;
+
 export interface SetoranLedgerView {
   store: CorrectableStore;
   /** Jakarta calendar date the list runs up to. */

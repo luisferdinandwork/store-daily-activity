@@ -13,6 +13,8 @@
 // POST { storeId, date, received, stored, reason }
 //      Fills in a day that has no submitted setoran (nothing, or an unsubmitted
 //      draft), then recalculates the days after it.
+// GET  /history?from=&to=   → every correction / addition of every store (see
+//      handleSetoranCorrectionHistoryGet) — the "Riwayat Koreksi" page.
 
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -21,11 +23,13 @@ import {
   LEDGER_MAX_DAYS,
   applySetoranCorrection,
   createSetoranForDate,
+  getCorrectionHistory,
   getSetoranLedger,
   listCorrectableStores,
   type ApplyCorrectionData,
 } from '@/lib/db/utils/setoran-correction';
-import type { CorrectableStore, SetoranLedgerView } from '@/lib/setoran-correction';
+import { isIsoDay } from '@/lib/finance/dates';
+import type { CorrectableStore, CorrectionHistoryView, SetoranLedgerView } from '@/lib/setoran-correction';
 
 export type SetoranCorrectionGetResponse =
   | { success: true; stores: CorrectableStore[] }
@@ -63,6 +67,40 @@ export async function handleSetoranCorrectionGet(
     return NextResponse.json({ success: true, ledger });
   } catch (err) {
     console.error(`[GET ${logTag}]`, err);
+    return NextResponse.json({ success: false, error: 'Internal server error' }, { status: 500 });
+  }
+}
+
+export type SetoranCorrectionHistoryResponse =
+  | ({ success: true } & CorrectionHistoryView)
+  | { success: false; error: string };
+
+/**
+ * GET ?[from=YYYY-MM-DD&to=YYYY-MM-DD] → every correction / addition of every
+ * store (by when it was made, Jakarta days, inclusive). Without a range: all time.
+ */
+export async function handleSetoranCorrectionHistoryGet(
+  req: NextRequest,
+  logTag: string,
+): Promise<NextResponse<SetoranCorrectionHistoryResponse>> {
+  try {
+    const from = req.nextUrl.searchParams.get('from');
+    const to = req.nextUrl.searchParams.get('to');
+
+    let range: { from: string; to: string } | undefined;
+    if (from || to) {
+      if (!from || !to || !isIsoDay(from) || !isIsoDay(to)) {
+        return NextResponse.json({ success: false, error: 'Invalid date range. Use from & to as YYYY-MM-DD.' }, { status: 400 });
+      }
+      if (from > to) {
+        return NextResponse.json({ success: false, error: '"from" must not be after "to".' }, { status: 400 });
+      }
+      range = { from, to };
+    }
+
+    return NextResponse.json({ success: true, ...(await getCorrectionHistory(range)) });
+  } catch (err) {
+    console.error(`[GET ${logTag}/history]`, err);
     return NextResponse.json({ success: false, error: 'Internal server error' }, { status: 500 });
   }
 }

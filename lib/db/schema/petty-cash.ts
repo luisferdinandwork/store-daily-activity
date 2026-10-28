@@ -8,6 +8,7 @@ import {
   boolean,
   decimal,
   timestamp,
+  jsonb,
   unique,
   index,
 } from 'drizzle-orm/pg-core';
@@ -15,6 +16,14 @@ import {
 import { stores, users } from './core';
 
 export const PETTY_CASH_MAX_BALANCE = 1_000_000;
+
+/** A request as it stood when Finance rejected it. */
+export interface FinanceRejectedSnapshot {
+  description: string;
+  amount: string;
+  actualAmount: string | null;
+  imageUrl: string | null;
+}
 
 // ─── Request categories ───────────────────────────────────────────────────────
 //
@@ -145,6 +154,23 @@ export const pettyCashTransactions = pgTable(
     actualAmountBy: text('actual_amount_by').references(() => users.id),
     actualAmountAt: timestamp('actual_amount_at'),
 
+    // Finance's review of a COMPLETED request, done on the Finance Petty Cash
+    // Monitoring page before it verifies the refill (see lib/petty-cash-review.ts):
+    //   null        = not reviewed
+    //   rejected    = Finance turned it down (optional comment) — its money is left
+    //                 out of the refill transfer; PIC 1 may fix and resubmit
+    //   resubmitted = PIC 1 corrected it, waiting for Finance to look again
+    //   accepted    = Finance accepted the correction — counts again
+    // Once the refill covering it has been verified the rejection is permanent.
+    financeReview: text('finance_review'),
+    financeReviewBy: text('finance_review_by').references(() => users.id),
+    financeReviewAt: timestamp('finance_review_at'),
+    financeComment: text('finance_comment'),
+    // What the request looked like when Finance rejected it (description,
+    // amounts, receipt) — so a correction can be compared with the original.
+    financeRejectedSnapshot: jsonb('finance_rejected_snapshot').$type<FinanceRejectedSnapshot>(),
+    resubmittedAt: timestamp('resubmitted_at'),
+
     // Keep column if already exists, but do not use image deletion anymore.
     archivedAt: timestamp('archived_at'),
 
@@ -269,6 +295,13 @@ export const pettyCashRefillRequests = pgTable(
     // photo is uploaded.
     financeVerifiedBy: text('finance_verified_by').references(() => users.id),
     financeVerifiedAt: timestamp('finance_verified_at'),
+
+    // The cash Finance was told to send, frozen when it verified: what the store
+    // used minus the requests Finance rejected. `rejectedCount` / `rejectedAmount`
+    // are those requests, shown to PIC 1 in the "refill sent" notification.
+    transferAmount: decimal('transfer_amount', { precision: 12, scale: 2 }),
+    rejectedCount: integer('rejected_count').default(0).notNull(),
+    rejectedAmount: decimal('rejected_amount', { precision: 12, scale: 2 }),
 
     // Proof-of-receipt photos, uploaded by PIC 1 once Finance has verified
     // the refill and handed over the cash.

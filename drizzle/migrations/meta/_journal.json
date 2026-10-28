@@ -267,6 +267,13 @@
       "when": 1793069395717,
       "tag": "0037_transfer_order_notified",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1793177055283,
+      "tag": "0038_smart_red_shift",
+      "breakpoints": true
     }
   ]
 }

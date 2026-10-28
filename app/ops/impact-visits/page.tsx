@@ -5,8 +5,8 @@
 // Mirrors the desktop panel look of app/ops/issues/page.tsx: OpsPageHeader,
 // slate canvas, store filter, card list. Area scoping is enforced
 // server-side by resolveOpsScope() in /api/ops/impact-visits. The Monthly
-// Report is its own page (sidebar: Impact Visit > Monthly Report). Only IT can
-// delete a visit.
+// Report is its own page (sidebar: Impact Visit > Monthly Report). Ops can
+// delete a draft; a submitted visit is deleted by IT only.
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useSession } from 'next-auth/react';
@@ -338,7 +338,7 @@ export default function ImpactVisitsPage() {
                 trailing={visit.canDelete && (
                   <button
                     type="button"
-                    title="Delete visit (IT)"
+                    title={visit.status === 'submitted' ? 'Delete visit (IT)' : 'Delete draft'}
                     aria-label="Delete visit"
                     disabled={deletingId === visit.id}
                     onClick={() => setToDelete(visit)}

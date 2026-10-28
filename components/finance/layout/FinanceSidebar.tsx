@@ -16,14 +16,15 @@
 //                 ▸ Report      /finance/petty-cash/report   (usage + refill bank account, Excel)
 //     Setoran     ▸ Review      /finance/setoran             (daily review: photos, verify, Excel)
 //                 ▸ Report      /finance/setoran/report      (monthly totals per store, Excel)
-//     Koreksi Setoran           /finance/setoran-correction  (fix one day's amounts, carry-over recalculated)
+//     Koreksi Setoran > Koreksi         /finance/setoran-correction  (fix one day's amounts, carry-over recalculated)
+//                       Riwayat Koreksi /finance/setoran-correction/history  (every correction, all stores)
 //     Uang Modal  ▸ Review      /finance/uang-modal          (daily opening-float check, verify, Excel)
 //                 ▸ Report      /finance/uang-modal/report   (monthly fill rate per store, Excel)
 //
 //   Operations
 //     Store Closing ▸ Review    /finance/store-closing       (EDC per bank × method, Indodana photo, Z-Report & EDC photo, statement posted / on hold)
 //                   ▸ Report    /finance/store-closing/report (daily money per store: cash from Setoran + card from the closing, Excel)
-//     Rekap per Toko            /finance/store-sheet         (pick a store → Excel-style daily sheet: Setoran cash, every bank × method, OP/ME/VOUCHER)
+//     Daily Report All Store    /finance/store-sheet         (pick a store → Excel-style daily sheet: Setoran cash, every bank × method, OP/ME/VOUCHER)
 //     Sales Return              /finance/sales-returns       (receipt number + photos the stores filed, by store / period)
 //
 //   Issues
@@ -115,7 +116,14 @@ const NAV: NavSection[] = [
           { href: '/finance/setoran/report', label: 'Report' },
         ],
       },
-      { href: '/finance/setoran-correction', label: 'Koreksi Setoran', icon: Eraser },
+      {
+        label: 'Koreksi Setoran',
+        icon: Eraser,
+        children: [
+          { href: '/finance/setoran-correction', label: 'Koreksi', exact: true },
+          { href: '/finance/setoran-correction/history', label: 'Riwayat Koreksi' },
+        ],
+      },
       {
         label: 'Uang Modal',
         icon: Coins,
@@ -137,7 +145,7 @@ const NAV: NavSection[] = [
           { href: '/finance/store-closing/report', label: 'Report' },
         ],
       },
-      { href: '/finance/store-sheet', label: 'Rekap per Toko', icon: Table2 },
+      { href: '/finance/store-sheet', label: 'Daily Report All Store', icon: Table2 },
       { href: '/finance/sales-returns', label: 'Sales Return', icon: ReceiptText },
     ],
   },

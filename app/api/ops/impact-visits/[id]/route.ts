@@ -222,7 +222,10 @@ export async function DELETE(
   const { canDelete } = computeImpactVisitPermissionFlags(found.visit, { userId: scope.userId, isHO, isIt: scope.isIt });
 
   if (!canDelete) {
-    return NextResponse.json({ success: false, error: 'Only IT can delete an Impact Visit.' }, { status: 403 });
+    const error = found.visit.status === 'draft'
+      ? 'You can only delete your own draft.'
+      : 'Only IT can delete a submitted Impact Visit.';
+    return NextResponse.json({ success: false, error }, { status: 403 });
   }
 
   await db.delete(impactVisits).where(eq(impactVisits.id, visitId));

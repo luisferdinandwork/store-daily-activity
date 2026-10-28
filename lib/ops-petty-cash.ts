@@ -10,6 +10,7 @@
 // pure functions so the two pages behave the same way.
 
 import { REFILL_STATE_LABEL, type RefillState } from '@/lib/petty-cash-report';
+import type { FinanceReview, RefillTransfer } from '@/lib/petty-cash-review';
 import { TX_STATUS_LABEL, TX_STATUS_ORDER, isTxStatus, type TxStatus } from '@/lib/petty-cash-transactions';
 
 export type { RefillState, TxStatus };
@@ -88,6 +89,8 @@ export interface RefillItem {
   /** What was really spent. */
   amount: number;
   imageUrl: string | null;
+  /** Finance's verdict on it (see lib/petty-cash-review.ts); null = not reviewed. */
+  financeReview: FinanceReview | null;
 }
 
 export interface OpsRefillRow {
@@ -114,6 +117,8 @@ export interface OpsRefillRow {
   used: number;
   /** What it takes to bring the store back to the maximum: max − balance. */
   refill: number;
+  /** The cash Finance sends: `refill` minus the requests it rejected (frozen once verified). */
+  transfer: RefillTransfer;
   /** The completed spending behind the refill, oldest first. */
   items: RefillItem[];
   /** When the store's previous refill landed (start of the window); null = since the store started. */
