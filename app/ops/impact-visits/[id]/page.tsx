@@ -17,7 +17,7 @@ import PanelPageHeader from '@/components/shared/PanelPageHeader';
 // and each checklist item that was "Tidak" last time is marked. Submitting
 // first warns (in Indonesian) how many isian are still empty, with "Simpan
 // sebagai Draft" as the way out. Ops can delete a draft; only IT deletes a
-// submitted visit.
+// submitted visit (the Delete button sits in the sticky header with the score).
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
@@ -819,6 +819,20 @@ export default function ImpactVisitDetailPage() {
               ))}
             </div>
             {activeScore && <ScorePill {...activeScore} />}
+            {/* Delete sits with the other actions: a draft for its Ops owner, a
+                submitted visit for IT only (so it shows when the form is locked). */}
+            {visit.canDelete && (
+              <button
+                type="button"
+                disabled={deleting || savingDraft || submitting}
+                onClick={() => setConfirmDelete(true)}
+                title={visit.status === 'submitted' ? 'Delete this submitted visit (IT)' : 'Delete this draft'}
+                className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-rose-200 bg-rose-50 px-3 text-xs font-bold text-rose-600 transition-all hover:bg-rose-100 disabled:opacity-50"
+              >
+                {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                Delete
+              </button>
+            )}
             {!locked && (
               <>
                 <button
@@ -1059,20 +1073,6 @@ export default function ImpactVisitDetailPage() {
             />
           </div>
 
-          {/* Submit / draft live in the sticky header; the destructive Delete
-              stays down here — a draft for its Ops owner, a submitted visit
-              for IT only. */}
-          {visit.canDelete && (
-            <button
-              type="button"
-              disabled={deleting}
-              onClick={() => setConfirmDelete(true)}
-              className="flex h-12 w-full items-center justify-center gap-2 rounded-2xl border border-rose-200 bg-rose-50 text-sm font-bold text-rose-600 transition-all hover:bg-rose-100 disabled:opacity-50"
-            >
-              {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-              {visit.status === 'submitted' ? 'Delete Visit (IT)' : 'Delete Draft'}
-            </button>
-          )}
         </div>
 
         {/* Docked history panel */}
