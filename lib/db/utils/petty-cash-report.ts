@@ -45,7 +45,8 @@ export async function getPettyCashReport(month: string): Promise<PettyCashReport
   const usedRows = await db
     .select({
       storeId: pettyCashTransactions.storeId,
-      total: sql<string>`COALESCE(SUM(COALESCE(${pettyCashTransactions.actualAmount}, ${pettyCashTransactions.amount})), 0)`,
+      // Requests Finance rejected (and not yet re-accepted) are not counted as used.
+      total: sql<string>`COALESCE(SUM(COALESCE(${pettyCashTransactions.actualAmount}, ${pettyCashTransactions.amount})) FILTER (WHERE ${pettyCashTransactions.financeReview} IS NULL OR ${pettyCashTransactions.financeReview} NOT IN ('rejected', 'resubmitted')), 0)`,
       count: sql<number>`COUNT(*)::int`,
     })
     .from(pettyCashTransactions)

@@ -56,6 +56,8 @@ export interface OpsRequestRow {
   rejectionReason: string | null;
   /** When the PIC filed the request (ISO instant). */
   createdAt: string;
+  /** Finance's review of a completed request; rejected / resubmitted ones are not counted as used. */
+  financeReview: string | null;
 
   storeId: number;
   storeNo: string;
@@ -248,7 +250,7 @@ export interface RequestTotals {
   awaitingActual: number;
   completed: number;
   rejected: number;
-  /** Completed requests only, at the actual amount — what really left the cash boxes. */
+  /** Completed requests only, at the actual amount — what really left the cash boxes (Finance-rejected ones left out). */
   used: number;
 }
 
@@ -261,7 +263,7 @@ export function totalsOfRequests(rows: OpsRequestRow[]): RequestTotals {
     } else if (r.status === 'ops_approved') t.awaitingActual += 1;
     else if (r.status === 'completed') {
       t.completed += 1;
-      t.used += requestAmount(r);
+      if (r.financeReview !== 'rejected' && r.financeReview !== 'resubmitted') t.used += requestAmount(r);
     } else if (r.status === 'ops_rejected') t.rejected += 1;
   }
   return t;

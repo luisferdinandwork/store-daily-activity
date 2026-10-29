@@ -394,6 +394,11 @@ type RefillRequestRow = {
   balanceAfter: string | null;
   rejectedAt: string | null;
   rejectionReason: string | null;
+  // Frozen when Finance verified: the cash sent, and the requests Finance rejected (not covered —
+  // paid by the employee outside the system). Null before verification.
+  transferAmount: string | null;
+  rejectedCount: number;
+  rejectedAmount: string | null;
   drawerPhotoUrl: string | null;
   signaturePhotoUrl: string | null;
   // Null on requests made before bank details were required.
@@ -720,6 +725,21 @@ function RefillRequestCard({
 
         <RefillBankLine request={request} />
 
+        {request.transferAmount != null && (
+          <div className="mt-2 rounded-xl bg-muted/60 px-3 py-2 text-[11px] text-foreground">
+            <p>
+              Ditransfer Finance:{' '}
+              <span className="font-bold tabular-nums">Rp {Number(request.transferAmount).toLocaleString('id-ID')}</span>
+            </p>
+            {request.rejectedCount > 0 && (
+              <p className="mt-1 font-medium text-rose-600">
+                {request.rejectedCount} request ditolak Finance (Rp {Number(request.rejectedAmount ?? 0).toLocaleString('id-ID')})
+                tidak dihitung terpakai dan tidak ditransfer — nominal itu dibayar sendiri di luar sistem.
+              </p>
+            )}
+          </div>
+        )}
+
         {isHolder && (
           <p className="mt-1.5 text-[11px] text-indigo-600/80">
             Saat Finance menyerahkan uangnya, ambil foto laci petty cash dan Surat Terima Petty Cash di bawah ini. Saldo akan diperbarui setelah kedua foto terkirim.
@@ -1016,10 +1036,10 @@ function FinanceReviewNote({
       </p>
       <p className="mt-1.5 text-[11px] text-rose-700">
         {permanent
-          ? 'Refill sudah diverifikasi Finance, jadi nominal ini tidak ditransfer dan tidak bisa diperbaiki lagi. Ajukan request baru bulan depan.'
+          ? 'Refill sudah diverifikasi Finance, jadi nominal ini tidak dihitung terpakai, tidak ditransfer, dan tidak bisa diperbaiki lagi. Nominalnya dibayar sendiri di luar sistem. Ajukan request baru bulan depan.'
           : isHolder
-            ? 'Nominal ini tidak ikut ditransfer. Perbaiki dan kirim ulang sebelum Finance memverifikasi Refill.'
-            : 'Nominal ini tidak ikut ditransfer. PIC 1 perlu memperbaikinya sebelum Finance memverifikasi Refill.'}
+            ? 'Nominal ini tidak dihitung terpakai dan tidak ikut ditransfer — jika tidak diperbaiki, dibayar sendiri di luar sistem. Perbaiki dan kirim ulang sebelum Finance memverifikasi Refill.'
+            : 'Nominal ini tidak dihitung terpakai dan tidak ikut ditransfer. PIC 1 perlu memperbaikinya sebelum Finance memverifikasi Refill.'}
       </p>
       {!permanent && isHolder && (
         <button
@@ -1652,8 +1672,9 @@ export default function EmployeePettyCashPage() {
       // OPS approved but the PIC hasn't confirmed the actual amount yet — this
       // is still just the requested estimate, and still not deducted.
       awaitingConfirmAmount: needsActualAmountTxs.reduce((sum, tx) => sum + Number(tx.amount), 0),
+      // A request Finance rejected doesn't count as used until it is accepted again.
       approvedSpend: transactions
-        .filter((tx) => tx.status === 'completed')
+        .filter((tx) => tx.status === 'completed' && tx.reviewOutcome !== 'rejected' && tx.reviewOutcome !== 'resubmitted' && tx.reviewOutcome !== 'permanent')
         .reduce((sum, tx) => sum + Number(tx.actualAmount ?? tx.amount), 0),
     };
   }, [transactions, needsActualAmountTxs, needsReceiptTxs]);

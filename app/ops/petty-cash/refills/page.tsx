@@ -137,6 +137,12 @@ function ItemsPanel({
           PIC note: &ldquo;{row.notes}&rdquo;
         </p>
       )}
+      {row.transfer.rejectedCount > 0 && (
+        <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs text-rose-700">
+          {row.transfer.rejectedCount} item ditolak Finance ({rp(row.transfer.rejectedAmount)}) tidak dihitung terpakai, jadi tidak ada
+          di Refill ({rp(row.transfer.transfer)}); nominal itu dibayar karyawan di luar sistem.
+        </p>
+      )}
       {row.state === 'rejected' && row.rejectionReason && (
         <p className="rounded-md border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs text-rose-700">
           Rejected: {row.rejectionReason}
@@ -160,7 +166,7 @@ function ItemsPanel({
             </thead>
             <tbody>
               {row.items.map((item) => (
-                <tr key={item.id} className="bg-white">
+                <tr key={item.id} className={cn('bg-white', (item.financeReview === 'rejected' || item.financeReview === 'resubmitted') && 'text-slate-400')}>
                   <td className={cn(TD, 'whitespace-nowrap text-slate-500')}>{fmtDay(item.createdAt)}</td>
                   <td className={cn(TD, 'max-w-0')}>
                     <div className="flex items-center gap-1.5">
@@ -179,12 +185,21 @@ function ItemsPanel({
                       <ReceiptThumb size="sm" url={item.imageUrl} onOpen={() => item.imageUrl && onOpenReceipt(item.imageUrl)} />
                     </span>
                   </td>
-                  <td className={cn(TD, 'text-right tabular-nums text-slate-900')}>{num(item.amount)}</td>
+                  <td className={cn(TD, 'text-right tabular-nums text-slate-900')}>
+                    {item.financeReview === 'rejected' || item.financeReview === 'resubmitted' ? (
+                      <>
+                        <span className="text-slate-400 line-through">{num(item.amount)}</span>
+                        <span className="block text-[10px] font-semibold text-rose-600">Ditolak Finance</span>
+                      </>
+                    ) : (
+                      num(item.amount)
+                    )}
+                  </td>
                 </tr>
               ))}
               <tr className="bg-indigo-50 font-semibold text-slate-900">
                 <td colSpan={3} className={cn(TD, 'text-right text-xs uppercase tracking-wide')}>
-                  Total used
+                  Total used (excl. rejected by Finance)
                 </td>
                 <td className={cn(TD, 'text-right tabular-nums')}>{num(row.used)}</td>
               </tr>

@@ -28,7 +28,8 @@ const stampOf = (iso: string) =>
 const statusLabel = (status: string) => (isTxStatus(status) ? TX_STATUS_LABEL[status] : status);
 
 /** Completed requests are the ones actually deducted, at the recorded actual amount. */
-const usedOf = (r: TransactionRow) => (r.status === 'completed' ? r.actualAmount ?? r.amount : 0);
+const usedOf = (r: TransactionRow) =>
+  r.status === 'completed' && r.financeReview !== 'rejected' && r.financeReview !== 'resubmitted' ? r.actualAmount ?? r.amount : 0;
 
 function buildTransactionsSheet(title: string, subtitle: string, rows: TransactionRow[]) {
   const ws: XlsxStyle.WorkSheet = {};

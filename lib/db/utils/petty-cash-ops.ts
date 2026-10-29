@@ -36,7 +36,7 @@ import {
   type RefillItem,
 } from '@/lib/ops-petty-cash';
 import { pettyCashDescription } from '@/lib/petty-cash-categories';
-import { isFinanceReview, leavesOutOfTransfer, refillTransfer } from '@/lib/petty-cash-review';
+import { isFinanceReview, leavesOutOfTransfer } from '@/lib/petty-cash-review';
 import { refillStateOf } from '@/lib/petty-cash-report';
 import { addMonths } from './petty-cash-period';
 
@@ -64,6 +64,7 @@ export async function getOpsRequestRows(opts: { areaId: number | null; month: st
       rejectedAt: tx.rejectedAt,
       rejectionReason: tx.rejectionReason,
       createdAt: tx.createdAt,
+      financeReview: tx.financeReview,
 
       storeId: stores.id,
       storeNo: stores.storeNo,
@@ -98,6 +99,7 @@ export async function getOpsRequestRows(opts: { areaId: number | null; month: st
     rejectedAt: iso(r.rejectedAt),
     rejectionReason: r.rejectionReason,
     createdAt: new Date(r.createdAt).toISOString(),
+    financeReview: r.financeReview,
 
     storeId: r.storeId,
     storeNo: r.storeNo,
@@ -297,7 +299,8 @@ async function buildRefillRows(where: SQL | undefined): Promise<OpsRefillRow[]> 
     const items = rejectedAt
       ? envelopeItems.filter((i) => new Date(i.createdAt).getTime() <= rejectedAt.getTime())
       : envelopeItems;
-    const used = items.reduce((sum, i) => sum + i.amount, 0);
+    // A request Finance rejected (and PIC 1 hasn't had re-accepted) is not counted as used.
+    const used = items.filter((i) => !leavesOutOfTransfer(i.financeReview)).reduce((sum, i) => sum + i.amount, 0);
 
     // What is left in that envelope; a store with no petty cash history falls
     // back to the balance the request itself recorded.
@@ -311,7 +314,9 @@ async function buildRefillRows(where: SQL | undefined): Promise<OpsRefillRow[]> 
 
     const refill = Math.max(0, PETTY_CASH_MAX_BALANCE - balance);
 
-    // What Finance sends: the refill minus the requests it rejected. Verifying freezes it.
+    // What Finance sends is the refill itself — the balance already got the rejected requests back, so
+    // they are not in it. Verifying freezes it; the rejected total is kept to tell the employee what
+    // they pay themselves.
     const rejected = items.filter((i) => leavesOutOfTransfer(i.financeReview));
     const frozen = r.transferAmount != null;
     const rejectedCount = frozen ? r.rejectedCount : rejected.length;
@@ -341,7 +346,7 @@ async function buildRefillRows(where: SQL | undefined): Promise<OpsRefillRow[]> 
         refill,
         rejectedCount,
         rejectedAmount,
-        transfer: frozen ? rupiah(r.transferAmount) : refillTransfer(refill, rejectedAmount),
+        transfer: frozen ? rupiah(r.transferAmount) : refill,
         frozen,
       },
       items,

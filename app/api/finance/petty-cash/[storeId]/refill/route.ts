@@ -130,6 +130,7 @@ export async function POST(req: NextRequest, { params }: Params) {
       amount: pettyCashTransactions.amount,
       actualAmount: pettyCashTransactions.actualAmount,
       status: pettyCashTransactions.status,
+      financeReview: pettyCashTransactions.financeReview,
     })
     .from(pettyCashTransactions)
     .where(
@@ -178,7 +179,7 @@ export async function POST(req: NextRequest, { params }: Params) {
   }
 
   const approvedSpend = txRows
-    .filter((tx) => tx.status === 'completed')
+    .filter((tx) => tx.status === 'completed' && tx.financeReview !== 'rejected' && tx.financeReview !== 'resubmitted')
     .reduce((sum, tx) => sum + Number(tx.actualAmount ?? tx.amount), 0);
 
   const fallbackBalance = Math.max(0, PETTY_CASH_MAX_BALANCE - approvedSpend);

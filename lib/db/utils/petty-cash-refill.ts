@@ -297,7 +297,7 @@ export async function verifyRefillRequests(ids: number[], actorUserId: string): 
         body:
           'Finance sudah memverifikasi Refill toko kamu' +
           (t ? `: Rp ${t.transfer.toLocaleString('id-ID')} ditransfer.` : '.') +
-          (rejected ? ` ${rejected} — penolakannya permanen, ajukan request baru bulan depan.` : '') +
+          (rejected ? ` ${rejected}. Penolakannya permanen, ajukan request baru bulan depan.` : '') +
           ' Setelah uangnya diterima, unggah foto laci petty cash dan Surat Terima.',
         link: '/employee/pettycash',
         relatedType: 'petty_cash_refill_request',

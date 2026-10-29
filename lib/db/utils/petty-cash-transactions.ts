@@ -52,6 +52,7 @@ async function selectTransactionRows(
       imageUrl: tx.imageUrl,
       rejectionReason: tx.rejectionReason,
       createdAt: tx.createdAt,
+      financeReview: tx.financeReview,
     })
     .from(tx)
     .innerJoin(stores, eq(stores.id, tx.storeId))
@@ -106,7 +107,8 @@ export async function getPettyCashTransactions(f: TransactionFilters): Promise<T
         status: tx.status,
         count: sql<number>`COUNT(*)::int`,
         // Completed requests are the ones actually deducted (see the monitoring view).
-        used: sql<string>`COALESCE(SUM(COALESCE(${tx.actualAmount}, ${tx.amount})), 0)`,
+        // Requests Finance rejected (and not yet re-accepted) are not counted as used.
+        used: sql<string>`COALESCE(SUM(COALESCE(${tx.actualAmount}, ${tx.amount})) FILTER (WHERE ${tx.financeReview} IS NULL OR ${tx.financeReview} NOT IN ('rejected', 'resubmitted')), 0)`,
       })
       .from(tx)
       .where(scope)

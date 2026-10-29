@@ -9,11 +9,13 @@
 // All three stop once the store's refill has been verified after the request was filed: that cash is
 // already sent, so a rejection standing at that point is permanent (getVerifiedCutoffs).
 //
-// A request keeps status 'completed' throughout — the money was already taken off the period's balance
-// when PIC 1 confirmed it, and the balance goes back to the maximum with the refill anyway. Only the
-// refill TRANSFER leaves rejected requests out (see getRefillRowsByIds).
+// A request keeps status 'completed' throughout, but while Finance's rejection stands (rejected, or
+// corrected and not yet re-accepted) its amount is NOT counted as used: rejecting gives the amount back
+// to the period's balance, accepting takes it off again (adjustPeriodBalance). So "used", the balance
+// and the refill (max − balance) all leave a rejected request out; whatever the transfer doesn't cover
+// is paid by the employee outside the system.
 
-import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import {
@@ -36,14 +38,23 @@ export type ReviewResult =
 const rp = (n: number) => `Rp ${Math.round(n).toLocaleString('id-ID')}`;
 const money = (n: number) => n.toFixed(2);
 
-/** When Finance last verified a refill of each store (stores with none are absent). */
+/** Later than any request: while a verified refill is still waiting for PIC 1's receipt, everything is locked. */
+const LOCKED_UNTIL_RECEIVED = new Date(8_640_000_000_000_000);
+
+/**
+ * When Finance last verified a refill of each store (stores with none are absent). Requests filed up
+ * to that moment are locked. While a verified refill has not been received yet (PIC 1 has not
+ * confirmed with both photos) the cash is already sent, so the cutoff is "forever": a request filed
+ * in between can't be rejected either. Once it is received, new requests start a new cycle.
+ */
 export async function getVerifiedCutoffs(storeIds: number[]): Promise<Map<number, Date>> {
   if (storeIds.length === 0) return new Map();
 
   const rows = await db
     .select({
       storeId: pettyCashRefillRequests.storeId,
-      at: sql<Date>`MAX(${pettyCashRefillRequests.financeVerifiedAt})`,
+      at: pettyCashRefillRequests.financeVerifiedAt,
+      balanceAfter: pettyCashRefillRequests.balanceAfter,
     })
     .from(pettyCashRefillRequests)
     .where(
@@ -53,10 +64,15 @@ export async function getVerifiedCutoffs(storeIds: number[]): Promise<Map<number
         isNotNull(pettyCashRefillRequests.financeVerifiedAt),
       ),
     )
-    .groupBy(pettyCashRefillRequests.storeId);
+    .orderBy(asc(pettyCashRefillRequests.financeVerifiedAt));
 
-  // Raw aggregates come back as strings from node-postgres, whatever the column type.
-  return new Map(rows.map((r) => [r.storeId, new Date(r.at)]));
+  // Oldest first, so the last row of a store is its latest verified refill.
+  const out = new Map<number, Date>();
+  for (const r of rows) {
+    if (!r.at) continue;
+    out.set(r.storeId, r.balanceAfter == null ? LOCKED_UNTIL_RECEIVED : new Date(r.at));
+  }
+  return out;
 }
 
 async function financeUserIds(): Promise<string[]> {
@@ -88,6 +104,23 @@ async function isLocked(tx: TxRow): Promise<boolean> {
 const amountOf = (tx: TxRow) => Number(tx.actualAmount ?? tx.amount);
 const labelOf = (tx: TxRow) => tx.categoryName ?? 'Request petty cash';
 
+type Trx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * Moves the money the request's period has left (+ gives back, − takes off), kept between 0 and the
+ * maximum. Closed periods are frozen books and stay as they are.
+ */
+async function adjustPeriodBalance(trx: Trx, periodId: number | null, delta: number): Promise<void> {
+  if (periodId == null || delta === 0) return;
+  await trx
+    .update(pettyCashPeriods)
+    .set({
+      currentBalance: sql`GREATEST(0, LEAST(${String(PETTY_CASH_MAX_BALANCE)}::numeric, ${pettyCashPeriods.currentBalance} + ${money(delta)}::numeric))`,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(pettyCashPeriods.id, periodId), eq(pettyCashPeriods.status, 'open')));
+}
+
 // ─── Finance ─────────────────────────────────────────────────────────────────
 
 export async function financeRejectTransaction(input: {
@@ -113,24 +146,37 @@ export async function financeRejectTransaction(input: {
   }
 
   const now = new Date();
-  const [updated] = await db
-    .update(pettyCashTransactions)
-    .set({
-      financeReview: 'rejected',
-      financeReviewBy: input.actorId,
-      financeReviewAt: now,
-      financeComment: comment.comment,
-      // The first rejection keeps what the request originally looked like.
-      financeRejectedSnapshot: tx.financeRejectedSnapshot ?? {
-        description: tx.description,
-        amount: tx.amount,
-        actualAmount: tx.actualAmount,
-        imageUrl: tx.imageUrl,
-      },
-      updatedAt: now,
-    })
-    .where(and(eq(pettyCashTransactions.id, tx.id), eq(pettyCashTransactions.status, 'completed')))
-    .returning({ id: pettyCashTransactions.id });
+  const previous = tx.financeReview;
+  const updated = await db.transaction(async (trx) => {
+    const [row] = await trx
+      .update(pettyCashTransactions)
+      .set({
+        financeReview: 'rejected',
+        financeReviewBy: input.actorId,
+        financeReviewAt: now,
+        financeComment: comment.comment,
+        // The first rejection keeps what the request originally looked like.
+        financeRejectedSnapshot: tx.financeRejectedSnapshot ?? {
+          description: tx.description,
+          amount: tx.amount,
+          actualAmount: tx.actualAmount,
+          imageUrl: tx.imageUrl,
+        },
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(pettyCashTransactions.id, tx.id),
+          eq(pettyCashTransactions.status, 'completed'),
+          previous == null ? isNull(pettyCashTransactions.financeReview) : eq(pettyCashTransactions.financeReview, previous),
+        ),
+      )
+      .returning({ id: pettyCashTransactions.id });
+    // The amount stops counting as used: a request that was still counted (never reviewed, or accepted)
+    // gives it back; one PIC 1 corrected ('resubmitted') already did.
+    if (row && previous !== 'resubmitted') await adjustPeriodBalance(trx, tx.periodId, amountOf(tx));
+    return row;
+  });
   if (!updated) return { success: false, error: 'Gagal menolak. Muat ulang lalu coba lagi.', status: 409 };
 
   await createNotificationsForUsers([tx.userId], {
@@ -163,11 +209,16 @@ export async function financeAcceptTransaction(input: { txId: number; actorId: s
 
   const wasFix = tx.financeReview === 'resubmitted';
   const now = new Date();
-  const [updated] = await db
-    .update(pettyCashTransactions)
-    .set({ financeReview: 'accepted', financeReviewBy: input.actorId, financeReviewAt: now, updatedAt: now })
-    .where(and(eq(pettyCashTransactions.id, tx.id), eq(pettyCashTransactions.financeReview, tx.financeReview)))
-    .returning({ id: pettyCashTransactions.id });
+  const updated = await db.transaction(async (trx) => {
+    const [row] = await trx
+      .update(pettyCashTransactions)
+      .set({ financeReview: 'accepted', financeReviewBy: input.actorId, financeReviewAt: now, updatedAt: now })
+      .where(and(eq(pettyCashTransactions.id, tx.id), eq(pettyCashTransactions.financeReview, tx.financeReview!)))
+      .returning({ id: pettyCashTransactions.id });
+    // Counted as used again: take the (possibly corrected) amount off the balance.
+    if (row) await adjustPeriodBalance(trx, tx.periodId, -amountOf(tx));
+    return row;
+  });
   if (!updated) return { success: false, error: 'Gagal memproses. Muat ulang lalu coba lagi.', status: 409 };
 
   await createNotificationsForUsers([tx.userId], {
@@ -227,43 +278,17 @@ export async function employeeFixTransaction(input: FixInput): Promise<ReviewRes
   }
 
   const newImage = input.imageUrl?.trim() || null;
-  const oldActual = amountOf(tx);
-  const delta = newActual - oldActual;
   if (!newImage && !tx.imageUrl) {
     return { success: false, error: 'Foto struk wajib ada.', status: 400 };
   }
-  if (description === pettyCashDescription(tx.description) && delta === 0 && !newImage) {
+  if (description === pettyCashDescription(tx.description) && newActual === amountOf(tx) && !newImage) {
     return { success: false, error: 'Ubah Keterangan, jumlah, atau foto struk dulu sebelum mengirim ulang.', status: 400 };
   }
 
   const now = new Date();
   const outcome = await db.transaction(async (trx): Promise<ReviewResult> => {
-    // A different amount moves the money the period has left by the difference.
-    if (delta !== 0) {
-      if (tx.periodId == null) {
-        return { success: false, error: 'Jumlah tidak bisa diubah: request ini tidak terhubung ke periode petty cash.', status: 409 };
-      }
-      const [period] = await trx
-        .update(pettyCashPeriods)
-        .set({ currentBalance: sql`${pettyCashPeriods.currentBalance} - ${money(delta)}::numeric`, updatedAt: now })
-        .where(
-          and(
-            eq(pettyCashPeriods.id, tx.periodId),
-            eq(pettyCashPeriods.status, 'open'),
-            sql`${pettyCashPeriods.currentBalance} - ${money(delta)}::numeric >= 0`,
-            sql`${pettyCashPeriods.currentBalance} - ${money(delta)}::numeric <= ${String(PETTY_CASH_MAX_BALANCE)}::numeric`,
-          ),
-        )
-        .returning({ id: pettyCashPeriods.id });
-      if (!period) {
-        return {
-          success: false,
-          error: 'Jumlah baru tidak bisa dipakai: saldo petty cash tidak cukup, atau periodenya sudah ditutup.',
-          status: 409,
-        };
-      }
-    }
-
+    // The balance doesn't move here: the rejected amount was already given back, and the corrected
+    // amount is taken off when Finance accepts it.
     const [updated] = await trx
       .update(pettyCashTransactions)
       .set({
@@ -278,7 +303,6 @@ export async function employeeFixTransaction(input: FixInput): Promise<ReviewRes
       .where(and(eq(pettyCashTransactions.id, tx.id), eq(pettyCashTransactions.financeReview, 'rejected')))
       .returning({ id: pettyCashTransactions.id });
     if (!updated) {
-      // Roll the balance change back with it.
       throw new Error('REVIEW_CHANGED');
     }
     return { success: true };

@@ -309,7 +309,12 @@ function TransferLine({ transfer: t }: { transfer: RefillTransfer }) {
       <div>
         <dt className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Ditolak Finance</dt>
         <dd className={cn('font-medium tabular-nums', t.rejectedCount > 0 ? 'text-rose-600' : 'text-slate-400')}>
-          {t.rejectedCount > 0 ? `− ${rp(t.rejectedAmount)} · ${t.rejectedCount} request` : '–'}
+          {t.rejectedCount > 0 ? `${rp(t.rejectedAmount)} · ${t.rejectedCount} request` : '–'}
+          {t.rejectedCount > 0 && (
+            <span className="block text-[10px] font-normal text-slate-500">
+              Tidak dihitung terpakai — dibayar sendiri oleh karyawan di luar sistem
+            </span>
+          )}
         </dd>
       </div>
       <div>
@@ -398,7 +403,7 @@ function TxSheet({
                 <td className={cn(TD, 'whitespace-nowrap font-medium text-slate-700')}>{tx.categoryName ?? '–'}</td>
                 <td className={cn(TD, 'max-w-xs truncate text-slate-700')} title={tx.description}>{tx.description}</td>
                 <td className={cn(TD, 'whitespace-nowrap text-slate-600')}>{tx.submittedBy}</td>
-                <td className={cn(TD, 'text-right tabular-nums text-slate-900', tx.status === 'ops_rejected' && 'text-slate-400 line-through')}>
+                <td className={cn(TD, 'text-right tabular-nums text-slate-900', (tx.status === 'ops_rejected' || tx.financeReview === 'rejected' || tx.financeReview === 'resubmitted') && 'text-slate-400 line-through')}>
                   {num(tx.actualAmount ?? tx.amount)}
                 </td>
                 <td className={cn(TD, 'py-1')}>

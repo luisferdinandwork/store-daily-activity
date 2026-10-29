@@ -244,10 +244,10 @@ export async function GET(
     // the actual amount used, so they don't count as spend yet.
     const completedTx = txList.filter((tx) => tx.status === 'completed');
 
-    const monthlySpend = completedTx.reduce(
-      (sum, tx) => sum + Number(tx.actualAmount ?? tx.amount),
-      0,
-    );
+    // A request Finance rejected (until it is accepted again) is not used: its amount went back to the balance.
+    const monthlySpend = completedTx
+      .filter((tx) => tx.financeReview !== 'rejected' && tx.financeReview !== 'resubmitted')
+      .reduce((sum, tx) => sum + Number(tx.actualAmount ?? tx.amount), 0);
 
     const pendingOpsCount = txList.filter((tx) => tx.status === 'pending_ops').length;
 

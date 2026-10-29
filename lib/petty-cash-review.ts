@@ -10,9 +10,10 @@
 //                       ▲                             │
 //                       └────── Finance rejects again ┘          (accept also undoes a rejection)
 //
-// A rejected (or not-yet-reviewed resubmitted) request is left out of the refill transfer: the transfer
-// is what the store used minus those requests, while the store's petty cash still goes back to
-// Rp 1.000.000 when PIC 1 confirms receipt. Once Finance has verified the refill the amount is locked
+// A rejected (or not-yet-reviewed resubmitted) request is not counted as used: the transfer is what the
+// store used minus those requests, while the store's petty cash still goes back to Rp 1.000.000 when
+// PIC 1 confirms receipt. The part the transfer does not cover (the rejected amount) is paid by the
+// employee themselves, outside the system — nothing is recorded for that payment. Once Finance has verified the refill the amount is locked
 // and any rejection still standing is PERMANENT: PIC 1 keeps seeing the reason, can no longer correct
 // it, and files a new request next month.
 
@@ -32,7 +33,9 @@ export const isFinanceReview = (v: unknown): v is FinanceReview =>
 /**
  * A request is locked once the store's refill has been verified after it was filed: its amount is part
  * of cash already sent, so Finance can no longer reject it and a standing rejection is permanent.
- * `verifiedCutoff` = when Finance last verified one of the store's refills.
+ * `verifiedCutoff` = when Finance last verified one of the store's refills — or a far-future date
+ * while that refill is still waiting for PIC 1's receipt, so requests filed after the verification
+ * (cash already sent) are locked too (see getVerifiedCutoffs).
  */
 export function isLockedByVerification(
   createdAt: Date | string,
@@ -63,17 +66,13 @@ export function reviewOutcome(review: string | null | undefined, locked: boolean
   return locked ? 'permanent' : review;
 }
 
-/** The cash to send: what the store used (max − balance) minus the requests Finance rejected. */
-export const refillTransfer = (refill: number, rejectedAmount: number): number =>
-  Math.max(0, refill - rejectedAmount);
-
 /** Frozen figures on a verified refill, or the live ones. */
 export interface RefillTransfer {
-  /** max − balance: what the store used. */
+  /** max − balance: what the store used, rejected requests NOT included (their amount went back to the balance). */
   refill: number;
   rejectedCount: number;
   rejectedAmount: number;
-  /** refill − rejectedAmount: what Finance sends. */
+  /** What Finance sends: the refill. */
   transfer: number;
   /** True once Finance has verified the refill — the figures no longer move. */
   frozen: boolean;
@@ -82,7 +81,7 @@ export interface RefillTransfer {
 /** The Indonesian line PIC 1 gets with the refill (and Finance sees on the request). */
 export function rejectedNote(count: number, amount: number): string | null {
   if (count <= 0) return null;
-  return `${count} request ditolak Finance (Rp ${amount.toLocaleString('id-ID')}) tidak ikut ditransfer`;
+  return `${count} request ditolak Finance (Rp ${amount.toLocaleString('id-ID')}) tidak dihitung sebagai terpakai dan tidak ikut ditransfer — nominal itu dibayar sendiri oleh karyawan di luar sistem`;
 }
 
 /** Trimmed optional comment, or an error message. */

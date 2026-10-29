@@ -35,6 +35,8 @@ export interface TransactionRow {
   rejectionReason: string | null;
   /** When the request was made (ISO instant). */
   createdAt: string;
+  /** Finance's review; rejected / resubmitted requests are not counted as used. */
+  financeReview: string | null;
 }
 
 export interface TransactionStoreOption {

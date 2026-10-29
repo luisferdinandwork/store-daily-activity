@@ -212,13 +212,16 @@ export async function DELETE(_req: NextRequest, { params }: Params) {
         status: pettyCashTransactions.status,
         periodId: pettyCashTransactions.periodId,
         actualAmount: pettyCashTransactions.actualAmount,
+        financeReview: pettyCashTransactions.financeReview,
       });
 
     if (!deleted) return null;
 
     let balanceRestored = false;
 
-    if (deleted.status === 'completed' && deleted.periodId != null && deleted.actualAmount != null) {
+    // A request Finance rejected (and not yet re-accepted) was already given back to the balance.
+    const stillCounted = deleted.financeReview !== 'rejected' && deleted.financeReview !== 'resubmitted';
+    if (stillCounted && deleted.status === 'completed' && deleted.periodId != null && deleted.actualAmount != null) {
       const restored = await trx
         .update(pettyCashPeriods)
         .set({
