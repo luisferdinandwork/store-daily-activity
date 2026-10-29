@@ -159,7 +159,7 @@ export const EMAIL_TEMPLATES = {
       { name: 'store', description: 'Store code · name (empty when unknown)', html: false, sample: 'FF001 · Fisik Football - Daan Mogot' },
       { name: 'area', description: 'Area of the store (empty when unknown)', html: false, sample: 'DKI - BALI' },
       { name: 'time', description: 'When it happened, WIB', html: false, sample: '23 Oktober 2026 pukul 08.41 WIB' },
-      { name: 'link', description: 'Web address of the Issues page (empty when the server URL is not set)', html: false, sample: 'https://prism.example.com/ops/issues' },
+      { name: 'link', description: "Web address of the recipient's own Issues page — Ops, Finance, IT or Audit (empty when the server URL is not set)", html: false, sample: 'https://prism.example.com/ops/issues' },
       { name: 'appName', description: 'The app name', html: false, sample: APP_NAME },
       { name: 'detailsTable', description: 'Ready-made list with store, area and time (rows without a value are left out)', html: true, sample: '' },
       { name: 'openLink', description: 'Ready-made "Buka halaman Issues" button (empty without a link)', html: true, sample: '' },

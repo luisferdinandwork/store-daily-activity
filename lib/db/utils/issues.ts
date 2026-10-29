@@ -23,6 +23,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { db } from '@/lib/db';
+import { issuesPathFor } from '@/lib/auth/access';
 import { appBaseUrl } from '@/lib/email/app-url';
 import { sendMail } from '@/lib/email/graph-mail';
 import { issueEmailVars, renderIssueEmail } from '@/lib/email/issue-emails';
@@ -479,15 +480,27 @@ export async function notifyIssueEvent(input: {
   const userIds = recipients.filter((id) => id !== input.excludeUserId);
   if (!userIds.length) return;
 
-  await createNotificationsForUsers(userIds, {
-    type: input.type,
-    title: input.title,
-    body: input.body,
-    link: '/ops/issues',
-  });
+  // Each role opens the issue inbox of its OWN panel — one /ops/issues link would
+  // bounce Finance / Audit to their panel home (proxy.ts RBAC redirect).
+  const recipientRows = await db
+    .select({ id: users.id, email: users.email, roleCode: userRoles.code })
+    .from(users)
+    .innerJoin(userRoles, eq(userRoles.id, users.roleId))
+    .where(inArray(users.id, userIds));
+
+  const idsByPath = new Map<string, string[]>();
+  for (const row of recipientRows) {
+    const path = issuesPathFor(row.roleCode);
+    idsByPath.set(path, [...(idsByPath.get(path) ?? []), row.id]);
+  }
+  await Promise.all(
+    [...idsByPath].map(([link, ids]) =>
+      createNotificationsForUsers(ids, { type: input.type, title: input.title, body: input.body, link }),
+    ),
+  );
 
   // The email copy never holds up (or fails) the request that raised the event.
-  void emailIssueRecipients(userIds, input.storeId, input.title, input.body).catch((err) =>
+  void emailIssueRecipients(recipientRows, input.storeId, input.title, input.body).catch((err) =>
     console.error('[issues] email notification failed:', err),
   );
 }
@@ -496,20 +509,22 @@ export async function notifyIssueEvent(input: {
  * Mails the same recipients as the in-app notification — the ones who have an
  * email set (users.email, optional). The recipients are already scoped: Ops Area
  * only for their own area's stores (Ops HO for all), Finance / IT / Audit as a
- * whole role. One mail per address, so a shared mailbox is not mailed twice.
+ * whole role. One mail per address, so a shared mailbox is not mailed twice. The
+ * button opens the recipient role's own issue page (signing in first if needed).
  */
 async function emailIssueRecipients(
-  userIds: string[],
+  recipients: { email: string | null; roleCode: string }[],
   storeId: number,
   title: string,
   body: string | undefined,
 ): Promise<void> {
-  const rows = await db
-    .select({ email: users.email })
-    .from(users)
-    .where(and(inArray(users.id, userIds), isNotNull(users.email)));
-  const addresses = [...new Set(rows.map((r) => r.email?.trim().toLowerCase()).filter((e): e is string => !!e))];
-  if (!addresses.length) return;
+  // address → issues path of the (first) role that owns it
+  const pathByAddress = new Map<string, string>();
+  for (const r of recipients) {
+    const address = r.email?.trim().toLowerCase();
+    if (address && !pathByAddress.has(address)) pathByAddress.set(address, issuesPathFor(r.roleCode));
+  }
+  if (!pathByAddress.size) return;
 
   const [store] = await db
     .select({ storeNo: stores.storeNo, name: stores.name, areaName: areas.name })
@@ -521,19 +536,24 @@ async function emailIssueRecipients(
   const base = appBaseUrl();
   // Subject + HTML are IT-editable (email_templates, /it/email-templates).
   const template = await getEmailTemplate('issue_notification');
-  const message = renderIssueEmail(
-    template,
-    issueEmailVars({
-      title,
-      body,
-      storeLabel: store ? `${store.storeNo} · ${store.name}` : null,
-      areaName: store?.areaName ?? null,
-      at: new Date(),
-      link: base ? `${base}/ops/issues` : null,
-    }),
-  );
+  const at = new Date();
+  const messageFor = (path: string) =>
+    renderIssueEmail(
+      template,
+      issueEmailVars({
+        title,
+        body,
+        storeLabel: store ? `${store.storeNo} · ${store.name}` : null,
+        areaName: store?.areaName ?? null,
+        at,
+        link: base ? `${base}${path}` : null,
+      }),
+    );
+  const messages = new Map<string, ReturnType<typeof messageFor>>();
 
-  for (const to of addresses) {
+  for (const [to, path] of pathByAddress) {
+    let message = messages.get(path);
+    if (!message) messages.set(path, (message = messageFor(path)));
     const result = await sendMail({ to, ...message });
     if (!result.success) console.error(`[issues] email to ${to} failed: ${result.error}`);
   }

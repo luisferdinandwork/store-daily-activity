@@ -6,6 +6,7 @@ import { signIn } from 'next-auth/react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { safeCallbackPath } from '@/lib/auth/access';
 import {
   Lock,
   ArrowRight,
@@ -45,6 +46,9 @@ export function LoginForm() {
   const timedOut = searchParams.get('reason') === 'timeout';
   // Back from the emailed reset link (components/auth/reset-password-form.tsx).
   const justReset = searchParams.get('reset') === 'success';
+  // Where the proxy was taking them before it asked for a login (e.g. the issue
+  // page linked from an email). Validated, so only an in-app path gets through.
+  const callbackUrl = safeCallbackPath(searchParams.get('callbackUrl'));
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -74,7 +78,8 @@ export function LoginForm() {
             : 'Invalid NIK or password. Please try again.',
         );
       } else {
-        router.push('/');
+        // A role that can't open the target is bounced to its own home by the proxy.
+        router.push(callbackUrl ?? '/');
         router.refresh();
       }
     } catch {

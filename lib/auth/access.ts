@@ -43,6 +43,42 @@ export function homePathFor(role: unknown, employeeType?: unknown): string {
   }
 }
 
+/**
+ * The issue inbox of each panel that receives issues. Links in issue emails and
+ * notifications must point at the recipient's OWN panel — `/ops/issues` sends a
+ * Finance or Audit user to their panel home (the RBAC redirect below).
+ */
+export function issuesPathFor(role: unknown): string {
+  switch (role) {
+    case 'ops':
+      return '/ops/issues';
+    case 'finance':
+      return '/finance/issues';
+    case 'audit':
+      return '/audit/issues';
+    case 'it':
+      return '/it/issues';
+    default:
+      // '/' sends a signed-in user to their own home.
+      return '/';
+  }
+}
+
+/**
+ * A `callbackUrl` the login page may send the user to after signing in: an
+ * in-app path only. Anything that could leave this origin (`//host`, `/\host`,
+ * a scheme), the login page itself and API routes are dropped, so a crafted
+ * `/login?callbackUrl=…` link can't be used as an open redirect.
+ */
+export function safeCallbackPath(raw: string | null | undefined): string | null {
+  if (!raw || raw.length > 2048) return null;
+  if (!raw.startsWith('/') || raw.startsWith('//')) return null;
+  if (/[\\\u0000-\u001f\u007f]/.test(raw)) return null;
+  const pathname = raw.split(/[?#]/)[0];
+  if (pathname === '/login' || isApiPath(pathname)) return null;
+  return raw;
+}
+
 type Rule = { prefix: string; roles: readonly AppRoleCode[] };
 
 /** Page (UI) panels. First match wins; prefixes are matched on path segments. */

@@ -27,6 +27,7 @@ import {
   isKnownRole,
   isPublicPath,
   pageRolesFor,
+  safeCallbackPath,
 } from '@/lib/auth/access';
 
 const UNSAFE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
@@ -190,7 +191,14 @@ export async function proxy(req: NextRequest) {
   const role = token?.role;
   if (!token?.id || !isKnownRole(role)) {
     if (api) return done(json(401, 'Unauthorized'));
-    return done(NextResponse.redirect(new URL('/login', publicOrigin(req))));
+    // Remember where they were headed (e.g. the link in an issue email) so the
+    // login page can send them there instead of to their panel home.
+    const login = new URL('/login', publicOrigin(req));
+    const wanted = pathname + req.nextUrl.search;
+    if (req.method === 'GET' && pathname !== '/' && safeCallbackPath(wanted)) {
+      login.searchParams.set('callbackUrl', wanted);
+    }
+    return done(NextResponse.redirect(login));
   }
 
   // 3. Panel-level RBAC (superset of every handler's own rule — see lib/auth/access.ts).
