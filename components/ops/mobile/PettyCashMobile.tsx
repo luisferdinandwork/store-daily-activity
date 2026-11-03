@@ -24,6 +24,8 @@ import type { KpiItem } from '@/components/finance/shared/sheet-kit';
 import { RefillStateChip, TxStatusChip, fmtDay, fmtWhen, num, rp } from '@/components/ops/petty-cash/shared';
 import type { OpsRefillRow, OpsRequestRow, PettyCashPending } from '@/lib/ops-petty-cash';
 import { MobilePageHeader } from './MobileKit';
+import { FINANCE_REVIEW_LABEL, leavesOutOfTransfer } from '@/lib/petty-cash-review';
+import { ReRequestBadge } from '@/components/petty-cash/ReRequestBadge';
 
 // ─── Header ──────────────────────────────────────────────────────────────────
 
@@ -399,6 +401,7 @@ export function RequestCard({
                   {row.categoryName}
                 </span>
               )}
+              {row.isReRequest && <ReRequestBadge className="mr-1.5 align-middle" />}
               {row.description}
             </p>
             <p className="mt-1.5 truncate text-[11px] text-slate-400">
@@ -568,11 +571,23 @@ export function RefillCard({
                             {item.categoryName}
                           </span>
                         )}
+                        {item.isReRequest && <ReRequestBadge className="mr-1 align-middle" />}
                         {item.description}
                       </p>
                       <p className="text-[10px] text-slate-400">{fmtDay(item.createdAt)}</p>
                     </div>
-                    <p className="shrink-0 text-xs font-semibold tabular-nums text-slate-900">{num(item.amount)}</p>
+                    {item.financeReview && leavesOutOfTransfer(item.financeReview) ? (
+                      <p className="shrink-0 text-right text-xs font-semibold tabular-nums">
+                        <span className="text-slate-400 line-through">{num(item.amount)}</span>
+                        <span
+                          className={`block text-[10px] ${item.financeReview === 'rejected' ? 'text-rose-600' : 'text-amber-600'}`}
+                        >
+                          {FINANCE_REVIEW_LABEL[item.financeReview]}
+                        </span>
+                      </p>
+                    ) : (
+                      <p className="shrink-0 text-xs font-semibold tabular-nums text-slate-900">{num(item.amount)}</p>
+                    )}
                   </div>
                 ))}
                 <div className="flex items-center justify-between rounded-xl bg-indigo-50 px-3 py-2 text-xs font-bold text-slate-900">

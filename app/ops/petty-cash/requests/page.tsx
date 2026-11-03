@@ -67,6 +67,7 @@ import {
   useJsonFeed,
   usePettyCashPending,
 } from '@/components/ops/petty-cash/shared';
+import { ReRequestBadge } from '@/components/petty-cash/ReRequestBadge';
 import {
   PAGE_SIZE,
   REQUEST_SORT_OPTIONS,
@@ -517,6 +518,7 @@ export default function OpsPettyCashRequestsPage() {
                                 {r.categoryName}
                               </span>
                             )}
+                            {r.isReRequest && <ReRequestBadge className="mr-1.5 align-middle" />}
                             {r.description}
                           </p>
                           {rejected && r.rejectionReason && (

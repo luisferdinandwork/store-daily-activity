@@ -35,8 +35,14 @@ export interface TransactionRow {
   rejectionReason: string | null;
   /** When the request was made (ISO instant). */
   createdAt: string;
-  /** Finance's review; rejected / resubmitted requests are not counted as used. */
+  /** Finance's review; Perlu Perbaikan / Ditolak requests are not counted as used. */
   financeReview: string | null;
+  /** Finance's comment on that decision, if it left one. */
+  financeComment: string | null;
+  /** A Perlu Perbaikan request PIC 1 filed again (lib/petty-cash-re-request.ts); `createdAt` is the day it was filed. */
+  isReRequest: boolean;
+  /** The day PIC 1 gave as the day the request was made (YYYY-MM-DD); null on a normal request. */
+  requestDate: string | null;
 }
 
 export interface TransactionStoreOption {
@@ -51,6 +57,8 @@ export interface TransactionSummary {
   /** Completed requests only — the amount actually deducted from balances. */
   totalUsed: number;
   byStatus: Record<TxStatus, number>;
+  /** How many of them are re-requests. */
+  reRequestCount: number;
 }
 
 export interface TransactionsPage {

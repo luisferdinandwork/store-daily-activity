@@ -1,5 +1,6 @@
 // lib/db/schema/petty-cash.ts
 
+import { sql } from 'drizzle-orm';
 import {
   pgTable,
   serial,
@@ -11,6 +12,8 @@ import {
   jsonb,
   unique,
   index,
+  uniqueIndex,
+  type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 
 import { stores, users } from './core';
@@ -157,11 +160,12 @@ export const pettyCashTransactions = pgTable(
     // Finance's review of a COMPLETED request, done on the Finance Petty Cash
     // Monitoring page before it verifies the refill (see lib/petty-cash-review.ts):
     //   null        = not reviewed
-    //   rejected    = Finance turned it down (optional comment) — its money is left
-    //                 out of the refill transfer; PIC 1 may fix and resubmit
-    //   resubmitted = PIC 1 corrected it, waiting for Finance to look again
-    //   accepted    = Finance accepted the correction — counts again
-    // Once the refill covering it has been verified the rejection is permanent.
+    //   needs_fix   = "Perlu Perbaikan": Finance sent it back (optional comment) — its money
+    //                 is left out of the refill transfer; PIC 1 files it again as a re-request
+    //   rejected    = "Ditolak": final, left out of the transfer, can NOT be re-requested
+    //   accepted    = Finance took its decision back — counts as used again
+    // (Migration 0040 retired the old 'resubmitted' state; `resubmitted_at` and
+    // `finance_rejected_snapshot` below are legacy and no longer written.)
     financeReview: text('finance_review'),
     financeReviewBy: text('finance_review_by').references(() => users.id),
     financeReviewAt: timestamp('finance_review_at'),
@@ -170,6 +174,18 @@ export const pettyCashTransactions = pgTable(
     // amounts, receipt) — so a correction can be compared with the original.
     financeRejectedSnapshot: jsonb('finance_rejected_snapshot').$type<FinanceRejectedSnapshot>(),
     resubmittedAt: timestamp('resubmitted_at'),
+
+    // RE-REQUEST (lib/petty-cash-re-request.ts): PIC 1 files a request Finance sent back (Perlu
+    // Perbaikan) again in a later period. No Ops step — it is inserted straight as 'completed' with the usage and
+    // the receipt, deducting the current period's balance. `createdAt` is the day it was filed;
+    // `requestDate` is the day PIC 1 says the original request was made (Jakarta day start, read it
+    // with jakartaDateKey). `reRequestOfId` points at the Perlu Perbaikan request (SET NULL if IT deletes it —
+    // `isReRequest` keeps the mark); at most one re-request per original (unique index below).
+    isReRequest: boolean('is_re_request').default(false).notNull(),
+    reRequestOfId: integer('re_request_of_id').references((): AnyPgColumn => pettyCashTransactions.id, {
+      onDelete: 'set null',
+    }),
+    requestDate: timestamp('request_date'),
 
     // Keep column if already exists, but do not use image deletion anymore.
     archivedAt: timestamp('archived_at'),
@@ -182,6 +198,9 @@ export const pettyCashTransactions = pgTable(
     storeMonthIdx: index('pct_store_month_idx').on(t.storeId, t.yearMonth),
     statusIdx: index('pct_status_idx').on(t.status),
     yearMonthIdx: index('pct_year_month_idx').on(t.yearMonth),
+    reRequestOfUnique: uniqueIndex('pct_re_request_of_unique')
+      .on(t.reRequestOfId)
+      .where(sql`${t.reRequestOfId} IS NOT NULL`),
   }),
 );
 

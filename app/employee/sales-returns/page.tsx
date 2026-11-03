@@ -29,7 +29,7 @@ import {
   SkeletonBlocks,
   inputClass,
 } from '@/components/employee/ui';
-import CameraCapture from '@/components/shared/CameraCapture';
+import DocumentScanner from '@/components/shared/DocumentScanner';
 import { ImageLightbox, type LightboxImage } from '@/components/shared/ImageLightbox';
 import {
   RECEIPT_NUMBER_MAX,
@@ -132,7 +132,7 @@ export default function SalesReturnsPage() {
   const duplicate = check.ok ? list.find((r) => r.receiptNumber === check.value) : undefined;
   const canSubmit = check.ok && photos.length > 0 && !submitting;
 
-  // The camera already shrinks each shot (useCameraCapture), so it goes straight into the list.
+  // The scanner already flattens + shrinks each shot (DocumentScanner), so it goes straight into the list.
   function onCapture(file: File) {
     setCameraOpen(false);
     if (photos.length >= SALES_RETURN_MAX_PHOTOS) {
@@ -291,7 +291,7 @@ export default function SalesReturnsPage() {
             Foto diambil langsung dengan kamera. Pastikan nomor struk terbaca jelas.
           </p>
 
-          <CameraCapture
+          <DocumentScanner
             open={cameraOpen}
             onClose={() => setCameraOpen(false)}
             onCapture={onCapture}

@@ -65,6 +65,7 @@ export async function getOpsRequestRows(opts: { areaId: number | null; month: st
       rejectionReason: tx.rejectionReason,
       createdAt: tx.createdAt,
       financeReview: tx.financeReview,
+      isReRequest: tx.isReRequest,
 
       storeId: stores.id,
       storeNo: stores.storeNo,
@@ -100,6 +101,7 @@ export async function getOpsRequestRows(opts: { areaId: number | null; month: st
     rejectionReason: r.rejectionReason,
     createdAt: new Date(r.createdAt).toISOString(),
     financeReview: r.financeReview,
+    isReRequest: r.isReRequest,
 
     storeId: r.storeId,
     storeNo: r.storeNo,
@@ -263,6 +265,7 @@ async function buildRefillRows(where: SQL | undefined): Promise<OpsRefillRow[]> 
         actualAmount: tx.actualAmount,
         imageUrl: tx.imageUrl,
         financeReview: tx.financeReview,
+        isReRequest: tx.isReRequest,
         createdAt: tx.createdAt,
       })
       .from(tx)
@@ -280,6 +283,7 @@ async function buildRefillRows(where: SQL | undefined): Promise<OpsRefillRow[]> 
         amount: rupiah(t.actualAmount ?? t.amount),
         imageUrl: t.imageUrl,
         financeReview: isFinanceReview(t.financeReview) ? t.financeReview : null,
+        isReRequest: t.isReRequest,
       };
       const list = itemsByEnvelope.get(key);
       if (list) list.push(item);

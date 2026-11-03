@@ -10,7 +10,7 @@
 // pure functions so the two pages behave the same way.
 
 import { REFILL_STATE_LABEL, type RefillState } from '@/lib/petty-cash-report';
-import type { FinanceReview, RefillTransfer } from '@/lib/petty-cash-review';
+import { leavesOutOfTransfer, type FinanceReview, type RefillTransfer } from '@/lib/petty-cash-review';
 import { TX_STATUS_LABEL, TX_STATUS_ORDER, isTxStatus, type TxStatus } from '@/lib/petty-cash-transactions';
 
 export type { RefillState, TxStatus };
@@ -56,8 +56,10 @@ export interface OpsRequestRow {
   rejectionReason: string | null;
   /** When the PIC filed the request (ISO instant). */
   createdAt: string;
-  /** Finance's review of a completed request; rejected / resubmitted ones are not counted as used. */
+  /** Finance's review of a completed request; Perlu Perbaikan / Ditolak ones are not counted as used. */
   financeReview: string | null;
+  /** A Perlu Perbaikan request filed again — it has no Ops step, so it arrives already completed. */
+  isReRequest: boolean;
 
   storeId: number;
   storeNo: string;
@@ -93,6 +95,8 @@ export interface RefillItem {
   imageUrl: string | null;
   /** Finance's verdict on it (see lib/petty-cash-review.ts); null = not reviewed. */
   financeReview: FinanceReview | null;
+  /** A Perlu Perbaikan request filed again (lib/petty-cash-re-request.ts). */
+  isReRequest: boolean;
 }
 
 export interface OpsRefillRow {
@@ -263,7 +267,7 @@ export function totalsOfRequests(rows: OpsRequestRow[]): RequestTotals {
     } else if (r.status === 'ops_approved') t.awaitingActual += 1;
     else if (r.status === 'completed') {
       t.completed += 1;
-      if (r.financeReview !== 'rejected' && r.financeReview !== 'resubmitted') t.used += requestAmount(r);
+      if (!leavesOutOfTransfer(r.financeReview)) t.used += requestAmount(r);
     } else if (r.status === 'ops_rejected') t.rejected += 1;
   }
   return t;

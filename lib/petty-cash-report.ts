@@ -99,6 +99,9 @@ export interface PettyCashReportRow {
   /** Completed petty cash spend in the month, integer Rupiah. */
   totalUsed: number;
   txCount: number;
+  /** Of that spend, the re-requests (Ditolak requests filed again — lib/petty-cash-re-request.ts): how many and how much. */
+  reRequestCount: number;
+  reRequestAmount: number;
 
   pic1Name: string | null;
   /** Null until PIC 1 has filed a refill request with bank details. */

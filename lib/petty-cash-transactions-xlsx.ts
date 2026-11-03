@@ -21,6 +21,8 @@ import {
   type TransactionRow,
   type TxStatus,
 } from '@/lib/petty-cash-transactions';
+import { FINANCE_REVIEW_LABEL, isFinanceReview, leavesOutOfTransfer } from '@/lib/petty-cash-review';
+import { RE_REQUEST_LABEL, fmtRequestDate } from '@/lib/petty-cash-re-request';
 
 const stampOf = (iso: string) =>
   new Date(iso).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', dateStyle: 'medium', timeStyle: 'short' });
@@ -29,19 +31,19 @@ const statusLabel = (status: string) => (isTxStatus(status) ? TX_STATUS_LABEL[st
 
 /** Completed requests are the ones actually deducted, at the recorded actual amount. */
 const usedOf = (r: TransactionRow) =>
-  r.status === 'completed' && r.financeReview !== 'rejected' && r.financeReview !== 'resubmitted' ? r.actualAmount ?? r.amount : 0;
+  r.status === 'completed' && !leavesOutOfTransfer(r.financeReview) ? r.actualAmount ?? r.amount : 0;
 
 function buildTransactionsSheet(title: string, subtitle: string, rows: TransactionRow[]) {
   const ws: XlsxStyle.WorkSheet = {};
   const headers = [
     'No', 'Tanggal', 'Kode Toko', 'Nama Toko', 'Kategori', 'Keterangan', 'Diajukan Oleh',
-    'Diajukan (Rp)', 'Aktual (Rp)', 'Status', 'Alasan Ditolak', 'Foto Struk',
+    'Diajukan (Rp)', 'Aktual (Rp)', 'Status', 'Keputusan Finance', 'Jenis', 'Tanggal Request', 'Alasan Ditolak', 'Foto Struk',
   ];
   const lastCol = headers.length - 1;
 
   ws['!cols'] = [
     { wch: 5 }, { wch: 20 }, { wch: 11 }, { wch: 34 }, { wch: 20 }, { wch: 44 }, { wch: 22 },
-    { wch: 16 }, { wch: 16 }, { wch: 22 }, { wch: 30 }, { wch: 14 },
+    { wch: 16 }, { wch: 16 }, { wch: 22 }, { wch: 20 }, { wch: 12 }, { wch: 16 }, { wch: 30 }, { wch: 14 },
   ];
   sheetTitle(ws, lastCol, title, subtitle);
   headers.forEach((h, c) => put(ws, HEADER_ROW, c, h, S.header));
@@ -60,13 +62,27 @@ function buildTransactionsSheet(title: string, subtitle: string, rows: Transacti
     else put(ws, r, 8, '-', S.textCenter);
     // Amber while the request is still waiting on someone, like the other exports' "missing" cells.
     put(ws, r, 9, statusLabel(tx.status), tx.status === 'completed' ? S.textCenter : S.missing);
-    put(ws, r, 10, tx.status === 'ops_rejected' ? tx.rejectionReason ?? '-' : '-', S.text);
+    put(ws, r, 10, isFinanceReview(tx.financeReview) ? FINANCE_REVIEW_LABEL[tx.financeReview] : '-', S.textCenter);
+    put(ws, r, 11, tx.isReRequest ? RE_REQUEST_LABEL : 'Baru', S.textCenter);
+    // A re-request carries the day PIC 1 gave as the day the request was made (Tanggal above = the day it was filed).
+    put(ws, r, 12, tx.isReRequest && tx.requestDate ? fmtRequestDate(tx.requestDate) : '-', S.textCenter);
+    put(
+      ws,
+      r,
+      13,
+      tx.status === 'ops_rejected'
+        ? tx.rejectionReason ?? '-'
+        : leavesOutOfTransfer(tx.financeReview)
+          ? tx.financeComment ?? '-'
+          : '-',
+      S.text,
+    );
 
     if (tx.imageUrl && /^https?:\/\//i.test(tx.imageUrl)) {
-      put(ws, r, 11, 'Lihat foto', S.textCenter);
-      ws[XlsxStyle.utils.encode_cell({ r, c: 11 })].l = { Target: tx.imageUrl };
+      put(ws, r, 14, 'Lihat foto', S.textCenter);
+      ws[XlsxStyle.utils.encode_cell({ r, c: 14 })].l = { Target: tx.imageUrl };
     } else {
-      put(ws, r, 11, tx.imageUrl ? 'Ada' : '-', S.textCenter);
+      put(ws, r, 14, tx.imageUrl ? 'Ada' : '-', S.textCenter);
     }
     ws['!rows']![r] = { hpt: 18 };
   });

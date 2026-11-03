@@ -106,13 +106,13 @@ export const HEADER_ROW = 3;
 function buildStoreSheet(title: string, subtitle: string, rows: PettyCashReportRow[]) {
   const ws: XlsxStyle.WorkSheet = {};
   const headers = [
-    'No', 'Kode Toko', 'Dept Code', 'Nama Toko', 'Status Toko', 'Total Terpakai (Rp)', 'No. Rekening', 'PIC 1',
-    'Bank', 'Atas Nama', 'Status Refill', 'Diverifikasi Finance',
+    'No', 'Kode Toko', 'Dept Code', 'Nama Toko', 'Status Toko', 'Total Terpakai (Rp)', 'Termasuk Re-request (Rp)',
+    'No. Rekening', 'PIC 1', 'Bank', 'Atas Nama', 'Status Refill', 'Diverifikasi Finance',
   ];
   const lastCol = headers.length - 1;
 
   ws['!cols'] = [
-    { wch: 5 }, { wch: 11 }, { wch: 18 }, { wch: 38 }, { wch: 14 }, { wch: 20 }, { wch: 24 }, { wch: 24 },
+    { wch: 5 }, { wch: 11 }, { wch: 18 }, { wch: 38 }, { wch: 14 }, { wch: 20 }, { wch: 22 }, { wch: 24 }, { wch: 24 },
     { wch: 16 }, { wch: 28 }, { wch: 18 }, { wch: 30 },
   ];
   sheetTitle(ws, lastCol, title, subtitle);
@@ -126,24 +126,27 @@ function buildStoreSheet(title: string, subtitle: string, rows: PettyCashReportR
     put(ws, r, 3, row.storeName, S.text);
     put(ws, r, 4, STORE_STATUS_LABEL[row.storeStatus], S.textCenter);
     put(ws, r, 5, row.totalUsed, S.money, MONEY_FORMAT);
+    // The re-requests (Ditolak requests filed again) inside that total.
+    if (row.reRequestCount > 0) put(ws, r, 6, row.reRequestAmount, S.money, MONEY_FORMAT);
+    else put(ws, r, 6, '-', S.textCenter);
     // Account numbers go in as text so Excel never turns them into 1.23E+15.
-    if (row.accountNumber) put(ws, r, 6, row.accountNumber, S.mono);
-    else put(ws, r, 6, 'Belum diisi', S.missing);
-    put(ws, r, 7, row.pic1Name ?? '-', S.text);
-    put(ws, r, 8, row.bankName ?? '-', row.bankName ? S.text : S.missing);
-    put(ws, r, 9, row.accountHolderName ?? '-', row.accountHolderName ? S.text : S.missing);
+    if (row.accountNumber) put(ws, r, 7, row.accountNumber, S.mono);
+    else put(ws, r, 7, 'Belum diisi', S.missing);
+    put(ws, r, 8, row.pic1Name ?? '-', S.text);
+    put(ws, r, 9, row.bankName ?? '-', row.bankName ? S.text : S.missing);
+    put(ws, r, 10, row.accountHolderName ?? '-', row.accountHolderName ? S.text : S.missing);
 
     const refill = row.refill;
     if (!refill) {
-      put(ws, r, 10, '-', S.textCenter);
       put(ws, r, 11, '-', S.textCenter);
+      put(ws, r, 12, '-', S.textCenter);
     } else {
       // Amber while Finance still owes a verification, like the missing-data cells.
-      put(ws, r, 10, REFILL_STATE_LABEL[refill.state], refill.state === 'awaiting_finance' ? S.missing : S.textCenter);
+      put(ws, r, 11, REFILL_STATE_LABEL[refill.state], refill.state === 'awaiting_finance' ? S.missing : S.textCenter);
       put(
         ws,
         r,
-        11,
+        12,
         refill.verifiedAt
           ? `${refill.verifiedByName ?? 'Finance'} · ${stampOf(refill.verifiedAt)}`
           : refill.state === 'awaiting_finance' ? 'Belum diverifikasi' : '-',
@@ -161,7 +164,8 @@ function buildStoreSheet(title: string, subtitle: string, rows: PettyCashReportR
   put(ws, totalRow, 3, 'TOTAL', S.totalLabel);
   put(ws, totalRow, 4, '', S.totalBlank);
   put(ws, totalRow, 5, total, S.totalMoney, MONEY_FORMAT);
-  for (let c = 6; c <= lastCol; c++) put(ws, totalRow, c, '', S.totalBlank);
+  put(ws, totalRow, 6, rows.reduce((sum, row) => sum + row.reRequestAmount, 0), S.totalMoney, MONEY_FORMAT);
+  for (let c = 7; c <= lastCol; c++) put(ws, totalRow, c, '', S.totalBlank);
   ws['!rows']![totalRow] = { hpt: 20 };
 
   ws['!ref'] = XlsxStyle.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: totalRow, c: lastCol } });

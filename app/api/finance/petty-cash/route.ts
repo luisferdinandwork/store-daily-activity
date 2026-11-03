@@ -12,13 +12,14 @@ import {
   pettyCashTransactions,
 } from '@/lib/db/schema/petty-cash';
 import { pettyCashDescription } from '@/lib/petty-cash-categories';
+import { jakartaDateKey } from '@/lib/day-bucket';
 import { getVerifiedCutoffs } from '@/lib/db/utils/petty-cash-review';
 import {
   isFinanceReview,
   isLockedByVerification,
+  leavesOutOfTransfer,
   type FinanceReview,
 } from '@/lib/petty-cash-review';
-import type { FinanceRejectedSnapshot } from '@/lib/db/schema/petty-cash';
 import type { StoreStatus } from '@/lib/store-status';
 
 function getJakartaMonth() {
@@ -55,15 +56,32 @@ export type PettyCashTxRow = {
 
   /** Finance's review of the request (lib/petty-cash-review.ts); null = not reviewed. */
   financeReview: FinanceReview | null;
-  /** Finance's comment on the rejection, if it left one. */
+  /** Finance's comment on its decision, if it left one. */
   financeComment: string | null;
   financeReviewAt: string | null;
-  /** When PIC 1 corrected it. */
-  resubmittedAt: string | null;
-  /** The refill covering it has been verified: the amount is locked, a standing rejection is final. */
+  /** The refill covering it has been verified: the amount is locked, Finance can no longer decide on it. */
   locked: boolean;
-  /** What the request looked like when Finance first rejected it. */
-  rejectedSnapshot: FinanceRejectedSnapshot | null;
+
+  /** A Perlu Perbaikan request PIC 1 filed again (lib/petty-cash-re-request.ts). `createdAt` is the day it was filed. */
+  isReRequest: boolean;
+  /** The day PIC 1 gave as the day the request was made (YYYY-MM-DD); null on a normal request. */
+  requestDate: string | null;
+  /** For a re-request: the Perlu Perbaikan request it files again (may be from an earlier month). */
+  reRequestOf: ReRequestOrigin | null;
+  /** For a Perlu Perbaikan request: the re-request that filed it again. */
+  reRequestedAs: number | null;
+};
+
+export type ReRequestOrigin = {
+  id: number;
+  categoryName: string | null;
+  description: string;
+  amount: string;
+  imageUrl: string | null;
+  createdAt: string;
+  month: string;
+  financeComment: string | null;
+  financeReviewAt: string | null;
 };
 
 export type PettyCashStoreRow = {
@@ -170,8 +188,9 @@ export async function GET(
       financeReview: pettyCashTransactions.financeReview,
       financeComment: pettyCashTransactions.financeComment,
       financeReviewAt: pettyCashTransactions.financeReviewAt,
-      resubmittedAt: pettyCashTransactions.resubmittedAt,
-      financeRejectedSnapshot: pettyCashTransactions.financeRejectedSnapshot,
+      isReRequest: pettyCashTransactions.isReRequest,
+      requestDate: pettyCashTransactions.requestDate,
+      reRequestOfId: pettyCashTransactions.reRequestOfId,
       submittedById: pettyCashTransactions.userId,
       submitterName: sql<string>`COALESCE((SELECT name FROM users WHERE id = ${pettyCashTransactions.userId}), 'Unknown')`,
     })
@@ -183,6 +202,37 @@ export async function GET(
       ),
     )
     .orderBy(desc(pettyCashTransactions.createdAt));
+
+  // Re-requests point at a Ditolak request that may sit in another month; Ditolak ones need to know whether
+  // somebody filed them again. Both are looked up by id, outside the month filter.
+  const originIds = [...new Set(txRows.flatMap((tx) => (tx.reRequestOfId != null ? [tx.reRequestOfId] : [])))];
+  const originRows = originIds.length
+    ? await db
+        .select({
+          id: pettyCashTransactions.id,
+          categoryName: pettyCashTransactions.categoryName,
+          description: pettyCashTransactions.description,
+          amount: pettyCashTransactions.amount,
+          actualAmount: pettyCashTransactions.actualAmount,
+          imageUrl: pettyCashTransactions.imageUrl,
+          createdAt: pettyCashTransactions.createdAt,
+          yearMonth: pettyCashTransactions.yearMonth,
+          financeComment: pettyCashTransactions.financeComment,
+          financeReviewAt: pettyCashTransactions.financeReviewAt,
+        })
+        .from(pettyCashTransactions)
+        .where(inArray(pettyCashTransactions.id, originIds))
+    : [];
+  const originById = new Map(originRows.map((o) => [o.id, o]));
+
+  const filedAgain = txRows.length
+    ? await db
+        .select({ id: pettyCashTransactions.id, of: pettyCashTransactions.reRequestOfId })
+        .from(pettyCashTransactions)
+        .where(inArray(pettyCashTransactions.reRequestOfId, txRows.map((tx) => tx.id)))
+    : [];
+  const reRequestedAs = new Map<number, number>();
+  for (const r of filedAgain) if (r.of != null) reRequestedAs.set(r.of, r.id);
 
   const refillRows = await db
     .select({
@@ -244,9 +294,9 @@ export async function GET(
     // the actual amount used, so they don't count as spend yet.
     const completedTx = txList.filter((tx) => tx.status === 'completed');
 
-    // A request Finance rejected (until it is accepted again) is not used: its amount went back to the balance.
+    // A request Finance turned down (until it is accepted again) is not used: its amount went back to the balance.
     const monthlySpend = completedTx
-      .filter((tx) => tx.financeReview !== 'rejected' && tx.financeReview !== 'resubmitted')
+      .filter((tx) => !leavesOutOfTransfer(tx.financeReview))
       .reduce((sum, tx) => sum + Number(tx.actualAmount ?? tx.amount), 0);
 
     const pendingOpsCount = txList.filter((tx) => tx.status === 'pending_ops').length;
@@ -294,9 +344,26 @@ export async function GET(
         financeReview: isFinanceReview(tx.financeReview) ? tx.financeReview : null,
         financeComment: tx.financeComment,
         financeReviewAt: tx.financeReviewAt ? new Date(tx.financeReviewAt).toISOString() : null,
-        resubmittedAt: tx.resubmittedAt ? new Date(tx.resubmittedAt).toISOString() : null,
         locked: isLockedByVerification(tx.createdAt, verifiedCutoffs.get(store.id)),
-        rejectedSnapshot: tx.financeRejectedSnapshot,
+        isReRequest: tx.isReRequest,
+        requestDate: tx.requestDate ? jakartaDateKey(tx.requestDate) : null,
+        reRequestOf: (() => {
+          const o = tx.reRequestOfId != null ? originById.get(tx.reRequestOfId) : undefined;
+          return o
+            ? {
+                id: o.id,
+                categoryName: o.categoryName,
+                description: pettyCashDescription(o.description),
+                amount: o.actualAmount ?? o.amount,
+                imageUrl: o.imageUrl,
+                createdAt: new Date(o.createdAt).toISOString(),
+                month: o.yearMonth,
+                financeComment: o.financeComment,
+                financeReviewAt: o.financeReviewAt ? new Date(o.financeReviewAt).toISOString() : null,
+              }
+            : null;
+        })(),
+        reRequestedAs: reRequestedAs.get(tx.id) ?? null,
       })),
     };
   });

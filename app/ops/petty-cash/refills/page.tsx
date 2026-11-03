@@ -78,6 +78,8 @@ import {
   type RefillState,
   type SortDir,
 } from '@/lib/ops-petty-cash';
+import { ReRequestBadge } from '@/components/petty-cash/ReRequestBadge';
+import { FINANCE_REVIEW_LABEL, leavesOutOfTransfer } from '@/lib/petty-cash-review';
 
 /** First day of this month in Jakarta, as YYYY-MM-01 (what OpsPageHeader's month picker works in). */
 function currentMonthStart() {
@@ -166,7 +168,7 @@ function ItemsPanel({
             </thead>
             <tbody>
               {row.items.map((item) => (
-                <tr key={item.id} className={cn('bg-white', (item.financeReview === 'rejected' || item.financeReview === 'resubmitted') && 'text-slate-400')}>
+                <tr key={item.id} className={cn('bg-white', leavesOutOfTransfer(item.financeReview) && 'text-slate-400')}>
                   <td className={cn(TD, 'whitespace-nowrap text-slate-500')}>{fmtDay(item.createdAt)}</td>
                   <td className={cn(TD, 'max-w-0')}>
                     <div className="flex items-center gap-1.5">
@@ -175,6 +177,7 @@ function ItemsPanel({
                           {item.categoryName}
                         </span>
                       )}
+                      {item.isReRequest && <ReRequestBadge />}
                       <span className="truncate text-slate-600" title={item.description}>
                         {item.description}
                       </span>
@@ -186,10 +189,17 @@ function ItemsPanel({
                     </span>
                   </td>
                   <td className={cn(TD, 'text-right tabular-nums text-slate-900')}>
-                    {item.financeReview === 'rejected' || item.financeReview === 'resubmitted' ? (
+                    {item.financeReview && leavesOutOfTransfer(item.financeReview) ? (
                       <>
                         <span className="text-slate-400 line-through">{num(item.amount)}</span>
-                        <span className="block text-[10px] font-semibold text-rose-600">Ditolak Finance</span>
+                        <span
+                          className={cn(
+                            'block text-[10px] font-semibold',
+                            item.financeReview === 'rejected' ? 'text-rose-600' : 'text-amber-600',
+                          )}
+                        >
+                          {FINANCE_REVIEW_LABEL[item.financeReview]}
+                        </span>
                       </>
                     ) : (
                       num(item.amount)
@@ -199,7 +209,7 @@ function ItemsPanel({
               ))}
               <tr className="bg-indigo-50 font-semibold text-slate-900">
                 <td colSpan={3} className={cn(TD, 'text-right text-xs uppercase tracking-wide')}>
-                  Total used (excl. rejected by Finance)
+                  Total used (excl. Perlu Perbaikan / Ditolak by Finance)
                 </td>
                 <td className={cn(TD, 'text-right tabular-nums')}>{num(row.used)}</td>
               </tr>

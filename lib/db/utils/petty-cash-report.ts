@@ -17,6 +17,7 @@ import {
   stores,
   users,
 } from '@/lib/db/schema';
+import { countsAsUsed } from './petty-cash-used';
 import {
   pickRefillByStore,
   refillStateOf,
@@ -45,9 +46,12 @@ export async function getPettyCashReport(month: string): Promise<PettyCashReport
   const usedRows = await db
     .select({
       storeId: pettyCashTransactions.storeId,
-      // Requests Finance rejected (and not yet re-accepted) are not counted as used.
-      total: sql<string>`COALESCE(SUM(COALESCE(${pettyCashTransactions.actualAmount}, ${pettyCashTransactions.amount})) FILTER (WHERE ${pettyCashTransactions.financeReview} IS NULL OR ${pettyCashTransactions.financeReview} NOT IN ('rejected', 'resubmitted')), 0)`,
+      // Requests Finance turned down (and not yet re-accepted) are not counted as used.
+      total: sql<string>`COALESCE(SUM(COALESCE(${pettyCashTransactions.actualAmount}, ${pettyCashTransactions.amount})) FILTER (WHERE ${countsAsUsed(pettyCashTransactions.financeReview)}), 0)`,
       count: sql<number>`COUNT(*)::int`,
+      // The re-requests inside that total.
+      reTotal: sql<string>`COALESCE(SUM(COALESCE(${pettyCashTransactions.actualAmount}, ${pettyCashTransactions.amount})) FILTER (WHERE ${pettyCashTransactions.isReRequest} AND ${countsAsUsed(pettyCashTransactions.financeReview)}), 0)`,
+      reCount: sql<number>`COUNT(*) FILTER (WHERE ${pettyCashTransactions.isReRequest} AND ${countsAsUsed(pettyCashTransactions.financeReview)})::int`,
     })
     .from(pettyCashTransactions)
     .where(and(eq(pettyCashTransactions.yearMonth, month), eq(pettyCashTransactions.status, 'completed')))
@@ -140,6 +144,8 @@ export async function getPettyCashReport(month: string): Promise<PettyCashReport
 
         totalUsed: Math.round(Number(used?.total ?? 0)),
         txCount: used?.count ?? 0,
+        reRequestCount: used?.reCount ?? 0,
+        reRequestAmount: Math.round(Number(used?.reTotal ?? 0)),
 
         pic1Name: bankByStore.get(store.id)?.requesterName ?? pic1ByStore.get(store.id)?.join(', ') ?? null,
         bankName: bank?.bankName ?? null,

@@ -701,6 +701,7 @@ export default function StoreClosingDetailPage() {
               title="Foto Z-Report & EDC Settlement"
               description={`Upload 1 foto yang menampilkan Z-Report dan EDC Settlement.`}
               photoType="eod_edc_settlement"
+              scan
               min={PHOTO_RULES.eodEdcSettlement.min}
               max={PHOTO_RULES.eodEdcSettlement.max}
               initialPhotos={eodEdcSettlementPhoto ? [eodEdcSettlementPhoto] : []}

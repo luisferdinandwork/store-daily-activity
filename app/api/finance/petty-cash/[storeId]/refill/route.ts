@@ -12,6 +12,7 @@ import {
   pettyCashTransactions,
 } from '@/lib/db/schema/petty-cash';
 import { stores } from '@/lib/db/schema/core';
+import { leavesOutOfTransfer } from '@/lib/petty-cash-review';
 
 type Params = { params: Promise<{ storeId: string }> };
 
@@ -179,7 +180,7 @@ export async function POST(req: NextRequest, { params }: Params) {
   }
 
   const approvedSpend = txRows
-    .filter((tx) => tx.status === 'completed' && tx.financeReview !== 'rejected' && tx.financeReview !== 'resubmitted')
+    .filter((tx) => tx.status === 'completed' && !leavesOutOfTransfer(tx.financeReview))
     .reduce((sum, tx) => sum + Number(tx.actualAmount ?? tx.amount), 0);
 
   const fallbackBalance = Math.max(0, PETTY_CASH_MAX_BALANCE - approvedSpend);

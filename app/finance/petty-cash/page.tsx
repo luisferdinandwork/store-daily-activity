@@ -54,7 +54,9 @@ import {
   type RefillState,
 } from '@/lib/petty-cash-report';
 import { TX_STATUS_LABEL } from '@/lib/petty-cash-transactions';
-import { FINANCE_REVIEW_LABEL, reviewOutcome, type RefillTransfer } from '@/lib/petty-cash-review';
+import { FINANCE_REVIEW_LABEL, leavesOutOfTransfer, reviewOutcome, type RefillTransfer } from '@/lib/petty-cash-review';
+import { fmtRequestDate } from '@/lib/petty-cash-re-request';
+import { ReRequestBadge } from '@/components/petty-cash/ReRequestBadge';
 import { STORE_STATUS_LABEL } from '@/lib/store-status';
 import { TxDetailModal, type ReviewHandler } from '@/components/finance/petty-cash/TxDetailModal';
 import {
@@ -307,7 +309,7 @@ function TransferLine({ transfer: t }: { transfer: RefillTransfer }) {
         <dd className="font-medium tabular-nums text-slate-900">{rp(t.refill)}</dd>
       </div>
       <div>
-        <dt className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Ditolak Finance</dt>
+        <dt className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Ditolak</dt>
         <dd className={cn('font-medium tabular-nums', t.rejectedCount > 0 ? 'text-rose-600' : 'text-slate-400')}>
           {t.rejectedCount > 0 ? `${rp(t.rejectedAmount)} · ${t.rejectedCount} request` : '–'}
           {t.rejectedCount > 0 && (
@@ -333,21 +335,11 @@ function NoBank() {
 
 /** Finance's verdict on a request, under its status (nothing when it was not reviewed). */
 function ReviewTag({ tx }: { tx: PettyCashTxRow }) {
-  const outcome = reviewOutcome(tx.financeReview, tx.locked);
+  const outcome = reviewOutcome(tx.financeReview);
   if (outcome === 'none') return null;
   const tone =
-    outcome === 'accepted'
-      ? 'text-emerald-600'
-      : outcome === 'resubmitted'
-        ? 'text-amber-600'
-        : 'text-rose-600';
-  const label =
-    outcome === 'permanent'
-      ? 'Ditolak permanen'
-      : outcome === 'rejected'
-        ? FINANCE_REVIEW_LABEL.rejected
-        : FINANCE_REVIEW_LABEL[outcome];
-  return <span className={cn('block text-[10px] font-semibold', tone)}>{label}</span>;
+    outcome === 'accepted' ? 'text-emerald-600' : outcome === 'needs_fix' ? 'text-amber-600' : 'text-rose-600';
+  return <span className={cn('block text-[10px] font-semibold', tone)}>{FINANCE_REVIEW_LABEL[outcome]}</span>;
 }
 
 function TxSheet({
@@ -399,11 +391,21 @@ function TxSheet({
                 title="Klik untuk melihat detail dan foto struk"
                 className="cursor-pointer bg-white outline-none hover:bg-emerald-50/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-500"
               >
-                <td className={cn(TD, 'whitespace-nowrap text-slate-500')}>{fmtDateTime(tx.createdAt)}</td>
+                <td className={cn(TD, 'whitespace-nowrap text-slate-500')}>
+                  {fmtDateTime(tx.createdAt)}
+                  {tx.isReRequest && tx.requestDate && (
+                    <span className="block text-[10px] text-violet-600" title="Tanggal request yang diisi PIC 1">
+                      Request {fmtRequestDate(tx.requestDate)}
+                    </span>
+                  )}
+                </td>
                 <td className={cn(TD, 'whitespace-nowrap font-medium text-slate-700')}>{tx.categoryName ?? '–'}</td>
-                <td className={cn(TD, 'max-w-xs truncate text-slate-700')} title={tx.description}>{tx.description}</td>
+                <td className={cn(TD, 'max-w-xs truncate text-slate-700')} title={tx.description}>
+                  {tx.isReRequest && <ReRequestBadge className="mr-1.5 align-middle" />}
+                  {tx.description}
+                </td>
                 <td className={cn(TD, 'whitespace-nowrap text-slate-600')}>{tx.submittedBy}</td>
-                <td className={cn(TD, 'text-right tabular-nums text-slate-900', (tx.status === 'ops_rejected' || tx.financeReview === 'rejected' || tx.financeReview === 'resubmitted') && 'text-slate-400 line-through')}>
+                <td className={cn(TD, 'text-right tabular-nums text-slate-900', (tx.status === 'ops_rejected' || leavesOutOfTransfer(tx.financeReview)) && 'text-slate-400 line-through')}>
                   {num(tx.actualAmount ?? tx.amount)}
                 </td>
                 <td className={cn(TD, 'py-1')}>
@@ -632,7 +634,7 @@ export default function FinancePettyCashPage() {
   useEffect(() => { void load(month); }, [load, month]);
   useEffect(() => { void loadRefillRequests(); }, [loadRefillRequests]);
 
-  // Reject a request (comment optional) or accept PIC 1's correction; the refill's transfer follows.
+  // Send a request back (Perlu Perbaikan) or turn it down (Ditolak) — comment optional — or accept PIC 1's correction; the refill's transfer follows.
   const reviewTx: ReviewHandler = async (txId, action, comment) => {
     try {
       const res = await fetch(`/api/finance/petty-cash/transactions/${txId}/review`, {
@@ -649,7 +651,9 @@ export default function FinancePettyCashPage() {
       toast.success(
         action === 'reject'
           ? 'Request ditolak — PIC 1 diberi tahu dan nominalnya tidak ikut ditransfer.'
-          : 'Keputusan disimpan.',
+          : action === 'revise'
+            ? 'Ditandai Perlu Perbaikan — PIC 1 mengajukan ulang (Re-request) bulan depan; nominalnya tidak ikut ditransfer.'
+            : 'Keputusan disimpan.',
       );
       await Promise.all([load(month, true), loadRefillRequests()]);
       return true;

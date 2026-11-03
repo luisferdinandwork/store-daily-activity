@@ -7,6 +7,7 @@ import { db } from '@/lib/db';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
 import { stores } from '@/lib/db/schema/core';
 import { pettyCashPeriods, pettyCashTransactions } from '@/lib/db/schema/petty-cash';
+import { leavesOutOfTransfer } from '@/lib/petty-cash-review';
 
 type Params = {
   params: Promise<{
@@ -219,8 +220,8 @@ export async function DELETE(_req: NextRequest, { params }: Params) {
 
     let balanceRestored = false;
 
-    // A request Finance rejected (and not yet re-accepted) was already given back to the balance.
-    const stillCounted = deleted.financeReview !== 'rejected' && deleted.financeReview !== 'resubmitted';
+    // A request Finance turned down (and not yet re-accepted) was already given back to the balance.
+    const stillCounted = !leavesOutOfTransfer(deleted.financeReview);
     if (stillCounted && deleted.status === 'completed' && deleted.periodId != null && deleted.actualAmount != null) {
       const restored = await trx
         .update(pettyCashPeriods)

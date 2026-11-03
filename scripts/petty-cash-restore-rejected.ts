@@ -35,7 +35,7 @@ async function main() {
            p.current_balance, p.year_month
       FROM petty_cash_transactions t
       JOIN petty_cash_periods p ON p.id = t.period_id AND p.status = 'open'
-     WHERE t.status = 'completed' AND t.finance_review IN ('rejected', 'resubmitted')
+     WHERE t.status = 'completed' AND t.finance_review IN ('needs_fix', 'rejected', 'resubmitted')
      ORDER BY t.id
   `);
 

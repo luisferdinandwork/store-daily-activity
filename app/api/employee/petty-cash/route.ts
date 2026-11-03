@@ -1,7 +1,7 @@
 // app/api/employee/petty-cash/route.ts
 
 import { NextRequest, NextResponse } from 'next/server';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { desc, eq, inArray, sql } from 'drizzle-orm';
 import { getServerSession } from 'next-auth';
 
 import { db } from '@/lib/db';
@@ -16,8 +16,11 @@ import {
 } from '@/lib/db/utils/petty-cash-categories';
 import { PETTY_CASH_REASON_MAX, pettyCashDescription } from '@/lib/petty-cash-categories';
 import { assertStoreOperational } from '@/lib/db/utils/store-status';
-import { getVerifiedCutoffs } from '@/lib/db/utils/petty-cash-review';
-import { isLockedByVerification, reviewOutcome } from '@/lib/petty-cash-review';
+import { canReRequest, reviewOutcome } from '@/lib/petty-cash-review';
+import { jakartaDateKey } from '@/lib/day-bucket';
+
+/** How many of the store's requests the page lists (newest first) — it searches / filters them client-side. */
+const MAX_LISTED_REQUESTS = 500;
 
 function currentYearMonth() {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -124,6 +127,8 @@ export async function GET() {
 
   const categories = await listPettyCashCategories({ activeOnly: true });
 
+  // Every request of the store, any month, newest first: the page searches / filters / sorts them as one
+  // list (each request appears once) and works out the current period's counters from `month` itself.
   const txList = await db
     .select({
       id: pettyCashTransactions.id,
@@ -137,22 +142,27 @@ export async function GET() {
       rejectedAt: pettyCashTransactions.rejectedAt,
       rejectionReason: pettyCashTransactions.rejectionReason,
       createdAt: pettyCashTransactions.createdAt,
+      yearMonth: pettyCashTransactions.yearMonth,
       financeReview: pettyCashTransactions.financeReview,
       financeComment: pettyCashTransactions.financeComment,
-      resubmittedAt: pettyCashTransactions.resubmittedAt,
+      isReRequest: pettyCashTransactions.isReRequest,
+      requestDate: pettyCashTransactions.requestDate,
+      reRequestOfId: pettyCashTransactions.reRequestOfId,
     })
     .from(pettyCashTransactions)
-    .where(
-      and(
-        eq(pettyCashTransactions.storeId, storeId),
-        eq(pettyCashTransactions.yearMonth, activeMonth),
-      ),
-    )
-    .orderBy(desc(pettyCashTransactions.createdAt));
+    .where(eq(pettyCashTransactions.storeId, storeId))
+    .orderBy(desc(pettyCashTransactions.createdAt), desc(pettyCashTransactions.id))
+    .limit(MAX_LISTED_REQUESTS);
 
-  // Finance may reject a request until it verifies the refill that covers it; after that the
-  // rejection stands for good (lib/petty-cash-review.ts).
-  const verifiedCutoff = (await getVerifiedCutoffs([storeId])).get(storeId);
+  // Which of these Perlu Perbaikan requests were already filed again (original id → the re-request's id).
+  const reRequestedAs = new Map<number, number>();
+  if (txList.length > 0) {
+    const filedAgain = await db
+      .select({ id: pettyCashTransactions.id, of: pettyCashTransactions.reRequestOfId })
+      .from(pettyCashTransactions)
+      .where(inArray(pettyCashTransactions.reRequestOfId, txList.map((t) => t.id)));
+    for (const r of filedAgain) if (r.of != null) reRequestedAs.set(r.of, r.id);
+  }
 
   return NextResponse.json({
     success: true,
@@ -184,10 +194,19 @@ export async function GET() {
       rejectedAt: t.rejectedAt ? new Date(t.rejectedAt).toISOString() : null,
       rejectionReason: t.rejectionReason,
       createdAt: new Date(t.createdAt).toISOString(),
-      // Finance's review: what happened, its comment, and whether PIC 1 can still correct it.
-      reviewOutcome: reviewOutcome(t.financeReview, isLockedByVerification(t.createdAt, verifiedCutoff)),
+      // The petty cash period it was filed in (YYYY-MM) — not always the month it was filed in.
+      month: t.yearMonth,
+      // Finance's decision on it (Perlu Perbaikan / Ditolak / Diterima) and its comment.
+      reviewOutcome: reviewOutcome(t.financeReview),
       financeComment: t.financeComment,
-      resubmittedAt: t.resubmittedAt ? new Date(t.resubmittedAt).toISOString() : null,
+      // A re-request (a Perlu Perbaikan request filed again): the day PIC 1 gave as the day it was made,
+      // the request it files again, and — on the original — the re-request that did it.
+      isReRequest: t.isReRequest,
+      requestDate: t.requestDate ? jakartaDateKey(t.requestDate) : null,
+      reRequestOfId: t.reRequestOfId,
+      reRequestedAs: reRequestedAs.get(t.id) ?? null,
+      // Perlu Perbaikan, completed and not filed again yet — what the Re-request button needs.
+      canReRequest: t.status === 'completed' && canReRequest(t.financeReview) && !reRequestedAs.has(t.id),
     })),
   });
 }

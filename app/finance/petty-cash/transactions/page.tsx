@@ -55,6 +55,9 @@ import {
   type DateRangeValue,
 } from '@/components/finance/shared/sheet-kit';
 import { StoreCombobox } from '@/components/shared/store-combobox';
+import { ReRequestBadge } from '@/components/petty-cash/ReRequestBadge';
+import { fmtRequestDate } from '@/lib/petty-cash-re-request';
+import { FINANCE_REVIEW_LABEL, isFinanceReview } from '@/lib/petty-cash-review';
 
 const STATUS_CHIP: Record<TxStatus, string> = {
   pending_ops: 'bg-amber-50 text-amber-700 ring-amber-200',
@@ -135,14 +138,24 @@ function TxLine({
   return (
     <tr className="bg-white text-[13px] hover:bg-emerald-50/40">
       <td className={cn(ROW_HEAD, 'w-11')}>{index}</td>
-      <td className={cn(TD, 'w-40 whitespace-nowrap text-slate-600')}>{fmtWhen(tx.createdAt)}</td>
+      <td className={cn(TD, 'w-40 whitespace-nowrap text-slate-600')}>
+        {fmtWhen(tx.createdAt)}
+        {tx.isReRequest && tx.requestDate && (
+          <span className="block text-[10px] text-violet-600" title="Tanggal request yang diisi PIC 1">
+            Request {fmtRequestDate(tx.requestDate)}
+          </span>
+        )}
+      </td>
       <td className={cn(TD, 'w-24 whitespace-nowrap font-mono text-xs font-semibold text-slate-600')}>{tx.storeNo}</td>
       <td className={cn(TD, 'min-w-48 font-medium text-slate-900')}>{tx.storeName}</td>
       <td className={cn(TD, 'whitespace-nowrap font-medium text-slate-700')}>
         {tx.categoryName ?? <span className="text-slate-300">–</span>}
       </td>
       <td className={cn(TD, 'min-w-64 max-w-sm')}>
-        <p className="line-clamp-2 text-slate-700" title={tx.description}>{tx.description}</p>
+        <p className="line-clamp-2 text-slate-700" title={tx.description}>
+          {tx.isReRequest && <ReRequestBadge className="mr-1.5 align-middle" />}
+          {tx.description}
+        </p>
         {rejected && tx.rejectionReason && (
           <p className="mt-0.5 text-[11px] text-rose-600">Ditolak: {tx.rejectionReason}</p>
         )}
@@ -154,7 +167,24 @@ function TxLine({
       <td className={cn(TD, 'w-32 text-right tabular-nums text-slate-900')}>
         {tx.actualAmount != null ? num(tx.actualAmount) : <span className="text-slate-300">–</span>}
       </td>
-      <td className={cn(TD, 'w-44')}><StatusChip status={tx.status} /></td>
+      <td className={cn(TD, 'w-44')}>
+        <StatusChip status={tx.status} />
+        {isFinanceReview(tx.financeReview) && (
+          <span
+            className={cn(
+              'mt-0.5 block text-[10px] font-semibold',
+              tx.financeReview === 'accepted'
+                ? 'text-emerald-600'
+                : tx.financeReview === 'rejected'
+                  ? 'text-rose-600'
+                  : 'text-amber-600',
+            )}
+            title={tx.financeComment ?? undefined}
+          >
+            {FINANCE_REVIEW_LABEL[tx.financeReview]}
+          </span>
+        )}
+      </td>
       <td className={cn(TD, 'w-16 py-1')}>
         <span className="flex justify-center">
           <ReceiptThumb url={tx.imageUrl} onOpen={onOpenPhoto} />
@@ -304,6 +334,7 @@ export default function FinancePettyCashTransactionsPage() {
               { label: 'Waiting OPS', value: String(summary.byStatus.pending_ops), sub: 'not yet approved' },
               { label: 'Awaiting actual amount', value: String(summary.byStatus.ops_approved), sub: 'approved, PIC yet to record' },
               { label: 'Rejected', value: String(summary.byStatus.ops_rejected), sub: 'by OPS' },
+              { label: 'Re-request', value: String(summary.reRequestCount), sub: 'ditolak Finance, diajukan ulang' },
             ]}
           />
         )}

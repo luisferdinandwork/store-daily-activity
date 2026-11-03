@@ -2,18 +2,18 @@
 //
 // Finance's review of completed petty cash requests (rules + states: lib/petty-cash-review.ts).
 //
-//   financeRejectTransaction  Finance turns a request down (optional comment) — PIC 1 is told
-//   financeAcceptTransaction  Finance accepts PIC 1's correction, or takes a rejection back
-//   employeeFixTransaction    PIC 1 corrects a rejected request (Keterangan, jumlah, struk) and resubmits
+//   financeRejectTransaction  Finance turns a request down — "Perlu Perbaikan" (PIC 1 files it again next
+//                             month as a re-request) or "Ditolak" (final, can't be re-requested) — PIC 1 is told
+//   financeAcceptTransaction  Finance takes either decision back
 //
-// All three stop once the store's refill has been verified after the request was filed: that cash is
-// already sent, so a rejection standing at that point is permanent (getVerifiedCutoffs).
+// Both stop once the store's refill has been verified after the request was filed: that cash is already
+// sent (getVerifiedCutoffs). They also stop for a Perlu Perbaikan request PIC 1 has already filed again.
 //
-// A request keeps status 'completed' throughout, but while Finance's rejection stands (rejected, or
-// corrected and not yet re-accepted) its amount is NOT counted as used: rejecting gives the amount back
-// to the period's balance, accepting takes it off again (adjustPeriodBalance). So "used", the balance
-// and the refill (max − balance) all leave a rejected request out; whatever the transfer doesn't cover
-// is paid by the employee outside the system.
+// A request keeps status 'completed' throughout, but while Finance's decision stands (needs_fix or
+// rejected) its amount is NOT counted as used: turning it down gives the amount back to the period's
+// balance, accepting takes it off again (adjustPeriodBalance). So "used", the balance and the refill
+// (max − balance) all leave it out; whatever the transfer doesn't cover is paid by the employee
+// outside the system.
 
 import { and, asc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 
@@ -23,12 +23,11 @@ import {
   pettyCashPeriods,
   pettyCashRefillRequests,
   pettyCashTransactions,
-  stores,
   userRoles,
   users,
 } from '@/lib/db/schema';
-import { PETTY_CASH_REASON_MAX, pettyCashDescription } from '@/lib/petty-cash-categories';
-import { isLockedByVerification, validateFinanceComment } from '@/lib/petty-cash-review';
+import { isLockedByVerification, leavesOutOfTransfer, validateFinanceComment } from '@/lib/petty-cash-review';
+import { RE_REQUEST_LABEL } from '@/lib/petty-cash-re-request';
 import { createNotificationsForUsers } from './notifications';
 
 export type ReviewResult =
@@ -45,7 +44,7 @@ const LOCKED_UNTIL_RECEIVED = new Date(8_640_000_000_000_000);
  * When Finance last verified a refill of each store (stores with none are absent). Requests filed up
  * to that moment are locked. While a verified refill has not been received yet (PIC 1 has not
  * confirmed with both photos) the cash is already sent, so the cutoff is "forever": a request filed
- * in between can't be rejected either. Once it is received, new requests start a new cycle.
+ * in between can't be decided on either. Once it is received, new requests start a new cycle.
  */
 export async function getVerifiedCutoffs(storeIds: number[]): Promise<Map<number, Date>> {
   if (storeIds.length === 0) return new Map();
@@ -75,7 +74,7 @@ export async function getVerifiedCutoffs(storeIds: number[]): Promise<Map<number
   return out;
 }
 
-async function financeUserIds(): Promise<string[]> {
+export async function financeUserIds(): Promise<string[]> {
   const rows = await db
     .select({ id: users.id })
     .from(users)
@@ -86,9 +85,8 @@ async function financeUserIds(): Promise<string[]> {
 
 async function loadTransaction(txId: number) {
   const [row] = await db
-    .select({ tx: pettyCashTransactions, storeName: stores.name })
+    .select({ tx: pettyCashTransactions })
     .from(pettyCashTransactions)
-    .innerJoin(stores, eq(stores.id, pettyCashTransactions.storeId))
     .where(eq(pettyCashTransactions.id, txId))
     .limit(1);
   return row ?? null;
@@ -99,6 +97,16 @@ type TxRow = typeof pettyCashTransactions.$inferSelect;
 async function isLocked(tx: TxRow): Promise<boolean> {
   const cutoff = (await getVerifiedCutoffs([tx.storeId])).get(tx.storeId);
   return isLockedByVerification(tx.createdAt, cutoff);
+}
+
+/** The re-request that filed this request again, if there is one. */
+async function reRequestOf(txId: number): Promise<number | null> {
+  const [again] = await db
+    .select({ id: pettyCashTransactions.id })
+    .from(pettyCashTransactions)
+    .where(eq(pettyCashTransactions.reRequestOfId, txId))
+    .limit(1);
+  return again?.id ?? null;
 }
 
 const amountOf = (tx: TxRow) => Number(tx.actualAmount ?? tx.amount);
@@ -123,11 +131,17 @@ async function adjustPeriodBalance(trx: Trx, periodId: number | null, delta: num
 
 // ─── Finance ─────────────────────────────────────────────────────────────────
 
+/** How Finance turns a request down: Perlu Perbaikan (re-requestable) or Ditolak (final). */
+export type RejectKind = 'needs_fix' | 'rejected';
+
 export async function financeRejectTransaction(input: {
   txId: number;
   actorId: string;
+  /** Default: Ditolak. */
+  kind?: RejectKind;
   comment?: unknown;
 }): Promise<ReviewResult> {
+  const kind: RejectKind = input.kind ?? 'rejected';
   const comment = validateFinanceComment(input.comment);
   if (!comment.ok) return { success: false, error: comment.error, status: 400 };
 
@@ -136,13 +150,20 @@ export async function financeRejectTransaction(input: {
   const { tx } = found;
 
   if (tx.status !== 'completed') {
-    return { success: false, error: 'Hanya request yang sudah selesai (jumlah terpakai sudah diisi PIC 1) yang bisa ditolak.', status: 409 };
+    return { success: false, error: 'Hanya request yang sudah selesai (jumlah terpakai sudah diisi PIC 1) yang bisa diputuskan.', status: 409 };
   }
   if (tx.financeReview === 'rejected') {
-    return { success: false, error: 'Request ini sudah ditolak.', status: 409 };
+    return { success: false, error: 'Request ini sudah Ditolak. Batalkan penolakannya dulu kalau ingin mengubah keputusan.', status: 409 };
+  }
+  if (tx.financeReview === 'needs_fix' && kind === 'needs_fix') {
+    return { success: false, error: 'Request ini sudah berstatus Perlu Perbaikan.', status: 409 };
   }
   if (await isLocked(tx)) {
-    return { success: false, error: 'Refill toko ini sudah diverifikasi — nominalnya sudah dikunci dan tidak bisa ditolak lagi.', status: 409 };
+    return { success: false, error: 'Refill toko ini sudah diverifikasi — nominalnya sudah dikunci dan keputusannya tidak bisa diubah lagi.', status: 409 };
+  }
+  const again = await reRequestOf(tx.id);
+  if (again != null) {
+    return { success: false, error: `Request ini sudah diajukan ulang sebagai ${RE_REQUEST_LABEL} (#${again}), jadi keputusannya tidak bisa diubah.`, status: 409 };
   }
 
   const now = new Date();
@@ -151,17 +172,10 @@ export async function financeRejectTransaction(input: {
     const [row] = await trx
       .update(pettyCashTransactions)
       .set({
-        financeReview: 'rejected',
+        financeReview: kind,
         financeReviewBy: input.actorId,
         financeReviewAt: now,
         financeComment: comment.comment,
-        // The first rejection keeps what the request originally looked like.
-        financeRejectedSnapshot: tx.financeRejectedSnapshot ?? {
-          description: tx.description,
-          amount: tx.amount,
-          actualAmount: tx.actualAmount,
-          imageUrl: tx.imageUrl,
-        },
         updatedAt: now,
       })
       .where(
@@ -173,19 +187,20 @@ export async function financeRejectTransaction(input: {
       )
       .returning({ id: pettyCashTransactions.id });
     // The amount stops counting as used: a request that was still counted (never reviewed, or accepted)
-    // gives it back; one PIC 1 corrected ('resubmitted') already did.
-    if (row && previous !== 'resubmitted') await adjustPeriodBalance(trx, tx.periodId, amountOf(tx));
+    // gives it back; one that was already left out (needs_fix → rejected) did so before.
+    if (row && (previous == null || previous === 'accepted')) await adjustPeriodBalance(trx, tx.periodId, amountOf(tx));
     return row;
   });
-  if (!updated) return { success: false, error: 'Gagal menolak. Muat ulang lalu coba lagi.', status: 409 };
+  if (!updated) return { success: false, error: 'Gagal menyimpan keputusan. Muat ulang lalu coba lagi.', status: 409 };
 
+  const reason = comment.comment ? ` Alasan: ${comment.comment}` : '';
   await createNotificationsForUsers([tx.userId], {
     type: 'petty_cash_tx_rejected',
-    title: 'Request petty cash ditolak Finance',
+    title: kind === 'needs_fix' ? 'Request petty cash perlu diperbaiki' : 'Request petty cash ditolak',
     body:
-      `${labelOf(tx)} ${rp(amountOf(tx))} ditolak Finance dan tidak ikut ditransfer.` +
-      (comment.comment ? ` Alasan: ${comment.comment}` : '') +
-      ' Perbaiki di halaman Petty Cash sebelum Finance memverifikasi Refill.',
+      kind === 'needs_fix'
+        ? `${labelOf(tx)} ${rp(amountOf(tx))} perlu diperbaiki dan tidak ikut ditransfer.${reason} Ajukan ulang bulan depan lewat ${RE_REQUEST_LABEL} di halaman Petty Cash.`
+        : `${labelOf(tx)} ${rp(amountOf(tx))} ditolak dan tidak ikut ditransfer.${reason} Request yang ditolak tidak bisa diajukan ulang.`,
     link: '/employee/pettycash',
     relatedType: 'petty_cash_transaction',
     relatedId: tx.id,
@@ -194,20 +209,23 @@ export async function financeRejectTransaction(input: {
   return { success: true };
 }
 
-/** Accepts PIC 1's correction, or — on a request nobody corrected — takes the rejection back. */
+/** Takes Finance's decision on a request back: it counts as used again. */
 export async function financeAcceptTransaction(input: { txId: number; actorId: string }): Promise<ReviewResult> {
   const found = await loadTransaction(input.txId);
   if (!found) return { success: false, error: 'Request tidak ditemukan.', status: 404 };
   const { tx } = found;
 
-  if (tx.financeReview !== 'rejected' && tx.financeReview !== 'resubmitted') {
+  if (!leavesOutOfTransfer(tx.financeReview)) {
     return { success: false, error: 'Request ini tidak sedang menunggu keputusan Finance.', status: 409 };
   }
   if (await isLocked(tx)) {
     return { success: false, error: 'Refill toko ini sudah diverifikasi — nominalnya sudah dikunci.', status: 409 };
   }
+  const again = await reRequestOf(tx.id);
+  if (again != null) {
+    return { success: false, error: `Request ini sudah diajukan ulang sebagai ${RE_REQUEST_LABEL} (#${again}), jadi keputusannya tidak bisa dibatalkan.`, status: 409 };
+  }
 
-  const wasFix = tx.financeReview === 'resubmitted';
   const now = new Date();
   const updated = await db.transaction(async (trx) => {
     const [row] = await trx
@@ -215,7 +233,7 @@ export async function financeAcceptTransaction(input: { txId: number; actorId: s
       .set({ financeReview: 'accepted', financeReviewBy: input.actorId, financeReviewAt: now, updatedAt: now })
       .where(and(eq(pettyCashTransactions.id, tx.id), eq(pettyCashTransactions.financeReview, tx.financeReview!)))
       .returning({ id: pettyCashTransactions.id });
-    // Counted as used again: take the (possibly corrected) amount off the balance.
+    // Counted as used again: take the amount off the balance.
     if (row) await adjustPeriodBalance(trx, tx.periodId, -amountOf(tx));
     return row;
   });
@@ -223,102 +241,9 @@ export async function financeAcceptTransaction(input: { txId: number; actorId: s
 
   await createNotificationsForUsers([tx.userId], {
     type: 'petty_cash_tx_accepted',
-    title: wasFix ? 'Perbaikan petty cash diterima Finance' : 'Penolakan petty cash dibatalkan Finance',
-    body: `${labelOf(tx)} ${rp(amountOf(tx))} ${wasFix ? 'sudah diterima Finance' : 'tidak jadi ditolak'} dan ikut dihitung di Refill.`,
+    title: 'Keputusan Finance atas request petty cash dibatalkan',
+    body: `${labelOf(tx)} ${rp(amountOf(tx))} tidak jadi ${tx.financeReview === 'rejected' ? 'ditolak' : 'diminta diperbaiki'} dan ikut dihitung di Refill.`,
     link: '/employee/pettycash',
-    relatedType: 'petty_cash_transaction',
-    relatedId: tx.id,
-  });
-
-  return { success: true };
-}
-
-// ─── Employee ────────────────────────────────────────────────────────────────
-
-export interface FixInput {
-  txId: number;
-  /** The store PIC 1 belongs to — a request of another store is never theirs to fix. */
-  storeId: number;
-  userId: string;
-  description: unknown;
-  actualAmount: unknown;
-  /** A new receipt photo; leave out to keep the one on file. */
-  imageUrl?: string | null;
-  imageKey?: string | null;
-}
-
-export async function employeeFixTransaction(input: FixInput): Promise<ReviewResult> {
-  const description = pettyCashDescription(typeof input.description === 'string' ? input.description.trim() : '');
-  if (!description) return { success: false, error: 'Keterangan wajib diisi.', status: 400 };
-  if (description.length > PETTY_CASH_REASON_MAX) {
-    return { success: false, error: `Keterangan maksimal ${PETTY_CASH_REASON_MAX} karakter.`, status: 400 };
-  }
-  const actual = Number(input.actualAmount);
-  if (!Number.isFinite(actual) || actual <= 0 || actual > PETTY_CASH_MAX_BALANCE) {
-    return { success: false, error: 'Jumlah terpakai harus lebih dari 0.', status: 400 };
-  }
-  const newActual = Math.round(actual);
-
-  const found = await loadTransaction(input.txId);
-  if (!found || found.tx.storeId !== input.storeId) {
-    return { success: false, error: 'Request tidak ditemukan.', status: 404 };
-  }
-  const { tx, storeName } = found;
-
-  const standing = tx.financeReview === 'rejected' || tx.financeReview === 'resubmitted';
-  if (standing && (await isLocked(tx))) {
-    return {
-      success: false,
-      error: 'Refill sudah diverifikasi Finance — penolakan ini permanen. Ajukan request baru bulan depan.',
-      status: 409,
-    };
-  }
-  if (tx.financeReview !== 'rejected') {
-    return { success: false, error: 'Request ini tidak sedang ditolak Finance, jadi tidak bisa diperbaiki.', status: 409 };
-  }
-
-  const newImage = input.imageUrl?.trim() || null;
-  if (!newImage && !tx.imageUrl) {
-    return { success: false, error: 'Foto struk wajib ada.', status: 400 };
-  }
-  if (description === pettyCashDescription(tx.description) && newActual === amountOf(tx) && !newImage) {
-    return { success: false, error: 'Ubah Keterangan, jumlah, atau foto struk dulu sebelum mengirim ulang.', status: 400 };
-  }
-
-  const now = new Date();
-  const outcome = await db.transaction(async (trx): Promise<ReviewResult> => {
-    // The balance doesn't move here: the rejected amount was already given back, and the corrected
-    // amount is taken off when Finance accepts it.
-    const [updated] = await trx
-      .update(pettyCashTransactions)
-      .set({
-        description,
-        actualAmount: money(newActual),
-        ...(newImage ? { imageUrl: newImage, imageKey: input.imageKey?.trim() || null } : {}),
-        financeReview: 'resubmitted',
-        resubmittedAt: now,
-        updatedAt: now,
-      })
-      // Still rejected: if Finance acted in the meantime this simply does nothing.
-      .where(and(eq(pettyCashTransactions.id, tx.id), eq(pettyCashTransactions.financeReview, 'rejected')))
-      .returning({ id: pettyCashTransactions.id });
-    if (!updated) {
-      throw new Error('REVIEW_CHANGED');
-    }
-    return { success: true };
-  }).catch((err: unknown): ReviewResult => {
-    if (err instanceof Error && err.message === 'REVIEW_CHANGED') {
-      return { success: false, error: 'Status request berubah. Muat ulang lalu coba lagi.', status: 409 };
-    }
-    throw err;
-  });
-  if (!outcome.success) return outcome;
-
-  await createNotificationsForUsers(await financeUserIds(), {
-    type: 'petty_cash_tx_resubmitted',
-    title: 'Perbaikan petty cash dikirim',
-    body: `${storeName}: ${labelOf(tx)} (${rp(newActual)}) sudah diperbaiki PIC 1 — mohon dicek ulang sebelum Refill diverifikasi.`,
-    link: '/finance/petty-cash',
     relatedType: 'petty_cash_transaction',
     relatedId: tx.id,
   });

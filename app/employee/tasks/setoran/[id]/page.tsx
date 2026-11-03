@@ -45,6 +45,7 @@ import {
   TaskReviewNotices,
 } from '@/components/employee/ui';
 import CameraCapture from '@/components/shared/CameraCapture';
+import DocumentScanner from '@/components/shared/DocumentScanner';
 import { uploadTaskPhoto } from '@/lib/tasks-upload';
 import type { GeoPoint } from '@/lib/geo';
 
@@ -647,8 +648,18 @@ function SetoranPageBody(props: BodyProps) {
               </ListGroup>
               )}
 
+              {/* The transfer slip (resi) is paper → document scanner; the rest are plain photos. */}
+              <DocumentScanner
+                open={cameraTarget === 'resi'}
+                onClose={() => setCameraTarget(null)}
+                onCapture={(file) => {
+                  setCameraTarget(null);
+                  void uploadPhoto(file, 'resi');
+                }}
+                title="Foto Resi"
+              />
               <CameraCapture
-                open={cameraTarget !== null}
+                open={cameraTarget !== null && cameraTarget !== 'resi'}
                 onClose={() => setCameraTarget(null)}
                 onCapture={(file) => {
                   const target = cameraTarget;

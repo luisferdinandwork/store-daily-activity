@@ -8,16 +8,16 @@ import {
   Banknote,
   CalendarDays,
   Camera,
+  ChevronDown,
   Clock3,
   Landmark,
   Loader2,
-  Pencil,
   ReceiptText,
-  ShieldCheck,
+  RotateCcw,
+  Search,
   UploadCloud,
   Wallet,
   X,
-  XCircle,
   ZoomIn,
 } from 'lucide-react';
 
@@ -32,9 +32,31 @@ import {
 import type { ReviewOutcome } from '@/lib/petty-cash-review';
 import {
   PETTY_CASH_REASON_MAX,
+  pettyCashDefaultDescription,
   pettyCashDescription,
   type PettyCashCategoryOption,
 } from '@/lib/petty-cash-categories';
+import { RE_REQUEST_LABEL, fmtRequestDate, type ReRequestable } from '@/lib/petty-cash-re-request';
+import { jakartaDateKey, jakartaTodayKey, jakartaYearMonth } from '@/lib/day-bucket';
+import {
+  DEFAULT_LIST_STATE,
+  FILTER_LABEL,
+  FILTER_ORDER,
+  GROUP_LABEL,
+  countByFilter,
+  filterExceptChip,
+  filterRequests,
+  isNarrowed,
+  listMonths,
+  requestAmount,
+  requestGroup,
+  sortRequests,
+  type RequestFilter,
+  type RequestGroup,
+  type RequestListState,
+} from '@/lib/employee-petty-cash-view';
+import { ReRequestBadge } from '@/components/petty-cash/ReRequestBadge';
+import { PettyCashSortControl } from '@/components/employee/PettyCashSortControl';
 import {
   PETTY_CASH_ACCOUNT_HOLDER_MAX,
   PETTY_CASH_ACCOUNT_NUMBER_MAX,
@@ -46,6 +68,7 @@ import {
 } from '@/lib/petty-cash-bank';
 import { EmptyState, Notice, SectionLabel, SkeletonBlocks } from '@/components/employee/ui';
 import CameraCapture from '@/components/shared/CameraCapture';
+import DocumentScanner from '@/components/shared/DocumentScanner';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -63,10 +86,20 @@ type TxRow = {
   rejectedAt: string | null;
   rejectionReason: string | null;
   createdAt: string;
-  /** Finance's review of the request, and whether PIC 1 can still correct it. */
+  /** The petty cash period it belongs to (YYYY-MM) — the list covers every period. */
+  month: string;
+  /** Finance's decision on it (Perlu Perbaikan / Ditolak / Diterima). */
   reviewOutcome: ReviewOutcome;
   financeComment: string | null;
-  resubmittedAt: string | null;
+  /** A Perlu Perbaikan request filed again, and the day PIC 1 gave as the day it was made (YYYY-MM-DD). */
+  isReRequest: boolean;
+  requestDate: string | null;
+  /** For a re-request: the request it files again. */
+  reRequestOfId: number | null;
+  /** For a Perlu Perbaikan request: the re-request that filed it again. */
+  reRequestedAs: number | null;
+  /** Perlu Perbaikan, finished, and not filed again yet. */
+  canReRequest: boolean;
 };
 
 type PageData = {
@@ -80,6 +113,7 @@ type PageData = {
   /** Today's calendar month (YYYY-MM). */
   currentMonth?: string;
   categories: PettyCashCategoryOption[];
+  /** Every request of the store, any month, newest first. */
   transactions: TxRow[];
 };
 
@@ -151,6 +185,16 @@ function fmtDate(iso: string) {
   });
 }
 
+/** "2 Nov 2026" — the day only, for the compact list. */
+function fmtDay(iso: string) {
+  return new Date(iso).toLocaleDateString('id-ID', {
+    timeZone: 'Asia/Jakarta',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
 function monthLabel(ym?: string) {
   if (!ym) return '';
   const [year, month] = ym.split('-').map(Number);
@@ -169,63 +213,60 @@ function needsActualAmount(tx: TxRow) {
 }
 
 function needsReceipt(tx: TxRow) {
-  return (tx.status === 'ops_approved' || tx.status === 'completed') && !tx.imageUrl;
+  // A request Finance sent back or turned down has nothing left to upload.
+  return (
+    (tx.status === 'ops_approved' || tx.status === 'completed') &&
+    !tx.imageUrl &&
+    tx.reviewOutcome !== 'needs_fix' &&
+    tx.reviewOutcome !== 'rejected'
+  );
 }
 
 // One consistent status language across the whole page:
-//   sky    = waiting on someone else to act
-//   indigo = action needed from you
+//   sky     = waiting on someone else to act
+//   indigo  = action needed from you now
+//   orange  = Perlu Perbaikan (file it again as a Re-request)
 //   emerald = done / approved
-//   rose   = rejected / problem
+//   rose    = Ditolak
+//   violet  = Re-request
 // `isHolder` = the viewer is PIC 1 (the one who acts); everyone else reads a
 // status line about PIC 1 instead of an instruction.
-function statusMeta(tx: TxRow, isHolder: boolean) {
+const GROUP_DOT: Record<RequestGroup, string> = {
+  action: 'bg-indigo-500',
+  pending_ops: 'bg-sky-500',
+  done: 'bg-emerald-500',
+  needs_fix: 'bg-orange-500',
+  rejected: 'bg-rose-500',
+};
+
+const GROUP_PILL: Record<RequestGroup, string> = {
+  action: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
+  pending_ops: 'bg-sky-50 text-sky-700 ring-sky-200',
+  done: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+  needs_fix: 'bg-orange-50 text-orange-700 ring-orange-200',
+  rejected: 'bg-rose-50 text-rose-700 ring-rose-200',
+};
+
+/** The one line under an opened request: where it stands (null when Finance's card says it all). */
+function requestNote(tx: TxRow, isHolder: boolean): string | null {
   if (tx.status === 'pending_ops') {
-    return {
-      label: 'Menunggu Persetujuan OPS',
-      icon: Clock3,
-      className: 'bg-sky-50 text-sky-700 ring-sky-200',
-      note: isHolder
-        ? 'Request kamu sudah dikirim ke OPS untuk disetujui.'
-        : 'Request PIC 1 sedang menunggu persetujuan OPS.',
-    };
+    return isHolder
+      ? 'Request kamu sudah dikirim ke OPS untuk disetujui.'
+      : 'Request PIC 1 sedang menunggu persetujuan OPS.';
   }
-
   if (tx.status === 'ops_rejected') {
-    return {
-      label: 'Ditolak OPS',
-      icon: XCircle,
-      className: 'bg-rose-50 text-rose-700 ring-rose-200',
-      note: tx.rejectionReason || 'Request ini ditolak oleh OPS.',
-    };
+    return tx.rejectionReason ? `Alasan: ${tx.rejectionReason}` : 'Request ini ditolak.';
   }
-
   if (needsActualAmount(tx)) {
-    return {
-      label: 'Konfirmasi Jumlah Terpakai',
-      icon: UploadCloud,
-      className: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
-      note: isHolder
-        ? 'OPS sudah menyetujui request ini. Konfirmasi jumlah uang yang benar-benar terpakai untuk dipotong dari saldo.'
-        : 'OPS sudah menyetujui — menunggu PIC 1 mengonfirmasi jumlah yang terpakai.',
-    };
+    return isHolder
+      ? 'OPS sudah menyetujui request ini. Konfirmasi jumlah uang yang benar-benar terpakai untuk dipotong dari saldo.'
+      : 'OPS sudah menyetujui — menunggu PIC 1 mengonfirmasi jumlah yang terpakai.';
   }
-
+  if (tx.reviewOutcome === 'needs_fix' || tx.reviewOutcome === 'rejected') return null;
   if (needsReceipt(tx)) {
-    return {
-      label: 'Unggah Struk',
-      icon: UploadCloud,
-      className: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
-      note: isHolder ? 'Unggah foto struk untuk arsip.' : 'Menunggu PIC 1 mengunggah foto struk.',
-    };
+    return isHolder ? 'Unggah foto struk untuk arsip.' : 'Menunggu PIC 1 mengunggah foto struk.';
   }
-
-  return {
-    label: 'Selesai',
-    icon: ShieldCheck,
-    className: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-    note: 'Jumlah yang terpakai sudah dipotong dari saldo.',
-  };
+  return 'Jumlah yang terpakai sudah dipotong dari saldo.';
 }
 
 // ─── Image lightbox ───────────────────────────────────────────────────────────
@@ -423,13 +464,15 @@ function RefillBankLine({ request }: { request: RefillRequestRow }) {
   );
 }
 
-const PROOF_STEPS: { kind: RefillProofKind; label: string }[] = [
-  { kind: 'drawer', label: 'Laci Petty Cash' },
-  { kind: 'signature', label: 'Surat Terima Petty Cash' },
+// The signed letter is paper (document scanner); the drawer is a plain photo.
+const PROOF_STEPS: { kind: RefillProofKind; label: string; isDocument: boolean }[] = [
+  { kind: 'drawer', label: 'Laci Petty Cash', isDocument: false },
+  { kind: 'signature', label: 'Surat Terima Petty Cash', isDocument: true },
 ];
 
 function RefillProofCapture({
   label,
+  isDocument,
   imageUrl,
   uploading,
   readOnly,
@@ -437,6 +480,8 @@ function RefillProofCapture({
   onView,
 }: {
   label: string;
+  /** Paper to flatten + clean up (scanner) rather than a plain photo. */
+  isDocument: boolean;
   imageUrl: string | null;
   uploading: boolean;
   /** Not PIC 1 — show the photo status only, no camera. */
@@ -485,12 +530,21 @@ function RefillProofCapture({
         {imageUrl ? 'Ambil Ulang' : 'Ambil Foto'}
       </button>
 
-      <CameraCapture
-        open={cameraOpen}
-        onClose={() => setCameraOpen(false)}
-        onCapture={(file) => { setCameraOpen(false); onConfirm(file); }}
-        title={label}
-      />
+      {isDocument ? (
+        <DocumentScanner
+          open={cameraOpen}
+          onClose={() => setCameraOpen(false)}
+          onCapture={(file) => { setCameraOpen(false); onConfirm(file); }}
+          title={label}
+        />
+      ) : (
+        <CameraCapture
+          open={cameraOpen}
+          onClose={() => setCameraOpen(false)}
+          onCapture={(file) => { setCameraOpen(false); onConfirm(file); }}
+          title={label}
+        />
+      )}
       </>
       )}
     </div>
@@ -751,6 +805,7 @@ function RefillRequestCard({
             <RefillProofCapture
               key={step.kind}
               label={step.label}
+              isDocument={step.isDocument}
               imageUrl={photoUrls[step.kind]}
               uploading={uploadingKind === step.kind}
               readOnly={!isHolder}
@@ -829,7 +884,7 @@ function ReceiptCapture({
         )}
       </button>
 
-      <CameraCapture
+      <DocumentScanner
         open={cameraOpen}
         onClose={() => setCameraOpen(false)}
         onCapture={(file) => { setCameraOpen(false); onConfirm(file); }}
@@ -839,23 +894,10 @@ function ReceiptCapture({
   );
 }
 
-// ─── Needs-action card (pulled out of history, given its own section) ───────
+// ─── What PIC 1 does about a request (shown inside its row once it is opened) ─
+// Every request is one row of the list below — these are its action forms, so nothing is listed twice.
 
-/** Category as the title, the reason underneath (older requests: reason only). */
-function TxTitle({ tx }: { tx: TxRow }) {
-  return (
-    <>
-      <p className="mt-2 truncate text-sm font-semibold text-foreground">
-        {tx.categoryName ?? tx.description}
-      </p>
-      {tx.categoryName && (
-        <p className="truncate text-[11px] text-muted-foreground">{tx.description}</p>
-      )}
-    </>
-  );
-}
-
-function NeedsReceiptCard({
+function ReceiptAction({
   tx,
   uploading,
   onUpload,
@@ -865,39 +907,19 @@ function NeedsReceiptCard({
   onUpload: (tx: TxRow, file: File) => void;
 }) {
   return (
-    <div className="rounded-2xl border border-border bg-card p-4 shadow-sm">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <span className="inline-flex items-center gap-1 rounded-full bg-indigo-600 px-2 py-0.5 text-[10px] font-bold text-white">
-            <UploadCloud className="h-3 w-3" />
-            Perlu Tindakan
-          </span>
-
-          <TxTitle tx={tx} />
-
-          <p className="mt-0.5 text-[11px] text-muted-foreground">
-            Disetujui {fmtDate(tx.createdAt)}
-          </p>
-        </div>
-
-        <span className="shrink-0 text-sm font-bold text-rose-500">
-          −{idr(tx.actualAmount ?? tx.amount)}
-        </span>
-      </div>
-
-      <p className="mt-2 text-[11px] font-medium text-indigo-700">
-        Unggah foto struk untuk arsip.
+    <div className="rounded-xl bg-indigo-50 px-3 py-2.5 ring-1 ring-indigo-200">
+      <p className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-700">
+        <UploadCloud className="h-3 w-3" />
+        Perlu tindakan
       </p>
-
+      <p className="mt-1 text-[11px] font-medium text-indigo-800">Unggah foto struk untuk arsip.</p>
       <ReceiptCapture uploading={uploading} onConfirm={(file) => onUpload(tx, file)} />
     </div>
   );
 }
 
-// ─── Confirm actual amount used (requests are estimates; this is what
-// actually gets cut from the balance) ────────────────────────────────────
-
-function ConfirmAmountCard({
+// Requests are estimates; this is what actually gets cut from the balance.
+function ConfirmAmountAction({
   tx,
   confirming,
   onConfirm,
@@ -916,25 +938,14 @@ function ConfirmAmountCard({
   const amountNum = Number(amount.replace(/[^0-9]/g, ''));
 
   return (
-    <div className="rounded-2xl border border-border bg-card p-4 shadow-sm">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <span className="inline-flex items-center gap-1 rounded-full bg-indigo-600 px-2 py-0.5 text-[10px] font-bold text-white">
-            <Banknote className="h-3 w-3" />
-            Perlu Tindakan
-          </span>
-
-          <TxTitle tx={tx} />
-
-          <p className="mt-0.5 text-[11px] text-muted-foreground">
-            Diminta {idr(tx.amount)} · Disetujui {fmtDate(tx.createdAt)}
-          </p>
-        </div>
-      </div>
-
-      <p className="mt-2 text-[11px] font-medium text-indigo-700">
-        OPS sudah menyetujui request ini. Masukkan jumlah yang benar-benar
-        terpakai — ini yang akan dipotong dari saldo, bukan jumlah yang diminta.
+    <div className="rounded-xl bg-indigo-50 px-3 py-3 ring-1 ring-indigo-200">
+      <p className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-700">
+        <Banknote className="h-3 w-3" />
+        Perlu tindakan
+      </p>
+      <p className="mt-1 text-[11px] font-medium text-indigo-800">
+        Diminta {idr(tx.amount)}. OPS sudah menyetujui request ini — masukkan jumlah yang benar-benar
+        terpakai, ini yang akan dipotong dari saldo.
       </p>
 
       <div className="mt-3">
@@ -951,7 +962,7 @@ function ConfirmAmountCard({
             value={amountNum ? amountNum.toLocaleString('id-ID') : ''}
             onChange={(e) => setAmount(e.target.value.replace(/[^0-9]/g, ''))}
             placeholder="0"
-            className="h-11 w-full rounded-xl border border-border bg-secondary/40 pl-10 pr-4 text-right text-base font-bold tabular-nums text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+            className="h-11 w-full rounded-xl border border-border bg-background pl-10 pr-4 text-right text-base font-bold tabular-nums text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
           />
         </div>
       </div>
@@ -969,7 +980,7 @@ function ConfirmAmountCard({
         Konfirmasi & Potong {amountNum ? idr(amountNum) : ''}
       </button>
 
-      <div className="mt-3 border-t border-border pt-3">
+      <div className="mt-3 border-t border-indigo-200 pt-3">
         <p className="mb-1.5 text-[11px] font-semibold text-muted-foreground">
           Foto struk {tx.imageUrl ? '(sudah diunggah)' : '(opsional, untuk arsip)'}
         </p>
@@ -990,19 +1001,18 @@ function ConfirmAmountCard({
   );
 }
 
-// ─── Finance's review of a finished request ─────────────────────────────────
-// Finance may reject a request (with or without a comment) until it verifies the refill that covers
-// it. PIC 1 can correct it and send it back; once the refill is verified the rejection is permanent —
-// still readable here, and the request is simply filed again next month (lib/petty-cash-review.ts).
+// ─── Finance's decision on a finished request ───────────────────────────────
+// Finance checks once a month. Perlu Perbaikan = PIC 1 files it again as a Re-request; Ditolak = final, it can
+// not be re-requested (lib/petty-cash-review.ts, lib/petty-cash-re-request.ts).
 
 function FinanceReviewNote({
   tx,
   isHolder,
-  onFix,
+  onReRequest,
 }: {
   tx: TxRow;
   isHolder: boolean;
-  onFix: (tx: TxRow) => void;
+  onReRequest: (txId: number) => void;
 }) {
   const outcome = tx.reviewOutcome;
   if (outcome === 'none') return null;
@@ -1011,79 +1021,131 @@ function FinanceReviewNote({
 
   if (outcome === 'accepted') {
     return (
-      <p className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-[11px] font-medium text-emerald-800 ring-1 ring-emerald-200">
-        Perbaikan diterima Finance — request ini ikut dihitung di Refill.
+      <p className="rounded-xl bg-emerald-50 px-3 py-2 text-[11px] font-medium text-emerald-800 ring-1 ring-emerald-200">
+        Diterima Finance — request ini ikut dihitung di Refill.
       </p>
     );
   }
 
-  if (outcome === 'resubmitted') {
+  if (outcome === 'needs_fix') {
     return (
-      <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-[11px] font-medium text-amber-800 ring-1 ring-amber-200">
-        Perbaikan sudah dikirim — menunggu Finance memeriksa ulang.
-      </p>
+      <div className="rounded-xl bg-orange-50 px-3 py-2.5 ring-1 ring-orange-200">
+        <p className="text-[11px] font-bold text-orange-700">Perlu Perbaikan</p>
+        <p className="mt-1 whitespace-pre-wrap break-words text-[12px] text-orange-950">
+          {comment ?? <span className="italic text-orange-700">Finance tidak menulis komentar.</span>}
+        </p>
+        <p className="mt-1.5 text-[11px] text-orange-700">
+          Nominal ini belum dihitung terpakai dan tidak ikut ditransfer. Ajukan ulang lewat {RE_REQUEST_LABEL} dengan
+          data yang sudah diperbaiki.
+        </p>
+        {tx.reRequestedAs != null ? (
+          <p className="mt-2 flex items-center gap-1.5 text-[11px] font-semibold text-violet-700">
+            <RotateCcw className="h-3 w-3" />
+            Sudah diajukan ulang ({RE_REQUEST_LABEL} #{tx.reRequestedAs})
+          </p>
+        ) : (
+          isHolder &&
+          tx.canReRequest && (
+            <button
+              type="button"
+              onClick={() => onReRequest(tx.id)}
+              className="mt-2.5 flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 text-xs font-bold text-white transition active:scale-[0.99]"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Ajukan ulang ({RE_REQUEST_LABEL})
+            </button>
+          )
+        )}
+      </div>
     );
   }
 
-  const permanent = outcome === 'permanent';
+  // outcome === 'rejected' — Ditolak, final
   return (
-    <div className="mt-3 rounded-xl bg-rose-50 px-3 py-2.5 ring-1 ring-rose-200">
-      <p className="text-[11px] font-bold text-rose-700">
-        {permanent ? 'Ditolak Finance — permanen' : 'Ditolak Finance'}
-      </p>
+    <div className="rounded-xl bg-rose-50 px-3 py-2.5 ring-1 ring-rose-200">
+      <p className="text-[11px] font-bold text-rose-700">Ditolak</p>
       <p className="mt-1 whitespace-pre-wrap break-words text-[12px] text-rose-900">
         {comment ?? <span className="italic text-rose-700">Finance tidak menulis komentar.</span>}
       </p>
       <p className="mt-1.5 text-[11px] text-rose-700">
-        {permanent
-          ? 'Refill sudah diverifikasi Finance, jadi nominal ini tidak dihitung terpakai, tidak ditransfer, dan tidak bisa diperbaiki lagi. Nominalnya dibayar sendiri di luar sistem. Ajukan request baru bulan depan.'
-          : isHolder
-            ? 'Nominal ini tidak dihitung terpakai dan tidak ikut ditransfer — jika tidak diperbaiki, dibayar sendiri di luar sistem. Perbaiki dan kirim ulang sebelum Finance memverifikasi Refill.'
-            : 'Nominal ini tidak dihitung terpakai dan tidak ikut ditransfer. PIC 1 perlu memperbaikinya sebelum Finance memverifikasi Refill.'}
+        Nominal ini tidak dihitung terpakai dan tidak ikut ditransfer — dibayar sendiri di luar sistem. Request yang
+        Ditolak tidak bisa diajukan ulang.
       </p>
-      {!permanent && isHolder && (
-        <button
-          type="button"
-          onClick={() => onFix(tx)}
-          className="mt-2.5 flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-rose-600 text-xs font-bold text-white transition active:scale-[0.99]"
-        >
-          <Pencil className="h-3.5 w-3.5" />
-          Perbaiki &amp; kirim ulang
-        </button>
-      )}
     </div>
   );
 }
 
-/** Bottom sheet: change Keterangan / jumlah / foto struk of a rejected request and resubmit it. */
-function FixRequestSheet({
-  tx,
+/** "n/100" under a Keterangan box — rose once it is over the limit (an older request can be longer). */
+function ReasonCounter({ value }: { value: string }) {
+  return (
+    <p className={cn('mt-1 text-right text-[11px] tabular-nums', value.length > PETTY_CASH_REASON_MAX ? 'font-semibold text-rose-600' : 'text-muted-foreground')}>
+      {value.length}/{PETTY_CASH_REASON_MAX}
+    </p>
+  );
+}
+
+// ─── Re-request ───────────────────────────────────────────────────────────────
+// A request Finance sent back with Perlu Perbaikan is filed again, usually next month: say which day the request
+// was made, correct Keterangan / what was spent / the receipt. There is no OPS step — it goes straight to
+// Finance, marked Re-request, and today's date is recorded automatically (lib/petty-cash-re-request.ts).
+
+/** What the sheet starts from. */
+function toReRequestable(tx: TxRow): ReRequestable {
+  return {
+    id: tx.id,
+    categoryName: tx.categoryName,
+    description: tx.description,
+    amount: Math.round(requestAmount(tx)),
+    imageUrl: tx.imageUrl,
+    createdAt: tx.createdAt,
+    month: tx.month,
+    financeComment: tx.financeComment,
+    filedOn: jakartaDateKey(tx.createdAt),
+    isReRequest: tx.isReRequest,
+  };
+}
+
+/** Bottom sheet: file a Perlu Perbaikan request again — the day it was made, Keterangan, what was spent, the receipt. */
+function ReRequestSheet({
+  source,
+  balance,
   storeName,
   onClose,
   onDone,
 }: {
-  tx: TxRow;
+  source: ReRequestable;
+  balance: number;
   storeName: string;
   onClose: () => void;
   onDone: () => void;
 }) {
-  const [description, setDescription] = useState(pettyCashDescription(tx.description));
-  const [amount, setAmount] = useState(String(Math.round(Number(tx.actualAmount ?? tx.amount))));
+  const today = jakartaTodayKey();
+  const [requestDate, setRequestDate] = useState(source.filedOn);
+  const [description, setDescription] = useState(pettyCashDescription(source.description));
+  const [amount, setAmount] = useState(String(source.amount));
   const [photo, setPhoto] = useState<{ file: File; preview: string } | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const amountNum = Number(amount.replace(/[^0-9]/g, ''));
-  const previewUrl = photo?.preview ?? tx.imageUrl;
+  const previewUrl = photo?.preview ?? source.imageUrl;
 
   // Free the object URL of a retaken / discarded photo.
   useEffect(() => () => { if (photo) URL.revokeObjectURL(photo.preview); }, [photo]);
 
   async function submit() {
     setError(null);
+    if (!requestDate) { setError('Isi tanggal request.'); return; }
+    if (requestDate > today) { setError('Tanggal request tidak boleh di masa depan.'); return; }
     if (!description.trim()) { setError('Keterangan wajib diisi.'); return; }
+    if (description.length > PETTY_CASH_REASON_MAX) {
+      setError(`Keterangan maksimal ${PETTY_CASH_REASON_MAX} karakter (sekarang ${description.length}). Persingkat dulu.`);
+      return;
+    }
     if (!amountNum) { setError('Masukkan jumlah terpakai yang valid.'); return; }
+    if (amountNum > balance) { setError(`Jumlah melebihi saldo yang tersedia saat ini (${idr(balance)}).`); return; }
+    if (!previewUrl) { setError('Foto struk wajib ada.'); return; }
 
     setBusy(true);
     try {
@@ -1101,18 +1163,25 @@ function FixRequestSheet({
         imageKey = upBody.key;
       }
 
-      const res = await fetch(`/api/employee/petty-cash/${tx.id}/fix`, {
+      const res = await fetch('/api/employee/petty-cash/re-request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ description, actualAmount: amountNum, imageUrl, imageKey }),
+        body: JSON.stringify({
+          originalTxId: source.id,
+          requestDate,
+          description,
+          actualAmount: amountNum,
+          imageUrl,
+          imageKey,
+        }),
       });
       const body = await res.json();
-      if (!res.ok || !body.success) throw new Error(body.error ?? 'Gagal mengirim perbaikan.');
+      if (!res.ok || !body.success) throw new Error(body.error ?? 'Gagal mengajukan ulang.');
 
       onDone();
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Gagal mengirim perbaikan. Coba lagi.');
+      setError(e instanceof Error ? e.message : 'Gagal mengajukan ulang. Coba lagi.');
     } finally {
       setBusy(false);
     }
@@ -1122,15 +1191,36 @@ function FixRequestSheet({
     <Sheet open onOpenChange={(open) => { if (!open && !busy) onClose(); }}>
       <SheetContent side="bottom" className="max-h-[92vh] gap-0 overflow-y-auto rounded-t-2xl p-0">
         <SheetHeader className="border-b border-border px-4 py-3 pr-12">
-          <SheetTitle className="text-base">Perbaiki request</SheetTitle>
-          <SheetDescription>{tx.categoryName ?? 'Request petty cash'} · {fmtDate(tx.createdAt)}</SheetDescription>
+          <SheetTitle className="text-base">Ajukan ulang ({RE_REQUEST_LABEL})</SheetTitle>
+          <SheetDescription>
+            {source.categoryName ?? 'Request petty cash'} · {monthLabel(source.month)}
+          </SheetDescription>
         </SheetHeader>
 
         <div className="space-y-4 px-4 py-4">
-          <div className="rounded-xl bg-rose-50 px-3 py-2.5 ring-1 ring-rose-200">
-            <p className="text-[11px] font-bold text-rose-700">Alasan Finance</p>
-            <p className="mt-1 whitespace-pre-wrap break-words text-[12px] text-rose-900">
-              {tx.financeComment ?? <span className="italic text-rose-700">Finance tidak menulis komentar.</span>}
+          <div className="rounded-xl bg-orange-50 px-3 py-2.5 ring-1 ring-orange-200">
+            <p className="text-[11px] font-bold text-orange-700">Perlu Perbaikan</p>
+            <p className="mt-1 whitespace-pre-wrap break-words text-[12px] text-orange-950">
+              {source.financeComment ?? <span className="italic text-orange-700">Finance tidak menulis komentar.</span>}
+            </p>
+          </div>
+
+          <Notice tone="info" title="Tanpa persetujuan OPS">
+            Perbaiki Keterangan, jumlah, atau foto struk sesuai catatan Finance. Jumlah terpakai langsung dipotong dari
+            saldo bulan ini dan dikirim ke Finance, ditandai {RE_REQUEST_LABEL}. Tanggal pengajuan (hari ini) tercatat otomatis.
+          </Notice>
+
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">Tanggal request</label>
+            <input
+              type="date"
+              value={requestDate}
+              max={today}
+              onChange={(e) => setRequestDate(e.target.value)}
+              className="h-11 w-full rounded-xl border border-border bg-background px-3.5 text-base text-foreground focus:border-primary focus:outline-none"
+            />
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Tanggal request ini dibuat{requestDate ? ` — ${fmtRequestDate(requestDate)}` : ''}. Asalnya: {fmtRequestDate(source.filedOn)}.
             </p>
           </div>
 
@@ -1143,6 +1233,7 @@ function FixRequestSheet({
               maxLength={PETTY_CASH_REASON_MAX}
               className="w-full resize-none rounded-xl border border-border bg-background px-3.5 py-2.5 text-base text-foreground focus:border-primary focus:outline-none"
             />
+            <ReasonCounter value={description} />
           </div>
 
           <div>
@@ -1158,6 +1249,10 @@ function FixRequestSheet({
                 className="h-11 w-full rounded-xl border border-border bg-secondary/40 pl-10 pr-4 text-right text-base font-bold tabular-nums text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
               />
             </div>
+            <p className={cn('mt-1.5 text-right text-xs font-semibold', amountNum > balance ? 'text-rose-500' : 'text-muted-foreground')}>
+              Saldo setelah dikirim: {idr(Math.max(0, balance - amountNum))}
+              {amountNum > balance && ' · melebihi saldo'}
+            </p>
           </div>
 
           <div>
@@ -1182,7 +1277,7 @@ function FixRequestSheet({
                   {photo ? 'Ambil ulang foto' : 'Ganti foto struk'}
                 </button>
                 <p className="mt-1 text-[11px] text-muted-foreground">
-                  {photo ? 'Foto baru akan dikirim.' : 'Boleh dibiarkan kalau fotonya sudah benar.'}
+                  {photo ? 'Foto baru akan dikirim.' : 'Foto struk request sebelumnya dipakai kalau tidak diganti.'}
                 </p>
               </div>
             </div>
@@ -1194,14 +1289,14 @@ function FixRequestSheet({
             type="button"
             onClick={submit}
             disabled={busy}
-            className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 text-xs font-bold text-white transition active:scale-[0.99] disabled:opacity-60"
+            className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 text-xs font-bold text-white transition active:scale-[0.99] disabled:opacity-60"
           >
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pencil className="h-4 w-4" />}
-            Kirim ulang ke Finance
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+            Kirim {RE_REQUEST_LABEL} ke Finance
           </button>
         </div>
 
-        <CameraCapture
+        <DocumentScanner
           open={cameraOpen}
           onClose={() => setCameraOpen(false)}
           onCapture={(file) => {
@@ -1215,84 +1310,228 @@ function FixRequestSheet({
   );
 }
 
-// ─── Transaction history item ─────────────────────────────────────────────────
+// ─── Request list: search · filter · sort, one compact row per request ──────
 
-function TxItem({
+function RequestListControls({
+  state,
+  onChange,
+  counts,
+  months,
+}: {
+  state: RequestListState;
+  onChange: (next: RequestListState) => void;
+  /** Per chip, for the current search + month. */
+  counts: Record<RequestFilter, number>;
+  months: string[];
+}) {
+  const set = (patch: Partial<RequestListState>) => onChange({ ...state, ...patch });
+
+  return (
+    <div className="space-y-2.5">
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <input
+          type="search"
+          value={state.query}
+          onChange={(e) => set({ query: e.target.value })}
+          placeholder="Cari keterangan, kategori, nominal, #nomor…"
+          aria-label="Cari request"
+          enterKeyHint="search"
+          className="h-11 w-full rounded-xl border border-border bg-background pl-10 pr-10 text-base text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none [&::-webkit-search-cancel-button]:hidden"
+        />
+        {state.query && (
+          <button
+            type="button"
+            onClick={() => set({ query: '' })}
+            aria-label="Hapus pencarian"
+            className="absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground active:bg-secondary"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
+      </div>
+
+      <div className="-mx-4 flex gap-1.5 overflow-x-auto px-4 pb-0.5 [scrollbar-width:none]" role="tablist" aria-label="Filter status">
+        {FILTER_ORDER.filter((f) => f === 'all' || counts[f] > 0 || state.filter === f).map((f) => {
+          const active = state.filter === f;
+          return (
+            <button
+              key={f}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => set({ filter: f })}
+              className={cn(
+                'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs font-bold transition-colors',
+                active
+                  ? 'border-primary bg-primary text-primary-foreground'
+                  : 'border-border bg-card text-foreground active:bg-secondary',
+              )}
+            >
+              {FILTER_LABEL[f]}
+              <span className={cn('tabular-nums', active ? 'text-primary-foreground/80' : 'text-muted-foreground')}>
+                {counts[f]}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <label className="flex h-16 min-w-0 flex-col justify-center gap-1 rounded-xl border border-border bg-background px-3 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20">
+          <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <CalendarDays className="size-3.5" aria-hidden="true" />
+            Periode
+          </span>
+          <select
+            value={state.month}
+            onChange={(e) => set({ month: e.target.value })}
+            aria-label="Periode"
+            className="w-full min-w-0 cursor-pointer bg-transparent text-sm font-semibold text-foreground focus:outline-none"
+          >
+            <option value="all">Semua bulan</option>
+            {months.map((m) => (
+              <option key={m} value={m}>
+                {monthLabel(m)}
+              </option>
+            ))}
+          </select>
+        </label>
+        <PettyCashSortControl value={state.sort} onChange={(sort) => set({ sort })} />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One request, one compact line (what · when · state · amount). Tap it open for the receipt, the full
+ * Keterangan, Finance's comment and whatever PIC 1 can do about it.
+ */
+function RequestRow({
   tx,
   isHolder,
+  defaultOpen,
+  confirming,
+  uploading,
+  onConfirm,
+  onUploadReceipt,
   onViewImage,
-  onFix,
+  onReRequest,
 }: {
   tx: TxRow;
   isHolder: boolean;
+  defaultOpen: boolean;
+  confirming: boolean;
+  uploading: boolean;
+  onConfirm: (tx: TxRow, actualAmount: number) => void;
+  onUploadReceipt: (tx: TxRow, file: File) => void;
   onViewImage: (url: string) => void;
-  onFix: (tx: TxRow) => void;
+  onReRequest: (txId: number) => void;
 }) {
-  const meta = statusMeta(tx, isHolder);
-  const Icon = meta.icon;
+  const [open, setOpen] = useState(defaultOpen);
+  const group = requestGroup(tx);
+  // A request nobody counts (Ditolak / Perlu Perbaikan) is struck through.
+  const counted = group !== 'rejected' && group !== 'needs_fix';
+  const note = requestNote(tx, isHolder);
 
   return (
-    <div className="rounded-2xl border border-border bg-card p-4 shadow-sm">
-      <div className="flex items-start gap-3">
-        {tx.imageUrl ? (
-          <button
-            type="button"
-            onClick={() => onViewImage(tx.imageUrl!)}
-            className="group relative h-14 w-14 shrink-0 overflow-hidden rounded-xl border border-border"
-          >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={tx.imageUrl} alt="" className="h-full w-full object-cover" />
-            <div className="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-active:bg-black/20">
-              <ZoomIn className="h-4 w-4 text-white opacity-0 group-active:opacity-100" />
-            </div>
-          </button>
-        ) : (
-          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl border border-dashed border-border bg-secondary">
-            <ReceiptText className="h-5 w-5 text-muted-foreground/50" />
-          </div>
-        )}
+    <li>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="flex w-full items-start gap-2.5 px-3.5 py-3 text-left transition-colors active:bg-secondary/60"
+      >
+        <span className={cn('mt-[7px] h-2 w-2 shrink-0 rounded-full', GROUP_DOT[group])} aria-hidden />
 
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span
-              className={cn(
-                'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold ring-1',
-                meta.className,
-              )}
-            >
-              <Icon className="h-3 w-3" />
-              {meta.label}
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[13px] font-semibold text-foreground">
+            {tx.categoryName ?? tx.description}
+            {tx.categoryName && <span className="font-normal text-muted-foreground"> · {tx.description}</span>}
+          </span>
+          <span className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-muted-foreground">
+            <span>{fmtDay(tx.createdAt)}</span>
+            <span className={cn('rounded-full px-1.5 py-px text-[10px] font-bold ring-1', GROUP_PILL[group])}>
+              {GROUP_LABEL[group]}
             </span>
-          </div>
-
-          <TxTitle tx={tx} />
-
-          <p className="mt-0.5 text-[11px] text-muted-foreground">
-            {fmtDate(tx.createdAt)}
-          </p>
-
-          <p
-            className={cn(
-              'mt-1 text-[11px] font-medium',
-              tx.status === 'ops_rejected' ? 'text-rose-600' : 'text-muted-foreground',
-            )}
-          >
-            {meta.note}
-          </p>
-        </div>
+            {tx.isReRequest && <ReRequestBadge className="rounded-full" />}
+          </span>
+        </span>
 
         <span
           className={cn(
-            'shrink-0 text-sm font-bold',
-            tx.status === 'ops_rejected' ? 'text-muted-foreground line-through' : 'text-rose-500',
+            'shrink-0 text-[13px] font-bold tabular-nums',
+            counted ? 'text-rose-500' : 'text-muted-foreground line-through',
           )}
         >
-          −{idr(tx.actualAmount ?? tx.amount)}
+          −{idr(requestAmount(tx))}
         </span>
-      </div>
+        <ChevronDown
+          className={cn('mt-0.5 h-4 w-4 shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')}
+          aria-hidden
+        />
+      </button>
 
-      <FinanceReviewNote tx={tx} isHolder={isHolder} onFix={onFix} />
-    </div>
+      {open && (
+        <div className="space-y-2.5 pb-3.5 pl-[34px] pr-3.5">
+          <div className="flex items-start gap-3">
+            {tx.imageUrl ? (
+              <button
+                type="button"
+                onClick={() => onViewImage(tx.imageUrl!)}
+                className="group relative h-14 w-14 shrink-0 overflow-hidden rounded-xl border border-border"
+                aria-label="Lihat foto struk"
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={tx.imageUrl} alt="" className="h-full w-full object-cover" />
+                <div className="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-active:bg-black/20">
+                  <ZoomIn className="h-4 w-4 text-white opacity-0 group-active:opacity-100" />
+                </div>
+              </button>
+            ) : (
+              <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl border border-dashed border-border bg-secondary">
+                <ReceiptText className="h-5 w-5 text-muted-foreground/50" />
+              </div>
+            )}
+
+            <div className="min-w-0 flex-1 text-[11px] text-muted-foreground">
+              <p className="whitespace-pre-wrap break-words text-[12px] text-foreground">{tx.description}</p>
+              <p className="mt-1">
+                #{tx.id} · diajukan {fmtDate(tx.createdAt)} · {monthLabel(tx.month)}
+              </p>
+              {tx.isReRequest && (
+                <p className="text-violet-700">
+                  {tx.requestDate ? `Request dibuat ${fmtRequestDate(tx.requestDate)}` : 'Re-request'}
+                  {tx.reRequestOfId != null && ` · mengajukan ulang #${tx.reRequestOfId}`}
+                </p>
+              )}
+              {tx.actualAmount != null && Number(tx.actualAmount) !== Number(tx.amount) && (
+                <p>Diminta {idr(tx.amount)}</p>
+              )}
+              {note && (
+                <p className={cn('mt-1 font-medium', tx.status === 'ops_rejected' && 'text-rose-600')}>{note}</p>
+              )}
+            </div>
+          </div>
+
+          {isHolder && needsActualAmount(tx) && (
+            <ConfirmAmountAction
+              tx={tx}
+              confirming={confirming}
+              onConfirm={onConfirm}
+              uploading={uploading}
+              onUploadReceipt={onUploadReceipt}
+              onViewImage={onViewImage}
+            />
+          )}
+          {isHolder && needsReceipt(tx) && !needsActualAmount(tx) && (
+            <ReceiptAction tx={tx} uploading={uploading} onUpload={onUploadReceipt} />
+          )}
+
+          <FinanceReviewNote tx={tx} isHolder={isHolder} onReRequest={onReRequest} />
+        </div>
+      )}
+    </li>
   );
 }
 
@@ -1300,7 +1539,7 @@ function TxItem({
 
 export default function EmployeePettyCashPage() {
   const { data: session } = useSession();
-  const employeeType = (session?.user as any)?.employeeType as string | undefined;
+  const employeeType = session?.user?.employeeType;
   // PIC 1 holds the store's petty cash: request, confirm the actual amount,
   // upload receipts, refill. Everyone else (PIC 2, SA) only views the status.
   const isHolder = employeeType === 'pic_1';
@@ -1322,8 +1561,26 @@ export default function EmployeePettyCashPage() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
-  // The request PIC 1 is correcting after Finance rejected it.
-  const [fixingTx, setFixingTx] = useState<TxRow | null>(null);
+  // The Perlu Perbaikan request PIC 1 is filing again.
+  const [reRequesting, setReRequesting] = useState<ReRequestable | null>(null);
+  // The request list's search / filter / sort.
+  const [list, setList] = useState<RequestListState>(() => ({
+    ...DEFAULT_LIST_STATE,
+    month: jakartaYearMonth(Date.now()),
+  }));
+
+  function startReRequest(txId: number) {
+    const tx = data?.transactions.find((t) => t.id === txId);
+    if (tx?.canReRequest) setReRequesting(toReRequestable(tx));
+  }
+
+  // A shortcut from the banners: show only that kind of request, and scroll to the list.
+  function showOnly(filter: RequestFilter) {
+    setList({ ...DEFAULT_LIST_STATE, filter });
+    requestAnimationFrame(() =>
+      document.getElementById('daftar-request')?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+    );
+  }
 
   const [refillRequest, setRefillRequest] = useState<RefillRequestRow | null>(null);
   const [lastBank, setLastBank] = useState<BankDetails | null>(null);
@@ -1339,10 +1596,10 @@ export default function EmployeePettyCashPage() {
   // category's default), which is kept.
   function selectCategory(next: PettyCashCategoryOption) {
     const untouched =
-      !description.trim() || description === pettyCashDescription(selectedCategory?.defaultReason);
+      !description.trim() || description === pettyCashDefaultDescription(selectedCategory?.defaultReason);
     setCategoryId(next.id);
     if (untouched) {
-      setDescription(next.requiresCustomReason ? '' : pettyCashDescription(next.defaultReason));
+      setDescription(next.requiresCustomReason ? '' : pettyCashDefaultDescription(next.defaultReason));
     }
     setFormError(null);
   }
@@ -1640,44 +1897,48 @@ export default function EmployeePettyCashPage() {
   const amountNum = Number(amount.replace(/[^0-9]/g, ''));
   const afterAmount = balance - (amountNum || 0);
 
-  const transactions = data?.transactions ?? [];
-  const needsActualAmountTxs = useMemo(
-    () => transactions.filter(needsActualAmount),
-    [transactions],
+  const transactions = useMemo(() => data?.transactions ?? [], [data]);
+
+  // The counters and the balance are about the petty cash period in use; the list below covers every month.
+  const periodTxs = useMemo(
+    () => transactions.filter((tx) => tx.month === data?.month),
+    [transactions, data?.month],
   );
-  const needsReceiptTxs = useMemo(
-    () => transactions.filter(needsReceipt),
-    [transactions],
-  );
-  // PIC 1 sees requests waiting on them in "Perlu tindakan kamu" instead of
-  // here; everyone else has no action section, so they see every request.
-  const historyTxs = useMemo(
-    () =>
-      isHolder
-        ? transactions.filter((tx) => !needsReceipt(tx) && !needsActualAmount(tx))
-        : transactions,
-    [transactions, isHolder],
-  );
+  const needsActualAmountTxs = useMemo(() => periodTxs.filter(needsActualAmount), [periodTxs]);
+  const needsReceiptTxs = useMemo(() => periodTxs.filter(needsReceipt), [periodTxs]);
 
   const summary = useMemo(() => {
     return {
-      pendingOps: transactions.filter((tx) => tx.status === 'pending_ops').length,
+      pendingOps: periodTxs.filter((tx) => tx.status === 'pending_ops').length,
       waitingConfirm: needsActualAmountTxs.length,
       waitingReceipt: needsReceiptTxs.length,
-      completed: transactions.filter((tx) => tx.status === 'completed').length,
-      rejected: transactions.filter((tx) => tx.status === 'ops_rejected').length,
-      pendingAmount: transactions
+      completed: periodTxs.filter((tx) => tx.status === 'completed').length,
+      pendingAmount: periodTxs
         .filter((tx) => tx.status === 'pending_ops')
         .reduce((sum, tx) => sum + Number(tx.amount), 0),
       // OPS approved but the PIC hasn't confirmed the actual amount yet — this
       // is still just the requested estimate, and still not deducted.
       awaitingConfirmAmount: needsActualAmountTxs.reduce((sum, tx) => sum + Number(tx.amount), 0),
-      // A request Finance rejected doesn't count as used until it is accepted again.
-      approvedSpend: transactions
-        .filter((tx) => tx.status === 'completed' && tx.reviewOutcome !== 'rejected' && tx.reviewOutcome !== 'resubmitted' && tx.reviewOutcome !== 'permanent')
+      // A request Finance sent back or turned down doesn't count as used until it is accepted again.
+      approvedSpend: periodTxs
+        .filter((tx) => tx.status === 'completed' && tx.reviewOutcome !== 'needs_fix' && tx.reviewOutcome !== 'rejected')
         .reduce((sum, tx) => sum + Number(tx.actualAmount ?? tx.amount), 0),
     };
-  }, [transactions, needsActualAmountTxs, needsReceiptTxs]);
+  }, [periodTxs, needsActualAmountTxs, needsReceiptTxs]);
+
+  // The request list: every request once. Chip counts follow the search + month, not the chip itself.
+  const allCounts = useMemo(() => countByFilter(transactions), [transactions]);
+  const chipCounts = useMemo(() => countByFilter(filterExceptChip(transactions, list)), [transactions, list]);
+  const visibleTxs = useMemo(
+    () => sortRequests(filterRequests(transactions, list), list.sort),
+    [transactions, list],
+  );
+  const currentMonth = data?.currentMonth ?? jakartaYearMonth(Date.now());
+  const months = useMemo(
+    () => listMonths([...transactions, { month: currentMonth }]),
+    [transactions, currentMonth],
+  );
+  const reRequestableCount = useMemo(() => transactions.filter((tx) => tx.canReRequest).length, [transactions]);
 
   return (
     <div className="mx-auto w-full max-w-md">
@@ -1685,15 +1946,16 @@ export default function EmployeePettyCashPage() {
         <Lightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
       )}
 
-      {fixingTx && data && (
-        <FixRequestSheet
-          key={fixingTx.id}
-          tx={fixingTx}
+      {reRequesting && data && (
+        <ReRequestSheet
+          key={reRequesting.id}
+          source={reRequesting}
+          balance={balance}
           storeName={data.storeName}
-          onClose={() => setFixingTx(null)}
+          onClose={() => setReRequesting(null)}
           onDone={() => {
-            setSuccessMessage('Perbaikan dikirim ke Finance.');
-            setTimeout(() => setSuccessMessage(null), 4000);
+            setSuccessMessage(`${RE_REQUEST_LABEL} dikirim ke Finance — jumlah terpakai sudah dipotong dari saldo.`);
+            setTimeout(() => setSuccessMessage(null), 5000);
             void load({ silent: true });
           }}
         />
@@ -1791,33 +2053,28 @@ export default function EmployeePettyCashPage() {
           </section>
         )}
 
-        {!loading && !loadError && isHolder && (needsActualAmountTxs.length > 0 || needsReceiptTxs.length > 0) && (
-          <section className="px-4">
-            <SectionLabel meta={`${needsActualAmountTxs.length + needsReceiptTxs.length} request`}>
-              Perlu tindakan kamu
-            </SectionLabel>
-
-            <div className="space-y-2.5">
-              {needsActualAmountTxs.map((tx) => (
-                <ConfirmAmountCard
-                  key={tx.id}
-                  tx={tx}
-                  confirming={confirmingTxId === tx.id}
-                  onConfirm={handleConfirmActualAmount}
-                  uploading={uploadingTxId === tx.id}
-                  onUploadReceipt={handleUploadReceipt}
-                  onViewImage={setLightboxSrc}
-                />
-              ))}
-              {needsReceiptTxs.map((tx) => (
-                <NeedsReceiptCard
-                  key={tx.id}
-                  tx={tx}
-                  uploading={uploadingTxId === tx.id}
-                  onUpload={handleUploadReceipt}
-                />
-              ))}
-            </div>
+        {!loading && !loadError && isHolder && (allCounts.action > 0 || reRequestableCount > 0) && (
+          <section className="space-y-2 px-4">
+            {allCounts.action > 0 && (
+              <button
+                type="button"
+                onClick={() => showOnly('action')}
+                className="flex w-full items-center justify-between gap-3 rounded-xl bg-indigo-50 px-3.5 py-2.5 text-left text-xs font-semibold text-indigo-800 ring-1 ring-indigo-200 active:scale-[0.99]"
+              >
+                <span>{allCounts.action} request menunggu tindakanmu (konfirmasi jumlah / unggah struk)</span>
+                <span className="shrink-0 text-indigo-600">Lihat ›</span>
+              </button>
+            )}
+            {reRequestableCount > 0 && (
+              <button
+                type="button"
+                onClick={() => showOnly('needs_fix')}
+                className="flex w-full items-center justify-between gap-3 rounded-xl bg-orange-50 px-3.5 py-2.5 text-left text-xs font-semibold text-orange-800 ring-1 ring-orange-200 active:scale-[0.99]"
+              >
+                <span>{reRequestableCount} request Perlu Perbaikan — ajukan ulang lewat {RE_REQUEST_LABEL}</span>
+                <span className="shrink-0 text-orange-600">Lihat ›</span>
+              </button>
+            )}
           </section>
         )}
 
@@ -1836,8 +2093,8 @@ export default function EmployeePettyCashPage() {
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <Notice tone="info" title="Foto struk belum diperlukan sekarang.">
-                Kirim Request terlebih dahulu. Setelah disetujui OPS, kamu akan
-                melihatnya di &quot;Perlu Tindakan Kamu&quot; untuk mengunggah struk.
+                Kirim Request terlebih dahulu. Setelah disetujui OPS, request-nya muncul di Daftar
+                request dengan tanda &quot;Perlu tindakan&quot; — buka untuk mengunggah struk.
               </Notice>
 
               <div>
@@ -1925,6 +2182,7 @@ export default function EmployeePettyCashPage() {
                     }
                     className="w-full resize-none rounded-xl border border-border bg-background px-3.5 py-2.5 text-base text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
                   />
+                  <ReasonCounter value={description} />
 
                   {!selectedCategory.requiresCustomReason && (
                     <p className="mt-1 text-[11px] text-muted-foreground">
@@ -1968,17 +2226,50 @@ export default function EmployeePettyCashPage() {
           </section>
         )}
 
-        {!loading && !loadError && historyTxs.length > 0 && (
-          <section className="px-4">
-            <SectionLabel meta={`${historyTxs.length} data`}>
-              Request {monthLabel(data?.month)}
+        {!loading && !loadError && transactions.length > 0 && (
+          <section id="daftar-request" className="scroll-mt-4 px-4">
+            <SectionLabel
+              meta={
+                isNarrowed(list)
+                  ? `${visibleTxs.length} dari ${transactions.length}`
+                  : `${transactions.length} request`
+              }
+            >
+              Daftar request
             </SectionLabel>
 
-            <div className="space-y-2.5">
-              {historyTxs.map((tx) => (
-                <TxItem key={tx.id} tx={tx} isHolder={isHolder} onViewImage={setLightboxSrc} onFix={setFixingTx} />
-              ))}
-            </div>
+            <RequestListControls state={list} onChange={setList} counts={chipCounts} months={months} />
+
+            {visibleTxs.length === 0 ? (
+              <div className="mt-3 rounded-2xl border border-dashed border-border px-4 py-7 text-center">
+                <p className="text-sm font-semibold text-foreground">Tidak ada request yang cocok</p>
+                <button
+                  type="button"
+                  onClick={() => setList(DEFAULT_LIST_STATE)}
+                  className="mt-2 text-xs font-bold text-primary"
+                >
+                  Hapus pencarian &amp; filter
+                </button>
+              </div>
+            ) : (
+              <ul className="mt-3 divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+                {visibleTxs.map((tx) => (
+                  <RequestRow
+                    // A new filter starts the rows closed again — except where the row is what the filter is for.
+                    key={`${list.filter}-${tx.id}`}
+                    tx={tx}
+                    isHolder={isHolder}
+                    defaultOpen={list.filter === 'action' || list.filter === 'needs_fix'}
+                    confirming={confirmingTxId === tx.id}
+                    uploading={uploadingTxId === tx.id}
+                    onConfirm={handleConfirmActualAmount}
+                    onUploadReceipt={handleUploadReceipt}
+                    onViewImage={setLightboxSrc}
+                    onReRequest={startReRequest}
+                  />
+                ))}
+              </ul>
+            )}
 
             <p className="mt-3 text-center text-[10px] text-muted-foreground">
               Foto struk disimpan secara permanen setelah diunggah.
@@ -1991,7 +2282,7 @@ export default function EmployeePettyCashPage() {
             <div className="rounded-2xl border border-dashed border-border">
               <EmptyState
                 icon={ReceiptText}
-                title={`Belum ada Request Petty Cash ${monthLabel(data?.month)}`}
+                title="Belum ada Request Petty Cash"
                 description={isHolder ? 'Isi formulir di atas untuk mengirim Request pertamamu ke OPS.' : undefined}
                 className="py-8"
               />

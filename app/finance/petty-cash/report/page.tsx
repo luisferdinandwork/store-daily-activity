@@ -37,6 +37,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { STORE_STATUS_BADGE, STORE_STATUS_LABEL } from '@/lib/store-status';
+import { ReRequestBadge } from '@/components/petty-cash/ReRequestBadge';
 import {
   REFILL_STATE_LABEL,
   groupByStoreCode,
@@ -240,6 +241,12 @@ function StoreLine({
       </td>
       <td className={cn(TD, 'w-36 text-right')}>
         <Amount value={row.totalUsed} />
+        {row.reRequestCount > 0 && (
+          <span className="mt-0.5 flex items-center justify-end gap-1 text-[10px] font-semibold text-violet-700">
+            <ReRequestBadge />
+            {row.reRequestCount} · {num(row.reRequestAmount)}
+          </span>
+        )}
       </td>
       <td className={cn(TD, 'min-w-44', !row.accountNumber && 'bg-amber-50')}>
         {row.accountNumber ? (

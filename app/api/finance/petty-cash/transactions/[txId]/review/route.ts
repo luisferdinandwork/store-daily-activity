@@ -1,11 +1,12 @@
 // app/api/finance/petty-cash/transactions/[txId]/review/route.ts
 //
-// POST { action: 'reject' | 'accept', comment?: string }
+// POST { action: 'revise' | 'reject' | 'accept', comment?: string }
 //
 // Finance's review of one completed petty cash request (rules: lib/petty-cash-review.ts):
-//   reject — turn it down, with or without a comment; PIC 1 is notified and may correct it
-//   accept — accept PIC 1's correction, or take a rejection back
-// Both stop once the store's refill has been verified.
+//   revise — "Perlu Perbaikan": send it back, with or without a comment; PIC 1 is notified and may correct it
+//   reject — "Ditolak": turn it down for good, with or without a comment; PIC 1 files it again next month as a re-request
+//   accept — accept PIC 1's correction, or take a decision back
+// All of them stop once the store's refill has been verified.
 
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveFinanceScope } from '@/lib/finance/scope';
@@ -26,15 +27,20 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   const body = await req.json().catch(() => null);
   const action = body?.action;
-  if (action !== 'reject' && action !== 'accept') {
-    return NextResponse.json({ success: false, error: 'action must be "reject" or "accept".' }, { status: 400 });
+  if (action !== 'revise' && action !== 'reject' && action !== 'accept') {
+    return NextResponse.json({ success: false, error: 'action must be "revise", "reject" or "accept".' }, { status: 400 });
   }
 
   try {
     const result =
-      action === 'reject'
-        ? await financeRejectTransaction({ txId, actorId: scope.userId, comment: body?.comment })
-        : await financeAcceptTransaction({ txId, actorId: scope.userId });
+      action === 'accept'
+        ? await financeAcceptTransaction({ txId, actorId: scope.userId })
+        : await financeRejectTransaction({
+            txId,
+            actorId: scope.userId,
+            kind: action === 'revise' ? 'needs_fix' : 'rejected',
+            comment: body?.comment,
+          });
 
     if (!result.success) {
       return NextResponse.json({ success: false, error: result.error }, { status: result.status });

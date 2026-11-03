@@ -4,8 +4,8 @@
 // IT at /it/petty-cash-categories; this starter set is what migration
 // 0015 inserts and the seed re-applies (idempotently, by name).
 
-/** Max length of a request's Keterangan / a category's default reason. */
-export const PETTY_CASH_REASON_MAX = 300;
+/** Max length of a request's Keterangan / a category's default reason (changed from 300, 2026-11-02, by request). */
+export const PETTY_CASH_REASON_MAX = 100;
 
 /**
  * A request's Keterangan is always shown (and stored) in capitals — the same on
@@ -14,6 +14,10 @@ export const PETTY_CASH_REASON_MAX = 300;
  */
 export const pettyCashDescription = (text: string | null | undefined): string =>
   (text ?? '').toLocaleUpperCase('id-ID');
+
+/** A category's default reason as it pre-fills the form: upper-case and cut to the Keterangan limit. */
+export const pettyCashDefaultDescription = (text: string | null | undefined): string =>
+  pettyCashDescription(text).slice(0, PETTY_CASH_REASON_MAX);
 
 /** Max length of a category name. */
 export const PETTY_CASH_CATEGORY_NAME_MAX = 50;
@@ -28,22 +32,19 @@ export interface PettyCashCategoryDefault {
 export const DEFAULT_PETTY_CASH_CATEGORIES: PettyCashCategoryDefault[] = [
   {
     name: 'Galon',
-    defaultReason:
-      'Pembelian isi ulang air galon untuk kebutuhan air minum karyawan selama jam operasional toko.',
+    defaultReason: 'Pembelian isi ulang air galon untuk kebutuhan air minum karyawan toko.',
     requiresCustomReason: false,
     sortOrder: 10,
   },
   {
     name: 'Pulsa Internet',
-    defaultReason:
-      'Pembelian pulsa / paket data internet untuk operasional toko, seperti koneksi aplikasi, komunikasi, dan pengiriman laporan harian.',
+    defaultReason: 'Pembelian pulsa / paket data internet untuk operasional toko.',
     requiresCustomReason: false,
     sortOrder: 20,
   },
   {
     name: 'Dokumen',
-    defaultReason:
-      'Biaya keperluan dokumen operasional toko, seperti fotokopi, cetak, atau pengiriman dokumen.',
+    defaultReason: 'Biaya keperluan dokumen operasional toko (fotokopi, cetak, pengiriman).',
     requiresCustomReason: false,
     sortOrder: 30,
   },
@@ -56,14 +57,13 @@ export const DEFAULT_PETTY_CASH_CATEGORIES: PettyCashCategoryDefault[] = [
   {
     name: 'Alat Kebersihan Toko',
     defaultReason:
-      'Pembelian perlengkapan kebersihan toko (sabun lantai, pembersih kaca, kain lap, kantong sampah, dll.) agar area toko tetap bersih dan nyaman.',
+      'Pembelian perlengkapan kebersihan toko (sabun lantai, pembersih kaca, kain lap, kantong sampah).',
     requiresCustomReason: false,
     sortOrder: 50,
   },
   {
     name: 'ATK',
-    defaultReason:
-      'Pembelian alat tulis kantor untuk operasional toko, seperti kertas, pulpen, lakban, dan label harga.',
+    defaultReason: 'Pembelian alat tulis kantor untuk operasional toko (kertas, pulpen, lakban, label harga).',
     requiresCustomReason: false,
     sortOrder: 60,
   },

@@ -22,6 +22,7 @@ import { Camera, X, Loader2, Check, Trash2 } from 'lucide-react';
 import { cn }    from '@/lib/utils';
 import { toast } from 'sonner';
 import CameraCapture from '@/components/shared/CameraCapture';
+import DocumentScanner from '@/components/shared/DocumentScanner';
 import { uploadTaskPhoto } from '@/lib/tasks-upload';
 
 // ─── Bucket type (multi-mode) ────────────────────────────────────────────────
@@ -34,6 +35,8 @@ export interface PhotoBucket {
   min:           number;
   max:           number;
   initialPhotos: string[];
+  /** Paper (receipt, Z-Report…): use the document scanner instead of the plain camera. */
+  scan?:         boolean;
 }
 
 // ─── Props (discriminated by `buckets`) ──────────────────────────────────────
@@ -44,6 +47,8 @@ type CommonProps = {
   title:        string;
   description?: string;
   disabled?:    boolean;
+  /** Use the document scanner for every bucket (a bucket's own `scan` wins). */
+  scan?:        boolean;
 };
 
 type SingleProps = CommonProps & {
@@ -81,16 +86,16 @@ export type ChecklistPhotoModalProps = SingleProps | MultiProps;
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function ChecklistPhotoModal(props: ChecklistPhotoModalProps) {
-  const { open, onClose, title, description, disabled } = props;
+  const { open, onClose, title, description, disabled, scan } = props;
 
-  const normalizedBuckets: PhotoBucket[] = props.buckets ?? [{
+  const normalizedBuckets: PhotoBucket[] = (props.buckets ?? [{
     key:           '__single__',
     label:         '',
     photoType:     props.photoType!,
     min:           props.min!,
     max:           props.max!,
     initialPhotos: props.initialPhotos ?? [],
-  }];
+  }]).map(b => ({ ...b, scan: b.scan ?? scan }));
 
   const [drafts, setDrafts] = useState<Record<string, string[]>>(() =>
     Object.fromEntries(normalizedBuckets.map(b => [b.key, b.initialPhotos])),
@@ -431,12 +436,21 @@ function BucketSection({
         </p>
       )}
 
-      <CameraCapture
-        open={cameraOpen}
-        onClose={() => setCameraOpen(false)}
-        onCapture={file => { setCameraOpen(false); onCapture(file); }}
-        title={bucket.label || undefined}
-      />
+      {bucket.scan ? (
+        <DocumentScanner
+          open={cameraOpen}
+          onClose={() => setCameraOpen(false)}
+          onCapture={file => { setCameraOpen(false); onCapture(file); }}
+          title={bucket.label || undefined}
+        />
+      ) : (
+        <CameraCapture
+          open={cameraOpen}
+          onClose={() => setCameraOpen(false)}
+          onCapture={file => { setCameraOpen(false); onCapture(file); }}
+          title={bucket.label || undefined}
+        />
+      )}
     </div>
   );
 }

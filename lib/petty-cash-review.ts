@@ -3,36 +3,42 @@
 // Finance's review of a completed petty cash request (client-safe, no DB imports) — shared by the
 // Finance Petty Cash Monitoring page, the employee Petty Cash page and their APIs.
 //
-// Finance opens a store's request on /finance/petty-cash and may REJECT it, with or without a comment,
-// until it verifies the refill that covers it:
+// Finance checks petty cash once a month. On /finance/petty-cash it may turn a request down in one of
+// two ways, with or without a comment, until it verifies the refill that covers it:
 //
-//   null ──reject──▶ rejected ──PIC 1 corrects──▶ resubmitted ──Finance accepts──▶ accepted
-//                       ▲                             │
-//                       └────── Finance rejects again ┘          (accept also undoes a rejection)
+//   Perlu Perbaikan (needs_fix)  PIC 1 files it again next month as a RE-REQUEST
+//                                (lib/petty-cash-re-request.ts) with what Finance asked for
+//   Ditolak (rejected)           final — it can NOT be re-requested
 //
-// A rejected (or not-yet-reviewed resubmitted) request is not counted as used: the transfer is what the
-// store used minus those requests, while the store's petty cash still goes back to Rp 1.000.000 when
-// PIC 1 confirms receipt. The part the transfer does not cover (the rejected amount) is paid by the
-// employee themselves, outside the system — nothing is recorded for that payment. Once Finance has verified the refill the amount is locked
-// and any rejection still standing is PERMANENT: PIC 1 keeps seeing the reason, can no longer correct
-// it, and files a new request next month.
+//   null ──Perlu Perbaikan──▶ needs_fix ──Ditolak──▶ rejected
+//    └────────────Ditolak───────────────────────────▶
+//   (accept takes either decision back → accepted; a Perlu Perbaikan that already has a re-request can't be touched)
+//
+// A request Finance has not accepted (needs_fix or rejected) is not counted as used: the transfer is
+// what the store used minus those requests, while the store's petty cash still goes back to Rp 1.000.000
+// when PIC 1 confirms receipt. The part the transfer does not cover is paid by the employee themselves,
+// outside the system. Once Finance has verified the refill the amount is locked and Finance can no
+// longer decide on it — but a Perlu Perbaikan request stays re-requestable.
 
-export type FinanceReview = 'rejected' | 'resubmitted' | 'accepted';
+export type FinanceReview = 'needs_fix' | 'rejected' | 'accepted';
 
 export const FINANCE_COMMENT_MAX = 300;
 
 export const FINANCE_REVIEW_LABEL: Record<FinanceReview, string> = {
-  rejected: 'Ditolak Finance',
-  resubmitted: 'Perbaikan dikirim',
-  accepted: 'Perbaikan diterima',
+  needs_fix: 'Perlu Perbaikan',
+  rejected: 'Ditolak',
+  accepted: 'Diterima',
 };
 
 export const isFinanceReview = (v: unknown): v is FinanceReview =>
-  v === 'rejected' || v === 'resubmitted' || v === 'accepted';
+  v === 'needs_fix' || v === 'rejected' || v === 'accepted';
+
+/** The reviews that take a request out of "used" — the same list the SQL filters use. */
+export const LEFT_OUT_REVIEWS = ['needs_fix', 'rejected'] as const;
 
 /**
  * A request is locked once the store's refill has been verified after it was filed: its amount is part
- * of cash already sent, so Finance can no longer reject it and a standing rejection is permanent.
+ * of cash already sent, so Finance can no longer decide on it.
  * `verifiedCutoff` = when Finance last verified one of the store's refills — or a far-future date
  * while that refill is still waiting for PIC 1's receipt, so requests filed after the verification
  * (cash already sent) are locked too (see getVerifiedCutoffs).
@@ -46,25 +52,17 @@ export function isLockedByVerification(
 
 /** A request in this state does not count towards the refill transfer. */
 export const leavesOutOfTransfer = (review: string | null | undefined): boolean =>
-  review === 'rejected' || review === 'resubmitted';
+  review === 'needs_fix' || review === 'rejected';
 
-/** What the employee can do about a request, from Finance's review and whether the refill is verified. */
-export type ReviewOutcome =
-  | 'none'
-  /** Rejected, PIC 1 may still correct it. */
-  | 'rejected'
-  /** Corrected, waiting for Finance. */
-  | 'resubmitted'
-  /** Finance accepted the correction. */
-  | 'accepted'
-  /** Rejected (or never re-accepted) and the refill is verified — final. */
-  | 'permanent';
+/** What the employee and Finance see about a request, from Finance's review. */
+export type ReviewOutcome = 'none' | FinanceReview;
 
-export function reviewOutcome(review: string | null | undefined, locked: boolean): ReviewOutcome {
-  if (!isFinanceReview(review)) return 'none';
-  if (review === 'accepted') return 'accepted';
-  return locked ? 'permanent' : review;
+export function reviewOutcome(review: string | null | undefined): ReviewOutcome {
+  return isFinanceReview(review) ? review : 'none';
 }
+
+/** Only a Perlu Perbaikan request can be filed again; a Ditolak one is final. */
+export const canReRequest = (review: string | null | undefined): boolean => review === 'needs_fix';
 
 /** Frozen figures on a verified refill, or the live ones. */
 export interface RefillTransfer {
@@ -81,7 +79,7 @@ export interface RefillTransfer {
 /** The Indonesian line PIC 1 gets with the refill (and Finance sees on the request). */
 export function rejectedNote(count: number, amount: number): string | null {
   if (count <= 0) return null;
-  return `${count} request ditolak Finance (Rp ${amount.toLocaleString('id-ID')}) tidak dihitung sebagai terpakai dan tidak ikut ditransfer — nominal itu dibayar sendiri oleh karyawan di luar sistem`;
+  return `${count} request Perlu Perbaikan / Ditolak (Rp ${amount.toLocaleString('id-ID')}) tidak dihitung sebagai terpakai dan tidak ikut ditransfer — nominal itu dibayar sendiri oleh karyawan di luar sistem`;
 }
 
 /** Trimmed optional comment, or an error message. */

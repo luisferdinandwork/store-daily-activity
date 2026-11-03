@@ -11,7 +11,9 @@ import { and, desc, eq, gte, lt, sql, type SQL } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { pettyCashTransactions as tx, stores, users } from '@/lib/db/schema';
 import { jakartaRangeBounds } from '@/lib/finance/dates';
+import { jakartaDateKey } from '@/lib/day-bucket';
 import { pettyCashDescription } from '@/lib/petty-cash-categories';
+import { countsAsUsed } from './petty-cash-used';
 import {
   TX_STATUS_ORDER,
   isTxStatus,
@@ -53,6 +55,9 @@ async function selectTransactionRows(
       rejectionReason: tx.rejectionReason,
       createdAt: tx.createdAt,
       financeReview: tx.financeReview,
+      financeComment: tx.financeComment,
+      isReRequest: tx.isReRequest,
+      requestDate: tx.requestDate,
     })
     .from(tx)
     .innerJoin(stores, eq(stores.id, tx.storeId))
@@ -68,6 +73,7 @@ async function selectTransactionRows(
     amount: Number(r.amount),
     actualAmount: r.actualAmount == null ? null : Number(r.actualAmount),
     createdAt: new Date(r.createdAt).toISOString(),
+    requestDate: r.requestDate ? jakartaDateKey(r.requestDate) : null,
   }));
 }
 
@@ -107,8 +113,9 @@ export async function getPettyCashTransactions(f: TransactionFilters): Promise<T
         status: tx.status,
         count: sql<number>`COUNT(*)::int`,
         // Completed requests are the ones actually deducted (see the monitoring view).
-        // Requests Finance rejected (and not yet re-accepted) are not counted as used.
-        used: sql<string>`COALESCE(SUM(COALESCE(${tx.actualAmount}, ${tx.amount})) FILTER (WHERE ${tx.financeReview} IS NULL OR ${tx.financeReview} NOT IN ('rejected', 'resubmitted')), 0)`,
+        // Requests Finance turned down (and not yet re-accepted) are not counted as used.
+        used: sql<string>`COALESCE(SUM(COALESCE(${tx.actualAmount}, ${tx.amount})) FILTER (WHERE ${countsAsUsed(tx.financeReview)}), 0)`,
+        reRequests: sql<number>`COUNT(*) FILTER (WHERE ${tx.isReRequest})::int`,
       })
       .from(tx)
       .where(scope)
@@ -118,8 +125,10 @@ export async function getPettyCashTransactions(f: TransactionFilters): Promise<T
   const byStatus = Object.fromEntries(TX_STATUS_ORDER.map((s) => [s, 0])) as Record<TxStatus, number>;
   let count = 0;
   let totalUsed = 0;
+  let reRequestCount = 0;
   for (const r of statusRows) {
     count += r.count;
+    reRequestCount += r.reRequests;
     if (isTxStatus(r.status)) byStatus[r.status] += r.count;
     if (r.status === 'completed') totalUsed += Number(r.used);
   }
@@ -140,7 +149,7 @@ export async function getPettyCashTransactions(f: TransactionFilters): Promise<T
     from: f.from,
     to: f.to,
     rows: data,
-    summary: { count, totalUsed, byStatus },
+    summary: { count, totalUsed, byStatus, reRequestCount },
     stores: storeOptions,
     matching,
     page,
