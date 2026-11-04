@@ -15,17 +15,20 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   MapPinned, ClipboardCheck, UserCheck, Store, Loader2, Plus, Pencil, Check, X,
-  UserX, ChevronsUpDown, ArrowRightLeft, Eye, UserRound,
+  UserX, ChevronsUpDown, ArrowRightLeft, Settings2, UserRound,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
-import { TONES, rateTone } from '@/lib/status-theme';
+import { HEALTH_TONE, TONES, rateTone, type Tone } from '@/lib/status-theme';
 import type { AreaGroup } from '@/app/api/ops/stores/route';
 import type { AreaSettingsRow, AreaStoreRow, OpsAreaUserRow, StorePic } from '@/app/api/ops/areas/route';
 import { AttendanceCountsLine } from '@/components/status/AttendanceStatus';
 import { OpsSearchInput } from '@/components/ops/layout/OpsToolbar';
 import IndonesiaAreaMap, { type MapArea } from '@/components/ops/areas/IndonesiaAreaMap';
-import { EMPTY_COUNTS, addCounts, showedUp, type AttendanceCounts } from '@/lib/attendance-health';
+import AreaCalendar from '@/components/ops/areas/AreaCalendar';
+import {
+  EMPTY_COUNTS, addCounts, attendanceHealth, attendanceRate, type AttendanceCounts,
+} from '@/lib/attendance-health';
 import { areaColor, regionsForAreaName } from '@/lib/area-map';
 import {
   Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
@@ -37,16 +40,22 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 
 // ─── Shared bits ──────────────────────────────────────────────────────────────
 
+/** Task completion colour — the same bands as every completion bar (rateTone). */
 function rateColor(rate: number, total: number) {
   const t = TONES[total === 0 ? 'muted' : rateTone(rate)];
   return { text: t.text, bar: t.dot };
 }
 
-function MiniBar({ pct, total }: { pct: number; total: number }) {
-  const c = rateColor(pct, total);
+/** Attendance colour — the Attendance calendar's health bands, not the task bands. */
+function attendanceColor(counts: AttendanceCounts) {
+  const tone: Tone = HEALTH_TONE[attendanceHealth(counts)];
+  return { text: TONES[tone].text, bar: TONES[tone].dot };
+}
+
+function MiniBar({ pct, bar }: { pct: number; bar: string }) {
   return (
     <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
-      <div className={cn('h-full rounded-full transition-all', c.bar)} style={{ width: `${Math.min(100, pct)}%` }} />
+      <div className={cn('h-full rounded-full transition-all', bar)} style={{ width: `${Math.min(100, pct)}%` }} />
     </div>
   );
 }
@@ -68,7 +77,8 @@ interface AreaRow {
   completionRate: number;
   /** Today's attendance across the area's stores (`total` = scheduled). */
   attendance: AttendanceCounts;
-  attendanceRate: number;
+  /** (present + late) ÷ (present + late + absent) — null while nobody is countable yet. */
+  attendanceRate: number | null;
 }
 
 function buildRows(areas: AreaSettingsRow[], groups: AreaGroup[]): AreaRow[] {
@@ -94,7 +104,7 @@ function buildRows(areas: AreaSettingsRow[], groups: AreaGroup[]): AreaRow[] {
       completedTasks,
       completionRate: totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0,
       attendance,
-      attendanceRate: attendance.total > 0 ? Math.round((showedUp(attendance) / attendance.total) * 100) : 0,
+      attendanceRate: attendanceRate(attendance),
     };
   });
 }
@@ -332,7 +342,7 @@ function AreaDetailDialog({
   }
 
   const taskColor = area ? rateColor(area.completionRate, area.totalTasks) : null;
-  const attColor = area ? rateColor(area.attendanceRate, area.attendance.total) : null;
+  const attColor = area ? attendanceColor(area.attendance) : null;
 
   return (
     <Dialog open={!!area} onOpenChange={(open) => { if (!open) onClose(); }}>
@@ -410,15 +420,15 @@ function AreaDetailDialog({
                         <span className="flex items-center gap-1"><ClipboardCheck className="h-3 w-3" /> Task</span>
                         <span className={taskColor.text}>{area.completionRate}%</span>
                       </div>
-                      <div className="mt-1"><MiniBar pct={area.completionRate} total={area.totalTasks} /></div>
+                      <div className="mt-1"><MiniBar pct={area.completionRate} bar={taskColor.bar} /></div>
                       <p className="mt-0.5 text-[10px] text-slate-400">{area.completedTasks}/{area.totalTasks} selesai</p>
                     </div>
                     <div>
                       <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-slate-400">
                         <span className="flex items-center gap-1"><UserCheck className="h-3 w-3" /> Attendance</span>
-                        <span className={attColor.text}>{area.attendanceRate}%</span>
+                        <span className={attColor.text}>{area.attendanceRate === null ? '—' : `${area.attendanceRate}%`}</span>
                       </div>
-                      <div className="mt-1"><MiniBar pct={area.attendanceRate} total={area.attendance.total} /></div>
+                      <div className="mt-1"><MiniBar pct={area.attendanceRate ?? 0} bar={attColor.bar} /></div>
                       <AttendanceCountsLine counts={area.attendance} className="mt-0.5" />
                     </div>
                   </div>
@@ -531,7 +541,7 @@ function AreaTable({
           <tbody className="divide-y divide-slate-100">
             {rows.map((a) => {
               const taskColor = rateColor(a.completionRate, a.totalTasks);
-              const attColor = rateColor(a.attendanceRate, a.attendance.total);
+              const attColor = attendanceColor(a.attendance);
               return (
                 <tr
                   key={a.id}
@@ -568,24 +578,24 @@ function AreaTable({
                       <span className="text-slate-400">{a.completedTasks}/{a.totalTasks}</span>
                       <span className={cn('font-bold tabular-nums', taskColor.text)}>{a.completionRate}%</span>
                     </div>
-                    <div className="mt-1"><MiniBar pct={a.completionRate} total={a.totalTasks} /></div>
+                    <div className="mt-1"><MiniBar pct={a.completionRate} bar={taskColor.bar} /></div>
                   </td>
                   <td className="hidden px-4 py-3 align-middle lg:table-cell">
                     <div className="flex items-center justify-end text-[11px]">
-                      <span className={cn('font-bold tabular-nums', attColor.text)}>{a.attendanceRate}%</span>
+                      <span className={cn('font-bold tabular-nums', attColor.text)}>{a.attendanceRate === null ? '—' : `${a.attendanceRate}%`}</span>
                     </div>
-                    <div className="mt-1"><MiniBar pct={a.attendanceRate} total={a.attendance.total} /></div>
+                    <div className="mt-1"><MiniBar pct={a.attendanceRate ?? 0} bar={attColor.bar} /></div>
                     <AttendanceCountsLine counts={a.attendance} className="mt-1" />
                   </td>
                   <td className="px-4 py-3 text-right align-middle">
                     <button
                       type="button"
                       onClick={() => onOpen(a.id)}
-                      aria-label={`Lihat detail ${a.name}`}
+                      aria-label={`Kelola ${a.name}`}
                       className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-600 transition hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700"
                     >
-                      <Eye className="h-3.5 w-3.5" />
-                      <span className="hidden sm:inline">Detail</span>
+                      <Settings2 className="h-3.5 w-3.5" />
+                      <span className="hidden sm:inline">Kelola</span>
                     </button>
                   </td>
                 </tr>
@@ -609,7 +619,13 @@ export interface AreaManagementViewHandle {
 
 export default function AreaManagementView({
   onReady,
+  showCalendar = false,
 }: {
+  /**
+   * OPS HO page: the Attendance / Task month calendar leads the page and the map
+   * is left out (simpler). IT keeps the map-first layout.
+   */
+  showCalendar?: boolean;
   /** Called on every load with a small snapshot the host page's header may want to show. */
   onReady?: (info: { loading: boolean; areaCount: number; storeCount: number; reload: () => void }) => void;
 }) {
@@ -623,6 +639,8 @@ export default function AreaManagementView({
   const [newAreaOpen, setNewAreaOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [hoveredId, setHoveredId] = useState<number | null>(null);
+  /** Bumped after every (re)load so the calendar refetches when stores/areas changed. */
+  const [version, setVersion] = useState(0);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -640,6 +658,7 @@ export default function AreaManagementView({
       setMonitorGroups(storesJson.data);
       setSettingsAreas(areasJson.areas);
       setOpsUsers(areasJson.opsUsers);
+      setVersion((v) => v + 1);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Failed to load area data');
     } finally {
@@ -662,6 +681,10 @@ export default function AreaManagementView({
   const rows = useMemo(() => buildRows(settingsAreas, monitorGroups), [settingsAreas, monitorGroups]);
   const mapAreas = useMemo<MapArea[]>(
     () => rows.map((r) => ({ id: r.id, name: r.name, color: r.color, regions: r.regions })),
+    [rows],
+  );
+  const calendarAreas = useMemo(
+    () => rows.map((r) => ({ id: r.id, name: r.name, color: r.color, opsUserName: r.opsUser?.name ?? null })),
     [rows],
   );
   const selected = rows.find((r) => r.id === selectedId) ?? null;
@@ -792,13 +815,17 @@ export default function AreaManagementView({
         </div>
       ) : (
         <>
-          <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Peta area</p>
-              <p className="text-[11px] text-slate-400">Klik wilayah untuk membuka detail</p>
-            </div>
-            <IndonesiaAreaMap areas={mapAreas} hoveredId={hoveredId} onHover={setHoveredId} onSelect={setSelectedId} />
-          </section>
+          {showCalendar ? (
+            <AreaCalendar areas={calendarAreas} version={version} onManage={setSelectedId} />
+          ) : (
+            <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Peta area</p>
+                <p className="text-[11px] text-slate-400">Klik wilayah untuk membuka detail</p>
+              </div>
+              <IndonesiaAreaMap areas={mapAreas} hoveredId={hoveredId} onHover={setHoveredId} onSelect={setSelectedId} />
+            </section>
+          )}
 
           {visibleRows.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-10 text-center">

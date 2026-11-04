@@ -18,7 +18,7 @@ export async function GET() {
   } catch (error) {
     console.error("[impact-results GET]", error);
     return NextResponse.json(
-      { success: false, error: "Gagal memuat hasil visit." },
+      { success: false, error: "Gagal memuat hasil Impact Visit." },
       { status: 500 },
     );
   }

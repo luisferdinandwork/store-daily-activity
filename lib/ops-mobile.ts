@@ -1,7 +1,7 @@
 // lib/ops-mobile.ts
 //
 // Ops on a phone. Dashboard, Issues, Petty Cash, and Visit Toko sit in the
-// bottom tab bar. Hasil Visit is also phone-ready; other Ops pages open under a
+// bottom tab bar. Hasil Impact Visit is also phone-ready; other Ops pages open under a
 // banner that stays put: "Buka di desktop untuk pengalaman lebih baik".
 // Shell: app/ops/OpsShell.tsx (components/ops/layout/OpsMobile*.tsx).
 

@@ -857,9 +857,12 @@ function RefillRequestCard({
 function ReceiptCapture({
   uploading,
   onConfirm,
+  replace = false,
 }: {
   uploading: boolean;
   onConfirm: (file: File) => void;
+  /** A photo is already saved — this button takes a new one in its place. */
+  replace?: boolean;
 }) {
   const [cameraOpen, setCameraOpen] = useState(false);
 
@@ -869,7 +872,12 @@ function ReceiptCapture({
         type="button"
         onClick={() => setCameraOpen(true)}
         disabled={uploading}
-        className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 text-xs font-bold text-white transition active:scale-[0.99] disabled:opacity-60"
+        className={cn(
+          'flex h-11 w-full items-center justify-center gap-2 rounded-xl text-xs font-bold transition active:scale-[0.99] disabled:opacity-60',
+          replace
+            ? 'border border-indigo-200 bg-white text-indigo-700'
+            : 'mt-3 bg-indigo-600 text-white',
+        )}
       >
         {uploading ? (
           <>
@@ -879,7 +887,7 @@ function ReceiptCapture({
         ) : (
           <>
             <Camera className="h-4 w-4" />
-            Ambil Foto Struk
+            {replace ? 'Ganti Foto Struk' : 'Ambil Foto Struk'}
           </>
         )}
       </button>
@@ -985,14 +993,20 @@ function ConfirmAmountAction({
           Foto struk {tx.imageUrl ? '(sudah diunggah)' : '(opsional, untuk arsip)'}
         </p>
         {tx.imageUrl ? (
-          <button
-            type="button"
-            onClick={() => onViewImage(tx.imageUrl!)}
-            className="h-11 w-11 overflow-hidden rounded-lg border border-border"
-          >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={tx.imageUrl} alt="" className="h-full w-full object-cover" />
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => onViewImage(tx.imageUrl!)}
+              className="h-14 w-14 shrink-0 overflow-hidden rounded-lg border border-border"
+              aria-label="Lihat foto struk"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={tx.imageUrl} alt="" className="h-full w-full object-cover" />
+            </button>
+            <div className="min-w-0 flex-1">
+              <ReceiptCapture replace uploading={uploading} onConfirm={(file) => onUploadReceipt(tx, file)} />
+            </div>
+          </div>
         ) : (
           <ReceiptCapture uploading={uploading} onConfirm={(file) => onUploadReceipt(tx, file)} />
         )}
@@ -1526,6 +1540,10 @@ function RequestRow({
           )}
           {isHolder && needsReceipt(tx) && !needsActualAmount(tx) && (
             <ReceiptAction tx={tx} uploading={uploading} onUpload={onUploadReceipt} />
+          )}
+          {/* Wrong or blurry photo already saved: PIC 1 can swap it until Finance has made a decision. */}
+          {isHolder && tx.status === 'completed' && tx.imageUrl && tx.reviewOutcome === 'none' && (
+            <ReceiptCapture replace uploading={uploading} onConfirm={(file) => onUploadReceipt(tx, file)} />
           )}
 
           <FinanceReviewNote tx={tx} isHolder={isHolder} onReRequest={onReRequest} />

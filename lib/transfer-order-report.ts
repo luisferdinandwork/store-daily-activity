@@ -221,32 +221,45 @@ export interface StoreMeta {
   areaName: string | null;
 }
 
-export interface Count { total: number; done: number }
-
 export interface StoreReport extends StoreMeta {
   total: number;
   done: number;
-  /** Sum of minutes over the DONE ones that have a clock (so averages can be pooled across stores). */
+  /**
+   * Sum of minutes over the COMPLETED ones that have a clock — the only thing an average
+   * is ever made of (`completedMinutes()`), so it can be pooled across stores.
+   */
   minutes: number;
-  /** How many of the done ones that `minutes` covers (a receipt BC closed with no store photo has no clock). */
+  /** How many completed ones `minutes` covers (a receipt BC closed with no store photo is done but has no clock). */
   timed: number;
   /** Open ones whose clock hasn't started — an Item Receiving the store hasn't photographed yet. */
   notStarted: number;
   /** How long the longest-waiting open one (with a running clock) has been waiting (null = none). */
   oldestOpenMinutes: number | null;
-  /** Per Jakarta day (only days that had a process). */
-  days: Record<string, Count>;
 }
 
 export function emptyStoreReport(meta: StoreMeta): StoreReport {
-  return { ...meta, total: 0, done: 0, minutes: 0, timed: 0, notStarted: 0, oldestOpenMinutes: null, days: {} };
+  return { ...meta, total: 0, done: 0, minutes: 0, timed: 0, notStarted: 0, oldestOpenMinutes: null };
 }
 
 function minutes(a: Date, b: Date): number {
   return Math.max(0, Math.round((b.getTime() - a.getTime()) / 60_000));
 }
 
-/** Every store in `stores` (even with none), counting `process` that started on `days`. */
+/**
+ * The duration an AVERAGE may use: start → done of a COMPLETED process. Null for one
+ * that is still open (its running wait is `waitingMinutes()`, never averaged) and for a
+ * completed one with no clock (an Item Receiving BC closed without the store's photo).
+ */
+export function completedMinutes(item: Pick<LegItem, 'startedAt' | 'doneAt'>): number | null {
+  return item.doneAt && item.startedAt ? minutes(item.startedAt, item.doneAt) : null;
+}
+
+/** How long an OPEN process has been waiting (null = done, or its clock hasn't started). */
+export function waitingMinutes(item: Pick<LegItem, 'startedAt' | 'doneAt'>, now: Date): number | null {
+  return !item.doneAt && item.startedAt ? minutes(item.startedAt, now) : null;
+}
+
+/** Every store in `stores` (even with none), counting `process` that started on `days`. Averages = completed ones only. */
 export function buildStoreReports(
   stores: StoreMeta[],
   rows: ReportRow[],
@@ -264,21 +277,18 @@ export function buildStoreReports(
       if (!store || !inPeriod.has(item.day)) continue;
 
       store.total += 1;
-      const day = (store.days[item.day] ??= { total: 0, done: 0 });
-      day.total += 1;
 
       if (item.doneAt) {
         store.done += 1;
-        day.done += 1;
-        if (item.startedAt) {
-          store.minutes += minutes(item.startedAt, item.doneAt);
+        const took = completedMinutes(item);
+        if (took != null) {
+          store.minutes += took;
           store.timed += 1;
         }
-      } else if (item.startedAt) {
-        const waiting = minutes(item.startedAt, now);
-        if (store.oldestOpenMinutes == null || waiting > store.oldestOpenMinutes) store.oldestOpenMinutes = waiting;
       } else {
-        store.notStarted += 1;
+        const waiting = waitingMinutes(item, now);
+        if (waiting == null) store.notStarted += 1;
+        else if (store.oldestOpenMinutes == null || waiting > store.oldestOpenMinutes) store.oldestOpenMinutes = waiting;
       }
     }
   }
@@ -299,8 +309,10 @@ export interface ReportTotals {
   storesOpen: number;
   /** Open ones whose clock hasn't started (Item Receiving not yet photographed). */
   notStarted: number;
-  /** Mean duration over finished ones that had a clock (null = none yet). */
+  /** Mean duration over COMPLETED ones that had a clock (null = none yet) — open ones never count. */
   avgMinutes: number | null;
+  /** How many completed ones `avgMinutes` is the mean of ("rata-rata dari N selesai"). */
+  timed: number;
   /** The longest an open one has been waiting, across stores (null = none open). */
   longestWaitMinutes: number | null;
 }
@@ -309,17 +321,16 @@ export const pct = (done: number, total: number): number => (total > 0 ? Math.ro
 
 export function summarise(reports: StoreReport[]): ReportTotals {
   const t: ReportTotals = {
-    total: 0, done: 0, open: 0, rate: 0, storesWithTo: 0, storesOpen: 0, notStarted: 0, avgMinutes: null, longestWaitMinutes: null,
+    total: 0, done: 0, open: 0, rate: 0, storesWithTo: 0, storesOpen: 0, notStarted: 0, avgMinutes: null, timed: 0, longestWaitMinutes: null,
   };
   let sum = 0;
-  let timed = 0;
 
   for (const s of reports) {
     t.total += s.total;
     t.done += s.done;
     t.notStarted += s.notStarted;
     sum += s.minutes;
-    timed += s.timed;
+    t.timed += s.timed;
     if (s.total > 0) t.storesWithTo += 1;
     if (s.done < s.total) t.storesOpen += 1;
     if (s.oldestOpenMinutes != null && (t.longestWaitMinutes == null || s.oldestOpenMinutes > t.longestWaitMinutes)) {
@@ -329,11 +340,11 @@ export function summarise(reports: StoreReport[]): ReportTotals {
 
   t.open = t.total - t.done;
   t.rate = pct(t.done, t.total);
-  t.avgMinutes = timed > 0 ? Math.round(sum / timed) : null;
+  t.avgMinutes = t.timed > 0 ? Math.round(sum / t.timed) : null;
   return t;
 }
 
-/** A store's own average, for its row (null = nothing finished with a clock). */
+/** A store's own average, for its row — completed ones only (null = nothing finished with a clock). */
 export function avgMinutes(report: StoreReport): number | null {
   return report.timed > 0 ? Math.round(report.minutes / report.timed) : null;
 }
@@ -411,8 +422,10 @@ export interface ReportItem {
   startedAt: string | null;
   doneAt: string | null;
   done: boolean;
-  /** Start → done, or start → now while still open. Null = no clock (not started, or closed in BC with no store photo). */
+  /** Start → done of a COMPLETED item — what the averages are made of. Null while open, or with no clock (closed in BC with no store photo). */
   minutes: number | null;
+  /** How long an OPEN item has been waiting (start → now). Never averaged. Null once done, or before its clock starts. */
+  waitingMinutes: number | null;
   /** The timeline recorded for this item (ISO, null = not yet). */
   steps: { label: string; at: string | null; signed: boolean }[];
 }
@@ -447,7 +460,8 @@ export function buildStoreItems(
         startedAt: leg.startedAt?.toISOString() ?? null,
         doneAt: leg.doneAt?.toISOString() ?? null,
         done: leg.doneAt != null,
-        minutes: leg.startedAt ? minutes(leg.startedAt, leg.doneAt ?? opts.now) : null,
+        minutes: completedMinutes(leg),
+        waitingMinutes: waitingMinutes(leg, opts.now),
         steps: leg.steps.map((s) => ({ label: s.label, at: s.at?.toISOString() ?? null, signed: s.signed === true })),
       });
     }

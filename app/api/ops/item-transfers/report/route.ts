@@ -8,6 +8,10 @@
 //   GET …&storeId=N
 //        → that store's processes (the drill-down sheet)
 //
+// Averages (a store's `minutes` ÷ `timed`, an item's `minutes`) cover COMPLETED
+// processes only; an open item carries `waitingMinutes` instead, which is never
+// averaged.
+//
 // Ops Area sees its own area, OPS HO / IT everything. Read-only: it never calls
 // Business Central on the request path — the 5-minute cron keeps the registry
 // warm, and a stale one is refreshed in the background (never awaited).

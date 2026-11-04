@@ -12,8 +12,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Package, Truck, PackageCheck, CheckCircle2, Store as StoreIcon,
-  MapPin, ChevronDown, Loader2, X, Globe2, Shield, AlertTriangle,
-  Factory, Send, Inbox, Warehouse, Search, ArrowRightLeft, Maximize2, Camera, ClipboardCheck,
+  MapPin, Loader2, X, Globe2, Shield, AlertTriangle,
+  Factory, Send, Inbox, Warehouse, Maximize2, Camera, ClipboardCheck, ArrowRight,
 } from 'lucide-react';
 import { ImageLightbox } from '@/components/shared/ImageLightbox';
 import {
@@ -23,8 +23,11 @@ import {
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
+import { TONES, TONE_HEX, type Tone } from '@/lib/status-theme';
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
-import { OpsList, OpsListRow } from '@/components/ops/layout/OpsList';
+import { OpsList, OpsListRow, OpsListSkeleton } from '@/components/ops/layout/OpsList';
+import { OpsFilterSelect, OpsSearchInput } from '@/components/ops/layout/OpsToolbar';
+import { MetricTile } from '@/components/tasks/MetricTile';
 import StorePickerCombobox, {
   type AreaGroupOption, type StoreOption,
 } from '@/components/ops/impact-visits/StorePickerCombobox';
@@ -73,18 +76,21 @@ interface Transfer {
 
 // ─── Phase config ─────────────────────────────────────────────────────────────
 
-const PHASE_CFG: Record<Phase, { label: string; accent: string; Icon: typeof Package }> = {
-  return: { label: 'Menunggu Diambil', accent: '#f59e0b', Icon: Package },
-  shipping: { label: 'Dalam Perjalanan', accent: '#0ea5e9', Icon: Truck },
-  receiving: { label: 'Menunggu Diterima BC', accent: '#8b5cf6', Icon: PackageCheck },
-  received: { label: 'Selesai', accent: '#10b981', Icon: CheckCircle2 },
-  to_warehouse: { label: 'Dikirim ke Gudang', accent: '#64748b', Icon: Warehouse },
+// Colours come from the shared tones (lib/status-theme.ts): waiting = warning, on
+// the road = info, waiting for BC = active, done = success, warehouse = neutral.
+const PHASE_CFG: Record<Phase, { label: string; tone: Tone; accent: string; Icon: typeof Package }> = {
+  return: { label: 'Menunggu Diambil', tone: 'warning', accent: TONE_HEX.warning, Icon: Package },
+  shipping: { label: 'Dalam Perjalanan', tone: 'info', accent: TONE_HEX.info, Icon: Truck },
+  receiving: { label: 'Menunggu Diterima BC', tone: 'active', accent: TONE_HEX.active, Icon: PackageCheck },
+  received: { label: 'Selesai', tone: 'success', accent: TONE_HEX.success, Icon: CheckCircle2 },
+  to_warehouse: { label: 'Dikirim ke Gudang', tone: 'neutral', accent: TONE_HEX.neutral, Icon: Warehouse },
 };
 
 // The linear happy path shown as the drawer's 4-dot stepper. to_warehouse is
 // a side branch off "return" (see resolvePhase), not a 5th step on this
 // path, so it's deliberately excluded — see TransferDrawer for its own view.
 const PHASE_ORDER: Phase[] = ['return', 'shipping', 'receiving', 'received'];
+const PHASE_TILE_ORDER: Phase[] = [...PHASE_ORDER, 'to_warehouse'];
 
 // ─── Time helpers ─────────────────────────────────────────────────────────────
 
@@ -138,14 +144,17 @@ function StoreLabel({ store, code, isWarehouse }: { store: StoreRef | null; code
 
 // ─── Phase badge ──────────────────────────────────────────────────────────────
 
-function PhaseBadge({ phase }: { phase: Phase }) {
+function PhaseBadge({ phase, compact }: { phase: Phase; compact?: boolean }) {
   const c = PHASE_CFG[phase];
   return (
     <span
-      className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold"
-      style={{ background: c.accent + '18', color: c.accent }}
+      className={cn(
+        'inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border font-bold',
+        TONES[c.tone].chip,
+        compact ? 'px-2 py-0.5 text-[10px]' : 'px-2.5 py-1 text-[11px]',
+      )}
     >
-      <span className="h-1.5 w-1.5 rounded-full" style={{ background: c.accent }} />
+      <span className={cn('h-1.5 w-1.5 rounded-full', TONES[c.tone].dot)} />
       {c.label}
     </span>
   );
@@ -160,7 +169,7 @@ function MetricPill({ metric }: { metric: Metric }) {
 
   if (!metric.applicable) {
     return (
-      <span className="flex items-center gap-1 rounded-lg bg-slate-50 px-2 py-1 text-slate-300" title={`${metric.label} — ${metric.naReason}`}>
+      <span className="flex w-full items-center justify-center gap-1 rounded-md bg-slate-50 px-1 py-0.5 text-slate-300" title={`${metric.label} — ${metric.naReason}`}>
         <Icon className="h-3 w-3" />
         <span className="text-[10px] font-semibold">N/A</span>
       </span>
@@ -169,7 +178,7 @@ function MetricPill({ metric }: { metric: Metric }) {
 
   if (!start) {
     return (
-      <span className="flex items-center gap-1 rounded-lg bg-slate-50 px-2 py-1 text-slate-400">
+      <span className="flex w-full items-center justify-center gap-1 rounded-md bg-slate-50 px-1 py-0.5 text-slate-400">
         <Icon className="h-3 w-3" />
         <span className="text-[10px] font-semibold">—</span>
       </span>
@@ -181,8 +190,8 @@ function MetricPill({ metric }: { metric: Metric }) {
   return (
     <span
       className={cn(
-        'flex items-center gap-1 rounded-lg px-2 py-1',
-        early ? 'bg-sky-50 text-sky-700' : ongoing ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700',
+        'flex w-full items-center justify-center gap-1 rounded-md px-1 py-0.5',
+        early ? TONES.info.soft : ongoing ? TONES.warning.soft : TONES.success.soft,
       )}
       title={early ? `${metric.label} — ${metric.earlyNote}` : metric.label}
     >
@@ -200,7 +209,7 @@ function MetricCard({ metric }: { metric: Metric }) {
   const Icon = METRIC_ICON[metric.key];
   const ongoing = Boolean(start) && !end;
   const early = finishedEarly(metric);
-  const accent = !metric.applicable ? '#cbd5e1' : !start ? '#94a3b8' : early ? '#0ea5e9' : ongoing ? '#f59e0b' : '#10b981';
+  const accent = !metric.applicable ? TONE_HEX.muted : !start ? TONE_HEX.neutral : early ? TONE_HEX.info : ongoing ? TONE_HEX.warning : TONE_HEX.success;
 
   return (
     <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
@@ -406,27 +415,93 @@ function TransferDrawer({ transfer, onClose }: { transfer: Transfer; onClose: ()
 
 // ─── Transfer row ─────────────────────────────────────────────────────────────
 
+// One list row per transfer order (OpsList). Wide container (`@5xl`, ~1000px of
+// list): a single line — TO code · status · route · the five timing metrics — whose
+// columns line up with the header row above. Narrower: two lines, code + status +
+// route on top and the five metrics under them, each with its small label, so the
+// list never scrolls sideways beside the sidebar.
+const ROW_GRID = '@5xl:grid @5xl:grid-cols-[112px_156px_minmax(0,1fr)_repeat(5,78px)] @5xl:items-center @5xl:gap-x-3';
+
+// Short header text per metric; the full wording (lib/transfer-order-metrics.ts)
+// is the hover title.
+const METRIC_HEAD: Record<MetricKey, string> = {
+  bcProcessing: 'TO → WS',
+  wsToReturn: 'WS → Foto',
+  returnTotal: 'Total Return',
+  delivery: 'Delivery',
+  bcReceiving: 'Terima BC',
+};
+
+const METRIC_HEAD_TITLE: Record<MetricKey, string> = {
+  bcProcessing: 'TO Dibuat → WS Diposting',
+  wsToReturn: 'WS Diposting → Foto Serah Terima',
+  returnTotal: 'Total Proses Item Return (TO Dibuat → Foto Serah Terima)',
+  delivery: 'Waktu Pengiriman (Delivery Time)',
+  bcReceiving: 'Terima Fisik Barang di Toko → WR Diposting (BC)',
+};
+
+const METRIC_ORDER: MetricKey[] = ['bcProcessing', 'wsToReturn', 'returnTotal', 'delivery', 'bcReceiving'];
+
+function TransferTableHead() {
+  const th = 'text-[10px] font-bold uppercase tracking-wide text-slate-500';
+  return (
+    <div className={cn(ROW_GRID, 'hidden border-b border-slate-100 bg-slate-50 py-2.5 pl-5 pr-[52px]')} aria-hidden>
+      <span className={th}>TO</span>
+      <span className={th}>Status</span>
+      <span className={th}>Dari → Ke</span>
+      {METRIC_ORDER.map((key) => {
+        const Icon = METRIC_ICON[key];
+        return (
+          <span key={key} title={METRIC_HEAD_TITLE[key]} className={cn(th, 'flex items-center justify-center gap-1 whitespace-nowrap')}>
+            <Icon className="h-3 w-3 shrink-0" />
+            {METRIC_HEAD[key]}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Store code (mono) + name; the name drops first when the route is tight. */
+function RouteEnd({ store, code, isWarehouse }: { store: StoreRef | null; code: string; isWarehouse?: boolean }) {
+  const Icon = isWarehouse ? Warehouse : StoreIcon;
+  const name = isWarehouse ? 'Gudang' : (store?.name ?? '');
+  return (
+    <span className="flex min-w-0 flex-1 items-center gap-1.5" title={`${name || code} (${code})`}>
+      <Icon className="h-3 w-3 shrink-0 text-slate-400" />
+      <span className={cn('shrink-0 font-mono text-xs font-semibold', isWarehouse ? 'text-slate-500' : 'text-slate-700')}>{code}</span>
+      {name && <span className="min-w-0 truncate text-[11px] text-slate-400">{name}</span>}
+    </span>
+  );
+}
+
 function TransferRow({ transfer, onClick }: { transfer: Transfer; onClick: () => void }) {
   const metrics = useMemo(() => buildMetrics(transfer), [transfer]);
 
   return (
-    <OpsListRow onClick={onClick} className="hover:bg-indigo-50/30">
-      <div className="min-w-0 flex-1 basis-64">
-        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-          <p className="font-mono text-sm font-bold leading-snug text-slate-800">{transfer.toaNo}</p>
-          <PhaseBadge phase={transfer.phase} />
+    <OpsListRow onClick={onClick} ariaLabel={`Buka ${transfer.toaNo}`} className="py-2.5">
+      <div className={cn('w-full min-w-0 space-y-2 @5xl:space-y-0', ROW_GRID)}>
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 @5xl:contents">
+          <div className="min-w-0">
+            <span className="block truncate font-mono text-xs font-bold text-slate-800">{transfer.toaNo}</span>
+            <span className="hidden text-[10px] tabular-nums text-slate-400 @5xl:block">Qty {transfer.qtyOrdered}</span>
+          </div>
+          <span><PhaseBadge phase={transfer.phase} compact /></span>
+          <span className="flex min-w-0 flex-1 basis-64 items-center gap-1.5 @5xl:flex-col @5xl:items-stretch @5xl:gap-0.5">
+            <RouteEnd store={transfer.fromStore} code={transfer.transferFromCode} isWarehouse={transfer.fromIsWarehouse} />
+            <ArrowRight className="h-3 w-3 shrink-0 text-slate-300 @5xl:hidden" />
+            <RouteEnd store={transfer.toStore} code={transfer.transferToCode} isWarehouse={transfer.toIsWarehouse} />
+            <span className="shrink-0 text-[11px] tabular-nums text-slate-400 @5xl:hidden" title="Qty pesanan">×{transfer.qtyOrdered}</span>
+          </span>
         </div>
-        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
-          <StoreLabel store={transfer.fromStore} code={transfer.transferFromCode} isWarehouse={transfer.fromIsWarehouse} />
-          <span className="text-slate-300">→</span>
-          <StoreLabel store={transfer.toStore} code={transfer.transferToCode} isWarehouse={transfer.toIsWarehouse} />
+        <div className="grid grid-cols-5 gap-1.5 @5xl:contents">
+          {metrics.map((m) => (
+            <div key={m.key} className="min-w-0">
+              <p className="mb-0.5 truncate text-center text-[9px] font-semibold uppercase tracking-wide text-slate-400 @5xl:hidden">{METRIC_HEAD[m.key]}</p>
+              <MetricPill metric={m} />
+            </div>
+          ))}
         </div>
-      </div>
-      <span className="flex w-20 shrink-0 items-center gap-1 text-[11px] text-slate-400">
-        <Package className="h-3 w-3" />Qty {transfer.qtyOrdered}
-      </span>
-      <div className="flex shrink-0 items-center gap-1.5 text-[11px]">
-        {metrics.map((m) => <MetricPill key={m.key} metric={m} />)}
       </div>
     </OpsListRow>
   );
@@ -437,7 +512,7 @@ function TransferRow({ transfer, onClick }: { transfer: Transfer; onClick: () =>
 export default function OpsItemTransfersPage() {
   const { data: session, status: authStatus } = useSession();
   const router = useRouter();
-  const role = (session?.user as any)?.role as string | undefined;
+  const role = (session?.user as { role?: string } | undefined)?.role;
   const isOps = role === 'ops' || role === 'it';
 
   const [transfers, setTransfers] = useState<Transfer[]>([]);
@@ -462,7 +537,7 @@ export default function OpsItemTransfersPage() {
   }, [authStatus, session, isOps, router]);
 
   const load = useCallback(async (isRefresh = false) => {
-    isRefresh ? setRefreshing(true) : setLoading(true);
+    if (isRefresh) setRefreshing(true); else setLoading(true);
     try {
       // The Refresh button forces a Business Central sweep; the first load /
       // reload reuses the one the 5-minute cron (or a colleague) just did.
@@ -534,14 +609,8 @@ export default function OpsItemTransfersPage() {
     [searchScoped, phaseFilter],
   );
 
-  const statCards = [
-    { key: 'all' as const, label: 'Total', value: meta.all, color: '#6366f1', Icon: Package },
-    { key: 'return' as const, label: PHASE_CFG.return.label, value: meta.return, color: PHASE_CFG.return.accent, Icon: PHASE_CFG.return.Icon },
-    { key: 'shipping' as const, label: PHASE_CFG.shipping.label, value: meta.shipping, color: PHASE_CFG.shipping.accent, Icon: PHASE_CFG.shipping.Icon },
-    { key: 'receiving' as const, label: PHASE_CFG.receiving.label, value: meta.receiving, color: PHASE_CFG.receiving.accent, Icon: PHASE_CFG.receiving.Icon },
-    { key: 'received' as const, label: PHASE_CFG.received.label, value: meta.received, color: PHASE_CFG.received.accent, Icon: PHASE_CFG.received.Icon },
-    { key: 'to_warehouse' as const, label: PHASE_CFG.to_warehouse.label, value: meta.to_warehouse, color: PHASE_CFG.to_warehouse.accent, Icon: PHASE_CFG.to_warehouse.Icon },
-  ];
+  const filtered = phaseFilter !== 'all' || storeFilter !== 'all' || direction !== 'all' || search.trim() !== '';
+  const clearFilters = () => { setPhaseFilter('all'); setStoreFilter('all'); setDirection('all'); setSearch(''); setSelected(null); };
 
   if (authStatus === 'loading' || !session) return (
     <div className="flex min-h-full items-center justify-center bg-slate-50"><Loader2 className="h-6 w-6 animate-spin text-indigo-400" /></div>
@@ -562,9 +631,9 @@ export default function OpsItemTransfersPage() {
         title="Transfer Orders"
         subtitle={
           <span className="inline-flex items-center gap-1.5">
-            {scope === 'all_areas' ? (<><Globe2 className="h-3.5 w-3.5" />All areas</>) : (<><MapPin className="h-3.5 w-3.5" />Your area</>)}
+            {scope === 'all_areas' ? (<><Globe2 className="h-3.5 w-3.5" />Semua area</>) : (<><MapPin className="h-3.5 w-3.5" />Area kamu</>)}
             <span>·</span>
-            <span>{transfers.length} transfer order{transfers.length !== 1 ? 's' : ''}</span>
+            <span>{transfers.length} transfer order</span>
           </span>
         }
         onRefresh={() => load(true)}
@@ -585,104 +654,75 @@ export default function OpsItemTransfersPage() {
           </div>
         )}
 
-        {/* Store filter + search */}
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-wrap items-end gap-4">
-            <div className="min-w-[200px] flex-1">
-              <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-widest text-slate-400">Store</label>
-              <StorePickerCombobox
-                storeGroups={storeGroups}
-                selectedValue={storeFilter}
-                triggerLabel={storeFilter === 'all' ? 'All stores' : (allStoreOptions.find((s) => String(s.id) === storeFilter)?.name ?? '')}
-                onSelect={(v) => { setStoreFilter(v); setSelected(null); }}
-                extraOption={{ value: 'all', label: 'All stores' }}
-              />
-            </div>
-            <div className="min-w-[200px] flex-1">
-              <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-widest text-slate-400">Direction</label>
-              <div className="relative">
-                <ArrowRightLeft className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <select
-                  value={direction}
-                  onChange={(e) => { setDirection(e.target.value as typeof direction); setSelected(null); }}
-                  className="h-11 w-full appearance-none rounded-xl border border-slate-200 bg-white pl-10 pr-10 text-sm font-semibold text-slate-800 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
-                >
-                  <option value="all">Both directions</option>
-                  <option value="from">Outbound · Item Return</option>
-                  <option value="to">Inbound · Receiving</option>
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-              </div>
-            </div>
-            <div className="min-w-[240px] flex-1">
-              <label className="mb-1.5 block text-[10px] font-bold uppercase tracking-widest text-slate-400">Search</label>
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <input
-                  value={search}
-                  onChange={(e) => { setSearch(e.target.value); setSelected(null); }}
-                  placeholder="TOA no, store name, or code…"
-                  className="h-11 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-9 text-sm font-semibold text-slate-800 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
-                />
-                {search && (
-                  <button
-                    onClick={() => setSearch('')}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500"
-                    aria-label="Clear search"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                )}
-              </div>
-            </div>
-            <p className="pb-3 text-xs tabular-nums text-slate-400">
-              {visible.length} shown · click a card to filter by phase
-            </p>
-          </div>
-        </div>
-
-        {/* Phase stat cards */}
-        <div className="grid grid-cols-3 gap-3 sm:grid-cols-6">
-          {statCards.map(({ key, label, value, color, Icon }) => {
-            const active = phaseFilter === key;
+        {/* Summary — one tile per phase; a tile is also the phase filter (click again to clear) */}
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+          {PHASE_TILE_ORDER.map((phase) => {
+            const cfg = PHASE_CFG[phase];
+            const active = phaseFilter === phase;
             return (
-              <button
-                key={key}
-                onClick={() => { setPhaseFilter(key); setSelected(null); }}
-                className="flex items-center gap-3 rounded-2xl border bg-white px-4 py-4 text-left shadow-sm transition-all"
-                style={{ borderColor: active ? color : '#e2e8f0', boxShadow: active ? `0 0 0 3px ${color}20` : undefined }}
-              >
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl" style={{ background: color + '15' }}>
-                  <Icon className="h-5 w-5" style={{ color }} />
-                </div>
-                <div>
-                  <p className="text-2xl font-bold tabular-nums" style={{ color }}>{value}</p>
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{label}</p>
-                </div>
-              </button>
+              <MetricTile
+                key={phase}
+                label={cfg.label}
+                value={loading ? '–' : meta[phase]}
+                tone={meta[phase] > 0 ? cfg.tone : 'default'}
+                active={active}
+                onClick={() => { setPhaseFilter(active ? 'all' : phase); setSelected(null); }}
+              />
             );
           })}
         </div>
 
+        {/* Search / store / direction */}
+        <div className="flex flex-wrap items-center gap-2">
+          <OpsSearchInput value={search} onChange={(v) => { setSearch(v); setSelected(null); }} placeholder="Cari no. TO, nama / kode toko…" className="max-w-sm" />
+          <div className="w-60 shrink-0 [&_button]:h-10">
+            <StorePickerCombobox
+              storeGroups={storeGroups}
+              selectedValue={storeFilter}
+              triggerLabel={storeFilter === 'all' ? 'Semua toko' : (allStoreOptions.find((s) => String(s.id) === storeFilter)?.name ?? '')}
+              onSelect={(v) => { setStoreFilter(v); setSelected(null); }}
+              extraOption={{ value: 'all', label: 'Semua toko' }}
+            />
+          </div>
+          <OpsFilterSelect label="Arah" value={direction} onChange={(v) => { setDirection(v as typeof direction); setSelected(null); }}>
+            <option value="all">Semua arah</option>
+            <option value="from">Keluar · Item Return</option>
+            <option value="to">Masuk · Item Receiving</option>
+          </OpsFilterSelect>
+        </div>
+
         {/* List */}
         {loading ? (
-          <div className="flex items-center justify-center py-20"><Loader2 className="h-8 w-8 animate-spin text-indigo-400" /></div>
+          <OpsListSkeleton rows={8} />
         ) : visible.length === 0 ? (
-          <div className="flex flex-col items-center gap-4 rounded-2xl border border-dashed border-slate-200 bg-white py-20 text-center">
-            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-50"><Package className="h-8 w-8 text-slate-300" /></div>
+          <div className="flex flex-col items-center gap-4 rounded-2xl border border-dashed border-slate-200 bg-white py-16 text-center">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-50"><Package className="h-7 w-7 text-slate-300" /></div>
             <div>
-              <p className="text-sm font-bold text-slate-700">No transfer orders to show</p>
+              <p className="text-sm font-bold text-slate-700">Tidak ada transfer order</p>
               <p className="mt-1 text-xs text-slate-400">
-                {phaseFilter !== 'all' ? `No transfers in "${PHASE_CFG[phaseFilter as Phase].label}" right now.` : 'Nothing synced from Business Central yet.'}
+                {filtered ? 'Tidak ada yang cocok dengan filter.' : 'Belum ada yang tersinkron dari Business Central.'}
               </p>
             </div>
+            {filtered && (
+              <button type="button" onClick={clearFilters} className="text-xs font-semibold text-indigo-600 hover:underline">Hapus filter</button>
+            )}
           </div>
         ) : (
-          <OpsList>
-            {visible.map((t) => (
-              <TransferRow key={t.id} transfer={t} onClick={() => setSelected(t)} />
-            ))}
-          </OpsList>
+          <div className="@container overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-2.5 sm:px-5">
+              <p className="text-sm font-semibold text-slate-800">
+                {visible.length} transfer order
+                {filtered && <span className="ml-2 text-xs font-normal text-slate-400">dari {transfers.length}</span>}
+              </p>
+              {filtered && (
+                <button type="button" onClick={clearFilters} className="text-xs font-semibold text-indigo-600 hover:underline">Hapus filter</button>
+              )}
+            </div>
+            <TransferTableHead />
+            <OpsList className="rounded-none border-0 shadow-none">
+              {visible.map((t) => <TransferRow key={t.id} transfer={t} onClick={() => setSelected(t)} />)}
+            </OpsList>
+          </div>
         )}
       </div>
 

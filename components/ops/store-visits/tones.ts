@@ -1,7 +1,7 @@
 // components/ops/store-visits/tones.ts
 //
 // The one colour code of the visit Report — every chip, dot, bar and badge on the
-// calendar, the queue and the area monitor draws from PlanTone (lib/store-visit/plan.ts):
+// calendar, the queue and the area monitor draws from VisitTone (lib/store-visit/upcoming.ts):
 //
 //   done    emerald  visit made / cycle met
 //   planned indigo   scheduled, time to spare
@@ -11,7 +11,7 @@
 //
 // Never hand-pick an emerald/indigo/amber/rose on these pages — add to this map.
 
-import type { PlanTone } from '@/lib/store-visit/plan';
+import type { VisitTone } from '@/lib/store-visit/upcoming';
 
 export interface ToneStyle {
   label: string;
@@ -31,7 +31,7 @@ export interface ToneStyle {
   badge: string;
 }
 
-export const TONE: Record<PlanTone, ToneStyle> = {
+export const TONE: Record<VisitTone, ToneStyle> = {
   done: {
     label: 'Sudah dikunjungi',
     dot: 'bg-emerald-500',
@@ -85,4 +85,4 @@ export const TONE: Record<PlanTone, ToneStyle> = {
 };
 
 /** Order the legend (and any tone list) is shown in. */
-export const TONE_ORDER: PlanTone[] = ['overdue', 'soon', 'planned', 'done', 'idle'];
+export const TONE_ORDER: VisitTone[] = ['overdue', 'soon', 'planned', 'done', 'idle'];

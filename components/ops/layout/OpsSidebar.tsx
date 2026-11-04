@@ -56,13 +56,13 @@ const PERFORMANCE_TARGETS_ITEM = {
   key: 'performance-targets',
 };
 
-// OPS HO only — assign the one OPS Area user per area, rename areas, move
-// stores between areas, and monitor task/attendance rolled up per area.
-const AREA_MANAGEMENT_ITEM = {
+// OPS HO only (Overview group) — the month calendar of attendance / task % per
+// area, plus assigning the one OPS Area user per area, renaming areas and moving
+// stores between areas.
+const AREA_MANAGEMENT_ITEM: NavItem = {
   href: '/ops/areas',
   label: 'Area Management',
   icon: MapPinned,
-  key: 'area-management',
 };
 
 
@@ -96,20 +96,22 @@ const IMPACT_VISIT_ITEM: NavItem = {
   label: 'Impact Visit',
   icon: FileCheck2,
   children: [
-    { href: '/ops/impact-visits', label: 'Visits' },
-    { href: '/ops/impact-visits/results', label: 'Hasil Visit' },
+    { href: '/ops/impact-visits', label: 'Impact Visits' },
+    { href: '/ops/impact-visits/results', label: 'Hasil Impact Visit' },
     { href: '/ops/impact-visits/report', label: 'Monthly Report' },
   ],
 };
 
-// Visit Toko: the visit list (fill a visit), and the report of which stores
-// were / weren't visited in their current cycle and what each Ops did.
+// Visit Toko (the regular store visit — NOT Impact Visit, which is a separate audit with
+// its own menu below): the visit list (fill a visit), the upcoming visits by days left, and
+// the report of the visits that were made / the periods that were missed.
 const STORE_VISIT_ITEM: NavItem = {
   href: '/ops/store-visits',
   label: 'Visit Toko',
   icon: MapPinned,
   children: [
     { href: '/ops/store-visits', label: 'Visits' },
+    { href: '/ops/store-visits/upcoming', label: 'Upcoming Visit' },
     { href: '/ops/store-visits/report', label: 'Report' },
   ],
 };
@@ -217,9 +219,15 @@ export default function OpsSidebar({ storeName = 'Ops', collapsed = false, drawe
   // Credentials) now lives in the /it panel, not here.
   const restSections = useMemo<NavSection[]>(() => {
     return isOpsHo
-      ? [{ section: 'OPS HQ', items: [AREA_MANAGEMENT_ITEM, MANUALS_ITEM] }, ...NAV.slice(1)]
+      ? [{ section: 'OPS HQ', items: [MANUALS_ITEM] }, ...NAV.slice(1)]
       : NAV.slice(1);
   }, [isOpsHo]);
+
+  // Overview: Dashboard, Stores — and, for OPS HO, the Area Management calendar.
+  const overviewItems = useMemo<NavItem[]>(
+    () => (isOpsHo ? [...NAV[0].items, AREA_MANAGEMENT_ITEM] : NAV[0].items),
+    [isOpsHo],
+  );
 
   const isActive = (href: string, exact?: boolean) =>
     exact ? pathname === href : pathname.startsWith(href);
@@ -294,7 +302,7 @@ export default function OpsSidebar({ storeName = 'Ops', collapsed = false, drawe
               </p>
             )}
             <ul className="space-y-0.5">
-              {NAV[0].items.map(({ href, label, icon: Icon, exact }) => {
+              {overviewItems.map(({ href, label, icon: Icon, exact }) => {
                 const active = isActive(href, exact);
                 const linkCls = cn(
                   'flex items-center rounded-md px-2.5 py-2 text-sm font-medium transition-colors',
@@ -388,7 +396,7 @@ export default function OpsSidebar({ storeName = 'Ops', collapsed = false, drawe
                       : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
                   );
 
-                  // ── Accordion group (Visit Toko ▸ Visits / Report, Impact Visit ▸ Visits / Monthly Report, Petty Cash ▸ Requests / Refills) ──
+                  // ── Accordion group (Visit Toko ▸ Visits / Upcoming Visit / Report, Impact Visit ▸ Impact Visits / Hasil Impact Visit / Monthly Report, Petty Cash ▸ Requests / Refills) ──
                   if (children) {
                     // The icon-only rail has no room for a sub-menu: the icon goes
                     // straight to the group's first page.

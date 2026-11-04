@@ -5,7 +5,8 @@ import { eq } from 'drizzle-orm';
 import { db, pool } from '@/lib/db';
 import { storeVisits } from '@/lib/db/schema';
 import { deleteFromStorage } from '@/lib/storage';
-import type { VisitDetail, VisitTask, VisitStore, VisitPhotoGeo } from '@/lib/store-visit/types';
+import { VISIT_FIELDS, VISIT_FIELD_MAX, VISIT_FIELD_TASKS } from '@/lib/store-visit/fields';
+import type { VisitDetail, VisitResult, VisitStore, VisitPhotoGeo } from '@/lib/store-visit/types';
 
 const base = process.env.VISIT_TEST_URL || 'http://localhost:3000';
 assert.ok(['localhost', '127.0.0.1'].includes(new URL(base).hostname), 'API test must target a local dev server.');
@@ -57,47 +58,57 @@ async function run() {
   check('Area Ops cannot read IT settings', (await area('/api/ops/store-visits/config')).response.status, 403);
   check('HO cannot edit IT settings', (await ho('/api/ops/store-visits/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{}' })).response.status, 403);
   check('HO monitors visits', (await ho(`/api/ops/store-visits/${outside.id}`)).body.success, true);
-  check('HO cannot submit area checklist', (await ho(`/api/ops/store-visits/${outside.id}`, { method: 'POST' })).response.status, 403);
+  check('HO cannot submit an area visit', (await ho(`/api/ops/store-visits/${outside.id}`, { method: 'POST' })).response.status, 403);
 
   const settings = await it('/api/ops/store-visits/config');
   check('45 imported policies available', (settings.body.policies as unknown[]).length >= 45, true);
   const invalidTask = await it('/api/ops/store-visits/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'tasks', tasks: [], version: 1 }) });
-  check('Empty checklist rejected without changing configuration', invalidTask.response.status, 400);
+  check('Old checklist edits are no longer accepted', invalidTask.response.status >= 400, true);
   const store = mine.find((s) => s.hasCoordinates);
   assert.ok(store, 'Assigned test area needs an active store with coordinates.');
   const detailReply = await area(`/api/ops/store-visits/${store.id}`);
   const detail = detailReply.body as unknown as VisitDetail;
+  check('Form data carries no visit history', 'visits' in detailReply.body, false);
+  check('Form data says Ops Area can submit', detail.canSubmit, true);
   const position = await pool.query<{ latitude: string; longitude: string }>('SELECT latitude,longitude FROM stores WHERE id = $1', [store.id]);
   const geo: VisitPhotoGeo = { lat: Number(position.rows[0].latitude), lng: Number(position.rows[0].longitude), accuracy: 10, capturedAt: new Date().toISOString() };
-  const answers = Object.fromEntries(detail.tasks.map((t: VisitTask) => [t.id, { answer: 'ya', note: '' }]));
-  const keys = ['store', ...detail.tasks.filter((t) => t.requirePhoto).map((t) => `task_${t.id}`)];
-  const data = { id: testId, version: detail.version, geo, answers, photos: Object.fromEntries(keys.map((key) => [key, geo])), notes: marker };
+  const fields = Object.fromEntries(VISIT_FIELDS.map((f) => [f.id, `Isian ${f.label} (${marker})`]));
+  const data = { id: testId, geo, fields, photos: { store: geo } };
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF1cAAAAASUVORK5CYII=', 'base64');
   function payload(overrides: Record<string, unknown> = {}, missingPhoto = false, invalidImage = false) {
     const form = new FormData(); form.set('data', JSON.stringify({ ...data, ...overrides }));
-    if (!missingPhoto) keys.forEach((key) => form.set(key, new Blob([invalidImage ? Buffer.from('<html>invalid</html>') : png], { type: 'image/png' }), `${key}.png`));
+    if (!missingPhoto) form.set('store', new Blob([invalidImage ? Buffer.from('<html>invalid</html>') : png], { type: 'image/png' }), 'store.png');
     return form;
   }
   const submit = (body: FormData) => area(`/api/ops/store-visits/${store.id}`, { method: 'POST', body });
   check('Outside geofence rejected', (await submit(payload({ geo: { ...geo, lat: geo.lat + 1 } }))).response.status, 422);
   check('Coarse GPS rejected', (await submit(payload({ geo: { ...geo, accuracy: 1000 } }))).response.status, 422);
   check('Stale GPS rejected', (await submit(payload({ geo: { ...geo, capturedAt: '2020-01-01T00:00:00Z' } }))).response.status, 422);
-  check('Outdated checklist rejected', (await submit(payload({ version: detail.version - 1 }))).response.status, 409);
-  check('Missing checklist answers rejected', (await submit(payload({ answers: {} }))).response.status, 400);
-  check('Missing photos rejected', (await submit(payload({}, true))).response.status, 400);
+  check('Missing text fields rejected', (await submit(payload({ fields: {} }))).response.status, 400);
+  check('One empty text field rejected', (await submit(payload({ fields: { ...fields, vm: '   ' } }))).response.status, 400);
+  check('Over-long text rejected', (await submit(payload({ fields: { ...fields, human: 'x'.repeat(VISIT_FIELD_MAX + 1) } }))).response.status, 400);
+  check('Missing store photo rejected', (await submit(payload({}, true))).response.status, 400);
   check('Invalid image bytes rejected', (await submit(payload({}, false, true))).response.status, 400);
-  check('Expired photo geotag rejected', (await submit(payload({ photos: Object.fromEntries(keys.map((key) => [key, { ...geo, capturedAt: '2020-01-01T00:00:00Z' }])) }))).response.status, 422);
-  check('Outside-store photo geotag rejected', (await submit(payload({ photos: Object.fromEntries(keys.map((key) => [key, { ...geo, lat: geo.lat + 1 }])) }))).response.status, 422);
+  check('Expired photo geotag rejected', (await submit(payload({ photos: { store: { ...geo, capturedAt: '2020-01-01T00:00:00Z' } } }))).response.status, 422);
+  check('Outside-store photo geotag rejected', (await submit(payload({ photos: { store: { ...geo, lat: geo.lat + 1 } } }))).response.status, 422);
   const saved = await submit(payload());
   assert.equal(saved.body.success, true, `Valid submission failed: ${saved.body.error}`);
-  check('Valid checklist, photos, and geotag submitted', saved.response.status, 201);
+  check('Valid text report, photo, and geotag submitted', saved.response.status, 201);
   check('Retry succeeds without duplicating a visit', (await submit(payload())).response.status, 200);
   const [record] = await db.select().from(storeVisits).where(eq(storeVisits.id, testId));
-  check('Checklist snapshot preserved', record.tasks, detail.tasks);
+  check('Fixed text fields snapshot preserved', record.tasks, VISIT_FIELD_TASKS);
+  check('Each text saved as a text answer', VISIT_FIELDS.every((f) => record.answers[f.id]?.answer === 'text' && record.answers[f.id].note === fields[f.id]), true);
   check('Geotag saved with store photo', record.photoGeo.lat, geo.lat);
-  check('All task evidence saved', record.tasks.filter((t) => t.requirePhoto).every((t) => !!record.answers[t.id].photoUrl && !!record.answers[t.id].photoGeo), true);
-  const history = (await area(`/api/ops/store-visits/${store.id}`)).body as unknown as VisitDetail;
-  check('Submitted visit appears in history once', history.visits.filter((v) => v.id === testId).length, 1);
+
+  // The result is read from its own endpoint (the Report's preview), never from the form.
+  const result = await area(`/api/ops/store-visits/result/${testId}`);
+  check('Own visit result readable', result.response.status, 200);
+  const shown = result.body.visit as VisitResult;
+  check('Result carries the three texts', VISIT_FIELDS.every((f) => shown.answers[f.id]?.note === fields[f.id]), true);
+  check('Result names the store', shown.storeNo, store.storeNo);
+  check('HO can read any visit result', (await ho(`/api/ops/store-visits/result/${testId}`)).response.status, 200);
+  check('Unknown visit result is 404', (await area(`/api/ops/store-visits/result/${randomUUID()}`)).response.status, 404);
+  check('Malformed visit id rejected', (await area('/api/ops/store-visits/result/not-a-uuid')).response.status, 400);
   check('No department code leaked to Ops', JSON.stringify(areaList.body).includes('deptCode'), false);
   console.log(`Passed ${checks} staging API checks.`);
 }
@@ -105,7 +116,7 @@ async function run() {
 async function cleanup() {
   const [record] = await db.select().from(storeVisits).where(eq(storeVisits.id, testId));
   if (record) {
-    assert.equal(record.notes, marker, 'Refuse cleanup of an unrelated record.');
+    assert.ok(Object.values(record.answers).every((a) => a.note.includes(marker)), 'Refuse cleanup of an unrelated record.');
     const photos = [record.photoUrl, ...Object.values(record.answers).map((a) => a.photoUrl).filter((url): url is string => !!url)];
     await db.delete(storeVisits).where(eq(storeVisits.id, testId));
     await deleteFromStorage(photos);

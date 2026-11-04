@@ -2,12 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { eq } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { stores, storeVisits } from '@/lib/db/schema';
-import { visitActor, visitConfiguration, visitHistory, visitStores } from '@/lib/store-visit/server';
+import { visitActor, visitStores } from '@/lib/store-visit/server';
+import { VISIT_FIELD_TASKS, validateVisitFields } from '@/lib/store-visit/fields';
 import { getStoreGeofence } from '@/lib/db/utils/geofence';
 import { evaluateGeofence, geofenceErrorMessage, parseGeoPoint } from '@/lib/geo';
 import { uploadToStorage, deleteFromStorage } from '@/lib/storage';
 import { sniffImageOf } from '@/lib/upload-validation';
-import type { VisitAnswer, VisitPhotoGeo } from '@/lib/store-visit/types';
+import type { VisitPhotoGeo } from '@/lib/store-visit/types';
 
 type Context = { params: Promise<{ storeId: string }> };
 const fail = (error: string, status = 400) => NextResponse.json({ success: false, error }, { status });
@@ -28,10 +29,8 @@ export async function GET(_req: NextRequest, ctx: Context) {
   const guard = await access(ctx);
   if (!guard.ok) return guard.response;
   try {
-    const [list, config, visits] = await Promise.all([
-      visitStores(guard.actor.isHO ? null : guard.actor.areaId), visitConfiguration(), visitHistory(guard.store.id, guard.actor),
-    ]);
-    return NextResponse.json({ success: true, store: list.find((s) => s.id === guard.store.id), tasks: config.tasks, version: config.version, canSubmit: guard.canSubmit, visits });
+    const list = await visitStores(guard.actor.isHO ? null : guard.actor.areaId);
+    return NextResponse.json({ success: true, store: list.find((s) => s.id === guard.store.id), canSubmit: guard.canSubmit });
   } catch (error) {
     console.error('Failed to load store visit', error);
     return fail('Visit gagal dimuat.', 500);
@@ -58,10 +57,9 @@ export async function POST(req: NextRequest, ctx: Context) {
       if (existing.visitedBy !== guard.actor.id || existing.storeId !== guard.store.id) return fail('ID visit sudah digunakan.', 409);
       return NextResponse.json({ success: true, id: existing.id });
     }
-    const config = await visitConfiguration();
-    if (body.version !== config.version) return fail('Checklist diperbarui IT. Muat ulang halaman untuk menggunakan checklist terbaru.', 409);
-    if (typeof body.notes !== 'string' || body.notes.length > 2000) return fail('Catatan maksimal 2.000 karakter.');
-    if (!body.answers || typeof body.answers !== 'object' || Array.isArray(body.answers)) return fail('Checklist belum diisi.');
+    const written = validateVisitFields(body.fields);
+    if ('error' in written) return fail(written.error);
+    const answers = written.answers;
     const fence = await getStoreGeofence(guard.store.id);
     if (!fence) return fail('Koordinat toko belum diatur. Hubungi IT sebelum melakukan visit.', 422);
     const geo = parseGeoPoint(body.geo?.lat, body.geo?.lng, body.geo?.accuracy);
@@ -72,21 +70,14 @@ export async function POST(req: NextRequest, ctx: Context) {
     const fixTime = new Date(body.geo?.capturedAt).getTime();
     if (!Number.isFinite(fixTime) || now.getTime() - fixTime > 120_000 || fixTime > now.getTime() + 30_000) return fail('Lokasi GPS kedaluwarsa. Ambil lokasi kembali.', 422);
 
-    const answers: Record<string, VisitAnswer> = {};
+    // The store photo is the only photo: it carries the geotag that proves the visit happened there.
     const photoKeys = ['store'];
-    for (const task of config.tasks) {
-      const answer = body.answers[task.id];
-      if (!answer || !['ya', 'tidak'].includes(answer.answer) || typeof answer.note !== 'string' || answer.note.length > 1000) return fail(`Isi checklist: ${task.label}.`);
-      if (answer.answer === 'tidak' && !answer.note.trim()) return fail(`Tuliskan temuan untuk: ${task.label}.`);
-      answers[task.id] = { answer: answer.answer, note: answer.note.trim() };
-      if (task.requirePhoto) photoKeys.push(`task_${task.id}`);
-    }
     // Validate every file and its capture geotag before uploading any object.
     const images: { key: string; buffer: Buffer; mime: string; ext: string; geo: VisitPhotoGeo }[] = [];
     let totalSize = 0;
     for (const key of photoKeys) {
       const file = form.get(key);
-      if (!(file instanceof File) || !file.size || file.size > 10 * 1024 * 1024) return fail('Foto toko dan foto task wajib diambil (maksimal 10 MB per foto).');
+      if (!(file instanceof File) || !file.size || file.size > 10 * 1024 * 1024) return fail('Foto toko wajib diambil (maksimal 10 MB).');
       totalSize += file.size;
       if (totalSize > 30 * 1024 * 1024) return fail('Total foto maksimal 30 MB.', 413);
       const buffer = Buffer.from(await file.arrayBuffer());
@@ -105,15 +96,11 @@ export async function POST(req: NextRequest, ctx: Context) {
     for (const image of images) {
       urls[image.key] = await uploadToStorage(image.buffer, `store-visits/${body.id}/${attempt}/${image.key}.${image.ext}`, image.mime);
       uploaded.push(urls[image.key]);
-      if (image.key !== 'store') {
-        const id = image.key.slice(5);
-        answers[id].photoUrl = urls[image.key]; answers[id].photoGeo = image.geo;
-      }
     }
     const [created] = await db.insert(storeVisits).values({
       id: body.id, storeId: guard.store.id, visitedBy: guard.actor.id, visitedAt: now,
       photoUrl: urls.store, photoGeo: images[0].geo, lat: String(geo.lat), lng: String(geo.lng),
-      accuracy: String(geo.accuracy), distanceM: verdict.distanceM, tasks: config.tasks, answers, notes: body.notes.trim(),
+      accuracy: String(geo.accuracy), distanceM: verdict.distanceM, tasks: VISIT_FIELD_TASKS, answers, notes: '',
     }).onConflictDoNothing().returning({ id: storeVisits.id });
     committed = !!created;
     if (!created) {

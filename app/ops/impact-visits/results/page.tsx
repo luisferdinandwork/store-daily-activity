@@ -46,7 +46,7 @@ export default function ImpactResultsPage() {
         });
         const data = await res.json();
         if (!res.ok || !data.success)
-          throw new Error(data.error ?? "Gagal memuat hasil visit.");
+          throw new Error(data.error ?? "Gagal memuat hasil Impact Visit.");
         if (!controller.signal.aborted) {
           setVisits(data.visits);
           setIsHO(data.isHO);
@@ -54,7 +54,7 @@ export default function ImpactResultsPage() {
       } catch (e) {
         if (!controller.signal.aborted)
           setError(
-            e instanceof Error ? e.message : "Gagal memuat hasil visit.",
+            e instanceof Error ? e.message : "Gagal memuat hasil Impact Visit.",
           );
       } finally {
         if (!controller.signal.aborted) setLoading(false);
@@ -95,7 +95,7 @@ export default function ImpactResultsPage() {
   return (
     <div className="min-h-full bg-slate-50">
       <OpsPageHeader
-        title="Hasil Visit"
+        title="Hasil Impact Visit"
         scope="Impact Visit / Tindak lanjut"
         subtitle={
           isHO
@@ -164,7 +164,7 @@ export default function ImpactResultsPage() {
           <div className="rounded-2xl border border-dashed border-slate-300 bg-white py-16 text-center">
             <ClipboardCheck className="mx-auto mb-3 h-8 w-8 text-slate-300" />
             <p className="text-sm font-semibold text-slate-700">
-              Belum ada hasil visit yang cocok
+              Belum ada hasil Impact Visit yang cocok
             </p>
             <p className="mt-1 text-xs text-slate-500">
               Hasil muncul setelah visit disubmit. Coba ubah filter Anda.

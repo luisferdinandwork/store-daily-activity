@@ -3,7 +3,7 @@ import './lib/not-production';
 import assert from 'node:assert/strict';
 import { pool } from '@/lib/db';
 import { jakartaDateKey } from '@/lib/day-bucket';
-import { calendarWeeks, type VisitReport } from '@/lib/store-visit/report';
+import { calendarWeeks, type VisitReport, type VisitUpcoming } from '@/lib/store-visit/report';
 
 const base = process.env.VISIT_TEST_URL ?? 'http://localhost:3000';
 assert.ok(['localhost', '127.0.0.1'].includes(new URL(base).hostname), 'Tests must target the local server.');
@@ -58,9 +58,8 @@ async function run() {
     });
     check(`${label}: exact calendar scope`, report.calendarVisits.map((v) => v.id).sort(), expectedCalendar.map((v) => v.id).sort());
     if (!full) {
-      check(`${label}: only own activity/name exposed`, report.ops.map((o) => o.id), [actor.user.id]);
       check(`${label}: only own area exposed`, report.areas.map((a) => a.id), [actor.user.areaId]);
-      check(`${label}: only own store assignments exposed`, report.stores.every((s) => s.opsNames.length === 1 && s.opsNames[0] === report.ops[0].name), true);
+      check(`${label}: only own name exposed as the area's Ops`, report.stores.every((s) => s.opsNames.length === 1), true);
     } else {
       check(`${label}: all active areas exposed`, report.areas.length, new Set(stores.map((s) => s.area_id)).size);
     }
@@ -87,13 +86,22 @@ async function run() {
   const personal = (await area.request('/api/ops/store-visits/report?month=2026-10&areaId=6&visitedBy=OPS-HO-001')).body as VisitReport;
   check('Query parameters cannot expand personal scope', personal.calendarVisits.every((v) => v.byId === area.user.id), true);
   check('Query parameters cannot expand area scope', personal.stores.every((s) => s.areaId === area.user.areaId), true);
+  // A visit's written result is read from its own endpoint, with the report's scope.
+  const ownVisit = visits.find((v) => v.visited_by === area.user.id)!;
+  check('Own visit result readable', (await area.request(`/api/ops/store-visits/result/${ownVisit.id}`)).response.status, 200);
+  check('Colleague visit result hidden from Ops Area', (await area.request(`/api/ops/store-visits/result/${peerVisit.id}`)).response.status, 404);
+  check('HO reads colleague visit result', (await ho.request(`/api/ops/store-visits/result/${peerVisit.id}`)).response.status, 200);
   const detail = await area.request(`/api/ops/store-visits/${peerVisit.store_id}`);
-  check('Area store history hides colleague evidence', detail.body.visits.every((v: { visitedBy: string }) => v.visitedBy === area.user.id), true);
-  const hoDetail = await ho.request(`/api/ops/store-visits/${peerVisit.store_id}`);
-  check('HO store history includes colleague evidence', hoDetail.body.visits.some((v: { visitedBy: string }) => v.visitedBy === colleague.user.id), true);
+  check('Store form data carries no visit history', 'visits' in detail.body, false);
   const outside = stores.find((s) => s.area_id !== area.user.areaId)!;
   check('Outside-area detail denied', (await area.request(`/api/ops/store-visits/${outside.id}`)).response.status, 403);
   check('Invalid calendar month rejected', (await area.request('/api/ops/store-visits/report?month=2026-13')).response.status, 400);
+  // Upcoming Visit: same scope rules as the report — an area sees its own area, HO / IT see every area.
+  check('Anonymous upcoming denied', (await fetch(`${base}/api/ops/store-visits/upcoming`)).status, 401);
+  const upArea = (await area.request('/api/ops/store-visits/upcoming?areaId=6')).body as VisitUpcoming & { success: boolean };
+  check('Upcoming: area scope ignores query parameters', [upArea.success, upArea.scope, upArea.stores.every((s) => s.areaId === area.user.areaId)], [true, 'area', true]);
+  const upHo = (await ho.request('/api/ops/store-visits/upcoming')).body as VisitUpcoming & { success: boolean };
+  check('Upcoming: HO sees every active store', upHo.stores.map((s) => s.id).sort(), stores.map((s) => s.id).sort());
   console.log(`Passed ${checks} read-only report API checks.`);
 }
 

@@ -3,7 +3,9 @@
 //
 // One store's processes (of the report's kind) for the period, in a slide-over:
 // the ones still open first (longest-waiting on top), then the finished ones.
-// Opened from a row / a day square of the TO Report.
+// Opened from a store row of the TO Report. The big duration on a card is the
+// completed duration (what the averages are made of); an open card shows its
+// running wait instead, which is never averaged.
 
 import { useMemo, useState } from 'react';
 import { AlertCircle, ArrowDownToLine, ArrowUpFromLine, Loader2, Truck, Warehouse } from 'lucide-react';
@@ -31,7 +33,7 @@ export interface StoreSheetTarget {
   store: StoreReport;
   from: string;
   to: string;
-  /** "Senin, 20 Oktober 2026" / "19 Okt – 25 Okt 2026". */
+  /** "Senin, 20 Oktober 2026" / "19 Okt – 25 Okt 2026" — the period on screen. */
   label: string;
 }
 
@@ -82,9 +84,9 @@ function Counterpart({ item }: { item: ReportItem }) {
 // WR Diposting). `none` = it has no clock — an Item Receiving the store hasn't
 // photographed yet, or one BC closed with no store photo.
 const DURATION_NOTE: Record<Process, { done: string; open: string; noneDone: string; noneOpen: string }> = {
-  return: { done: 'total proses', open: 'berjalan', noneDone: '', noneOpen: '' },
+  return: { done: 'total proses', open: 'sudah menunggu', noneDone: '', noneOpen: '' },
   receiving: { done: 'terima fisik → WR', open: 'sejak terima fisik', noneDone: 'tanpa foto toko', noneOpen: 'belum diterima fisik' },
-  delivery: { done: 'durasi', open: 'berjalan', noneDone: '', noneOpen: '' },
+  delivery: { done: 'durasi', open: 'sudah menunggu', noneDone: '', noneOpen: '' },
 };
 
 /**
@@ -176,10 +178,16 @@ function ItemCard({ item }: { item: ReportItem }) {
           <span className={cn('inline-flex rounded-full border px-2 py-0.5 text-[10px] font-bold', tone.chip)}>
             {item.done ? 'Selesai' : 'Belum'}
           </span>
-          {item.minutes != null ? (
+          {/* Done: the duration the averages use. Open: the running wait, which never does. */}
+          {item.done && item.minutes != null ? (
             <>
               <p className={cn('mt-1.5 text-sm font-bold tabular-nums', tone.strong)}>{formatMinutes(item.minutes)}</p>
-              <p className="text-[10px] text-slate-400">{item.done ? note.done : note.open}</p>
+              <p className="text-[10px] text-slate-400">{note.done}</p>
+            </>
+          ) : !item.done && item.waitingMinutes != null ? (
+            <>
+              <p className={cn('mt-1.5 text-sm font-bold tabular-nums', tone.strong)}>{formatMinutes(item.waitingMinutes)}</p>
+              <p className="text-[10px] text-slate-400">{note.open}</p>
             </>
           ) : (
             <>
@@ -241,7 +249,12 @@ function SheetBody({ target }: { target: StoreSheetTarget }) {
                     <p className="mt-0.5 text-lg font-semibold tabular-nums text-slate-900">
                       {store.done}<span className="text-sm font-medium text-slate-400">/{store.total}</span>
                     </p>
-                    <p className="truncate text-[10px] text-slate-400">{avg != null ? `rata-rata ${formatMinutes(avg)}` : ' '}</p>
+                    <p
+                      className="truncate text-[10px] text-slate-400"
+                      title="Rata-rata hanya dari proses yang sudah selesai; yang belum selesai tidak dihitung"
+                    >
+                      {avg != null ? `rata-rata ${formatMinutes(avg)} dari ${store.timed} selesai` : store.done > 0 ? 'tanpa durasi' : 'belum ada yang selesai'}
+                    </p>
                   </div>
                   <div className="min-w-0">
                     <p className="truncate text-[10px] font-semibold uppercase tracking-wider text-slate-400">Belum selesai</p>

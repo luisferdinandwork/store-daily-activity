@@ -107,7 +107,7 @@ export async function recordImpactCheck(
     return {
       success: false as const,
       status: 404,
-      error: "Hasil visit tidak ditemukan.",
+      error: "Hasil Impact Visit tidak ditemukan.",
     };
   if (!visit.canReview)
     return {

@@ -107,13 +107,13 @@ export default function ImpactVisitResultDetailPage() {
       try {
         const res = await fetch(`/api/employee/impact-visits/${id}`, { cache: 'no-store' });
         const json = await res.json();
-        if (!res.ok || !json.success) throw new Error(json.error ?? 'Gagal memuat hasil visit.');
+        if (!res.ok || !json.success) throw new Error(json.error ?? 'Gagal memuat hasil Impact Visit.');
         const v = json.visit as ImpactVisitResultDetail;
         setVisit(v);
         // Open on the checklist that has something to fix.
         if (v.mainNegatives.length === 0 && v.vmNegatives.length > 0) setTab('vm');
       } catch (e) {
-        setError(e instanceof Error ? e.message : 'Gagal memuat hasil visit.');
+        setError(e instanceof Error ? e.message : 'Gagal memuat hasil Impact Visit.');
       } finally {
         setLoading(false);
       }

@@ -24,6 +24,7 @@
     "db:local:status": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/local-db.ps1 status",
     "db:seed:local": "dotenv -e .env.local -- tsx scripts/seed/local-demo.ts",
     "test:scanner": "tsx scripts/test-scanner.ts",
+    "test:transfer-report": "tsx scripts/test-transfer-order-report.ts",
     "test:setoran": "dotenv -e .env.local -- tsx scripts/test-setoran-access.ts"
   },
   "dependencies": {

@@ -8,7 +8,7 @@ import {
 type Context = { params: Promise<{ id: string }> };
 const missing = () =>
   NextResponse.json(
-    { success: false, error: "Hasil visit tidak ditemukan." },
+    { success: false, error: "Hasil Impact Visit tidak ditemukan." },
     { status: 404 },
   );
 
@@ -27,7 +27,7 @@ export async function GET(_req: NextRequest, { params }: Context) {
   } catch (error) {
     console.error("[impact-result GET]", error);
     return NextResponse.json(
-      { success: false, error: "Gagal memuat hasil visit." },
+      { success: false, error: "Gagal memuat hasil Impact Visit." },
       { status: 500 },
     );
   }

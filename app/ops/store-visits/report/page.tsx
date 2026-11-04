@@ -1,37 +1,34 @@
 'use client';
 // app/ops/store-visits/report/page.tsx
 //
-// Report Visit — "which store do I visit next?".
+// Visit Toko ▸ Report — what already happened, nothing upcoming (that is the Upcoming page).
 //
-//   Ops Area  Kunjungi berikutnya (the stores to go to first) → summary tiles →
-//             the calendar of suggested visits (and what was visited).
-//   Ops HO    Siapa yang harus visit apa: every area's backlog, worst first; a click
-//             narrows the page to that area → summary tiles → the same calendar.
+//   Kalender  every day with the stores visited (green) and the periods that ended without
+//             enough visits (rose); a day opens its details.
+//   Daftar    the visits that were made, newest first, one thin row each.
 //
-// Two views share one filter row: Kalender (default) and Antrean (every store as a row,
-// grouped by urgency, or by area for HO). Colours come from one map (components/ops/
-// store-visits/tones.ts); the schedule is derived on the fly (lib/store-visit/plan.ts).
+// A visit (calendar day panel or list row) opens its RESULT in a side sheet — what Ops wrote,
+// the store photo and geotag; the answering form itself is /ops/store-visits/[storeId].
+// Ops Area sees only their own area's data (resolved server-side); Ops HO / IT pick an area.
 
 import { useMemo, useState } from 'react';
-import { AlertCircle, CalendarDays, ChevronDown, List } from 'lucide-react';
+import { AlertCircle, CalendarDays, ChevronRight, List } from 'lucide-react';
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
 import { OpsListSkeleton } from '@/components/ops/layout/OpsList';
-import { OpsSearchInput, OpsFilterSelect, OpsChipTabs } from '@/components/ops/layout/OpsToolbar';
-import { daysAgoLabel } from '@/components/ops/store-visits/shared';
+import { OpsSearchInput, OpsFilterSelect } from '@/components/ops/layout/OpsToolbar';
+import { StoreCombobox } from '@/components/shared/store-combobox';
 import VisitTabs from '@/components/ops/store-visits/VisitTabs';
-import VisitPlanCalendar, { VisitLegend, VisitPlanPanel, type CalendarPick } from '@/components/ops/store-visits/VisitPlanCalendar';
-import VisitQueue, { type QueueGroupBy } from '@/components/ops/store-visits/VisitQueue';
-import { AreaMonitor, NextUp, SummaryTiles } from '@/components/ops/store-visits/PlanOverview';
+import VisitResultSheet from '@/components/ops/store-visits/VisitResultSheet';
+import ReportCalendar, { MonthNav, ReportDayPanel, ReportLegend } from '@/components/ops/store-visits/ReportCalendar';
+import { TONE } from '@/components/ops/store-visits/tones';
 import { useApi } from '@/lib/client/use-api';
-import { addDaysKey, jakartaDateKey, jakartaTodayKey } from '@/lib/day-bucket';
-import { SOON_DAYS, areaRollups, buildPlanByArea, nextUp, planHorizonEnd, storeUrgency, type Urgency } from '@/lib/store-visit/plan';
-import { calendarWeeks, type ReportOps, type ReportStore, type VisitReport } from '@/lib/store-visit/report';
+import { jakartaTime, jakartaTodayKey } from '@/lib/day-bucket';
+import { calendarWeeks, missedCycles, type CalendarVisit, type ReportStore, type VisitReport } from '@/lib/store-visit/report';
 import { cn } from '@/lib/utils';
 
-const HOW_TO_READ = 'Tiap toko punya periodenya sendiri (7 hari = Senin–Minggu); visit boleh kapan saja selama periode berjalan, lalu hitungan mulai dari nol. Hari yang disarankan menyebar kunjungan merata dan mengelompokkan toko sekota. Minggu dibiarkan kosong.';
+type View = 'calendar' | 'list';
 
-type FilterKey = 'all' | Urgency;
-type View = 'calendar' | 'queue';
+const dayShort = (day: string) => new Date(`${day}T00:00:00Z`).toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
 
 function matchesQuery(s: ReportStore, q: string): boolean {
   return !q || `${s.name} ${s.storeNo} ${s.areaName} ${s.policy?.city ?? ''} ${s.opsNames.join(' ')}`.toLowerCase().includes(q);
@@ -43,10 +40,9 @@ export default function StoreVisitReportPage() {
   const [view, setView] = useState<View>('calendar');
   const [query, setQuery] = useState('');
   const [area, setArea] = useState('all');
-  const [category, setCategory] = useState('all');
-  const [filter, setFilter] = useState<FilterKey>('all');
-  const [groupBy, setGroupBy] = useState<QueueGroupBy>('urgency');
-  const [pick, setPick] = useState<CalendarPick | null>(null);
+  const [storeId, setStoreId] = useState<number | null>(null);
+  const [pick, setPick] = useState<string | null>(null);
+  const [openVisit, setOpenVisit] = useState<string | null>(null);
 
   const api = useApi<VisitReport & { success: boolean; error?: string }>(`/api/ops/store-visits/report?month=${month}`);
   // Refetch keeps the frame: hold the last report while another month loads.
@@ -58,73 +54,46 @@ export default function StoreVisitReportPage() {
   const load = () => void api.refresh();
 
   const isHO = report?.scope === 'all';
+  const multiArea = (report?.areas.length ?? 0) > 1;
   const weeks = useMemo(() => calendarWeeks(month), [month]);
-  const horizonEnd = planHorizonEnd(today);
 
-  // The schedule is worked out per area from every store (never from the filtered list), so a
-  // filter or a search can't move a store to another day.
-  const fullPlan = useMemo(() => buildPlanByArea(report?.stores ?? [], today, horizonEnd), [report, today, horizonEnd]);
-
-  // Area + category narrow the whole page (numbers included); search and chips narrow what is listed.
-  const scoped = useMemo(() => (report?.stores ?? []).filter((s) =>
-    (area === 'all' || String(s.areaId) === area) && (category === 'all' || s.policy?.category === category),
-  ), [report, area, category]);
-  const scopedIds = useMemo(() => new Set(scoped.map((s) => s.id)), [scoped]);
-  const scopedPlan = useMemo(() => fullPlan.filter((p) => scopedIds.has(p.storeId)), [fullPlan, scopedIds]);
-
+  // Area and store narrow the whole page; search narrows what is shown (numbers follow all three).
   const q = query.trim().toLowerCase();
-  const searched = useMemo(() => scoped.filter((s) => matchesQuery(s, q)), [scoped, q]);
-  const searchedIds = useMemo(() => new Set(searched.map((s) => s.id)), [searched]);
-  const calendarPlan = useMemo(() => scopedPlan.filter((p) => searchedIds.has(p.storeId)), [scopedPlan, searchedIds]);
-  const calendarVisits = useMemo(() => (report?.calendarVisits ?? []).filter((v) => searchedIds.has(v.storeId)), [report, searchedIds]);
+  const areaStores = useMemo(() => (report?.stores ?? []).filter((s) => area === 'all' || String(s.areaId) === area), [report, area]);
+  const stores = useMemo(() => (storeId == null ? areaStores : areaStores.filter((s) => s.id === storeId)), [areaStores, storeId]);
+  const storeById = useMemo(() => new Map(stores.map((s) => [s.id, s])), [stores]);
+  const visits = useMemo(() => (report?.calendarVisits ?? []).filter((v) => {
+    const s = storeById.get(v.storeId);
+    return !!s && (!q || matchesQuery(s, q) || (v.by ?? '').toLowerCase().includes(q));
+  }), [report, storeById, q]);
+  const missed = useMemo(() => missedCycles(stores.filter((s) => matchesQuery(s, q)), weeks[0][0], weeks[weeks.length - 1][6], today), [stores, q, weeks, today]);
 
-  const counts = useMemo(() => {
-    const c: Record<Urgency, number> = { overdue: 0, soon: 0, open: 0, met: 0, unset: 0 };
-    for (const s of scoped) c[storeUrgency(s)]++;
-    return c;
-  }, [scoped]);
-  const withPolicy = scoped.length - counts.unset;
-  const next7 = useMemo(() => scopedPlan.filter((p) => p.day <= addDaysKey(today, 6)).length, [scopedPlan, today]);
+  // The numbers and the list are for the month itself (the calendar also shows its edge weeks).
+  const monthVisits = useMemo(() => visits.filter((v) => v.day.slice(0, 7) === month), [visits, month]);
+  const monthMissed = useMemo(() => missed.filter((m) => m.day.slice(0, 7) === month), [missed, month]);
+  const visitedStores = useMemo(() => new Set(monthVisits.map((v) => v.storeId)).size, [monthVisits]);
 
-  const queueStores = useMemo(() => searched.filter((s) => filter === 'all' || storeUrgency(s) === filter), [searched, filter]);
-  const rollups = useMemo(() => areaRollups(report?.stores ?? [], report?.ops ?? [], fullPlan, today)
-    .filter((r) => category === 'all' || scoped.some((s) => s.areaId === r.areaId)), [report, fullPlan, today, category, scoped]);
-
-  // Default pick: today's date (or the next day that has something planned); another month → its first week.
-  const nextDay = calendarPlan.find((p) => p.day >= today)?.day;
-  const todayBusy = calendarPlan.some((p) => p.day === today) || calendarVisits.some((v) => v.day === today);
-  const activePick: CalendarPick | null = pick ?? (month === today.slice(0, 7)
-    ? { kind: 'day', day: todayBusy ? today : nextDay && weeks.some((w) => w.includes(nextDay)) ? nextDay : today }
-    : weeks.length ? { kind: 'week', week: weeks[0] } : null);
+  // Default pick: today when it's in the month, else the latest day that has something.
+  const activeDays = useMemo(() => [...new Set([...monthVisits.map((v) => v.day), ...monthMissed.map((m) => m.day)])].sort(), [monthVisits, monthMissed]);
+  const activePick = pick && pick.slice(0, 7) === month ? pick : month === today.slice(0, 7) ? today : activeDays[activeDays.length - 1] ?? null;
 
   const trackedLabel = report?.trackedFrom
     ? new Date(`${report.trackedFrom}T00:00:00Z`).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })
     : null;
-  const multiArea = (report?.areas.length ?? 0) > 1;
-
-  const tiles = [
-    { key: 'overdue', tone: 'overdue' as const, label: 'Terlewat', value: counts.overdue, hint: 'periode lalu tidak terpenuhi' },
-    { key: 'soon', tone: 'soon' as const, label: 'Segera berakhir', short: 'Segera', value: counts.soon, hint: `periode habis ≤ ${SOON_DAYS} hari` },
-    { key: 'planned7', tone: 'planned' as const, label: 'Dijadwalkan', short: '7 hari', value: next7, hint: '7 hari ke depan' },
-    { key: 'met', tone: 'done' as const, label: 'Terpenuhi', value: counts.met, hint: `dari ${withPolicy} toko periode ini` },
-  ];
-  const selectTile = (key: string) => {
-    setView('queue');
-    setFilter(key === 'planned7' ? 'open' : (key as FilterKey));
-  };
+  const showArea = isHO && area === 'all' && multiArea;
 
   return (
     <div className="min-h-full bg-slate-50">
       <OpsPageHeader
         title="Report Visit"
         scope="OPS · Kunjungan Area"
-        subtitle={isHO ? 'Pantau toko mana yang harus dikunjungi tiap Ops Area.' : 'Rencana kunjungan: toko mana yang perlu didatangi berikutnya.'}
+        subtitle={isHO ? 'Visit yang sudah dilakukan dan periode yang terlewat, per area.' : 'Visit yang sudah Anda lakukan dan periode yang terlewat.'}
         onRefresh={load}
         refreshing={api.validating}
         className="max-md:[&_h1]:text-xl"
         contentClassName="w-full"
       />
-      <div className="space-y-4 p-4 pb-8 sm:space-y-5 sm:p-6 lg:px-8">
+      <div className="space-y-3 p-4 pb-8 sm:space-y-4 sm:p-6 lg:px-8">
         <VisitTabs />
 
         {error ? (
@@ -136,133 +105,132 @@ export default function StoreVisitReportPage() {
           <OpsListSkeleton />
         ) : (
           <>
-            {isHO ? (
-              <AreaMonitor rows={rollups} selected={area} onSelect={setArea} activityDays={report?.activityDays ?? 28} />
-            ) : (
-              <NextUp items={nextUp(scopedPlan, today)} stores={scoped} today={today} allDone={withPolicy > 0 && counts.met === withPolicy} />
-            )}
-
-            <section aria-label="Ringkasan">
-              <SummaryTiles tiles={tiles} onSelect={selectTile} />
-            </section>
-
-            {/* Filters — scoping everything below. Phone: switch, search, then the selects side by side. */}
+            {/* Filters: month, (area), search, view */}
             <div className="space-y-2 md:flex md:flex-wrap md:items-center md:gap-2 md:space-y-0">
-              <div role="tablist" aria-label="Tampilan" className="flex h-11 items-center gap-0.5 rounded-xl border border-slate-200 bg-white p-0.5 md:inline-flex md:h-10">
-                {([['calendar', 'Kalender', CalendarDays], ['queue', 'Antrean', List]] as const).map(([key, label, Icon]) => (
-                  <button
-                    key={key}
-                    type="button"
-                    role="tab"
-                    aria-selected={view === key}
-                    onClick={() => setView(key)}
-                    className={cn('inline-flex h-full flex-1 items-center justify-center gap-1.5 rounded-lg px-3 text-xs font-bold transition md:flex-none', view === key ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50')}
-                  >
-                    <Icon className="h-3.5 w-3.5" />{label}
-                  </button>
-                ))}
+              <div className="flex gap-2">
+                <MonthNav month={month} today={today} onChange={(m) => { setMonth(m); setPick(null); }} className="min-w-0 flex-1 justify-between md:flex-none" />
+                <div role="tablist" aria-label="Tampilan" className="flex h-10 shrink-0 items-center gap-0.5 rounded-xl border border-slate-200 bg-white p-0.5 md:order-last">
+                  {([['calendar', 'Kalender', CalendarDays], ['list', 'Daftar', List]] as const).map(([key, label, Icon]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      role="tab"
+                      aria-selected={view === key}
+                      onClick={() => setView(key)}
+                      className={cn('inline-flex h-full items-center justify-center gap-1.5 rounded-lg px-3 text-xs font-bold transition', view === key ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-500 hover:bg-slate-50')}
+                    >
+                      <Icon className="h-3.5 w-3.5" />{label}
+                    </button>
+                  ))}
+                </div>
               </div>
-              <OpsSearchInput value={query} onChange={setQuery} placeholder="Cari toko, kode, kota, atau Ops…" className="w-full md:w-auto md:max-w-sm" />
               <div className="flex gap-2 md:contents">
-                {multiArea && (
-                  <OpsFilterSelect label="Area" value={area} onChange={setArea} className="min-w-0 flex-1 md:flex-none [&>select]:w-full [&>select]:max-w-none md:[&>select]:w-auto md:[&>select]:max-w-[220px]">
+                <OpsSearchInput value={query} onChange={setQuery} placeholder="Cari toko / kota / Ops…" className="min-w-0 flex-1 md:max-w-sm md:flex-none" />
+                {isHO && multiArea && (
+                  <OpsFilterSelect label="Area" value={area} onChange={(v) => { setArea(v); setStoreId(null); }} className="min-w-0 shrink-0 [&>select]:max-w-[150px] md:[&>select]:max-w-[240px]">
                     <option value="all">Semua area</option>
                     {report?.areas.map((a) => <option key={a.id} value={String(a.id)}>{a.name}</option>)}
                   </OpsFilterSelect>
                 )}
-                <OpsFilterSelect label="Kategori visit" value={category} onChange={setCategory} className="min-w-0 flex-1 md:flex-none [&>select]:w-full [&>select]:max-w-none md:[&>select]:w-auto md:[&>select]:max-w-[220px]">
-                  <option value="all">Semua kategori</option>
-                  <option value="in_city">Dalam kota</option><option value="out_city">Luar kota</option>
-                </OpsFilterSelect>
-                {isHO && view === 'queue' && (
-                  <OpsFilterSelect label="Kelompokkan" value={groupBy} onChange={(v) => setGroupBy(v as QueueGroupBy)} highlight={groupBy === 'area'} className="min-w-0 flex-1 md:flex-none [&>select]:w-full [&>select]:max-w-none md:[&>select]:w-auto md:[&>select]:max-w-[220px]">
-                    <option value="urgency">Kelompok: Urgensi</option>
-                    <option value="area">Kelompok: Area / Ops</option>
-                  </OpsFilterSelect>
-                )}
               </div>
+              <StoreCombobox stores={areaStores} value={storeId} onChange={setStoreId} allLabel="Semua toko" className="w-full md:w-60" />
             </div>
+
+            {/* Three numbers for the month — no more */}
+            <dl className="grid grid-cols-3 gap-2 sm:gap-3">
+              <Stat label="Visit" more=" dilakukan" value={monthVisits.length} tone="done" />
+              <Stat label="Toko" more=" dikunjungi" value={visitedStores} tone="done" />
+              <Stat label="Terlewat" more="" value={monthMissed.length} tone="overdue" />
+            </dl>
 
             {view === 'calendar' ? (
               <div className="space-y-3">
-                <div className="grid grid-cols-[minmax(0,1fr)] items-start gap-3 sm:gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
-                  <VisitPlanCalendar
+                <div className="grid grid-cols-[minmax(0,1fr)] items-start gap-3 sm:gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+                  <ReportCalendar
                     month={month}
                     weeks={weeks}
-                    visits={calendarVisits}
-                    stores={searched}
-                    plan={calendarPlan}
+                    visits={visits}
+                    missed={missed}
+                    stores={stores}
                     today={today}
-                    trackedFrom={report?.trackedFrom ?? null}
-                    horizonEnd={horizonEnd}
                     pick={activePick}
                     onPick={setPick}
-                    onMonthChange={(m) => { setMonth(m); setPick(null); }}
                     loading={api.validating}
                   />
                   <div className="xl:sticky xl:top-4">
-                    <VisitPlanPanel pick={activePick} visits={calendarVisits} stores={searched} plan={calendarPlan} today={today} trackedFrom={report?.trackedFrom ?? null} showArea={isHO && area === 'all' && multiArea} weeks={weeks} onPick={setPick} />
+                    <ReportDayPanel day={activePick} visits={visits} missed={missed} stores={stores} today={today} showArea={showArea} onOpenVisit={setOpenVisit} />
                   </div>
                 </div>
-                <VisitLegend className="px-1" />
-                {/* The how-to-read note: folded away on a phone, plain text from md up */}
-                <details className="group rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs leading-5 text-slate-500 md:hidden">
-                  <summary className="flex min-h-6 cursor-pointer list-none items-center justify-between font-semibold text-slate-600 [&::-webkit-details-marker]:hidden">
-                    Cara membaca jadwal<ChevronDown className="h-4 w-4 text-slate-400 transition group-open:rotate-180" />
-                  </summary>
-                  <p className="mt-2">{HOW_TO_READ}{trackedLabel && ` Riwayat dicatat sejak ${trackedLabel}.`}</p>
-                </details>
-                <p className="hidden px-1 text-xs leading-5 text-slate-500 md:block">{HOW_TO_READ}{trackedLabel && ` Riwayat dicatat sejak ${trackedLabel}.`}</p>
+                <ReportLegend className="px-1" />
+                {trackedLabel && <p className="px-1 text-xs text-slate-500">Riwayat dicatat sejak {trackedLabel}; periode sebelum itu tidak dinilai.</p>}
               </div>
             ) : (
-              <>
-                <div className="-mx-4 overflow-x-auto px-4 pb-0.5 [scrollbar-width:none] sm:mx-0 sm:px-0 [&::-webkit-scrollbar]:hidden [&>div]:flex-nowrap [&>div]:sm:flex-wrap">
-                  <OpsChipTabs<FilterKey> value={filter} onChange={setFilter} items={[
-                    { key: 'all', label: 'Semua', count: scoped.length },
-                    { key: 'overdue', label: 'Terlewat', count: counts.overdue, tone: 'rose' },
-                    { key: 'soon', label: 'Segera berakhir', count: counts.soon, tone: 'amber' },
-                    { key: 'open', label: 'Berjalan', count: counts.open, tone: 'indigo' },
-                    { key: 'met', label: 'Terpenuhi', count: counts.met, tone: 'emerald' },
-                    { key: 'unset', label: 'Belum diatur', count: counts.unset, tone: 'slate' },
-                  ]} />
-                </div>
-                <VisitQueue stores={queueStores} plan={scopedPlan} today={today} showArea={isHO && multiArea} groupBy={isHO ? groupBy : 'urgency'} />
-              </>
+              <VisitTable visits={monthVisits} storeById={storeById} showArea={showArea} onOpen={setOpenVisit} />
             )}
-
-            {isHO && report && report.ops.length > 0 && <OpsActivity ops={report.ops} days={report.activityDays} />}
           </>
         )}
       </div>
+      <VisitResultSheet visitId={openVisit} onClose={() => setOpenVisit(null)} />
     </div>
   );
 }
 
-function OpsActivity({ ops, days }: { ops: ReportOps[]; days: number }) {
+function Stat({ label, more, value, tone }: { label: string; /** Said only from sm up. */ more: string; value: number; tone: 'done' | 'overdue' }) {
   return (
-    <section aria-label="Aktivitas Ops" className="space-y-2.5">
-      <div className="flex items-baseline gap-2 px-1">
-        <h2 className="text-sm font-bold text-slate-900">Aktivitas Ops</h2>
-        <span className="text-xs text-slate-500">{days} hari terakhir</span>
-      </div>
-      <ul className="divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        {ops.map((o) => (
-          <li key={o.id} className="flex items-center gap-3 px-4 py-3">
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-indigo-50 text-sm font-bold text-indigo-700">{o.name.charAt(0).toUpperCase()}</span>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-bold text-slate-900">{o.name}</p>
-              <p className="truncate text-xs text-slate-500">
-                {o.areaName ? `${o.areaName} · ` : ''}
-                {o.lastVisitAt ? `Terakhir ${daysAgoLabel(jakartaDateKey(o.lastVisitAt)).toLowerCase()}` : 'Belum ada visit'}
-              </p>
-            </div>
-            <div className="text-right">
-              <p className={cn('text-sm font-bold tabular-nums', o.visits ? 'text-slate-900' : 'text-rose-600')}>{o.visits} visit</p>
-              <p className="text-xs text-slate-500">{o.stores} toko</p>
-            </div>
-          </li>
-        ))}
-      </ul>
-    </section>
+    <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white px-3 py-2.5 sm:px-4 sm:py-3">
+      <span aria-hidden className={cn('absolute inset-y-0 left-0 w-1', TONE[tone].dot)} />
+      <dt className="truncate pl-1 text-[11px] font-bold uppercase tracking-wide text-slate-500">{label}<span className="hidden sm:inline">{more}</span></dt>
+      <dd className={cn('pl-1 text-2xl font-bold tabular-nums', value ? TONE[tone].text : 'text-slate-300')}>{value}</dd>
+    </div>
+  );
+}
+
+/** The visits that were made — newest first, the date shown once per day. */
+function VisitTable({ visits, storeById, showArea, onOpen }: { visits: CalendarVisit[]; storeById: Map<number, ReportStore>; showArea: boolean; onOpen: (visitId: string) => void }) {
+  const rows = useMemo(() => [...visits].sort((a, b) => b.at.localeCompare(a.at)), [visits]);
+  if (rows.length === 0) {
+    return <p className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">Belum ada visit pada bulan ini.</p>;
+  }
+  return (
+    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <table className="w-full border-collapse text-left text-sm">
+        <thead>
+          <tr className="border-b border-slate-200 bg-slate-50 text-[11px] font-bold uppercase tracking-wide text-slate-500">
+            <th scope="col" className="px-3 py-2 sm:px-4">Tanggal</th>
+            <th scope="col" className="px-3 py-2">Toko</th>
+            {showArea && <th scope="col" className="hidden px-3 py-2 xl:table-cell">Area</th>}
+            <th scope="col" className="hidden px-3 py-2 xl:table-cell">Kota</th>
+            <th scope="col" className="hidden px-3 py-2 sm:table-cell">Oleh</th>
+            <th scope="col" className="w-8 py-2 pr-2"><span className="sr-only">Buka</span></th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {rows.map((v, i) => {
+            const s = storeById.get(v.storeId);
+            const first = i === 0 || rows[i - 1].day !== v.day;
+            return (
+              <tr key={v.id} onClick={() => onOpen(v.id)} className={cn('group cursor-pointer transition-colors hover:bg-indigo-50/40', first && i > 0 && 'border-t-2 border-t-slate-100')}>
+                <td className="whitespace-nowrap px-3 py-2 sm:px-4">
+                  {first ? <span className="font-semibold text-slate-900">{dayShort(v.day)}</span> : <span className="text-slate-300" aria-hidden>·</span>}
+                  <span className="ml-2 text-xs tabular-nums text-slate-500">{jakartaTime(v.at)}</span>
+                </td>
+                <td className="px-3 py-2 sm:min-w-[11rem]">
+                  {s ? (
+                    <button type="button" onClick={(e) => { e.stopPropagation(); onOpen(v.id); }} aria-label={`Lihat hasil visit ${s.name}`} className="flex min-w-0 max-w-[11rem] items-center gap-2 text-left focus-visible:outline-none sm:max-w-[22rem]">
+                      <span aria-hidden className={cn('h-5 w-1 shrink-0 rounded-full', TONE.done.dot)} />
+                      <span className="min-w-0"><span className="line-clamp-2 font-semibold leading-snug text-slate-900 sm:line-clamp-1">{s.name}</span><span className="block truncate text-xs text-slate-500">{s.storeNo}<span className="xl:hidden"> · {s.policy?.city || s.areaName}</span><span className="sm:hidden"> · {v.by ?? 'Ops'}</span></span></span>
+                    </button>
+                  ) : '—'}
+                </td>
+                {showArea && <td className="hidden max-w-[11rem] truncate px-3 py-2 text-slate-600 xl:table-cell">{s?.areaName}</td>}
+                <td className="hidden px-3 py-2 text-slate-600 xl:table-cell">{s?.policy?.city || '—'}</td>
+                <td className="hidden px-3 py-2 text-slate-600 sm:table-cell"><span className="block max-w-[11rem] truncate">{v.by ?? 'Ops'}</span></td>
+                <td className="py-2 pr-2 text-slate-300 group-hover:text-indigo-500"><ChevronRight className="h-4 w-4" /></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }

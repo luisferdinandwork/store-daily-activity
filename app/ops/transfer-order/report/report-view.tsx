@@ -4,26 +4,27 @@
 // The TO Report for ONE process (Item Return / Item Receiving / Item Delivery —
 // one page each, switched by the header tabs or the sidebar): per store, how many
 // of that process it had in the period and how many it has finished. Same shape
-// as Task Progress: the Harian / Mingguan / Bulanan header, a KPI band, a filter
-// bar, one row per store. In a week or month each row also carries a day-by-day
-// trend strip. A row opens that store's processes (store-sheet.tsx); a day square
-// opens that day.
+// as Task Progress: the Harian / Mingguan / Bulanan header, four KPI tiles, one
+// search / area / sort row, one list of stores. A row opens that store's processes
+// (store-sheet.tsx).
 //
-// What counts, and when: lib/transfer-order-report.ts. Data:
+// What counts, and when: lib/transfer-order-report.ts. Averages (the tile, each
+// row, the sheet) are made of COMPLETED processes only — an open one never moves
+// them; it only shows as "Belum selesai" and "Menunggu terlama". Data:
 // GET /api/ops/item-transfers/report?process=….
 
-import { useMemo, useState } from 'react';
-import { AlertCircle, ChevronRight, Info } from 'lucide-react';
+import { useMemo, useState, type ReactNode } from 'react';
+import { AlertCircle, Info } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
-import { TONES, heatStep, rateTone } from '@/lib/status-theme';
+import { TONES, rateTone } from '@/lib/status-theme';
 import { useApi } from '@/lib/client/use-api';
 import { jakartaTime, jakartaTodayKey } from '@/lib/day-bucket';
 import { periodDays } from '@/lib/task-progress';
 import OpsPageHeader, { type Period } from '@/components/ops/layout/OpsPageHeader';
+import { OpsList, OpsListRow, OpsListSkeleton } from '@/components/ops/layout/OpsList';
 import { OpsChipTabs, OpsFilterSelect, OpsSearchInput } from '@/components/ops/layout/OpsToolbar';
 import { MetricTile, RateBar } from '@/components/tasks/MetricTile';
-import { PctLegend } from '@/components/tasks/HeatGrid';
 import { SectionTabs } from '@/components/finance/shared/sheet-kit';
 import { formatMinutes } from '@/lib/transfer-order-metrics';
 import {
@@ -63,24 +64,40 @@ function useHeld<T extends { success: boolean }>(data: T | undefined): T | null 
   return data?.success ? data : held;
 }
 
-const WEEKDAY = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
-
 /** An open process waiting this long (a day / two) turns the figure amber / red. */
 const WAIT_WARN_MIN = 24 * 60;
 const WAIT_ALERT_MIN = 48 * 60;
 const waitTone = (m: number) => (m >= WAIT_ALERT_MIN ? TONES.danger : m >= WAIT_WARN_MIN ? TONES.warning : TONES.neutral);
 
-// One template for the header and every row so the columns line up.
-const GRID_BASE = 'grid items-center gap-x-5';
-const COLS_DAY = 'grid-cols-[minmax(180px,1.5fr)_minmax(150px,1.1fr)_minmax(90px,0.6fr)_minmax(90px,0.6fr)_minmax(100px,0.7fr)_20px]';
-const COLS_RANGE = 'grid-cols-[minmax(180px,1.2fr)_minmax(140px,0.9fr)_minmax(80px,0.5fr)_minmax(80px,0.5fr)_minmax(90px,0.6fr)_minmax(180px,1.4fr)_20px]';
+const SORT_OPTIONS: { key: ReportSort; label: string }[] = [
+  { key: 'attention', label: 'Paling tertinggal' },
+  { key: 'oldest', label: 'Menunggu terlama' },
+  { key: 'volume', label: 'Proses terbanyak' },
+  { key: 'name', label: 'Nama toko' },
+];
 
-// ─── Row parts ───────────────────────────────────────────────────────────────
+// ─── Row ─────────────────────────────────────────────────────────────────────
+// One list row per store. Below the container's `@3xl` the four figures fold into
+// two columns under the store name (each with its own small label); from `@3xl` up
+// they sit on one line beside it and the header row above names the columns.
+// Widths are shared with the header so the columns line up.
 
-function ProgressCell({ store }: { store: StoreReport }) {
-  if (store.total === 0) {
-    return <span className="inline-flex w-fit rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-[11px] font-semibold text-slate-400">Tidak ada proses</span>;
-  }
+const W_PROGRESS = '@3xl:w-44';
+const W_FIGURE = '@3xl:w-24';
+const W_WAIT = '@3xl:w-28';
+
+function Figure({ label, className, children }: { label: string; className?: string; children: ReactNode }) {
+  return (
+    <div className={cn('min-w-0', className)}>
+      <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400 @3xl:hidden">{label}</p>
+      {children}
+    </div>
+  );
+}
+
+const dash = <span className="text-sm text-slate-300">—</span>;
+
+function ProgressFigure({ store }: { store: StoreReport }) {
   const p = pct(store.done, store.total);
   return (
     <div className="min-w-0">
@@ -95,13 +112,12 @@ function ProgressCell({ store }: { store: StoreReport }) {
   );
 }
 
-function OpenCell({ store }: { store: StoreReport }) {
-  if (store.total === 0) return <span className="text-sm text-slate-300">—</span>;
+function OpenFigure({ store }: { store: StoreReport }) {
   const open = store.total - store.done;
   if (open === 0) return <span className={cn('text-xs font-semibold', TONES.success.strong)}>Selesai semua</span>;
   return (
     <div className="min-w-0">
-      <span className={cn('text-sm font-semibold tabular-nums', TONES.warning.strong)}>{open}<span className="ml-1 text-[11px] font-medium text-slate-400">belum</span></span>
+      <span className={cn('text-sm font-semibold tabular-nums', TONES.warning.strong)}>{open}</span>
       {store.notStarted > 0 && (
         <p className="truncate text-[10px] text-slate-400" title="Belum difoto terima fisik oleh toko — waktu belum berjalan">
           {store.notStarted} belum difoto
@@ -111,61 +127,58 @@ function OpenCell({ store }: { store: StoreReport }) {
   );
 }
 
-function DurationCell({ minutes, tone }: { minutes: number | null; tone?: (typeof TONES)['neutral'] }) {
-  if (minutes == null) return <span className="text-sm text-slate-300">—</span>;
-  return <span className={cn('text-sm font-semibold tabular-nums', tone ? tone.strong : 'text-slate-700')}>{formatMinutes(minutes)}</span>;
-}
-
-function TrendHeader({ days, today }: { days: string[]; today: string }) {
-  const weekly = days.length <= 7;
+function Duration({ minutes, tone, sub }: { minutes: number | null; tone?: (typeof TONES)['neutral']; sub?: string }) {
+  if (minutes == null) return dash;
   return (
-    <div className="flex gap-[3px]" aria-hidden>
-      {days.map((day) => {
-        const d = new Date(`${day}T00:00:00Z`);
-        const label = weekly ? WEEKDAY[d.getUTCDay()] : (d.getUTCDate() === 1 || d.getUTCDate() % 5 === 0 ? String(d.getUTCDate()) : '');
-        return (
-          <span key={day} className={cn('min-w-0 flex-1 text-center text-[9px] font-medium normal-case tracking-normal', day === today ? 'font-bold text-slate-900' : 'text-slate-400')}>
-            {label}
-          </span>
-        );
-      })}
+    <div className="min-w-0">
+      <span className={cn('text-sm font-semibold tabular-nums', tone ? tone.strong : 'text-slate-700')}>{formatMinutes(minutes)}</span>
+      {sub && <p className="truncate text-[10px] text-slate-400">{sub}</p>}
     </div>
   );
 }
 
-function TrendStrip({
-  store, days, today, onPick,
-}: {
-  store: StoreReport;
-  days: string[];
-  today: string;
-  onPick: (day: string) => void;
-}) {
+function StoreRow({ store, onOpen }: { store: StoreReport; onOpen: () => void }) {
+  const idle = store.total === 0;
   return (
-    <div className="flex gap-[3px]">
-      {days.map((day) => {
-        const c = store.days[day];
-        const p = c && c.total > 0 ? pct(c.done, c.total) : null;
-        const future = day > today;
-        const title = `${new Date(`${day}T00:00:00Z`).toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'short', timeZone: 'UTC' })}: ${
-          c && c.total > 0 ? `${c.done}/${c.total} selesai (${p}%)` : 'tidak ada proses'
-        }`;
-        return (
-          <button
-            key={day}
-            type="button"
-            disabled={p === null}
-            title={title}
-            aria-label={title}
-            onClick={(e) => { e.stopPropagation(); onPick(day); }}
-            className={cn(
-              'h-6 min-w-0 flex-1 rounded-[5px] transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400',
-              p === null ? (future ? 'bg-slate-50' : 'bg-slate-100') : cn(heatStep(p).cell, 'hover:scale-110 hover:shadow-sm'),
-              day === today && 'ring-2 ring-slate-900/60 ring-offset-1',
-            )}
-          />
-        );
-      })}
+    <OpsListRow onClick={onOpen} ariaLabel={`Lihat proses ${store.name}`} className={cn(idle && 'py-2.5 opacity-60 hover:opacity-100')}>
+      <div className="grid w-full min-w-0 grid-cols-2 gap-x-4 gap-y-2.5 @3xl:flex @3xl:items-center @3xl:gap-5">
+        <div className="col-span-2 min-w-0 @3xl:col-span-1 @3xl:flex-1">
+          <p className="truncate text-sm font-semibold text-slate-900">{store.name}</p>
+          <p className="truncate text-[11px] text-slate-400">
+            <span className="font-mono font-medium text-slate-500">{store.storeNo}</span>
+            {store.areaName && <> · {store.areaName}</>}
+          </p>
+        </div>
+
+        {idle ? (
+          <p className="col-span-2 text-xs text-slate-400 @3xl:col-span-1 @3xl:w-[33.75rem]">Tidak ada proses pada periode ini</p>
+        ) : (
+          <>
+            <Figure label="Selesai" className={cn('col-span-2 @3xl:col-span-1', W_PROGRESS)}><ProgressFigure store={store} /></Figure>
+            <Figure label="Belum selesai" className={W_FIGURE}><OpenFigure store={store} /></Figure>
+            <Figure label="Rata-rata" className={W_FIGURE}>
+              <Duration minutes={avgMinutes(store)} sub={store.timed > 0 ? `dari ${store.timed} selesai` : undefined} />
+            </Figure>
+            <Figure label="Menunggu terlama" className={W_WAIT}>
+              <Duration minutes={store.oldestOpenMinutes} tone={store.oldestOpenMinutes != null ? waitTone(store.oldestOpenMinutes) : undefined} />
+            </Figure>
+          </>
+        )}
+      </div>
+    </OpsListRow>
+  );
+}
+
+function ColumnHeads() {
+  const th = 'text-[11px] font-semibold uppercase tracking-wider text-slate-500';
+  return (
+    <div className="hidden items-center gap-x-5 border-b border-slate-100 bg-slate-50 px-5 py-2.5 @3xl:flex" aria-hidden>
+      <span className={cn(th, 'flex-1')}>Toko</span>
+      <span className={cn(th, 'w-44')}>Selesai</span>
+      <span className={cn(th, 'w-24')}>Belum selesai</span>
+      <span className={cn(th, 'w-24')} title="Rata-rata hanya dari proses yang sudah selesai">Rata-rata</span>
+      <span className={cn(th, 'w-28')} title="Proses terbuka yang paling lama menunggu">Menunggu terlama</span>
+      <span className="w-4 shrink-0" />
     </div>
   );
 }
@@ -183,7 +196,6 @@ export default function ReportView({ process }: { process: Process }) {
   const [filter, setFilter] = useState<ReportFilter>('all');
   const [sheet, setSheet] = useState<StoreSheetTarget | null>(null);
 
-  const today = jakartaTodayKey();
   const days = useMemo(() => periodDays(period, date), [period, date]);
   const from = days[0];
   const to = days[days.length - 1];
@@ -209,16 +221,12 @@ export default function ReportView({ process }: { process: Process }) {
 
   const scopeLabel = data?.scope === 'area' ? (data.areaName ?? 'Area') : activeArea !== 'all' ? activeArea : 'Semua area';
   const subtitle = period === 'daily' ? fmtDateLabel(date) : rangeLabel(days);
-  const ranged = period !== 'daily';
 
   const openStore = (store: StoreReport) => setSheet({ process, store, from, to, label: subtitle });
-  const openDay = (store: StoreReport, day: string) => {
-    setPeriod('daily');
-    setDate(day);
-    setSheet({ process, store, from: day, to: day, label: fmtDateLabel(day) });
-  };
-
   const tabs = PROCESSES.map((p) => ({ href: `/ops/transfer-order/report/${p}`, label: PROCESS_META[p].label }));
+
+  const noTotal = firstLoad || totals.total === 0;
+  const unclocked = totals.done - totals.timed; // completed, but no clock to average
 
   return (
     <div className="min-h-full bg-slate-50">
@@ -234,26 +242,34 @@ export default function ReportView({ process }: { process: Process }) {
       />
 
       <div className="space-y-4 px-4 py-5 sm:px-6 lg:px-8">
-        <p className="text-sm text-slate-500">{meta.blurb}. <span className="text-slate-400">{meta.rangeHint}.</span></p>
+        <details className="group text-sm text-slate-500">
+          <summary className="cursor-pointer list-none">
+            {meta.blurb}. <span className="text-slate-400">{meta.rangeHint}.</span>{' '}
+            <span className="font-semibold text-indigo-600 group-open:hidden">Cara dihitung</span>
+          </summary>
+          <div className="mt-2 flex items-start gap-2.5 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs leading-relaxed text-slate-500">
+            <Info className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
+            <p>
+              {meta.howItCounts} Rata-rata hanya dihitung dari proses yang sudah selesai — proses yang masih menunggu tidak ikut, dan
+              hanya tampil sebagai &ldquo;Belum selesai&rdquo; dan &ldquo;Menunggu terlama&rdquo;. Yang tampil adalah TO yang tercatat di sistem; TO yang
+              sudah selesai di Business Central tanpa konfirmasi toko tidak terhitung. Waktu dalam WIB.
+            </p>
+          </div>
+        </details>
 
         {/* ── KPI band ─────────────────────────────────────────────────── */}
-        <div className={cn('grid grid-cols-2 gap-3 transition-opacity lg:grid-cols-3 xl:grid-cols-5', reloading && 'opacity-70')}>
+        <div className={cn('grid grid-cols-2 gap-3 transition-opacity xl:grid-cols-4', reloading && 'opacity-70')}>
           <MetricTile
-            label="Penyelesaian"
-            value={firstLoad || totals.total === 0 ? '–' : `${totals.rate}%`}
-            tone={totals.total === 0 ? 'default' : rateTone(totals.rate)}
-            hint={totals.total === 0 ? 'Belum ada proses pada periode ini' : `${totals.done} dari ${totals.total} proses selesai`}
-            footer={totals.total > 0 ? <RateBar rate={totals.rate} /> : undefined}
-          />
-          <MetricTile
-            label="Total proses"
-            value={firstLoad ? '–' : totals.total}
-            hint={`${totals.storesWithTo} toko terlibat`}
+            label="Selesai"
+            value={noTotal ? '–' : `${totals.rate}%`}
+            tone={noTotal ? 'default' : rateTone(totals.rate)}
+            hint={noTotal ? 'Belum ada proses pada periode ini' : `${totals.done} dari ${totals.total} proses · ${totals.storesWithTo} toko`}
+            footer={!noTotal ? <RateBar rate={totals.rate} /> : undefined}
           />
           <MetricTile
             label="Belum selesai"
             value={firstLoad ? '–' : totals.open}
-            tone={firstLoad || totals.total === 0 ? 'default' : totals.open > 0 ? 'warning' : 'success'}
+            tone={noTotal ? 'default' : totals.open > 0 ? 'warning' : 'success'}
             hint={
               totals.open > 0
                 ? `${totals.storesOpen} toko perlu tindak lanjut${totals.notStarted > 0 ? ` · ${totals.notStarted} belum difoto toko` : ''}`
@@ -263,44 +279,32 @@ export default function ReportView({ process }: { process: Process }) {
           <MetricTile
             label={meta.avgLabel}
             value={firstLoad || totals.avgMinutes == null ? '–' : formatMinutes(totals.avgMinutes)}
-            hint={meta.rangeHint}
+            hint={
+              totals.avgMinutes == null
+                ? 'Belum ada proses selesai untuk dirata-rata'
+                : `rata-rata dari ${totals.timed} selesai${unclocked > 0 ? ` · ${unclocked} selesai tanpa foto toko tidak dihitung` : ''}`
+            }
           />
           <MetricTile
             label="Menunggu terlama"
             value={firstLoad || totals.longestWaitMinutes == null ? '–' : formatMinutes(totals.longestWaitMinutes)}
             tone={totals.longestWaitMinutes == null ? 'default' : totals.longestWaitMinutes >= WAIT_ALERT_MIN ? 'danger' : totals.longestWaitMinutes >= WAIT_WARN_MIN ? 'warning' : 'default'}
-            hint={totals.longestWaitMinutes == null ? 'Tidak ada yang menunggu' : meta.waitHint}
+            hint={totals.longestWaitMinutes == null ? 'Tidak ada yang menunggu' : `${meta.waitHint} · tidak masuk rata-rata`}
           />
         </div>
 
-        {/* ── Filters ──────────────────────────────────────────────────── */}
-        <div className="space-y-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <OpsSearchInput value={search} onChange={setSearch} placeholder="Cari nama / kode toko…" className="max-w-sm" />
-            {data?.scope !== 'area' && areaOptions.length > 1 && (
-              <OpsFilterSelect label="Area" value={activeArea} onChange={setArea}>
-                <option value="all">Semua area</option>
-                {areaOptions.map((a) => <option key={a} value={a}>{a}</option>)}
-              </OpsFilterSelect>
-            )}
-            <OpsFilterSelect label="Urutkan" value={sort} onChange={(v) => setSort(v as ReportSort)} highlight={false}>
-              <option value="attention">Urut: Paling tertinggal</option>
-              <option value="oldest">Urut: Menunggu terlama</option>
-              <option value="progress">Urut: Progress tertinggi</option>
-              <option value="volume">Urut: Proses terbanyak</option>
-              <option value="name">Urut: Nama toko</option>
+        {/* ── Search / area / sort ─────────────────────────────────────── */}
+        <div className="flex flex-wrap items-center gap-2">
+          <OpsSearchInput value={search} onChange={setSearch} placeholder="Cari nama / kode toko…" className="max-w-sm" />
+          {data?.scope !== 'area' && areaOptions.length > 1 && (
+            <OpsFilterSelect label="Area" value={activeArea} onChange={setArea}>
+              <option value="all">Semua area</option>
+              {areaOptions.map((a) => <option key={a} value={a}>{a}</option>)}
             </OpsFilterSelect>
-          </div>
-          <OpsChipTabs<ReportFilter>
-            value={filter}
-            onChange={setFilter}
-            items={[
-              { key: 'all', label: 'Semua toko', count: counts.all },
-              { key: 'open', label: 'Ada yang belum selesai', count: counts.open, tone: 'amber' },
-              { key: 'complete', label: 'Semua selesai', count: counts.complete, tone: 'emerald' },
-              { key: 'none', label: 'Tanpa proses', count: counts.none, tone: 'slate' },
-            ]}
-          />
+          )}
+          <OpsFilterSelect label="Urutkan" value={sort} onChange={(v) => setSort(v as ReportSort)} highlight={false}>
+            {SORT_OPTIONS.map((o) => <option key={o.key} value={o.key}>Urut: {o.label}</option>)}
+          </OpsFilterSelect>
         </div>
 
         {error && (
@@ -312,84 +316,38 @@ export default function ReportView({ process }: { process: Process }) {
 
         {/* ── Store list ───────────────────────────────────────────────── */}
         {firstLoad ? (
-          <div className="h-[420px] animate-pulse rounded-2xl border border-slate-200 bg-white" />
-        ) : rows.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center">
-            <p className="text-sm font-semibold text-slate-700">Tidak ada toko</p>
-            <p className="mt-1 text-xs text-slate-400">Coba ubah periode, area, filter, atau kata kunci pencarian.</p>
-          </div>
+          <OpsListSkeleton rows={8} />
         ) : (
-          <div className={cn('overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition-opacity', reloading && 'opacity-60')}>
-            <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-slate-100 px-4 py-3">
-              <p className="text-sm font-semibold text-slate-800">
-                {rows.length} toko
-                {data && <span className="ml-2 text-xs font-normal text-slate-400">diperbarui {jakartaTime(data.generatedAt).replace(':', '.')} WIB</span>}
-              </p>
-              {ranged ? <PctLegend /> : (
-                <p className="text-xs text-slate-400">Klik toko untuk melihat daftar prosesnya.</p>
-              )}
+          <div className={cn('@container overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition-opacity', reloading && 'opacity-60')}>
+            <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b border-slate-100 px-4 py-3 sm:px-5">
+              <OpsChipTabs<ReportFilter>
+                value={filter}
+                onChange={setFilter}
+                items={[
+                  { key: 'all', label: 'Semua toko', count: counts.all },
+                  { key: 'open', label: 'Belum selesai', count: counts.open, tone: 'amber' },
+                  { key: 'complete', label: 'Selesai semua', count: counts.complete, tone: 'emerald' },
+                  { key: 'none', label: 'Tanpa proses', count: counts.none, tone: 'slate' },
+                ]}
+              />
+              {data && <p className="text-xs text-slate-400">diperbarui {jakartaTime(data.generatedAt).replace(':', '.')} WIB</p>}
             </div>
 
-            {/* Scrolls sideways on a narrow window instead of squeezing the columns. */}
-            <div className="overflow-x-auto">
-              <div className={ranged ? 'min-w-[1000px]' : 'min-w-[720px]'}>
-                <div className={cn(GRID_BASE, ranged ? COLS_RANGE : COLS_DAY, 'border-b border-slate-100 bg-slate-50 px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500')}>
-                  <span>Toko</span>
-                  <span>Penyelesaian</span>
-                  <span>Belum selesai</span>
-                  <span>Rata-rata</span>
-                  <span>Terlama menunggu</span>
-                  {ranged && <TrendHeader days={days} today={today} />}
-                  <span />
-                </div>
-
-                <ul className="divide-y divide-slate-100">
-                  {rows.map((store) => {
-                    const idle = store.total === 0;
-                    return (
-                      <li key={store.id}>
-                        <div
-                          role="button"
-                          tabIndex={0}
-                          onClick={() => openStore(store)}
-                          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openStore(store); } }}
-                          className={cn(
-                            GRID_BASE, ranged ? COLS_RANGE : COLS_DAY,
-                            'group cursor-pointer px-4 py-3 transition hover:bg-slate-50 focus:outline-none focus-visible:bg-indigo-50',
-                            idle && 'opacity-60 hover:opacity-100',
-                          )}
-                        >
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-semibold text-slate-900">{store.name}</p>
-                            <p className="truncate text-[11px] text-slate-400">
-                              <span className="font-mono font-medium text-slate-500">{store.storeNo}</span>
-                              {store.areaName && <> · {store.areaName}</>}
-                            </p>
-                          </div>
-                          <ProgressCell store={store} />
-                          <OpenCell store={store} />
-                          <DurationCell minutes={avgMinutes(store)} />
-                          <DurationCell minutes={store.oldestOpenMinutes} tone={store.oldestOpenMinutes != null ? waitTone(store.oldestOpenMinutes) : undefined} />
-                          {ranged && <TrendStrip store={store} days={days} today={today} onPick={(day) => openDay(store, day)} />}
-                          <ChevronRight className="h-4 w-4 text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-slate-500" />
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
+            {rows.length === 0 ? (
+              <div className="p-10 text-center">
+                <p className="text-sm font-semibold text-slate-700">Tidak ada toko</p>
+                <p className="mt-1 text-xs text-slate-400">Coba ubah periode, area, filter, atau kata kunci pencarian.</p>
               </div>
-            </div>
+            ) : (
+              <>
+                <ColumnHeads />
+                <OpsList className="rounded-none border-0 shadow-none">
+                  {rows.map((store) => <StoreRow key={store.id} store={store} onOpen={() => openStore(store)} />)}
+                </OpsList>
+              </>
+            )}
           </div>
         )}
-
-        {/* ── How to read it ───────────────────────────────────────────── */}
-        <div className="flex items-start gap-2.5 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-xs leading-relaxed text-slate-500">
-          <Info className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
-          <p>
-            {meta.howItCounts} Yang tampil adalah TO yang tercatat di sistem — TO yang sudah selesai di Business Central tanpa konfirmasi toko
-            tidak ikut terhitung. Waktu dalam WIB.
-          </p>
-        </div>
       </div>
 
       <StoreSheet target={sheet} onClose={() => setSheet(null)} />

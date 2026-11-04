@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { visitProgress, validateVisitPolicy, validateVisitTasks } from '../lib/store-visit/rules';
 import { cycleContaining, cycleRangeLabel, visitCycleView } from '../lib/store-visit/cycles';
-import { attentionOrder, buildReportStore, calendarWeeks, missedLastCycle, missedStreak, reportState, reportTotals, weekCoverage } from '../lib/store-visit/report';
+import { buildReportStore, calendarWeeks, missedCycles, missedLastCycle, missedStreak } from '../lib/store-visit/report';
+import { daysLeftLabel, dueTone, upcomingRows, upcomingSummary } from '../lib/store-visit/upcoming';
 import { parseGeoPoint, evaluateGeofence } from '../lib/geo';
 import { isOpsMobileReady } from '../lib/ops-mobile';
 import source from '../lib/store-visit/schedule-source.json';
@@ -53,8 +54,8 @@ assert.deepEqual(view.past.map((c) => [c.start, c.met]), [['2026-10-12', true]])
 const longRun = visitCycleView(policy, [], '2026-10-21', '2026-08-31');
 assert.deepEqual(longRun.past.map((c) => c.start), ['2026-08-31', '2026-09-07', '2026-09-14', '2026-09-21', '2026-09-28', '2026-10-05', '2026-10-12']);
 assert.ok(longRun.past.every((c) => !c.met));
-assert.equal(visitCycleView(policy, [], '2026-10-21').past.length, 8);
-assert.equal(visitCycleView(p90, [], '2026-10-21').past.length, 4);
+assert.equal(visitCycleView(policy, [], '2026-10-21').past.length, 26);
+assert.equal(visitCycleView(p90, [], '2026-10-21').past.length, 6);
 // A cycle that began before tracking started still shows when it was met.
 assert.deepEqual(visitCycleView(policy, ['2026-10-12T03:00:00Z'], '2026-10-21', '2026-10-14').past.map((c) => [c.start, c.met]), [['2026-10-12', true]]);
 
@@ -64,9 +65,9 @@ const alpha = buildReportStore({ ...base, id: 1, policy }, [], '2026-10-21', '20
 const beta = buildReportStore({ ...base, id: 2, name: 'Beta', policy }, [{ id: 'v1', storeId: 2, at: '2026-10-20T03:00:00Z', by: 'Ops A' }], '2026-10-21', '2026-10-05');
 const gamma = buildReportStore({ ...base, id: 3, name: 'Gamma', policy }, [{ id: 'v2', storeId: 3, at: '2026-10-14T03:00:00Z', by: 'Ops A' }], '2026-10-21', '2026-10-05');
 const delta = buildReportStore({ ...base, id: 4, name: 'Delta', policy: null }, [], '2026-10-21', '2026-10-05');
-assert.equal(reportState(alpha), 'open');
-assert.equal(reportState(beta), 'met');
-assert.equal(reportState(delta), 'unset');
+assert.equal(alpha.cycle?.met, false);
+assert.equal(beta.cycle?.met, true);
+assert.equal(delta.cycle, null);
 assert.equal(beta.visits.length, 1);
 assert.equal(beta.lastVisit?.by, 'Ops A');
 assert.equal(missedLastCycle(alpha)?.start, '2026-10-12');
@@ -74,9 +75,29 @@ assert.equal(missedStreak(alpha), 2);
 assert.equal(missedLastCycle(gamma), null);
 assert.equal(missedStreak(beta), 2); // visited this week, but the two weeks before it were missed
 assert.equal(missedStreak(gamma), 0);
-// Needs attention first: missed + still owed, then open by deadline, then done, then unset.
-assert.deepEqual([delta, beta, gamma, alpha].sort(attentionOrder).map((s) => s.name), ['Alpha', 'Gamma', 'Beta', 'Delta']);
-assert.deepEqual(reportTotals([alpha, beta, gamma, delta]), { withPolicy: 3, open: 2, met: 1, unset: 1, missed: 2, endingSoon: 0 });
+
+// ── Upcoming: only stores that still owe a visit, nearest deadline first ──
+const upcoming = upcomingRows([delta, beta, gamma, alpha]);
+assert.deepEqual(upcoming.map((r) => r.store.name), ['Alpha', 'Gamma']); // Beta is met, Delta has no rule
+assert.deepEqual(upcoming.map((r) => [r.daysLeft, r.deadline, r.remaining]), [[4, '2026-10-25', 1], [4, '2026-10-25', 1]]);
+assert.deepEqual(upcoming.map((r) => r.missedBefore), [true, false]); // same deadline: the one that missed before first
+assert.equal(dueTone(0), 'overdue');
+assert.equal(dueTone(1), 'overdue');
+assert.equal(dueTone(2), 'soon');
+assert.equal(dueTone(3), 'soon');
+assert.equal(dueTone(4), 'planned');
+assert.deepEqual([daysLeftLabel(0), daysLeftLabel(1), daysLeftLabel(5)], ['Hari ini', 'Besok', '5 hari']);
+assert.deepEqual(upcomingSummary(upcoming), { total: 2, byTone: { overdue: 0, soon: 0, planned: 2 } });
+const longOwed = buildReportStore({ ...base, id: 5, name: 'Echo', policy: { ...policy, intervalDays: 60 } }, [], '2026-10-29', '2026-10-05');
+assert.deepEqual(upcomingRows([alpha, longOwed]).map((r) => [r.store.name, r.daysLeft]), [['Echo', 2], ['Alpha', 4]]);
+
+// ── Missed periods land on the day the period ended; nothing for the running one ──
+const missed = missedCycles([alpha, beta, gamma, delta], '2026-09-28', '2026-11-01', '2026-10-21');
+assert.deepEqual(missed.filter((m) => m.storeId === 1).map((m) => [m.start, m.day, m.count, m.needed]), [['2026-10-05', '2026-10-11', 0, 1], ['2026-10-12', '2026-10-18', 0, 1]]);
+assert.deepEqual(missed.filter((m) => m.storeId === 3).map((m) => m.start), ['2026-10-05']);
+assert.deepEqual(missed.filter((m) => m.storeId === 2).map((m) => m.start), ['2026-10-05', '2026-10-12']); // visited this week, but the two before it were missed
+assert.ok(missed.every((m) => m.day < '2026-10-21'));
+assert.deepEqual(missedCycles([alpha], '2026-10-12', '2026-10-18', '2026-10-21').map((m) => m.day), ['2026-10-18']);
 
 // ── Calendar ──
 const oct = calendarWeeks('2026-10');
@@ -88,11 +109,7 @@ const calVisits = [
   { id: 'v1', storeId: 2, at: '2026-10-20T03:00:00Z', day: '2026-10-20', byId: 'A', by: 'Ops A' },
   { id: 'v2', storeId: 3, at: '2026-10-14T03:00:00Z', day: '2026-10-14', byId: 'A', by: 'Ops A' },
 ];
-const thisWeek = weekCoverage(oct[3], [alpha, beta, gamma, delta], calVisits, '2026-10-21', '2026-10-05');
-assert.deepEqual([thisWeek.visited, thisWeek.total, thisWeek.future, thisWeek.untracked], [1, 3, false, false]);
-assert.equal(weekCoverage(oct[2], [alpha, beta, gamma], calVisits, '2026-10-21', '2026-10-05').visited, 1);
-assert.equal(weekCoverage(oct[4], [alpha], calVisits, '2026-10-21', null).future, true);
-assert.equal(weekCoverage(oct[0], [alpha], calVisits, '2026-10-21', '2026-10-05').untracked, true);
+assert.equal(calVisits.length, 2);
 assert.equal(source.length, 45);
 assert.equal(source.filter((s) => s.category === 'in_city' && s.intervalDays === 7).length, 30);
 assert.equal(source.filter((s) => s.category === 'out_city' && s.intervalDays === 60).length, 8);

@@ -2,6 +2,8 @@ import type { ReactNode } from 'react';
 import { jakartaTodayKey } from '@/lib/day-bucket';
 import { cn } from '@/lib/utils';
 import type { VisitStore } from '@/lib/store-visit/types';
+import type { VisitTone } from '@/lib/store-visit/upcoming';
+import { TONE } from './tones';
 
 const TONES = {
   indigo: 'bg-indigo-50 text-indigo-700 ring-indigo-100',
@@ -24,6 +26,11 @@ export function StatTile({ label, value, tone = 'slate', hint }: { label: string
 
 export function Pill({ tone = 'slate', children, className }: { tone?: Tone; children: ReactNode; className?: string }) {
   return <span className={cn('inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-bold ring-1 ring-inset', TONES[tone], className)}>{children}</span>;
+}
+
+/** A pill in one of the shared visit tones (tones.ts) — the Upcoming + Report colour code. */
+export function TonePill({ tone, children, className }: { tone: VisitTone; children: ReactNode; className?: string }) {
+  return <span className={cn('inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-bold ring-1 ring-inset', TONE[tone].pill, className)}>{children}</span>;
 }
 
 export function ProgressBar({ value, max, tone = 'indigo', className }: { value: number; max: number; tone?: 'indigo' | 'amber' | 'emerald'; className?: string }) {

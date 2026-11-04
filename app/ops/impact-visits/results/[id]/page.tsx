@@ -204,7 +204,7 @@ export default function ImpactResultPage() {
         });
         const data = await res.json();
         if (!res.ok || !data.success)
-          throw new Error(data.error ?? "Gagal memuat hasil visit.");
+          throw new Error(data.error ?? "Gagal memuat hasil Impact Visit.");
         if (!controller.signal.aborted) {
           setVisit(data.visit);
           if (!data.visit.mainNegatives.length) setTab("vm");
@@ -212,7 +212,7 @@ export default function ImpactResultPage() {
       } catch (e) {
         if (!controller.signal.aborted)
           setError(
-            e instanceof Error ? e.message : "Gagal memuat hasil visit.",
+            e instanceof Error ? e.message : "Gagal memuat hasil Impact Visit.",
           );
       } finally {
         if (!controller.signal.aborted) setLoading(false);
@@ -255,7 +255,7 @@ export default function ImpactResultPage() {
   return (
     <div className="min-h-full bg-slate-50">
       <OpsPageHeader
-        title={visit?.store.name ?? "Hasil Visit"}
+        title={visit?.store.name ?? "Hasil Impact Visit"}
         scope="Impact Visit / Tindak lanjut"
         subtitle={
           visit

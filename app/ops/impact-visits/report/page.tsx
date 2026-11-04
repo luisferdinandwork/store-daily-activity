@@ -405,7 +405,7 @@ export default function ImpactVisitReportPage() {
                     </h2>
                     <p className="mt-1 text-xs text-slate-500">
                       Nilai asli saat visit. Verifikasi perbaikan tersedia di
-                      menu Hasil Visit.
+                      menu Hasil Impact Visit.
                     </p>
                   </div>
                   <div className="flex gap-1 rounded-xl bg-slate-100 p-1">

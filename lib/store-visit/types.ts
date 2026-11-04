@@ -7,7 +7,8 @@ export interface VisitTask {
   requirePhoto: boolean;
 }
 export interface VisitAnswer {
-  answer: 'ya' | 'tidak';
+  /** 'ya' / 'tidak' = the old checklist; 'text' = a free-text field (see fields.ts), `note` holds the text. */
+  answer: 'ya' | 'tidak' | 'text';
   note: string;
   photoUrl?: string;
   photoGeo?: VisitPhotoGeo;
@@ -31,6 +32,7 @@ export interface VisitStore {
   id: number;
   storeNo: string;
   name: string;
+  areaId: number;
   areaName: string;
   hasCoordinates: boolean;
   policy: VisitPolicy | null;
@@ -51,10 +53,14 @@ export interface StoreVisitRecord {
   answers: Record<string, VisitAnswer>;
   notes: string;
 }
+/** GET /api/ops/store-visits/[storeId] — the visit form's data (what was written lives in the Report). */
 export interface VisitDetail {
   store: VisitStore;
-  tasks: VisitTask[];
-  version: number;
   canSubmit: boolean;
-  visits: StoreVisitRecord[];
+}
+/** GET /api/ops/store-visits/result/[visitId] — one saved visit, for the Report's preview. */
+export interface VisitResult extends StoreVisitRecord {
+  storeName: string;
+  storeNo: string;
+  areaName: string;
 }

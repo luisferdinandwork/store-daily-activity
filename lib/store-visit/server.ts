@@ -4,11 +4,11 @@ import { guardApi } from '@/lib/auth/guards';
 import { loadOpsActor } from '@/lib/auth/ops-actor';
 import type { OpsActorRecord } from '@/lib/auth/ops-actor';
 import { db } from '@/lib/db';
-import { addDaysKey, jakartaDateKey, jakartaTodayKey } from '@/lib/day-bucket';
+import { jakartaDateKey, jakartaTodayKey } from '@/lib/day-bucket';
 import { areas, employeeTypes, stores, storeVisitConfig, storeVisitPolicies, storeVisits, userRoles, users } from '@/lib/db/schema';
-import { OPS_ACTIVITY_DAYS, buildReportStore, calendarWeeks, type ReportOps, type VisitReport } from './report';
+import { buildReportStore, calendarWeeks, type VisitReport, type VisitUpcoming } from './report';
 import { visitProgress } from './rules';
-import type { VisitStore } from './types';
+import type { VisitResult, VisitStore } from './types';
 
 export async function visitActor() {
   const guard = await guardApi(['ops', 'it']);
@@ -27,7 +27,7 @@ export async function visitConfiguration() {
 export async function visitStores(areaId: number | null) {
   const rows = await db.select({
     id: stores.id, storeNo: stores.storeNo, name: stores.name,
-    areaName: areas.name, lat: stores.latitude, lng: stores.longitude,
+    areaId: stores.areaId, areaName: areas.name, lat: stores.latitude, lng: stores.longitude,
     policy: storeVisitPolicies,
   }).from(stores).innerJoin(areas, eq(areas.id, stores.areaId))
     .leftJoin(storeVisitPolicies, eq(storeVisitPolicies.storeNo, stores.storeNo))
@@ -43,23 +43,22 @@ export async function visitStores(areaId: number | null) {
     list.push(row.visitedAt); byStore.set(row.storeId, list);
   }
   return rows.map((r): VisitStore => ({
-    id: r.id, storeNo: r.storeNo, name: r.name, areaName: r.areaName,
+    id: r.id, storeNo: r.storeNo, name: r.name, areaId: r.areaId, areaName: r.areaName,
     hasCoordinates: r.lat !== null && r.lng !== null,
     policy: r.policy, progress: visitProgress(r.policy, byStore.get(r.id) ?? []),
   }));
 }
 
 /**
- * Data for the Ops "Report Visit" page: every active store in scope with its current
- * visit cycle and how its finished cycles went, plus what each Ops did lately.
+ * The stores in the actor's scope with their current visit cycle and how their finished
+ * cycles went — the one read behind the Report and the Upcoming pages.
  * Ops Area sees only its own submissions within its assigned area. HO / IT see all.
  */
-export async function visitReport(actor: OpsActorRecord, month?: string): Promise<VisitReport> {
+async function loadVisitScope(actor: OpsActorRecord) {
   if (!actor.isHO && actor.areaId == null) throw new Error('Ops area is required.');
   const areaId = actor.isHO ? null : actor.areaId;
   const visitorScope = actor.isHO ? undefined : eq(storeVisits.visitedBy, actor.id);
   const today = jakartaTodayKey();
-  const calendarMonth = month ?? today.slice(0, 7);
   const scope = and(eq(stores.status, 'active'), areaId == null ? undefined : eq(stores.areaId, areaId));
 
   const rows = await db.select({
@@ -79,10 +78,9 @@ export async function visitReport(actor: OpsActorRecord, month?: string): Promis
     db.select({ at: min(storeVisitPolicies.updatedAt) }).from(storeVisitPolicies),
     db.select({ at: min(storeVisits.visitedAt) }).from(storeVisits)
       .innerJoin(stores, eq(stores.id, storeVisits.storeId)).where(and(scope, visitorScope)),
-    db.select({ id: users.id, name: users.name, areaId: users.areaId, areaName: areas.name }).from(users)
+    db.select({ id: users.id, name: users.name, areaId: users.areaId }).from(users)
       .innerJoin(userRoles, eq(users.roleId, userRoles.id))
       .innerJoin(employeeTypes, eq(users.employeeTypeId, employeeTypes.id))
-      .leftJoin(areas, eq(areas.id, users.areaId))
       .where(and(eq(userRoles.code, 'ops'), eq(employeeTypes.code, 'ops_area'), eq(users.isActive, true), isNull(users.deletedAt), areaId == null ? undefined : eq(users.areaId, areaId), actor.isHO ? undefined : eq(users.id, actor.id))),
   ]);
 
@@ -106,53 +104,71 @@ export async function visitReport(actor: OpsActorRecord, month?: string): Promis
     trackedFrom,
   ));
 
-  // What each Ops did in the last OPS_ACTIVITY_DAYS days — assigned Ops Area users with no
-  // visit at all still get a row (that is the point), plus anyone else who visited.
-  const since = addDaysKey(today, 1 - OPS_ACTIVITY_DAYS);
-  const activity = new Map<string, ReportOps>(opsRows.map((o) => [o.id, { id: o.id, name: o.name, areaId: o.areaId, areaName: o.areaName, visits: 0, stores: 0, lastVisitAt: null }]));
-  const storesSeen = new Map<string, Set<number>>();
-  for (const v of visitRows) {
-    const day = jakartaDateKey(v.at);
-    if (day < since || day > today) continue;
-    const entry = activity.get(v.byId) ?? { id: v.byId, name: v.by ?? 'Ops', areaName: null, visits: 0, stores: 0, lastVisitAt: null };
-    entry.visits++;
-    const seen = storesSeen.get(v.byId) ?? new Set<number>();
-    seen.add(v.storeId); storesSeen.set(v.byId, seen);
-    entry.stores = seen.size;
-    const at = v.at.toISOString();
-    if (!entry.lastVisitAt || at > entry.lastVisitAt) entry.lastVisitAt = at;
-    activity.set(v.byId, entry);
-  }
-
   const areaList = new Map<number, string>();
   for (const s of reportStores) areaList.set(s.areaId, s.areaName);
+
+  return {
+    scope: (actor.isHO ? 'all' : 'area') as 'area' | 'all',
+    today,
+    trackedFrom,
+    visitRows,
+    reportStores,
+    areas: [...areaList.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name)),
+  };
+}
+
+/**
+ * Data for the Ops "Report Visit" page: every active store in scope with its finished
+ * cycles (what was missed) and every visit made in the weeks the month's calendar shows.
+ */
+export async function visitReport(actor: OpsActorRecord, month?: string): Promise<VisitReport> {
+  const s = await loadVisitScope(actor);
+  const calendarMonth = month ?? s.today.slice(0, 7);
 
   // The calendar's weeks run Monday–Sunday, so they spill into the months around it.
   const weeks = calendarWeeks(calendarMonth);
   const calFrom = weeks[0][0];
   const calTo = weeks[weeks.length - 1][6];
-  const calendarVisits = visitRows
+  const calendarVisits = s.visitRows
     .map((v) => ({ id: v.id, storeId: v.storeId, at: v.at.toISOString(), day: jakartaDateKey(v.at), byId: v.byId, by: v.by }))
-    .filter((v) => v.day >= calFrom && v.day <= calTo)
+    .filter((v) => v.day >= calFrom && v.day <= calTo && v.day <= s.today)
     .sort((a, b) => a.at.localeCompare(b.at));
 
   return {
-    scope: actor.isHO ? 'all' : 'area',
-    today,
-    trackedFrom,
-    activityDays: OPS_ACTIVITY_DAYS,
+    scope: s.scope,
+    today: s.today,
+    trackedFrom: s.trackedFrom,
     month: calendarMonth,
     calendarVisits,
-    areas: [...areaList.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name)),
-    stores: reportStores,
-    ops: [...activity.values()].sort((a, b) => b.visits - a.visits || a.name.localeCompare(b.name)),
+    areas: s.areas,
+    stores: s.reportStores,
   };
 }
 
-export async function visitHistory(storeId: number, actor: OpsActorRecord) {
-  const rows = await db.select({ visit: storeVisits, visitorName: users.name }).from(storeVisits)
+/** Data for the Ops "Upcoming Visit" page: the stores in scope with their current cycle. */
+export async function visitUpcoming(actor: OpsActorRecord): Promise<VisitUpcoming> {
+  const s = await loadVisitScope(actor);
+  return { scope: s.scope, today: s.today, areas: s.areas, stores: s.reportStores };
+}
+
+/**
+ * One saved visit with everything Ops wrote (the Report's result preview). Same scope as
+ * the Report: HO / IT any visit, Ops Area only their own visits inside their own area.
+ */
+export async function visitResult(visitId: string, actor: OpsActorRecord): Promise<VisitResult | null> {
+  const [row] = await db.select({
+    visit: storeVisits, visitorName: users.name,
+    storeName: stores.name, storeNo: stores.storeNo, areaId: stores.areaId, areaName: areas.name,
+  }).from(storeVisits)
+    .innerJoin(stores, eq(stores.id, storeVisits.storeId))
+    .innerJoin(areas, eq(areas.id, stores.areaId))
     .leftJoin(users, eq(users.id, storeVisits.visitedBy))
-    .where(and(eq(storeVisits.storeId, storeId), actor.isHO ? undefined : eq(storeVisits.visitedBy, actor.id)))
-    .orderBy(desc(storeVisits.visitedAt)).limit(30);
-  return rows.map(({ visit, visitorName }) => ({ ...visit, visitedAt: visit.visitedAt.toISOString(), visitorName }));
+    .where(eq(storeVisits.id, visitId));
+  if (!row) return null;
+  if (!actor.isHO && (row.areaId !== actor.areaId || row.visit.visitedBy !== actor.id)) return null;
+  const { visit } = row;
+  return {
+    ...visit, visitedAt: visit.visitedAt.toISOString(), visitorName: row.visitorName,
+    storeName: row.storeName, storeNo: row.storeNo, areaName: row.areaName,
+  };
 }

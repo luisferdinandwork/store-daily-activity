@@ -11,7 +11,7 @@ export const VISIT_CYCLE_ANCHOR = '2026-01-05';
 
 /** How many finished cycles the report remembers per store, by cycle length. */
 export function historyLength(intervalDays: number): number {
-  return intervalDays <= 7 ? 8 : 4;
+  return intervalDays <= 7 ? 26 : 6;
 }
 
 export interface VisitCycle {

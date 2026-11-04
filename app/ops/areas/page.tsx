@@ -55,7 +55,7 @@ export default function OpsAreasPage() {
       />
 
       <div className="mx-auto space-y-5 px-4 py-5 sm:px-6 lg:px-8">
-        <AreaManagementView onReady={setInfo} />
+        <AreaManagementView onReady={setInfo} showCalendar />
       </div>
     </div>
   );
