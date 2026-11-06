@@ -22,7 +22,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { isDayKey } from '@/lib/day-bucket';
 import { MAX_RANGE_DAYS } from '@/lib/task-progress';
-import { isWarehouseCode } from '@/lib/db/utils/item-transfers';
+import { ensureWarehouseCodes, isWarehouseCode } from '@/lib/db/utils/item-transfers';
 import { getReportRows, getReportStores, getStoreNamesByCode } from '@/lib/db/utils/transfer-order-report';
 import { refreshTransferRegistry } from '@/lib/db/utils/transfer-order-refresh';
 import {
@@ -48,6 +48,7 @@ export async function GET(req: NextRequest) {
   const actor = await getOpsActor(session.user.id);
   if (!actor) return bad('OPS only.', 403);
 
+  await ensureWarehouseCodes();
   const sp = req.nextUrl.searchParams;
   const process = sp.get('process');
   if (!isProcess(process)) return bad('process must be return, receiving or delivery.');

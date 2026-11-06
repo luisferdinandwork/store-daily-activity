@@ -102,3 +102,25 @@ export const itemTransferOrders = pgTable('item_transfer_orders', {
 
 export type ItemTransferOrder    = typeof itemTransferOrders.$inferSelect;
 export type NewItemTransferOrder = typeof itemTransferOrders.$inferInsert;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Warehouse codes — Business Central location codes that are a WAREHOUSE, not a
+// store. Every code starting with "DM" is one automatically (isWarehouseCode in
+// lib/db/utils/item-transfers.ts); this list adds the codes that don't follow
+// that rule, and lets IT see/maintain the full list at /it/warehouse-codes.
+// A transfer to/from a listed code never links to a store and shows as
+// "Gudang (code)" on the Ops and employee Transfer Order pages.
+// ─────────────────────────────────────────────────────────────────────────────
+export const warehouseCodes = pgTable('warehouse_codes', {
+  id: serial('id').primaryKey(),
+  /** Upper-case BC location code, e.g. "DM-MP". */
+  code: text('code').notNull(),
+  /** Optional friendly name, e.g. "Gudang Marketplace". */
+  name: text('name'),
+  createdBy: text('created_by'),
+  createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
+}, (t) => ({
+  codeUnique: unique('warehouse_codes_code_unique').on(t.code),
+}));
+
+export type WarehouseCode = typeof warehouseCodes.$inferSelect;

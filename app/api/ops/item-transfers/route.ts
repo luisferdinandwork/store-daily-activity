@@ -14,7 +14,7 @@ import { desc, eq, inArray } from 'drizzle-orm';
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
 import { itemTransferOrders, itemReturnEntries, itemDroppingEntries, stores, areas } from '@/lib/db/schema';
-import { isWarehouseCode } from '@/lib/db/utils/item-transfers';
+import { ensureWarehouseCodes, isWarehouseCode } from '@/lib/db/utils/item-transfers';
 import { effectiveToCreatedAt } from '@/lib/transfer-order-metrics';
 import { refreshReceivingStatus, refreshTransferRegistry } from '@/lib/db/utils/transfer-order-refresh';
 import { getOpsActor } from '@/app/api/ops/tasks/_helpers';
@@ -67,6 +67,7 @@ export async function GET(req: Request) {
     return NextResponse.json({ success: false, error: 'OPS only.' }, { status: 403 });
   }
 
+  await ensureWarehouseCodes();
   const force = new URL(req.url).searchParams.get('fresh') === '1';
   // Registry first, then receiving: receiving works off the shipments the
   // registry sweep just recorded, so running them side by side would leave a
@@ -90,8 +91,12 @@ export async function GET(req: Request) {
     .leftJoin(itemDroppingEntries, eq(itemDroppingEntries.transferOrderId, itemTransferOrders.id))
     .orderBy(desc(itemTransferOrders.updatedAt));
 
+  // Every "DM…" code is the warehouse (isWarehouseCode) — never a store, whatever a store row
+  // with that code (or an older link) says: that side carries no store, so no store name shows.
   const allRows = joined.map((j) => ({
     ...j.to,
+    fromStoreId: isWarehouseCode(j.to.transferFromCode) ? null : j.to.fromStoreId,
+    toStoreId: isWarehouseCode(j.to.transferToCode) ? null : j.to.toStoreId,
     returnPhoto: j.returnPhoto,
     returnQtyCounted: j.returnQtyCounted,
     droppingPhoto: j.droppingPhoto,

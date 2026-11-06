@@ -2,9 +2,13 @@
 // Petty cash request categories — shared rules + the starting set (client-safe,
 // no DB imports). The live list is the petty_cash_categories table, managed by
 // IT at /it/petty-cash-categories; this starter set is what migration
-// 0015 inserts and the seed re-applies (idempotently, by name).
+// 0041 inserts and the seed re-applies (idempotently, by name).
+//
+// A category has NO preset Keterangan: the PIC always writes their own. What a
+// category has is a Pengertian (definition) and Contoh Pengeluaran (examples),
+// shown in the "!" help sheet on the employee Petty Cash page.
 
-/** Max length of a request's Keterangan / a category's default reason (changed from 300, 2026-11-02, by request). */
+/** Max length of a request's Keterangan (changed from 300, 2026-11-02, by request). */
 export const PETTY_CASH_REASON_MAX = 100;
 
 /**
@@ -15,71 +19,67 @@ export const PETTY_CASH_REASON_MAX = 100;
 export const pettyCashDescription = (text: string | null | undefined): string =>
   (text ?? '').toLocaleUpperCase('id-ID');
 
-/** A category's default reason as it pre-fills the form: upper-case and cut to the Keterangan limit. */
-export const pettyCashDefaultDescription = (text: string | null | undefined): string =>
-  pettyCashDescription(text).slice(0, PETTY_CASH_REASON_MAX);
-
 /** Max length of a category name. */
 export const PETTY_CASH_CATEGORY_NAME_MAX = 50;
 
+/** Max length of a category's Pengertian / Contoh Pengeluaran. */
+export const PETTY_CASH_CATEGORY_TEXT_MAX = 1000;
+
 export interface PettyCashCategoryDefault {
   name: string;
-  defaultReason: string | null;
-  requiresCustomReason: boolean;
+  definition: string;
+  examples: string;
   sortOrder: number;
 }
 
+/** The main categories, from Finance's "Kategori Pengeluaran Store" sheet. */
 export const DEFAULT_PETTY_CASH_CATEGORIES: PettyCashCategoryDefault[] = [
   {
-    name: 'Galon',
-    defaultReason: 'Pembelian isi ulang air galon untuk kebutuhan air minum karyawan toko.',
-    requiresCustomReason: false,
+    name: 'STATIONERY & OFFICE SUPPLIES',
+    definition: 'Alat tulis dan perlengkapan administrasi kantor.',
+    examples:
+      'Pulpen, pensil, spidol, kertas HVS, sticky notes, buku tulis, map, folder, ordner, amplop, stapler, isi staples, paper clip, tinta printer, toner, correction tape, gunting, cutter, lakban, lem, label sticker, kalkulator, print surat jalan',
     sortOrder: 10,
   },
   {
-    name: 'Pulsa Internet',
-    defaultReason: 'Pembelian pulsa / paket data internet untuk operasional toko.',
-    requiresCustomReason: false,
+    name: 'POSTAGE / TELEGRAMS',
+    definition: 'Biaya pengiriman surat, dokumen, dan paket.',
+    examples:
+      'Pengiriman dokumen melalui JNE/J&T/SiCepat, surat resmi, biaya kurir/ekspedisi, perangko, dan pengiriman paket kantor.',
     sortOrder: 20,
   },
   {
-    name: 'Dokumen',
-    defaultReason: 'Biaya keperluan dokumen operasional toko (fotokopi, cetak, pengiriman).',
-    requiresCustomReason: false,
+    name: 'TELEPHONE / FAX / TELEX',
+    definition: 'Biaya telepon dan layanan komunikasi kantor.',
+    examples:
+      'Tagihan telepon kantor, pulsa/nomor telepon kantor, biaya layanan fax, biaya telex (jika digunakan), dan layanan komunikasi kantor lainnya. Paket internet dicatat di sini hanya jika sesuai kebijakan akun perusahaan.',
     sortOrder: 30,
   },
   {
-    name: 'POV',
-    defaultReason: 'Pembelian kebutuhan POV untuk mendukung operasional toko.',
-    requiresCustomReason: false,
+    name: 'HOUSEKEEPING EXPS / SUPPLIES',
+    definition: 'Biaya kebersihan dan perlengkapan cleaning kantor.',
+    examples:
+      'Sabun cuci tangan, tisu toilet/ruangan, cairan pembersih lantai, pembersih kaca, pewangi ruangan, sapu, pel, pengki, spons, lap, kantong sampah, disinfektan, sarung tangan cleaning, dan pengharum toilet, air galon',
     sortOrder: 40,
   },
   {
-    name: 'Alat Kebersihan Toko',
-    defaultReason:
-      'Pembelian perlengkapan kebersihan toko (sabun lantai, pembersih kaca, kain lap, kantong sampah).',
-    requiresCustomReason: false,
+    name: 'PRINTING',
+    definition: 'Biaya promosi toko yang diadakan oleh marketing',
+    examples: 'Cetak POP, sale tag dll',
     sortOrder: 50,
   },
-  {
-    name: 'ATK',
-    defaultReason: 'Pembelian alat tulis kantor untuk operasional toko (kertas, pulpen, lakban, label harga).',
-    requiresCustomReason: false,
-    sortOrder: 60,
-  },
-  {
-    // No default — the PIC must explain what the request is for.
-    name: 'Lain-Lain',
-    defaultReason: null,
-    requiresCustomReason: true,
-    sortOrder: 70,
-  },
 ];
+
+/** Shown under the category list: the final grouping is Finance's call. */
+export const PETTY_CASH_CATEGORY_NOTE =
+  'Pengelompokan akhir mengikuti kebijakan Chart of Accounts (COA) dan ketentuan Finance perusahaan.';
 
 /** What the employee request form needs to know about a category. */
 export interface PettyCashCategoryOption {
   id: number;
   name: string;
-  defaultReason: string | null;
-  requiresCustomReason: boolean;
+  /** Pengertian. */
+  definition: string | null;
+  /** Contoh Pengeluaran. */
+  examples: string | null;
 }

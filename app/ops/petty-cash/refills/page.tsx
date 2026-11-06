@@ -78,6 +78,7 @@ import {
   type RefillState,
   type SortDir,
 } from '@/lib/ops-petty-cash';
+import { LateBadge, PeriodBadge } from '@/components/petty-cash/PeriodBadge';
 import { ReRequestBadge } from '@/components/petty-cash/ReRequestBadge';
 import { FINANCE_REVIEW_LABEL, leavesOutOfTransfer } from '@/lib/petty-cash-review';
 
@@ -664,7 +665,11 @@ export default function OpsPettyCashRefillsPage() {
                             {r.refill === 0 ? <span className="font-normal text-slate-300 no-underline">–</span> : num(r.refill)}
                           </td>
                           <td className={TD}>
-                            <RefillStateChip state={r.state} />
+                            <span className="flex flex-wrap items-center gap-1">
+                              <RefillStateChip state={r.state} />
+                              <PeriodBadge month={r.periodMonth} />
+                              {r.late && <LateBadge month={r.periodMonth} />}
+                            </span>
                           </td>
                           <td className={TD} onClick={(e) => e.stopPropagation()}>
                             {waiting ? (

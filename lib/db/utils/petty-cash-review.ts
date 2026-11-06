@@ -2,25 +2,25 @@
 //
 // Finance's review of completed petty cash requests (rules + states: lib/petty-cash-review.ts).
 //
-//   financeRejectTransaction  Finance turns a request down — "Perlu Perbaikan" (PIC 1 files it again next
-//                             month as a re-request) or "Ditolak" (final, can't be re-requested) — PIC 1 is told
+//   financeRejectTransaction  Finance turns a request down — "Perlu Perbaikan" (PIC 1 files it again as a re-request,
+//                             counted in the next period) or "Ditolak" (final, can't be re-requested) — PIC 1 is told
 //   financeAcceptTransaction  Finance takes either decision back
 //
-// Both stop once the store's refill has been verified after the request was filed: that cash is already
-// sent (getVerifiedCutoffs). They also stop for a Perlu Perbaikan request PIC 1 has already filed again.
+// Both stop once the refill that settles the request's period has been verified: that cash is already
+// sent (getVerifiedThrough). A request filed while the refill was on its way belongs to the NEXT period,
+// so it stays open to Finance's decision. They also stop for a Perlu Perbaikan request PIC 1 has already
+// filed again.
 //
 // A request keeps status 'completed' throughout, but while Finance's decision stands (needs_fix or
 // rejected) its amount is NOT counted as used: turning it down gives the amount back to the period's
-// balance, accepting takes it off again (adjustPeriodBalance). So "used", the balance and the refill
-// (max − balance) all leave it out; whatever the transfer doesn't cover is paid by the employee
-// outside the system.
+// balance, accepting takes it off again (adjustPeriodBalance — also on a period closed by its refill, until
+// Finance verifies that refill). So "used", the balance and the refill (max − balance) all leave it out;
+// whatever the transfer doesn't cover is paid by the employee outside the system.
 
-import { and, asc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import {
-  PETTY_CASH_MAX_BALANCE,
-  pettyCashPeriods,
   pettyCashRefillRequests,
   pettyCashTransactions,
   userRoles,
@@ -29,49 +29,37 @@ import {
 import { isLockedByVerification, leavesOutOfTransfer, validateFinanceComment } from '@/lib/petty-cash-review';
 import { RE_REQUEST_LABEL } from '@/lib/petty-cash-re-request';
 import { createNotificationsForUsers } from './notifications';
+import { adjustPeriodBalance } from './petty-cash-period';
 
 export type ReviewResult =
   | { success: true }
   | { success: false; error: string; status: 400 | 404 | 409 };
 
 const rp = (n: number) => `Rp ${Math.round(n).toLocaleString('id-ID')}`;
-const money = (n: number) => n.toFixed(2);
-
-/** Later than any request: while a verified refill is still waiting for PIC 1's receipt, everything is locked. */
-const LOCKED_UNTIL_RECEIVED = new Date(8_640_000_000_000_000);
 
 /**
- * When Finance last verified a refill of each store (stores with none are absent). Requests filed up
- * to that moment are locked. While a verified refill has not been received yet (PIC 1 has not
- * confirmed with both photos) the cash is already sent, so the cutoff is "forever": a request filed
- * in between can't be decided on either. Once it is received, new requests start a new cycle.
+ * Per store, the latest period (YYYY-MM) whose refill Finance has verified (stores with none are absent).
+ * Requests of that period or an earlier one are locked: the cash is already sent.
  */
-export async function getVerifiedCutoffs(storeIds: number[]): Promise<Map<number, Date>> {
+export async function getVerifiedThrough(storeIds: number[]): Promise<Map<number, string>> {
   if (storeIds.length === 0) return new Map();
 
   const rows = await db
     .select({
       storeId: pettyCashRefillRequests.storeId,
-      at: pettyCashRefillRequests.financeVerifiedAt,
-      balanceAfter: pettyCashRefillRequests.balanceAfter,
+      through: sql<string>`MAX(${pettyCashRefillRequests.yearMonth})`,
     })
     .from(pettyCashRefillRequests)
     .where(
       and(
         inArray(pettyCashRefillRequests.storeId, storeIds),
         eq(pettyCashRefillRequests.status, 'approved'),
-        isNotNull(pettyCashRefillRequests.financeVerifiedAt),
+        sql`${pettyCashRefillRequests.financeVerifiedAt} IS NOT NULL`,
       ),
     )
-    .orderBy(asc(pettyCashRefillRequests.financeVerifiedAt));
+    .groupBy(pettyCashRefillRequests.storeId);
 
-  // Oldest first, so the last row of a store is its latest verified refill.
-  const out = new Map<number, Date>();
-  for (const r of rows) {
-    if (!r.at) continue;
-    out.set(r.storeId, r.balanceAfter == null ? LOCKED_UNTIL_RECEIVED : new Date(r.at));
-  }
-  return out;
+  return new Map(rows.map((r) => [r.storeId, r.through]));
 }
 
 export async function financeUserIds(): Promise<string[]> {
@@ -95,8 +83,8 @@ async function loadTransaction(txId: number) {
 type TxRow = typeof pettyCashTransactions.$inferSelect;
 
 async function isLocked(tx: TxRow): Promise<boolean> {
-  const cutoff = (await getVerifiedCutoffs([tx.storeId])).get(tx.storeId);
-  return isLockedByVerification(tx.createdAt, cutoff);
+  const through = (await getVerifiedThrough([tx.storeId])).get(tx.storeId);
+  return isLockedByVerification(tx.yearMonth, through);
 }
 
 /** The re-request that filed this request again, if there is one. */
@@ -111,23 +99,6 @@ async function reRequestOf(txId: number): Promise<number | null> {
 
 const amountOf = (tx: TxRow) => Number(tx.actualAmount ?? tx.amount);
 const labelOf = (tx: TxRow) => tx.categoryName ?? 'Request petty cash';
-
-type Trx = Parameters<Parameters<typeof db.transaction>[0]>[0];
-
-/**
- * Moves the money the request's period has left (+ gives back, − takes off), kept between 0 and the
- * maximum. Closed periods are frozen books and stay as they are.
- */
-async function adjustPeriodBalance(trx: Trx, periodId: number | null, delta: number): Promise<void> {
-  if (periodId == null || delta === 0) return;
-  await trx
-    .update(pettyCashPeriods)
-    .set({
-      currentBalance: sql`GREATEST(0, LEAST(${String(PETTY_CASH_MAX_BALANCE)}::numeric, ${pettyCashPeriods.currentBalance} + ${money(delta)}::numeric))`,
-      updatedAt: new Date(),
-    })
-    .where(and(eq(pettyCashPeriods.id, periodId), eq(pettyCashPeriods.status, 'open')));
-}
 
 // ─── Finance ─────────────────────────────────────────────────────────────────
 
@@ -199,7 +170,7 @@ export async function financeRejectTransaction(input: {
     title: kind === 'needs_fix' ? 'Request petty cash perlu diperbaiki' : 'Request petty cash ditolak',
     body:
       kind === 'needs_fix'
-        ? `${labelOf(tx)} ${rp(amountOf(tx))} perlu diperbaiki dan tidak ikut ditransfer.${reason} Ajukan ulang bulan depan lewat ${RE_REQUEST_LABEL} di halaman Petty Cash.`
+        ? `${labelOf(tx)} ${rp(amountOf(tx))} perlu diperbaiki dan tidak ikut ditransfer.${reason} Ajukan ulang lewat ${RE_REQUEST_LABEL} di halaman Petty Cash — dihitung di periode berikutnya.`
         : `${labelOf(tx)} ${rp(amountOf(tx))} ditolak dan tidak ikut ditransfer.${reason} Request yang ditolak tidak bisa diajukan ulang.`,
     link: '/employee/pettycash',
     relatedType: 'petty_cash_transaction',

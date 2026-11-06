@@ -55,6 +55,9 @@ import {
 } from '@/lib/petty-cash-report';
 import { TX_STATUS_LABEL } from '@/lib/petty-cash-transactions';
 import { FINANCE_REVIEW_LABEL, leavesOutOfTransfer, reviewOutcome, type RefillTransfer } from '@/lib/petty-cash-review';
+import { LateBadge, PeriodBadge } from '@/components/petty-cash/PeriodBadge';
+import { jakartaDateKey } from '@/lib/day-bucket';
+import { isRefillLate } from '@/lib/petty-cash-period';
 import { fmtRequestDate } from '@/lib/petty-cash-re-request';
 import { ReRequestBadge } from '@/components/petty-cash/ReRequestBadge';
 import { STORE_STATUS_LABEL } from '@/lib/store-status';
@@ -241,6 +244,8 @@ function RefillPanel({ request, onViewImage }: { request: RefillRequestRow; onVi
         <Landmark className="h-3.5 w-3.5 text-slate-500" />
         <span className="text-xs font-semibold text-slate-700">Refill request</span>
         <Chip className={meta.chip}>{meta.label}</Chip>
+        <PeriodBadge month={request.yearMonth} />
+        {isRefillLate(request.yearMonth, jakartaDateKey(request.requestedAt)) && <LateBadge month={request.yearMonth} />}
         <span className="ml-auto text-[11px] text-slate-400">
           {request.requestedByName ?? 'PIC'} · {fmtDateTime(request.requestedAt)}
         </span>

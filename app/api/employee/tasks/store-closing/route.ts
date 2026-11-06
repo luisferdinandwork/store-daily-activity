@@ -87,6 +87,7 @@ export async function POST(req: NextRequest) {
       // EDC summary — validated in submitStoreClosing (lib/store-closing-edc.ts).
       edcEntries?: EdcEntryInput[];
       opMeVoucherAmount?: number | null;
+      salesCashAmount?: number | null;
       indodanaDashboardPhoto?: string | null;
       openStatementDecision?: StoreClosingOpenStatementDecision;
       openStatementHoldReason?: string;
@@ -138,6 +139,7 @@ export async function POST(req: NextRequest) {
       edcSummaryNotes: body.edcSummaryNotes,
       edcEntries: body.edcEntries ?? [],
       opMeVoucherAmount: body.opMeVoucherAmount ?? null,
+      salesCashAmount: body.salesCashAmount ?? null,
       indodanaDashboardPhoto: body.indodanaDashboardPhoto ?? null,
       openStatementDecision,
       openStatementHoldReason: body.openStatementHoldReason,

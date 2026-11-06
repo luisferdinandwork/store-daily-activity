@@ -207,6 +207,15 @@ export const setoranTasks = pgTable('setoran_tasks', {
   /** Photo of the ATM/debit card — paired with cashierPhoto for small setoran. */
   atmCardPhoto:            text('atm_card_photo'),
 
+  /**
+   * Photo of the counted cash ("Foto Jumlah Sales Cash") — the evidence for
+   * "Jumlah Sales Cash" (expectedAmount). Asked while the IT switch
+   * `store_closing_update` is on and the amount is above 0.
+   */
+  salesCashPhoto:          text('sales_cash_photo'),
+  salesCashPhotoBy:        text('sales_cash_photo_by').references(() => users.id),
+  salesCashPhotoAt:        timestamp('sales_cash_photo_at', { mode: 'date' }),
+
   actualReceivedAmountBy: text('actual_received_amount_by').references(() => users.id),
   actualReceivedAmountAt: timestamp('actual_received_amount_at', { mode: 'date' }),
   storedAmountBy: text('stored_amount_by').references(() => users.id),
@@ -276,6 +285,10 @@ export const setoranMoneyStorage = pgTable('setoran_money_storage', {
   atmCardSelfiePhoto: text('atm_card_selfie_photo'),
   cashierPhoto: text('cashier_photo'),
   atmCardPhoto: text('atm_card_photo'),
+  /** Mirrors setoranTasks.salesCashPhoto. */
+  salesCashPhoto: text('sales_cash_photo'),
+  salesCashPhotoBy: text('sales_cash_photo_by').references(() => users.id),
+  salesCashPhotoAt: timestamp('sales_cash_photo_at', { mode: 'date' }),
   notes: text('notes'),
 
   actualReceivedAmountBy: text('actual_received_amount_by').references(() => users.id),
@@ -956,6 +969,13 @@ export const storeClosingTasks = pgTable('store_closing_tasks', {
 
   /** OP/ME/VOUCHER — the one EDC-summary amount that is not a bank. NULL = not filled in. */
   opMeVoucherAmount: decimal('op_me_voucher_amount', { precision: 14, scale: 2 }),
+
+  /**
+   * Cash sales of the day, typed at closing. NULL = not filled in. The NEXT
+   * morning's Setoran fills "Jumlah Sales Cash" from it (the employee checks it
+   * and adds the photo) — see getSalesCashFromClosing in lib/db/utils/setoran.ts.
+   */
+  salesCashAmount: decimal('sales_cash_amount', { precision: 14, scale: 2 }),
 
   /** Photo of the Indodana dashboard — required once Indodana has an amount. */
   indodanaDashboardPhoto:   text('indodana_dashboard_photo'),

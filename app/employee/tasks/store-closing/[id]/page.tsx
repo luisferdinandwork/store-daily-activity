@@ -12,13 +12,14 @@ import { toast } from 'sonner';
 import { useAutoSave } from '@/lib/hooks/useAutoSave';
 import { TaskDateCard, TaskHeader, TaskSubmitBar, SaveIndicator, shiftLabel } from '@/components/employee/tasks';
 import {
-  ActionButton, BottomSheet, CheckRow, EmptyState, ListGroup, Notice, NotesField, PageBody, PhotoRow, Section,
+  ActionButton, AmountField, BottomSheet, CheckRow, EmptyState, ListGroup, Notice, NotesField, PageBody, PhotoRow, Section,
   SkeletonBlocks, TaskReviewNotices,
 } from '@/components/employee/ui';
 import ChecklistPhotoModal from '@/components/tasks/ChecklistPhotoModal';
 import AccessGuard from '@/components/employee/tasks/AccessGuard';
 import EdcSummaryFields, {
   EdcConfirmTable,
+  cleanEdcDigits,
   edcDigitsToAmount,
   edcEntriesFromState,
   edcStateFromEntries,
@@ -65,6 +66,8 @@ interface StoreClosingData {
   edcSummaryNotes:         string | null;
   edcEntries:              EdcEntryLike[];
   opMeVoucherAmount:       number | null;
+  /** Cash sales of the day — the next morning's Setoran picks it up as "Jumlah Sales Cash". */
+  salesCashAmount:         number | null;
   indodanaDashboardPhoto:  string | null;
   openStatementDecision:   OpenStatementDecision | null;
   openStatementHoldReason: string | null;
@@ -79,7 +82,7 @@ interface StoreClosingData {
 const PHOTO_RULES = {
   eodEdcSettlement: { min: 1, max: 1 },
   storefrontLocked: { min: 1, max: 1 },
-  // Optional — the Indodana dashboard photo is never required.
+  // Optional by default — required only when Indodana has a transaction (see indodanaRequired in the page).
   indodanaDashboard: { min: 1, max: 1 },
 } as const;
 
@@ -241,7 +244,8 @@ export default function StoreClosingDetailPage() {
   // EDC summary: digits per bank × method cell, OP/ME/VOUCHER, Indodana dashboard photo.
   const [edcAmounts,            setEdcAmounts]            = useState<EdcAmountState>({});
   const [opMeVoucher,           setOpMeVoucher]           = useState('');
-  const [indodanaPhoto,         setIndodanaPhoto]         = useState<string | null>(null);
+  const [salesCash,             setSalesCash]             = useState('');
+  const [indodanaPhoto,        setIndodanaPhoto]         = useState<string | null>(null);
   const [edcSummaryNotes,       setEdcSummaryNotes]       = useState('');
   // EDC cells this page has edited (what the auto-save sends — see saveEdcAmounts).
   const edcEdited = useRef(new Set<string>());
@@ -268,6 +272,7 @@ export default function StoreClosingDetailPage() {
         setEdcAmounts(edcStateFromEntries(d.edcEntries));
         edcEdited.current.clear();
         setOpMeVoucher(d.opMeVoucherAmount == null ? '' : String(d.opMeVoucherAmount));
+        setSalesCash(d.salesCashAmount == null ? '' : String(d.salesCashAmount));
         setIndodanaPhoto(d.indodanaDashboardPhoto ?? null);
         setEdcSummaryNotes(d.edcSummaryNotes ?? '');
         setOpenStatementDecision(d.openStatementDecision ?? null);
@@ -351,6 +356,12 @@ export default function StoreClosingDetailPage() {
     autoSave({ opMeVoucherAmount: edcDigitsToAmount(digits) });
   }
 
+  function handleSalesCash(digits: string) {
+    const clean = cleanEdcDigits(digits);
+    setSalesCash(clean);
+    autoSave({ salesCashAmount: edcDigitsToAmount(clean) });
+  }
+
   function syncIndodanaPhoto(photos: string[]) {
     const next = Array.isArray(photos) && photos.length > 0 ? photos[0] : null;
     setIndodanaPhoto(next);
@@ -400,6 +411,7 @@ export default function StoreClosingDetailPage() {
             ? {
                 edcEntries: edcEntriesFromState(edcAmounts),
                 opMeVoucherAmount: edcDigitsToAmount(opMeVoucher),
+                salesCashAmount: edcDigitsToAmount(salesCash),
                 indodanaDashboardPhoto: indodanaPhoto,
                 edcSummaryNotes: edcSummaryNotes || undefined,
               }
@@ -469,6 +481,12 @@ export default function StoreClosingDetailPage() {
         // A closing made before the money format only has the old checklist tick.
         const legacyEdc = readonly && !edcSummary.hasData && !!taskData?.edcSummaryDone;
 
+        // The Indodana dashboard photo is a must only when Indodana had a transaction
+        // (total above Rp 0); blank / "Tidak ada transaksi" / 0 keeps it optional.
+        // An On Hold report goes through without it (same rule as the server).
+        const indodanaRequired = moneyOn && edcSummary.banks.some(b => b.dashboardPhoto && b.total > 0);
+        const indodanaPhotoSatisfied = !indodanaRequired || !!indodanaPhoto || openStatementDecision === 'on_hold';
+
         const canSubmit =
           !locked &&
           !isOnHold &&
@@ -477,6 +495,7 @@ export default function StoreClosingDetailPage() {
           edcSettlementDone &&
           evidencePhotoSatisfied &&
           storefrontLockedSatisfied &&
+          indodanaPhotoSatisfied &&
           !!openStatementDecision &&
           openStmtSatisfied;
 
@@ -487,6 +506,7 @@ export default function StoreClosingDetailPage() {
           if (!edcSettlementDone) return 'Centang checklist EDC Settlement.';
           if (!evidencePhotoSatisfied) return 'Upload foto Z-Report & EDC Settlement.';
           if (!storefrontLockedSatisfied) return 'Upload foto storefront terkunci.';
+          if (!indodanaPhotoSatisfied) return `Upload ${INDODANA_PHOTO_LABEL} — ada transaksi Indodana.`;
           if (!openStatementDecision) return 'Pilih status Open Statement.';
           return '';
         })();
@@ -567,6 +587,21 @@ export default function StoreClosingDetailPage() {
                     </Section>
 
                     {moneyOn && (
+                    <Section title={nextTitle('Sales Cash')}>
+                      <div className="space-y-3">
+                        <AmountField
+                          label="Jumlah Sales Cash hari ini"
+                          value={salesCash}
+                          onChange={handleSalesCash}
+                          disabled={dis}
+                          placeholder="0"
+                          hint="Total penjualan tunai hari ini. Besok pagi terisi otomatis di task Setoran untuk dicek, difoto, dan disetor. Isi 0 bila tidak ada penjualan tunai."
+                        />
+                      </div>
+                    </Section>
+                    )}
+
+                    {moneyOn && (
                     <Section
                       title={nextTitle('EDC Summary')}
                       meta={legacyEdc ? undefined : `${EDC_BANKS.length - edcSummary.missingBanks.length}/${EDC_BANKS.length} bank`}
@@ -627,7 +662,7 @@ export default function StoreClosingDetailPage() {
                       </ListGroup>
                     </Section>
 
-                    <Section title={nextTitle('Foto bukti')} meta={`${(evidencePhotoSatisfied ? 1 : 0) + (storefrontLockedSatisfied ? 1 : 0)}/2`}>
+                    <Section title={nextTitle('Foto bukti')} meta={`${(evidencePhotoSatisfied ? 1 : 0) + (storefrontLockedSatisfied ? 1 : 0) + (indodanaRequired && indodanaPhoto ? 1 : 0)}/${indodanaRequired ? 3 : 2}`}>
                       <ListGroup>
                         <PhotoRow
                           title="Z-Report & EDC Settlement"
@@ -646,13 +681,26 @@ export default function StoreClosingDetailPage() {
                           icon={<Lock className="h-4 w-4" />}
                         />
                         {moneyOn && (
+                          // Required (amber "Wajib") when Indodana has a transaction; with none the row is
+                          // switched off and greyed. A photo already uploaded stays openable so it can be removed.
                           <PhotoRow
                             title={INDODANA_PHOTO_LABEL}
-                            hint="Opsional — foto / screenshot dashboard Indodana hari ini"
+                            hint={
+                              indodanaRequired
+                                ? 'Ada transaksi Indodana — foto dashboard wajib diupload'
+                                : indodanaPhoto
+                                  ? 'Tidak wajib (tidak ada transaksi Indodana)'
+                                  : 'Tidak ada transaksi Indodana, foto tidak diperlukan'
+                            }
                             photo={indodanaPhoto}
                             onClick={() => setIndodanaModalOpen(true)}
-                            disabled={dis}
+                            disabled={dis || (!indodanaRequired && !indodanaPhoto)}
                             icon={<LayoutDashboard className="h-4 w-4" />}
+                            badge={
+                              indodanaRequired
+                                ? { label: 'Wajib', tone: 'warning', icon: AlertTriangle }
+                                : { label: 'Tidak perlu', tone: 'neutral' }
+                            }
                           />
                         )}
                       </ListGroup>
@@ -735,6 +783,12 @@ export default function StoreClosingDetailPage() {
               }
             >
               <EdcConfirmTable summary={edcSummary} indodanaPhoto={indodanaPhoto} />
+              <div className="mt-2 flex items-center justify-between rounded-xl border border-border px-3 py-2 text-xs">
+                <span className="font-semibold text-foreground">Sales Cash</span>
+                <span className="font-bold tabular-nums text-foreground">
+                  {salesCash === '' ? '–' : Number(salesCash).toLocaleString('id-ID')}
+                </span>
+              </div>
             </BottomSheet>
             )}
 

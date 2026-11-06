@@ -67,6 +67,8 @@ import {
   useJsonFeed,
   usePettyCashPending,
 } from '@/components/ops/petty-cash/shared';
+import { PeriodBadge } from '@/components/petty-cash/PeriodBadge';
+import { RequestDetailModal } from '@/components/ops/petty-cash/RequestDetailModal';
 import { ReRequestBadge } from '@/components/petty-cash/ReRequestBadge';
 import {
   PAGE_SIZE,
@@ -107,6 +109,8 @@ export default function OpsPettyCashRequestsPage() {
   const [busyId, setBusyId] = useState<number | null>(null);
   const [toDelete, setToDelete] = useState<OpsRequestRow | null>(null);
   const [lightbox, setLightbox] = useState<{ title: string; url: string } | null>(null);
+  // The request open in the detail modal (by id, so it follows the row when the list reloads).
+  const [detailId, setDetailId] = useState<number | null>(null);
 
   const feed = useJsonFeed<OpsRequestsResponse>(`/api/ops/petty-cash?month=${month}`);
   const { pending, refresh: refreshPending } = usePettyCashPending();
@@ -139,6 +143,8 @@ export default function OpsPettyCashRequestsPage() {
   const currentPage = Math.min(page, pages);
   const offset = (currentPage - 1) * PAGE_SIZE;
   const pageRows = sorted.slice(offset, offset + PAGE_SIZE);
+
+  const detailIndex = detailId == null ? -1 : pageRows.findIndex((r) => r.id === detailId);
 
   const filtersActive = query.trim() !== '' || area !== 'all' || category !== 'all' || status !== 'all';
 
@@ -230,6 +236,19 @@ export default function OpsPettyCashRequestsPage() {
 
   return (
     <div className="min-h-full bg-slate-50">
+      {detailIndex >= 0 && (
+        <RequestDetailModal
+          rows={pageRows}
+          index={detailIndex}
+          showArea={isHo}
+          busy={busyId === pageRows[detailIndex]?.id}
+          onIndex={(i) => setDetailId(pageRows[i]?.id ?? null)}
+          onClose={() => setDetailId(null)}
+          onApprove={(row) => void decide(row, 'approve')}
+          onReject={(row, reason) => void decide(row, 'reject', reason)}
+        />
+      )}
+
       {lightbox && (
         <PhotoLightbox
           title={lightbox.title}
@@ -477,13 +496,15 @@ export default function OpsPettyCashRequestsPage() {
         ) : feed.data ? (
           <>
             <SheetFrame dimmed={feed.loading}>
-              <table className="w-full min-w-[980px] border-separate border-spacing-0 text-left">
+              <table className="w-full min-w-[1180px] border-separate border-spacing-0 text-left">
                 <thead>
                   <tr>
                     <th className={cn(TH, 'w-11 text-center')}>No</th>
                     <SortTh label="Date / PIC" sortKey="date" active={sort.key} dir={sort.dir} onSort={sortBy} />
                     <SortTh label="Store" sortKey="store" active={sort.key} dir={sort.dir} onSort={sortBy} />
-                    <th className={cn(TH, 'text-left')}>Item</th>
+                    <th className={cn(TH, 'text-left')}>Category</th>
+                    <th className={cn(TH, 'text-left')}>Keterangan</th>
+                    <th className={cn(TH, 'text-left')}>Period</th>
                     <SortTh label="Requested (Rp)" sortKey="amount" active={sort.key} dir={sort.dir} onSort={sortBy} align="right" />
                     <th className={cn(TH, 'text-right')}>Actual (Rp)</th>
                     <th className={cn(TH, 'text-center')}>Receipt</th>
@@ -499,10 +520,8 @@ export default function OpsPettyCashRequestsPage() {
                     return (
                       <tr
                         key={r.id}
-                        className={cn(
-                          'text-[13px] transition-colors',
-                          waiting ? 'bg-amber-50/50 hover:bg-amber-50' : 'bg-white hover:bg-indigo-50/40',
-                        )}
+                        onClick={() => setDetailId(r.id)}
+                        className="cursor-pointer bg-white text-[13px] transition-colors hover:bg-indigo-50/40"
                       >
                         <td className={cn(ROW_HEAD, 'w-11')}>{offset + i + 1}</td>
                         <td className={TD}>
@@ -511,14 +530,17 @@ export default function OpsPettyCashRequestsPage() {
                         <td className={cn(TD, 'min-w-52')}>
                           <StoreCell name={r.storeName} code={r.storeNo} area={isHo ? r.areaName : undefined} />
                         </td>
+                        <td className={cn(TD, 'min-w-40')}>
+                          {r.categoryName ? (
+                            <span className="inline-block rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700">
+                              {r.categoryName}
+                            </span>
+                          ) : (
+                            <span className="text-slate-300">–</span>
+                          )}
+                        </td>
                         <td className={cn(TD, 'min-w-52')}>
-                          <p className="line-clamp-2 leading-snug text-slate-700" title={r.description}>
-                            {r.categoryName && (
-                              <span className="mr-1.5 rounded bg-indigo-50 px-1.5 py-0.5 align-middle text-[10px] font-bold text-indigo-700">
-                                {r.categoryName}
-                              </span>
-                            )}
-                            {r.isReRequest && <ReRequestBadge className="mr-1.5 align-middle" />}
+                          <p className="line-clamp-2 leading-snug text-slate-800" title={r.description}>
                             {r.description}
                           </p>
                           {rejected && r.rejectionReason && (
@@ -526,6 +548,9 @@ export default function OpsPettyCashRequestsPage() {
                               Rejected: {r.rejectionReason}
                             </p>
                           )}
+                        </td>
+                        <td className={cn(TD, 'whitespace-nowrap')}>
+                          <PeriodBadge month={r.periodMonth} />
                         </td>
                         <td
                           className={cn(
@@ -539,7 +564,7 @@ export default function OpsPettyCashRequestsPage() {
                         <td className={cn(TD, 'whitespace-nowrap text-right tabular-nums text-slate-900')}>
                           {r.actualAmount != null ? num(r.actualAmount) : <span className="text-slate-300">–</span>}
                         </td>
-                        <td className={cn(TD, 'py-1')}>
+                        <td className={cn(TD, 'py-1')} onClick={(e) => e.stopPropagation()}>
                           <span className="flex justify-center">
                             <ReceiptThumb
                               url={r.imageUrl}
@@ -548,9 +573,12 @@ export default function OpsPettyCashRequestsPage() {
                           </span>
                         </td>
                         <td className={TD}>
-                          <TxStatusChip status={r.status} />
+                          <span className="flex flex-wrap items-center gap-1">
+                            <TxStatusChip status={r.status} />
+                            {r.isReRequest && <ReRequestBadge />}
+                          </span>
                         </td>
-                        <td className={TD}>
+                        <td className={TD} onClick={(e) => e.stopPropagation()}>
                           {waiting ? (
                             <DecisionButtons
                               busy={busyId === r.id}

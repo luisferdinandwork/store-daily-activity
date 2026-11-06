@@ -2,12 +2,13 @@
 
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import {
   Banknote,
   CalendarDays,
   Camera,
+  Check,
   ChevronDown,
   Clock3,
   Landmark,
@@ -31,12 +32,13 @@ import {
 } from '@/components/ui/sheet';
 import type { ReviewOutcome } from '@/lib/petty-cash-review';
 import {
+  PETTY_CASH_CATEGORY_NOTE,
   PETTY_CASH_REASON_MAX,
-  pettyCashDefaultDescription,
   pettyCashDescription,
   type PettyCashCategoryOption,
 } from '@/lib/petty-cash-categories';
 import { RE_REQUEST_LABEL, fmtRequestDate, type ReRequestable } from '@/lib/petty-cash-re-request';
+import { addMonths, periodLabel, periodMonthName, type DeadlineStatus } from '@/lib/petty-cash-period';
 import { jakartaDateKey, jakartaTodayKey, jakartaYearMonth } from '@/lib/day-bucket';
 import {
   DEFAULT_LIST_STATE,
@@ -66,7 +68,7 @@ import {
   normalizeBankDetails,
   type BankDetails,
 } from '@/lib/petty-cash-bank';
-import { EmptyState, Notice, SectionLabel, SkeletonBlocks } from '@/components/employee/ui';
+import { EmptyState, Notice, SectionLabel, Segmented, SkeletonBlocks } from '@/components/employee/ui';
 import CameraCapture from '@/components/shared/CameraCapture';
 import DocumentScanner from '@/components/shared/DocumentScanner';
 
@@ -79,9 +81,12 @@ type TxRow = {
   amount: string;
   actualAmount: string | null;
   description: string;
+  categoryId: number | null;
   categoryName: string | null;
   status: PettyCashStatus | string;
   imageUrl: string | null;
+  /** What may be done about the receipt photo: replace (not finished yet), add the first one, or nothing (locked). */
+  receiptAction: 'replace' | 'add' | 'locked' | 'none';
   approvedAt: string | null;
   rejectedAt: string | null;
   rejectionReason: string | null;
@@ -100,14 +105,27 @@ type TxRow = {
   reRequestedAs: number | null;
   /** Perlu Perbaikan, finished, and not filed again yet. */
   canReRequest: boolean;
+  /** The period a Re-request of it would be counted in (always after its own) and what that period has left. */
+  reRequestTarget: { month: string; balance: number } | null;
 };
 
 type PageData = {
   storeName: string;
+  /**
+   * Set while the refill of an earlier period is on its way (or was turned down): that period is closed and new
+   * requests are counted in the one in use (`month`). Nothing is blocked.
+   */
+  closedPeriod?: { month: string; refillState: string } | null;
+  /**
+   * The Refill of the period before the one in use that has not been received yet. `balance` already leaves it
+   * out — it only turns up in the balance once PIC 1 has uploaded the proof photos.
+   */
+  refillPending?: { month: string; amount: number } | null;
+  /** What can be spent: the period's balance minus `refillPending`. */
   balance: string;
   openingBalance?: string;
   closingBalance?: string | null;
-  periodStatus?: 'open' | 'closed' | string;
+  periodStatus?: 'open' | 'closed' | 'upcoming' | string;
   /** The petty cash period in use (YYYY-MM). */
   month: string;
   /** Today's calendar month (YYYY-MM). */
@@ -145,35 +163,11 @@ function balanceBg(balance: number) {
   return 'from-emerald-50 to-teal-50';
 }
 
-function balanceHealth(balance: number, isHolder: boolean) {
-  if (balance <= 0) {
-    return {
-      label: 'Habis',
-      detail: isHolder
-        ? 'Ajukan Refill sebelum mengirim Request baru.'
-        : 'Minta PIC 1 untuk mengajukan Refill.',
-      textClass: 'text-rose-600',
-    };
-  }
-  if (balance < 250_000) {
-    return {
-      label: 'Kritis',
-      detail: isHolder
-        ? 'Saldo sangat menipis — ajukan Refill sekarang.'
-        : 'Saldo sangat menipis — minta PIC 1 untuk mengajukan Refill.',
-      textClass: 'text-rose-600',
-    };
-  }
-  if (balance < 500_000) {
-    return {
-      label: 'Mulai Menipis',
-      detail: isHolder
-        ? 'Pertimbangkan untuk mengajukan Refill.'
-        : 'PIC 1 mungkin perlu mengajukan Refill segera.',
-      textClass: 'text-amber-600',
-    };
-  }
-  return { label: 'Aman', detail: null, textClass: 'text-emerald-600' };
+function balanceHealth(balance: number) {
+  if (balance <= 0) return { label: 'Habis', textClass: 'text-rose-600' };
+  if (balance < 250_000) return { label: 'Kritis', textClass: 'text-rose-600' };
+  if (balance < 500_000) return { label: 'Mulai Menipis', textClass: 'text-amber-600' };
+  return { label: 'Aman', textClass: 'text-emerald-600' };
 }
 
 function fmtDate(iso: string) {
@@ -203,6 +197,25 @@ function monthLabel(ym?: string) {
     month: 'long',
     year: 'numeric',
   });
+}
+
+/** The banner under the balance card once a period's refill has been sent (the period itself is closed). */
+function closedPeriodText(closed: { month: string; refillState: string }, usageMonth: string) {
+  const closedName = periodLabel(closed.month);
+  const usageName = periodLabel(usageMonth);
+
+  if (closed.refillState === 'rejected') {
+    return `Refill ${closedName} ditolak OPS, tapi periodenya tetap tertutup — ajukan Refill lagi di tab Refill. Request baru masuk ke periode ${usageName}.`;
+  }
+
+  const where =
+    closed.refillState === 'pending'
+      ? 'menunggu persetujuan OPS'
+      : closed.refillState === 'awaiting_finance'
+        ? 'menunggu Finance memprosesnya'
+        : 'sudah diproses Finance — tinggal foto bukti penerimaan';
+
+  return `Refill ${closedName} ${where}. Kamu tetap bisa membuat request — request baru dihitung di periode ${usageName}.`;
 }
 
 // Needs the PIC to confirm what was actually spent — the requested amount
@@ -247,26 +260,10 @@ const GROUP_PILL: Record<RequestGroup, string> = {
   rejected: 'bg-rose-50 text-rose-700 ring-rose-200',
 };
 
-/** The one line under an opened request: where it stands (null when Finance's card says it all). */
-function requestNote(tx: TxRow, isHolder: boolean): string | null {
-  if (tx.status === 'pending_ops') {
-    return isHolder
-      ? 'Request kamu sudah dikirim ke OPS untuk disetujui.'
-      : 'Request PIC 1 sedang menunggu persetujuan OPS.';
-  }
-  if (tx.status === 'ops_rejected') {
-    return tx.rejectionReason ? `Alasan: ${tx.rejectionReason}` : 'Request ini ditolak.';
-  }
-  if (needsActualAmount(tx)) {
-    return isHolder
-      ? 'OPS sudah menyetujui request ini. Konfirmasi jumlah uang yang benar-benar terpakai untuk dipotong dari saldo.'
-      : 'OPS sudah menyetujui — menunggu PIC 1 mengonfirmasi jumlah yang terpakai.';
-  }
-  if (tx.reviewOutcome === 'needs_fix' || tx.reviewOutcome === 'rejected') return null;
-  if (needsReceipt(tx)) {
-    return isHolder ? 'Unggah foto struk untuk arsip.' : 'Menunggu PIC 1 mengunggah foto struk.';
-  }
-  return 'Jumlah yang terpakai sudah dipotong dari saldo.';
+/** The one line under an opened request: OPS's reason when it turned the request down (the state pill says the rest). */
+function requestNote(tx: TxRow): string | null {
+  if (tx.status === 'ops_rejected' && tx.rejectionReason) return `Alasan: ${tx.rejectionReason}`;
+  return null;
 }
 
 // ─── Image lightbox ───────────────────────────────────────────────────────────
@@ -315,8 +312,8 @@ function BalanceCard({
   totalApprovedSpend,
   pendingAmount,
   awaitingConfirmAmount,
+  refillPending,
   month,
-  currentMonth,
   isHolder,
 }: {
   balance: number;
@@ -324,23 +321,14 @@ function BalanceCard({
   totalApprovedSpend: number;
   pendingAmount: number;
   awaitingConfirmAmount: number;
+  /** A Refill not received yet — the balance rises by this once the proof photos are in. */
+  refillPending: { month: string; amount: number } | null;
   /** The petty cash period in use (YYYY-MM). */
   month: string;
-  /** Today's calendar month (YYYY-MM), to flag a carried-over / next period. */
-  currentMonth?: string;
   isHolder: boolean;
 }) {
   const pct = Math.min(100, Math.round((balance / 1_000_000) * 100));
-  const health = balanceHealth(balance, isHolder);
-
-  // The period isn't always this calendar month: an unrefilled balance keeps
-  // carrying forward, and a received refill already opens next month's.
-  const periodNote =
-    currentMonth && month && month !== currentMonth
-      ? month < currentMonth
-        ? `Masih memakai saldo ${monthLabel(month)} — belum ada Refill sejak itu.`
-        : `Saldo ${monthLabel(month)} sudah aktif setelah Refill diterima.`
-      : null;
+  const health = balanceHealth(balance);
 
   return (
     <div className={cn('mx-4 rounded-2xl bg-gradient-to-br p-5 shadow-sm', balanceBg(balance))}>
@@ -358,9 +346,6 @@ function BalanceCard({
             <span className="text-xs font-bold text-foreground">{monthLabel(month)}</span>
           </div>
 
-          {periodNote && (
-            <p className="mt-1.5 text-[10px] font-medium text-muted-foreground">{periodNote}</p>
-          )}
         </div>
         <span className={cn('shrink-0 text-[10px] font-bold uppercase tracking-wide', health.textClass)}>
           {health.label}
@@ -369,10 +354,6 @@ function BalanceCard({
 
       <p className={cn('text-4xl font-bold tracking-tight', balanceColor(balance))}>
         {idr(balance)}
-      </p>
-
-      <p className="mt-0.5 text-[11px] text-muted-foreground">
-        Sisa saldo setelah jumlah terpakai dikonfirmasi
       </p>
 
       <div className="mt-4 h-2 overflow-hidden rounded-full bg-white/60">
@@ -390,19 +371,21 @@ function BalanceCard({
         <span>Pengeluaran disetujui {idr(totalApprovedSpend)}</span>
       </div>
 
-      {health.detail && (
-        <p className={cn('mt-2 text-[11px] font-semibold', health.textClass)}>
-          {health.detail}
-        </p>
+      {refillPending && (
+        <div className="mt-3 rounded-xl bg-white/60 px-3 py-2">
+          <p className="text-[11px] font-semibold text-indigo-700">
+            Refill {periodLabel(refillPending.month)} {idr(refillPending.amount)} belum diterima
+          </p>
+          <p className="mt-0.5 text-[10px] text-muted-foreground">
+            Saldo bertambah setelah foto bukti Refill diunggah.
+          </p>
+        </div>
       )}
 
       {pendingAmount > 0 && (
         <div className="mt-3 rounded-xl bg-white/60 px-3 py-2">
           <p className="text-[11px] font-semibold text-sky-700">
             Request menunggu OPS: {idr(pendingAmount)}
-          </p>
-          <p className="mt-0.5 text-[10px] text-muted-foreground">
-            Jumlah ini belum dipotong sampai disetujui OPS.
           </p>
         </div>
       )}
@@ -411,9 +394,6 @@ function BalanceCard({
         <div className="mt-3 rounded-xl bg-white/60 px-3 py-2">
           <p className="text-[11px] font-semibold text-indigo-700">
             OPS sudah menyetujui, menunggu konfirmasi {isHolder ? 'kamu' : 'PIC 1'}: {idr(awaitingConfirmAmount)}
-          </p>
-          <p className="mt-0.5 text-[10px] text-muted-foreground">
-            Ini masih perkiraan awal — belum dipotong sampai {isHolder ? 'kamu' : 'PIC 1'} konfirmasi jumlah yang benar-benar terpakai.
           </p>
         </div>
       )}
@@ -427,6 +407,8 @@ type RefillProofKind = 'drawer' | 'signature';
 
 type RefillRequestRow = {
   id: number;
+  /** The period (YYYY-MM) this Refill settles — it closed when the Refill was sent. */
+  yearMonth: string;
   status: 'pending' | 'approved' | 'rejected';
   requestedAt: string;
   approvedAt: string | null;
@@ -613,9 +595,6 @@ function RefillBankForm({
         <Landmark className="mt-0.5 h-4 w-4 shrink-0 text-indigo-600" />
         <div>
           <p className="text-xs font-bold text-foreground">Rekening tujuan Refill</p>
-          <p className="text-[11px] text-muted-foreground">
-            Finance akan mentransfer uang Refill ke rekening ini. Pastikan datanya benar.
-          </p>
         </div>
       </div>
 
@@ -697,8 +676,102 @@ function RefillBankForm({
   );
 }
 
+// ─── Refill: PIC 1 sends it, everyone at the store sees where it stands ─────────
+// Sending a Refill closes the period it covers (what was used is fixed — that is what Finance transfers) and the
+// next period opens at once, so requests carry on while the Refill goes OPS → Finance → PIC 1's receipt photos.
+// It is due before the 15th of the period's month; later is still accepted but marked "Terlambat"
+// (lib/petty-cash-period.ts).
+
+type RefillOverviewData = {
+  /** The period new requests are counted in right now. */
+  usageMonth: string;
+  /** What a Refill sent now would cover; null while another Refill is on its way. */
+  settle: { month: string; balance: number; refill: number; closed: boolean } | null;
+  deadline: DeadlineStatus | null;
+  canRequest: boolean;
+  blockedReason: string | null;
+};
+
+const REFILL_STEPS = ['Diajukan', 'OPS', 'Finance', 'Foto bukti'] as const;
+
+/** The step a Refill is waiting on (0-based); 4 = all done. A rejected one stops at OPS. */
+function refillStep(request: RefillRequestRow): number {
+  if (request.balanceAfter) return REFILL_STEPS.length;
+  if (request.status === 'rejected' || request.status === 'pending') return 1;
+  return request.financeVerifiedAt ? 3 : 2;
+}
+
+/** A Refill still on its way: not turned down and not received yet. */
+const isLiveRefill = (request: RefillRequestRow): boolean => request.status !== 'rejected' && !request.balanceAfter;
+
+function RefillStepper({ request }: { request: RefillRequestRow }) {
+  const current = refillStep(request);
+  const failed = request.status === 'rejected';
+
+  return (
+    <ol className="mt-3 flex items-start" aria-label="Tahap Refill">
+      {REFILL_STEPS.map((label, i) => {
+        const done = i < current;
+        const active = i === current;
+        return (
+          <li key={label} className="relative flex flex-1 flex-col items-center gap-1.5">
+            {i > 0 && (
+              <span
+                aria-hidden
+                className={cn('absolute right-1/2 top-3 h-0.5 w-full -translate-y-1/2', i <= current ? 'bg-emerald-400' : 'bg-border')}
+              />
+            )}
+            <span
+              className={cn(
+                'relative z-10 flex h-6 w-6 items-center justify-center rounded-full text-[10px] font-bold ring-2 ring-card',
+                done && 'bg-emerald-500 text-white',
+                active && !failed && 'bg-indigo-600 text-white',
+                active && failed && 'bg-rose-500 text-white',
+                !done && !active && 'bg-secondary text-muted-foreground',
+              )}
+            >
+              {done ? <Check className="h-3 w-3" /> : active && failed ? <X className="h-3 w-3" /> : i + 1}
+            </span>
+            <span
+              className={cn(
+                'text-[10px] font-semibold',
+                active ? (failed ? 'text-rose-600' : 'text-foreground') : done ? 'text-emerald-700' : 'text-muted-foreground',
+              )}
+            >
+              {label}
+            </span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/** The 15th line of the new-Refill card: how long PIC 1 has, or that it is late (still allowed). */
+function refillDeadlineLine(d: DeadlineStatus, periodMonth: string): { text: string; tone: 'ok' | 'soon' | 'late' } | null {
+  if (!d.applies) return null;
+  const day = `${Number(d.deadline.slice(8))} ${periodMonthName(periodMonth)}`;
+
+  if (d.late) {
+    return {
+      tone: 'late',
+      text: `Batas kirim Refill ${periodLabel(periodMonth)} (${day}) sudah lewat. Tetap bisa diajukan, tapi ditandai Terlambat untuk OPS dan Finance.`,
+    };
+  }
+  if (d.daysLeft === 0) return { tone: 'soon', text: `Hari ini batas terakhir kirim Refill (${day}).` };
+  if (d.daysLeft <= 3) return { tone: 'soon', text: `Tinggal ${d.daysLeft} hari — kirim Refill sebelum ${day}.` };
+  return { tone: 'ok', text: `Kirim Refill sebelum ${day} (${d.daysLeft} hari lagi).` };
+}
+
+const DEADLINE_TONE = {
+  ok: 'bg-secondary/60 text-muted-foreground',
+  soon: 'bg-amber-50 text-amber-800 ring-1 ring-amber-200',
+  late: 'bg-rose-50 text-rose-700 ring-1 ring-rose-200',
+} as const;
+
 function RefillRequestCard({
   request,
+  overview,
   isHolder,
   requesting,
   lastBank,
@@ -707,7 +780,9 @@ function RefillRequestCard({
   onUploadProof,
   onViewImage,
 }: {
+  /** The Refill on its way, else the latest one; null = the store never sent one. */
   request: RefillRequestRow | null;
+  overview: RefillOverviewData | null;
   isHolder: boolean;
   requesting: boolean;
   lastBank: BankDetails | null;
@@ -716,51 +791,10 @@ function RefillRequestCard({
   onUploadProof: (kind: RefillProofKind, file: File) => void;
   onViewImage: (url: string) => void;
 }) {
-  // Card shells are neutral now (card / border) — status still reads
-  // clearly from the icon + heading color and, for "approved", from the
-  // action itself (proof capture rows). Colored fills stayed only in the
-  // small elements whose entire job is to signal status.
-  if (request?.status === 'pending') {
-    return (
-      <div className="mx-4 rounded-2xl border border-border bg-card p-4">
-        <div className="flex items-center gap-2">
-          <Clock3 className="h-4 w-4 text-sky-600" />
-          <p className="text-xs font-bold text-sky-700">Request Refill menunggu persetujuan OPS</p>
-        </div>
-        <RefillBankLine request={request} />
-      </div>
-    );
-  }
-
-  const toppedUp = Boolean(request?.balanceAfter);
-
-  // Once a refill is fully received (both proof photos in), it stops
-  // appearing here at all — the topped-up balance applies to NEXT month, so
-  // there's nothing left to action on this month's view. The request itself
-  // stays intact for Ops/Finance; PIC can fall through to request a fresh one.
-  // OPS approved, but Finance hasn't sent/verified the cash yet — there is
-  // nothing to confirm receiving, so no camera here. The server enforces the
-  // same rule (attachRefillProof).
-  if (request?.status === 'approved' && !toppedUp && !request.financeVerifiedAt) {
-    return (
-      <div className="mx-4 rounded-2xl border border-border bg-card p-4">
-        <div className="flex items-center gap-2">
-          <Clock3 className="h-4 w-4 text-sky-600" />
-          <p className="text-xs font-bold text-sky-700">OPS sudah menyetujui Refill — menunggu Finance memprosesnya</p>
-        </div>
-
-        <RefillBankLine request={request} />
-
-        <p className="mt-1.5 text-[11px] text-muted-foreground">
-          {isHolder
-            ? 'Konfirmasi penerimaan (foto laci petty cash dan Surat Terima) baru bisa dilakukan setelah Finance memverifikasi bahwa uangnya sudah dikirim. Kamu akan mendapat notifikasi.'
-            : 'PIC 1 bisa mengonfirmasi penerimaan setelah Finance memverifikasi Refill ini.'}
-        </p>
-      </div>
-    );
-  }
-
-  if (request?.status === 'approved' && !toppedUp) {
+  // ── A Refill is on its way: where it stands, and what is left for PIC 1 ──────
+  if (request && isLiveRefill(request)) {
+    const waitingOps = request.status === 'pending';
+    const waitingFinance = request.status === 'approved' && !request.financeVerifiedAt;
     const photoUrls: Record<RefillProofKind, string | null> = {
       drawer: request.drawerPhotoUrl,
       signature: request.signaturePhotoUrl,
@@ -768,83 +802,167 @@ function RefillRequestCard({
 
     return (
       <div className="mx-4 rounded-2xl border border-border bg-card p-4">
-        <div className="flex items-center gap-2">
-          <Banknote className="h-4 w-4 text-indigo-600" />
-          <p className="text-xs font-bold text-indigo-700">
-            {isHolder
-              ? 'Finance sudah memproses Refill — ambil foto bukti setelah menerima uangnya'
-              : 'Finance sudah memproses Refill — menunggu PIC 1 mengunggah foto bukti'}
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Refill periode</p>
+            <p className="text-sm font-bold text-foreground">{periodLabel(request.yearMonth)}</p>
+          </div>
+          {request.transferAmount != null && (
+            <p className="shrink-0 text-right text-[11px] text-muted-foreground">
+              Ditransfer
+              <span className="block text-sm font-bold tabular-nums text-foreground">
+                Rp {Number(request.transferAmount).toLocaleString('id-ID')}
+              </span>
+            </p>
+          )}
+        </div>
+
+        <RefillStepper request={request} />
+
+        <div className="mt-4 flex items-start gap-2">
+          {waitingOps || waitingFinance ? (
+            <Clock3 className="mt-px h-4 w-4 shrink-0 text-sky-600" />
+          ) : (
+            <Banknote className="mt-px h-4 w-4 shrink-0 text-indigo-600" />
+          )}
+          <p className={cn('text-xs font-bold', waitingOps || waitingFinance ? 'text-sky-700' : 'text-indigo-700')}>
+            {waitingOps
+              ? 'Menunggu persetujuan OPS'
+              : waitingFinance
+                ? 'OPS sudah menyetujui — menunggu Finance memprosesnya'
+                : isHolder
+                  ? 'Finance sudah memproses — ambil foto bukti setelah menerima uangnya'
+                  : 'Finance sudah memproses — menunggu PIC 1 mengunggah foto bukti'}
           </p>
         </div>
 
         <RefillBankLine request={request} />
 
-        {request.transferAmount != null && (
-          <div className="mt-2 rounded-xl bg-muted/60 px-3 py-2 text-[11px] text-foreground">
-            <p>
-              Ditransfer Finance:{' '}
-              <span className="font-bold tabular-nums">Rp {Number(request.transferAmount).toLocaleString('id-ID')}</span>
-            </p>
-            {request.rejectedCount > 0 && (
-              <p className="mt-1 font-medium text-rose-600">
-                {request.rejectedCount} request ditolak Finance (Rp {Number(request.rejectedAmount ?? 0).toLocaleString('id-ID')})
-                tidak dihitung terpakai dan tidak ditransfer — nominal itu dibayar sendiri di luar sistem.
-              </p>
-            )}
-          </div>
-        )}
-
-        {isHolder && (
-          <p className="mt-1.5 text-[11px] text-indigo-600/80">
-            Saat Finance menyerahkan uangnya, ambil foto laci petty cash dan Surat Terima Petty Cash di bawah ini. Saldo akan diperbarui setelah kedua foto terkirim.
+        {request.rejectedCount > 0 && (
+          <p className="mt-2 text-[11px] font-medium text-rose-600">
+            {request.rejectedCount} request ditolak Finance (Rp {Number(request.rejectedAmount ?? 0).toLocaleString('id-ID')})
+            tidak ditransfer
           </p>
         )}
 
-        <div className="mt-3 space-y-2">
-          {PROOF_STEPS.map((step) => (
-            <RefillProofCapture
-              key={step.kind}
-              label={step.label}
-              isDocument={step.isDocument}
-              imageUrl={photoUrls[step.kind]}
-              uploading={uploadingKind === step.kind}
-              readOnly={!isHolder}
-              onConfirm={(file) => onUploadProof(step.kind, file)}
-              onView={onViewImage}
-            />
-          ))}
-        </div>
+        {request.financeVerifiedAt && (
+          <div className="mt-3 space-y-2">
+            {PROOF_STEPS.map((step) => (
+              <RefillProofCapture
+                key={step.kind}
+                label={step.label}
+                isDocument={step.isDocument}
+                imageUrl={photoUrls[step.kind]}
+                uploading={uploadingKind === step.kind}
+                readOnly={!isHolder}
+                onConfirm={(file) => onUploadProof(step.kind, file)}
+                onView={onViewImage}
+              />
+            ))}
+          </div>
+        )}
+
+        <p className="mt-3 flex items-start gap-1.5 rounded-xl bg-secondary/60 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+          <CalendarDays className="mt-px h-3 w-3 shrink-0" aria-hidden />
+          <span>
+            Periode {periodLabel(request.yearMonth)} sudah ditutup. Request baru tetap bisa dibuat — dihitung di periode{' '}
+            {periodLabel(overview?.usageMonth ?? addMonths(request.yearMonth, 1))}. Saldo baru bertambah setelah Refill diterima
+            (foto bukti diunggah).
+          </span>
+        </p>
       </div>
     );
   }
 
+  // ── Nothing on its way ───────────────────────────────────────────────────────
+  const settle = overview?.settle ?? null;
+  const received = Boolean(request?.balanceAfter);
+
   if (!isHolder) {
-    return null;
+    return (
+      <div className="mx-4 rounded-2xl border border-dashed border-border bg-card p-4 text-center">
+        <p className="text-xs font-bold text-foreground">Tidak ada Refill yang sedang berjalan</p>
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          {received && request
+            ? `Refill ${periodLabel(request.yearMonth)} sudah diterima toko. Refill diajukan oleh PIC 1.`
+            : 'Refill diajukan oleh PIC 1. Statusnya akan tampil di sini.'}
+        </p>
+      </div>
+    );
   }
 
+  const deadline = settle && overview?.deadline ? refillDeadlineLine(overview.deadline, settle.month) : null;
+  const nextMonth = settle ? addMonths(settle.month, 1) : null;
+
   return (
-    <div className="mx-4 rounded-2xl border border-dashed border-border bg-card p-4">
+    <div className="mx-4 rounded-2xl border border-border bg-card p-4">
       <div className="flex items-start gap-3">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-50">
           <Banknote className="h-4 w-4 text-indigo-600" />
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-xs font-bold text-foreground">Saldo keseluruhan mulai menipis?</p>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">
-            Refill mengembalikan seluruh petty cash toko ke Rp 1.000.000.
-            Ini terpisah dari Request penggunaan — ditinjau dan disetujui oleh OPS.
+          <p className="text-xs font-bold text-foreground">
+            {settle ? `Refill periode ${periodLabel(settle.month)}` : 'Ajukan Refill'}
           </p>
-          {request?.status === 'rejected' && (
-            <p className="mt-1.5 text-[11px] font-medium text-rose-600">
-              Request terakhir ditolak{request.rejectionReason ? `: ${request.rejectionReason}` : '.'} Kamu bisa mengajukan lagi.
-            </p>
-          )}
+          <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+            Refill mengembalikan saldo ke Rp 1.000.000 sebesar yang sudah terpakai.
+          </p>
         </div>
       </div>
-      {/* Outline style — a secondary action, visually distinct from the
-          filled primary "Kirim Request ke OPS" button below the page. It
-          opens the bank-details form; the request is only sent from there. */}
-      <RefillBankForm lastBank={lastBank} requesting={requesting} onSubmit={onRequest} />
+
+      {request?.status === 'rejected' && (
+        <p className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-[11px] font-medium text-rose-700 ring-1 ring-rose-200">
+          Refill terakhir ditolak OPS{request.rejectionReason ? `: ${request.rejectionReason}` : '.'} Ajukan lagi dengan data yang benar.
+        </p>
+      )}
+
+      {received && request && (
+        <p className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-[11px] font-medium text-emerald-800 ring-1 ring-emerald-200">
+          Refill {periodLabel(request.yearMonth)} sudah diterima toko.
+        </p>
+      )}
+
+      {settle && (
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <div className="rounded-xl bg-secondary/60 px-3 py-2">
+            <p className="text-[10px] font-semibold text-muted-foreground">Sisa saldo</p>
+            <p className="text-sm font-bold tabular-nums text-foreground">{idr(settle.balance)}</p>
+          </div>
+          <div className="rounded-xl bg-indigo-50 px-3 py-2 ring-1 ring-indigo-200">
+            <p className="text-[10px] font-semibold text-indigo-600">Refill (yang terpakai)</p>
+            <p className="text-sm font-bold tabular-nums text-indigo-700">{idr(settle.refill)}</p>
+          </div>
+        </div>
+      )}
+
+      {deadline && (
+        <p className={cn('mt-3 flex items-start gap-1.5 rounded-xl px-3 py-2 text-[11px] font-medium leading-relaxed', DEADLINE_TONE[deadline.tone])}>
+          <Clock3 className="mt-px h-3 w-3 shrink-0" aria-hidden />
+          <span>{deadline.text}</span>
+        </p>
+      )}
+
+      {overview && !overview.canRequest ? (
+        <p className="mt-3 rounded-xl bg-secondary/60 px-3 py-2 text-[11px] text-muted-foreground">
+          {overview.blockedReason ?? 'Refill belum bisa diajukan.'}
+        </p>
+      ) : (
+        <>
+          {settle && nextMonth && (
+            <p className="mt-3 flex items-start gap-1.5 text-[11px] leading-relaxed text-muted-foreground">
+              <CalendarDays className="mt-px h-3 w-3 shrink-0" aria-hidden />
+              <span>
+                {settle.closed
+                  ? `Periode ${periodLabel(settle.month)} sudah ditutup.`
+                  : `Begitu dikirim, periode ${periodLabel(settle.month)} ditutup dan periode ${periodLabel(nextMonth)} dibuka.`}{' '}
+                Kamu tetap bisa membuat request — masuk ke periode {periodLabel(nextMonth)}, walau Refill belum diproses.
+                Saldo tidak langsung kembali ke Rp 1.000.000; saldo baru bertambah setelah Refill diterima.
+              </span>
+            </p>
+          )}
+          <RefillBankForm lastBank={lastBank} requesting={requesting} onSubmit={onRequest} />
+        </>
+      )}
     </div>
   );
 }
@@ -920,7 +1038,6 @@ function ReceiptAction({
         <UploadCloud className="h-3 w-3" />
         Perlu tindakan
       </p>
-      <p className="mt-1 text-[11px] font-medium text-indigo-800">Unggah foto struk untuk arsip.</p>
       <ReceiptCapture uploading={uploading} onConfirm={(file) => onUpload(tx, file)} />
     </div>
   );
@@ -951,10 +1068,7 @@ function ConfirmAmountAction({
         <Banknote className="h-3 w-3" />
         Perlu tindakan
       </p>
-      <p className="mt-1 text-[11px] font-medium text-indigo-800">
-        Diminta {idr(tx.amount)}. OPS sudah menyetujui request ini — masukkan jumlah yang benar-benar
-        terpakai, ini yang akan dipotong dari saldo.
-      </p>
+      <p className="mt-1 text-[11px] font-medium text-indigo-800">Diminta {idr(tx.amount)}</p>
 
       <div className="mt-3">
         <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">
@@ -990,7 +1104,7 @@ function ConfirmAmountAction({
 
       <div className="mt-3 border-t border-indigo-200 pt-3">
         <p className="mb-1.5 text-[11px] font-semibold text-muted-foreground">
-          Foto struk {tx.imageUrl ? '(sudah diunggah)' : '(opsional, untuk arsip)'}
+          Foto struk
         </p>
         {tx.imageUrl ? (
           <div className="flex items-center gap-3">
@@ -1036,7 +1150,7 @@ function FinanceReviewNote({
   if (outcome === 'accepted') {
     return (
       <p className="rounded-xl bg-emerald-50 px-3 py-2 text-[11px] font-medium text-emerald-800 ring-1 ring-emerald-200">
-        Diterima Finance — request ini ikut dihitung di Refill.
+        Diterima Finance
       </p>
     );
   }
@@ -1045,13 +1159,9 @@ function FinanceReviewNote({
     return (
       <div className="rounded-xl bg-orange-50 px-3 py-2.5 ring-1 ring-orange-200">
         <p className="text-[11px] font-bold text-orange-700">Perlu Perbaikan</p>
-        <p className="mt-1 whitespace-pre-wrap break-words text-[12px] text-orange-950">
-          {comment ?? <span className="italic text-orange-700">Finance tidak menulis komentar.</span>}
-        </p>
-        <p className="mt-1.5 text-[11px] text-orange-700">
-          Nominal ini belum dihitung terpakai dan tidak ikut ditransfer. Ajukan ulang lewat {RE_REQUEST_LABEL} dengan
-          data yang sudah diperbaiki.
-        </p>
+        {comment && (
+          <p className="mt-1 whitespace-pre-wrap break-words text-[12px] text-orange-950">{comment}</p>
+        )}
         {tx.reRequestedAs != null ? (
           <p className="mt-2 flex items-center gap-1.5 text-[11px] font-semibold text-violet-700">
             <RotateCcw className="h-3 w-3" />
@@ -1078,13 +1188,9 @@ function FinanceReviewNote({
   return (
     <div className="rounded-xl bg-rose-50 px-3 py-2.5 ring-1 ring-rose-200">
       <p className="text-[11px] font-bold text-rose-700">Ditolak</p>
-      <p className="mt-1 whitespace-pre-wrap break-words text-[12px] text-rose-900">
-        {comment ?? <span className="italic text-rose-700">Finance tidak menulis komentar.</span>}
-      </p>
-      <p className="mt-1.5 text-[11px] text-rose-700">
-        Nominal ini tidak dihitung terpakai dan tidak ikut ditransfer — dibayar sendiri di luar sistem. Request yang
-        Ditolak tidak bisa diajukan ulang.
-      </p>
+      {comment && (
+        <p className="mt-1 whitespace-pre-wrap break-words text-[12px] text-rose-900">{comment}</p>
+      )}
     </div>
   );
 }
@@ -1103,9 +1209,17 @@ function ReasonCounter({ value }: { value: string }) {
 // was made, correct Keterangan / what was spent / the receipt. There is no OPS step — it goes straight to
 // Finance, marked Re-request, and today's date is recorded automatically (lib/petty-cash-re-request.ts).
 
-/** What the sheet starts from. */
-function toReRequestable(tx: TxRow): ReRequestable {
+/** What the sheet starts from: the request, its category and where the re-request would be counted. */
+type ReRequestSource = ReRequestable & {
+  categoryId: number | null;
+  /** The period the Re-request is counted in (after the original's) and what that period has left. */
+  target: { month: string; balance: number } | null;
+};
+
+function toReRequestable(tx: TxRow): ReRequestSource {
   return {
+    categoryId: tx.categoryId,
+    target: tx.reRequestTarget,
     id: tx.id,
     categoryName: tx.categoryName,
     description: tx.description,
@@ -1122,18 +1236,33 @@ function toReRequestable(tx: TxRow): ReRequestable {
 /** Bottom sheet: file a Perlu Perbaikan request again — the day it was made, Keterangan, what was spent, the receipt. */
 function ReRequestSheet({
   source,
+  categories,
   balance,
   storeName,
   onClose,
   onDone,
 }: {
-  source: ReRequestable;
+  source: ReRequestSource;
+  /** The categories PIC 1 can pick today — the original's may have been hidden since. */
+  categories: PettyCashCategoryOption[];
+  /** The period in use — a fallback when the sheet doesn't know the target period's balance. */
   balance: number;
   storeName: string;
   onClose: () => void;
-  onDone: () => void;
+  onDone: (periodMonth: string | null) => void;
 }) {
   const today = jakartaTodayKey();
+  // The Re-request is counted in a later period than the original (never one already closed), and is cut from
+  // THAT period's balance — not the one shown on the page.
+  const available = source.target?.balance ?? balance;
+  // Starts on the original's category (by id, else by name); empty when it is no longer on offer, so PIC 1 picks.
+  const [categoryId, setCategoryId] = useState<number | null>(
+    () =>
+      (categories.find((c) => c.id === source.categoryId) ??
+        categories.find((c) => c.name.trim().toUpperCase() === (source.categoryName ?? '').trim().toUpperCase()))?.id ??
+      null,
+  );
+  const selectedCategory = categories.find((c) => c.id === categoryId) ?? null;
   const [requestDate, setRequestDate] = useState(source.filedOn);
   const [description, setDescription] = useState(pettyCashDescription(source.description));
   const [amount, setAmount] = useState(String(source.amount));
@@ -1150,6 +1279,7 @@ function ReRequestSheet({
 
   async function submit() {
     setError(null);
+    if (!selectedCategory) { setError('Pilih kategori petty cash.'); return; }
     if (!requestDate) { setError('Isi tanggal request.'); return; }
     if (requestDate > today) { setError('Tanggal request tidak boleh di masa depan.'); return; }
     if (!description.trim()) { setError('Keterangan wajib diisi.'); return; }
@@ -1158,7 +1288,10 @@ function ReRequestSheet({
       return;
     }
     if (!amountNum) { setError('Masukkan jumlah terpakai yang valid.'); return; }
-    if (amountNum > balance) { setError(`Jumlah melebihi saldo yang tersedia saat ini (${idr(balance)}).`); return; }
+    if (amountNum > available) {
+      setError(`Jumlah melebihi saldo periode ${source.target ? periodLabel(source.target.month) : 'ini'} (${idr(available)}).`);
+      return;
+    }
     if (!previewUrl) { setError('Foto struk wajib ada.'); return; }
 
     setBusy(true);
@@ -1182,6 +1315,7 @@ function ReRequestSheet({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           originalTxId: source.id,
+          categoryId: selectedCategory.id,
           requestDate,
           description,
           actualAmount: amountNum,
@@ -1192,7 +1326,7 @@ function ReRequestSheet({
       const body = await res.json();
       if (!res.ok || !body.success) throw new Error(body.error ?? 'Gagal mengajukan ulang.');
 
-      onDone();
+      onDone(typeof body.periodMonth === 'string' ? body.periodMonth : null);
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Gagal mengajukan ulang. Coba lagi.');
@@ -1214,15 +1348,59 @@ function ReRequestSheet({
         <div className="space-y-4 px-4 py-4">
           <div className="rounded-xl bg-orange-50 px-3 py-2.5 ring-1 ring-orange-200">
             <p className="text-[11px] font-bold text-orange-700">Perlu Perbaikan</p>
-            <p className="mt-1 whitespace-pre-wrap break-words text-[12px] text-orange-950">
-              {source.financeComment ?? <span className="italic text-orange-700">Finance tidak menulis komentar.</span>}
-            </p>
+            {source.financeComment && (
+              <p className="mt-1 whitespace-pre-wrap break-words text-[12px] text-orange-950">{source.financeComment}</p>
+            )}
           </div>
 
-          <Notice tone="info" title="Tanpa persetujuan OPS">
-            Perbaiki Keterangan, jumlah, atau foto struk sesuai catatan Finance. Jumlah terpakai langsung dipotong dari
-            saldo bulan ini dan dikirim ke Finance, ditandai {RE_REQUEST_LABEL}. Tanggal pengajuan (hari ini) tercatat otomatis.
-          </Notice>
+          {source.target && (
+            <div className="rounded-xl bg-violet-50 px-3 py-2.5 ring-1 ring-violet-200">
+              <p className="text-[11px] font-bold text-violet-700">
+                Dihitung di periode {periodLabel(source.target.month)}
+              </p>
+              <p className="mt-0.5 text-[11px] leading-relaxed text-violet-900">
+                Finance sudah memeriksa periode {periodLabel(source.month)}, jadi {RE_REQUEST_LABEL} baru dinilai di
+                pemeriksaan periode berikutnya. Jumlah terpakai dipotong dari saldo periode itu.
+              </p>
+            </div>
+          )}
+
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">Kategori</label>
+            {categories.length === 0 ? (
+              <Notice tone="warning">Kategori petty cash belum diatur. Hubungi OPS.</Notice>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {categories.map((c) => {
+                  const active = c.id === categoryId;
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => { setCategoryId(c.id); setError(null); }}
+                      aria-pressed={active}
+                      className={cn(
+                        'rounded-full border px-3.5 py-2 text-sm font-semibold transition-colors',
+                        active
+                          ? 'border-primary bg-primary text-primary-foreground'
+                          : 'border-border bg-background text-foreground active:bg-secondary',
+                      )}
+                    >
+                      {c.name}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {!selectedCategory && source.categoryName && (
+              <p className="mt-1.5 text-[11px] text-muted-foreground">
+                Kategori sebelumnya ({source.categoryName}) sudah tidak dipakai — pilih kategori yang baru.
+              </p>
+            )}
+            {selectedCategory?.definition && (
+              <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">{selectedCategory.definition}</p>
+            )}
+          </div>
 
           <div>
             <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">Tanggal request</label>
@@ -1233,9 +1411,6 @@ function ReRequestSheet({
               onChange={(e) => setRequestDate(e.target.value)}
               className="h-11 w-full rounded-xl border border-border bg-background px-3.5 text-base text-foreground focus:border-primary focus:outline-none"
             />
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              Tanggal request ini dibuat{requestDate ? ` — ${fmtRequestDate(requestDate)}` : ''}. Asalnya: {fmtRequestDate(source.filedOn)}.
-            </p>
           </div>
 
           <div>
@@ -1263,9 +1438,10 @@ function ReRequestSheet({
                 className="h-11 w-full rounded-xl border border-border bg-secondary/40 pl-10 pr-4 text-right text-base font-bold tabular-nums text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
               />
             </div>
-            <p className={cn('mt-1.5 text-right text-xs font-semibold', amountNum > balance ? 'text-rose-500' : 'text-muted-foreground')}>
-              Saldo setelah dikirim: {idr(Math.max(0, balance - amountNum))}
-              {amountNum > balance && ' · melebihi saldo'}
+            <p className={cn('mt-1.5 text-right text-xs font-semibold', amountNum > available ? 'text-rose-500' : 'text-muted-foreground')}>
+              Saldo {source.target ? `periode ${periodMonthName(source.target.month)} ` : ''}setelah dikirim:{' '}
+              {idr(Math.max(0, available - amountNum))}
+              {amountNum > available && ' · melebihi saldo'}
             </p>
           </div>
 
@@ -1290,9 +1466,6 @@ function ReRequestSheet({
                   <Camera className="h-4 w-4" />
                   {photo ? 'Ambil ulang foto' : 'Ganti foto struk'}
                 </button>
-                <p className="mt-1 text-[11px] text-muted-foreground">
-                  {photo ? 'Foto baru akan dikirim.' : 'Foto struk request sebelumnya dipakai kalau tidak diganti.'}
-                </p>
               </div>
             </div>
           </div>
@@ -1446,7 +1619,7 @@ function RequestRow({
   const group = requestGroup(tx);
   // A request nobody counts (Ditolak / Perlu Perbaikan) is struck through.
   const counted = group !== 'rejected' && group !== 'needs_fix';
-  const note = requestNote(tx, isHolder);
+  const note = requestNote(tx);
 
   return (
     <li>
@@ -1511,7 +1684,7 @@ function RequestRow({
             <div className="min-w-0 flex-1 text-[11px] text-muted-foreground">
               <p className="whitespace-pre-wrap break-words text-[12px] text-foreground">{tx.description}</p>
               <p className="mt-1">
-                #{tx.id} · diajukan {fmtDate(tx.createdAt)} · {monthLabel(tx.month)}
+                #{tx.id} · diajukan {fmtDate(tx.createdAt)} · periode {monthLabel(tx.month)}
               </p>
               {tx.isReRequest && (
                 <p className="text-violet-700">
@@ -1523,7 +1696,7 @@ function RequestRow({
                 <p>Diminta {idr(tx.amount)}</p>
               )}
               {note && (
-                <p className={cn('mt-1 font-medium', tx.status === 'ops_rejected' && 'text-rose-600')}>{note}</p>
+                <p className="mt-1 font-medium text-rose-600">{note}</p>
               )}
             </div>
           </div>
@@ -1541,15 +1714,70 @@ function RequestRow({
           {isHolder && needsReceipt(tx) && !needsActualAmount(tx) && (
             <ReceiptAction tx={tx} uploading={uploading} onUpload={onUploadReceipt} />
           )}
-          {/* Wrong or blurry photo already saved: PIC 1 can swap it until Finance has made a decision. */}
-          {isHolder && tx.status === 'completed' && tx.imageUrl && tx.reviewOutcome === 'none' && (
-            <ReceiptCapture replace uploading={uploading} onConfirm={(file) => onUploadReceipt(tx, file)} />
-          )}
+          {/* The photo can be swapped only until the request is Selesai (the confirm form above). Once it is
+              finished it is simply locked: no button, no message. A Re-request is the way to change it. */}
 
           <FinanceReviewNote tx={tx} isHolder={isHolder} onReRequest={onReRequest} />
         </div>
       )}
     </li>
+  );
+}
+
+// ─── "!" help: what each category means ─────────────────────────────────────
+// Kategori · Pengertian · Contoh Pengeluaran, straight from the category list
+// IT keeps — so PIC 1 picks the right one without a preset Keterangan.
+
+function CategoryHelpSheet({
+  categories,
+  onClose,
+}: {
+  categories: PettyCashCategoryOption[];
+  onClose: () => void;
+}) {
+  return (
+    <Sheet open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <SheetContent side="bottom" className="max-h-[88vh] gap-0 overflow-y-auto rounded-t-2xl p-0">
+        <SheetHeader className="border-b border-border px-4 py-3 pr-12">
+          <SheetTitle className="text-base">Kategori Pengeluaran</SheetTitle>
+          <SheetDescription>Pilih kategori yang paling sesuai untuk setiap request.</SheetDescription>
+        </SheetHeader>
+
+        <ol className="space-y-3 px-4 py-4">
+          {categories.map((c, i) => (
+            <li key={c.id} className="rounded-2xl border border-border bg-card p-3.5">
+              <div className="flex items-start gap-2.5">
+                <span className="mt-px flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-secondary text-[10px] font-bold text-muted-foreground">
+                  {i + 1}
+                </span>
+                <p className="min-w-0 text-sm font-bold leading-snug text-foreground">{c.name}</p>
+              </div>
+
+              {c.definition && (
+                <div className="mt-2.5">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Pengertian</p>
+                  <p className="mt-0.5 text-xs leading-relaxed text-foreground">{c.definition}</p>
+                </div>
+              )}
+
+              {c.examples && (
+                <div className="mt-2.5">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+                    Contoh Pengeluaran
+                  </p>
+                  <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{c.examples}</p>
+                </div>
+              )}
+            </li>
+          ))}
+        </ol>
+
+        <p className="border-t border-border px-4 py-3 text-[11px] leading-relaxed text-muted-foreground">
+          <span className="font-semibold text-foreground">Catatan: </span>
+          {PETTY_CASH_CATEGORY_NOTE}
+        </p>
+      </SheetContent>
+    </Sheet>
   );
 }
 
@@ -1569,6 +1797,9 @@ export default function EmployeePettyCashPage() {
   const [amount, setAmount] = useState('');
   const [categoryId, setCategoryId] = useState<number | null>(null);
   const [description, setDescription] = useState('');
+  // Two tabs so PIC 1 can focus on one thing at a time; the "!" button opens the category guide.
+  const [tab, setTab] = useState<'request' | 'refill'>('request');
+  const [helpOpen, setHelpOpen] = useState(false);
 
   const [submitting, setSubmitting] = useState(false);
   const [uploadingTxId, setUploadingTxId] = useState<number | null>(null);
@@ -1580,12 +1811,17 @@ export default function EmployeePettyCashPage() {
 
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   // The Perlu Perbaikan request PIC 1 is filing again.
-  const [reRequesting, setReRequesting] = useState<ReRequestable | null>(null);
+  const [reRequesting, setReRequesting] = useState<ReRequestSource | null>(null);
   // The request list's search / filter / sort.
   const [list, setList] = useState<RequestListState>(() => ({
     ...DEFAULT_LIST_STATE,
     month: jakartaYearMonth(Date.now()),
   }));
+
+  // The list starts on the period in use — after a Refill that is the NEXT period, not the calendar month, and a
+  // request filed a moment ago must not be hidden by the default filter. Only the first load decides; after that the
+  // month picker is PIC 1's.
+  const monthSeeded = useRef(false);
 
   function startReRequest(txId: number) {
     const tx = data?.transactions.find((t) => t.id === txId);
@@ -1601,6 +1837,7 @@ export default function EmployeePettyCashPage() {
   }
 
   const [refillRequest, setRefillRequest] = useState<RefillRequestRow | null>(null);
+  const [refillOverview, setRefillOverview] = useState<RefillOverviewData | null>(null);
   const [lastBank, setLastBank] = useState<BankDetails | null>(null);
   const [bankLoaded, setBankLoaded] = useState(false);
   const [requestingRefill, setRequestingRefill] = useState(false);
@@ -1609,16 +1846,9 @@ export default function EmployeePettyCashPage() {
   const categories = data?.categories ?? [];
   const selectedCategory = categories.find((c) => c.id === categoryId) ?? null;
 
-  // Picking a category pre-fills Keterangan with its default reason — unless
-  // the PIC already typed their own text (anything other than the previous
-  // category's default), which is kept.
+  // Picking a category only sets the category — Keterangan is always the PIC's own words.
   function selectCategory(next: PettyCashCategoryOption) {
-    const untouched =
-      !description.trim() || description === pettyCashDefaultDescription(selectedCategory?.defaultReason);
     setCategoryId(next.id);
-    if (untouched) {
-      setDescription(next.requiresCustomReason ? '' : pettyCashDefaultDescription(next.defaultReason));
-    }
     setFormError(null);
   }
 
@@ -1640,6 +1870,10 @@ export default function EmployeePettyCashPage() {
 
       if (body.success) {
         setData(body);
+        if (!monthSeeded.current && typeof body.month === 'string') {
+          monthSeeded.current = true;
+          setList((l) => ({ ...l, month: body.month }));
+        }
       } else {
         setLoadError(body.error ?? 'Gagal memuat data petty cash.');
       }
@@ -1656,6 +1890,7 @@ export default function EmployeePettyCashPage() {
       const body = await res.json();
       if (body.success) {
         setRefillRequest(body.request ?? null);
+        setRefillOverview(body.overview ?? null);
         setLastBank(body.lastBankDetails ?? null);
       }
     } catch {
@@ -1689,7 +1924,16 @@ export default function EmployeePettyCashPage() {
       if (!res.ok || !body.success) throw new Error(body.error ?? 'Gagal mengajukan Refill.');
       setRefillRequest(body.request);
       setLastBank(bank);
-      setSuccessMessage('Refill diajukan — akan ditinjau oleh OPS.');
+      const sentFor: string = body.periodMonth ?? body.request?.yearMonth;
+      const next: string | undefined = body.nextMonth ?? (sentFor ? addMonths(sentFor, 1) : undefined);
+      setSuccessMessage(
+        sentFor && next
+          ? `Refill periode ${periodLabel(sentFor)} diajukan${body.late ? ' (terlambat)' : ''} — menunggu OPS. Periode ditutup; request baru dihitung di periode ${periodLabel(next)}.`
+          : 'Refill diajukan — akan ditinjau oleh OPS.',
+      );
+      // Sending the Refill closed its period and opened the next: the balance, banner and list all change.
+      void load({ silent: true });
+      void loadRefillStatus();
     } catch (e) {
       setActionError(e instanceof Error ? e.message : 'Gagal mengajukan Refill.');
     } finally {
@@ -1736,6 +1980,9 @@ export default function EmployeePettyCashPage() {
       setRefillRequest(patchBody.request);
       setSuccessMessage('Foto berhasil diunggah.');
       setTimeout(() => setSuccessMessage(null), 4000);
+      // With both photos in the Refill is received: the banner and what a next Refill covers change.
+      void loadRefillStatus();
+      void load({ silent: true });
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Gagal mengunggah foto. Coba lagi.');
     } finally {
@@ -1763,11 +2010,7 @@ export default function EmployeePettyCashPage() {
     }
 
     if (!description.trim()) {
-      setFormError(
-        selectedCategory.requiresCustomReason
-          ? `Tulis keterangan untuk kategori ${selectedCategory.name}.`
-          : 'Keterangan wajib diisi.',
-      );
+      setFormError('Keterangan wajib diisi.');
       return;
     }
 
@@ -1923,14 +2166,9 @@ export default function EmployeePettyCashPage() {
     [transactions, data?.month],
   );
   const needsActualAmountTxs = useMemo(() => periodTxs.filter(needsActualAmount), [periodTxs]);
-  const needsReceiptTxs = useMemo(() => periodTxs.filter(needsReceipt), [periodTxs]);
 
   const summary = useMemo(() => {
     return {
-      pendingOps: periodTxs.filter((tx) => tx.status === 'pending_ops').length,
-      waitingConfirm: needsActualAmountTxs.length,
-      waitingReceipt: needsReceiptTxs.length,
-      completed: periodTxs.filter((tx) => tx.status === 'completed').length,
       pendingAmount: periodTxs
         .filter((tx) => tx.status === 'pending_ops')
         .reduce((sum, tx) => sum + Number(tx.amount), 0),
@@ -1942,7 +2180,7 @@ export default function EmployeePettyCashPage() {
         .filter((tx) => tx.status === 'completed' && tx.reviewOutcome !== 'needs_fix' && tx.reviewOutcome !== 'rejected')
         .reduce((sum, tx) => sum + Number(tx.actualAmount ?? tx.amount), 0),
     };
-  }, [periodTxs, needsActualAmountTxs, needsReceiptTxs]);
+  }, [periodTxs, needsActualAmountTxs]);
 
   // The request list: every request once. Chip counts follow the search + month, not the chip itself.
   const allCounts = useMemo(() => countByFilter(transactions), [transactions]);
@@ -1953,9 +2191,15 @@ export default function EmployeePettyCashPage() {
   );
   const currentMonth = data?.currentMonth ?? jakartaYearMonth(Date.now());
   const months = useMemo(
-    () => listMonths([...transactions, { month: currentMonth }]),
-    [transactions, currentMonth],
+    () => listMonths([...transactions, { month: currentMonth }, ...(data?.month ? [{ month: data.month }] : [])]),
+    [transactions, currentMonth, data?.month],
   );
+  // Finance has sent the cash: PIC 1 still has the proof photos to take.
+  const refillNeedsAction =
+    isHolder &&
+    refillRequest?.status === 'approved' &&
+    Boolean(refillRequest.financeVerifiedAt) &&
+    !refillRequest.balanceAfter;
   const reRequestableCount = useMemo(() => transactions.filter((tx) => tx.canReRequest).length, [transactions]);
 
   return (
@@ -1968,24 +2212,45 @@ export default function EmployeePettyCashPage() {
         <ReRequestSheet
           key={reRequesting.id}
           source={reRequesting}
+          categories={categories}
           balance={balance}
           storeName={data.storeName}
           onClose={() => setReRequesting(null)}
-          onDone={() => {
-            setSuccessMessage(`${RE_REQUEST_LABEL} dikirim ke Finance — jumlah terpakai sudah dipotong dari saldo.`);
+          onDone={(periodMonth) => {
+            setSuccessMessage(
+              `${RE_REQUEST_LABEL} dikirim ke Finance — dihitung di periode ${periodLabel(periodMonth ?? reRequesting.target?.month ?? data.month)}, jumlah terpakai sudah dipotong dari saldo periode itu.`,
+            );
             setTimeout(() => setSuccessMessage(null), 5000);
             void load({ silent: true });
           }}
         />
       )}
 
-      <div className="px-4 pt-4">
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-          Request Petty Cash
-        </p>
-        <p className="mt-0.5 text-base font-bold leading-tight text-foreground">
-          {data?.storeName ?? '…'}
-        </p>
+      {helpOpen && categories.length > 0 && (
+        <CategoryHelpSheet categories={categories} onClose={() => setHelpOpen(false)} />
+      )}
+
+      <div className="flex items-start justify-between gap-3 px-4 pt-4">
+        <div className="min-w-0">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Petty Cash
+          </p>
+          <p className="mt-0.5 text-base font-bold leading-tight text-foreground">
+            {data?.storeName ?? '…'}
+          </p>
+        </div>
+
+        {!loading && !loadError && categories.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setHelpOpen(true)}
+            aria-label="Lihat kategori pengeluaran"
+            title="Kategori pengeluaran"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border bg-card text-base font-black leading-none text-foreground shadow-sm transition active:scale-95"
+          >
+            !
+          </button>
+        )}
       </div>
 
       <div className="space-y-5 pb-8 pt-5">
@@ -1998,65 +2263,43 @@ export default function EmployeePettyCashPage() {
             balance={balance}
             storeName={data?.storeName ?? ''}
             month={data?.month ?? ''}
-            currentMonth={data?.currentMonth}
             totalApprovedSpend={summary.approvedSpend}
             pendingAmount={summary.pendingAmount}
             awaitingConfirmAmount={summary.awaitingConfirmAmount}
+            refillPending={data?.refillPending ?? null}
             isHolder={isHolder}
-          />
-        )}
-
-        {!loading && !loadError && bankLoaded && (isHolder || refillRequest) && (
-          <RefillRequestCard
-            request={refillRequest}
-            isHolder={isHolder}
-            requesting={requestingRefill}
-            lastBank={lastBank}
-            onRequest={handleRequestRefill}
-            uploadingKind={uploadingProofKind}
-            onUploadProof={handleUploadProof}
-            onViewImage={setLightboxSrc}
           />
         )}
 
         {!loading && !loadError && (
-          <section className="grid grid-cols-4 gap-2 px-4">
-            <div className="min-w-0 rounded-2xl border border-border bg-card px-2 py-3 text-center">
-              <p className="truncate text-[10px] font-bold uppercase tracking-wide text-sky-600">
-                OPS
-              </p>
-              <p className="mt-1 text-xl font-black text-sky-700">
-                {summary.pendingOps}
-              </p>
-            </div>
-
-            <div className="min-w-0 rounded-2xl border border-border bg-card px-2 py-3 text-center">
-              <p className="truncate text-[10px] font-bold uppercase tracking-wide text-indigo-600">
-                Konfirmasi
-              </p>
-              <p className="mt-1 text-xl font-black text-indigo-700">
-                {summary.waitingConfirm}
-              </p>
-            </div>
-
-            <div className="min-w-0 rounded-2xl border border-border bg-card px-2 py-3 text-center">
-              <p className="truncate text-[10px] font-bold uppercase tracking-wide text-indigo-600">
-                Struk
-              </p>
-              <p className="mt-1 text-xl font-black text-indigo-700">
-                {summary.waitingReceipt}
-              </p>
-            </div>
-
-            <div className="min-w-0 rounded-2xl border border-border bg-card px-2 py-3 text-center">
-              <p className="truncate text-[10px] font-bold uppercase tracking-wide text-emerald-600">
-                Selesai
-              </p>
-              <p className="mt-1 text-xl font-black text-emerald-700">
-                {summary.completed}
-              </p>
-            </div>
-          </section>
+          <div className="px-4">
+            <Segmented
+              value={tab}
+              onChange={setTab}
+              options={[
+                {
+                  value: 'request' as const,
+                  label: (
+                    <span className="flex items-center gap-1.5">
+                      <ReceiptText className="h-4 w-4" />
+                      Request
+                    </span>
+                  ),
+                  count: isHolder ? allCounts.action : 0,
+                },
+                {
+                  value: 'refill' as const,
+                  label: (
+                    <span className="flex items-center gap-1.5">
+                      <Banknote className="h-4 w-4" />
+                      Refill
+                    </span>
+                  ),
+                  count: refillNeedsAction ? 1 : 0,
+                },
+              ]}
+            />
+          </div>
         )}
 
         {!loading && !loadError && actionError && (
@@ -2071,7 +2314,25 @@ export default function EmployeePettyCashPage() {
           </section>
         )}
 
-        {!loading && !loadError && isHolder && (allCounts.action > 0 || reRequestableCount > 0) && (
+        {!loading && !loadError && tab === 'refill' && (
+          bankLoaded ? (
+            <RefillRequestCard
+              request={refillRequest}
+              overview={refillOverview}
+              isHolder={isHolder}
+              requesting={requestingRefill}
+              lastBank={lastBank}
+              onRequest={handleRequestRefill}
+              uploadingKind={uploadingProofKind}
+              onUploadProof={handleUploadProof}
+              onViewImage={setLightboxSrc}
+            />
+          ) : (
+            <div className="px-4"><SkeletonBlocks count={1} className="h-24" /></div>
+          )
+        )}
+
+        {!loading && !loadError && tab === 'request' && isHolder && (allCounts.action > 0 || reRequestableCount > 0) && (
           <section className="space-y-2 px-4">
             {allCounts.action > 0 && (
               <button
@@ -2096,25 +2357,19 @@ export default function EmployeePettyCashPage() {
           </section>
         )}
 
-        {!loading && !loadError && !isHolder && (
+        {!loading && !loadError && tab === 'request' && data?.closedPeriod && (
           <section className="px-4">
-            <Notice tone="neutral" title="Petty cash dikelola oleh PIC 1">
-              Request, konfirmasi jumlah terpakai, foto struk, dan Refill hanya bisa dilakukan
-              PIC 1. Kamu bisa melihat saldo dan status Request di sini.
+            <Notice tone="info" title={`Periode ${periodLabel(data.closedPeriod.month)} sudah ditutup`}>
+              {closedPeriodText(data.closedPeriod, data.month)}
             </Notice>
           </section>
         )}
 
-        {!loading && !loadError && isHolder && (
+        {!loading && !loadError && tab === 'request' && isHolder && (
           <section className="px-4">
             <SectionLabel>Request petty cash baru</SectionLabel>
 
             <form onSubmit={handleSubmit} className="space-y-4">
-              <Notice tone="info" title="Foto struk belum diperlukan sekarang.">
-                Kirim Request terlebih dahulu. Setelah disetujui OPS, request-nya muncul di Daftar
-                request dengan tanda &quot;Perlu tindakan&quot; — buka untuk mengunggah struk.
-              </Notice>
-
               <div>
                 <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">
                   Kategori
@@ -2146,6 +2401,12 @@ export default function EmployeePettyCashPage() {
                       );
                     })}
                   </div>
+                )}
+
+                {selectedCategory?.definition && (
+                  <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+                    {selectedCategory.definition}
+                  </p>
                 )}
               </div>
 
@@ -2182,34 +2443,21 @@ export default function EmployeePettyCashPage() {
                 )}
               </div>
 
-              {selectedCategory && (
-                <div>
-                  <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">
-                    Keterangan{selectedCategory.requiresCustomReason && ' (wajib diisi)'}
-                  </label>
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">
+                  Keterangan
+                </label>
 
-                  <textarea
-                    value={description}
-                    onChange={(e) => setDescription(pettyCashDescription(e.target.value))}
-                    rows={3}
-                    maxLength={PETTY_CASH_REASON_MAX}
-                    placeholder={
-                      selectedCategory.requiresCustomReason
-                        ? 'Jelaskan untuk apa request ini, misal: perbaikan engsel pintu gudang…'
-                        : 'Keterangan request…'
-                    }
-                    className="w-full resize-none rounded-xl border border-border bg-background px-3.5 py-2.5 text-base text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
-                  />
-                  <ReasonCounter value={description} />
-
-                  {!selectedCategory.requiresCustomReason && (
-                    <p className="mt-1 text-[11px] text-muted-foreground">
-                      Terisi otomatis dari kategori {selectedCategory.name}. Boleh diubah atau
-                      ditambah detail.
-                    </p>
-                  )}
-                </div>
-              )}
+                <textarea
+                  value={description}
+                  onChange={(e) => setDescription(pettyCashDescription(e.target.value))}
+                  rows={3}
+                  maxLength={PETTY_CASH_REASON_MAX}
+                  placeholder="Tulis untuk apa request ini, misal: lakban & kertas HVS untuk label harga…"
+                  className="w-full resize-none rounded-xl border border-border bg-background px-3.5 py-2.5 text-base text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+                />
+                <ReasonCounter value={description} />
+              </div>
 
               {formError && <Notice tone="error">{formError}</Notice>}
 
@@ -2234,17 +2482,11 @@ export default function EmployeePettyCashPage() {
                   'Kirim Request ke OPS'
                 )}
               </button>
-
-              {balance <= 0 && (
-                <p className="text-center text-xs text-muted-foreground">
-                  Saldo habis. Ajukan Refill terlebih dahulu.
-                </p>
-              )}
             </form>
           </section>
         )}
 
-        {!loading && !loadError && transactions.length > 0 && (
+        {!loading && !loadError && tab === 'request' && transactions.length > 0 && (
           <section id="daftar-request" className="scroll-mt-4 px-4">
             <SectionLabel
               meta={
@@ -2288,20 +2530,15 @@ export default function EmployeePettyCashPage() {
                 ))}
               </ul>
             )}
-
-            <p className="mt-3 text-center text-[10px] text-muted-foreground">
-              Foto struk disimpan secara permanen setelah diunggah.
-            </p>
           </section>
         )}
 
-        {!loading && !loadError && transactions.length === 0 && (
+        {!loading && !loadError && tab === 'request' && transactions.length === 0 && (
           <section className="px-4">
             <div className="rounded-2xl border border-dashed border-border">
               <EmptyState
                 icon={ReceiptText}
                 title="Belum ada Request Petty Cash"
-                description={isHolder ? 'Isi formulir di atas untuk mengirim Request pertamamu ke OPS.' : undefined}
                 className="py-8"
               />
             </div>

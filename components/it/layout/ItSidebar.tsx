@@ -4,43 +4,53 @@
 // Collapsible sidebar for the IT (super-admin) panel. Same structural
 // pattern as FinanceSidebar/AuditSidebar, cyan-accented (IT's brand color).
 //
+// Sections are ordered by how often they are used, 2-4 items each. Headings are
+// plain labels — every section is always fully shown (no section folding). Only
+// the long sub-menus (Task Progress, Issues, Koreksi Setoran) are accordions.
+//
 //   Overview
 //     Dashboard            /it
+//     Task Progress >      Semua Task + one page per task (every store's progress on it)
 //     Switch Role          /it/switch-role      (preview the app as another role)
 //
-//   Monitoring
-//     Task Progress > Semua Task + one page per task (every store's progress on it)
+//   Requests (what is waiting for IT)
+//     Reset Password        /it/password-reset   ("Lupa password" queue; badge = waiting on IT)
+//     Issues >              IT / Ops / Finance / Audit queues (IT can view them all)
 //
-//   Management
+//   People & Stores
 //     Users                 /it/users            (create/edit accounts, assign roles)
 //     Area Management       /it/areas            (rename areas, assign OPS Area users)
 //     Store Management      /it/stores           (create/edit stores, assign employees/ops)
-//     Reset Password         /it/password-reset   ("Lupa password" queue; badge = waiting on IT)
 //
-//   Configuration (IT-only)
+//   Operations Setup
 //     Task Management        /it/task-management
 //     Shift & Tasks           /it/shift-tasks
-//     BC Credentials           /it/bc-credentials
+//     Pengaturan Visit        /it/store-visits
 //     Performance Target Defaults /it/target-allocation (PIC1/PIC2/SA % grid)
-//     Petty Cash Categories   /it/petty-cash-categories
+//     Warehouse Codes         /it/warehouse-codes (BC location codes that are a warehouse, not a store)
+//
+//   Templates & Categories
 //     Issue Templates         /it/issue-templates (report presets employees pick)
 //     Email Templates         /it/email-templates (subject + HTML of outgoing emails)
+//     Petty Cash Categories   /it/petty-cash-categories
+//
+//   System
 //     Feature Switches        /it/feature-switches (on/off for risky features, e.g. schedule "Delete everything")
+//     BC Credentials           /it/bc-credentials
+//     Profil & Keamanan        /it/settings
 //
 //   Data Correction (IT-only)
 //     Koreksi Setoran > Koreksi         /it/setoran-correction (fix one day's amounts, carry-over recalculated)
 //                       Riwayat Koreksi /it/setoran-correction/history (every correction, all stores)
+//     Impact Visits         /ops/impact-visits (Ops can delete a draft; only IT deletes a submitted visit)
+//     Reset Petty Cash      /it/petty-cash-reset (wipe one store's petty cash: one period or all periods)
 //
-//   Other Panels (IT keeps its role — a "Back to IT" banner shows on the way)
+//   Other Panels (IT keeps its role, a "Back to IT" banner shows on the way)
 //     Ops Panel             /ops
 //     Finance Panel         /finance
 //     Audit Panel           /audit
 //
-//   Issues (every role's queue — IT can view all)
-//     IT Issues              /it/issues
-//     Ops Issues            /ops/issues
-//     Finance Issues        /finance/issues
-//     Audit Issues           /audit/issues
+// The icon-only rail shows every item (no headings, a divider between sections).
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
@@ -50,6 +60,7 @@ import {
   AlertTriangle,
   BarChart3,
   Building2,
+  CalendarCheck,
   ChevronDown,
   ChevronRight,
   ClipboardCheck,
@@ -65,12 +76,15 @@ import {
   MapPinned,
   Percent,
   Repeat,
+  RotateCcw,
+  ShieldCheck,
   Store,
   Tags,
   ToggleRight,
   UserCog,
   Users,
   Wallet,
+  Warehouse,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
@@ -116,45 +130,68 @@ const TASK_PROGRESS_ITEM: NavItem = {
   ],
 };
 
+// Every role's issue queue in one place — IT sees them all, its own first.
+const ISSUES_ITEM: NavItem = {
+  href: '/it/issues',
+  label: 'Issues',
+  icon: AlertTriangle,
+  children: [
+    { href: '/it/issues', label: 'IT' },
+    { href: '/ops/issues', label: 'Ops' },
+    { href: '/finance/issues', label: 'Finance' },
+    { href: '/audit/issues', label: 'Audit' },
+  ],
+};
+
 const NAV: NavSection[] = [
   {
     section: 'Overview',
     items: [
       { href: '/it', label: 'Dashboard', icon: LayoutDashboard, exact: true },
+      TASK_PROGRESS_ITEM,
       { href: '/it/switch-role', label: 'Switch Role', icon: Repeat },
     ],
   },
   {
-    section: 'Monitoring',
-    items: [TASK_PROGRESS_ITEM],
+    // What is waiting for IT, so it is the first thing under the dashboard.
+    section: 'Requests',
+    items: [
+      { href: '/it/password-reset', label: 'Reset Password', icon: LockKeyhole, badge: 'passwordReset' },
+      ISSUES_ITEM,
+    ],
   },
   {
-    section: 'Management',
+    section: 'People & Stores',
     items: [
       { href: '/it/users', label: 'Users', icon: Users },
       { href: '/it/areas', label: 'Area Management', icon: MapPinned },
       { href: '/it/stores', label: 'Store Management', icon: Building2 },
-      { href: '/it/password-reset', label: 'Reset Password', icon: LockKeyhole, badge: 'passwordReset' },
     ],
   },
   {
-    section: 'Akun',
-    items: [
-      { href: '/it/settings', label: 'Profil & Keamanan', icon: UserCog },
-    ],
-  },
-  {
-    section: 'Configuration',
+    section: 'Operations Setup',
     items: [
       { href: '/it/task-management', label: 'Task Management', icon: ClipboardCheck },
-      { href: '/it/store-visits', label: 'Pengaturan Visit', icon: MapPinned },
       { href: '/it/shift-tasks', label: 'Shift & Tasks', icon: Layers },
-      { href: '/it/bc-credentials', label: 'BC Credentials', icon: KeyRound },
+      { href: '/it/store-visits', label: 'Pengaturan Visit', icon: CalendarCheck },
       { href: '/it/target-allocation', label: 'Performance Target Defaults', icon: Percent },
-      { href: '/it/petty-cash-categories', label: 'Petty Cash Categories', icon: Tags },
+      { href: '/it/warehouse-codes', label: 'Warehouse Codes', icon: Warehouse },
+    ],
+  },
+  {
+    section: 'Templates & Categories',
+    items: [
       { href: '/it/issue-templates', label: 'Issue Templates', icon: ClipboardList },
       { href: '/it/email-templates', label: 'Email Templates', icon: Mail },
+      { href: '/it/petty-cash-categories', label: 'Petty Cash Categories', icon: Tags },
+    ],
+  },
+  {
+    section: 'System',
+    items: [
       { href: '/it/feature-switches', label: 'Feature Switches', icon: ToggleRight },
+      { href: '/it/bc-credentials', label: 'BC Credentials', icon: KeyRound },
+      { href: '/it/settings', label: 'Profil & Keamanan', icon: UserCog },
     ],
   },
   {
@@ -169,8 +206,9 @@ const NAV: NavSection[] = [
           { href: '/it/setoran-correction/history', label: 'Riwayat Koreksi' },
         ],
       },
-      // Ops pages — Ops can delete a draft; only IT may delete a submitted visit.
+      // Ops page — Ops can delete a draft; only IT may delete a submitted visit.
       { href: '/ops/impact-visits', label: 'Impact Visits', icon: FileCheck2 },
+      { href: '/it/petty-cash-reset', label: 'Reset Petty Cash', icon: RotateCcw },
     ],
   },
   {
@@ -178,16 +216,7 @@ const NAV: NavSection[] = [
     items: [
       { href: '/ops', label: 'Ops Panel', icon: Store },
       { href: '/finance', label: 'Finance Panel', icon: Wallet },
-      { href: '/audit', label: 'Audit Panel', icon: ClipboardCheck },
-    ],
-  },
-  {
-    section: 'Issues',
-    items: [
-      { href: '/it/issues', label: 'IT Issues', icon: AlertTriangle },
-      { href: '/ops/issues', label: 'Ops Issues', icon: AlertTriangle },
-      { href: '/finance/issues', label: 'Finance Issues', icon: AlertTriangle },
-      { href: '/audit/issues', label: 'Audit Issues', icon: AlertTriangle },
+      { href: '/audit', label: 'Audit Panel', icon: ShieldCheck },
     ],
   },
 ];
@@ -277,12 +306,19 @@ export default function ItSidebar({ collapsed = false, userName = 'IT' }: Props)
   // inside it; folding it by hand is remembered only for the page it was done on.
   const [fold, setFold] = useState<{ path: string; label: string; open: boolean } | null>(null);
 
+  // An item is "inside" when its page, or any page of its sub-menu, is the current one
+  // (Issues > Ops lives under /ops/issues, not under the group's own href).
+  const itemActive = (item: NavItem) =>
+    item.children
+      ? item.children.some((c) => pathname === c.href || pathname.startsWith(`${c.href}/`))
+      : isActive(item.href, item.exact);
+
   const groupOpen = (item: NavItem) =>
-    fold && fold.path === pathname && fold.label === item.label ? fold.open : isActive(item.href);
+    fold && fold.path === pathname && fold.label === item.label ? fold.open : itemActive(item);
 
   function onGroupClick(item: NavItem) {
     // Already inside: just fold / unfold it. From outside: land on its first page.
-    if (isActive(item.href)) {
+    if (itemActive(item)) {
       setFold({ path: pathname, label: item.label, open: !groupOpen(item) });
       return;
     }
@@ -321,18 +357,19 @@ export default function ItSidebar({ collapsed = false, userName = 'IT' }: Props)
         </div>
 
         {/* ── Nav ── */}
-        <nav className="flex-1 space-y-5 overflow-x-hidden overflow-y-auto px-2 py-4">
-          {NAV.map(({ section, items }) => (
-            <div key={section}>
+        <nav className="flex-1 space-y-4 overflow-x-hidden overflow-y-auto px-2 py-3">
+          {NAV.map(({ section, items }, index) => (
+            // The icon-only rail has no headings: a thin divider marks where a section starts.
+            <div key={section} className={cn(collapsed && index > 0 && 'border-t border-border pt-3')}>
               {!collapsed && (
-                <p className="mb-1.5 px-2 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                <p className="mb-1 px-2 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
                   {section}
                 </p>
               )}
               <ul className="space-y-0.5">
                 {items.map((item) => {
-                  const { href, label, icon: Icon, exact, badge, children } = item;
-                  const active = isActive(href, exact);
+                  const { href, label, icon: Icon, badge, children } = item;
+                  const active = itemActive(item);
                   const count = badgeFor(badge);
                   const linkCls = cn(
                     'flex items-center rounded-md px-2.5 py-2 text-sm font-medium transition-colors',

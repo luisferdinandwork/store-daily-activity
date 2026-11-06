@@ -46,6 +46,8 @@ export interface StoreClosingRow {
   edcEntries: EdcEntry[];
   /** OP/ME/VOUCHER in Rupiah; null = not filled in. */
   opMeVoucher: number | null;
+  /** Sales Cash typed at closing (settled by the next morning's Setoran); null = not filled in. */
+  salesCash?: number | null;
   /** Photo of the Indodana dashboard. */
   indodanaPhoto: string | null;
   edcNotes: string | null;

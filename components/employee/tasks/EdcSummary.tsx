@@ -22,6 +22,7 @@ import {
   INDODANA_PHOTO_LABEL,
   OP_ME_VOUCHER_LABEL,
   edcCellKey,
+  isSingleAmountBank,
   summariseEdc,
   type EdcBank,
   type EdcBankCode,
@@ -117,6 +118,42 @@ function BankCard({
   onZero: () => void;
   disabled?: boolean;
 }) {
+  // A bank that is one plain amount (Indodana): laid out like OP/ME/VOUCHER.
+  if (isSingleAmountBank(bank)) {
+    const method = bank.methods[0] as EdcMethod;
+    return (
+      <div className="rounded-xl border border-border bg-card px-3.5 py-3">
+        <div className="flex items-center gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-bold text-foreground">{bank.label}</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">Satu nominal dari dashboard · boleh dikosongkan</p>
+          </div>
+          {filled ? (
+            <Check className="h-4 w-4 flex-shrink-0 text-green-600" strokeWidth={3} />
+          ) : (
+            !disabled && (
+              <button
+                type="button"
+                onClick={onZero}
+                className="flex-shrink-0 rounded-lg bg-primary/10 px-2.5 py-1.5 text-[11px] font-semibold text-primary transition-opacity active:opacity-70"
+              >
+                Tidak ada transaksi
+              </button>
+            )
+          )}
+        </div>
+        <div className="mt-2.5">
+          <AmountInput
+            label={bank.label}
+            value={state[edcCellKey(bank.code, method)] ?? ''}
+            onChange={(digits) => onChange(method, digits)}
+            disabled={disabled}
+          />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-card">
       <div className="flex items-center gap-3 px-3.5 py-3">
@@ -271,11 +308,17 @@ export function EdcConfirmTable({ summary, indodanaPhoto }: { summary: EdcSummar
             {summary.banks.map((b) => (
               <tr key={b.code}>
                 <td className="whitespace-nowrap py-1.5 pl-3 pr-2 font-semibold text-foreground">{b.label}</td>
-                {EDC_METHODS.map((m) => (
-                  <td key={m} className={cn(td, b.cells[m] === undefined ? 'text-muted-foreground/50' : 'text-foreground')}>
-                    {b.cells[m] === undefined ? '–' : num(b.cells[m])}
+                {isSingleAmountBank(b) ? (
+                  <td colSpan={EDC_METHODS.length} className={cn(td, 'text-muted-foreground/50')}>
+                    satu nominal
                   </td>
-                ))}
+                ) : (
+                  EDC_METHODS.map((m) => (
+                    <td key={m} className={cn(td, b.cells[m] === undefined ? 'text-muted-foreground/50' : 'text-foreground')}>
+                      {b.cells[m] === undefined ? '–' : num(b.cells[m])}
+                    </td>
+                  ))
+                )}
                 <td className={cn(td, 'pr-3 font-bold', b.filled ? 'text-foreground' : 'text-muted-foreground/50')}>
                   {b.filled ? num(b.total) : '–'}
                 </td>

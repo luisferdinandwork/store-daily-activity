@@ -60,6 +60,11 @@ export interface OpsRequestRow {
   financeReview: string | null;
   /** A Perlu Perbaikan request filed again — it has no Ops step, so it arrives already completed. */
   isReRequest: boolean;
+  /**
+   * The petty cash period (YYYY-MM) the request is counted in. It is later than the month it was filed in when
+   * the refill of the month was already on its way — or for a Re-request, which always goes to the next period.
+   */
+  periodMonth: string;
 
   storeId: number;
   storeNo: string;
@@ -110,6 +115,13 @@ export interface OpsRefillRow {
   requestedAt: string;
   requestedByName: string | null;
   notes: string | null;
+
+  /** The period (YYYY-MM) this refill settles — it closed when PIC 1 sent the refill. */
+  periodMonth: string;
+  /** YYYY-MM-DD: the last day that period's refill is on time (the 15th). */
+  deadline: string;
+  /** Sent after the deadline (only for periods the rule applies to). */
+  late: boolean;
 
   /** Where the request stands — the same words Finance uses (REFILL_STATE_LABEL). */
   state: RefillState;

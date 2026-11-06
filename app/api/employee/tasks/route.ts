@@ -31,7 +31,7 @@ import { eq, and, gte, lte, desc, inArray, asc } from "drizzle-orm";
 import { todayInStoreTimezone } from "@/lib/schedule-utils";
 import { isFeatureEnabled } from "@/lib/db/utils/feature-switches";
 import { isDayKey, jakartaDateKey, jakartaDayRange } from "@/lib/day-bucket";
-import { getOrCreateSetoranForSchedule } from "@/lib/db/utils/setoran";
+import { getOrCreateSetoranForSchedule, getSalesCashFromClosing } from "@/lib/db/utils/setoran";
 import { getOrCreateStoreOpeningForSchedule } from "@/lib/db/utils/store-opening";
 import {
   getOrCreateStoreFrontForSchedule,
@@ -719,6 +719,19 @@ export async function GET(request: NextRequest) {
     // IT switch: the Store Closing money part (EDC summary + Indodana photo).
     const storeClosingUpdate = storeClosingRows.length > 0 && (await isFeatureEnabled("store_closing_update"));
 
+    // Same switch on the Setoran side: yesterday's closing Sales Cash pre-fills
+    // "Jumlah Sales Cash" and its photo becomes required.
+    const setoranSalesCashOn = setoranRows.length > 0 && (await isFeatureEnabled("store_closing_update"));
+    const salesCashFromClosingByStoreId = new Map<number, number | null>();
+    if (setoranSalesCashOn) {
+      await Promise.all(
+        [...new Set(setoranRows.map((r) => r.storeId))].map(async (sid) => {
+          const row = setoranRows.find((r) => r.storeId === sid)!;
+          salesCashFromClosingByStoreId.set(sid, await getSalesCashFromClosing(sid, row.date));
+        }),
+      );
+    }
+
     const [availableBinRows, checkedBinRows, edcEntryRows] = await Promise.all([
       shouldLoadTask("cek_bin")
         ? db
@@ -1012,6 +1025,12 @@ export async function GET(request: NextRequest) {
               atmCardSelfiePhoto: t.atmCardSelfiePhoto,
               cashierPhoto: t.cashierPhoto,
               atmCardPhoto: t.atmCardPhoto,
+
+              // Sales Cash flow (IT switch store_closing_update): what yesterday's
+              // Store Closing recorded, the counted-cash photo, and whether it is required.
+              salesCashFromClosing: salesCashFromClosingByStoreId.get(t.storeId) ?? null,
+              salesCashPhoto: t.salesCashPhoto,
+              salesCashPhotoRequired: setoranSalesCashOn,
 
               actualReceivedAmountBy: t.actualReceivedAmountBy ?? null,
               actualReceivedAmountAt: toIso(t.actualReceivedAmountAt),
@@ -1376,6 +1395,8 @@ export async function GET(request: NextRequest) {
               edcEntries: edcEntriesByTaskId.get(t.id) ?? [],
               opMeVoucherAmount:
                 t.opMeVoucherAmount === null ? null : Number(t.opMeVoucherAmount),
+              salesCashAmount:
+                t.salesCashAmount === null ? null : Number(t.salesCashAmount),
               indodanaDashboardPhoto: t.indodanaDashboardPhoto,
               indodanaDashboardPhotoAt: toIso(t.indodanaDashboardPhotoAt),
 

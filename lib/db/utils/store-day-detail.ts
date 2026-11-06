@@ -138,6 +138,7 @@ export async function getStoreDayDetail(storeId: number, salesDate: string): Pro
 
       // The ledger row is what was submitted; the task only holds a draft's columns.
       photos: present([
+        photo({ key: 'salesCash', label: 'Foto Jumlah Sales Cash', url: ledger.salesCashPhoto ?? setoranTask?.salesCashPhoto, at: ledger.salesCashPhotoAt }),
         photo({ key: 'resi', label: 'Foto resi', url: ledger.resiPhoto ?? setoranTask?.resiPhoto, at: ledger.resiPhotoAt }),
         photo({ key: 'atmSelfie', label: 'Selfie kartu ATM', url: ledger.atmCardSelfiePhoto ?? setoranTask?.atmCardSelfiePhoto, at: ledger.atmCardSelfiePhotoAt }),
         photo({ key: 'cashier', label: 'Foto sisa setoran', url: ledger.cashierPhoto ?? setoranTask?.cashierPhoto, at: ledger.cashierPhotoAt }),

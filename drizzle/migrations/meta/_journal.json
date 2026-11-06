@@ -288,6 +288,27 @@
       "when": 1793595746596,
       "tag": "0040_petty_cash_review_simplify",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1793872740689,
+      "tag": "0041_petty_cash_category_help",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1793952027858,
+      "tag": "0042_store_closing_sales_cash",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1793956312984,
+      "tag": "0043_careful_turbo",
+      "breakpoints": true
     }
   ]
 }

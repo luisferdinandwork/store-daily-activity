@@ -66,9 +66,12 @@ import {
 } from '@/lib/db/utils/issues';
 import { isFeatureEnabled } from '@/lib/db/utils/feature-switches';
 import {
+  INDODANA_PHOTO_REQUIRED_MESSAGE,
+  indodanaPhotoRequired,
   parseEdcAmount,
   parseEdcEntries,
   type EdcEntryInput,
+  type EdcEntryLike,
 } from '@/lib/store-closing-edc';
 
 // ─── Public types ─────────────────────────────────────────────────────────────
@@ -106,6 +109,8 @@ export interface SubmitStoreClosingInput {
   edcEntries: EdcEntryInput[];
   /** OP/ME/VOUCHER amount in Rupiah; null = not filled in. */
   opMeVoucherAmount: number | null;
+  /** Cash sales of the day in Rupiah; null = not filled in. Next morning's Setoran picks it up. */
+  salesCashAmount?: number | null;
   /** Photo of the Indodana dashboard — required once Indodana has an amount. */
   indodanaDashboardPhoto: string | null;
 
@@ -129,6 +134,7 @@ export interface AutoSaveStoreClosingPatch {
   /** Cells to set (`amount: null` clears one); cells not mentioned stay as they are. */
   edcEntries?: EdcEntryInput[];
   opMeVoucherAmount?: number | null;
+  salesCashAmount?: number | null;
   indodanaDashboardPhoto?: string | null;
   eodEdcSettlementPhoto?: string | null;
   storefrontLockedPhoto?: string | null;
@@ -240,12 +246,13 @@ type EdcSummaryRead =
       ok: true;
       entries: EdcEntryInput[];
       opMeVoucher: number | null;
+      salesCash: number | null;
     }
   | { ok: false; error: string };
 
 /** Parses the untrusted EDC part of a submit. Every field is optional; only the format is checked. */
 function readEdcSummary(
-  input: Pick<SubmitStoreClosingInput, 'edcEntries' | 'opMeVoucherAmount' | 'indodanaDashboardPhoto'>,
+  input: Pick<SubmitStoreClosingInput, 'edcEntries' | 'opMeVoucherAmount' | 'salesCashAmount' | 'indodanaDashboardPhoto'>,
 ): EdcSummaryRead {
   const entries = parseEdcEntries(input.edcEntries ?? []);
   if (!entries.ok) return { ok: false, error: entries.error };
@@ -253,7 +260,10 @@ function readEdcSummary(
   const opMeVoucher = parseEdcAmount(input.opMeVoucherAmount);
   if (!opMeVoucher.ok) return { ok: false, error: opMeVoucher.error };
 
-  return { ok: true, entries: entries.value, opMeVoucher: opMeVoucher.value };
+  const salesCash = parseEdcAmount(input.salesCashAmount);
+  if (!salesCash.ok) return { ok: false, error: salesCash.error };
+
+  return { ok: true, entries: entries.value, opMeVoucher: opMeVoucher.value, salesCash: salesCash.value };
 }
 
 /**
@@ -589,13 +599,24 @@ export async function autoSaveStoreClosing(
         update.opMeVoucherAmount = parsed.value === null ? null : String(parsed.value);
       }
 
+      if ('salesCashAmount' in input.patch) {
+        const parsed = parseEdcAmount(input.patch.salesCashAmount);
+        if (!parsed.ok) return { success: false, error: parsed.error };
+        update.salesCashAmount = parsed.value === null ? null : String(parsed.value);
+      }
+
       if ('indodanaDashboardPhoto' in input.patch) {
         const photo = input.patch.indodanaDashboardPhoto;
         update.indodanaDashboardPhoto = isFilled(photo) ? photo.trim() : null;
         update.indodanaDashboardPhotoAt = isFilled(photo) ? now : null;
       }
 
-      if (edcCells || 'opMeVoucherAmount' in input.patch || 'indodanaDashboardPhoto' in input.patch) {
+      if (
+        edcCells ||
+        'opMeVoucherAmount' in input.patch ||
+        'salesCashAmount' in input.patch ||
+        'indodanaDashboardPhoto' in input.patch
+      ) {
         update.edcSummaryBy = input.userId;
         update.edcSummaryAt = now;
       }
@@ -664,11 +685,24 @@ export async function submitStoreClosing(
 
     // Switch off: the money fields are not part of a closing, whatever the client sent.
     const moneyOn = await isFeatureEnabled('store_closing_update');
-    const edc = moneyOn ? readEdcSummary(input) : { ok: true as const, entries: [], opMeVoucher: null };
+    const edc = moneyOn
+      ? readEdcSummary(input)
+      : { ok: true as const, entries: [], opMeVoucher: null, salesCash: null };
     if (!edc.ok) return { success: false, error: edc.error };
 
     const validationErr = validateSubmitPayload(input);
     if (validationErr) return { success: false, error: validationErr };
+
+    // Indodana had a transaction → its dashboard photo is a must (an On Hold report is let through,
+    // it is resubmitted once the issue is solved).
+    if (
+      moneyOn &&
+      input.openStatementDecision !== 'on_hold' &&
+      !isFilled(input.indodanaDashboardPhoto) &&
+      indodanaPhotoRequired(edc.entries.filter((e) => e.amount !== null) as EdcEntryLike[])
+    ) {
+      return { success: false, error: INDODANA_PHOTO_REQUIRED_MESSAGE };
+    }
 
     let existing: StoreClosingTask | undefined;
 
@@ -766,6 +800,7 @@ export async function submitStoreClosing(
             edcSummaryBy: input.userId,
             edcSummaryAt: now,
             opMeVoucherAmount: edc.opMeVoucher === null ? null : String(edc.opMeVoucher),
+            salesCashAmount: edc.salesCash === null ? null : String(edc.salesCash),
             indodanaDashboardPhoto: indodanaPhoto,
             indodanaDashboardPhotoAt: indodanaPhoto ? now : null,
           }

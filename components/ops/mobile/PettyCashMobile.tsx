@@ -25,7 +25,9 @@ import { RefillStateChip, TxStatusChip, fmtDay, fmtWhen, num, rp } from '@/compo
 import type { OpsRefillRow, OpsRequestRow, PettyCashPending } from '@/lib/ops-petty-cash';
 import { MobilePageHeader } from './MobileKit';
 import { FINANCE_REVIEW_LABEL, leavesOutOfTransfer } from '@/lib/petty-cash-review';
+import { LateBadge, PeriodBadge } from '@/components/petty-cash/PeriodBadge';
 import { ReRequestBadge } from '@/components/petty-cash/ReRequestBadge';
+import { jakartaYearMonth } from '@/lib/day-bucket';
 
 // ─── Header ──────────────────────────────────────────────────────────────────
 
@@ -395,15 +397,18 @@ export function RequestCard({
 
         <div className="mt-3 flex gap-3">
           <div className="min-w-0 flex-1">
-            <p className="line-clamp-3 text-[13px] leading-snug text-slate-700">
-              {row.categoryName && (
-                <span className="mr-1.5 rounded bg-indigo-50 px-1.5 py-0.5 align-middle text-[10px] font-bold text-indigo-700">
-                  {row.categoryName}
-                </span>
-              )}
-              {row.isReRequest && <ReRequestBadge className="mr-1.5 align-middle" />}
-              {row.description}
-            </p>
+            {(row.categoryName || row.isReRequest || row.periodMonth !== jakartaYearMonth(row.createdAt)) && (
+              <div className="mb-1 flex flex-wrap items-center gap-1">
+                {row.categoryName && (
+                  <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700">
+                    {row.categoryName}
+                  </span>
+                )}
+                {row.isReRequest && <ReRequestBadge />}
+                {row.periodMonth !== jakartaYearMonth(row.createdAt) && <PeriodBadge month={row.periodMonth} />}
+              </div>
+            )}
+            <p className="line-clamp-3 text-[13px] leading-snug text-slate-800">{row.description}</p>
             <p className="mt-1.5 truncate text-[11px] text-slate-400">
               {row.submittedByName} · {fmtWhen(row.createdAt)}
             </p>
@@ -502,6 +507,11 @@ export function RefillCard({
             </p>
           </div>
           <RefillStateChip state={row.state} />
+        </div>
+
+        <div className="mt-2 flex flex-wrap gap-1">
+          <PeriodBadge month={row.periodMonth} />
+          {row.late && <LateBadge month={row.periodMonth} />}
         </div>
 
         <div className="mt-3 grid grid-cols-2 gap-2">

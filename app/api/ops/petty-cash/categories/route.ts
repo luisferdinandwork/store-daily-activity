@@ -27,8 +27,8 @@ export async function GET() {
     categories: categories.map((c) => ({
       id: c.id,
       name: c.name,
-      defaultReason: c.defaultReason,
-      requiresCustomReason: c.requiresCustomReason,
+      definition: c.definition,
+      examples: c.examples,
       isActive: c.isActive,
       sortOrder: c.sortOrder,
       usageCount: c.usageCount,

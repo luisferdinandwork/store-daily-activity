@@ -10,11 +10,11 @@
 //
 // Refills: every request is shown with what the store used. The spending behind
 // a refill is the petty cash "envelope" the store was drawing from when it asked
-// — its period. A refill that lands (both proof photos in) starts the next
-// envelope: petty-cash-refill.ts tops up the month AFTER the request's month. So
-// the envelope of a request is the period that follows the store's last
-// received refill (or the store's first period if it never had one), and the
-// refill it needs is max − what is left there.
+// — the period the refill settles (`yearMonth`; it closed when the refill was sent,
+// see petty-cash-period.ts). Refills filed before periods worked that way have no
+// such period row, so their envelope is found the old way: the period after the
+// store's last received refill (else its first period). The refill it needs is
+// max − what is left there.
 
 import { and, asc, desc, eq, gte, inArray, isNotNull, lt, or, sql, type SQL } from 'drizzle-orm';
 
@@ -35,7 +35,9 @@ import {
   type PettyCashPending,
   type RefillItem,
 } from '@/lib/ops-petty-cash';
+import { jakartaDateKey } from '@/lib/day-bucket';
 import { pettyCashDescription } from '@/lib/petty-cash-categories';
+import { isRefillLate, refillDeadline } from '@/lib/petty-cash-period';
 import { isFinanceReview, leavesOutOfTransfer } from '@/lib/petty-cash-review';
 import { refillStateOf } from '@/lib/petty-cash-report';
 import { addMonths } from './petty-cash-period';
@@ -66,6 +68,7 @@ export async function getOpsRequestRows(opts: { areaId: number | null; month: st
       createdAt: tx.createdAt,
       financeReview: tx.financeReview,
       isReRequest: tx.isReRequest,
+      periodMonth: tx.yearMonth,
 
       storeId: stores.id,
       storeNo: stores.storeNo,
@@ -102,6 +105,7 @@ export async function getOpsRequestRows(opts: { areaId: number | null; month: st
     createdAt: new Date(r.createdAt).toISOString(),
     financeReview: r.financeReview,
     isReRequest: r.isReRequest,
+    periodMonth: r.periodMonth,
 
     storeId: r.storeId,
     storeNo: r.storeNo,
@@ -243,11 +247,14 @@ async function buildRefillRows(where: SQL | undefined): Promise<OpsRefillRow[]> 
   }
 
   // Pair each request with its envelope, then fetch the completed spending of
-  // exactly those (store, month) envelopes in one query.
-  const resolved = requestRows.map((row) => ({
-    row,
-    ...envelopeFor(row.request.requestedAt, periodsByStore.get(row.request.storeId) ?? [], receivedByStore.get(row.request.storeId) ?? []),
-  }));
+  // exactly those (store, month) envelopes in one query. A refill names the period it settles (`yearMonth`), so
+  // that period is the envelope; a request from before that rule (no such period row) falls back to the chain.
+  const resolved = requestRows.map((row) => {
+    const periods = periodsByStore.get(row.request.storeId) ?? [];
+    const chain = envelopeFor(row.request.requestedAt, periods, receivedByStore.get(row.request.storeId) ?? []);
+    const own = periods.find((p) => p.yearMonth === row.request.yearMonth) ?? null;
+    return { row, period: own ?? chain.period, since: chain.since };
+  });
 
   const months = [...new Set(resolved.flatMap((r) => (r.period ? [r.period.yearMonth] : [])))];
 
@@ -337,6 +344,10 @@ async function buildRefillRows(where: SQL | undefined): Promise<OpsRefillRow[]> 
       requestedAt: new Date(r.requestedAt).toISOString(),
       requestedByName: row.requestedByName,
       notes: r.notes,
+
+      periodMonth: r.yearMonth,
+      deadline: refillDeadline(r.yearMonth),
+      late: isRefillLate(r.yearMonth, jakartaDateKey(r.requestedAt)),
 
       state: refillStateOf(r),
       approvedAt: iso(r.approvedAt),

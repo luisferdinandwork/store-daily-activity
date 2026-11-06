@@ -1,6 +1,6 @@
 // app/api/ops/petty-cash/categories/[id]/route.ts
 //
-// PATCH  — edit name / default reason / "PIC writes own reason" / active.
+// PATCH  — edit name / Pengertian / Contoh pengeluaran / active.
 // DELETE — remove; past requests keep their category name snapshot.
 //
 // IT only (see ../_auth.ts).

@@ -172,6 +172,7 @@ export async function getSetoranDay(dateStr: string): Promise<SetoranStoreRow[]>
       atmCardSelfiePhoto: task?.atmCardSelfiePhoto ?? null,
       cashierPhoto: task?.cashierPhoto ?? null,
       atmCardPhoto: task?.atmCardPhoto ?? null,
+      salesCashPhoto: task?.salesCashPhoto ?? null,
 
       submittedBy: name(task?.completedBy),
       submittedAt: iso(task?.completedAt),

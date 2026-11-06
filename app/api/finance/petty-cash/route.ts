@@ -13,7 +13,7 @@ import {
 } from '@/lib/db/schema/petty-cash';
 import { pettyCashDescription } from '@/lib/petty-cash-categories';
 import { jakartaDateKey } from '@/lib/day-bucket';
-import { getVerifiedCutoffs } from '@/lib/db/utils/petty-cash-review';
+import { getVerifiedThrough } from '@/lib/db/utils/petty-cash-review';
 import {
   isFinanceReview,
   isLockedByVerification,
@@ -59,7 +59,7 @@ export type PettyCashTxRow = {
   /** Finance's comment on its decision, if it left one. */
   financeComment: string | null;
   financeReviewAt: string | null;
-  /** The refill covering it has been verified: the amount is locked, Finance can no longer decide on it. */
+  /** The refill of its period has been verified: the amount is locked, Finance can no longer decide on it. */
   locked: boolean;
 
   /** A Perlu Perbaikan request PIC 1 filed again (lib/petty-cash-re-request.ts). `createdAt` is the day it was filed. */
@@ -245,8 +245,9 @@ export async function GET(
 
   const refillByStore = new Map(refillRows.map((refill) => [refill.storeId, refill]));
 
-  // Per store: when Finance last verified a refill — requests filed before that are locked.
-  const verifiedCutoffs = await getVerifiedCutoffs(storeIds);
+  // Per store: the latest period whose refill Finance has verified — requests of that period (or an earlier one)
+  // are locked. A request filed while a refill was on its way belongs to the next period and stays open.
+  const verifiedThrough = await getVerifiedThrough(storeIds);
 
   const txByStore = new Map<number, typeof txRows>();
 
@@ -344,7 +345,8 @@ export async function GET(
         financeReview: isFinanceReview(tx.financeReview) ? tx.financeReview : null,
         financeComment: tx.financeComment,
         financeReviewAt: tx.financeReviewAt ? new Date(tx.financeReviewAt).toISOString() : null,
-        locked: isLockedByVerification(tx.createdAt, verifiedCutoffs.get(store.id)),
+        // Every row here is of this period (`month`).
+        locked: isLockedByVerification(month, verifiedThrough.get(store.id)),
         isReRequest: tx.isReRequest,
         requestDate: tx.requestDate ? jakartaDateKey(tx.requestDate) : null,
         reRequestOf: (() => {

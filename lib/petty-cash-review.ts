@@ -18,7 +18,7 @@
 // what the store used minus those requests, while the store's petty cash still goes back to Rp 1.000.000
 // when PIC 1 confirms receipt. The part the transfer does not cover is paid by the employee themselves,
 // outside the system. Once Finance has verified the refill the amount is locked and Finance can no
-// longer decide on it — but a Perlu Perbaikan request stays re-requestable.
+// longer decide on it — but a Perlu Perbaikan request stays re-requestable (in the next period).
 
 export type FinanceReview = 'needs_fix' | 'rejected' | 'accepted';
 
@@ -37,17 +37,18 @@ export const isFinanceReview = (v: unknown): v is FinanceReview =>
 export const LEFT_OUT_REVIEWS = ['needs_fix', 'rejected'] as const;
 
 /**
- * A request is locked once the store's refill has been verified after it was filed: its amount is part
- * of cash already sent, so Finance can no longer decide on it.
- * `verifiedCutoff` = when Finance last verified one of the store's refills — or a far-future date
- * while that refill is still waiting for PIC 1's receipt, so requests filed after the verification
- * (cash already sent) are locked too (see getVerifiedCutoffs).
+ * A request is locked once the refill that settles its period has been verified: its amount is part of cash
+ * already sent, so Finance can no longer decide on it. Requests are tied to their PERIOD (not to the day they
+ * were filed), so one filed while the refill was on its way — it belongs to the next period — stays open to
+ * Finance's decision.
+ * `verifiedThrough` = the latest period (YYYY-MM) of the store whose refill Finance has verified
+ * (see getVerifiedThrough); `requestMonth` is the request's own period.
  */
 export function isLockedByVerification(
-  createdAt: Date | string,
-  verifiedCutoff: Date | string | null | undefined,
+  requestMonth: string,
+  verifiedThrough: string | null | undefined,
 ): boolean {
-  return verifiedCutoff != null && new Date(createdAt).getTime() <= new Date(verifiedCutoff).getTime();
+  return verifiedThrough != null && requestMonth <= verifiedThrough;
 }
 
 /** A request in this state does not count towards the refill transfer. */

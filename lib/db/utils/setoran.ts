@@ -21,7 +21,8 @@
 import { db } from '@/lib/db';
 import { isOpeningShift } from '@/lib/shift-tasks';
 import { SETORAN_SMALL_THRESHOLD } from '@/lib/setoran-review';
-import { jakartaDateKey, jakartaDayRange } from '@/lib/day-bucket';
+import { addDaysKey, jakartaDateKey, jakartaDayRange } from '@/lib/day-bucket';
+import { isFeatureEnabled } from '@/lib/db/utils/feature-switches';
 import { and, desc, eq, gte, lt, isNotNull } from 'drizzle-orm';
 import {
   setoranTasks,
@@ -30,6 +31,7 @@ import {
   attendance,
   schedules,
   stores,
+  storeClosingTasks,
   type SetoranTask,
   type SetoranMoneyStorage,
 } from '@/lib/db/schema';
@@ -62,6 +64,8 @@ export interface SubmitSetoranInput {
   atmCardSelfiePhoto: string;
   cashierPhoto?: string;
   atmCardPhoto?: string;
+  /** "Foto Jumlah Sales Cash" — required while `store_closing_update` is on and Jumlah Sales Cash > 0. */
+  salesCashPhoto?: string;
   notes?: string;
 }
 
@@ -79,6 +83,7 @@ export interface SetoranAutoSavePatch {
   atmCardSelfiePhoto?: string | null;
   cashierPhoto?: string | null;
   atmCardPhoto?: string | null;
+  salesCashPhoto?: string | null;
   notes?: string;
 }
 
@@ -89,6 +94,33 @@ export interface SetoranWithStorage {
 
 function startOfDay(d: Date): Date {
   return jakartaDayRange(jakartaDateKey(d)).start;
+}
+
+/**
+ * The Sales Cash the store typed at yesterday's Store Closing — what this
+ * morning's setoran starts from as "Jumlah Sales Cash" (the employee checks it
+ * and adds the photo). Same D / D+1 pairing as the Finance Store Closing Report:
+ * the closing of sales day D is settled by the setoran filed on D+1. null = no
+ * closing yesterday, or it did not fill Sales Cash in, or the IT switch
+ * `store_closing_update` is off (the field does not exist then).
+ */
+export async function getSalesCashFromClosing(storeId: number, setoranDate: Date): Promise<number | null> {
+  if (!(await isFeatureEnabled('store_closing_update'))) return null;
+
+  const { start, end } = jakartaDayRange(addDaysKey(jakartaDateKey(setoranDate), -1));
+  const [row] = await db
+    .select({ salesCash: storeClosingTasks.salesCashAmount })
+    .from(storeClosingTasks)
+    .where(and(
+      eq(storeClosingTasks.storeId, storeId),
+      gte(storeClosingTasks.date, start),
+      lt(storeClosingTasks.date, end),
+    ))
+    .limit(1);
+
+  if (row?.salesCash == null) return null;
+  const n = Number(row.salesCash);
+  return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
 /**
@@ -229,12 +261,38 @@ export async function getPriorUnpaidForStore(
   return money(parseAmount(priorStorage?.unpaidAmount));
 }
 
+/** Deposits are made in multiples of this (the page rounds "Jumlah setoran Tunai" down to it). */
+const SETORAN_DEPOSIT_STEP = 50_000;
+
+/**
+ * What a fresh setoran starts with when yesterday's Store Closing recorded a Sales
+ * Cash: "Jumlah Sales Cash" (expectedAmount) = that figure, and "Jumlah setoran
+ * Tunai" (amount) = (Sales Cash + sisa kemarin) rounded DOWN to kelipatan Rp 50.000,
+ * the same auto value the page computes. Written when the task is opened, so it is
+ * on the record without the employee typing anything. null = nothing to pre-fill.
+ */
+async function salesCashPrefill(
+  storeId: number,
+  date: Date,
+  carriedDeficit: string,
+): Promise<{ expectedAmount: string; amount?: string } | null> {
+  const salesCash = await getSalesCashFromClosing(storeId, date);
+  if (salesCash == null) return null;
+
+  const deposit = Math.floor((salesCash + parseAmount(carriedDeficit)) / SETORAN_DEPOSIT_STEP) * SETORAN_DEPOSIT_STEP;
+  return { expectedAmount: money(salesCash), ...(deposit > 0 ? { amount: money(deposit) } : {}) };
+}
+
 async function refreshPendingCarryForward(task: SetoranTask): Promise<SetoranTask> {
   if (task.status !== 'not_started' && task.status !== 'in_progress') return task;
 
   const carriedDeficit = await getPriorUnpaidForStore(task.storeId, task.date);
 
-  if (sameMoney(task.carriedDeficit, carriedDeficit)) return task;
+  // Nothing typed yet → start from yesterday's Sales Cash (never over an employee's own figure).
+  const prefill = task.expectedAmount == null ? await salesCashPrefill(task.storeId, task.date, carriedDeficit) : null;
+  if (prefill && parseAmount(task.amount) > 0) delete prefill.amount;
+
+  if (sameMoney(task.carriedDeficit, carriedDeficit) && !prefill) return task;
 
   const [updated] = await db
     .update(setoranTasks)
@@ -243,6 +301,7 @@ async function refreshPendingCarryForward(task: SetoranTask): Promise<SetoranTas
       carriedDeficitFetchedAt: new Date(),
       unpaidAmount: '0.00',
       updatedAt: new Date(),
+      ...(prefill ?? {}),
     })
     .where(eq(setoranTasks.id, task.id))
     .returning();
@@ -298,6 +357,7 @@ export async function getOrCreateSetoranForSchedule(
     }
 
     const carriedDeficit = await getPriorUnpaidForStore(sched.storeId, dayStart);
+    const prefill = await salesCashPrefill(sched.storeId, sched.date, carriedDeficit);
     const morningShiftId = await getMorningShiftId();
     const now = new Date();
 
@@ -312,6 +372,7 @@ export async function getOrCreateSetoranForSchedule(
         carriedDeficit,
         carriedDeficitFetchedAt: now,
         unpaidAmount: '0.00',
+        ...(prefill ?? {}),
         status: 'not_started',
         createdAt: now,
         updatedAt: now,
@@ -382,6 +443,11 @@ function actorFieldsForPatch(
     update.atmCardPhotoAt = now;
   }
 
+  if ('salesCashPhoto' in patch) {
+    update.salesCashPhotoBy = actor.userId;
+    update.salesCashPhotoAt = now;
+  }
+
   if ('notes' in patch) {
     update.notesBy = actor.userId;
     update.notesAt = now;
@@ -427,6 +493,11 @@ function preserveSetoranFieldActors(
     values.atmCardPhotoAt = now;
   }
 
+  if (input.salesCashPhoto?.trim() && !existing.salesCashPhotoBy) {
+    values.salesCashPhotoBy = input.userId;
+    values.salesCashPhotoAt = now;
+  }
+
   if (input.notes !== undefined && !existing.notesBy) {
     values.notesBy = input.userId;
     values.notesAt = now;
@@ -438,8 +509,15 @@ function preserveSetoranFieldActors(
 /**
  * `cashDrawerTotal` = uang aktual diterima + sisa kemarin (requiredStoreAmount).
  */
-function validateSetoranPayload(input: SubmitSetoranInput, cashDrawerTotal: number): string | null {
+function validateSetoranPayload(
+  input: SubmitSetoranInput,
+  cashDrawerTotal: number,
+  salesCashPhotoRequired: boolean,
+): string | null {
   const stored = parseAmount(input.storedAmount ?? input.amount);
+
+  // Photo of the counted Sales Cash — first, like on the page.
+  if (salesCashPhotoRequired && !input.salesCashPhoto?.trim()) return 'Foto Jumlah Sales Cash wajib diupload.';
 
   // Setoran kecil (total cash drawer < Rp 50.000, termasuk 0 / "tidak ada
   // setoran") dan tidak ada yang disetor — tanpa resi + selfie ATM, cukup foto
@@ -480,7 +558,10 @@ export async function submitSetoran(
     // Total uang cash drawer — the amount the small-setoran rule is judged on.
     const requiredStoreAmount = actualReceived + previousUnpaid;
 
-    const validationErr = validateSetoranPayload(input, requiredStoreAmount);
+    // The Sales Cash photo belongs to the Store Closing update (IT switch) and is only
+    // asked when there is cash to show.
+    const salesCashPhotoRequired = actualReceived > 0 && (await isFeatureEnabled('store_closing_update'));
+    const validationErr = validateSetoranPayload(input, requiredStoreAmount, salesCashPhotoRequired);
     if (validationErr) return { success: false, error: validationErr };
 
     const stored = parseAmount(input.storedAmount ?? input.amount);
@@ -505,6 +586,7 @@ export async function submitSetoran(
     const atmCardSelfiePhoto = isSmallSetoran ? null : input.atmCardSelfiePhoto;
     const cashierPhoto = isSmallSetoran ? (input.cashierPhoto?.trim() || null) : null;
     const atmCardPhoto = isSmallSetoran ? (input.atmCardPhoto?.trim() || null) : null;
+    const salesCashPhoto = input.salesCashPhoto?.trim() || null;
 
     const [updated] = await db
       .update(setoranTasks)
@@ -523,6 +605,7 @@ export async function submitSetoran(
         atmCardSelfiePhoto,
         cashierPhoto,
         atmCardPhoto,
+        salesCashPhoto,
         notes: input.notes,
         ...preserveSetoranFieldActors(existing, input, now),
         completedBy: input.userId,
@@ -553,6 +636,7 @@ export async function submitSetoran(
         atmCardSelfiePhoto,
         cashierPhoto,
         atmCardPhoto,
+        salesCashPhoto,
         notes: input.notes,
         actualReceivedAmountBy: updated.actualReceivedAmountBy,
         actualReceivedAmountAt: updated.actualReceivedAmountAt,
@@ -566,6 +650,8 @@ export async function submitSetoran(
         cashierPhotoAt: updated.cashierPhotoAt,
         atmCardPhotoBy: updated.atmCardPhotoBy,
         atmCardPhotoAt: updated.atmCardPhotoAt,
+        salesCashPhotoBy: updated.salesCashPhotoBy,
+        salesCashPhotoAt: updated.salesCashPhotoAt,
         notesBy: updated.notesBy,
         notesAt: updated.notesAt,
         completedBy: input.userId,
@@ -591,6 +677,7 @@ export async function submitSetoran(
           atmCardSelfiePhoto,
           cashierPhoto,
           atmCardPhoto,
+          salesCashPhoto,
           notes: input.notes,
           actualReceivedAmountBy: updated.actualReceivedAmountBy,
           actualReceivedAmountAt: updated.actualReceivedAmountAt,
@@ -604,6 +691,8 @@ export async function submitSetoran(
           cashierPhotoAt: updated.cashierPhotoAt,
           atmCardPhotoBy: updated.atmCardPhotoBy,
           atmCardPhotoAt: updated.atmCardPhotoAt,
+          salesCashPhotoBy: updated.salesCashPhotoBy,
+          salesCashPhotoAt: updated.salesCashPhotoAt,
           notesBy: updated.notesBy,
           notesAt: updated.notesAt,
           completedBy: input.userId,
@@ -655,6 +744,7 @@ export async function autoSaveSetoran(
     if ('atmCardSelfiePhoto' in patch) update.atmCardSelfiePhoto = patch.atmCardSelfiePhoto ?? null;
     if ('cashierPhoto' in patch) update.cashierPhoto = patch.cashierPhoto ?? null;
     if ('atmCardPhoto' in patch) update.atmCardPhoto = patch.atmCardPhoto ?? null;
+    if ('salesCashPhoto' in patch) update.salesCashPhoto = patch.salesCashPhoto ?? null;
     if ('notes' in patch) update.notes = patch.notes;
 
     if (existing.status === 'not_started') update.status = 'in_progress';

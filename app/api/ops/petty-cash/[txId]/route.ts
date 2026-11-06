@@ -1,12 +1,13 @@
 // app/api/ops/petty-cash/[txId]/route.ts
 
 import { NextRequest, NextResponse } from 'next/server';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
 import { stores } from '@/lib/db/schema/core';
-import { pettyCashPeriods, pettyCashTransactions } from '@/lib/db/schema/petty-cash';
+import { pettyCashTransactions } from '@/lib/db/schema/petty-cash';
+import { adjustPeriodBalance } from '@/lib/db/utils/petty-cash-period';
 import { leavesOutOfTransfer } from '@/lib/petty-cash-review';
 
 type Params = {
@@ -174,8 +175,8 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 /**
  * DELETE — IT only. Removes a petty cash request outright, for double entries
  * or mistakes by Ops / the PIC. A completed request had already cut its actual
- * amount from the store's balance, so that amount is put back on the period
- * (when it is still open; a closed period's balance was already rolled over).
+ * amount from the store's balance, so that amount is put back on its period
+ * (unless that period's refill was already verified by Finance — frozen books).
  */
 export async function DELETE(_req: NextRequest, { params }: Params) {
   const scope = await resolveOpsScope();
@@ -223,15 +224,8 @@ export async function DELETE(_req: NextRequest, { params }: Params) {
     // A request Finance turned down (and not yet re-accepted) was already given back to the balance.
     const stillCounted = !leavesOutOfTransfer(deleted.financeReview);
     if (stillCounted && deleted.status === 'completed' && deleted.periodId != null && deleted.actualAmount != null) {
-      const restored = await trx
-        .update(pettyCashPeriods)
-        .set({
-          currentBalance: sql`${pettyCashPeriods.currentBalance} + ${deleted.actualAmount}::numeric`,
-        })
-        .where(and(eq(pettyCashPeriods.id, deleted.periodId), eq(pettyCashPeriods.status, 'open')))
-        .returning({ id: pettyCashPeriods.id });
-
-      balanceRestored = restored.length > 0;
+      // Not for a period whose refill Finance already verified — that cash is sent, the books are frozen.
+      balanceRestored = await adjustPeriodBalance(trx, deleted.periodId, Number(deleted.actualAmount));
     }
 
     return { id: deleted.id, balanceRestored };

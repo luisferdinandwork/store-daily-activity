@@ -1,11 +1,11 @@
 // app/api/employee/petty-cash/re-request/route.ts
 //
-// POST { originalTxId, requestDate, description, actualAmount, imageUrl?, imageKey? }
+// POST { originalTxId, requestDate, description, actualAmount, categoryId?, imageUrl?, imageKey? }
 //
-// PIC 1 files a request Finance turned down (Ditolak) again, in the store's current period
-// (lib/petty-cash-re-request.ts). No Ops step: the new request is created already completed — the usage and
-// the receipt are what Finance reviews. The day it is filed is recorded automatically; `requestDate` is the
-// day PIC 1 says the original request was made.
+// PIC 1 files a request Finance sent back (Perlu Perbaikan) again (lib/petty-cash-re-request.ts). It is counted in
+// the period AFTER the original's, whatever refill is on its way. No Ops step: the new request is created already
+// completed — the usage and the receipt are what Finance reviews. PIC 1 can change the category and the receipt.
+// The day it is filed is recorded automatically; `requestDate` is the day PIC 1 says the original request was made.
 
 import { NextRequest, NextResponse } from 'next/server';
 import { eq } from 'drizzle-orm';
@@ -57,6 +57,7 @@ export async function POST(req: NextRequest) {
       requestDate: body.requestDate,
       description: body.description,
       actualAmount: body.actualAmount,
+      categoryId: body.categoryId,
       imageUrl: typeof body.imageUrl === 'string' ? body.imageUrl : null,
       imageKey: typeof body.imageKey === 'string' ? body.imageKey : null,
     });
@@ -64,7 +65,10 @@ export async function POST(req: NextRequest) {
     if (!result.success) {
       return NextResponse.json({ success: false, error: result.error }, { status: result.status });
     }
-    return NextResponse.json({ success: true, txId: result.txId, newBalance: result.newBalance }, { status: 201 });
+    return NextResponse.json(
+      { success: true, txId: result.txId, newBalance: result.newBalance, periodMonth: result.periodMonth },
+      { status: 201 },
+    );
   } catch (err) {
     console.error('[POST /api/employee/petty-cash/re-request]', err);
     return NextResponse.json({ success: false, error: 'Internal server error' }, { status: 500 });

@@ -24,6 +24,7 @@ import {
   itemDroppingEntries,
   itemReturnTasks,
   itemDroppingTasks,
+  warehouseCodes,
   stores,
   attendance,
   type ItemTransferOrder,
@@ -84,8 +85,30 @@ function jsonPhotos(paths: string[]): string | null {
  * with a scheduled employee using this app, so neither Item Return nor Item
  * Receiving ever gets a human confirmation on that side of the transfer.
  */
-export function isWarehouseCode(code: string): boolean {
-  return /^dm/i.test(code.trim());
+export function isWarehouseCode(code: string | null | undefined): boolean {
+  if (!code) return false;
+  const c = code.trim();
+  return /^dm/i.test(c) || listedWarehouseCodes.has(c.toUpperCase());
+}
+
+// Codes IT added at /it/warehouse-codes (table `warehouse_codes`) that don't
+// start with "DM". isWarehouseCode stays synchronous, so this set is filled by
+// ensureWarehouseCodes() — call it once at the top of an API route or sync
+// before using isWarehouseCode; it re-reads the table at most every 30 s.
+let listedWarehouseCodes = new Set<string>();
+let listedLoadedAt = 0;
+const LISTED_TTL_MS = 30_000;
+
+export async function ensureWarehouseCodes(force = false): Promise<void> {
+  if (!force && Date.now() - listedLoadedAt < LISTED_TTL_MS) return;
+  try {
+    const rows = await db.select({ code: warehouseCodes.code }).from(warehouseCodes);
+    listedWarehouseCodes = new Set(rows.map((r) => r.code.trim().toUpperCase()));
+    listedLoadedAt = Date.now();
+  } catch (err) {
+    // Fail safe to the "DM…" rule (e.g. before the migration ran).
+    console.error('[warehouse-codes] could not load the list', err);
+  }
 }
 
 // ─── BC row shapes ──────────────────────────────────────────────────────────
@@ -364,8 +387,10 @@ function groupWhseShipments(rows: BcWhseShipmentRow[]): Map<string, WhseShipment
 
 /** Every store's code → id, for resolving BC transferFrom/ToCode. */
 async function storeIdByCodeMap(): Promise<Map<string, number>> {
+  await ensureWarehouseCodes();
   const rows = await db.select({ id: stores.id, storeNo: stores.storeNo }).from(stores);
-  return new Map(rows.map((s) => [s.storeNo, s.id]));
+  // A "DM…" code is the warehouse, not a store — never link a transfer to a store row that carries one.
+  return new Map(rows.filter((s) => !isWarehouseCode(s.storeNo)).map((s) => [s.storeNo, s.id]));
 }
 
 /** Last-one-wins de-dupe by key — a single INSERT ... ON CONFLICT statement
@@ -881,6 +906,7 @@ export async function syncReceivingStatus(
     let closed = 0;
     let removed = 0;
 
+    await ensureWarehouseCodes();
     const warehouseCandidates = await db
       .select({ id: itemTransferOrders.id, transferToCode: itemTransferOrders.transferToCode })
       .from(itemTransferOrders)
@@ -1122,3 +1148,25 @@ export async function getItemDroppingEntriesWithTransferOrder(taskId: number) {
 }
 
 export { getActiveItemReturnTask, getActiveItemDroppingTask };
+
+
+/**
+ * A code just became a warehouse: unlink it from any store row on existing
+ * transfer orders (a BC location code that happens to match a store's storeNo
+ * had linked them), so Ops / the employee app show "Gudang (code)" instead of a
+ * store name. Returns how many orders were changed.
+ */
+export async function unlinkWarehouseCodeFromStores(code: string): Promise<number> {
+  const c = code.trim();
+  const fromRows = await db
+    .update(itemTransferOrders)
+    .set({ fromStoreId: null })
+    .where(and(isNotNull(itemTransferOrders.fromStoreId), sql`upper(trim(${itemTransferOrders.transferFromCode})) = ${c.toUpperCase()}`))
+    .returning({ id: itemTransferOrders.id });
+  const toRows = await db
+    .update(itemTransferOrders)
+    .set({ toStoreId: null })
+    .where(and(isNotNull(itemTransferOrders.toStoreId), sql`upper(trim(${itemTransferOrders.transferToCode})) = ${c.toUpperCase()}`))
+    .returning({ id: itemTransferOrders.id });
+  return new Set([...fromRows, ...toRows].map((r) => r.id)).size;
+}

@@ -120,6 +120,7 @@ async function toRows(
 
       edcEntries: task ? edcByTask.get(task.id) ?? [] : [],
       opMeVoucher: task?.opMeVoucherAmount != null ? Number(task.opMeVoucherAmount) : null,
+      salesCash: task?.salesCashAmount != null ? Number(task.salesCashAmount) : null,
       indodanaPhoto: task?.indodanaDashboardPhoto ?? null,
       edcNotes: task?.edcSummaryNotes ?? null,
       edcBy: name(task?.edcSummaryBy),

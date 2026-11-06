@@ -13,7 +13,7 @@ import { useGeo } from '@/lib/hooks/useGeo';
 import type { GeoPoint } from '@/lib/geo';
 import {
   CheckCircle2, Loader2, AlertCircle,
-  Store, Clock, Truck, Package, Inbox, Search, X,
+  Store, Warehouse, Clock, Truck, Package, Inbox, Search, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -59,6 +59,9 @@ interface EntryData {
   submittedAt: string | null;
   fromStore: StoreRef | null;
   toStore: StoreRef | null;
+  /** That end is the warehouse (a "DM…" / listed code) — show "Gudang" + the code, never a store. */
+  fromIsWarehouse?: boolean;
+  toIsWarehouse?: boolean;
   transferFromCode: string | null;
   transferToCode: string | null;
   bcStatus: string | null;
@@ -203,7 +206,16 @@ function formatDurationBetween(startIso: string | null | undefined, endIso: stri
 
 // ─── Store pill ───────────────────────────────────────────────────────────────
 
-function StorePill({ store, code }: { store: StoreRef | null; code: string | null }) {
+function StorePill({ store, code, isWarehouse }: { store: StoreRef | null; code: string | null; isWarehouse?: boolean }) {
+  if (isWarehouse) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-lg bg-secondary px-2 py-1 text-[11px] font-semibold text-foreground">
+        <Warehouse className="h-3 w-3 text-muted-foreground" />
+        Gudang
+        {code && <span className="font-mono text-[10px] text-muted-foreground">({code})</span>}
+      </span>
+    );
+  }
   return (
     <span className="inline-flex items-center gap-1 rounded-lg bg-secondary px-2 py-1 text-[11px] font-semibold text-foreground">
       <Store className="h-3 w-3 text-muted-foreground" />
@@ -233,6 +245,7 @@ function OpenEntryCard({
   const canConfirm = qtyCounted.trim() !== '' && Number(qtyCounted) >= 0 && photos.length >= 1;
   const store = kind === 'dropping' ? entry.fromStore : entry.toStore;
   const code = kind === 'dropping' ? entry.transferFromCode : entry.transferToCode;
+  const isWarehouseSide = kind === 'dropping' ? entry.fromIsWarehouse : entry.toIsWarehouse;
   // Dropping: elapsed since the origin store actually submitted the Item
   // Return on this website (not since our sync merely detected the
   // shipment) — null means it hasn't left the origin store yet.
@@ -254,7 +267,7 @@ function OpenEntryCard({
           <p className="font-mono text-sm font-bold text-foreground">{entry.toaNo}</p>
           <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
             <span>{cfg.directionLabel}</span>
-            <StorePill store={store} code={code} />
+            <StorePill store={store} code={code} isWarehouse={isWarehouseSide} />
           </div>
           <p className="mt-1 text-[11px] text-muted-foreground">Qty: {entry.qtyOrdered}</p>
         </div>
@@ -345,6 +358,7 @@ function ConfirmedEntryCard({ kind, entry }: { kind: Kind; entry: EntryData }) {
 
   const store = isDropping ? entry.fromStore : entry.toStore;
   const code = isDropping ? entry.transferFromCode : entry.transferToCode;
+  const isWarehouseSide = isDropping ? entry.fromIsWarehouse : entry.toIsWarehouse;
   // The headline duration is always THIS card's own leg: for Item Return,
   // TO detected → this employee's confirm; for Receiving, the actual
   // delivery time (origin store's Item Return submit → this employee's
@@ -365,7 +379,7 @@ function ConfirmedEntryCard({ kind, entry }: { kind: Kind; entry: EntryData }) {
           <p className="font-mono text-sm font-bold text-foreground">{entry.toaNo}</p>
           <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
             <span>{cfg.directionLabel}</span>
-            <StorePill store={store} code={code} />
+            <StorePill store={store} code={code} isWarehouse={isWarehouseSide} />
           </div>
           <p className="mt-1 text-[11px] text-muted-foreground">
             Qty pesanan {entry.qtyOrdered} · dihitung {entry.qtyCounted ?? '—'}

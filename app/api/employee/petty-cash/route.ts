@@ -1,15 +1,15 @@
 // app/api/employee/petty-cash/route.ts
 
 import { NextRequest, NextResponse } from 'next/server';
-import { desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { getServerSession } from 'next-auth';
 
 import { db } from '@/lib/db';
 import { authOptions } from '@/lib/auth';
 import { stores, users } from '@/lib/db/schema/core';
-import { pettyCashTransactions } from '@/lib/db/schema/petty-cash';
-import { isPettyCashHolder } from '@/lib/db/utils/petty-cash-refill';
-import { getActivePeriod } from '@/lib/db/utils/petty-cash-period';
+import { PETTY_CASH_MAX_BALANCE, pettyCashPeriods, pettyCashTransactions } from '@/lib/db/schema/petty-cash';
+import { getLatestRefillRequest, getRefillOutstanding, isPettyCashHolder } from '@/lib/db/utils/petty-cash-refill';
+import { getActivePeriod, getPeriod, rollRequestToActivePeriod } from '@/lib/db/utils/petty-cash-period';
 import {
   getPettyCashCategory,
   listPettyCashCategories,
@@ -18,6 +18,8 @@ import { PETTY_CASH_REASON_MAX, pettyCashDescription } from '@/lib/petty-cash-ca
 import { assertStoreOperational } from '@/lib/db/utils/store-status';
 import { canReRequest, reviewOutcome } from '@/lib/petty-cash-review';
 import { jakartaDateKey } from '@/lib/day-bucket';
+import { addMonths, periodLabel, receiptPhotoAction, reRequestPeriodMonth } from '@/lib/petty-cash-period';
+import { refillStateOf } from '@/lib/petty-cash-report';
 
 /** How many of the store's requests the page lists (newest first) — it searches / filters them client-side. */
 const MAX_LISTED_REQUESTS = 500;
@@ -57,10 +59,9 @@ async function getEmployeeStore(userId: string) {
   return user?.homeStoreId ?? null;
 }
 
-// Petty cash balance carries forward across months — a store only gets a
-// fresh max-balance period when it's actually refilled (see
-// lib/db/utils/petty-cash-period.ts). This just resolves whichever period
-// is currently active for the store.
+// Petty cash balance carries forward across months — a period stays open until
+// PIC 1 sends its refill, which closes it and opens the next one (see
+// lib/db/utils/petty-cash-period.ts). This just resolves the period in use.
 async function ensurePettyCashPeriod(storeId: number, yearMonth: string) {
   return getActivePeriod(storeId, yearMonth);
 }
@@ -118,12 +119,15 @@ export async function GET() {
     );
   }
 
-  // period.yearMonth (not the raw calendar `month`) drives which
-  // transactions we show: a refill pre-creates NEXT month's period as soon
-  // as it's received, and the employee should immediately see that fresh
-  // envelope — balance and history both — rather than waiting for the
-  // calendar to catch up. See getActivePeriod in petty-cash-period.ts.
+  // period.yearMonth (not the raw calendar `month`) is the period in use: sending a refill closes the period
+  // and opens the next one right away, so new requests belong to that one — balance and counters both —
+  // rather than waiting for the calendar to catch up. See getActivePeriod in petty-cash-period.ts.
   const activeMonth = period.yearMonth;
+
+  // The next period opens at the full Rp 1.000.000 on paper the moment a refill is sent, but that money is not in
+  // the cash box until PIC 1 confirms receiving it — so the balance shown (and spendable) leaves it out until then.
+  const refillOwed = await getRefillOutstanding(storeId, period.yearMonth);
+  const spendable = Math.max(0, Number(period.currentBalance ?? 0) - refillOwed);
 
   const categories = await listPettyCashCategories({ activeOnly: true });
 
@@ -135,6 +139,7 @@ export async function GET() {
       amount: pettyCashTransactions.amount,
       actualAmount: pettyCashTransactions.actualAmount,
       description: pettyCashTransactions.description,
+      categoryId: pettyCashTransactions.categoryId,
       categoryName: pettyCashTransactions.categoryName,
       status: pettyCashTransactions.status,
       imageUrl: pettyCashTransactions.imageUrl,
@@ -164,10 +169,48 @@ export async function GET() {
     for (const r of filedAgain) if (r.of != null) reRequestedAs.set(r.of, r.id);
   }
 
+  // The refill on its way (or one OPS turned down) means the previous period is closed and requests are now filed
+  // under the next one — the page says so. Nothing is blocked.
+  const latestRefill = await getLatestRefillRequest(storeId);
+  let closedPeriod: { month: string; refillState: string } | null = null;
+  if (latestRefill) {
+    const state = refillStateOf(latestRefill);
+    if (state === 'rejected') {
+      const was = await getPeriod(storeId, latestRefill.yearMonth);
+      if (was?.status === 'closed') closedPeriod = { month: latestRefill.yearMonth, refillState: state };
+    } else if (state !== 'received') {
+      closedPeriod = { month: latestRefill.yearMonth, refillState: state };
+    }
+  }
+
+  // Where a Re-request of each Perlu Perbaikan request would be counted (the period after its own, or the one in
+  // use) and what that period has left — a period that doesn't exist yet starts at the maximum.
+  const isReRequestable = (t: (typeof txList)[number]) =>
+    t.status === 'completed' && canReRequest(t.financeReview) && !reRequestedAs.has(t.id);
+  const targetMonths = [
+    ...new Set(txList.filter(isReRequestable).map((t) => reRequestPeriodMonth(t.yearMonth, period.yearMonth))),
+  ];
+  // Spendable = the period's balance minus the refill of the period before it that has not arrived yet.
+  const targetBalance = new Map<string, number>([[period.yearMonth, spendable]]);
+  const missingMonths = targetMonths.filter((m) => !targetBalance.has(m));
+  if (missingMonths.length > 0) {
+    const rows = await db
+      .select({ yearMonth: pettyCashPeriods.yearMonth, balance: pettyCashPeriods.currentBalance })
+      .from(pettyCashPeriods)
+      .where(and(eq(pettyCashPeriods.storeId, storeId), inArray(pettyCashPeriods.yearMonth, missingMonths)));
+    for (const r of rows) {
+      const owed = await getRefillOutstanding(storeId, r.yearMonth);
+      targetBalance.set(r.yearMonth, Math.max(0, Number(r.balance) - owed));
+    }
+  }
+
   return NextResponse.json({
     success: true,
     storeName: store.name,
-    balance: period.currentBalance ?? '0',
+    closedPeriod,
+    balance: String(spendable),
+    // The refill of the previous period that has not been received yet: the balance rises by this on receipt.
+    refillPending: refillOwed > 0 ? { month: addMonths(period.yearMonth, -1), amount: refillOwed } : null,
     openingBalance: period.openingBalance,
     closingBalance: period.closingBalance,
     periodStatus: period.status,
@@ -179,17 +222,21 @@ export async function GET() {
     categories: categories.map((c) => ({
       id: c.id,
       name: c.name,
-      defaultReason: c.defaultReason,
-      requiresCustomReason: c.requiresCustomReason,
+      definition: c.definition,
+      examples: c.examples,
     })),
     transactions: txList.map((t) => ({
       id: t.id,
       amount: t.amount,
       actualAmount: t.actualAmount,
       description: pettyCashDescription(t.description),
+      categoryId: t.categoryId,
       categoryName: t.categoryName,
       status: t.status,
       imageUrl: t.imageUrl,
+      // What PIC 1 may do about the receipt photo: replace it (OPS-approved, not finished yet), add the first one,
+      // or nothing — a finished request's photo is locked, a Re-request is the way to change it.
+      receiptAction: receiptPhotoAction({ status: t.status, hasPhoto: Boolean(t.imageUrl), financeReview: t.financeReview }),
       approvedAt: t.approvedAt ? new Date(t.approvedAt).toISOString() : null,
       rejectedAt: t.rejectedAt ? new Date(t.rejectedAt).toISOString() : null,
       rejectionReason: t.rejectionReason,
@@ -206,7 +253,14 @@ export async function GET() {
       reRequestOfId: t.reRequestOfId,
       reRequestedAs: reRequestedAs.get(t.id) ?? null,
       // Perlu Perbaikan, completed and not filed again yet — what the Re-request button needs.
-      canReRequest: t.status === 'completed' && canReRequest(t.financeReview) && !reRequestedAs.has(t.id),
+      canReRequest: isReRequestable(t),
+      // The period that Re-request would be counted in, and what it has left.
+      reRequestTarget: isReRequestable(t)
+        ? (() => {
+            const month = reRequestPeriodMonth(t.yearMonth, period.yearMonth);
+            return { month, balance: targetBalance.get(month) ?? PETTY_CASH_MAX_BALANCE };
+          })()
+        : null,
     })),
   });
 }
@@ -247,9 +301,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Every request is filed under an active category. Its default reason
-  // fills in the Keterangan when the PIC leaves it blank; a custom-reason
-  // category (Lain-Lain) has none, so the PIC must write their own.
+  // Every request is filed under an active category. A category has no preset
+  // Keterangan — the PIC always writes their own.
   const categoryId = Number(body.categoryId);
   const category = Number.isInteger(categoryId) ? await getPettyCashCategory(categoryId) : null;
 
@@ -262,9 +315,7 @@ export async function POST(req: NextRequest) {
 
   const typedReason =
     typeof body.description === 'string' ? body.description.trim() : '';
-  const description = pettyCashDescription(
-    typedReason || (category.requiresCustomReason ? '' : (category.defaultReason ?? '')),
-  );
+  const description = pettyCashDescription(typedReason);
 
   if (!description) {
     return NextResponse.json(
@@ -289,6 +340,8 @@ export async function POST(req: NextRequest) {
   const inactive = await storeInactiveResponse(storeId);
   if (inactive) return inactive;
 
+  // A refill on its way never blocks a request: the refill closed the previous period, so this one is simply
+  // filed under the period in use now (the next one) — see getActivePeriod.
   const month = currentYearMonth();
 
   const period = await ensurePettyCashPeriod(storeId, month);
@@ -321,9 +374,9 @@ export async function POST(req: NextRequest) {
       imageUrl: null,
       imageKey: null,
       // Tag with the period's OWN month, not the raw calendar month — once a
-      // refill has pre-created next month's period, new spend is already
-      // happening against that envelope (see getActivePeriod), so it must be
-      // grouped under that month for Finance's per-month ledger to add up.
+      // refill has closed the previous period, new spend belongs to the next one
+      // (see getActivePeriod), so it must be grouped under that month for
+      // Finance's per-month ledger to add up.
       yearMonth: period.yearMonth,
       // Explicit app-clock timestamp instead of the column's DEFAULT NOW() —
       // the self-hosted Postgres session's own timezone doesn't necessarily
@@ -341,6 +394,9 @@ export async function POST(req: NextRequest) {
       success: true,
       txId: inserted.id,
       status: 'pending_ops',
+      // The period it is counted in — the page tells PIC 1 when that is not the calendar month.
+      periodMonth: period.yearMonth,
+      periodLabel: periodLabel(period.yearMonth),
       message: 'Petty cash request sent to OPS for approval.',
     },
     { status: 201 },
@@ -414,6 +470,18 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
+    // A request still waiting when its period closed belongs to the period in use (it normally moved when the
+    // refill was sent; this catches stragglers) — that is the balance the actual amount is cut from.
+    await rollRequestToActivePeriod(txId, storeId, currentYearMonth());
+
+    // What is spendable is the period's balance minus a refill still on its way (see getRefillOutstanding).
+    const [owner] = await db
+      .select({ yearMonth: pettyCashTransactions.yearMonth })
+      .from(pettyCashTransactions)
+      .where(and(eq(pettyCashTransactions.id, txId), eq(pettyCashTransactions.storeId, storeId)))
+      .limit(1);
+    const owed = owner ? await getRefillOutstanding(storeId, owner.yearMonth) : 0;
+
     const result = await db.execute(sql`
       WITH target_tx AS (
         SELECT id, period_id
@@ -430,7 +498,7 @@ export async function PATCH(req: NextRequest) {
           updated_at = NOW()
         WHERE id = (SELECT period_id FROM target_tx)
           AND status = 'open'
-          AND current_balance >= ${actualAmount.toFixed(2)}::numeric
+          AND current_balance - ${owed.toFixed(2)}::numeric >= ${actualAmount.toFixed(2)}::numeric
         RETURNING id, current_balance::text AS new_balance
       ),
 
@@ -459,7 +527,9 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json(
         {
           error:
-            'Could not confirm the actual amount. The request must be OPS approved, not yet confirmed, and the balance must cover this amount.',
+            owed > 0
+              ? 'Saldo belum cukup untuk jumlah ini — Refill yang sedang diproses belum dihitung sampai foto buktinya diunggah.'
+              : 'Could not confirm the actual amount. The request must be OPS approved, not yet confirmed, and the balance must cover this amount.',
         },
         { status: 409 },
       );
@@ -480,6 +550,9 @@ export async function PATCH(req: NextRequest) {
     );
   }
 
+  // The receipt photo can be swapped only until the request is finished (receiptPhotoAction): while it is
+  // OPS-approved, or — as a first upload, not a replacement — on a finished request that has no photo yet and
+  // that Finance has not turned down. A finished request's photo is locked; a Re-request is how it is changed.
   const result = await db.execute(sql`
     UPDATE petty_cash_transactions
     SET
@@ -488,7 +561,14 @@ export async function PATCH(req: NextRequest) {
       updated_at = NOW()
     WHERE id = ${txId}
       AND store_id = ${storeId}
-      AND status IN ('ops_approved', 'completed')
+      AND (
+        status = 'ops_approved'
+        OR (
+          status = 'completed'
+          AND image_url IS NULL
+          AND (finance_review IS NULL OR finance_review = 'accepted')
+        )
+      )
     RETURNING id::int
   `);
 
@@ -496,12 +576,25 @@ export async function PATCH(req: NextRequest) {
   const row = rows[0] as { id: number } | undefined;
 
   if (!row) {
-    return NextResponse.json(
-      {
-        error: 'Receipt upload failed. Request must be OPS approved.',
-      },
-      { status: 409 },
-    );
+    const [current] = await db
+      .select({
+        status: pettyCashTransactions.status,
+        imageUrl: pettyCashTransactions.imageUrl,
+        financeReview: pettyCashTransactions.financeReview,
+      })
+      .from(pettyCashTransactions)
+      .where(and(eq(pettyCashTransactions.id, txId), eq(pettyCashTransactions.storeId, storeId)))
+      .limit(1);
+
+    const error = !current
+      ? 'Request tidak ditemukan.'
+      : current.status === 'completed' && current.imageUrl
+        ? 'Foto struk tidak bisa diganti setelah request selesai. Kalau perlu foto lain, ajukan ulang lewat Re-request.'
+        : current.status === 'completed'
+          ? 'Request ini sudah diputuskan Finance, jadi tidak ada foto yang perlu diunggah.'
+          : 'Foto struk baru bisa diunggah setelah request disetujui OPS.';
+
+    return NextResponse.json({ success: false, error }, { status: 409 });
   }
 
   return NextResponse.json({

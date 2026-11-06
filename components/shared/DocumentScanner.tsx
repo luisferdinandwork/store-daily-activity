@@ -5,6 +5,10 @@
 // back a JPEG File) for finance paperwork: transfer slips (resi), Z-Report / EDC
 // settlement strips, petty-cash receipts, sales-return receipts.
 //
+// The scanning itself is a switch in the camera ("Dokumen"), OFF each time it opens:
+// off = a plain photo (shutter only, no outline / auto-capture / flatten / filters);
+// on = everything described below.
+//
 // Live: the rear camera runs with continuous autofocus; every ~120 ms a small
 // copy of the frame is searched for the sheet (lib/scanner/detect.ts) and its
 // outline is drawn over the video. When the sheet has held still AND the focus
@@ -65,7 +69,10 @@ const IDLE_VIEW: LiveView = {
   quad: null, vw: 16, vh: 9, progress: 0, tone: 'none', hint: 'Arahkan kamera ke dokumen',
 };
 
-interface Shot { canvas: HTMLCanvasElement; quad: Quad | null }
+/** `doc` = the scanner was on when it was shot (decides how the review treats it). */
+interface Shot { canvas: HTMLCanvasElement; quad: Quad | null; doc: boolean }
+
+const PLAIN_VIEW: LiveView = { ...IDLE_VIEW, hint: 'Ketuk tombol untuk mengambil foto' };
 
 export interface DocumentScannerProps {
   open: boolean;
@@ -86,6 +93,9 @@ function ScannerSession({ onClose, onCapture, title }: DocumentScannerProps) {
 
   const [phase, setPhase] = useState<'live' | 'review'>('live');
   const [view, setView] = useState<LiveView>(IDLE_VIEW);
+  // Document scanning (outline, auto-capture, flatten + clean-up) is OFF each time the camera
+  // opens: it takes a plain photo until the user switches "Dokumen" on.
+  const [docOn, setDocOn] = useState(false);
   const [autoOn, setAutoOn] = useState(true);
   const [shooting, setShooting] = useState(false);
   const [shot, setShot] = useState<Shot | null>(null);
@@ -96,10 +106,12 @@ function ScannerSession({ onClose, onCapture, title }: DocumentScannerProps) {
   const lastQuad = useRef<Quad | null>(null);
   const shootingRef = useRef(false);
   const autoRef = useRef(true);
+  const docRef = useRef(false);
   const shootRef = useRef<() => void>(() => {});
   const viewportRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => { autoRef.current = autoOn; }, [autoOn]);
+  useEffect(() => { docRef.current = docOn; }, [docOn]);
 
   // Start the camera once; lock page scroll behind the full-screen view.
   useEffect(() => {
@@ -114,8 +126,9 @@ function ScannerSession({ onClose, onCapture, title }: DocumentScannerProps) {
     shootingRef.current = true;
     setShooting(true);
     try {
+      const doc = docRef.current;
       const scratch = createScratch();
-      const tracked = lastQuad.current;
+      const tracked = doc ? lastQuad.current : null;
       const region = focusRegion(tracked);
 
       // A short burst: keep whichever frame is sharpest (handheld shake, late autofocus).
@@ -134,15 +147,19 @@ function ScannerSession({ onClose, onCapture, title }: DocumentScannerProps) {
       }
 
       // Exact outline from the chosen frame; fall back to what the user saw on screen.
+      // (Scanner off: a plain photo, nothing is searched for.)
       const { canvas } = best;
-      const fine = sampleRaster(canvas, canvas.width, canvas.height, FINAL_EDGE, scratch);
-      const found = (fine ? detectDocument(fine)?.quad : null) ?? tracked;
-      const quad = found
-        ? clampQuad(expandQuad(scaleQuad(found, canvas.width, canvas.height), 1.004), canvas.width, canvas.height)
-        : null;
+      let quad: Quad | null = null;
+      if (doc) {
+        const fine = sampleRaster(canvas, canvas.width, canvas.height, FINAL_EDGE, scratch);
+        const found = (fine ? detectDocument(fine)?.quad : null) ?? tracked;
+        quad = found
+          ? clampQuad(expandQuad(scaleQuad(found, canvas.width, canvas.height), 1.004), canvas.width, canvas.height)
+          : null;
+      }
 
       stop();
-      setShot({ canvas, quad });
+      setShot({ canvas, quad, doc });
       setPhase('review');
     } finally {
       shootingRef.current = false;
@@ -157,6 +174,13 @@ function ScannerSession({ onClose, onCapture, title }: DocumentScannerProps) {
     if (phase !== 'live' || status !== 'streaming') return;
     const video = videoRef.current;
     if (!video) return;
+
+    // Scanner off: nothing to analyse — no outline, no auto-capture, no CPU spent.
+    if (!docOn) {
+      lastQuad.current = null;
+      setView(PLAIN_VIEW);
+      return;
+    }
 
     const scratch = createScratch();
     const probeCanvas = createScratch();
@@ -228,12 +252,12 @@ function ScannerSession({ onClose, onCapture, title }: DocumentScannerProps) {
       alive = false;
       clearTimeout(timer);
     };
-  }, [phase, status, videoRef, torchSupported]);
+  }, [phase, status, videoRef, torchSupported, docOn]);
 
   function handleRetake() {
     lastQuad.current = null;
     setShot(null);
-    setView(IDLE_VIEW);
+    setView(docOn ? IDLE_VIEW : PLAIN_VIEW);
     setPhase('live');
     void start();
   }
@@ -357,7 +381,7 @@ function ScannerSession({ onClose, onCapture, title }: DocumentScannerProps) {
           )}
 
           {/* Guide when nothing is tracked yet */}
-          {ready && !view.quad && (
+          {ready && docOn && !view.quad && (
             <div className="pointer-events-none absolute inset-[10%] rounded-2xl border-2 border-dashed border-white/35" />
           )}
 
@@ -423,17 +447,19 @@ function ScannerSession({ onClose, onCapture, title }: DocumentScannerProps) {
             'landscape:px-3 landscape:py-6 landscape:pr-[calc(0.75rem+env(safe-area-inset-right))]',
           )}
         >
+          {/* Document scanning: off by default — a plain photo until switched on */}
           <button
             type="button"
-            onClick={() => setAutoOn(v => !v)}
-            aria-pressed={autoOn}
+            onClick={() => setDocOn(v => !v)}
+            aria-pressed={docOn}
+            aria-label={docOn ? 'Matikan mode pindai dokumen' : 'Nyalakan mode pindai dokumen'}
             className={cn(
               'flex h-11 min-w-[68px] items-center justify-center gap-1 rounded-full px-3 text-xs font-bold active:scale-95',
-              autoOn ? 'bg-white text-black' : 'bg-white/10 text-white',
+              docOn ? 'bg-white text-black' : 'bg-white/10 text-white',
             )}
           >
-            {autoOn ? <Zap className="h-4 w-4" /> : <ZapOff className="h-4 w-4" />}
-            Auto
+            <ScanLine className="h-4 w-4" />
+            Dokumen
           </button>
 
           <button
@@ -457,8 +483,23 @@ function ScannerSession({ onClose, onCapture, title }: DocumentScannerProps) {
               : <span className="h-[52px] w-[52px] rounded-full bg-white" />}
           </button>
 
-          {/* Spacer keeps the shutter centred */}
-          <div className="min-w-[68px]" aria-hidden="true" />
+          {/* Auto-capture belongs to scanning; without it the slot is a spacer that keeps the shutter centred */}
+          {docOn ? (
+            <button
+              type="button"
+              onClick={() => setAutoOn(v => !v)}
+              aria-pressed={autoOn}
+              className={cn(
+                'flex h-11 min-w-[68px] items-center justify-center gap-1 rounded-full px-3 text-xs font-bold active:scale-95',
+                autoOn ? 'bg-white text-black' : 'bg-white/10 text-white',
+              )}
+            >
+              {autoOn ? <Zap className="h-4 w-4" /> : <ZapOff className="h-4 w-4" />}
+              Auto
+            </button>
+          ) : (
+            <div className="min-w-[68px]" aria-hidden="true" />
+          )}
         </div>
       </div>
 
@@ -467,6 +508,7 @@ function ScannerSession({ onClose, onCapture, title }: DocumentScannerProps) {
           source={shot.canvas}
           initialQuad={shot.quad}
           title={title}
+          plain={!shot.doc}
           onRetake={handleRetake}
           onClose={handleClose}
           onUse={onCapture}

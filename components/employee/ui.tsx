@@ -343,7 +343,7 @@ export function NotesField({
  * ("2/3 foto") that opens a photo modal instead of the camera.
  */
 export function PhotoRow({
-  title, hint, photo, count, required, onClick, disabled, loading, icon,
+  title, hint, photo, count, required, onClick, disabled, loading, icon, badge,
 }: {
   title: string;
   hint?: string;
@@ -354,6 +354,8 @@ export function PhotoRow({
   disabled?: boolean;
   loading?: boolean;
   icon?: ReactNode;
+  /** Replaces the right-hand chip while there is no photo (e.g. "Wajib" / "Tidak perlu"). */
+  badge?: { label: string; tone: ChipTone; icon?: ComponentType<{ className?: string }> };
 }) {
   const multi = count != null;
   const done = multi ? count >= (required ?? 1) : Boolean(photo);
@@ -388,6 +390,8 @@ export function PhotoRow({
         </Chip>
       ) : done ? (
         <Chip tone="success" icon={Check}>Ada</Chip>
+      ) : badge ? (
+        <Chip tone={badge.tone} icon={badge.icon}>{badge.label}</Chip>
       ) : (
         <Chip tone="primary" icon={Camera}>Foto</Chip>
       )}

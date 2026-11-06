@@ -25,6 +25,11 @@ interface ScanReviewProps {
   /** Detected corners in source pixels, or null when nothing was found. */
   initialQuad: Quad | null;
   title?: string;
+  /**
+   * Plain photo (scanner switched off): no crop, no flattening, no filter — the frame
+   * as shot, only rotatable. No corner editor, filter row or "edges not found" warning.
+   */
+  plain?: boolean;
   onRetake: () => void;
   onClose: () => void;
   onUse: (file: File) => void;
@@ -32,10 +37,10 @@ interface ScanReviewProps {
 
 interface Result { file: File; url: string }
 
-export default function ScanReview({ source, initialQuad, title, onRetake, onClose, onUse }: ScanReviewProps) {
+export default function ScanReview({ source, initialQuad, title, plain = false, onRetake, onClose, onUse }: ScanReviewProps) {
   const detected = initialQuad !== null;
   const [corners, setCorners] = useState<Quad>(() => initialQuad ?? fullFrameQuad(source.width, source.height));
-  const [filter, setFilter] = useState<ScanFilter>('document');
+  const [filter, setFilter] = useState<ScanFilter>(plain ? 'original' : 'document');
   const [turns, setTurns] = useState(0);
   const [editing, setEditing] = useState(false);
   const [processing, setProcessing] = useState(true);
@@ -60,11 +65,15 @@ export default function ScanReview({ source, initialQuad, title, onRetake, onClo
     await nextFrame(); // let the spinner paint before the heavy part
     try {
       sourceRaster.current ??= canvasToRaster(source);
-      const key = c.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join('|');
+      const key = plain ? 'plain' : c.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join('|');
       let flat = flatCache.current?.key === key ? flatCache.current.flat : null;
       if (!flat) {
-        const size = scanOutputSize(c);
-        flat = warpQuad(sourceRaster.current, c, size.width, size.height);
+        if (plain) {
+          flat = sourceRaster.current; // as shot
+        } else {
+          const size = scanOutputSize(c);
+          flat = warpQuad(sourceRaster.current, c, size.width, size.height);
+        }
         flatCache.current = { key, flat };
       }
       await nextFrame();
@@ -81,7 +90,7 @@ export default function ScanReview({ source, initialQuad, title, onRetake, onClo
     } finally {
       if (id === runId.current) setProcessing(false);
     }
-  }, [source]);
+  }, [source, plain]);
 
   // First pass + the picture the corner editor draws on.
   useEffect(() => {
@@ -151,7 +160,7 @@ export default function ScanReview({ source, initialQuad, title, onRetake, onClo
           <X className="h-5 w-5" />
         </button>
         <p className="min-w-0 flex-1 truncate text-center text-sm font-semibold text-white landscape:max-w-[56px] landscape:flex-none landscape:line-clamp-4 landscape:whitespace-normal landscape:break-words landscape:text-[10px] landscape:leading-tight">
-          {editing ? 'Atur sudut dokumen' : (title ?? 'Hasil pindai')}
+          {editing ? 'Atur sudut dokumen' : (title ?? (plain ? 'Hasil foto' : 'Hasil pindai'))}
         </p>
         {editing ? (
           <button
@@ -171,14 +180,16 @@ export default function ScanReview({ source, initialQuad, title, onRetake, onClo
             >
               <RotateCw className="h-5 w-5" />
             </button>
-            <button
-              type="button"
-              onClick={() => setEditing(true)}
-              aria-label="Atur sudut"
-              className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white active:scale-95"
-            >
-              <Crop className="h-5 w-5" />
-            </button>
+            {!plain && (
+              <button
+                type="button"
+                onClick={() => setEditing(true)}
+                aria-label="Atur sudut"
+                className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white active:scale-95"
+              >
+                <Crop className="h-5 w-5" />
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -200,7 +211,7 @@ export default function ScanReview({ source, initialQuad, title, onRetake, onClo
                 <Loader2 className="h-8 w-8 animate-spin text-white" />
               </div>
             )}
-            {!detected && !busy && (
+            {!plain && !detected && !busy && (
               <div className="absolute inset-x-3 top-3 flex items-start gap-2 rounded-xl bg-amber-500/95 px-3 py-2 text-[11px] font-semibold leading-snug text-black">
                 <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
                 <span>Tepi dokumen tidak terdeteksi, seluruh foto dipakai. Ketuk ikon potong untuk mengatur sudut, atau ambil ulang.</span>
@@ -228,22 +239,24 @@ export default function ScanReview({ source, initialQuad, title, onRetake, onClo
           </button>
         ) : (
           <>
-            <div className="flex rounded-full bg-white/10 p-1 landscape:flex-col landscape:rounded-2xl">
-              {FILTERS.map(f => (
-                <button
-                  key={f}
-                  type="button"
-                  onClick={() => changeFilter(f)}
-                  aria-pressed={filter === f}
-                  className={cn(
-                    'flex-1 rounded-full px-3 py-2 text-xs font-bold transition-colors landscape:rounded-xl',
-                    filter === f ? 'bg-white text-black' : 'text-white/80',
-                  )}
-                >
-                  {SCAN_FILTER_LABEL[f]}
-                </button>
-              ))}
-            </div>
+            {!plain && (
+              <div className="flex rounded-full bg-white/10 p-1 landscape:flex-col landscape:rounded-2xl">
+                {FILTERS.map(f => (
+                  <button
+                    key={f}
+                    type="button"
+                    onClick={() => changeFilter(f)}
+                    aria-pressed={filter === f}
+                    className={cn(
+                      'flex-1 rounded-full px-3 py-2 text-xs font-bold transition-colors landscape:rounded-xl',
+                      filter === f ? 'bg-white text-black' : 'text-white/80',
+                    )}
+                  >
+                    {SCAN_FILTER_LABEL[f]}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="flex gap-3 landscape:flex-col">
               <button
                 type="button"

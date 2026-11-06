@@ -1,9 +1,9 @@
 // app/api/employee/petty-cash/refill-request/route.ts
 //
-// GET   — current month's refill request status for the employee's home store
-//         (visible to every employee at the store, not just PIC 1).
-// POST  — create a new refill request. PIC 1 only (the petty cash holder),
-//         one active (pending or approved) request per store per month.
+// GET   — the store's refill: the one on its way (else the latest) plus what a new one would cover and where it
+//         stands against the 15th (visible to every employee at the store, not just PIC 1).
+// POST  — send the refill for the period in use. PIC 1 only (the petty cash holder), one refill on its way per
+//         store at a time. Sending it CLOSES the period and opens the next one (lib/petty-cash-period.ts).
 //         Must include the bank account Finance should send the cash to
 //         (bankName / accountNumber / accountHolderName).
 // PATCH — attach a proof-of-receipt photo (drawer / signature) once Finance
@@ -16,13 +16,16 @@ import { authOptions } from '@/lib/auth';
 import {
   attachRefillProof,
   createRefillRequest,
-  currentYearMonthJakarta,
   getLastBankDetails,
-  getLatestRefillRequest,
+  getRefillOverview,
   isPettyCashHolder,
   type ProofPhotoKind,
 } from '@/lib/db/utils/petty-cash-refill';
+import { assertStoreOperational } from '@/lib/db/utils/store-status';
 import { normalizeBankDetails } from '@/lib/petty-cash-bank';
+
+/** What the session carries about the employee (NextAuth user, see lib/auth). */
+type SessionUser = { id: string; homeStoreId?: number | string | null; employeeType?: string | null };
 
 const holderOnly = (what: string) =>
   NextResponse.json(
@@ -40,20 +43,34 @@ export async function GET() {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
   }
 
-  const user = session.user as any;
+  const user = session.user as SessionUser;
   const storeId = Number(user.homeStoreId);
   if (!Number.isFinite(storeId)) {
     return NextResponse.json({ success: false, error: 'No home store.' }, { status: 400 });
   }
 
-  const yearMonth = currentYearMonthJakarta();
-  const request = await getLatestRefillRequest(storeId, yearMonth);
+  // Resolving the period in use may create one, so only for a store that runs petty cash.
+  const inactive = await assertStoreOperational(storeId);
+  if (inactive) return NextResponse.json({ success: false, error: inactive }, { status: 403 });
+
+  const overview = await getRefillOverview(storeId);
   // Only PIC 1 files requests, so only they get their saved account back to pre-fill the form.
   const lastBankDetails = isPettyCashHolder(user.employeeType)
     ? await getLastBankDetails(session.user.id as string)
     : null;
 
-  return NextResponse.json({ success: true, yearMonth, request, lastBankDetails });
+  return NextResponse.json({
+    success: true,
+    request: overview.request,
+    lastBankDetails,
+    overview: {
+      usageMonth: overview.usageMonth,
+      settle: overview.settle,
+      deadline: overview.deadline,
+      canRequest: overview.canRequest,
+      blockedReason: overview.blockedReason,
+    },
+  });
 }
 
 export async function POST(req: NextRequest) {
@@ -62,13 +79,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
   }
 
-  const user = session.user as any;
+  const user = session.user as SessionUser;
   if (!isPettyCashHolder(user.employeeType)) return holderOnly('mengajukan Refill petty cash');
 
   const storeId = Number(user.homeStoreId);
   if (!Number.isFinite(storeId)) {
     return NextResponse.json({ success: false, error: 'No home store.' }, { status: 400 });
   }
+
+  const inactive = await assertStoreOperational(storeId);
+  if (inactive) return NextResponse.json({ success: false, error: inactive }, { status: 403 });
 
   const body = await req.json().catch(() => ({}));
   const notes = typeof body?.notes === 'string' && body.notes.trim() ? body.notes.trim() : undefined;
@@ -88,7 +108,7 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
   }
 
-  const user = session.user as any;
+  const user = session.user as SessionUser;
   if (!isPettyCashHolder(user.employeeType)) return holderOnly('mengunggah foto bukti Refill');
 
   const storeId = Number(user.homeStoreId);

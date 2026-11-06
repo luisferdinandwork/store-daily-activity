@@ -4,36 +4,61 @@
 // the employee page, the server utils, Ops task progress and Finance.
 //
 // At closing the store reads the day's total off each bank's EDC, per payment
-// method, and types it in: BCA, Mandiri, BRI, OCBC and Indodana, each split by
-// QRIS / Debit / Credit, plus one extra amount, OP/ME/VOUCHER. Every field is
-// optional — a blank cell is simply "nothing counted". Indodana has no EDC slip;
-// its figure comes from the Indodana dashboard, whose photo is optional too.
+// method, and types it in: BCA, Mandiri, BRI, OCBC each split by QRIS / Debit /
+// Credit, plus two single amounts, Indodana and OP/ME/VOUCHER. Every field is
+// optional — a blank cell is simply "nothing counted". Indodana has no EDC slip
+// and no method split; its one figure comes from the Indodana dashboard, whose
+// photo is optional unless Indodana had a transaction (see indodanaPhotoRequired)
+// — then it is a must. (Rows an earlier QRIS / Debit / Credit Indodana closing
+// stored are folded into the single amount by migration 0042.)
+//
+// The day's Sales Cash is NOT part of this summary: it is its own number on the
+// closing (store_closing_tasks.sales_cash_amount) that the next morning's Setoran
+// picks up as "Jumlah Sales Cash".
 //
 // Rows are stored per (bank, method) in store_closing_edc_entries, so adding a
 // bank or changing which methods a bank has is a one-line edit of EDC_BANKS
 // below — no migration.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** The payment methods an EDC machine splits a bank's day by. */
 export const EDC_METHODS = ['qris', 'debit', 'credit'] as const;
-export type EdcMethod = (typeof EDC_METHODS)[number];
+export type EdcCardMethod = (typeof EDC_METHODS)[number];
+
+/**
+ * A bank with no split (Indodana: one figure off its dashboard) has this single
+ * "method" — one cell per day, like OP/ME/VOUCHER. Not a column of the QRIS /
+ * Debit / Credit tables.
+ */
+export const EDC_TOTAL_METHOD = 'total' as const;
+export type EdcMethod = EdcCardMethod | typeof EDC_TOTAL_METHOD;
 
 export const EDC_METHOD_LABELS: Record<EdcMethod, string> = {
   qris: 'QRIS',
   debit: 'Debit',
   credit: 'Credit',
+  total: 'Total',
 };
+
+const TOTAL_ONLY = [EDC_TOTAL_METHOD] as const;
 
 /**
  * The banks a store counts at closing, in the order they are shown.
  * `dashboardPhoto` = needs a photo of the bank's dashboard when it has an amount.
+ * Indodana has no EDC slip, so it is one amount, not split by method.
  */
 export const EDC_BANKS = [
   { code: 'bca', label: 'BCA', methods: EDC_METHODS, dashboardPhoto: false },
   { code: 'mandiri', label: 'Mandiri', methods: EDC_METHODS, dashboardPhoto: false },
   { code: 'bri', label: 'BRI', methods: EDC_METHODS, dashboardPhoto: false },
   { code: 'ocbc', label: 'OCBC', methods: EDC_METHODS, dashboardPhoto: false },
-  { code: 'indodana', label: 'Indodana', methods: EDC_METHODS, dashboardPhoto: true },
+  { code: 'indodana', label: 'Indodana', methods: TOTAL_ONLY, dashboardPhoto: true },
 ] as const;
+
+/** A bank that is a single amount (no QRIS / Debit / Credit split). */
+export function isSingleAmountBank(bank: { methods: readonly string[] }): boolean {
+  return bank.methods.length === 1 && bank.methods[0] === EDC_TOTAL_METHOD;
+}
 
 export type EdcBank = (typeof EDC_BANKS)[number];
 export type EdcBankCode = EdcBank['code'];
@@ -131,6 +156,18 @@ export function parseEdcEntries(raw: unknown): EdcParse<EdcEntryInput[]> {
   return { ok: true, value: out };
 }
 
+/**
+ * Does this closing need the Indodana dashboard photo? Only when Indodana actually
+ * had a transaction (its cells add up to more than Rp 0). Blank, "Tidak ada
+ * transaksi" and typed zeros leave the photo optional.
+ */
+export function indodanaPhotoRequired(entries: readonly EdcEntryLike[] | null | undefined): boolean {
+  return summariseEdc(entries, null).banks.some((b) => b.dashboardPhoto && b.total > 0);
+}
+
+export const INDODANA_PHOTO_REQUIRED_MESSAGE =
+  `${INDODANA_PHOTO_LABEL} wajib diupload karena ada transaksi Indodana. Kosongkan/isi 0 nominal Indodana bila tidak ada transaksi.`;
+
 // ─── Totals ──────────────────────────────────────────────────────────────────
 
 export interface EdcBankSummary {
@@ -148,7 +185,9 @@ export interface EdcBankSummary {
 export interface EdcSummary {
   banks: EdcBankSummary[];
   /** Per payment method across every bank. */
-  byMethod: Record<EdcMethod, number>;
+  byMethod: Record<EdcCardMethod, number>;
+  /** Banks that are one plain amount (Indodana), all added up — not part of byMethod. */
+  singleBanksTotal: number;
   /** All banks together, without OP/ME/VOUCHER. */
   banksTotal: number;
   /** null = not filled in. */
@@ -171,21 +210,23 @@ export function summariseEdc(
     if (Number.isFinite(amount)) byCell.set(edcCellKey(e.bank, e.method), amount);
   }
 
-  const byMethod = { qris: 0, debit: 0, credit: 0 } satisfies Record<EdcMethod, number>;
+  const byMethod = { qris: 0, debit: 0, credit: 0 } satisfies Record<EdcCardMethod, number>;
+  let singleBanksTotal = 0;
   const banks: EdcBankSummary[] = EDC_BANKS.map((bank) => {
     const cells: Partial<Record<EdcMethod, number>> = {};
     let total = 0;
-    for (const method of bank.methods) {
+    for (const method of bank.methods as readonly EdcMethod[]) {
       const amount = byCell.get(edcCellKey(bank.code, method));
       if (amount === undefined) continue;
       cells[method] = amount;
       total += amount;
-      byMethod[method] += amount;
+      if (method === EDC_TOTAL_METHOD) singleBanksTotal += amount;
+      else byMethod[method] += amount;
     }
     return {
       code: bank.code,
       label: bank.label,
-      methods: bank.methods,
+      methods: bank.methods as readonly EdcMethod[],
       cells,
       total,
       filled: Object.keys(cells).length > 0,
@@ -200,6 +241,7 @@ export function summariseEdc(
   return {
     banks,
     byMethod,
+    singleBanksTotal,
     banksTotal,
     opMeVoucher: opMe,
     total: banksTotal + (opMe ?? 0),

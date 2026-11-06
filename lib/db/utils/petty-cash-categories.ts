@@ -1,9 +1,9 @@
 // lib/db/utils/petty-cash-categories.ts
 //
-// Petty cash request categories (Galon, ATK, …, Lain-Lain) — CRUD for the OPS
-// HO / IT management page, plus the lookup the employee request form uses.
-// Every category either has a default reason (pre-filled into the request's
-// Keterangan) or requires the PIC to write their own (Lain-Lain).
+// Petty cash request categories (STATIONERY & OFFICE SUPPLIES, PRINTING, …) —
+// CRUD for the IT management page, plus the lookup the employee request form
+// uses. A category has a Pengertian + Contoh Pengeluaran (for the "!" help sheet)
+// and no preset Keterangan — the PIC always writes their own.
 import { and, asc, eq, inArray, ne, sql } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
@@ -14,7 +14,7 @@ import {
 } from '@/lib/db/schema';
 import {
   PETTY_CASH_CATEGORY_NAME_MAX,
-  PETTY_CASH_REASON_MAX,
+  PETTY_CASH_CATEGORY_TEXT_MAX,
 } from '@/lib/petty-cash-categories';
 
 export type TaskResult<T = void> =
@@ -23,8 +23,8 @@ export type TaskResult<T = void> =
 
 export interface PettyCashCategoryInput {
   name?: unknown;
-  defaultReason?: unknown;
-  requiresCustomReason?: unknown;
+  definition?: unknown;
+  examples?: unknown;
   isActive?: unknown;
 }
 
@@ -71,8 +71,8 @@ export async function getPettyCashCategory(id: number): Promise<PettyCashCategor
 
 type CleanFields = {
   name?: string;
-  defaultReason?: string | null;
-  requiresCustomReason?: boolean;
+  definition?: string | null;
+  examples?: string | null;
   isActive?: boolean;
 };
 
@@ -88,19 +88,14 @@ function cleanInput(input: PettyCashCategoryInput): TaskResult<CleanFields> {
     out.name = name;
   }
 
-  if (input.defaultReason !== undefined) {
-    const reason = typeof input.defaultReason === 'string' ? input.defaultReason.trim() : '';
-    if (reason.length > PETTY_CASH_REASON_MAX) {
-      return { success: false, error: `Alasan default maksimal ${PETTY_CASH_REASON_MAX} karakter.` };
+  for (const [key, label] of [['definition', 'Pengertian'], ['examples', 'Contoh pengeluaran']] as const) {
+    const raw = input[key];
+    if (raw === undefined) continue;
+    const text = typeof raw === 'string' ? raw.trim() : '';
+    if (text.length > PETTY_CASH_CATEGORY_TEXT_MAX) {
+      return { success: false, error: `${label} maksimal ${PETTY_CASH_CATEGORY_TEXT_MAX} karakter.` };
     }
-    out.defaultReason = reason || null;
-  }
-
-  if (input.requiresCustomReason !== undefined) {
-    if (typeof input.requiresCustomReason !== 'boolean') {
-      return { success: false, error: 'requiresCustomReason must be a boolean.' };
-    }
-    out.requiresCustomReason = input.requiresCustomReason;
+    out[key] = text || null;
   }
 
   if (input.isActive !== undefined) {
@@ -111,14 +106,6 @@ function cleanInput(input: PettyCashCategoryInput): TaskResult<CleanFields> {
   }
 
   return { success: true, data: out };
-}
-
-/** A category needs a default reason unless the PIC must write their own. */
-function assertHasReason(fields: { defaultReason: string | null; requiresCustomReason: boolean }) {
-  if (!fields.requiresCustomReason && !fields.defaultReason) {
-    return 'Isi alasan default, atau tandai kategori ini agar PIC menulis alasan sendiri.';
-  }
-  return null;
 }
 
 async function nameTaken(name: string, exceptId?: number): Promise<boolean> {
@@ -142,11 +129,9 @@ export async function createPettyCashCategory(
 ): Promise<TaskResult<PettyCashCategory>> {
   const clean = cleanInput(input);
   if (!clean.success) return clean;
-  const { name, defaultReason = null, requiresCustomReason = false, isActive = true } = clean.data;
+  const { name, definition = null, examples = null, isActive = true } = clean.data;
 
   if (!name) return { success: false, error: 'Nama kategori wajib diisi.' };
-  const reasonErr = assertHasReason({ defaultReason, requiresCustomReason });
-  if (reasonErr) return { success: false, error: reasonErr };
   if (await nameTaken(name)) return { success: false, error: `Kategori "${name}" sudah ada.` };
 
   // New categories go to the end of the list.
@@ -158,9 +143,8 @@ export async function createPettyCashCategory(
     .insert(pettyCashCategories)
     .values({
       name,
-      // A custom-reason category ignores any default text.
-      defaultReason: requiresCustomReason ? null : defaultReason,
-      requiresCustomReason,
+      definition,
+      examples,
       isActive,
       sortOrder: maxSort + 10,
     })
@@ -182,13 +166,6 @@ export async function updatePettyCashCategory(
   if (!clean.success) return clean;
   const patch = clean.data;
 
-  const requiresCustomReason = patch.requiresCustomReason ?? existing.requiresCustomReason;
-  const defaultReason = requiresCustomReason
-    ? null
-    : patch.defaultReason !== undefined ? patch.defaultReason : existing.defaultReason;
-
-  const reasonErr = assertHasReason({ defaultReason, requiresCustomReason });
-  if (reasonErr) return { success: false, error: reasonErr };
   if (patch.name && (await nameTaken(patch.name, id))) {
     return { success: false, error: `Kategori "${patch.name}" sudah ada.` };
   }
@@ -198,8 +175,8 @@ export async function updatePettyCashCategory(
     .set({
       ...(patch.name ? { name: patch.name } : {}),
       ...(patch.isActive !== undefined ? { isActive: patch.isActive } : {}),
-      defaultReason,
-      requiresCustomReason,
+      ...(patch.definition !== undefined ? { definition: patch.definition } : {}),
+      ...(patch.examples !== undefined ? { examples: patch.examples } : {}),
       updatedAt: new Date(),
     })
     .where(eq(pettyCashCategories.id, id))

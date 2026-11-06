@@ -25,6 +25,8 @@ import {
   syncReceivingStatus,
   getItemDroppingEntriesWithTransferOrder,
   getItemReturnEntriesWithTransferOrder,
+  ensureWarehouseCodes,
+  isWarehouseCode,
 } from '@/lib/db/utils/item-transfers';
 import { refreshTransferRegistry } from '@/lib/db/utils/transfer-order-refresh';
 
@@ -115,9 +117,17 @@ export async function GET() {
     getItemReturnEntriesWithTransferOrder(returnTask.id),
   ]);
 
+  await ensureWarehouseCodes();
+  // A warehouse code ("DM…" or listed at /it/warehouse-codes) is never a store, whatever store row it once matched.
+  const fromIsWarehouse = (t: { transferFromCode: string } | null | undefined) => !!t && isWarehouseCode(t.transferFromCode);
+  const toIsWarehouse = (t: { transferToCode: string } | null | undefined) => !!t && isWarehouseCode(t.transferToCode);
+
   const storeIds = [...new Set(
     [...droppingRaw, ...returnRaw]
-      .flatMap((r) => [r.transferOrder?.fromStoreId, r.transferOrder?.toStoreId])
+      .flatMap((r) => [
+        fromIsWarehouse(r.transferOrder) ? null : r.transferOrder?.fromStoreId,
+        toIsWarehouse(r.transferOrder) ? null : r.transferOrder?.toStoreId,
+      ])
       .filter((v): v is number => v != null),
   )];
 
@@ -134,8 +144,10 @@ export async function GET() {
     qtyCounted: entry.qtyCounted,
     courierSignPhoto: entry.courierSignPhoto,
     submittedAt: entry.submittedAt?.toISOString() ?? null,
-    fromStore: transferOrder?.fromStoreId ? storeById.get(transferOrder.fromStoreId) ?? null : null,
-    toStore: transferOrder?.toStoreId ? storeById.get(transferOrder.toStoreId) ?? null : null,
+    fromStore: transferOrder?.fromStoreId && !fromIsWarehouse(transferOrder) ? storeById.get(transferOrder.fromStoreId) ?? null : null,
+    toStore: transferOrder?.toStoreId && !toIsWarehouse(transferOrder) ? storeById.get(transferOrder.toStoreId) ?? null : null,
+    fromIsWarehouse: fromIsWarehouse(transferOrder),
+    toIsWarehouse: toIsWarehouse(transferOrder),
     transferFromCode: transferOrder?.transferFromCode ?? null,
     transferToCode: transferOrder?.transferToCode ?? null,
     bcStatus: transferOrder?.bcStatus ?? null,
@@ -160,8 +172,10 @@ export async function GET() {
     qtyCounted: entry.qtyCounted,
     courierSignPhoto: entry.courierSignPhoto,
     submittedAt: entry.submittedAt?.toISOString() ?? null,
-    fromStore: transferOrder?.fromStoreId ? storeById.get(transferOrder.fromStoreId) ?? null : null,
-    toStore: transferOrder?.toStoreId ? storeById.get(transferOrder.toStoreId) ?? null : null,
+    fromStore: transferOrder?.fromStoreId && !fromIsWarehouse(transferOrder) ? storeById.get(transferOrder.fromStoreId) ?? null : null,
+    toStore: transferOrder?.toStoreId && !toIsWarehouse(transferOrder) ? storeById.get(transferOrder.toStoreId) ?? null : null,
+    fromIsWarehouse: fromIsWarehouse(transferOrder),
+    toIsWarehouse: toIsWarehouse(transferOrder),
     transferFromCode: transferOrder?.transferFromCode ?? null,
     transferToCode: transferOrder?.transferToCode ?? null,
     bcStatus: transferOrder?.bcStatus ?? null,

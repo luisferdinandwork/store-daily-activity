@@ -30,15 +30,18 @@ export interface FinanceRejectedSnapshot {
 
 // ─── Request categories ───────────────────────────────────────────────────────
 //
-// What a PIC picks when requesting petty cash (Galon, ATK, …), managed by IT
-// at /it/petty-cash-categories. Picking one pre-fills the request's
-// Keterangan with `defaultReason` (still editable); a `requiresCustomReason`
-// category (Lain-Lain) has no default and the PIC must write their own.
-// Requests keep a name snapshot, so renaming/deleting a category never
-// rewrites history.
+// What a PIC picks when requesting petty cash (the Finance expense categories),
+// managed by IT at /it/petty-cash-categories. A category has no preset
+// Keterangan — the PIC always writes their own. `definition` (Pengertian) and
+// `examples` (Contoh Pengeluaran) only feed the "!" help sheet on the employee
+// Petty Cash page (migration 0041). Requests keep a name snapshot, so
+// renaming/deleting a category never rewrites history.
 export const pettyCashCategories = pgTable('petty_cash_categories', {
   id: serial('id').primaryKey(),
   name: text('name').notNull().unique(),
+  definition: text('definition'),
+  examples: text('examples'),
+  // LEGACY (before 0041: a preset Keterangan / "PIC writes their own"). No longer read or written.
   defaultReason: text('default_reason'),
   requiresCustomReason: boolean('requires_custom_reason').default(false).notNull(),
   isActive: boolean('is_active').default(true).notNull(),

@@ -30,6 +30,7 @@ import { taskStatusInfo, taskStatusTile } from '@/components/status/TaskStatus';
 import {
   EDC_METHODS,
   EDC_METHOD_LABELS,
+  isSingleAmountBank,
   INDODANA_PHOTO_LABEL,
   OP_ME_VOUCHER_LABEL,
   summariseEdc,
@@ -754,6 +755,11 @@ function SetoranDetail({ task }: { task: FlatTask }) {
           <InfoRow label="Sisa" value={<span className="font-bold text-amber-600">{fmtAmount(unpaid)}</span>} />
         )}
       </div>
+      {typeof e.salesCashPhoto === 'string' && e.salesCashPhoto && (
+        <div className="mt-2">
+          <PhotoGrid label="Foto Jumlah Sales Cash" photos={e.salesCashPhoto} columns={2} />
+        </div>
+      )}
       {hasSmallSetoranPhotos ? (
         <div className="mt-2 space-y-2">
           <p className="text-xs italic text-slate-400">
@@ -1011,7 +1017,11 @@ function EdcSummaryTable({ summary }: { summary: EdcSummary }) {
           {summary.banks.map((b) => (
             <tr key={b.code}>
               <td className="whitespace-nowrap py-1.5 pl-2.5 pr-2 font-semibold text-slate-700">{b.label}</td>
-              {b.filled ? (
+              {isSingleAmountBank(b) ? (
+                <td colSpan={EDC_METHODS.length} className={cn(td, b.filled ? 'text-slate-300' : 'font-semibold text-amber-600')}>
+                  {b.filled ? 'satu nominal' : 'Belum diisi'}
+                </td>
+              ) : b.filled ? (
                 EDC_METHODS.map((m) => (
                   <td key={m} className={cn(td, b.cells[m] === undefined ? 'text-slate-300' : 'text-slate-600')}>
                     {b.cells[m] === undefined ? '—' : fmtNum(b.cells[m])}
@@ -1134,6 +1144,20 @@ function StoreClosingDetail({ task }: { task: FlatTask }) {
       )}
       {edcSummaryNotes && (
         <p className="mt-1 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">{edcSummaryNotes}</p>
+      )}
+
+      {/* Sales Cash — settled by the next morning's Setoran ("Jumlah Sales Cash"). */}
+      {(e.salesCashAmount != null || !!e.storeClosingUpdate) && (
+        <div className="mt-2 divide-y divide-slate-100">
+          <InfoRow
+            label="Sales Cash"
+            value={
+              e.salesCashAmount == null
+                ? <span className="text-amber-600">Belum diisi</span>
+                : fmtRupiah(Number(e.salesCashAmount))
+            }
+          />
+        </div>
       )}
 
       {/* 3 · EDC Settlement */}

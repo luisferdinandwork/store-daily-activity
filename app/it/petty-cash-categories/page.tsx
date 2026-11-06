@@ -3,10 +3,11 @@
 import PanelPageHeader from '@/components/shared/PanelPageHeader';
 // app/it/petty-cash-categories/page.tsx — IT only.
 //
-// Manage the categories a PIC picks when requesting petty cash (Galon, ATK, …,
-// Lain-Lain): add, edit the default reason that pre-fills the request's
-// Keterangan, mark a category as "PIC writes their own reason", hide, reorder,
-// delete. Employees see the active ones via GET /api/employee/petty-cash.
+// Manage the categories a PIC picks when requesting petty cash (STATIONERY &
+// OFFICE SUPPLIES, PRINTING, …): add, edit the Pengertian + Contoh Pengeluaran
+// shown in the "!" help sheet of the employee Petty Cash page, hide, reorder,
+// delete. A category has no preset Keterangan — the PIC always writes their own.
+// Employees see the active ones via GET /api/employee/petty-cash.
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
@@ -30,7 +31,8 @@ import {
 } from '@/components/ui/dialog';
 import {
   PETTY_CASH_CATEGORY_NAME_MAX,
-  PETTY_CASH_REASON_MAX,
+  PETTY_CASH_CATEGORY_NOTE,
+  PETTY_CASH_CATEGORY_TEXT_MAX,
 } from '@/lib/petty-cash-categories';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -38,16 +40,16 @@ import {
 type CategoryRow = {
   id: number;
   name: string;
-  defaultReason: string | null;
-  requiresCustomReason: boolean;
+  definition: string | null;
+  examples: string | null;
   isActive: boolean;
   sortOrder: number;
   usageCount: number;
 };
 
-type Draft = { name: string; defaultReason: string; requiresCustomReason: boolean };
+type Draft = { name: string; definition: string; examples: string };
 
-const EMPTY_DRAFT: Draft = { name: '', defaultReason: '', requiresCustomReason: false };
+const EMPTY_DRAFT: Draft = { name: '', definition: '', examples: '' };
 
 async function api(url: string, init?: RequestInit) {
   const res = await fetch(url, {
@@ -76,16 +78,17 @@ function CategoryDialog({
     editing
       ? {
           name: editing.name,
-          defaultReason: editing.defaultReason ?? '',
-          requiresCustomReason: editing.requiresCustomReason,
+          definition: editing.definition ?? '',
+          examples: editing.examples ?? '',
         }
       : EMPTY_DRAFT,
   );
   const [busy, setBusy] = useState(false);
 
   const name = draft.name.trim();
-  const reason = draft.defaultReason.trim();
-  const canSave = name.length >= 2 && (draft.requiresCustomReason || reason.length > 0) && !busy;
+  const definition = draft.definition.trim();
+  const examples = draft.examples.trim();
+  const canSave = name.length >= 2 && !busy;
 
   async function save() {
     if (!canSave) return;
@@ -93,8 +96,8 @@ function CategoryDialog({
     try {
       const body = JSON.stringify({
         name,
-        defaultReason: draft.requiresCustomReason ? '' : reason,
-        requiresCustomReason: draft.requiresCustomReason,
+        definition,
+        examples,
       });
       if (editing) {
         await api(`/api/ops/petty-cash/categories/${editing.id}`, { method: 'PATCH', body });
@@ -120,7 +123,7 @@ function CategoryDialog({
             {editing ? 'Edit kategori' : 'Tambah kategori'}
           </DialogTitle>
           <DialogDescription className="text-slate-500">
-            Kategori tampil di form Request Petty Cash milik PIC.
+            Kategori tampil di form Request Petty Cash milik PIC. Pengertian dan contoh tampil di tombol “!”.
           </DialogDescription>
         </DialogHeader>
 
@@ -132,47 +135,47 @@ function CategoryDialog({
               value={draft.name}
               maxLength={PETTY_CASH_CATEGORY_NAME_MAX}
               onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
-              placeholder="mis. Galon"
+              placeholder="mis. PRINTING"
               className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm focus:border-cyan-400 focus:outline-none"
             />
           </label>
 
-          <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-slate-200 bg-slate-50 p-3">
-            <input
-              type="checkbox"
-              checked={draft.requiresCustomReason}
-              onChange={(e) => setDraft((d) => ({ ...d, requiresCustomReason: e.target.checked }))}
-              className="mt-0.5 h-4 w-4 accent-cyan-600"
-            />
-            <span>
-              <span className="block text-sm font-semibold text-slate-800">PIC menulis alasan sendiri</span>
-              <span className="block text-xs text-slate-500">
-                Untuk kategori seperti Lain-Lain — tanpa alasan default, Keterangan wajib diisi PIC.
+          <label className="block space-y-1.5">
+            <span className="flex items-center justify-between text-xs font-bold text-slate-600">
+              Pengertian
+              <span className="font-semibold tabular-nums text-slate-400">
+                {draft.definition.length}/{PETTY_CASH_CATEGORY_TEXT_MAX}
               </span>
             </span>
+            <textarea
+              value={draft.definition}
+              maxLength={PETTY_CASH_CATEGORY_TEXT_MAX}
+              onChange={(e) => setDraft((d) => ({ ...d, definition: e.target.value }))}
+              rows={2}
+              placeholder="Satu kalimat: pengeluaran apa yang masuk kategori ini."
+              className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-cyan-400 focus:outline-none"
+            />
           </label>
 
-          {!draft.requiresCustomReason && (
-            <label className="block space-y-1.5">
-              <span className="flex items-center justify-between text-xs font-bold text-slate-600">
-                Alasan default
-                <span className="font-semibold tabular-nums text-slate-400">
-                  {draft.defaultReason.length}/{PETTY_CASH_REASON_MAX}
-                </span>
+          <label className="block space-y-1.5">
+            <span className="flex items-center justify-between text-xs font-bold text-slate-600">
+              Contoh pengeluaran
+              <span className="font-semibold tabular-nums text-slate-400">
+                {draft.examples.length}/{PETTY_CASH_CATEGORY_TEXT_MAX}
               </span>
-              <textarea
-                value={draft.defaultReason}
-                maxLength={PETTY_CASH_REASON_MAX}
-                onChange={(e) => setDraft((d) => ({ ...d, defaultReason: e.target.value }))}
-                rows={4}
-                placeholder="Mengisi Keterangan otomatis saat PIC memilih kategori ini."
-                className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-cyan-400 focus:outline-none"
-              />
-              <span className="block text-[11px] text-slate-400">
-                PIC tetap bisa mengubah atau menambah detail sebelum mengirim.
-              </span>
-            </label>
-          )}
+            </span>
+            <textarea
+              value={draft.examples}
+              maxLength={PETTY_CASH_CATEGORY_TEXT_MAX}
+              onChange={(e) => setDraft((d) => ({ ...d, examples: e.target.value }))}
+              rows={5}
+              placeholder="Pulpen, kertas HVS, lakban, …"
+              className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-cyan-400 focus:outline-none"
+            />
+            <span className="block text-[11px] text-slate-400">
+              PIC menulis Keterangan sendiri — kategori tidak mengisinya otomatis.
+            </span>
+          </label>
         </div>
 
         <div className="flex justify-end gap-2 pt-1">
@@ -271,24 +274,18 @@ function CategoryItem({
           <p className={cn('text-sm font-bold', category.isActive ? 'text-slate-900' : 'text-slate-400')}>
             {category.name}
           </p>
-          {category.requiresCustomReason && (
-            <span className="rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">
-              Alasan ditulis PIC
-            </span>
-          )}
           {!category.isActive && (
             <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-500">
               Disembunyikan
             </span>
           )}
         </div>
-        <p className="mt-0.5 line-clamp-2 text-xs text-slate-500">
-          {category.requiresCustomReason ? (
-            <span className="italic">PIC wajib menulis Keterangan sendiri.</span>
-          ) : (
-            category.defaultReason
-          )}
+        <p className="mt-0.5 line-clamp-1 text-xs font-medium text-slate-600">
+          {category.definition || <span className="italic text-slate-400">Belum ada pengertian.</span>}
         </p>
+        {category.examples && (
+          <p className="mt-0.5 line-clamp-2 text-xs text-slate-400">{category.examples}</p>
+        )}
       </div>
 
       <p className="shrink-0 text-[11px] font-semibold tabular-nums text-slate-400 md:w-24 md:text-right">
@@ -455,9 +452,9 @@ export default function ItPettyCashCategoriesPage() {
 
       <div className="space-y-3 px-4 py-5 sm:px-6 lg:px-8">
         <p className="text-xs text-slate-500">
-          PIC memilih kategori saat mengirim Request Petty Cash. Alasan default mengisi Keterangan
-          otomatis (PIC masih bisa mengubahnya); kategori bertanda <span className="font-semibold text-amber-700">Alasan ditulis PIC</span> wajib
-          diisi sendiri. Urutan di sini = urutan di form PIC.
+          PIC memilih kategori saat mengirim Request Petty Cash dan menulis Keterangan sendiri.
+          Pengertian dan contoh pengeluaran tampil di tombol “!” halaman Petty Cash PIC. Urutan di sini =
+          urutan di form PIC. {PETTY_CASH_CATEGORY_NOTE}
         </p>
 
         <button

@@ -23,12 +23,14 @@
 // unchanged from the previous version.
 //
 // Naming ↔ DB: "Jumlah yang harus disetor" = expectedAmount + carriedDeficit;
-// "Jumlah Sales Cash" = expectedAmount; "Jumlah setoran Tunai" = amount (the
+// "Jumlah Sales Cash" = expectedAmount (pre-filled from yesterday's Store Closing
+// Sales Cash, with a "Foto Jumlah Sales Cash" - salesCashPhoto - while the IT
+// switch store_closing_update is on); "Jumlah setoran Tunai" = amount (the
 // deposit); "Jumlah yang tidak disetor" = unpaidAmount.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { AlertCircle, CreditCard, Monitor, Pencil, Receipt } from 'lucide-react';
+import { AlertCircle, Banknote, CreditCard, Monitor, Pencil, Receipt } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { useAutoSave } from '@/lib/hooks/useAutoSave';
@@ -81,9 +83,16 @@ type SetoranTaskData = {
   atmCardSelfiePhoto: string | null;
   cashierPhoto?: string | null;
   atmCardPhoto?: string | null;
+
+  /** Sales Cash the store typed at yesterday's Store Closing (null = none / switch off). */
+  salesCashFromClosing?: number | null;
+  /** "Foto Jumlah Sales Cash" - the counted cash. */
+  salesCashPhoto?: string | null;
+  /** IT switch `store_closing_update`: the photo is part of the setoran (required once Jumlah Sales Cash > 0). */
+  salesCashPhotoRequired?: boolean;
 };
 
-type SetoranPhotoType = 'resi' | 'atm_card_selfie' | 'setoran_cashier' | 'setoran_atm_card';
+type SetoranPhotoType = 'resi' | 'atm_card_selfie' | 'setoran_cashier' | 'setoran_atm_card' | 'setoran_sales_cash';
 
 type TaskItem = { type: string; data: SetoranTaskData };
 
@@ -133,6 +142,7 @@ export default function SetoranTaskPage() {
   const [atmCardSelfiePhoto, setAtmCardSelfiePhoto] = useState<string | null>(null);
   const [cashierPhoto, setCashierPhoto] = useState<string | null>(null);
   const [atmCardPhoto, setAtmCardPhoto] = useState<string | null>(null);
+  const [salesCashPhoto, setSalesCashPhoto] = useState<string | null>(null);
   const [notes, setNotes] = useState('');
 
   // ─── Load ────────────────────────────────────────────────────────────────
@@ -152,16 +162,29 @@ export default function SetoranTaskPage() {
 
       const d = found.data;
       setTask(d);
-      setActualReceivedAmount(String(d.actualReceivedAmount ?? d.expectedAmount ?? ''));
+      // Not typed yet: start from what yesterday's Store Closing recorded as Sales Cash;
+      // the employee checks it against the cash and adds the photo.
+      const savedReceived = d.actualReceivedAmount ?? d.expectedAmount ?? null;
+      setActualReceivedAmount(
+        savedReceived != null
+          ? String(savedReceived)
+          : d.salesCashFromClosing != null ? String(d.salesCashFromClosing) : '',
+      );
       const savedStored = d.storedAmount ?? d.amount ?? '';
       setStoredAmount(String(savedStored));
-      // A previously saved deposit is treated as a manual value so the auto
-      // recompute doesn't clobber it on load.
-      setStoredManual(toNumber(String(savedStored)) > 0);
+      // A saved deposit that differs from the auto value (Sales Cash + sisa, rounded down to
+      // kelipatan 50.000) is the employee's own and is kept. One that equals it - e.g. what
+      // the server pre-filled from yesterday's closing - keeps following the auto value.
+      const loadedReceived = toNumber(
+        savedReceived != null ? String(savedReceived) : d.salesCashFromClosing != null ? String(d.salesCashFromClosing) : '',
+      );
+      const loadedAuto = roundDownToStep(loadedReceived + toNumber(d.previousUnpaidAmount ?? d.carriedDeficit));
+      setStoredManual(toNumber(String(savedStored)) > 0 && toNumber(String(savedStored)) !== loadedAuto);
       setResiPhoto(d.resiPhoto ?? null);
       setAtmCardSelfiePhoto(d.atmCardSelfiePhoto ?? null);
       setCashierPhoto(d.cashierPhoto ?? null);
       setAtmCardPhoto(d.atmCardPhoto ?? null);
+      setSalesCashPhoto(d.salesCashPhoto ?? null);
       setNotes(d.notes ?? '');
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : String(err));
@@ -238,6 +261,8 @@ export default function SetoranTaskPage() {
           setCashierPhoto={setCashierPhoto}
           atmCardPhoto={atmCardPhoto}
           setAtmCardPhoto={setAtmCardPhoto}
+          salesCashPhoto={salesCashPhoto}
+          setSalesCashPhoto={setSalesCashPhoto}
           notes={notes}
           setNotes={setNotes}
           cashDrawerTotal={cashDrawerTotal}
@@ -286,6 +311,8 @@ interface BodyProps {
   setCashierPhoto: (v: string | null) => void;
   atmCardPhoto: string | null;
   setAtmCardPhoto: (v: string | null) => void;
+  salesCashPhoto: string | null;
+  setSalesCashPhoto: (v: string | null) => void;
   notes: string;
   setNotes: (v: string) => void;
   cashDrawerTotal: number;
@@ -317,7 +344,8 @@ function SetoranPageBody(props: BodyProps) {
   const {
     task, geo, actualReceivedAmount, setActualReceivedAmount, storedAmount, setStoredAmount,
     resiPhoto, setResiPhoto, atmCardSelfiePhoto, setAtmCardSelfiePhoto,
-    cashierPhoto, setCashierPhoto, atmCardPhoto, setAtmCardPhoto, notes, setNotes,
+    cashierPhoto, setCashierPhoto, atmCardPhoto, setAtmCardPhoto,
+    salesCashPhoto, setSalesCashPhoto, notes, setNotes,
     cashDrawerTotal, autoStored, storedManual, setStoredManual,
     storedNumber, kurang, isOverStored, isNoSetoran, isSmallSetoran,
     readonly, dis, accessOk, banner, lockedOverlay,
@@ -331,6 +359,12 @@ function SetoranPageBody(props: BodyProps) {
   // A blank "uang aktual diterima" must not silently record Rp 0 — even when the
   // carried sisa alone is enough to deposit.
   const hasReceived = actualReceivedAmount.trim() !== '';
+  // Sales Cash flow: the photo row exists while the IT switch is on, and the photo is
+  // a must once there is cash to show. `salesCashFromClosing` = yesterday's closing figure.
+  const salesCashOn = !!task.salesCashPhotoRequired;
+  const salesCashPhotoNeeded = salesCashOn && toNumber(actualReceivedAmount) > 0;
+  const salesCashPhotoOk = !salesCashPhotoNeeded || !!salesCashPhoto;
+  const fromClosing = task.salesCashFromClosing ?? null;
 
   // ─── Autosave (no geo) ───────────────────────────────────────────────────
   const { status: saveStatus, lastSaved, save: rawAutoSave } = useAutoSave({
@@ -355,12 +389,13 @@ function SetoranPageBody(props: BodyProps) {
       atmCardSelfiePhoto,
       cashierPhoto,
       atmCardPhoto,
+      salesCashPhoto,
       notes,
       ...patch,
     });
   }, [
     dis, rawAutoSave, task,
-    actualReceivedAmount, storedAmount, resiPhoto, atmCardSelfiePhoto, cashierPhoto, atmCardPhoto, notes,
+    actualReceivedAmount, storedAmount, resiPhoto, atmCardSelfiePhoto, cashierPhoto, atmCardPhoto, salesCashPhoto, notes,
   ]);
 
   // ─── Photo upload ────────────────────────────────────────────────────────
@@ -380,6 +415,9 @@ function SetoranPageBody(props: BodyProps) {
       } else if (photoType === 'setoran_atm_card') {
         setAtmCardPhoto(url);
         autoSave({ atmCardPhoto: url });
+      } else if (photoType === 'setoran_sales_cash') {
+        setSalesCashPhoto(url);
+        autoSave({ salesCashPhoto: url });
       } else {
         setAtmCardSelfiePhoto(url);
         autoSave({ atmCardSelfiePhoto: url });
@@ -391,7 +429,7 @@ function SetoranPageBody(props: BodyProps) {
     } finally {
       setUploading(null);
     }
-  }, [dis, autoSave, setResiPhoto, setAtmCardSelfiePhoto, setCashierPhoto, setAtmCardPhoto, setUploading, setSubmitError]);
+  }, [dis, autoSave, setResiPhoto, setAtmCardSelfiePhoto, setCashierPhoto, setAtmCardPhoto, setSalesCashPhoto, setUploading, setSubmitError]);
 
   // ─── Submit (no geo) ─────────────────────────────────────────────────────
   // Validates, then opens the confirmation modal — the actual network call
@@ -401,6 +439,11 @@ function SetoranPageBody(props: BodyProps) {
   const handleSubmit = useCallback(() => {
     if (readonly) return;
     setSubmitError(null);
+
+    if (!salesCashPhotoOk) {
+      setSubmitError('Foto Jumlah Sales Cash wajib diupload.');
+      return;
+    }
 
     if (isSmallSetoran) {
       if (!cashierPhoto) {
@@ -432,7 +475,7 @@ function SetoranPageBody(props: BodyProps) {
 
     setConfirmOpen(true);
   }, [
-    readonly, isSmallSetoran, hasReceived, storedNumber, cashDrawerTotal,
+    readonly, isSmallSetoran, hasReceived, storedNumber, cashDrawerTotal, salesCashPhotoOk,
     resiPhoto, atmCardSelfiePhoto, cashierPhoto, atmCardPhoto, setSubmitError,
   ]);
 
@@ -457,6 +500,7 @@ function SetoranPageBody(props: BodyProps) {
           atmCardSelfiePhoto,
           cashierPhoto,
           atmCardPhoto,
+          salesCashPhoto,
           notes,
         }),
       });
@@ -476,20 +520,21 @@ function SetoranPageBody(props: BodyProps) {
       setConfirmOpen(false);
     }
   }, [
-    storedNumber, resiPhoto, atmCardSelfiePhoto, cashierPhoto, atmCardPhoto,
+    storedNumber, resiPhoto, atmCardSelfiePhoto, cashierPhoto, atmCardPhoto, salesCashPhoto,
     task, geo, dis, actualReceivedAmount, notes, router,
     setSubmitError, setSubmitting,
   ]);
 
   // ─── Submit gating ───────────────────────────────────────────────────────
   const canSubmit =
-    !readonly && accessOk &&
+    !readonly && accessOk && salesCashPhotoOk &&
     ((isSmallSetoran && !!cashierPhoto && !!atmCardPhoto) ||
       (!isSmallSetoran && hasReceived && storedNumber > 0 && !isOverStored && !!resiPhoto && !!atmCardSelfiePhoto));
 
   const submitHint = (() => {
     if (readonly) return undefined;
     if (!accessOk) return 'Selesaikan validasi akses di atas sebelum submit.';
+    if (!salesCashPhotoOk) return 'Foto Jumlah Sales Cash belum diupload.';
     if (isSmallSetoran) {
       if (!cashierPhoto) return 'Foto sisa setoran belum diupload.';
       if (!atmCardPhoto) return 'Foto kartu ATM belum diupload.';
@@ -502,9 +547,12 @@ function SetoranPageBody(props: BodyProps) {
     return undefined;
   })();
 
-  const photosDone = isSmallSetoran
-    ? (cashierPhoto ? 1 : 0) + (atmCardPhoto ? 1 : 0)
-    : (resiPhoto ? 1 : 0) + (atmCardSelfiePhoto ? 1 : 0);
+  const photosDone =
+    (isSmallSetoran
+      ? (cashierPhoto ? 1 : 0) + (atmCardPhoto ? 1 : 0)
+      : (resiPhoto ? 1 : 0) + (atmCardSelfiePhoto ? 1 : 0)) +
+    (salesCashOn && salesCashPhoto ? 1 : 0);
+  const photosTotal = 2 + (salesCashOn ? 1 : 0);
 
   return (
     <>
@@ -582,7 +630,11 @@ function SetoranPageBody(props: BodyProps) {
                 disabled={dis}
                 placeholder="1.000.000"
                 hint={
-                  isNoSetoran
+                  fromClosing !== null
+                    ? toNumber(actualReceivedAmount) === fromClosing
+                      ? `Terisi otomatis dari Store Closing kemarin (${rupiah(fromClosing)}). Cek dengan uang tunai, lalu foto.`
+                      : `Store Closing kemarin mencatat ${rupiah(fromClosing)}. Sesuaikan bila uang tunai yang dihitung berbeda.`
+                    : isNoSetoran
                     ? 'Tidak ada setoran hari ini — tetap wajib foto sisa setoran & foto kartu ATM.'
                     : isSmallSetoran
                       ? `Jumlah yang harus disetor di bawah ${rupiah(SMALL_SETORAN_THRESHOLD)}: tidak perlu resi & selfie ATM, cukup foto sisa setoran & foto kartu ATM.`
@@ -602,8 +654,21 @@ function SetoranPageBody(props: BodyProps) {
             {/* ─── Photos ─────────────────────────────────────────────────── */}
             <Section
               title="Foto bukti"
-              meta={`${photosDone}/2`}
+              meta={`${photosDone}/${photosTotal}`}
             >
+              {salesCashOn && (
+                <ListGroup>
+                  <PhotoRow
+                    title="Foto Jumlah Sales Cash"
+                    hint={salesCashPhotoNeeded ? 'Wajib - foto uang tunai yang dihitung' : 'Foto uang tunai yang dihitung'}
+                    photo={salesCashPhoto}
+                    disabled={dis || uploading !== null}
+                    loading={uploading === 'setoran_sales_cash'}
+                    onClick={() => setCameraTarget('setoran_sales_cash')}
+                    icon={<Banknote className="h-4 w-4" />}
+                  />
+                </ListGroup>
+              )}
               {isSmallSetoran ? (
                 <ListGroup>
                   <PhotoRow
@@ -670,6 +735,7 @@ function SetoranPageBody(props: BodyProps) {
                   cameraTarget === 'atm_card_selfie' ? 'Selfie + Kartu ATM'
                     : cameraTarget === 'setoran_cashier' ? 'Foto Sisa Setoran'
                     : cameraTarget === 'setoran_atm_card' ? 'Foto Kartu ATM'
+                    : cameraTarget === 'setoran_sales_cash' ? 'Foto Jumlah Sales Cash'
                     : 'Foto Resi'
                 }
                 facingMode={cameraTarget === 'atm_card_selfie' ? 'user' : 'environment'}

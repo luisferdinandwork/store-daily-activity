@@ -55,6 +55,7 @@ import {
   EDC_BANKS,
   EDC_METHODS,
   EDC_METHOD_LABELS,
+  isSingleAmountBank,
   INDODANA_PHOTO_LABEL,
   OP_ME_VOUCHER_LABEL,
   summariseEdc,
@@ -363,7 +364,11 @@ function EdcMatrix({ summary }: { summary: EdcSummary }) {
           {summary.banks.map((b) => (
             <tr key={b.code}>
               <td className={cn(td, 'text-left font-semibold text-slate-800')}>{b.label}</td>
-              {b.filled ? (
+              {isSingleAmountBank(b) ? (
+                <td colSpan={EDC_METHODS.length} className={cn(td, b.filled ? 'text-slate-300' : 'font-semibold text-amber-600')}>
+                  {b.filled ? 'satu nominal' : 'Belum diisi'}
+                </td>
+              ) : b.filled ? (
                 EDC_METHODS.map((m) => (
                   <td key={m} className={cn(td, b.cells[m] === undefined ? 'text-slate-300' : 'text-slate-700')}>
                     {b.cells[m] === undefined ? '–' : num(b.cells[m])}
@@ -422,6 +427,12 @@ function DetailPanel({
         {edc.hasData ? (
           <>
             <EdcMatrix summary={edc} />
+            {row.salesCash != null && (
+              <p className="mt-1.5 text-[11px] text-slate-600">
+                Sales Cash: <span className="font-semibold tabular-nums text-slate-800">{num(row.salesCash)}</span>
+                <span className="text-slate-400"> · disetor di Setoran besok pagi</span>
+              </p>
+            )}
             {row.edcBy && (
               <p className="mt-1.5 text-[11px] text-slate-500">
                 Diisi {row.edcBy}{row.edcAt ? ` · ${fmtDateTime(row.edcAt)}` : ''}

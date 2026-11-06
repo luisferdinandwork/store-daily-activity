@@ -37,7 +37,10 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { STORE_STATUS_BADGE, STORE_STATUS_LABEL } from '@/lib/store-status';
+import { LateBadge } from '@/components/petty-cash/PeriodBadge';
 import { ReRequestBadge } from '@/components/petty-cash/ReRequestBadge';
+import { jakartaDateKey } from '@/lib/day-bucket';
+import { isRefillLate } from '@/lib/petty-cash-period';
 import {
   REFILL_STATE_LABEL,
   groupByStoreCode,
@@ -155,6 +158,8 @@ function RefillCell({
         {(refill.state === 'verified' || refill.state === 'received') && <ShieldCheck className="h-3 w-3" />}
         {REFILL_STATE_LABEL[refill.state]}
       </span>
+
+      {isRefillLate(refill.yearMonth, jakartaDateKey(refill.requestedAt)) && <LateBadge month={refill.yearMonth} />}
 
       {refill.state === 'awaiting_finance' && (
         <button
