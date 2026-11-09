@@ -626,6 +626,7 @@ export default function StoreClosingDetailPage() {
                               onBankZero={handleEdcBankZero}
                               opMeVoucher={opMeVoucher}
                               onOpMeVoucherChange={handleOpMeVoucher}
+                              salesCash={salesCash}
                               disabled={dis}
                             />
                           </>
@@ -782,13 +783,7 @@ export default function StoreClosingDetailPage() {
                 </>
               }
             >
-              <EdcConfirmTable summary={edcSummary} indodanaPhoto={indodanaPhoto} />
-              <div className="mt-2 flex items-center justify-between rounded-xl border border-border px-3 py-2 text-xs">
-                <span className="font-semibold text-foreground">Sales Cash</span>
-                <span className="font-bold tabular-nums text-foreground">
-                  {salesCash === '' ? '–' : Number(salesCash).toLocaleString('id-ID')}
-                </span>
-              </div>
+              <EdcConfirmTable summary={edcSummary} indodanaPhoto={indodanaPhoto} salesCash={edcDigitsToAmount(salesCash)} />
             </BottomSheet>
             )}
 

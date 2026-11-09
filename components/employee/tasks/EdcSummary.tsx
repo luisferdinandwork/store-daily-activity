@@ -209,6 +209,7 @@ function BankCard({
 export default function EdcSummaryFields({
   amounts, onAmountChange, onBankZero,
   opMeVoucher, onOpMeVoucherChange,
+  salesCash,
   disabled,
 }: {
   amounts: EdcAmountState;
@@ -217,9 +218,12 @@ export default function EdcSummaryFields({
   onBankZero: (bank: EdcBankCode) => void;
   opMeVoucher: string;
   onOpMeVoucherChange: (digits: string) => void;
+  /** Today's Sales Cash (digits) — added into the Total shown here. */
+  salesCash?: string;
   disabled?: boolean;
 }) {
   const summary = edcSummaryFromState(amounts, opMeVoucher);
+  const salesCashAmount = edcDigitsToAmount(salesCash ?? '') ?? 0;
 
   return (
     <div className="space-y-3">
@@ -266,10 +270,14 @@ export default function EdcSummaryFields({
           <span className="text-muted-foreground">{OP_ME_VOUCHER_LABEL}</span>
           <span className="font-semibold tabular-nums text-foreground">{formatRupiah(summary.opMeVoucher ?? 0)}</span>
         </div>
+        <div className="flex items-center justify-between gap-3 text-sm">
+          <span className="text-muted-foreground">Sales Cash</span>
+          <span className="font-semibold tabular-nums text-foreground">{formatRupiah(salesCashAmount)}</span>
+        </div>
         <SummaryStat
           className={cn('border-t border-primary/15 pt-2.5')}
           label="Total"
-          value={formatRupiah(summary.total)}
+          value={formatRupiah(summary.total + salesCashAmount)}
           emphasis
         />
         <FieldHint>
@@ -288,7 +296,14 @@ export default function EdcSummaryFields({
  * The same bank × QRIS / Debit / Credit table Ops and Finance see, shown to the
  * employee before a "Post Statement" submit. Blank fields read as a dash.
  */
-export function EdcConfirmTable({ summary, indodanaPhoto }: { summary: EdcSummary; indodanaPhoto: string | null }) {
+export function EdcConfirmTable({
+  summary, indodanaPhoto, salesCash,
+}: {
+  summary: EdcSummary;
+  indodanaPhoto: string | null;
+  /** Today's Sales Cash — shown as its own row and added into the Total. */
+  salesCash?: number | null;
+}) {
   const th = 'px-2 py-1.5 text-right text-[10px] font-bold uppercase tracking-wide text-muted-foreground';
   const td = 'whitespace-nowrap px-2 py-1.5 text-right tabular-nums';
   const num = (n: number) => n.toLocaleString('id-ID');
@@ -328,9 +343,15 @@ export function EdcConfirmTable({ summary, indodanaPhoto }: { summary: EdcSummar
               <td colSpan={EDC_METHODS.length + 1} className="py-1.5 pl-3 pr-2 font-semibold text-foreground">{OP_ME_VOUCHER_LABEL}</td>
               <td className={cn(td, 'pr-3 font-bold')}>{summary.opMeVoucher === null ? '–' : num(summary.opMeVoucher)}</td>
             </tr>
+            {salesCash !== undefined && (
+              <tr className="bg-secondary/60">
+                <td colSpan={EDC_METHODS.length + 1} className="py-1.5 pl-3 pr-2 font-semibold text-foreground">Sales Cash</td>
+                <td className={cn(td, 'pr-3 font-bold')}>{salesCash === null ? '–' : num(salesCash)}</td>
+              </tr>
+            )}
             <tr className="bg-primary/5">
               <td colSpan={EDC_METHODS.length + 1} className="py-1.5 pl-3 pr-2 font-bold text-foreground">Total</td>
-              <td className={cn(td, 'pr-3 font-bold text-foreground')}>{num(summary.total)}</td>
+              <td className={cn(td, 'pr-3 font-bold text-foreground')}>{num(summary.total + (salesCash ?? 0))}</td>
             </tr>
           </tbody>
         </table>
