@@ -8,8 +8,11 @@
 //   delete it (the held task points at it — see computeIssuePermissionFlags)
 // - once reported, content is locked — reported / in_review / solved / completed
 //   are read-only for store employees, EXCEPT:
-//     - the reporter can mark it "solved" only once it is "in_review"
-//       (their own resolution — happens BEFORE Ops gives final closure)
+//     - the reporter — or ANY PIC 1 of the issue's store, so the issue doesn't
+//       get stuck when its reporter is removed or moved — can mark it "solved"
+//       only once it is "in_review" (their own resolution — happens BEFORE Ops
+//       gives final closure). A PIC 1 who is not the reporter can do ONLY this:
+//       no edit / send / delete / Berita Acara, and never on someone's draft
 //     - the reporter can upload a one-time Berita Acara (BA) attachment at
 //       ANY status, including draft, any time before it's uploaded once
 // - managers (ops/finance/it/audit) can advance reported -> in_review here;
@@ -28,6 +31,7 @@ import { eq } from 'drizzle-orm';
 import {
   computeIssuePermissionFlags,
   getStoreClosingHoldIssueIds,
+  isStorePic1,
   loadIssueAssignedRoles,
   notifyIssueEvent,
   replaceIssueRoleAssignments,
@@ -115,10 +119,35 @@ export async function PATCH(
     const sameStore = user.homeStoreId != null && Number(user.homeStoreId) === existing.storeId;
     // The reporter — or, for a Store Closing On Hold issue, anyone in its store.
     const actsAsReporter = ownsIssue || (isStoreClosingHold && sameStore);
+    // Any PIC 1 of the issue's store may also mark it solved (see header).
+    const pic1OfStore = !manager && isStorePic1(user, existing.storeId);
+    const canSolve = actsAsReporter || pic1OfStore;
     const roleIds = cleanRoleIds(parsed.data);
 
-    if (!manager && !actsAsReporter) {
+    if (!manager && !canSolve) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+
+    // A PIC 1 who is not the reporter: solving a sent issue is ALL they get.
+    if (!actsAsReporter && !manager) {
+      // A colleague's draft is private to its reporter — pretend it isn't there.
+      if (existing.status === 'draft') {
+        return NextResponse.json({ error: 'Issue not found' }, { status: 404 });
+      }
+
+      const touchesAnythingElse =
+        parsed.data.title !== undefined ||
+        parsed.data.description !== undefined ||
+        parsed.data.attachmentUrls !== undefined ||
+        parsed.data.baAttachmentUrls !== undefined ||
+        roleIds !== undefined;
+
+      if (parsed.data.status !== 'solved' || touchesAnythingElse) {
+        return NextResponse.json(
+          { error: 'PIC 1 hanya dapat menandai issue ini sebagai solved.' },
+          { status: 403 },
+        );
+      }
     }
 
     // ── Berita Acara upload — separate path, independent of the content/status
@@ -136,11 +165,11 @@ export async function PATCH(
 
     const wantsToSendDraft = existing.status === 'draft' && parsed.data.status === 'reported';
     const wantsToMarkSolved =
-      actsAsReporter &&
+      canSolve &&
       parsed.data.status === 'solved' &&
       existing.status === 'in_review';
 
-    if (actsAsReporter && !manager && parsed.data.status === 'solved' && existing.status !== 'in_review') {
+    if (canSolve && !manager && parsed.data.status === 'solved' && existing.status !== 'in_review') {
       return NextResponse.json(
         { error: 'Issue baru bisa ditandai solved setelah statusnya In Review.' },
         { status: 409 },
@@ -168,7 +197,10 @@ export async function PATCH(
         );
       }
     } else if (parsed.data.status === 'solved') {
-      return NextResponse.json({ error: 'Only the reporter can mark an issue as solved.' }, { status: 403 });
+      return NextResponse.json(
+        { error: 'Only the reporter or a PIC 1 of the store can mark an issue as solved.' },
+        { status: 403 },
+      );
     }
 
     if (parsed.data.status === 'completed') {
@@ -258,7 +290,11 @@ export async function PATCH(
         assignedRoles: finalRoles,
         type: 'issue_solved',
         title: `Issue closed: ${updated.title}`,
-        body: 'The reporter confirmed this is solved. Issue closed.',
+        body: ownsIssue
+          ? 'The reporter confirmed this is solved. Issue closed.'
+          : pic1OfStore
+            ? 'A PIC 1 of the store confirmed this is solved. Issue closed.'
+            : 'The store confirmed this is solved. Issue closed.',
         excludeUserId: user.id,
       });
     }
@@ -283,7 +319,11 @@ export async function PATCH(
       success: true,
       issue: {
         ...serialized,
-        ...computeIssuePermissionFlags(updated, user.id, { isStoreClosingHold, sameStore }),
+        ...computeIssuePermissionFlags(updated, user.id, {
+          isStoreClosingHold,
+          sameStore,
+          isStorePic1: pic1OfStore,
+        }),
       },
     });
   } catch (err) {

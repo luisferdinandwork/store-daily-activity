@@ -996,6 +996,12 @@ function IssueDetail({
                 Tombol aktif setelah issue berstatus In Review.
               </p>
             )}
+            {/* Someone else's report (or a colleague who has left the store): only a PIC 1 gets here. */}
+            {canMarkSolved && issue.isOwner === false && !issue.isStoreClosingHold && (
+              <p className="-mt-1 text-center text-xs text-muted-foreground">
+                Sebagai PIC 1 toko ini, Anda juga dapat menandai issue ini sebagai solved.
+              </p>
+            )}
           </>
         )}
 

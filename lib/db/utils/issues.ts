@@ -11,7 +11,9 @@
 //                  stuck behind one person's account. It can't be deleted.
 //     reported   → sent to assigned roles
 //     in_review  → optional: a manager (ops/finance/it/audit) started working it
-//     solved     → the reporter resolves it (reachable from reported or in_review)
+//     solved     → the reporter — or any PIC 1 of the issue's store, so it never
+//                  gets stuck when the reporter is removed or moved — resolves it
+//                  (button locked until In Review; see computeIssuePermissionFlags)
 //     completed  → ops gives final confirmation/closure (only reachable from solved)
 //   A one-time Berita Acara (BA) photo upload is available to the reporter at
 //   ANY status, including draft, independent of status (see setIssueBaAttachments).
@@ -269,6 +271,28 @@ export async function getStoreClosingHoldIssueIdsForStore(storeId: number): Prom
   return uniqueNumbers(rows.map((r) => r.issueId));
 }
 
+/** `employee_types.code` of the store's petty-cash holder — the one who may also close a colleague's issue. */
+export const ISSUE_SOLVER_EMPLOYEE_TYPE = 'pic_1';
+
+/**
+ * Is this signed-in user a PIC 1 of the issue's store (`employee_types.code = 'pic_1'`
+ * and the same home store)? Any such PIC 1 can **Mark as Solved** a store issue
+ * — not only the employee who reported it — so an issue never gets stuck because
+ * its reporter was removed (hidden stub) or moved to another store. It is the
+ * ONLY extra right: no editing, sending, deleting or Berita Acara.
+ * Reads the session's fields (`employeeType`, `homeStoreId`).
+ */
+export function isStorePic1(
+  user: { employeeType?: string | null; homeStoreId?: number | string | null },
+  storeId: number,
+): boolean {
+  return (
+    user.employeeType === ISSUE_SOLVER_EMPLOYEE_TYPE &&
+    user.homeStoreId != null &&
+    Number(user.homeStoreId) === storeId
+  );
+}
+
 export interface IssuePermissionFlags {
   isOwner: boolean;
   /** A Store Closing On Hold issue — shared by the whole store. */
@@ -289,17 +313,21 @@ export interface IssuePermissionFlags {
  * The reporter can edit / send / delete a draft and later mark it solved. For a
  * Store Closing On Hold issue every employee of its store gets the same rights
  * (`sameStore`), except deleting — the held task points at it. The Berita Acara
- * stays the reporter's.
+ * stays the reporter's. A PIC 1 of the issue's store (`isStorePic1`) can mark a
+ * sent issue solved too — and nothing else — so it doesn't depend on one account.
  */
 export function computeIssuePermissionFlags(
   issue: Pick<Issue, 'userId' | 'status' | 'baAttachmentUrls'>,
   userId: string,
-  opts: { isStoreClosingHold?: boolean; sameStore?: boolean } = {},
+  opts: { isStoreClosingHold?: boolean; sameStore?: boolean; isStorePic1?: boolean } = {},
 ): IssuePermissionFlags {
   const isOwner = issue.userId === userId;
   const isDraft = issue.status === 'draft';
   const isStoreClosingHold = opts.isStoreClosingHold === true;
   const actsAsReporter = isOwner || (isStoreClosingHold && opts.sameStore === true);
+  // Solving is the one right shared beyond the reporter. A draft is still private
+  // (showMarkSolved needs !isDraft, and the list never shows others' drafts).
+  const canSolveRole = actsAsReporter || opts.isStorePic1 === true;
 
   return {
     isOwner,
@@ -307,8 +335,8 @@ export function computeIssuePermissionFlags(
     canEdit: actsAsReporter && isDraft,
     canDelete: isOwner && isDraft && !isStoreClosingHold,
     canSendToOps: actsAsReporter && isDraft,
-    canMarkSolved: actsAsReporter && issue.status === 'in_review',
-    showMarkSolved: actsAsReporter && !isDraft,
+    canMarkSolved: canSolveRole && issue.status === 'in_review',
+    showMarkSolved: canSolveRole && !isDraft,
     canUploadBa: isOwner && !parseAttachmentUrls(issue.baAttachmentUrls).length,
   };
 }

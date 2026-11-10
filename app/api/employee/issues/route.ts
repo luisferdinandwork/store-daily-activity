@@ -4,7 +4,8 @@
 //        Draft issues stay private to the reporter — except a Store Closing
 //        On Hold draft, which the whole store sees (and can send).
 //        Reported / in_review / resolved issues are visible to every employee
-//        assigned to the same store.
+//        assigned to the same store — and any PIC 1 of that store can mark them
+//        solved (flags from computeIssuePermissionFlags), whoever reported them.
 // POST — create a new issue routed to one or more roles/departments.
 
 import { NextResponse } from 'next/server';
@@ -18,6 +19,7 @@ import {
   computeIssuePermissionFlags,
   createIssueWithRoles,
   getStoreClosingHoldIssueIdsForStore,
+  isStorePic1,
   loadIssueAssignedRoles,
   notifyIssueEvent,
   serializeIssue,
@@ -88,11 +90,20 @@ export async function GET(req: Request) {
 
   const roleMap = await loadIssueAssignedRoles(rows.map((row) => row.id));
 
+  // A PIC 1 can mark ANY sent issue of their store solved (not just their own),
+  // so the list below — every non-draft issue of the home store, whoever
+  // reported it, removed or moved reporters included — is exactly what they need.
+  const viewer = {
+    employeeType: (session.user as { employeeType?: string | null }).employeeType ?? null,
+    homeStoreId: me.homeStoreId,
+  };
+
   const out = rows.map((row) => ({
     ...serializeIssue(row, roleMap.get(row.id) ?? []),
     ...computeIssuePermissionFlags(row, userId, {
       isStoreClosingHold: holdIssueIdSet.has(row.id),
       sameStore: true,
+      isStorePic1: isStorePic1(viewer, row.storeId),
     }),
   }));
 
