@@ -14,8 +14,6 @@ import {
   storeFrontTasks,
   setoranTasks,
   cekBinTasks,
-  storeBins,
-  cekBinTaskBins,
   vmChecklistTasks,
   marketingCheckTasks,
   briefingTasks,
@@ -713,14 +711,13 @@ export async function GET(request: NextRequest) {
         : Promise.resolve([]),
     ]);
 
-    const cekBinTaskIds = cekBinRows.map((r) => r.id);
     const storeClosingTaskIds = storeClosingRows.map((r) => r.id);
 
     // IT switch: the Store Closing money part (EDC summary + Indodana photo).
     const storeClosingUpdate = storeClosingRows.length > 0 && (await isFeatureEnabled("store_closing_update"));
 
     // Same switch on the Setoran side: yesterday's closing Sales Cash pre-fills
-    // "Jumlah Sales Cash" and its photo becomes required.
+    // "Jumlah Sales Cash" (no photo of it is asked).
     const setoranSalesCashOn = setoranRows.length > 0 && (await isFeatureEnabled("store_closing_update"));
     const salesCashFromClosingByStoreId = new Map<number, number | null>();
     if (setoranSalesCashOn) {
@@ -732,46 +729,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const [availableBinRows, checkedBinRows, edcEntryRows] = await Promise.all([
-      shouldLoadTask("cek_bin")
-        ? db
-            .select({
-              id: storeBins.id,
-              storeId: storeBins.storeId,
-              bin: storeBins.bin,
-              qtyBc: storeBins.qtyBc,
-              qtySesuaiBin: storeBins.qtySesuaiBin,
-              qtyTidakSesuaiBin: storeBins.qtyTidakSesuaiBin,
-              nama: storeBins.nama,
-            })
-            .from(storeBins)
-            .where(
-              and(
-                inArray(storeBins.storeId, storeIds),
-                eq(storeBins.isActive, true),
-              ),
-            )
-            .orderBy(asc(storeBins.storeId), asc(storeBins.bin))
-        : Promise.resolve([]),
-
-      cekBinTaskIds.length
-        ? db
-            .select({
-              id: cekBinTaskBins.id,
-              taskId: cekBinTaskBins.taskId,
-              binId: cekBinTaskBins.binId,
-              bin: cekBinTaskBins.bin,
-              qtyBc: cekBinTaskBins.qtyBc,
-              qtySesuaiBin: cekBinTaskBins.qtySesuaiBin,
-              qtyTidakSesuaiBin: cekBinTaskBins.qtyTidakSesuaiBin,
-              nama: cekBinTaskBins.nama,
-              notes: cekBinTaskBins.notes,
-            })
-            .from(cekBinTaskBins)
-            .where(inArray(cekBinTaskBins.taskId, cekBinTaskIds))
-            .orderBy(asc(cekBinTaskBins.bin))
-        : Promise.resolve([]),
-
+    const [edcEntryRows] = await Promise.all([
       // Store Closing's EDC summary cells (bank × payment method).
       storeClosingTaskIds.length
         ? db
@@ -834,20 +792,6 @@ export async function GET(request: NextRequest) {
           console.error("[tasks] serah_terima task get-or-create failed", err);
         }
       }
-    }
-
-    const availableBinsByStoreId = new Map<number, typeof availableBinRows>();
-    for (const bin of availableBinRows) {
-      const bucket = availableBinsByStoreId.get(bin.storeId) ?? [];
-      bucket.push(bin);
-      availableBinsByStoreId.set(bin.storeId, bucket);
-    }
-
-    const checkedBinsByTaskId = new Map<number, typeof checkedBinRows>();
-    for (const bin of checkedBinRows) {
-      const bucket = checkedBinsByTaskId.get(bin.taskId) ?? [];
-      bucket.push(bin);
-      checkedBinsByTaskId.set(bin.taskId, bucket);
     }
 
     const tasks = [
@@ -1026,11 +970,9 @@ export async function GET(request: NextRequest) {
               cashierPhoto: t.cashierPhoto,
               atmCardPhoto: t.atmCardPhoto,
 
-              // Sales Cash flow (IT switch store_closing_update): what yesterday's
-              // Store Closing recorded, the counted-cash photo, and whether it is required.
+              // Sales Cash pre-fill (IT switch store_closing_update): what yesterday's
+              // Store Closing recorded.
               salesCashFromClosing: salesCashFromClosingByStoreId.get(t.storeId) ?? null,
-              salesCashPhoto: t.salesCashPhoto,
-              salesCashPhotoRequired: setoranSalesCashOn,
 
               actualReceivedAmountBy: t.actualReceivedAmountBy ?? null,
               actualReceivedAmountAt: toIso(t.actualReceivedAmountAt),
@@ -1059,37 +1001,6 @@ export async function GET(request: NextRequest) {
       ...cekBinRows
         .filter((r) => inStore(r.storeId))
         .map((t) => {
-          const availableBins = (
-            availableBinsByStoreId.get(t.storeId) ?? []
-          ).map((bin) => ({
-            id: String(bin.id),
-            storeId: String(bin.storeId),
-            bin: bin.bin,
-            qtyBc: bin.qtyBc,
-            qtySesuaiBin: bin.qtySesuaiBin,
-            qtyTidakSesuaiBin: bin.qtyTidakSesuaiBin,
-            nama: bin.nama,
-          }));
-
-          const checkedBins = (checkedBinsByTaskId.get(t.id) ?? []).map(
-            (bin) => ({
-              id: String(bin.id),
-              taskId: String(bin.taskId),
-              binId: String(bin.binId),
-              bin: bin.bin,
-              qtyBc: bin.qtyBc,
-              qtySesuaiBin: bin.qtySesuaiBin,
-              qtyTidakSesuaiBin: bin.qtyTidakSesuaiBin,
-              nama: bin.nama,
-              notes: bin.notes,
-            }),
-          );
-
-          const totalStoreBins = t.totalStoreBins || availableBins.length;
-          const minimumBinsToCheck =
-            t.minimumBinsToCheck || Math.ceil(totalStoreBins * 0.3);
-          const checkedBinsCount = t.checkedBinsCount || checkedBins.length;
-
           // Shared per store/day — send the logged-in employee's own schedule.
           const actorScheduleId =
             morningScheduleByStoreId.get(t.storeId)?.id ?? t.scheduleId;
@@ -1105,13 +1016,6 @@ export async function GET(request: NextRequest) {
               storeId: String(t.storeId),
               shift: (shiftCodeMap[t.shiftId] ?? "morning") as ShiftCode,
               date: t.date.toISOString(),
-
-              totalStoreBins,
-              minimumBinsToCheck,
-              checkedBinsCount,
-              availableBins,
-              checkedBins,
-              selectedBinIds: checkedBins.map((bin) => bin.binId),
 
               status: t.status,
               notes: t.notes,

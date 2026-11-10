@@ -346,7 +346,12 @@ export default function ItTaskProgressOverviewPage() {
         )}
       </div>
 
-      <StoreDaySheet target={sheet} onClose={() => setSheet(null)} />
+      <StoreDaySheet
+        target={sheet}
+        onClose={() => setSheet(null)}
+        stores={boardRows.map((s) => ({ storeId: s.storeId, name: s.name, storeNo: s.storeNo }))}
+        onNavigate={setSheet}
+      />
     </div>
   );
 }

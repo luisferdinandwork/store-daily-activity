@@ -13,12 +13,13 @@ import { TONES, TONE_HEX, rateTone } from '@/lib/status-theme';
 import { taskStatusTile } from '@/components/status/TaskStatus';
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet';
 import { EDC_BANKS } from '@/lib/store-closing-edc';
+import TaskDetailModal from '@/components/tasks/TaskDetailModal';
 import {
   DoerLine,
   SerahTerimaPanel,
   TASK_ICONS,
   TASK_LABELS,
-  TaskDetailView,
+  closingTotalOf,
   edcSummaryOf,
   fmtTime,
   statusBadgeClass,
@@ -110,9 +111,9 @@ function TaskRow({ task, onSelect }: { task: FlatTask; onSelect: () => void }) {
   const closingEdc = task.type === 'store_closing' && !task.isPlaceholder ? edcSummaryOf(task.extra) : null;
   const closingEdcLine = (() => {
     if (!closingEdc?.hasData) return null;
-    const total = `Rp ${closingEdc.total.toLocaleString('id-ID')}`;
-    if (isFinished(status)) return `EDC ${total}`;
-    return `Rekap EDC ${EDC_BANKS.length - closingEdc.missingBanks.length}/${EDC_BANKS.length} bank · ${total}`;
+    // Done: one number — Sales Cash + EDC + OP/ME/VOUCHER. Still typing: how far the EDC rekap is.
+    if (isFinished(status)) return `Total Sales Rp ${closingTotalOf(task.extra).total.toLocaleString('id-ID')}`;
+    return `Rekap EDC ${EDC_BANKS.length - closingEdc.missingBanks.length}/${EDC_BANKS.length} bank · Rp ${closingEdc.total.toLocaleString('id-ID')}`;
   })();
 
   const tone = taskStatusTile(status);
@@ -264,15 +265,31 @@ function StoreDayBody({ day, onSelect }: { day: StoreDay; onSelect: (key: string
   );
 }
 
-/** Pick the task a cell click asked for (null = show the whole day). */
+/** Pick the task a cell click (or a ‹ › to another store) asked for (null = show the whole day). */
 function focusedTask(day: StoreDay, target: StoreDayTarget): FlatTask | null {
   if (!target.focusType) return null;
   const ofType = day.tasks.filter((t) => t.type === target.focusType);
   if (target.focusId != null) return ofType.find((t) => Number(t.id) === target.focusId) ?? null;
-  return ofType.find((t) => t.isPlaceholder && (target.focusShift == null || t.shift === target.focusShift)) ?? null;
+  // No id: the not-yet-opened slot of that shift, or — stepping to another store — whatever that store has.
+  const ofShift = ofType.filter((t) => target.focusShift == null || t.shift === target.focusShift);
+  return ofShift.find((t) => t.isPlaceholder) ?? ofShift[0] ?? ofType[0] ?? null;
 }
 
-export default function StoreDaySheet({ target, onClose }: { target: StoreDayTarget | null; onClose: () => void }) {
+/** A store of the board, in the order the board shows them — what ‹ › steps through. */
+export type StoreDayNavStore = { storeId: number; name: string; storeNo: string };
+
+export default function StoreDaySheet({
+  target,
+  onClose,
+  stores,
+  onNavigate,
+}: {
+  target: StoreDayTarget | null;
+  onClose: () => void;
+  /** The board's stores in their current order; with `onNavigate` the task modal can step between them. */
+  stores?: StoreDayNavStore[];
+  onNavigate?: (next: StoreDayTarget) => void;
+}) {
   const key = target ? `${target.storeId}|${target.date}` : null;
   const [loaded, setLoaded] = useState<{ key: string; day: StoreDay | null; error: string } | null>(null);
   // The task open inside the sheet — keyed by the target, so a new cell starts fresh.
@@ -304,8 +321,60 @@ export default function StoreDaySheet({ target, onClose }: { target: StoreDayTar
     else openTask = focusedTask(day, target);
   }
 
+  // A task opens in the wide modal (zoomable photo + details + ‹ › between stores); the day's list stays in the sheet.
+  const pickedFromList = selected?.for === target && !!selected?.key;
+  const backToList = selected?.for === target && selected?.key === null;
+  const modalOpen = !!target && !backToList && (pickedFromList || !!target.focusType);
+  const modalType = openTask?.type ?? (pickedFromList ? null : target?.focusType ?? null);
+
+  const navIndex = target && stores ? stores.findIndex((s) => s.storeId === target.storeId) : -1;
+  const goTo = (store: StoreDayNavStore | undefined) => {
+    if (!store || !target || !onNavigate || !modalType) return;
+    onNavigate({
+      storeId: store.storeId,
+      name: store.name,
+      storeNo: store.storeNo,
+      date: target.date,
+      focusType: modalType,
+      focusId: null,
+      focusShift: openTask?.shift ?? target.focusShift ?? null,
+    });
+  };
+  const prevStore = navIndex > 0 ? stores?.[navIndex - 1] : undefined;
+  const nextStore = stores && navIndex >= 0 && navIndex < stores.length - 1 ? stores[navIndex + 1] : undefined;
+
   return (
-    <Sheet open={!!target} onOpenChange={(open) => { if (!open) onClose(); }}>
+    <>
+    {target && modalOpen && modalType && (
+      <TaskDetailModal
+        type={modalType}
+        store={{ name: target.name, storeNo: target.storeNo }}
+        dateLabel={fmtDateLabel(target.date)}
+        state={!ready ? 'loading' : !day ? 'error' : openTask ? 'ready' : 'missing'}
+        error={ready?.error}
+        task={openTask}
+        nav={
+          onNavigate && stores && navIndex >= 0 && stores.length > 1
+            ? {
+                index: navIndex,
+                count: stores.length,
+                prevName: prevStore?.name,
+                nextName: nextStore?.name,
+                onPrev: prevStore ? () => goTo(prevStore) : undefined,
+                onNext: nextStore ? () => goTo(nextStore) : undefined,
+              }
+            : null
+        }
+        onAllTasks={() => setSelected({ for: target, key: null })}
+        onClose={() => (pickedFromList ? setSelected({ for: target, key: null }) : onClose())}
+      />
+    )}
+    {/* While the task modal is up the sheet is closed on purpose; its own dismiss handlers (focus moving
+        into the modal above it) must not take the whole thing down with them. */}
+    <Sheet
+      open={!!target && !(modalOpen && modalType)}
+      onOpenChange={(open) => { if (!open && !(modalOpen && modalType)) onClose(); }}
+    >
       <SheetContent side="right" className="w-full gap-0 bg-slate-50 p-0 sm:max-w-2xl">
         <div className="shrink-0 border-b border-slate-200 bg-white px-5 py-4 pr-12">
           <SheetTitle className="truncate text-base font-bold text-slate-900">{target?.name ?? 'Task toko'}</SheetTitle>
@@ -323,13 +392,12 @@ export default function StoreDaySheet({ target, onClose }: { target: StoreDayTar
               <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
               <p className="text-sm font-semibold">{ready.error}</p>
             </div>
-          ) : openTask ? (
-            <TaskDetailView task={openTask} onBack={() => setSelected({ for: target, key: null })} />
           ) : (
             <StoreDayBody day={day} onSelect={(k) => setSelected({ for: target, key: k })} />
           )}
         </div>
       </SheetContent>
     </Sheet>
+    </>
   );
 }

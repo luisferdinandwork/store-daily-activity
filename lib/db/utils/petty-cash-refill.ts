@@ -3,43 +3,57 @@
 // PIC-initiated "top me back up" requests — distinct from Finance's own
 // month-end close-and-reset (pettyCashRefills in lib/db/schema/petty-cash.ts).
 //
-// Flow (period rules: lib/petty-cash-period.ts):
+// Flow (period rules: lib/petty-cash-period.ts — the CALENDAR changes the period, a refill never does):
 //
-//   1. PIC 1 sends the refill for the period in use (due before the 15th of its month — later still works, it is
-//      just flagged Terlambat). The period is CLOSED right there: what was used is fixed, and the next period opens
-//      at once, so new requests keep flowing — they are filed under the next period. Requests that were still
-//      waiting (OPS / confirmation) move to it too.
+//   1. PIC 1 sends the refill. Which period it settles is worked out by `pickRefillPeriod`: the oldest period,
+//      up to the one in use, that was used and whose refill nobody has asked for. So on or before the 15th it
+//      is the period in use (once the previous one is settled), and after the 15th it is the period that has just
+//      ended while that one is still waiting (flagged Terlambat) — then the new one. Sending changes no period
+//      and moves no request: the period in use keeps taking requests until its 15th is over.
 //   2. OPS approves / rejects the request. Approval alone does NOT move the balance — the store hasn't received the
-//      cash yet. A rejected refill leaves the period closed: PIC 1 sends a corrected one for the same period.
+//      cash yet. A rejected refill leaves its period waiting: PIC 1 sends a corrected one for the same period.
 //   3. Finance sends the cash and verifies the refill on its Petty Cash pages (financeVerifiedAt; PIC 1 can't
-//      confirm receipt before this). Verifying freezes the amount (transferAmount).
+//      confirm receipt before this). Verifying freezes the amount (transferAmount). Whatever is used from the
+//      period after that is not in the transfer; it carries into the next period (rollForward).
 //   4. PIC 1 uploads two proof-of-receipt photos (the petty cash drawer and the Surat Terima Petty Cash). Once BOTH
-//      are in the refill is received (balanceAfter set) — the real "the store now has the money" moment. The next
-//      period was opened at step 1 and already carries whatever was spent meanwhile, so nothing is reset.
+//      are in the refill is received (balanceAfter set) — the real "the store now has the money" moment.
 //
-// The balance PIC 1 sees does NOT jump back to Rp 1.000.000 at step 1: the cash is still on its way. Until step 4
-// the spendable balance is the period's balance minus the refill not received yet (getRefillOutstanding), so the
-// store keeps working with what is really in the cash box and the balance "turns back" only on receipt.
+// A period's `current_balance` is the usage ledger — it never jumps back to Rp 1.000.000 when a refill is sent or
+// received. What PIC 1 can really SPEND is the cash in the box (getSpendable): the period's balance, minus the
+// refill of the period before it that has not been received yet (`owed`, from the moment that period ends — even
+// if nobody has asked for it yet), plus its own refill once that has been received while the period is still
+// running (`received`).
 //
-// `pettyCashRefillRequests.yearMonth` is the PERIOD the refill settles (the month that was closed), not the
-// calendar month it was filed in; `requestedAt` says when.
+// `pettyCashRefillRequests.yearMonth` is the PERIOD the refill settles, not the calendar month it was filed in;
+// `requestedAt` says when.
 
 import { db } from '@/lib/db';
 import { and, desc, eq, inArray, isNotNull, isNull, or } from 'drizzle-orm';
 import {
   pettyCashPeriods,
   pettyCashRefillRequests,
+  pettyCashRefills,
   stores,
   users,
+  type PettyCashPeriod,
   type PettyCashRefillRequest,
 } from '@/lib/db/schema';
 import { PETTY_CASH_MAX_BALANCE } from '@/lib/db/schema/petty-cash';
-import { jakartaTodayKey, jakartaYearMonth } from '@/lib/day-bucket';
+import { jakartaTodayKey } from '@/lib/day-bucket';
 import { createNotificationsForUsers, getOpsUserIdsForArea } from './notifications';
 import { getRefillRowsByIds } from './petty-cash-ops';
 import { rejectedNote, type RefillTransfer } from '@/lib/petty-cash-review';
-import { closePeriodAndOpenNext, getActivePeriod, getPeriod, type DbExecutor } from './petty-cash-period';
-import { addMonths, deadlineStatus, isRefillLate, periodLabel, type DeadlineStatus } from '@/lib/petty-cash-period';
+import { getActivePeriod, getPeriod, type DbExecutor } from './petty-cash-period';
+import {
+  REFILL_DEADLINE_FIRST_PERIOD,
+  addMonths,
+  deadlineStatus,
+  isRefillLate,
+  periodLabel,
+  pickRefillPeriod,
+  type DeadlineStatus,
+  type RefillCandidate,
+} from '@/lib/petty-cash-period';
 import type { BankDetails } from '@/lib/petty-cash-bank';
 
 /**
@@ -119,31 +133,65 @@ export async function getLatestRefillRequest(
 }
 
 /**
- * The period a refill sent now would settle: the one in use — unless the store's latest refill was rejected by OPS
- * for a period that is already closed, in which case that period still has to be settled (its usage is fixed,
- * PIC 1 sends a corrected request for it).
+ * The period a refill sent on Jakarta day `today` would settle, together with the period in use. `settle` is null
+ * when there is nothing to refill: every period that was used already has its refill asked for
+ * (`pickRefillPeriod` holds the rule).
  */
 async function resolveSettlePeriod(
   storeId: number,
-  latest: PettyCashRefillRequest | null,
+  today: string,
   exec: DbExecutor = db,
-) {
-  if (latest?.status === 'rejected') {
-    const period = await getPeriod(storeId, latest.yearMonth, exec);
-    if (period?.status === 'closed') return period;
-  }
-  return getActivePeriod(storeId, jakartaYearMonth(Date.now()));
+): Promise<{ usage: PettyCashPeriod; settle: PettyCashPeriod | null }> {
+  // First: this moves the store to the period of `today` if its last one has ended, so what is read next is current.
+  const usage = await getActivePeriod(storeId, today, exec);
+
+  // One after the other — `exec` may be a transaction, which has a single connection.
+  const periods = await exec.select().from(pettyCashPeriods).where(eq(pettyCashPeriods.storeId, storeId));
+  const requests = await exec
+    .select({ yearMonth: pettyCashRefillRequests.yearMonth, status: pettyCashRefillRequests.status })
+    .from(pettyCashRefillRequests)
+    .where(eq(pettyCashRefillRequests.storeId, storeId));
+  const monthEndCloses = await exec
+    .select({ yearMonth: pettyCashRefills.yearMonth })
+    .from(pettyCashRefills)
+    .where(eq(pettyCashRefills.storeId, storeId));
+
+  // A period is settled once its refill was asked for and not turned down — or Finance closed it itself at month end.
+  const settled = new Set<string>([
+    ...requests.filter((r) => r.status !== 'rejected').map((r) => r.yearMonth),
+    ...monthEndCloses.map((r) => r.yearMonth),
+  ]);
+
+  const candidates: RefillCandidate[] = periods.map((p) => ({
+    month: p.yearMonth,
+    balance: Number(p.currentBalance),
+    settled: settled.has(p.yearMonth),
+  }));
+  const month = pickRefillPeriod(candidates, usage.yearMonth);
+
+  return { usage, settle: month ? (periods.find((p) => p.yearMonth === month) ?? null) : null };
+}
+
+/** The store's latest refill request for one period, whatever its state. */
+async function latestRequestFor(storeId: number, yearMonth: string, exec: DbExecutor) {
+  const [request] = await exec
+    .select()
+    .from(pettyCashRefillRequests)
+    .where(and(eq(pettyCashRefillRequests.storeId, storeId), eq(pettyCashRefillRequests.yearMonth, yearMonth)))
+    .orderBy(desc(pettyCashRefillRequests.requestedAt), desc(pettyCashRefillRequests.id))
+    .limit(1);
+  return request ?? null;
 }
 
 /**
- * Cash the store has been promised but does not have yet: the Refill of the period just BEFORE `periodMonth`, for as
- * long as it is on its way (waiting on OPS, approved, waiting for Finance, or turned down and not sent again) — it
- * counts as received only once PIC 1 has both proof photos in (balanceAfter).
+ * Cash the store is owed but does not have yet: the Refill of the period just BEFORE `periodMonth`, for as long as
+ * it is not received — not asked for yet (the 15th is over and PIC 1 has not sent it), waiting on OPS, approved
+ * and waiting for Finance, or turned down and not sent again. It counts as received only once PIC 1 has both
+ * proof photos in (balanceAfter).
  *
- * Sending a Refill opens the next period at the full Rp 1.000.000 on paper so requests can carry on, but that money
- * is not in the cash box until it arrives. What PIC 1 can actually spend is therefore the period's balance MINUS
- * this amount — the balance only "turns back" to Rp 1.000.000 (less what was spent meanwhile) when the Refill is
- * received. It is the frozen transfer once Finance verified, else what the closed period still needs (max − balance).
+ * A period starts at the full Rp 1.000.000 on paper, but the cash box holds that only after the Refill of the
+ * period before it has arrived. What PIC 1 can really spend is therefore the period's balance MINUS this amount.
+ * It is the frozen transfer once Finance verified, else what the ended period still needs (max − balance).
  */
 export async function getRefillOutstanding(
   storeId: number,
@@ -151,32 +199,79 @@ export async function getRefillOutstanding(
   exec: DbExecutor = db,
 ): Promise<number> {
   const prev = addMonths(periodMonth, -1);
+  const request = await latestRequestFor(storeId, prev, exec);
 
+  if (request?.balanceAfter) return 0;
+  if (request?.transferAmount != null) return Math.max(0, Math.round(Number(request.transferAmount)));
+
+  const previous = await getPeriod(storeId, prev, exec);
+
+  if (!request) {
+    // Nobody has asked for it (yet). Only periods of the date-driven flow can be owed like this — never an older
+    // one, and never one Finance already settled itself at month end.
+    if (!previous || prev < REFILL_DEADLINE_FIRST_PERIOD) return 0;
+    const [monthEndClose] = await exec
+      .select({ id: pettyCashRefills.id })
+      .from(pettyCashRefills)
+      .where(and(eq(pettyCashRefills.storeId, storeId), eq(pettyCashRefills.yearMonth, prev)))
+      .limit(1);
+    if (monthEndClose) return 0;
+  }
+
+  const left = previous ? Number(previous.currentBalance) : Number(request?.balanceBefore ?? PETTY_CASH_MAX_BALANCE);
+  return Math.max(0, Math.round(PETTY_CASH_MAX_BALANCE - left));
+}
+
+/**
+ * The Refill of this very period once PIC 1 has received it while the period is still running: the cash is in the
+ * box, but the period's balance (the usage ledger) does not move — so it is added when working out what is spendable.
+ */
+export async function getRefillReceivedWithin(
+  storeId: number,
+  periodMonth: string,
+  exec: DbExecutor = db,
+): Promise<number> {
   const [request] = await exec
-    .select()
+    .select({ transferAmount: pettyCashRefillRequests.transferAmount })
     .from(pettyCashRefillRequests)
-    .where(and(eq(pettyCashRefillRequests.storeId, storeId), eq(pettyCashRefillRequests.yearMonth, prev)))
+    .where(
+      and(
+        eq(pettyCashRefillRequests.storeId, storeId),
+        eq(pettyCashRefillRequests.yearMonth, periodMonth),
+        eq(pettyCashRefillRequests.status, 'approved'),
+        isNotNull(pettyCashRefillRequests.balanceAfter),
+      ),
+    )
     .orderBy(desc(pettyCashRefillRequests.requestedAt), desc(pettyCashRefillRequests.id))
     .limit(1);
 
-  if (!request || request.balanceAfter) return 0;
-  if (request.transferAmount != null) return Math.max(0, Math.round(Number(request.transferAmount)));
+  return request?.transferAmount != null ? Math.max(0, Math.round(Number(request.transferAmount))) : 0;
+}
 
-  const closed = await getPeriod(storeId, prev, exec);
-  const left = closed ? Number(closed.currentBalance) : Number(request.balanceBefore ?? PETTY_CASH_MAX_BALANCE);
-  return Math.max(0, Math.round(PETTY_CASH_MAX_BALANCE - left));
+/**
+ * What PIC 1 can spend from `period` — the cash really in the box: its balance, minus the previous period's Refill
+ * that has not arrived (`owed`), plus its own Refill once that has (`received`). `net` is `received − owed`, the
+ * number to add to the period's balance in a SQL check.
+ */
+export async function getSpendable(
+  storeId: number,
+  period: Pick<PettyCashPeriod, 'yearMonth' | 'currentBalance'>,
+  exec: DbExecutor = db,
+): Promise<{ spendable: number; owed: number; received: number; net: number }> {
+  const owed = await getRefillOutstanding(storeId, period.yearMonth, exec);
+  const received = await getRefillReceivedWithin(storeId, period.yearMonth, exec);
+  const net = received - owed;
+  return { spendable: Math.max(0, Number(period.currentBalance ?? 0) + net), owed, received, net };
 }
 
 export type RefillRequestResult =
   | {
       success: true;
       request: PettyCashRefillRequest;
-      /** The period the refill settles, the one new requests now go to, and whether it was past the 15th. */
+      /** The period the refill settles, the one new requests go to right now, and whether it was past the 15th. */
       periodMonth?: string;
-      nextMonth?: string;
+      usageMonth?: string;
       late?: boolean;
-      /** Requests that were still waiting and moved to the next period. */
-      moved?: number;
     }
   | { success: false; error: string };
 
@@ -186,7 +281,7 @@ export interface RefillOverview {
   request: PettyCashRefillRequest | null;
   /** The period new requests are filed under right now. */
   usageMonth: string;
-  /** What a refill sent now would cover; null while another refill is on its way. */
+  /** What a refill sent now would cover; null while another refill is on its way or there is nothing to refill. */
   settle: { month: string; balance: number; refill: number; closed: boolean } | null;
   /** Where that refill stands against the 15th. */
   deadline: DeadlineStatus | null;
@@ -197,13 +292,16 @@ export interface RefillOverview {
 
 type SendOutcome =
   | { ok: false; error: string }
-  | { ok: true; request: PettyCashRefillRequest; period: string; next: string; moved: number };
+  | { ok: true; request: PettyCashRefillRequest; period: string; usage: string };
 
-const NOTHING_USED = (month: string) =>
-  `Belum ada pemakaian di periode ${periodLabel(month)}, jadi belum ada yang perlu di-Refill.`;
+/** Why there is nothing to send: the period in use has no usage, or its refill is already asked for. */
+const nothingToRefill = (usage: Pick<PettyCashPeriod, 'yearMonth' | 'currentBalance'>) =>
+  Number(usage.currentBalance) < PETTY_CASH_MAX_BALANCE
+    ? `Refill periode ${periodLabel(usage.yearMonth)} sudah diajukan.`
+    : `Belum ada pemakaian di periode ${periodLabel(usage.yearMonth)}, jadi belum ada yang perlu di-Refill.`;
 
-export async function getRefillOverview(storeId: number): Promise<RefillOverview> {
-  const usage = await getActivePeriod(storeId, jakartaYearMonth(Date.now()));
+export async function getRefillOverview(storeId: number, today: string = jakartaTodayKey()): Promise<RefillOverview> {
+  const { usage, settle } = await resolveSettlePeriod(storeId, today);
   const live = await getLiveRefillRequest(storeId);
 
   if (live) {
@@ -218,7 +316,18 @@ export async function getRefillOverview(storeId: number): Promise<RefillOverview
   }
 
   const latest = await getLatestRefillRequest(storeId);
-  const settle = await resolveSettlePeriod(storeId, latest);
+
+  if (!settle) {
+    return {
+      request: latest,
+      usageMonth: usage.yearMonth,
+      settle: null,
+      deadline: null,
+      canRequest: false,
+      blockedReason: nothingToRefill(usage),
+    };
+  }
+
   const balance = Number(settle.currentBalance);
   const refill = Math.max(0, PETTY_CASH_MAX_BALANCE - balance);
 
@@ -226,9 +335,9 @@ export async function getRefillOverview(storeId: number): Promise<RefillOverview
     request: latest,
     usageMonth: usage.yearMonth,
     settle: { month: settle.yearMonth, balance, refill, closed: settle.status === 'closed' },
-    deadline: deadlineStatus(settle.yearMonth, jakartaTodayKey()),
+    deadline: deadlineStatus(settle.yearMonth, today),
     canRequest: refill > 0,
-    blockedReason: refill > 0 ? null : NOTHING_USED(settle.yearMonth),
+    blockedReason: refill > 0 ? null : nothingToRefill(usage),
   };
 }
 
@@ -253,27 +362,30 @@ export async function getLastBankDetails(userId: string): Promise<BankDetails | 
 }
 
 /**
- * PIC 1 sends the refill for the period in use. It must say where Finance should send the cash, so `bank` is
- * required (already validated/normalised by normalizeBankDetails in the route).
+ * PIC 1 sends the refill. It must say where Finance should send the cash, so `bank` is required (already
+ * validated/normalised by normalizeBankDetails in the route).
  *
- * In one transaction: the period is closed, the next one opens, requests still waiting move to it, and the refill
- * request is recorded against the period it settles (balanceBefore = what that period had left).
+ * The period it settles is worked out here (resolveSettlePeriod): before or on the 15th the period in use — unless
+ * an older one is still waiting — and after the 15th the period that has just ended, as long as nobody asked for it.
+ * The request is recorded against that period (balanceBefore = what it had left). Nothing else changes: no period
+ * is closed or opened, no request moves — the calendar does that.
+ *
+ * `today` is a Jakarta day (YYYY-MM-DD); only tests pass it.
  */
 export async function createRefillRequest(
   storeId: number,
   userId: string,
   bank: BankDetails,
   notes?: string,
+  today: string = jakartaTodayKey(),
 ): Promise<RefillRequestResult> {
-  const today = jakartaTodayKey();
-
   const outcome = await db.transaction(async (trx): Promise<SendOutcome> => {
     if (await getLiveRefillRequest(storeId, trx)) {
       return { ok: false, error: 'Refill sebelumnya masih diproses. Refill berikutnya bisa diajukan setelah uangnya diterima toko.' };
     }
 
-    const latest = await getLatestRefillRequest(storeId, trx);
-    const settle = await resolveSettlePeriod(storeId, latest, trx);
+    const { usage, settle } = await resolveSettlePeriod(storeId, today, trx);
+    if (!settle) return { ok: false, error: nothingToRefill(usage) };
 
     // Serialise two taps on "Kirim": the second waits here, then sees the first one's request below.
     await trx.select({ id: pettyCashPeriods.id }).from(pettyCashPeriods).where(eq(pettyCashPeriods.id, settle.id)).for('update');
@@ -283,10 +395,7 @@ export async function createRefillRequest(
 
     const fresh = (await getPeriod(storeId, settle.yearMonth, trx)) ?? settle;
     const balance = Number(fresh.currentBalance);
-    if (PETTY_CASH_MAX_BALANCE - balance <= 0) return { ok: false, error: NOTHING_USED(fresh.yearMonth) };
-
-    // Sending the refill closes the period (a retry for an already-closed one leaves it as it is) and opens the next.
-    const closing = await closePeriodAndOpenNext(storeId, fresh.yearMonth, userId, trx);
+    if (PETTY_CASH_MAX_BALANCE - balance <= 0) return { ok: false, error: nothingToRefill(usage) };
 
     const [request] = await trx
       .insert(pettyCashRefillRequests)
@@ -305,7 +414,7 @@ export async function createRefillRequest(
       })
       .returning();
 
-    return { ok: true, request, period: fresh.yearMonth, next: closing.next.yearMonth, moved: closing.moved };
+    return { ok: true, request, period: fresh.yearMonth, usage: usage.yearMonth };
   });
 
   if (!outcome.ok) return { success: false, error: outcome.error };
@@ -324,9 +433,8 @@ export async function createRefillRequest(
     success: true,
     request: outcome.request,
     periodMonth: outcome.period,
-    nextMonth: outcome.next,
+    usageMonth: outcome.usage,
     late,
-    moved: outcome.moved,
   };
 }
 
@@ -343,7 +451,7 @@ export async function approveRefillRequest(id: number, actorUserId: string): Pro
   if (!existing) return { success: false, error: 'Request not found.' };
   if (existing.status !== 'pending') return { success: false, error: 'Request has already been processed.' };
 
-  // The period was closed when the refill was sent — it is the usage that is being paid for.
+  // The period the refill settles — the usage that is being paid for (live while that period is still running).
   const period = await getPeriod(existing.storeId, existing.yearMonth);
 
   const [request] = await db
@@ -488,9 +596,8 @@ export type ProofPhotoKind = 'drawer' | 'signature';
  * are in, this is the moment the cash is considered actually received: the
  * refill is marked received (balanceAfter) — right here, not at approval time.
  *
- * The next period was already opened when the refill was sent and carries whatever the store spent since, so
- * receiving never resets a balance. (closePeriodAndOpenNext only makes sure of it for a refill sent before
- * periods closed at that moment — a no-op for every other.)
+ * Receiving never resets a balance or changes a period: the period in use already carries whatever the store
+ * spent meanwhile, and which period is in use is the calendar's call.
  */
 export async function attachRefillProof(
   id: number,
@@ -531,18 +638,23 @@ export async function attachRefillProof(
 
   // Guard on balanceAfter still being unset so a retaken photo after the refill was received doesn't do it twice.
   if (bothUploaded && !request.balanceAfter) {
-    const updated = await db.transaction(async (trx) => {
-      const closing = await closePeriodAndOpenNext(existing.storeId, existing.yearMonth, userId, trx);
+    // Receiving never opens or closes a period — the calendar does that. balanceAfter marks the refill as
+    // received (which is what lets the spendable balance catch up: getRefillOutstanding becomes 0, or
+    // getRefillReceivedWithin starts counting it) and records the cash the box holds on paper right after:
+    //   • the period it settles has ended → the balance of the period in use now;
+    //   • it is still the period in use → its balance plus this refill (the period's own balance does not move).
+    const active = await getActivePeriod(existing.storeId);
+    const topUp = request.transferAmount != null ? Number(request.transferAmount) : 0;
+    const boxAfter =
+      active.yearMonth > existing.yearMonth
+        ? Number(active.currentBalance)
+        : Math.min(PETTY_CASH_MAX_BALANCE, Number(active.currentBalance) + topUp);
 
-      // balanceAfter is what the period now holding the cash has on paper; it also marks the refill as received,
-      // which is what lets the spendable balance catch up with it (getRefillOutstanding becomes 0).
-      const [row] = await trx
-        .update(pettyCashRefillRequests)
-        .set({ balanceAfter: String(closing.next.currentBalance), updatedAt: new Date() })
-        .where(and(eq(pettyCashRefillRequests.id, id), isNull(pettyCashRefillRequests.balanceAfter)))
-        .returning();
-      return row;
-    });
+    const [updated] = await db
+      .update(pettyCashRefillRequests)
+      .set({ balanceAfter: String(boxAfter), updatedAt: new Date() })
+      .where(and(eq(pettyCashRefillRequests.id, id), isNull(pettyCashRefillRequests.balanceAfter)))
+      .returning();
 
     if (updated) return { success: true, request: updated };
   }

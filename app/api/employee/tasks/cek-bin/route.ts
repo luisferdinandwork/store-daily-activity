@@ -1,14 +1,12 @@
 // app/api/employee/tasks/cek-bin/route.ts
+//
+// Cek Bin has no submit step: the employee page calls this once when the task is
+// opened and the day's task is marked done (idempotent — see completeCekBin). The
+// bins and what is wrong in them come live from Business Central: ./results/route.ts.
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import {
-  autoSaveCekBin,
-  getCekBinById,
-  submitCekBin,
-  type AutoSaveCekBinInput,
-  type CekBinSelectedBinInput,
-} from '@/lib/db/utils/cek-bin';
+import { completeCekBin } from '@/lib/db/utils/cek-bin';
 import { parseAccuracy, type GeoPoint } from '@/lib/geo';
 
 function toInt(val: unknown, field: string): number {
@@ -23,43 +21,6 @@ function toGeo(geo: unknown, skipGeo: boolean): GeoPoint | null {
   const { lat, lng, accuracy } = geo as Record<string, unknown>;
   if (typeof lat !== 'number' || typeof lng !== 'number') return null;
   return { lat, lng, accuracy: parseAccuracy(accuracy) };
-}
-
-function parseSelectedBins(raw: unknown): CekBinSelectedBinInput[] {
-  if (!Array.isArray(raw)) return [];
-
-  return raw.map((item, index) => {
-    if (!item || typeof item !== 'object') {
-      throw new Error(`selectedBins[${index}] must be an object.`);
-    }
-
-    const row = item as Record<string, unknown>;
-
-    return {
-      binId: toInt(row.binId, `selectedBins[${index}].binId`),
-      qtyBc: toInt(row.qtyBc, `selectedBins[${index}].qtyBc`),
-      qtySesuaiBin: toInt(row.qtySesuaiBin, `selectedBins[${index}].qtySesuaiBin`),
-      qtyTidakSesuaiBin: toInt(row.qtyTidakSesuaiBin, `selectedBins[${index}].qtyTidakSesuaiBin`),
-      notes: typeof row.notes === 'string' ? row.notes : undefined,
-    };
-  });
-}
-
-export async function GET(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.id) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-  }
-
-  const { searchParams } = new URL(req.url);
-  const taskId = Number(searchParams.get('taskId') ?? searchParams.get('id'));
-
-  if (!Number.isInteger(taskId)) {
-    return NextResponse.json({ success: false, error: 'taskId is required.' }, { status: 400 });
-  }
-
-  const result = await getCekBinById(taskId);
-  return NextResponse.json(result, { status: result.success ? 200 : 404 });
 }
 
 export async function POST(req: NextRequest) {
@@ -78,13 +39,11 @@ export async function POST(req: NextRequest) {
   let scheduleId: number;
   let storeId: number;
   let shiftId: number | undefined;
-  let selectedBins: CekBinSelectedBinInput[];
 
   try {
     scheduleId = toInt(body.scheduleId, 'scheduleId');
     storeId = toInt(body.storeId, 'storeId');
     shiftId = body.shiftId == null ? undefined : toInt(body.shiftId, 'shiftId');
-    selectedBins = parseSelectedBins(body.selectedBins);
   } catch (e) {
     return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 400 });
   }
@@ -94,50 +53,14 @@ export async function POST(req: NextRequest) {
   const geo = rawGeo ?? { lat: 0, lng: 0 };
   const effectiveSkipGeo = skipGeo || rawGeo === null;
 
-  const result = await submitCekBin({
+  const result = await completeCekBin({
     scheduleId,
     userId: session.user.id,
     storeId,
     shiftId,
     geo,
     skipGeo: effectiveSkipGeo,
-    selectedBins,
-    notes: typeof body.notes === 'string' ? body.notes : undefined,
   });
 
-  return NextResponse.json(result, { status: result.success ? 200 : 400 });
-}
-
-export async function PATCH(req: NextRequest) {
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.id) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-  }
-
-  let body: Record<string, unknown>;
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ success: false, error: 'Invalid JSON body.' }, { status: 400 });
-  }
-
-  let taskId: number;
-  try {
-    taskId = toInt(body.taskId, 'taskId');
-  } catch (e) {
-    return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 400 });
-  }
-
-  const patch: AutoSaveCekBinInput = {};
-
-  try {
-    if ('selectedBins' in body) patch.selectedBins = parseSelectedBins(body.selectedBins);
-  } catch (e) {
-    return NextResponse.json({ success: false, error: e instanceof Error ? e.message : String(e) }, { status: 400 });
-  }
-
-  if ('notes' in body) patch.notes = typeof body.notes === 'string' ? body.notes : undefined;
-
-  const result = await autoSaveCekBin(taskId, patch);
   return NextResponse.json(result, { status: result.success ? 200 : 400 });
 }

@@ -2,7 +2,7 @@
 //
 // Seeds YESTERDAY's Store Closing of the test store (DUMMY-001) with a Sales Cash
 // amount, so today's morning Setoran can be tried: "Jumlah Sales Cash" starts from
-// it and "Foto Jumlah Sales Cash" is asked.
+// it (there is no photo of it any more).
 //
 //   npx tsx scripts/seed-store-closing-sales-cash.ts            # 2.350.000
 //   npx tsx scripts/seed-store-closing-sales-cash.ts 4100000    # your own amount

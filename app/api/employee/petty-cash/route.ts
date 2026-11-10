@@ -7,9 +7,19 @@ import { getServerSession } from 'next-auth';
 import { db } from '@/lib/db';
 import { authOptions } from '@/lib/auth';
 import { stores, users } from '@/lib/db/schema/core';
-import { PETTY_CASH_MAX_BALANCE, pettyCashPeriods, pettyCashTransactions } from '@/lib/db/schema/petty-cash';
-import { getLatestRefillRequest, getRefillOutstanding, isPettyCashHolder } from '@/lib/db/utils/petty-cash-refill';
-import { getActivePeriod, getPeriod, rollRequestToActivePeriod } from '@/lib/db/utils/petty-cash-period';
+import {
+  PETTY_CASH_MAX_BALANCE,
+  pettyCashPeriods,
+  pettyCashRefillRequests,
+  pettyCashTransactions,
+} from '@/lib/db/schema/petty-cash';
+import {
+  getRefillOutstanding,
+  getRefillReceivedWithin,
+  getSpendable,
+  isPettyCashHolder,
+} from '@/lib/db/utils/petty-cash-refill';
+import { getActivePeriod, rollRequestToActivePeriod } from '@/lib/db/utils/petty-cash-period';
 import {
   getPettyCashCategory,
   listPettyCashCategories,
@@ -59,11 +69,10 @@ async function getEmployeeStore(userId: string) {
   return user?.homeStoreId ?? null;
 }
 
-// Petty cash balance carries forward across months — a period stays open until
-// PIC 1 sends its refill, which closes it and opens the next one (see
-// lib/db/utils/petty-cash-period.ts). This just resolves the period in use.
-async function ensurePettyCashPeriod(storeId: number, yearMonth: string) {
-  return getActivePeriod(storeId, yearMonth);
+// The CALENDAR decides the period in use: it runs 16th → 15th and changes on the 16th, whether or not a refill was
+// sent (see lib/db/utils/petty-cash-period.ts). This resolves it, moving the store forward if its last one ended.
+async function ensurePettyCashPeriod(storeId: number) {
+  return getActivePeriod(storeId);
 }
 
 function getRows(result: unknown): unknown[] {
@@ -110,7 +119,7 @@ export async function GET() {
     return NextResponse.json({ error: 'Store not found.' }, { status: 404 });
   }
 
-  const period = await ensurePettyCashPeriod(storeId, month);
+  const period = await ensurePettyCashPeriod(storeId);
 
   if (!period) {
     return NextResponse.json(
@@ -119,15 +128,14 @@ export async function GET() {
     );
   }
 
-  // period.yearMonth (not the raw calendar `month`) is the period in use: sending a refill closes the period
-  // and opens the next one right away, so new requests belong to that one — balance and counters both —
-  // rather than waiting for the calendar to catch up. See getActivePeriod in petty-cash-period.ts.
+  // period.yearMonth (not the raw calendar `month`) is the period in use: a period runs 16th → 15th and is named
+  // after the month it ends in, so on the 20th of November the period in use is December.
   const activeMonth = period.yearMonth;
 
-  // The next period opens at the full Rp 1.000.000 on paper the moment a refill is sent, but that money is not in
-  // the cash box until PIC 1 confirms receiving it — so the balance shown (and spendable) leaves it out until then.
-  const refillOwed = await getRefillOutstanding(storeId, period.yearMonth);
-  const spendable = Math.max(0, Number(period.currentBalance ?? 0) - refillOwed);
+  // A period starts at the full Rp 1.000.000 on paper, but the cash box holds that only once the Refill of the
+  // period before it has been received — so the balance shown (and spendable) leaves it out until then, and adds
+  // the period's own Refill once it has arrived.
+  const { spendable, owed: refillOwed } = await getSpendable(storeId, period);
 
   const categories = await listPettyCashCategories({ activeOnly: true });
 
@@ -169,18 +177,19 @@ export async function GET() {
     for (const r of filedAgain) if (r.of != null) reRequestedAs.set(r.of, r.id);
   }
 
-  // The refill on its way (or one OPS turned down) means the previous period is closed and requests are now filed
-  // under the next one — the page says so. Nothing is blocked.
-  const latestRefill = await getLatestRefillRequest(storeId);
+  // The period before the one in use has ended (its 15th is over) and its Refill has not arrived: not asked for
+  // yet, on its way, or turned down. The page says so — new requests are already counted in the period in use,
+  // and nothing is blocked.
+  const previousMonth = addMonths(period.yearMonth, -1);
   let closedPeriod: { month: string; refillState: string } | null = null;
-  if (latestRefill) {
-    const state = refillStateOf(latestRefill);
-    if (state === 'rejected') {
-      const was = await getPeriod(storeId, latestRefill.yearMonth);
-      if (was?.status === 'closed') closedPeriod = { month: latestRefill.yearMonth, refillState: state };
-    } else if (state !== 'received') {
-      closedPeriod = { month: latestRefill.yearMonth, refillState: state };
-    }
+  if (refillOwed > 0) {
+    const [previousRefill] = await db
+      .select()
+      .from(pettyCashRefillRequests)
+      .where(and(eq(pettyCashRefillRequests.storeId, storeId), eq(pettyCashRefillRequests.yearMonth, previousMonth)))
+      .orderBy(desc(pettyCashRefillRequests.requestedAt), desc(pettyCashRefillRequests.id))
+      .limit(1);
+    closedPeriod = { month: previousMonth, refillState: previousRefill ? refillStateOf(previousRefill) : 'none' };
   }
 
   // Where a Re-request of each Perlu Perbaikan request would be counted (the period after its own, or the one in
@@ -199,8 +208,8 @@ export async function GET() {
       .from(pettyCashPeriods)
       .where(and(eq(pettyCashPeriods.storeId, storeId), inArray(pettyCashPeriods.yearMonth, missingMonths)));
     for (const r of rows) {
-      const owed = await getRefillOutstanding(storeId, r.yearMonth);
-      targetBalance.set(r.yearMonth, Math.max(0, Number(r.balance) - owed));
+      const target = await getSpendable(storeId, { yearMonth: r.yearMonth, currentBalance: r.balance });
+      targetBalance.set(r.yearMonth, target.spendable);
     }
   }
 
@@ -209,8 +218,12 @@ export async function GET() {
     storeName: store.name,
     closedPeriod,
     balance: String(spendable),
-    // The refill of the previous period that has not been received yet: the balance rises by this on receipt.
-    refillPending: refillOwed > 0 ? { month: addMonths(period.yearMonth, -1), amount: refillOwed } : null,
+    // The refill of the previous period that has not been received yet (even if nobody asked for it yet): the
+    // balance rises by this on receipt. `requested` = it has been asked for.
+    refillPending:
+      refillOwed > 0
+        ? { month: previousMonth, amount: refillOwed, requested: closedPeriod?.refillState !== 'none' }
+        : null,
     openingBalance: period.openingBalance,
     closingBalance: period.closingBalance,
     periodStatus: period.status,
@@ -340,11 +353,9 @@ export async function POST(req: NextRequest) {
   const inactive = await storeInactiveResponse(storeId);
   if (inactive) return inactive;
 
-  // A refill on its way never blocks a request: the refill closed the previous period, so this one is simply
-  // filed under the period in use now (the next one) — see getActivePeriod.
-  const month = currentYearMonth();
-
-  const period = await ensurePettyCashPeriod(storeId, month);
+  // A refill never blocks a request: this one is simply filed under the period the calendar says is in use now
+  // (up to the 15th this month's, from the 16th the next one's) — see getActivePeriod.
+  const period = await ensurePettyCashPeriod(storeId);
 
   if (!period) {
     return NextResponse.json(
@@ -373,9 +384,8 @@ export async function POST(req: NextRequest) {
       status: 'pending_ops',
       imageUrl: null,
       imageKey: null,
-      // Tag with the period's OWN month, not the raw calendar month — once a
-      // refill has closed the previous period, new spend belongs to the next one
-      // (see getActivePeriod), so it must be grouped under that month for
+      // Tag with the period's OWN month, not the raw calendar month — from the 16th new spend belongs to the
+      // next month's period (see getActivePeriod), so it must be grouped under that month for
       // Finance's per-month ledger to add up.
       yearMonth: period.yearMonth,
       // Explicit app-clock timestamp instead of the column's DEFAULT NOW() —
@@ -470,17 +480,20 @@ export async function PATCH(req: NextRequest) {
       );
     }
 
-    // A request still waiting when its period closed belongs to the period in use (it normally moved when the
-    // refill was sent; this catches stragglers) — that is the balance the actual amount is cut from.
-    await rollRequestToActivePeriod(txId, storeId, currentYearMonth());
+    // A request still waiting when its period ended belongs to the period in use (it normally moved on the 16th,
+    // when the calendar moved the store; this catches stragglers) — that is the balance the actual amount is cut from.
+    await rollRequestToActivePeriod(txId, storeId);
 
-    // What is spendable is the period's balance minus a refill still on its way (see getRefillOutstanding).
+    // What is spendable is the period's balance minus a refill still on its way (getRefillOutstanding), plus its
+    // own refill once received (getRefillReceivedWithin) — `net` is what to add to the balance in the check below.
     const [owner] = await db
       .select({ yearMonth: pettyCashTransactions.yearMonth })
       .from(pettyCashTransactions)
       .where(and(eq(pettyCashTransactions.id, txId), eq(pettyCashTransactions.storeId, storeId)))
       .limit(1);
     const owed = owner ? await getRefillOutstanding(storeId, owner.yearMonth) : 0;
+    const received = owner ? await getRefillReceivedWithin(storeId, owner.yearMonth) : 0;
+    const net = received - owed;
 
     const result = await db.execute(sql`
       WITH target_tx AS (
@@ -498,7 +511,7 @@ export async function PATCH(req: NextRequest) {
           updated_at = NOW()
         WHERE id = (SELECT period_id FROM target_tx)
           AND status = 'open'
-          AND current_balance - ${owed.toFixed(2)}::numeric >= ${actualAmount.toFixed(2)}::numeric
+          AND current_balance + ${net.toFixed(2)}::numeric >= ${actualAmount.toFixed(2)}::numeric
         RETURNING id, current_balance::text AS new_balance
       ),
 

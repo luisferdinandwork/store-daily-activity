@@ -27,8 +27,6 @@ import {
   setoranTasks,
   setoranMoneyStorage,
   cekBinTasks,
-  storeBins,
-  cekBinTaskBins,
   vmChecklistTasks,
   marketingCheckTasks,
   briefingTasks,
@@ -668,65 +666,22 @@ export async function seedAttendance() {
   }
   await insertInBatches(setoranMoneyStorage, setoranStorageRows);
 
-  // Cek Bin needs child rows.
-  const activeBins: any[] = [];
-  for (const storeBatch of chunks(uniqueNumbers(storeIds), SELECT_BATCH_SIZE)) {
-    const rows = await db
-      .select()
-      .from(storeBins)
-      .where(
-        and(
-          inArray(storeBins.storeId, storeBatch),
-          eq(storeBins.isActive, true),
-        ),
-      );
-    activeBins.push(...(rows as any[]));
-  }
-  const binsByStoreId = new Map<number, any[]>();
-  for (const bin of activeBins as any[]) {
-    const list = binsByStoreId.get(bin.storeId) ?? [];
-    list.push(bin);
-    binsByStoreId.set(bin.storeId, list);
-  }
-
-  const cekBinTaskBinsRows: Array<typeof cekBinTaskBins.$inferInsert> = [];
+  // Cek Bin: just the task row — what was scanned / is wrong is read from BC.
   for (const { sched } of morningSchedules) {
     const task = cekBinMap.get(sched.id);
     if (!task || task.status !== "not_started" || !chance(0.8)) continue;
-    const bins = binsByStoreId.get(sched.storeId) ?? [];
-    const minToCheck = Math.max(1, Math.ceil(bins.length * 0.3));
-    const checkedBins = bins.slice(0, minToCheck);
 
     await db
       .update(cekBinTasks)
       .set({
-        totalStoreBins: bins.length,
-        minimumBinsToCheck: minToCheck,
-        checkedBinsCount: checkedBins.length,
-        notes: checkedBins.length
-          ? "Auto seed cek bin."
-          : "No active bins seeded for this store.",
+        notes: "Auto seed cek bin.",
         status: "completed",
         completedAt,
         updatedAt: now,
       } as any)
       .where(eq(cekBinTasks.id, task.id));
-
-    for (const bin of checkedBins) {
-      cekBinTaskBinsRows.push({
-        taskId: task.id,
-        binId: bin.id,
-        bin: bin.bin,
-        nama: bin.nama,
-        qtyBc: bin.qtyBc,
-        qtySesuaiBin: bin.qtySesuaiBin,
-        qtyTidakSesuaiBin: bin.qtyTidakSesuaiBin,
-        notes: chance(0.15) ? "Ada minor selisih, perlu follow up." : null,
-      } as any);
-    }
     tasksCompleted++;
   }
-  await insertInBatches(cekBinTaskBins, cekBinTaskBinsRows);
 
   tasksCompleted += await updateTaskByIds(
     vmChecklistTasks,

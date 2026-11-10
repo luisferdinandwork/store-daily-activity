@@ -11,13 +11,21 @@
 // slate, and the backup is put back at the end — also when an assertion fails. petty_cash_* notifications the
 // scenario created are removed again.
 //
+// The date is the thing under test, so the scenario walks across the 16th by passing a Jakarta day to the
+// functions that take one (`getActivePeriod(storeId, day)`, `createRefillRequest(…, day)`, `getRefillOverview(…, day)`).
+// M is the period of TODAY (16th → 15th, named after the month it ends in), N the one after, P the one after that.
+//
 // Rules under test:
-//   • sending the refill closes the period, opens the next at once, and moves waiting requests to it;
-//   • the spendable balance does NOT jump back to Rp 1.000.000 — it keeps the refill-not-received-yet out until
-//     both proof photos are in;
+//   • THE CALENDAR changes the period, on the 16th — sending / approving / verifying / receiving a refill closes
+//     nothing and moves no request; on the 16th the store moves on and waiting requests go with it;
+//   • a refill settles the OLDEST used period without a refill: on or before the 15th the period in use, after the
+//     15th the period that has just ended (late) while it is still waiting, then the new one;
+//   • the spendable balance is the cash really in the box: the period's balance, minus the previous period's refill
+//     until it is received (even before it is asked for), plus its own refill once received while it still runs;
+//   • usage booked after Finance froze a refill's amount carries into the next period;
 //   • a Re-request is counted in the NEXT period, may change the category, and is checked against that period;
-//   • Finance can still decide on a closed period until its refill is verified (then it is locked), and the next
-//     period stays open to Finance.
+//   • Finance can still decide on a period until its refill is verified (then it is locked), and the next period
+//     stays open to Finance.
 
 import './lib/not-production';
 
@@ -30,8 +38,8 @@ import { Pool } from 'pg';
 import { db } from '@/lib/db';
 import { describeTarget } from './lib/db-target';
 import { pettyCashPeriods, pettyCashRefillRequests, pettyCashTransactions } from '@/lib/db/schema';
-import { jakartaYearMonth } from '@/lib/day-bucket';
-import { addMonths } from '@/lib/petty-cash-period';
+import { jakartaTodayKey } from '@/lib/day-bucket';
+import { addMonths, usagePeriodFor } from '@/lib/petty-cash-period';
 import { adjustPeriodBalance, getActivePeriod, getPeriod } from '@/lib/db/utils/petty-cash-period';
 import {
   approveRefillRequest,
@@ -40,6 +48,8 @@ import {
   getLiveRefillRequest,
   getRefillOutstanding,
   getRefillOverview,
+  getRefillReceivedWithin,
+  getSpendable,
   verifyRefillRequests,
 } from '@/lib/db/utils/petty-cash-refill';
 import { createReRequest } from '@/lib/db/utils/petty-cash-re-request';
@@ -108,9 +118,15 @@ async function main() {
   try {
     await wipe();
 
-    const M = jakartaYearMonth(Date.now());
+    const today = jakartaTodayKey();
+    const M = usagePeriodFor(today); // the period of today
     const N = addMonths(M, 1);
+    const P = addMonths(M, 2);
+    const D16 = `${M}-16`; // the day the calendar moves M → N
+    const D16b = `${N}-16`; // …and N → P
     const balanceOf = async (ym: string) => Number((await getPeriod(storeId, ym))!.currentBalance);
+    const statusOf = async (ym: string) => (await getPeriod(storeId, ym))?.status ?? null;
+    const spendableOf = async (ym: string) => (await getSpendable(storeId, (await getPeriod(storeId, ym))!)).spendable;
     const categories = await listPettyCashCategories({ activeOnly: true });
     assert.ok(categories.length >= 1, 'needs at least one active category');
     const catA = categories[0];
@@ -118,17 +134,18 @@ async function main() {
 
     // ── 1. A period in use with some spending ─────────────────────────────────
     step(`1. Period ${M} in use`);
-    const period = await getActivePeriod(storeId, M);
+    const period = await getActivePeriod(storeId);
     assert.equal(period.yearMonth, M);
+    assert.equal(period.status, 'open');
     assert.equal(Number(period.currentBalance), MAX);
-    ok(`opens at Rp ${MAX.toLocaleString('id-ID')}`);
+    ok(`today (${today}) is in period ${M}; it opens at Rp ${MAX.toLocaleString('id-ID')}`);
 
     const now = new Date();
-    const mk = async (status: string, amount: number, extra: Record<string, unknown> = {}) => {
+    const mk = async (status: string, amount: number, extra: Record<string, unknown> = {}, p = period) => {
       const [row] = await db
         .insert(pettyCashTransactions)
         .values({
-          periodId: period.id,
+          periodId: p.id,
           userId: pic,
           storeId,
           amount: amount.toFixed(2),
@@ -138,7 +155,7 @@ async function main() {
           categoryName: catA.name,
           status,
           imageUrl: status === 'completed' || status === 'ops_approved' ? 'https://example.test/receipt.jpg' : null,
-          yearMonth: M,
+          yearMonth: p.yearMonth,
           createdAt: now,
           updatedAt: now,
           ...extra,
@@ -146,11 +163,18 @@ async function main() {
         .returning();
       return row;
     };
+    /** What PIC 1 confirming a spend does to the period's balance. */
+    const spend = async (ym: string, amount: number) =>
+      db
+        .update(pettyCashPeriods)
+        .set({ currentBalance: String((await balanceOf(ym)) - amount) })
+        .where(eq(pettyCashPeriods.id, (await getPeriod(storeId, ym))!.id));
+
     const A = await mk('completed', 100_000);
     const B = await mk('completed', 50_000);
     const C = await mk('pending_ops', 30_000);
     const D = await mk('ops_approved', 20_000);
-    await db.update(pettyCashPeriods).set({ currentBalance: String(MAX - 150_000) }).where(eq(pettyCashPeriods.id, period.id));
+    await spend(M, 150_000);
     assert.equal(await balanceOf(M), 850_000);
     ok('A 100k + B 50k completed, C waiting on OPS, D OPS-approved → balance 850.000');
 
@@ -161,61 +185,54 @@ async function main() {
     ok('B → Perlu Perbaikan gives 50k back → balance 900.000');
 
     // ── 2. Overview before sending ────────────────────────────────────────────
-    step('2. Refill overview before sending');
+    step('2. Refill overview before sending (on or before the 15th)');
     const before = await getRefillOverview(storeId);
     assert.equal(before.usageMonth, M);
     assert.equal(before.settle?.month, M);
     assert.equal(before.settle?.balance, 900_000);
     assert.equal(before.settle?.refill, 100_000);
+    assert.equal(before.settle?.closed, false);
+    assert.equal(before.deadline?.late, false);
     assert.equal(before.canRequest, true);
     assert.equal(await getRefillOutstanding(storeId, M), 0);
-    ok('settles this period, refill = max − balance = 100.000, nothing outstanding');
+    ok('settles the period in use, refill = max − balance = 100.000, not late, nothing outstanding');
 
-    // ── 3. Send the refill ────────────────────────────────────────────────────
+    // ── 3. Send the refill — nothing closes ───────────────────────────────────
     step('3. PIC 1 sends the refill');
     const sent = await createRefillRequest(storeId, pic, BANK);
     assert.equal(sent.success, true);
     if (!sent.success) return;
     assert.equal(sent.periodMonth, M);
-    assert.equal(sent.nextMonth, N);
-    assert.equal(sent.moved, 2);
+    assert.equal(sent.usageMonth, M);
+    assert.equal(sent.late, false);
     assert.equal(sent.request.yearMonth, M);
-    ok(`refill is for period ${M}, next period is ${N}, 2 waiting requests moved`);
+    ok(`refill is for period ${M}, on time, and ${M} is still the period in use`);
 
-    assert.equal((await getPeriod(storeId, M))!.status, 'closed');
-    assert.equal((await getPeriod(storeId, N))!.status, 'open');
-    assert.equal(await balanceOf(N), MAX);
-    ok(`${M} is closed, ${N} is open`);
+    assert.equal(await statusOf(M), 'open');
+    assert.equal(await getPeriod(storeId, N), null);
+    assert.equal((await getActivePeriod(storeId)).yearMonth, M);
+    ok(`sending it did NOT close ${M} or open ${N} — new requests still land in ${M}`);
 
-    const [movedC] = await db.select().from(pettyCashTransactions).where(eq(pettyCashTransactions.id, C.id));
-    const [movedD] = await db.select().from(pettyCashTransactions).where(eq(pettyCashTransactions.id, D.id));
-    const [keptA] = await db.select().from(pettyCashTransactions).where(eq(pettyCashTransactions.id, A.id));
-    assert.equal(movedC.yearMonth, N);
-    assert.equal(movedD.yearMonth, N);
-    assert.equal(keptA.yearMonth, M);
-    ok('C (OPS) and D (approved) moved to the next period; completed A stays');
-
-    assert.equal((await getActivePeriod(storeId, M)).yearMonth, N);
-    ok('new requests now land in the next period');
+    const [stillC] = await db.select().from(pettyCashTransactions).where(eq(pettyCashTransactions.id, C.id));
+    const [stillD] = await db.select().from(pettyCashTransactions).where(eq(pettyCashTransactions.id, D.id));
+    assert.equal(stillC.yearMonth, M);
+    assert.equal(stillD.yearMonth, M);
+    ok('C (OPS) and D (approved) did not move');
 
     const again = await createRefillRequest(storeId, pic, BANK);
     assert.equal(again.success, false);
+    const busy = await getRefillOverview(storeId);
+    assert.equal(busy.canRequest, false);
+    assert.equal(busy.settle, null);
     ok('a second refill while one is on its way is refused');
 
-    // ── 4. The balance does not turn back to 1 million ────────────────────────
-    step('4. Balance stays at what is in the box until the refill is received');
-    assert.equal(await getRefillOutstanding(storeId, N), 100_000);
-    const spendable = Math.max(0, (await balanceOf(N)) - (await getRefillOutstanding(storeId, N)));
-    assert.equal(spendable, 900_000);
-    ok('next period is Rp 1.000.000 on paper but only 900.000 is spendable (100.000 refill not received)');
-
-    // ── 5. Re-request ─────────────────────────────────────────────────────────
-    step('5. Re-request of the Perlu Perbaikan request');
+    // ── 4. Re-request ─────────────────────────────────────────────────────────
+    step(`4. Re-request of the Perlu Perbaikan request (counted in ${N})`);
     const re = await createReRequest({
       originalTxId: B.id,
       storeId,
       userId: pic,
-      requestDate: M === jakartaYearMonth(Date.now()) ? new Date().toISOString().slice(0, 10) : `${M}-01`,
+      requestDate: today,
       description: 'perbaikan struk',
       actualAmount: 50_000,
       categoryId: catB.id,
@@ -227,7 +244,9 @@ async function main() {
     assert.equal(re.periodMonth, N);
     assert.equal(re.newBalance, 850_000);
     assert.equal(await balanceOf(N), 950_000);
-    ok(`counted in the next period ${N}, cut from its balance (spendable 900.000 → 850.000)`);
+    assert.equal(await statusOf(N), 'upcoming');
+    assert.equal(await balanceOf(M), 900_000);
+    ok(`counted in the next period ${N} (made ahead, still 'upcoming'), cut from its balance (spendable 900.000 → 850.000)`);
 
     const [reRow] = await db.select().from(pettyCashTransactions).where(eq(pettyCashTransactions.id, re.txId));
     assert.equal(reRow.isReRequest, true);
@@ -237,31 +256,30 @@ async function main() {
     assert.equal(reRow.imageUrl, 'https://example.test/new-receipt.jpg');
     ok('inserted as completed, new category + new receipt photo kept');
 
-    assert.equal((await createReRequest({ originalTxId: B.id, storeId, userId: pic, requestDate: new Date().toISOString().slice(0, 10), description: 'x', actualAmount: 1000 })).success, false);
+    assert.equal((await createReRequest({ originalTxId: B.id, storeId, userId: pic, requestDate: today, description: 'x', actualAmount: 1000 })).success, false);
     ok('a request can be re-requested only once');
-    assert.equal((await createReRequest({ originalTxId: A.id, storeId, userId: pic, requestDate: new Date().toISOString().slice(0, 10), description: 'x', actualAmount: 1000 })).success, false);
+    assert.equal((await createReRequest({ originalTxId: A.id, storeId, userId: pic, requestDate: today, description: 'x', actualAmount: 1000 })).success, false);
     ok('a request that is not Perlu Perbaikan can not be re-requested');
 
-    // E: another Perlu Perbaikan request in the closed period — a re-request bigger than the spendable balance fails.
     const E = await mk('completed', 10_000, { financeReview: 'needs_fix', financeComment: 'x' });
-    const tooBig = await createReRequest({ originalTxId: E.id, storeId, userId: pic, requestDate: new Date().toISOString().slice(0, 10), description: 'besar', actualAmount: 900_000 });
+    const tooBig = await createReRequest({ originalTxId: E.id, storeId, userId: pic, requestDate: today, description: 'besar', actualAmount: 900_000 });
     assert.equal(tooBig.success, false);
     ok('a re-request above the spendable balance (850.000) is refused');
 
-    // ── 6. Finance on the closed period, before verification ──────────────────
-    step('6. Finance review while the refill is not verified yet');
+    // ── 5. Finance on the period, before verification ─────────────────────────
+    step('5. Finance review while the refill is not verified yet');
     const rejectA = await financeRejectTransaction({ txId: A.id, actorId: financeId, kind: 'rejected' });
     assert.equal(rejectA.success, true);
-    assert.equal(await balanceOf(M), MAX - 0); // 900k + A 100k, clamped at max
+    assert.equal(await balanceOf(M), MAX); // 900k + A 100k, clamped at max
     assert.equal(await getRefillOutstanding(storeId, N), 0);
-    ok('rejecting A gives 100k back to the CLOSED period → the refill owed drops to 0');
+    ok('rejecting A gives 100k back → the refill owed drops to 0');
     assert.equal((await financeAcceptTransaction({ txId: A.id, actorId: financeId })).success, true);
     assert.equal(await balanceOf(M), 900_000);
     assert.equal(await getRefillOutstanding(storeId, N), 100_000);
     ok('accepting it again takes it back');
 
-    // ── 7. OPS approves, Finance verifies → period locked ─────────────────────
-    step('7. OPS approves, Finance verifies');
+    // ── 6. OPS approves, Finance verifies → period locked for Finance ─────────
+    step('6. OPS approves, Finance verifies');
     assert.equal((await approveRefillRequest(sent.request.id, ops)).success, true);
     const verified = await verifyRefillRequests([sent.request.id], financeId);
     assert.deepEqual(verified.changedIds, [sent.request.id]);
@@ -269,21 +287,22 @@ async function main() {
     assert.ok(frozen.transferAmount != null, 'verify freezes the transfer');
     assert.equal(Math.round(Number(frozen.transferAmount)), 100_000);
     assert.equal(await getRefillOutstanding(storeId, N), 100_000);
-    ok('transfer frozen at 100.000, still owed to the store');
+    assert.equal(await statusOf(M), 'open');
+    ok(`transfer frozen at 100.000, still owed to the store, and ${M} is still open`);
 
     const lockedA = await financeRejectTransaction({ txId: A.id, actorId: financeId, kind: 'rejected' });
     assert.equal(lockedA.success, false);
     ok('a request of the verified period is locked for Finance');
-    assert.equal(await adjustPeriodBalance(db, period.id, 50_000), false);
-    ok('the verified period balance no longer moves');
 
-    const nextPeriodOk = await financeRejectTransaction({ txId: re.txId, actorId: financeId, kind: 'needs_fix' });
-    assert.equal(nextPeriodOk.success, true);
-    assert.equal((await financeAcceptTransaction({ txId: re.txId, actorId: financeId })).success, true);
-    assert.equal(await balanceOf(N), 950_000);
-    ok('the re-request (next period) is still open to Finance');
+    // ── 7. Spending after the amount was frozen ───────────────────────────────
+    step(`7. PIC 1 keeps spending in ${M} after Finance froze the transfer`);
+    await mk('completed', 40_000);
+    await spend(M, 40_000);
+    assert.equal(await balanceOf(M), 860_000);
+    assert.equal((await getActivePeriod(storeId)).yearMonth, M);
+    ok('F 40k is booked in the period still in use → balance 860.000 (the transfer stays 100.000)');
 
-    // ── 8. Receipt ────────────────────────────────────────────────────────────
+    // ── 8. Receipt — while the period is still running ────────────────────────
     step('8. PIC 1 uploads the proof photos');
     const drawer = await attachRefillProof(sent.request.id, storeId, pic, 'drawer', 'https://example.test/drawer.jpg');
     assert.equal(drawer.success, true);
@@ -297,14 +316,127 @@ async function main() {
     assert.equal(await getLiveRefillRequest(storeId), null);
     ok('both photos in → received, nothing owed any more');
 
-    assert.equal(await balanceOf(N), 950_000);
-    ok('the next period was NOT reset to Rp 1.000.000 — it keeps what was spent in the meantime (950.000)');
+    assert.equal(await statusOf(M), 'open');
+    assert.equal(await statusOf(N), 'upcoming');
+    assert.equal(await balanceOf(M), 860_000);
+    ok('receiving changed no period and did not touch the balance');
 
-    const after = await getRefillOverview(storeId);
-    assert.equal(after.settle?.month, N);
-    assert.equal(after.settle?.refill, 50_000);
-    assert.equal(after.canRequest, true);
-    ok(`the next refill settles ${N} (50.000) and can be sent`);
+    assert.equal(await getRefillReceivedWithin(storeId, M), 100_000);
+    assert.equal(await spendableOf(M), 960_000);
+    ok('but the cash is in the box: spendable in the running period = 860.000 + the 100.000 that arrived = 960.000');
+
+    // ── 9. The 16th ───────────────────────────────────────────────────────────
+    step(`9. The calendar moves on (${D16})`);
+    const rolled = await getActivePeriod(storeId, D16);
+    assert.equal(rolled.yearMonth, N);
+    assert.equal(await statusOf(M), 'closed');
+    assert.equal(await statusOf(N), 'open');
+    ok(`${M} closed by itself, ${N} (made ahead for the Re-request) is open now`);
+
+    assert.equal(await balanceOf(M), 860_000);
+    assert.equal(await balanceOf(N), 910_000);
+    ok('F (40k, spent after the transfer was frozen) is carried into the new period: 950.000 − 40.000 = 910.000');
+
+    const [movedC] = await db.select().from(pettyCashTransactions).where(eq(pettyCashTransactions.id, C.id));
+    const [movedD] = await db.select().from(pettyCashTransactions).where(eq(pettyCashTransactions.id, D.id));
+    const [keptA] = await db.select().from(pettyCashTransactions).where(eq(pettyCashTransactions.id, A.id));
+    assert.equal(movedC.yearMonth, N);
+    assert.equal(movedD.yearMonth, N);
+    assert.equal(movedC.periodId, rolled.id);
+    assert.equal(keptA.yearMonth, M);
+    ok('C (OPS) and D (approved) moved to the new period; completed A stays');
+
+    await getActivePeriod(storeId, D16);
+    assert.equal(await balanceOf(N), 910_000);
+    assert.equal((await getActivePeriod(storeId)).yearMonth, N);
+    ok('rolling again changes nothing, and a call with today\'s date never moves the store backwards');
+
+    assert.equal(await spendableOf(N), 910_000);
+    ok('spendable now = 910.000: the box holds exactly what the books say');
+
+    assert.equal(await adjustPeriodBalance(db, period.id, 50_000), false);
+    ok(`the ended, verified period ${M} no longer moves`);
+
+    const nextPeriodOk = await financeRejectTransaction({ txId: re.txId, actorId: financeId, kind: 'needs_fix' });
+    assert.equal(nextPeriodOk.success, true);
+    assert.equal((await financeAcceptTransaction({ txId: re.txId, actorId: financeId })).success, true);
+    assert.equal(await balanceOf(N), 910_000);
+    ok('the re-request (new period) is still open to Finance');
+
+    // ── 10. After the 15th, the previous period is settled → the new one ──────
+    step('10. After the 15th, with the previous period settled');
+    const afterSettled = await getRefillOverview(storeId, D16);
+    assert.equal(afterSettled.usageMonth, N);
+    assert.equal(afterSettled.settle?.month, N);
+    assert.equal(afterSettled.settle?.refill, 90_000);
+    assert.equal(afterSettled.settle?.closed, false);
+    assert.equal(afterSettled.deadline?.late, false);
+    assert.equal(afterSettled.canRequest, true);
+    ok(`a refill now covers ${N} (90.000), not late — ${M} already has its refill`);
+
+    // ── 11. A refill sent after the 15th for the period that just ended ───────
+    step(`11. Nobody asks for ${N}'s refill — the 16th passes`);
+    await spend(N, 100_000);
+    await mk('completed', 100_000, {}, (await getPeriod(storeId, N))!);
+    assert.equal(await balanceOf(N), 810_000);
+
+    const nextPeriod = await getActivePeriod(storeId, D16b);
+    assert.equal(nextPeriod.yearMonth, P);
+    assert.equal(await statusOf(N), 'closed');
+    assert.equal(await statusOf(P), 'open');
+    assert.equal(await balanceOf(P), MAX);
+    ok(`${N} closed with 810.000 left, ${P} opened at 1.000.000 — no refill was needed to do that`);
+
+    assert.equal(await getRefillOutstanding(storeId, P), 190_000);
+    assert.equal(await spendableOf(P), 810_000);
+    ok('even though nobody asked for it, the 190.000 is owed: spendable in the new period = 810.000, what is really in the box');
+
+    const lateView = await getRefillOverview(storeId, D16b);
+    assert.equal(lateView.usageMonth, P);
+    assert.equal(lateView.settle?.month, N);
+    assert.equal(lateView.settle?.refill, 190_000);
+    assert.equal(lateView.settle?.closed, true);
+    assert.equal(lateView.deadline?.late, true);
+    ok(`sent now, the refill is for ${N} (the period that just ended, 190.000), flagged late`);
+
+    const late = await createRefillRequest(storeId, pic, BANK, undefined, D16b);
+    assert.equal(late.success, true);
+    if (!late.success) return;
+    assert.equal(late.periodMonth, N);
+    assert.equal(late.usageMonth, P);
+    assert.equal(late.late, true);
+    assert.equal(late.request.yearMonth, N);
+    assert.equal(await statusOf(P), 'open');
+    assert.equal(await balanceOf(P), MAX);
+    ok(`the late refill is recorded against ${N}; ${P} is untouched`);
+
+    assert.equal((await createRefillRequest(storeId, pic, BANK, undefined, D16b)).success, false);
+    ok('and while it is on its way the next one has to wait');
+
+    assert.equal((await approveRefillRequest(late.request.id, ops)).success, true);
+    assert.deepEqual((await verifyRefillRequests([late.request.id], financeId)).changedIds, [late.request.id]);
+    await attachRefillProof(late.request.id, storeId, pic, 'drawer', 'https://example.test/drawer2.jpg');
+    await attachRefillProof(late.request.id, storeId, pic, 'signature', 'https://example.test/signature2.jpg');
+    assert.equal(await getRefillOutstanding(storeId, P), 0);
+    assert.equal(await spendableOf(P), MAX);
+    ok(`received → nothing owed, ${P} spendable is back to 1.000.000`);
+
+    const nothing = await getRefillOverview(storeId, D16b);
+    assert.equal(nothing.settle, null);
+    assert.equal(nothing.canRequest, false);
+    ok(`nothing to refill now: ${N} is settled and ${P} has no usage yet`);
+
+    // ── 12. And the new period on its own ─────────────────────────────────────
+    step(`12. Usage in ${P}, previous period settled`);
+    await mk('completed', 60_000, {}, (await getPeriod(storeId, P))!);
+    await spend(P, 60_000);
+    const cur = await getRefillOverview(storeId, D16b);
+    assert.equal(cur.settle?.month, P);
+    assert.equal(cur.settle?.refill, 60_000);
+    assert.equal(cur.settle?.closed, false);
+    assert.equal(cur.deadline?.late, false);
+    assert.equal(cur.canRequest, true);
+    ok(`the refill now covers the period in use ${P} (60.000), not late — its 15th is still ahead`);
 
     console.log(`\n${checks} checks passed`);
   } finally {

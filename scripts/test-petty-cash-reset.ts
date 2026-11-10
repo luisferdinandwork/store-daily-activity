@@ -31,8 +31,8 @@ import { eq } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { describeTarget } from './lib/db-target';
 import { pettyCashPeriods, pettyCashTransactions } from '@/lib/db/schema';
-import { jakartaTodayKey, jakartaYearMonth } from '@/lib/day-bucket';
-import { addMonths } from '@/lib/petty-cash-period';
+import { jakartaTodayKey } from '@/lib/day-bucket';
+import { addMonths, usagePeriodFor } from '@/lib/petty-cash-period';
 import { parseResetScope } from '@/lib/petty-cash-reset';
 import { getActivePeriod, getPeriod } from '@/lib/db/utils/petty-cash-period';
 import {
@@ -125,9 +125,11 @@ async function main() {
   try {
     await wipe();
 
-    const M = jakartaYearMonth(Date.now());
-    const N = addMonths(M, 1);
     const today = jakartaTodayKey();
+    // The period of today's date (16th → 15th) and the one after it; D16 = the day the calendar moves on to N.
+    const M = usagePeriodFor(today);
+    const N = addMonths(M, 1);
+    const D16 = `${M}-16`;
     const balanceOf = async (ym: string) => Number((await getPeriod(storeId, ym))!.currentBalance);
     const categories = await listPettyCashCategories({ activeOnly: true });
     assert.ok(categories.length >= 1, 'needs at least one active category');
@@ -135,7 +137,7 @@ async function main() {
 
     // ── Scenario: the full Refill story over two periods ───────────────────────
     step(`Scenario: period ${M} refilled → ${N} in use, with a Re-request`);
-    const period = await getActivePeriod(storeId, M);
+    const period = await getActivePeriod(storeId);
     const now = new Date();
     const mk = async (status: string, amount: number, extra: Record<string, unknown> = {}) => {
       const [row] = await db
@@ -172,6 +174,9 @@ async function main() {
     if (!sent.success) return;
     assert.equal((await approveRefillRequest(sent.request.id, ops)).success, true);
     assert.deepEqual((await verifyRefillRequests([sent.request.id], financeId)).changedIds, [sent.request.id]);
+    assert.equal((await getPeriod(storeId, M))!.status, 'open'); // sending / verifying a refill closes nothing
+    // The 16th: the calendar moves the store on — M closes, N opens, C and D (still waiting) go with it.
+    assert.equal((await getActivePeriod(storeId, D16)).yearMonth, N);
 
     const re = await createReRequest({
       originalTxId: B.id,
@@ -315,7 +320,7 @@ async function main() {
     assert.equal((await getPeriod(storeId, N))!.status, 'open');
     assert.equal(await balanceOf(N), 950_000);
     assert.equal(await countRows('select count(*)::int n from petty_cash_transactions where store_id = $1 and period_id = $2', storeId, (await getPeriod(storeId, N))!.id), 3);
-    assert.equal((await getActivePeriod(storeId, M)).yearMonth, N);
+    assert.equal((await getActivePeriod(storeId, D16)).yearMonth, N);
     ok(`${N} untouched: still open, 3 requests, balance 950.000, still where new requests land`);
 
     const [reRow] = await db.select().from(pettyCashTransactions).where(eq(pettyCashTransactions.id, re.txId));

@@ -52,14 +52,41 @@ export function getBusinessCentralAuthHeaders(
   };
 }
 
+export type BusinessCentralFetchOptions = {
+  /**
+   * Abort a single page request (connect + body) after this many ms. Unset =
+   * no limit, which is what every older caller relies on; a staff-facing page
+   * that must never hang on BC (Cek Bin results) sets one.
+   */
+  timeoutMs?: number;
+};
+
 async function fetchBusinessCentralPage(params: {
   url: string;
   headers: HeadersInit;
+  timeoutMs?: number;
 }): Promise<BusinessCentralPage | unknown[]> {
+  const signal = params.timeoutMs ? AbortSignal.timeout(params.timeoutMs) : undefined;
+
+  try {
+    return await fetchBusinessCentralPageOnce(params, signal);
+  } catch (err) {
+    if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+      throw new Error(`Business Central API timed out after ${params.timeoutMs} ms`);
+    }
+    throw err;
+  }
+}
+
+async function fetchBusinessCentralPageOnce(
+  params: { url: string; headers: HeadersInit },
+  signal: AbortSignal | undefined,
+): Promise<BusinessCentralPage | unknown[]> {
   const response = await fetch(params.url, {
     method: 'GET',
     headers: params.headers,
     cache: 'no-store',
+    signal,
   });
 
   if (!response.ok) {
@@ -92,6 +119,7 @@ function getNextLink(page: BusinessCentralPage | unknown[]): string | null {
 export async function fetchAllBusinessCentralRows(
   url: string,
   settings: ResolvedBusinessCentralSettings,
+  options: BusinessCentralFetchOptions = {},
 ): Promise<unknown[]> {
   const headers = getBusinessCentralAuthHeaders(settings);
   const rows: unknown[] = [];
@@ -107,7 +135,7 @@ export async function fetchAllBusinessCentralRows(
       );
     }
 
-    const page = await fetchBusinessCentralPage({ url: nextUrl, headers });
+    const page = await fetchBusinessCentralPage({ url: nextUrl, headers, timeoutMs: options.timeoutMs });
     rows.push(...getRowsFromPage(page));
 
     const nextLink = getNextLink(page);

@@ -55,8 +55,6 @@ export interface SetoranStoreRow {
   atmCardSelfiePhoto: string | null;
   cashierPhoto: string | null;
   atmCardPhoto: string | null;
-  /** "Foto Jumlah Sales Cash" - counted cash (asked while IT's store_closing_update switch is on). */
-  salesCashPhoto?: string | null;
 
   // Actor trail (display names)
   submittedBy: string | null;
@@ -131,7 +129,7 @@ export function deriveReviewStatus(row: SetoranStoreRow, isPastDay: boolean): Re
 // ─── Evidence ────────────────────────────────────────────────────────────────
 
 export interface EvidenceSlot {
-  key: 'resi' | 'atmSelfie' | 'cashier' | 'atmCard' | 'salesCash';
+  key: 'resi' | 'atmSelfie' | 'cashier' | 'atmCard';
   label: string;
   url: string | null;
 }
@@ -144,26 +142,18 @@ export interface EvidenceSlot {
  * just list whichever photos exist.
  */
 export function evidenceSlots(
-  row: Pick<SetoranStoreRow, 'resiPhoto' | 'atmCardSelfiePhoto' | 'cashierPhoto' | 'atmCardPhoto' | 'received' | 'stored'> & {
-    salesCashPhoto?: string | null;
-  },
+  row: Pick<SetoranStoreRow, 'resiPhoto' | 'atmCardSelfiePhoto' | 'cashierPhoto' | 'atmCardPhoto' | 'received' | 'stored'>,
 ): EvidenceSlot[] {
   const resi:      EvidenceSlot = { key: 'resi',      label: 'Foto resi',        url: row.resiPhoto };
   const atmSelfie: EvidenceSlot = { key: 'atmSelfie', label: 'Selfie kartu ATM', url: row.atmCardSelfiePhoto };
   const cashier:   EvidenceSlot = { key: 'cashier',   label: 'Foto sisa setoran', url: row.cashierPhoto };
   const atmCard:   EvidenceSlot = { key: 'atmCard',   label: 'Foto kartu ATM',   url: row.atmCardPhoto };
 
-  // Sales Cash photo: listed only when the store took one (the switch can be off), so it never
-  // counts as missing evidence.
-  const salesCash: EvidenceSlot[] = row.salesCashPhoto
-    ? [{ key: 'salesCash', label: 'Foto Jumlah Sales Cash', url: row.salesCashPhoto }]
-    : [];
-
-  if (row.received == null) return [resi, atmSelfie, cashier, atmCard, ...salesCash].filter((s) => s.url);
+  if (row.received == null) return [resi, atmSelfie, cashier, atmCard].filter((s) => s.url);
   // Small = little received and nothing deposited. A day that deposited money
   // (e.g. IT recorded a deposit of the carried sisa) needs the bank receipt.
   const small = row.received < SETORAN_SMALL_THRESHOLD && (row.stored ?? 0) === 0;
-  return [...salesCash, ...(small ? [cashier, atmCard] : [resi, atmSelfie])];
+  return small ? [cashier, atmCard] : [resi, atmSelfie];
 }
 
 /** Labels of required photos that a submitted setoran doesn't have. */

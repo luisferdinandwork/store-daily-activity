@@ -28,7 +28,6 @@ import {
   areas,
   employeeTypes,
   shifts,
-  storeBins,
   stores,
   userRoles,
   users,
@@ -147,19 +146,6 @@ async function createUserStoreAssignmentIfMissing(
     .values(values)
     .returning();
 
-  return created;
-}
-
-async function createStoreBinIfMissing(values: typeof storeBins.$inferInsert) {
-  const [existing] = await db
-    .select()
-    .from(storeBins)
-    .where(and(eq(storeBins.storeId, values.storeId), eq(storeBins.bin, values.bin)))
-    .limit(1);
-
-  if (existing) return existing;
-
-  const [created] = await db.insert(storeBins).values(values).returning();
   return created;
 }
 
@@ -403,22 +389,6 @@ export async function seedSetup() {
       pettyCashBalance: s.pettyCashBalance,
     });
     storeIdByNo[s.storeNo] = store.id;
-
-    const binRows = Array.from({ length: 12 }, (_, i) => {
-      const n = i + 1;
-      const qtyBc = 20 + ((n * 3) % 25);
-      const qtyTidakSesuaiBin = n % 5 === 0 ? 1 : 0;
-      return {
-        storeId: store.id,
-        bin: `BIN-${String(n).padStart(2, '0')}`,
-        qtyBc,
-        qtySesuaiBin: Math.max(qtyBc - qtyTidakSesuaiBin, 0),
-        qtyTidakSesuaiBin,
-        nama: `Bin ${n}`,
-        isActive: true,
-      };
-    });
-    for (const row of binRows) await createStoreBinIfMissing(row);
 
     console.log(`✓   ${s.storeNo}  ${s.name}  (area ${s.areaName}, ${s.employees.length} staff)`);
   }

@@ -208,9 +208,9 @@ export const setoranTasks = pgTable('setoran_tasks', {
   atmCardPhoto:            text('atm_card_photo'),
 
   /**
-   * Photo of the counted cash ("Foto Jumlah Sales Cash") — the evidence for
-   * "Jumlah Sales Cash" (expectedAmount). Asked while the IT switch
-   * `store_closing_update` is on and the amount is above 0.
+   * LEGACY — "Foto Jumlah Sales Cash" is no longer asked (removed 2026-11-10); nothing
+   * reads or writes these three columns. Kept so existing rows/migration 0042 stay valid;
+   * the 60-day photo cleanup still sweeps any photo already stored here.
    */
   salesCashPhoto:          text('sales_cash_photo'),
   salesCashPhotoBy:        text('sales_cash_photo_by').references(() => users.id),
@@ -285,7 +285,7 @@ export const setoranMoneyStorage = pgTable('setoran_money_storage', {
   atmCardSelfiePhoto: text('atm_card_selfie_photo'),
   cashierPhoto: text('cashier_photo'),
   atmCardPhoto: text('atm_card_photo'),
-  /** Mirrors setoranTasks.salesCashPhoto. */
+  /** LEGACY — mirrors setoranTasks.salesCashPhoto (no longer written). */
   salesCashPhoto: text('sales_cash_photo'),
   salesCashPhotoBy: text('sales_cash_photo_by').references(() => users.id),
   salesCashPhotoAt: timestamp('sales_cash_photo_at', { mode: 'date' }),

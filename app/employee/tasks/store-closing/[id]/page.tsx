@@ -1,6 +1,7 @@
 'use client';
 // app/employee/tasks/store-closing/[id]/page.tsx
 
+import { HOLD_REASON_MAX, holdReasonProblem } from '@/lib/store-closing-hold';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
@@ -140,6 +141,8 @@ function OpenStatementSelector({
   onHoldReasonChange: (v: string) => void;
   disabled?:          boolean;
 }) {
+  // Shown once something is typed — an untouched box just carries the usual note.
+  const holdProblem = value === 'on_hold' && holdReason.length > 0 ? holdReasonProblem(holdReason) : null;
   const options = [
     {
       value:       'post_statement' as const,
@@ -205,11 +208,12 @@ function OpenStatementSelector({
             onChange={e => onHoldReasonChange(e.target.value)}
             disabled={disabled}
             rows={3}
+            maxLength={HOLD_REASON_MAX}
             placeholder="Jelaskan alasan mengapa open statement tidak bisa diposting sekarang…"
             className="w-full resize-none rounded-xl border border-amber-200 bg-white px-3.5 py-2.5 text-base placeholder:text-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-300 disabled:opacity-60"
           />
-          <p className="text-[11px] text-amber-700">
-            Issue akan dibuat dan langsung dikirim otomatis ke Ops, Finance, dan IT untuk ditindaklanjuti.
+          <p className={cn('text-[11px]', holdProblem ? 'font-semibold text-rose-600' : 'text-amber-700')}>
+            {holdProblem ?? 'Issue akan dibuat dan langsung dikirim otomatis ke Ops, Finance, dan IT untuk ditindaklanjuti.'}
           </p>
         </div>
       )}
@@ -487,6 +491,9 @@ export default function StoreClosingDetailPage() {
         const indodanaRequired = moneyOn && edcSummary.banks.some(b => b.dashboardPhoto && b.total > 0);
         const indodanaPhotoSatisfied = !indodanaRequired || !!indodanaPhoto || openStatementDecision === 'on_hold';
 
+        // On Hold becomes an issue for Ops / IT / Finance — the reason is a must.
+        const holdReasonMissing = openStatementDecision === 'on_hold' ? holdReasonProblem(holdReason) : null;
+
         const canSubmit =
           !locked &&
           !isOnHold &&
@@ -497,7 +504,8 @@ export default function StoreClosingDetailPage() {
           storefrontLockedSatisfied &&
           indodanaPhotoSatisfied &&
           !!openStatementDecision &&
-          openStmtSatisfied;
+          openStmtSatisfied &&
+          !holdReasonMissing;
 
         // Same order as the page.
         const submitHint = (() => {
@@ -508,6 +516,7 @@ export default function StoreClosingDetailPage() {
           if (!storefrontLockedSatisfied) return 'Upload foto storefront terkunci.';
           if (!indodanaPhotoSatisfied) return `Upload ${INDODANA_PHOTO_LABEL} — ada transaksi Indodana.`;
           if (!openStatementDecision) return 'Pilih status Open Statement.';
+          if (holdReasonMissing) return holdReasonMissing;
           return '';
         })();
 

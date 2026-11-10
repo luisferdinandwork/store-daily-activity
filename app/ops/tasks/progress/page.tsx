@@ -312,7 +312,12 @@ export default function OpsTaskProgressPage() {
         )}
       </div>
 
-      <StoreDaySheet target={sheet} onClose={() => setSheet(null)} />
+      <StoreDaySheet
+        target={sheet}
+        onClose={() => setSheet(null)}
+        stores={period === 'daily' ? boardRows.map((s) => ({ storeId: s.storeId, name: s.name, storeNo: s.storeNo })) : undefined}
+        onNavigate={setSheet}
+      />
     </div>
   );
 }

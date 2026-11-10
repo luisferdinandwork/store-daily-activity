@@ -29,7 +29,6 @@ import {
   storeFrontTasks,
   setoranTasks,
   cekBinTasks,
-  storeBins,
   vmChecklistTasks,
   marketingCheckTasks,
   briefingTasks,
@@ -347,7 +346,6 @@ export async function seedTasks() {
     briefingKeys,
     storeClosingKeys,
     groomingScheduleIds,
-    activeBins,
   ] = await Promise.all([
     loadStoreDateKeys(storeOpeningTasks, storeIds, range.start, range.end),
     loadStoreDateKeys(storeFrontTasks, storeIds, range.start, range.end),
@@ -358,21 +356,7 @@ export async function seedTasks() {
     loadStoreDateShiftKeys(briefingTasks, storeIds, range.start, range.end),
     loadStoreDateKeys(storeClosingTasks, storeIds, range.start, range.end),
     loadScheduleIdKeys(groomingTasks, scheduleIds),
-    db
-      .select({ storeId: storeBins.storeId })
-      .from(storeBins)
-      .where(
-        and(inArray(storeBins.storeId, storeIds), eq(storeBins.isActive, true)),
-      ),
   ]);
-
-  const binCountByStoreId = new Map<number, number>();
-  for (const row of activeBins as Array<{ storeId: number }>) {
-    binCountByStoreId.set(
-      row.storeId,
-      (binCountByStoreId.get(row.storeId) ?? 0) + 1,
-    );
-  }
 
   const rows = {
     storeOpening: [] as Array<typeof storeOpeningTasks.$inferInsert>,
@@ -416,14 +400,7 @@ export async function seedTasks() {
         unpaidAmount: "0",
       });
 
-      const totalStoreBins = binCountByStoreId.get(sched.storeId) ?? 0;
-      addStoreDateTask(counts, cekBinKeys, "cekBin", rows.cekBin, {
-        ...morningBase,
-        totalStoreBins,
-        minimumBinsToCheck:
-          totalStoreBins > 0 ? Math.ceil(totalStoreBins * 0.3) : 0,
-        checkedBinsCount: 0,
-      });
+      addStoreDateTask(counts, cekBinKeys, "cekBin", rows.cekBin, morningBase);
 
       addStoreDateTask(
         counts,

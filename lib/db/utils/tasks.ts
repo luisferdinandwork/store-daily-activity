@@ -1,7 +1,7 @@
 // lib/db/utils/tasks.ts
 import { db }                                          from '@/lib/db';
 import { baseShiftCode, isClosingShift, isOpeningShift } from '@/lib/shift-tasks';
-import { eq, and, gte, lt, lte, inArray, sql, isNull, or } from 'drizzle-orm';
+import { eq, and, gte, lt, lte, inArray, isNull, or } from 'drizzle-orm';
 import {
   schedules, stores, shifts, attendance,
   monthlySchedules, monthlyScheduleEntries,
@@ -11,8 +11,6 @@ import {
 
   storeFrontTasks,
   cekBinTasks,
-  storeBins,
-  cekBinTaskBins,
   vmChecklistTasks,
   marketingCheckTasks,
   briefingTasks,
@@ -25,7 +23,6 @@ import {
   type StoreOpeningTask,
   type SetoranTask,
   type StoreFrontTask,
-  type CekBinTask,
   type VmChecklistTask,
   type BriefingTask,
   type GroomingTask,
@@ -93,55 +90,6 @@ export interface SubmitVmChecklistInput {
 
   notes?:   string;
   skipGeo?: boolean;
-}
-
-export interface CekBinSelectedBinInput {
-  binId: number;
-  qtyBc: number;
-  qtySesuaiBin: number;
-  qtyTidakSesuaiBin: number;
-  notes?: string;
-}
-
-export interface SubmitCekBinInput {
-  scheduleId: number;
-  userId:     string;
-  storeId:    number;
-  shiftId?:   number;
-  geo:        GeoPoint;
-
-  selectedBins: CekBinSelectedBinInput[];
-
-  notes?:   string;
-  skipGeo?: boolean;
-}
-
-export interface AutoSaveCekBinInput {
-  selectedBins?: CekBinSelectedBinInput[];
-  notes?: string;
-}
-
-export interface CekBinWithBins extends CekBinTask {
-  availableBins: Array<{
-    id: number;
-    storeId: number;
-    bin: string;
-    qtyBc: number;
-    qtySesuaiBin: number;
-    qtyTidakSesuaiBin: number;
-    nama: string;
-  }>;
-  checkedBins: Array<{
-    id: number;
-    taskId: number;
-    binId: number;
-    bin: string;
-    qtyBc: number;
-    qtySesuaiBin: number;
-    qtyTidakSesuaiBin: number;
-    nama: string;
-    notes: string | null;
-  }>;
 }
 
 export interface SubmitBriefingInput {
@@ -289,129 +237,6 @@ function parseJsonPhotos(raw: unknown): string[] {
   } catch {
     return [];
   }
-}
-
-function toNonNegativeInt(value: unknown, field: string): number {
-  const n = Number(value);
-  if (!Number.isInteger(n) || n < 0) {
-    throw new Error(`${field} harus berupa angka bulat 0 atau lebih.`);
-  }
-  return n;
-}
-
-function minimumBinsToCheck(totalActiveBins: number): number {
-  if (totalActiveBins <= 0) return 0;
-  return Math.ceil(totalActiveBins * 0.3);
-}
-
-async function getActiveStoreBins(storeId: number) {
-  return db
-    .select({
-      id: storeBins.id,
-      storeId: storeBins.storeId,
-      bin: storeBins.bin,
-      qtyBc: storeBins.qtyBc,
-      qtySesuaiBin: storeBins.qtySesuaiBin,
-      qtyTidakSesuaiBin: storeBins.qtyTidakSesuaiBin,
-      nama: storeBins.nama,
-    })
-    .from(storeBins)
-    .where(and(eq(storeBins.storeId, storeId), eq(storeBins.isActive, true)))
-    .orderBy(storeBins.bin);
-}
-
-async function findCekBinByStoreDate(storeId: number, date: Date): Promise<CekBinTask | null> {
-  const [row] = await db
-    .select()
-    .from(cekBinTasks)
-    .where(and(
-      eq(cekBinTasks.storeId, storeId),
-      gte(cekBinTasks.date, startOfDay(date)),
-      lte(cekBinTasks.date, endOfDay(date)),
-    ))
-    .limit(1);
-
-  return row ?? null;
-}
-
-async function getCheckedBins(taskId: number) {
-  return db
-    .select({
-      id: cekBinTaskBins.id,
-      taskId: cekBinTaskBins.taskId,
-      binId: cekBinTaskBins.binId,
-      bin: cekBinTaskBins.bin,
-      qtyBc: cekBinTaskBins.qtyBc,
-      qtySesuaiBin: cekBinTaskBins.qtySesuaiBin,
-      qtyTidakSesuaiBin: cekBinTaskBins.qtyTidakSesuaiBin,
-      nama: cekBinTaskBins.nama,
-      notes: cekBinTaskBins.notes,
-    })
-    .from(cekBinTaskBins)
-    .where(eq(cekBinTaskBins.taskId, taskId))
-    .orderBy(cekBinTaskBins.bin);
-}
-
-function validateSelectedBins(
-  selectedBins: CekBinSelectedBinInput[],
-  activeBins: Awaited<ReturnType<typeof getActiveStoreBins>>,
-): string | null {
-  const activeById = new Map(activeBins.map((b) => [b.id, b]));
-  const seen = new Set<number>();
-
-  for (const item of selectedBins) {
-    if (!Number.isInteger(item.binId)) return 'Ada BIN yang tidak valid.';
-    if (!activeById.has(item.binId)) return `BIN ID ${item.binId} tidak ditemukan di store ini atau sudah tidak aktif.`;
-    if (seen.has(item.binId)) return `BIN ID ${item.binId} dipilih lebih dari satu kali.`;
-    seen.add(item.binId);
-
-    try {
-      toNonNegativeInt(item.qtyBc, 'QTY BC');
-      toNonNegativeInt(item.qtySesuaiBin, 'QTY SESUAI BIN');
-      toNonNegativeInt(item.qtyTidakSesuaiBin, 'QTY TIDAK SESUAI BIN');
-    } catch (e) {
-      return e instanceof Error ? e.message : String(e);
-    }
-  }
-
-  const min = minimumBinsToCheck(activeBins.length);
-  if (activeBins.length > 0 && selectedBins.length < min) {
-    return `Minimal cek ${min} BIN, yaitu 30% dari total ${activeBins.length} BIN aktif di store.`;
-  }
-
-  return null;
-}
-
-async function replaceCheckedBins(
-  taskId: number,
-  selectedBins: CekBinSelectedBinInput[],
-  storeId: number,
-): Promise<void> {
-  const activeBins = await getActiveStoreBins(storeId);
-  const activeById = new Map(activeBins.map((b) => [b.id, b]));
-
-  await db.delete(cekBinTaskBins).where(eq(cekBinTaskBins.taskId, taskId));
-
-  if (!selectedBins.length) return;
-
-  await db.insert(cekBinTaskBins).values(
-    selectedBins.map((item) => {
-      const master = activeById.get(item.binId);
-      if (!master) throw new Error(`BIN ID ${item.binId} tidak valid.`);
-
-      return {
-        taskId,
-        binId: item.binId,
-        bin: master.bin,
-        nama: master.nama,
-        qtyBc: toNonNegativeInt(item.qtyBc, 'QTY BC'),
-        qtySesuaiBin: toNonNegativeInt(item.qtySesuaiBin, 'QTY SESUAI BIN'),
-        qtyTidakSesuaiBin: toNonNegativeInt(item.qtyTidakSesuaiBin, 'QTY TIDAK SESUAI BIN'),
-        notes: item.notes,
-        updatedAt: new Date(),
-      };
-    }),
-  );
 }
 
 // ─── Discrepancy helpers ──────────────────────────────────────────────────────
@@ -821,179 +646,6 @@ export async function submitVmChecklist(
     return { success: true, data: row };
   } catch (err) {
     return { success: false, error: `submitVmChecklist: ${err}` };
-  }
-}
-
-export async function submitCekBin(
-  input: SubmitCekBinInput,
-): Promise<TaskResult<CekBinWithBins>> {
-  try {
-    const gateErr = await assertCanProgressTask(input.scheduleId, input.storeId, input.geo, input.skipGeo);
-    if (gateErr) return { success: false, error: gateErr };
-
-    const activeBins = await getActiveStoreBins(input.storeId);
-    const validationErr = validateSelectedBins(input.selectedBins, activeBins);
-    if (validationErr) return { success: false, error: validationErr };
-
-    const now = new Date();
-    const min = minimumBinsToCheck(activeBins.length);
-
-    let task = await findCekBinByStoreDate(input.storeId, now);
-    if (isFinalStatus(task?.status)) {
-      return { success: false, error: 'Task sudah completed dan tidak bisa diubah.' };
-    }
-
-    const shiftMap = await getShiftIdMap();
-    const shiftId = input.shiftId ?? task?.shiftId ?? shiftMap['morning'];
-
-    const values = {
-      scheduleId: input.scheduleId,
-      userId: input.userId,
-      storeId: input.storeId,
-      shiftId,
-      date: startOfDay(now),
-      totalStoreBins: activeBins.length,
-      minimumBinsToCheck: min,
-      checkedBinsCount: input.selectedBins.length,
-      submittedLat: String(input.geo.lat),
-      submittedLng: String(input.geo.lng),
-      notes: input.notes,
-      status: 'completed' as const,
-      completedAt: now,
-      updatedAt: now,
-    };
-
-    if (task) {
-      const [updated] = await db
-        .update(cekBinTasks)
-        .set(values)
-        .where(eq(cekBinTasks.id, task.id))
-        .returning();
-      task = updated;
-    } else {
-      const [created] = await db.insert(cekBinTasks).values(values).returning();
-      task = created;
-    }
-
-    await replaceCheckedBins(task.id, input.selectedBins, input.storeId);
-
-    return getCekBinById(task.id);
-  } catch (err) {
-    return { success: false, error: `submitCekBin: ${err}` };
-  }
-}
-
-export async function autoSaveCekBin(
-  taskId: number,
-  patch: AutoSaveCekBinInput,
-): Promise<TaskResult<{ saved: string[] }>> {
-  try {
-    const [task] = await db.select().from(cekBinTasks).where(eq(cekBinTasks.id, taskId)).limit(1);
-    if (!task) return { success: false, error: 'Task Cek BIN tidak ditemukan.' };
-    if (isFinalStatus(task.status)) return { success: true, data: { saved: [] } };
-
-    const saved: string[] = [];
-    const update: Partial<typeof cekBinTasks.$inferInsert> = { updatedAt: new Date() };
-
-    if ('notes' in patch) {
-      update.notes = patch.notes;
-      saved.push('notes');
-    }
-
-    if (patch.selectedBins) {
-      const activeBins = await getActiveStoreBins(task.storeId);
-      const activeById = new Map(activeBins.map((b) => [b.id, b]));
-      const uniqueIds = [...new Set(patch.selectedBins.map((b) => b.binId))];
-
-      for (const binId of uniqueIds) {
-        if (!activeById.has(binId)) {
-          return { success: false, error: `BIN ID ${binId} tidak ditemukan di store ini atau sudah tidak aktif.` };
-        }
-      }
-
-      await replaceCheckedBins(task.id, patch.selectedBins, task.storeId);
-      update.checkedBinsCount = uniqueIds.length;
-      update.totalStoreBins = activeBins.length;
-      update.minimumBinsToCheck = minimumBinsToCheck(activeBins.length);
-      saved.push('selectedBins');
-    }
-
-    if (task.status === 'not_started') update.status = 'in_progress';
-
-    await db.update(cekBinTasks).set(update).where(eq(cekBinTasks.id, task.id));
-
-    return { success: true, data: { saved } };
-  } catch (err) {
-    return { success: false, error: `autoSaveCekBin: ${err}` };
-  }
-}
-
-export async function getCekBinById(id: number): Promise<TaskResult<CekBinWithBins>> {
-  try {
-    const [task] = await db.select().from(cekBinTasks).where(eq(cekBinTasks.id, id)).limit(1);
-    if (!task) return { success: false, error: 'Task Cek BIN tidak ditemukan.' };
-
-    const [availableBins, checkedBins] = await Promise.all([
-      getActiveStoreBins(task.storeId),
-      getCheckedBins(task.id),
-    ]);
-
-    return {
-      success: true,
-      data: {
-        ...task,
-        availableBins,
-        checkedBins,
-      },
-    };
-  } catch (err) {
-    return { success: false, error: `getCekBinById: ${err}` };
-  }
-}
-
-export async function listStoreBins(storeId: number) {
-  return getActiveStoreBins(storeId);
-}
-
-export async function upsertStoreBins(
-  storeId: number,
-  bins: Array<{
-    bin: string;
-    qtyBc: number;
-    qtySesuaiBin: number;
-    qtyTidakSesuaiBin: number;
-    nama: string;
-  }>,
-): Promise<TaskResult<{ count: number }>> {
-  try {
-    if (!bins.length) return { success: true, data: { count: 0 } };
-
-    await db.insert(storeBins).values(
-      bins.map((b) => ({
-        storeId,
-        bin: b.bin.trim(),
-        qtyBc: toNonNegativeInt(b.qtyBc, 'QTY BC'),
-        qtySesuaiBin: toNonNegativeInt(b.qtySesuaiBin, 'QTY SESUAI BIN'),
-        qtyTidakSesuaiBin: toNonNegativeInt(b.qtyTidakSesuaiBin, 'QTY TIDAK SESUAI BIN'),
-        nama: b.nama.trim(),
-        isActive: true,
-        updatedAt: new Date(),
-      })),
-    ).onConflictDoUpdate({
-      target: [storeBins.storeId, storeBins.bin],
-      set: {
-        qtyBc: sql`excluded.qty_bc`,
-        qtySesuaiBin: sql`excluded.qty_sesuai_bin`,
-        qtyTidakSesuaiBin: sql`excluded.qty_tidak_sesuai_bin`,
-        nama: sql`excluded.nama`,
-        isActive: true,
-        updatedAt: new Date(),
-      },
-    });
-
-    return { success: true, data: { count: bins.length } };
-  } catch (err) {
-    return { success: false, error: `upsertStoreBins: ${err}` };
   }
 }
 

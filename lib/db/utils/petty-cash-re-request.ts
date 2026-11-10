@@ -9,8 +9,8 @@
 // Which period: Finance checks petty cash once a month, so a request it sent back is not decided again in the
 // same check — a Re-request is counted in the period AFTER the one the original was filed in (and never in one
 // that is already closed: if the store has moved on, in the period in use). When that is still ahead of the
-// period in use (the original's own period has not been refilled yet), the next period is created ahead of time
-// as 'upcoming' and opens when the current one closes (lib/db/utils/petty-cash-period.ts).
+// period in use (the original's own period is still running), the next period is created ahead of time as
+// 'upcoming' and opens when the calendar reaches it — the 16th (lib/db/utils/petty-cash-period.ts).
 //
 // PIC 1 can change the category, Keterangan, what was spent and the receipt photo. The original is left as it is
 // (still Perlu Perbaikan, still outside its own period's "used"); the new row is a normal completed request as
@@ -30,7 +30,7 @@ import { canReRequest } from '@/lib/petty-cash-review';
 import { createNotificationsForUsers } from './notifications';
 import { getPettyCashCategory } from './petty-cash-categories';
 import { ensureUpcomingPeriod, getActivePeriod } from './petty-cash-period';
-import { currentYearMonthJakarta, getRefillOutstanding } from './petty-cash-refill';
+import { getSpendable } from './petty-cash-refill';
 import { financeUserIds } from './petty-cash-review';
 
 const money = (n: number) => n.toFixed(2);
@@ -121,15 +121,16 @@ export async function createReRequest(input: ReRequestInput): Promise<ReRequestR
   if (!imageUrl) return { success: false, error: 'Foto struk wajib ada.', status: 400 };
 
   // The period it is counted in: the one after the original's — or the period in use, if the store has moved on.
-  const usage = await getActivePeriod(tx.storeId, currentYearMonthJakarta());
+  const usage = await getActivePeriod(tx.storeId);
   const targetMonth = reRequestPeriodMonth(tx.yearMonth, usage.yearMonth);
   const period = targetMonth === usage.yearMonth ? usage : await ensureUpcomingPeriod(tx.storeId, targetMonth);
   if (period.status === 'closed') {
     return { success: false, error: `Periode petty cash ${periodLabel(period.yearMonth)} sudah ditutup.`, status: 422 };
   }
 
-  // Cash on hand in that period = its balance minus a refill (of the period before it) not received yet.
-  const owed = await getRefillOutstanding(tx.storeId, period.yearMonth);
+  // Cash on hand in that period = its balance minus a refill (of the period before it) not received yet, plus
+  // its own refill once that has arrived.
+  const { net } = await getSpendable(tx.storeId, period);
 
   const now = new Date();
   try {
@@ -144,7 +145,7 @@ export async function createReRequest(input: ReRequestInput): Promise<ReRequestR
           and(
             eq(pettyCashPeriods.id, period.id),
             sql`${pettyCashPeriods.status} IN ('open', 'upcoming')`,
-            sql`${pettyCashPeriods.currentBalance} - ${money(owed)}::numeric >= ${money(amount)}::numeric`,
+            sql`${pettyCashPeriods.currentBalance} + ${money(net)}::numeric >= ${money(amount)}::numeric`,
           ),
         )
         .returning({ balance: pettyCashPeriods.currentBalance });
@@ -177,7 +178,7 @@ export async function createReRequest(input: ReRequestInput): Promise<ReRequestR
         })
         .returning({ id: pettyCashTransactions.id });
 
-      return { id: row.id, balance: Math.max(0, Number(paid.balance) - owed) };
+      return { id: row.id, balance: Math.max(0, Number(paid.balance) + net) };
     });
 
     await createNotificationsForUsers(await financeUserIds(), {

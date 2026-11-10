@@ -15,6 +15,7 @@ import { stores, storeStatusHistory } from '@/lib/db/schema/core';
 import { PETTY_CASH_MAX_BALANCE } from '@/lib/db/schema/petty-cash';
 import { topUpPeriodToMax } from '@/lib/db/utils/petty-cash-period';
 import { todayJakarta } from '@/lib/finance/dates';
+import { usagePeriodFor } from '@/lib/petty-cash-period';
 import {
   canTransitionStoreStatus,
   isStoreOperational,
@@ -119,15 +120,15 @@ export async function changeStoreStatus(params: {
     .where(eq(stores.id, storeId));
 
   // Activation is the "trigger the petty cash" moment: a prep store carries
-  // Rp 0, and going live provisions the standard float and opens this month's
-  // period so Finance sees it. Reopening a closed store keeps whatever balance
+  // Rp 0, and going live provisions the standard float and opens the period of
+  // today's date (16th → 15th, see lib/petty-cash-period.ts) so Finance sees it. Reopening a closed store keeps whatever balance
   // the close left behind (it is not a fresh provision).
   if (from === 'ready_to_open' && to === 'active') {
     await db
       .update(stores)
       .set({ pettyCashBalance: String(PETTY_CASH_MAX_BALANCE) })
       .where(eq(stores.id, storeId));
-    await topUpPeriodToMax(storeId, todayJakarta().slice(0, 7));
+    await topUpPeriodToMax(storeId, usagePeriodFor(todayJakarta()));
   }
 
   await db.insert(storeStatusHistory).values({

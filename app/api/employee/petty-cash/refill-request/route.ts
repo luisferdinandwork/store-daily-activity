@@ -2,8 +2,9 @@
 //
 // GET   — the store's refill: the one on its way (else the latest) plus what a new one would cover and where it
 //         stands against the 15th (visible to every employee at the store, not just PIC 1).
-// POST  — send the refill for the period in use. PIC 1 only (the petty cash holder), one refill on its way per
-//         store at a time. Sending it CLOSES the period and opens the next one (lib/petty-cash-period.ts).
+// POST  — send the refill. PIC 1 only (the petty cash holder), one refill on its way per store at a time. The
+//         server picks the period it settles (the oldest used one without a refill, up to the period in use —
+//         lib/petty-cash-period.ts `pickRefillPeriod`); sending it closes nothing, the calendar changes periods.
 //         Must include the bank account Finance should send the cash to
 //         (bankName / accountNumber / accountHolderName).
 // PATCH — attach a proof-of-receipt photo (drawer / signature) once Finance

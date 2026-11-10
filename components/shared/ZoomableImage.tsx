@@ -31,10 +31,13 @@ export function ZoomableImage({
   src,
   alt,
   className,
+  onError,
 }: {
   src: string;
   alt: string;
   className?: string;
+  /** Called once when the photo can't be loaded (the stage shows its own "Foto tidak bisa dimuat"). */
+  onError?: () => void;
 }) {
   const stageRef = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<View>(FIT);
@@ -122,7 +125,7 @@ export function ZoomableImage({
             src={src}
             alt={alt}
             draggable={false}
-            onError={() => setBroken(true)}
+            onError={() => { setBroken(true); onError?.(); }}
             style={{
               transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale}) rotate(${view.turns * 90}deg)`,
               transition: dragging ? 'none' : 'transform 120ms ease-out',

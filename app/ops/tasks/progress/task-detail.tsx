@@ -1,7 +1,7 @@
 'use client';
 // app/ops/tasks/progress/task-detail.tsx
 
-import { useCallback, useEffect, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useId, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   AlertTriangle,
@@ -27,13 +27,18 @@ import {
 import { cn } from '@/lib/utils';
 import { TONES, taskStatusTone } from '@/lib/status-theme';
 import { taskStatusInfo, taskStatusTile } from '@/components/status/TaskStatus';
+import { ZoomableImage } from '@/components/shared/ZoomableImage';
+import BinCheckResults from '@/components/employee/BinCheckResults';
+import { jakartaDateKey } from '@/lib/day-bucket';
 import {
+  closingSalesTotal,
   EDC_METHODS,
   EDC_METHOD_LABELS,
   isSingleAmountBank,
   INDODANA_PHOTO_LABEL,
   OP_ME_VOUCHER_LABEL,
   summariseEdc,
+  type ClosingSalesTotal,
   type EdcEntryLike,
   type EdcSummary,
 } from '@/lib/store-closing-edc';
@@ -88,6 +93,24 @@ export const TASK_LABELS: Record<string, string> = {
   store_closing: 'Store Closing',
   grooming: 'Grooming',
 };
+
+/**
+ * Task types whose detail carries photos (they render `PhotoGrid`s): Store Opening,
+ * Store Front, Setoran, Store Closing, Grooming. Only these get the big zoomable photo
+ * stage in TaskDetailModal; every other task (Cek Bin, VM Checklist, Marketing Check,
+ * Cek Uang Modal, Briefing) opens as a compact single-column dialog. Decided by TYPE,
+ * not by whether this store happens to have photos, so the dialog doesn't change shape
+ * while Ops steps from store to store. A new task type with photos goes in here.
+ */
+export const PHOTO_TASK_TYPES: ReadonlySet<string> = new Set([
+  'store_opening',
+  'store_front',
+  'setoran',
+  'store_closing',
+  'grooming',
+]);
+
+export const taskHasPhotos = (type: string): boolean => PHOTO_TASK_TYPES.has(type);
 
 export const TASK_ICONS: Record<string, React.ElementType> = {
   store_opening: Store,
@@ -260,13 +283,15 @@ function Lightbox({
   );
 
   useEffect(() => {
+    // Capture + stop: the viewer is opened from inside a sheet / dialog, whose own Escape
+    // handler would otherwise close that as well — Escape should only close the viewer.
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-      if (e.key === 'ArrowRight') go(1);
-      if (e.key === 'ArrowLeft') go(-1);
+      if (e.key === 'Escape') { e.stopPropagation(); onClose(); }
+      if (e.key === 'ArrowRight') { e.stopPropagation(); go(1); }
+      if (e.key === 'ArrowLeft') { e.stopPropagation(); go(-1); }
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, [go, onClose]);
 
   // Portal straight to <body> — this is opened from deep inside
@@ -280,6 +305,9 @@ function Lightbox({
 
   return createPortal(
     <div
+      // A Radix sheet / dialog behind this sets `pointer-events: none` on <body>, which this portal
+      // would inherit — without `auto` every click falls through to the sheet's overlay and closes it.
+      style={{ pointerEvents: 'auto' }}
       className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm"
       onClick={onClose}
     >
@@ -312,14 +340,20 @@ function Lightbox({
           <p className="text-sm font-semibold text-white/70">Foto tidak tersedia</p>
         </div>
       ) : (
-        /* eslint-disable-next-line @next/next/no-img-element */
-        <img
-          src={urls[index]}
-          alt={`Foto ${index + 1}`}
+        // Same zoomable stage as the Finance petty cash receipt: wheel / double-click to zoom,
+        // drag to pan. Clicks inside it must not reach the backdrop (which closes the viewer).
+        <div
           onClick={(e) => e.stopPropagation()}
-          onError={() => onPhotoError(urls[index])}
-          className="max-h-[85vh] max-w-[90vw] rounded-lg object-contain shadow-2xl"
-        />
+          className="flex h-[88vh] w-[min(90vw,1100px)] overflow-hidden rounded-lg shadow-2xl"
+        >
+          <ZoomableImage
+            key={urls[index]}
+            src={urls[index]}
+            alt={`Foto ${index + 1}`}
+            onError={() => onPhotoError(urls[index])}
+            className="flex-1"
+          />
+        </div>
       )}
 
       {urls.length > 1 && (
@@ -343,7 +377,28 @@ function Lightbox({
   );
 }
 
-// ─── PhotoGrid (self-contained, opens its own lightbox) ──────────────────────
+// ─── Photo stage ─────────────────────────────────────────────────────────────
+//
+// Inside the task detail modal (components/tasks/TaskDetailModal.tsx) the photos
+// are not opened in a lightbox: every PhotoGrid reports its photos to the modal,
+// which shows the chosen one in the zoomable stage next to the task's details.
+// Anywhere else (PIC tasks, IT task pages) there is no stage and a PhotoGrid
+// opens its own zoomable lightbox.
+
+export interface PhotoStage {
+  register: (id: string, label: string, urls: string[]) => void;
+  unregister: (id: string) => void;
+  /** Photos are picked by key (`<grid id>#<position>`), not URL — two photos may share one URL. */
+  select: (key: string) => void;
+  /** Key of the photo currently on the stage. */
+  active: string | null;
+}
+
+export const photoKey = (gridId: string, index: number) => `${gridId}#${index}`;
+
+export const PhotoStageContext = createContext<PhotoStage | null>(null);
+
+// ─── PhotoGrid (opens the stage it sits in, else its own lightbox) ───────────
 
 export function PhotoGrid({
   label,
@@ -359,6 +414,17 @@ export function PhotoGrid({
   const [active, setActive] = useState<number | null>(null);
   const [brokenUrls, setBrokenUrls] = useState<Set<string>>(new Set());
   const urls = asPhotos(photos).map(resolvePhotoUrl).filter(Boolean);
+
+  const stage = useContext(PhotoStageContext);
+  const register = stage?.register;
+  const unregister = stage?.unregister;
+  const id = useId();
+  const urlKey = urls.join('\n');
+  useEffect(() => {
+    if (!register || !unregister || !urlKey) return;
+    register(id, label ?? 'Foto', urlKey.split('\n'));
+    return () => unregister(id);
+  }, [register, unregister, id, label, urlKey]);
 
   const markBroken = (url: string) =>
     setBrokenUrls((prev) => (prev.has(url) ? prev : new Set(prev).add(url)));
@@ -398,8 +464,11 @@ export function PhotoGrid({
             <button
               key={`${url}-${i}`}
               type="button"
-              onClick={() => setActive(i)}
-              className="group relative aspect-square overflow-hidden rounded-lg border border-slate-200 bg-slate-50"
+              onClick={() => (stage ? stage.select(photoKey(id, i)) : setActive(i))}
+              className={cn(
+                'group relative aspect-square overflow-hidden rounded-lg border bg-slate-50',
+                stage?.active === photoKey(id, i) ?'border-indigo-500 ring-2 ring-indigo-500/40' : 'border-slate-200',
+              )}
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
@@ -755,11 +824,6 @@ function SetoranDetail({ task }: { task: FlatTask }) {
           <InfoRow label="Sisa" value={<span className="font-bold text-amber-600">{fmtAmount(unpaid)}</span>} />
         )}
       </div>
-      {typeof e.salesCashPhoto === 'string' && e.salesCashPhoto && (
-        <div className="mt-2">
-          <PhotoGrid label="Foto Jumlah Sales Cash" photos={e.salesCashPhoto} columns={2} />
-        </div>
-      )}
       {hasSmallSetoranPhotos ? (
         <div className="mt-2 space-y-2">
           <p className="text-xs italic text-slate-400">
@@ -786,22 +850,18 @@ function SetoranDetail({ task }: { task: FlatTask }) {
   );
 }
 
+// Cek Bin stores no figures of its own: the task is marked done when the employee opens
+// it, and the bins + what is wrong in them live in Business Central. Reviewers see the
+// same "Hasil scan BC" panel the staff see, read live for this store + day, then who
+// opened it (and any old notes).
 function CekBinDetail({ task }: { task: FlatTask }) {
-  const e = task.extra;
-  const total   = Number(e.totalStoreBins ?? 0);
-  const minimum = Number(e.minimumBinsToCheck ?? 0);
-  const checked = Number(e.checkedBinsCount ?? 0);
-  const pct     = total > 0 ? Math.round((checked / total) * 100) : 0;
+  const storeId = Number(task.storeId);
+  const day = jakartaDateKey(task.date);
   return (
     <div>
-      <div className="space-y-1 divide-y divide-slate-100">
-        <InfoRow label="Total BIN toko" value={total} />
-        <InfoRow label="Minimum dicek" value={minimum} />
-        <InfoRow
-          label="Sudah dicek"
-          value={<span className={cn('font-bold', checked >= minimum ? 'text-emerald-600' : 'text-amber-600')}>{checked} ({pct}%)</span>}
-        />
-      </div>
+      {Number.isInteger(storeId) && storeId > 0 && day && (
+        <BinCheckResults storeId={storeId} date={day} audience="review" />
+      )}
       <ActorFooter task={task} />
       <NotesBlock notes={task.notes} />
     </div>
@@ -999,6 +1059,43 @@ export function edcSummaryOf(extra: Record<string, unknown>): EdcSummary {
   );
 }
 
+/** Sales Cash + every bank's EDC + OP/ME/VOUCHER of a Store Closing, as one number. */
+export function closingTotalOf(extra: Record<string, unknown>): ClosingSalesTotal {
+  return closingSalesTotal(edcSummaryOf(extra), extra.salesCashAmount as number | string | null | undefined);
+}
+
+/** The day's sales on one line: Total Sales, with what it is made of underneath. */
+function ClosingTotalCard({ total }: { total: ClosingSalesTotal }) {
+  const parts: { label: string; value: number | null }[] = [
+    { label: 'Sales Cash', value: total.salesCash },
+    { label: 'EDC (semua bank)', value: total.banksTotal },
+    { label: OP_ME_VOUCHER_LABEL, value: total.opMeVoucher },
+  ];
+  return (
+    <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50/60 px-3 py-2.5">
+      <div className="flex items-baseline justify-between gap-3">
+        <p className="text-xs font-bold text-emerald-800">Total Sales</p>
+        <p className="text-base font-bold tabular-nums text-emerald-800">{fmtRupiah(total.total)}</p>
+      </div>
+      <dl className="mt-1.5 space-y-0.5 border-t border-emerald-200/70 pt-1.5">
+        {parts.map((p) => (
+          <div key={p.label} className="flex items-center justify-between gap-3 text-[11px]">
+            <dt className="text-emerald-700">{p.label}</dt>
+            <dd className={cn('tabular-nums', p.value === null ? 'italic text-amber-600' : 'font-semibold text-emerald-900')}>
+              {p.value === null ? 'Belum diisi' : fmtRupiah(p.value)}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      {total.missing.length > 0 && (
+        <p className="mt-1.5 text-[10px] text-amber-700">
+          Belum termasuk: {total.missing.join(', ')}.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function EdcSummaryTable({ summary }: { summary: EdcSummary }) {
   const th = 'px-2 py-1.5 text-right text-[10px] font-bold uppercase tracking-wide text-slate-400';
   const td = 'whitespace-nowrap px-2 py-1.5 text-right tabular-nums';
@@ -1047,7 +1144,7 @@ function EdcSummaryTable({ summary }: { summary: EdcSummary }) {
           </tr>
           <tr className="bg-emerald-50/60">
             <td colSpan={EDC_METHODS.length + 1} className="py-1.5 pl-2.5 pr-2 font-bold text-emerald-800">
-              Total
+              Total EDC
             </td>
             <td className={cn(td, 'pr-2.5 font-bold text-emerald-800')}>{fmtNum(summary.total)}</td>
           </tr>
@@ -1072,7 +1169,8 @@ function StoreClosingDetail({ task }: { task: FlatTask }) {
   const reopenedAt  = (e.reopenedAt as string | null | undefined) ?? null;
 
   const edc            = edcSummaryOf(e);
-  const indodanaPhoto  = typeof e.indodanaDashboardPhoto === 'string' ? e.indodanaDashboardPhoto : null;
+  const closingTotal   = closingTotalOf(e);
+  const indodanaPhoto = typeof e.indodanaDashboardPhoto === 'string' ? e.indodanaDashboardPhoto : null;
   const edcBy          = actorName(e, 'edcSummary');
   const edcAt          = actorAt(e, 'edcSummary');
 
@@ -1159,6 +1257,9 @@ function StoreClosingDetail({ task }: { task: FlatTask }) {
           />
         </div>
       )}
+
+      {/* Sales Cash + EDC + OP/ME/VOUCHER, added into one */}
+      {closingTotal.hasData && <ClosingTotalCard total={closingTotal} />}
 
       {/* 3 · EDC Settlement */}
       <p className="mb-1 mt-3 text-[10px] font-bold uppercase tracking-widest text-slate-400">EDC Settlement</p>

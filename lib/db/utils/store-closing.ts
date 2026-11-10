@@ -31,6 +31,7 @@
 //     reopens only that held task so the current employee can finish it.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { holdReasonProblem } from '@/lib/store-closing-hold';
 import type { GeoPoint } from '@/lib/geo';
 import { assertInGeofence } from '@/lib/db/utils/geofence';
 import { db } from '@/lib/db';
@@ -772,10 +773,12 @@ export async function submitStoreClosing(
     const sideBySidePhoto = input.eodEdcSettlementPhoto?.trim() ?? null;
     const storefrontLockedPhoto = input.storefrontLockedPhoto?.trim() ?? null;
     const indodanaPhoto = isFilled(input.indodanaDashboardPhoto) ? input.indodanaDashboardPhoto.trim() : null;
-    const holdReason =
-      input.openStatementDecision === 'on_hold'
-        ? input.openStatementHoldReason?.trim() || 'Tidak ada alasan tambahan dari employee.'
-        : input.openStatementHoldReason?.trim() || null;
+    // On Hold becomes an issue for Ops / IT / Finance, so the employee must say why.
+    if (input.openStatementDecision === 'on_hold') {
+      const problem = holdReasonProblem(input.openStatementHoldReason);
+      if (problem) return { success: false, error: problem };
+    }
+    const holdReason = input.openStatementHoldReason?.trim() || null;
 
     const baseValues = {
       scheduleId: input.scheduleId,

@@ -250,3 +250,40 @@ export function summariseEdc(
   };
 }
 
+/**
+ * One number for the day's sales as a closing states them: Sales Cash + every
+ * bank's EDC + OP/ME/VOUCHER. A part nobody filled in counts as 0 and is listed
+ * in `missing`, so a partial closing shows a (lower) total with a note.
+ */
+export interface ClosingSalesTotal {
+  /** null = not filled in. */
+  salesCash: number | null;
+  banksTotal: number;
+  /** null = not filled in. */
+  opMeVoucher: number | null;
+  total: number;
+  missing: string[];
+  /** Anything at all to add up. */
+  hasData: boolean;
+}
+
+export function closingSalesTotal(
+  summary: EdcSummary,
+  salesCash: number | string | null | undefined,
+): ClosingSalesTotal {
+  const cash = salesCash == null || salesCash === '' ? null : Number(salesCash);
+  const salesCashAmount = cash != null && Number.isFinite(cash) ? cash : null;
+  const missing: string[] = [];
+  if (salesCashAmount === null) missing.push('Sales Cash');
+  // A bank left blank is a bank with no sales (every money field is optional), so it isn't "missing".
+  if (summary.opMeVoucher === null) missing.push(OP_ME_VOUCHER_LABEL);
+  return {
+    salesCash: salesCashAmount,
+    banksTotal: summary.banksTotal,
+    opMeVoucher: summary.opMeVoucher,
+    total: (salesCashAmount ?? 0) + summary.total,
+    missing,
+    hasData: salesCashAmount !== null || summary.hasData,
+  };
+}
+

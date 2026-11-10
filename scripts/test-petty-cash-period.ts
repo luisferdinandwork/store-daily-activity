@@ -3,6 +3,9 @@
 //   npm run test:petty-cash-period
 //
 // The rules under test:
+//   • THE CALENDAR changes the period: it runs 16th → 15th and is named after the month it ends in, so the 16th
+//     starts the next one (a Refill never does);
+//   • which period a Refill settles: the oldest used period without a refill, up to the one in use;
 //   • the Refill of a period is due on or before the 15th of its month; later is "late" (never blocked), and
 //     periods before the rule existed are never late;
 //   • a Re-request is counted in the period AFTER the original's — never one already closed;
@@ -19,9 +22,15 @@ import {
   isRefillLate,
   periodLabel,
   periodMonthName,
+  periodRangeLabel,
+  periodWindow,
+  pickRefillPeriod,
   receiptPhotoAction,
   refillDeadline,
   reRequestPeriodMonth,
+  uncoveredUsage,
+  usagePeriodFor,
+  type RefillCandidate,
 } from '../lib/petty-cash-period';
 import { isLockedByVerification } from '../lib/petty-cash-review';
 
@@ -80,8 +89,88 @@ ok('across a year end', () => {
   assert.equal(reRequestPeriodMonth('2026-12', '2026-12'), '2027-01');
 });
 
+console.log('The calendar decides the period');
+ok('up to and including the 15th it is this month, from the 16th the next month', () => {
+  assert.equal(usagePeriodFor('2026-11-01'), '2026-11');
+  assert.equal(usagePeriodFor('2026-11-15'), '2026-11');
+  assert.equal(usagePeriodFor('2026-11-16'), '2026-12');
+  assert.equal(usagePeriodFor('2026-11-30'), '2026-12');
+});
+ok('across a year end', () => {
+  assert.equal(usagePeriodFor('2026-12-15'), '2026-12');
+  assert.equal(usagePeriodFor('2026-12-16'), '2027-01');
+  assert.equal(usagePeriodFor('2026-12-31'), '2027-01');
+  assert.equal(usagePeriodFor('2027-01-01'), '2027-01');
+  assert.equal(usagePeriodFor('2027-01-15'), '2027-01');
+});
+ok('a period runs from the 16th of the month before to the 15th of its name', () => {
+  assert.deepEqual(periodWindow('2026-11'), { from: '2026-10-16', to: '2026-11-15' });
+  assert.deepEqual(periodWindow('2027-01'), { from: '2026-12-16', to: '2027-01-15' });
+  assert.equal(periodRangeLabel('2026-11'), '16 Okt – 15 Nov 2026');
+  assert.equal(periodRangeLabel('2027-01'), '16 Des 2026 – 15 Jan 2027');
+});
+ok('the periods tile the calendar: every day is in exactly the period whose window holds it', () => {
+  for (let d = Date.UTC(2026, 8, 1); d < Date.UTC(2027, 3, 1); d += 86_400_000) {
+    const day = new Date(d).toISOString().slice(0, 10);
+    const { from, to } = periodWindow(usagePeriodFor(day));
+    assert.ok(day >= from && day <= to, `${day} is outside ${from}…${to}`);
+  }
+});
+ok('the last day of a period is also the day its refill is on time', () => {
+  assert.equal(periodWindow('2026-11').to, refillDeadline('2026-11'));
+  assert.equal(isRefillLate('2026-11', periodWindow('2026-11').to), false);
+  assert.equal(isRefillLate('2026-11', '2026-11-16'), true);
+});
+
+console.log('Which period a Refill settles');
+const used = (month: string, balance = 900_000, settled = false): RefillCandidate => ({ month, balance, settled });
+ok('on the 10th, previous period settled: the period in use', () => {
+  assert.equal(pickRefillPeriod([used('2026-10', 900_000, true), used('2026-11')], '2026-11'), '2026-11');
+});
+ok('after the 15th, the period that just ended has no refill yet: it goes first (late)', () => {
+  // 20 Nov → period in use is 2026-12; November was never asked for
+  assert.equal(pickRefillPeriod([used('2026-11'), used('2026-12', 950_000)], '2026-12'), '2026-11');
+});
+ok('after the 15th, the ended period already has its refill: the period in use', () => {
+  assert.equal(pickRefillPeriod([used('2026-11', 900_000, true), used('2026-12', 950_000)], '2026-12'), '2026-12');
+});
+ok('on or before the 15th with the previous period still waiting: the previous one first', () => {
+  assert.equal(pickRefillPeriod([used('2026-10'), used('2026-11')], '2026-11'), '2026-10');
+});
+ok('a period nobody used needs no refill', () => {
+  assert.equal(pickRefillPeriod([used('2026-11', 1_000_000), used('2026-12', 950_000)], '2026-12'), '2026-12');
+  assert.equal(pickRefillPeriod([used('2026-11', 900_000, true), used('2026-12', 1_000_000)], '2026-12'), null);
+});
+ok('nothing to refill when every used period is settled', () => {
+  assert.equal(pickRefillPeriod([used('2026-11', 900_000, true), used('2026-12', 900_000, true)], '2026-12'), null);
+  assert.equal(pickRefillPeriod([], '2026-12'), null);
+});
+ok('a period ahead of the one in use (made for a Re-request) is never the target', () => {
+  assert.equal(pickRefillPeriod([used('2026-11'), used('2026-12', 950_000)], '2026-11'), '2026-11');
+  assert.equal(pickRefillPeriod([used('2026-11', 900_000, true), used('2026-12', 950_000)], '2026-11'), null);
+});
+ok('periods older than the latest settled one belong to a cycle that is already done', () => {
+  assert.equal(pickRefillPeriod([used('2026-08'), used('2026-10', 900_000, true), used('2026-11')], '2026-11'), '2026-11');
+});
+ok('a refill OPS turned down leaves its period waiting (it is simply not "settled")', () => {
+  assert.equal(pickRefillPeriod([used('2026-11', 900_000, false), used('2026-12', 950_000)], '2026-12'), '2026-11');
+});
+
+console.log('Usage after the amount was frozen');
+ok('what Finance sent covers what was used then; later usage is the shortfall', () => {
+  assert.equal(uncoveredUsage(900_000, 100_000), 0);
+  assert.equal(uncoveredUsage(850_000, 100_000), 50_000);
+});
+ok('no frozen amount (refill not verified yet, or none asked for) → it will cover everything', () => {
+  assert.equal(uncoveredUsage(850_000, null), 0);
+  assert.equal(uncoveredUsage(850_000, undefined), 0);
+});
+ok('a request given back afterwards never makes the shortfall negative', () => {
+  assert.equal(uncoveredUsage(960_000, 100_000), 0);
+});
+
 console.log('Receipt photo');
-const photo = (status: string, hasPhoto: boolean, financeReview: string | null = null) =>
+const photo =(status: string, hasPhoto: boolean, financeReview: string | null = null) =>
   receiptPhotoAction({ status, hasPhoto, financeReview });
 ok('before Selesai the photo can be replaced', () => {
   assert.equal(photo('ops_approved', true), 'replace');

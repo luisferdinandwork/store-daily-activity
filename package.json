@@ -25,6 +25,8 @@
     "db:seed:local": "dotenv -e .env.local -- tsx scripts/seed/local-demo.ts",
     "test:scanner": "tsx scripts/test-scanner.ts",
     "test:transfer-report": "tsx scripts/test-transfer-order-report.ts",
+    "test:bin-check": "tsx scripts/test-bin-check.ts",
+    "mock:bc-bin": "tsx scripts/mock-bc-bin-check.ts",
     "test:petty-cash-period": "tsx scripts/test-petty-cash-period.ts",
     "test:petty-cash-flow": "dotenv -e .env.local -- tsx scripts/test-petty-cash-period-flow.ts",
     "test:petty-cash-reset": "dotenv -e .env.local -- tsx scripts/test-petty-cash-reset.ts",

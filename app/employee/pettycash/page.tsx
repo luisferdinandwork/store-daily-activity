@@ -38,7 +38,7 @@ import {
   type PettyCashCategoryOption,
 } from '@/lib/petty-cash-categories';
 import { RE_REQUEST_LABEL, fmtRequestDate, type ReRequestable } from '@/lib/petty-cash-re-request';
-import { addMonths, periodLabel, periodMonthName, type DeadlineStatus } from '@/lib/petty-cash-period';
+import { periodLabel, periodMonthName, periodRangeLabel, type DeadlineStatus } from '@/lib/petty-cash-period';
 import { jakartaDateKey, jakartaTodayKey, jakartaYearMonth } from '@/lib/day-bucket';
 import {
   DEFAULT_LIST_STATE,
@@ -112,15 +112,16 @@ type TxRow = {
 type PageData = {
   storeName: string;
   /**
-   * Set while the refill of an earlier period is on its way (or was turned down): that period is closed and new
-   * requests are counted in the one in use (`month`). Nothing is blocked.
+   * Set while the period before the one in use (it ended on the 15th) has not had its Refill received: not asked
+   * for yet (`none`), on its way, or turned down. New requests are already counted in the period in use
+   * (`month`). Nothing is blocked.
    */
   closedPeriod?: { month: string; refillState: string } | null;
   /**
    * The Refill of the period before the one in use that has not been received yet. `balance` already leaves it
-   * out — it only turns up in the balance once PIC 1 has uploaded the proof photos.
+   * out — it only turns up in the balance once PIC 1 has uploaded the proof photos. `requested` = it was asked for.
    */
-  refillPending?: { month: string; amount: number } | null;
+  refillPending?: { month: string; amount: number; requested?: boolean } | null;
   /** What can be spent: the period's balance minus `refillPending`. */
   balance: string;
   openingBalance?: string;
@@ -199,13 +200,17 @@ function monthLabel(ym?: string) {
   });
 }
 
-/** The banner under the balance card once a period's refill has been sent (the period itself is closed). */
+/** The banner under the balance card while the period that has just ended still waits for its Refill. */
 function closedPeriodText(closed: { month: string; refillState: string }, usageMonth: string) {
   const closedName = periodLabel(closed.month);
   const usageName = periodLabel(usageMonth);
 
+  if (closed.refillState === 'none') {
+    return `Refill ${closedName} belum diajukan — ajukan di tab Refill (ditandai Terlambat). Periode berganti otomatis tanggal 16; request baru dihitung di periode ${usageName}.`;
+  }
+
   if (closed.refillState === 'rejected') {
-    return `Refill ${closedName} ditolak OPS, tapi periodenya tetap tertutup — ajukan Refill lagi di tab Refill. Request baru masuk ke periode ${usageName}.`;
+    return `Refill ${closedName} ditolak OPS — ajukan Refill lagi di tab Refill. Request baru masuk ke periode ${usageName}.`;
   }
 
   const where =
@@ -322,7 +327,7 @@ function BalanceCard({
   pendingAmount: number;
   awaitingConfirmAmount: number;
   /** A Refill not received yet — the balance rises by this once the proof photos are in. */
-  refillPending: { month: string; amount: number } | null;
+  refillPending: { month: string; amount: number; requested?: boolean } | null;
   /** The petty cash period in use (YYYY-MM). */
   month: string;
   isHolder: boolean;
@@ -339,12 +344,13 @@ function BalanceCard({
             <p className="truncate text-xs font-semibold text-muted-foreground">{storeName}</p>
           </div>
 
-          {/* The month whose petty cash is in use — highlighted on purpose. */}
+          {/* The period whose petty cash is in use (16th → 15th) — highlighted on purpose. */}
           <div className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-white/80 px-3 py-1 shadow-sm ring-1 ring-black/5">
             <CalendarDays className="h-3.5 w-3.5 text-foreground/70" />
-            <span className="text-[11px] font-medium text-muted-foreground">Saldo bulan</span>
+            <span className="text-[11px] font-medium text-muted-foreground">Periode</span>
             <span className="text-xs font-bold text-foreground">{monthLabel(month)}</span>
           </div>
+          <p className="mt-1 pl-1 text-[10px] text-muted-foreground">{periodRangeLabel(month)}</p>
 
         </div>
         <span className={cn('shrink-0 text-[10px] font-bold uppercase tracking-wide', health.textClass)}>
@@ -374,10 +380,13 @@ function BalanceCard({
       {refillPending && (
         <div className="mt-3 rounded-xl bg-white/60 px-3 py-2">
           <p className="text-[11px] font-semibold text-indigo-700">
-            Refill {periodLabel(refillPending.month)} {idr(refillPending.amount)} belum diterima
+            Refill {periodLabel(refillPending.month)} {idr(refillPending.amount)}{' '}
+            {refillPending.requested === false ? 'belum diajukan' : 'belum diterima'}
           </p>
           <p className="mt-0.5 text-[10px] text-muted-foreground">
-            Saldo bertambah setelah foto bukti Refill diunggah.
+            {refillPending.requested === false
+              ? 'Saldo bertambah setelah Refill diajukan, diproses, dan foto buktinya diunggah.'
+              : 'Saldo bertambah setelah foto bukti Refill diunggah.'}
           </p>
         </div>
       )}
@@ -407,7 +416,7 @@ type RefillProofKind = 'drawer' | 'signature';
 
 type RefillRequestRow = {
   id: number;
-  /** The period (YYYY-MM) this Refill settles — it closed when the Refill was sent. */
+  /** The period (YYYY-MM) this Refill settles (16th of the month before → 15th of this month). */
   yearMonth: string;
   status: 'pending' | 'approved' | 'rejected';
   requestedAt: string;
@@ -677,9 +686,10 @@ function RefillBankForm({
 }
 
 // ─── Refill: PIC 1 sends it, everyone at the store sees where it stands ─────────
-// Sending a Refill closes the period it covers (what was used is fixed — that is what Finance transfers) and the
-// next period opens at once, so requests carry on while the Refill goes OPS → Finance → PIC 1's receipt photos.
-// It is due before the 15th of the period's month; later is still accepted but marked "Terlambat"
+// The CALENDAR changes the period (on the 16th) — sending a Refill closes nothing, so requests carry on while the
+// Refill goes OPS → Finance → PIC 1's receipt photos. Which period it covers is decided by the server: on or
+// before the 15th the period in use (once the one before is settled), after the 15th the period that has just ended
+// while it is still waiting. It is due on or before the 15th; later is still accepted but marked "Terlambat"
 // (lib/petty-cash-period.ts).
 
 type RefillOverviewData = {
@@ -865,9 +875,10 @@ function RefillRequestCard({
         <p className="mt-3 flex items-start gap-1.5 rounded-xl bg-secondary/60 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
           <CalendarDays className="mt-px h-3 w-3 shrink-0" aria-hidden />
           <span>
-            Periode {periodLabel(request.yearMonth)} sudah ditutup. Request baru tetap bisa dibuat — dihitung di periode{' '}
-            {periodLabel(overview?.usageMonth ?? addMonths(request.yearMonth, 1))}. Saldo baru bertambah setelah Refill diterima
-            (foto bukti diunggah).
+            {overview?.usageMonth && overview.usageMonth > request.yearMonth
+              ? `Periode ${periodLabel(request.yearMonth)} sudah berakhir (${periodRangeLabel(request.yearMonth)}). Request baru tetap bisa dibuat — dihitung di periode ${periodLabel(overview.usageMonth)}.`
+              : `Periode ${periodLabel(request.yearMonth)} masih berjalan (${periodRangeLabel(request.yearMonth)}); request baru tetap bisa dibuat dan dihitung di periode ini. Periode berganti otomatis tanggal 16.`}{' '}
+            Saldo baru bertambah setelah Refill diterima (foto bukti diunggah).
           </span>
         </p>
       </div>
@@ -892,7 +903,6 @@ function RefillRequestCard({
   }
 
   const deadline = settle && overview?.deadline ? refillDeadlineLine(overview.deadline, settle.month) : null;
-  const nextMonth = settle ? addMonths(settle.month, 1) : null;
 
   return (
     <div className="mx-4 rounded-2xl border border-border bg-card p-4">
@@ -948,14 +958,13 @@ function RefillRequestCard({
         </p>
       ) : (
         <>
-          {settle && nextMonth && (
+          {settle && (
             <p className="mt-3 flex items-start gap-1.5 text-[11px] leading-relaxed text-muted-foreground">
               <CalendarDays className="mt-px h-3 w-3 shrink-0" aria-hidden />
               <span>
                 {settle.closed
-                  ? `Periode ${periodLabel(settle.month)} sudah ditutup.`
-                  : `Begitu dikirim, periode ${periodLabel(settle.month)} ditutup dan periode ${periodLabel(nextMonth)} dibuka.`}{' '}
-                Kamu tetap bisa membuat request — masuk ke periode {periodLabel(nextMonth)}, walau Refill belum diproses.
+                  ? `Periode ${periodLabel(settle.month)} (${periodRangeLabel(settle.month)}) sudah berakhir; request baru dihitung di periode ${periodLabel(overview?.usageMonth ?? settle.month)}.`
+                  : `Periode ${periodLabel(settle.month)} berjalan ${periodRangeLabel(settle.month)} dan berganti otomatis tanggal 16 — mengajukan Refill tidak menutupnya.`}{' '}
                 Saldo tidak langsung kembali ke Rp 1.000.000; saldo baru bertambah setelah Refill diterima.
               </span>
             </p>
@@ -1925,13 +1934,13 @@ export default function EmployeePettyCashPage() {
       setRefillRequest(body.request);
       setLastBank(bank);
       const sentFor: string = body.periodMonth ?? body.request?.yearMonth;
-      const next: string | undefined = body.nextMonth ?? (sentFor ? addMonths(sentFor, 1) : undefined);
+      const inUse: string | undefined = body.usageMonth;
       setSuccessMessage(
-        sentFor && next
-          ? `Refill periode ${periodLabel(sentFor)} diajukan${body.late ? ' (terlambat)' : ''} — menunggu OPS. Periode ditutup; request baru dihitung di periode ${periodLabel(next)}.`
+        sentFor
+          ? `Refill periode ${periodLabel(sentFor)} diajukan${body.late ? ' (terlambat)' : ''} — menunggu OPS.${inUse && inUse !== sentFor ? ` Request baru dihitung di periode ${periodLabel(inUse)}.` : ''}`
           : 'Refill diajukan — akan ditinjau oleh OPS.',
       );
-      // Sending the Refill closed its period and opened the next: the balance, banner and list all change.
+      // The Refill is on its way: the balance, banner and Refill card all change.
       void load({ silent: true });
       void loadRefillStatus();
     } catch (e) {

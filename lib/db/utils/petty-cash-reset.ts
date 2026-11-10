@@ -34,9 +34,9 @@ import {
   type PettyCashPeriod,
 } from '@/lib/db/schema';
 import { PETTY_CASH_MAX_BALANCE } from '@/lib/db/schema/petty-cash';
-import { jakartaYearMonth } from '@/lib/day-bucket';
+import { jakartaTodayKey } from '@/lib/day-bucket';
 import { refillStateOf } from '@/lib/petty-cash-report';
-import type { PeriodStatus } from '@/lib/petty-cash-period';
+import { usagePeriodFor, type PeriodStatus } from '@/lib/petty-cash-period';
 import type {
   ResetOverview,
   ResetPeriodRow,
@@ -177,7 +177,8 @@ function notificationWhere(txIds: number[], refillIds: number[], staffOfStore: n
   return parts.length ? or(...parts) : undefined;
 }
 
-const freshPeriodMonth = () => jakartaYearMonth(Date.now());
+// The fresh period after a full reset is the one of today's date — it changes on the 16th, not with the calendar month.
+const freshPeriodMonth = () => usagePeriodFor(jakartaTodayKey());
 
 function afterState(r: Resolved): ResetPreview['after'] {
   if (r.scope.type === 'period' && r.period) {

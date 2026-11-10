@@ -174,32 +174,8 @@ export interface MarketingCheckData extends TaskBase {
   randomNonShoeItems: boolean;
   sellTag: boolean;
 }
-export interface CekBinData extends TaskBase {
-  totalStoreBins: number;
-  minimumBinsToCheck: number;
-  checkedBinsCount: number;
-  selectedBinIds: string[];
-  availableBins: Array<{
-    id: string;
-    storeId: string;
-    bin: string;
-    nama: string | null;
-    qtyBc: number | null;
-    qtySesuaiBin: number | null;
-    qtyTidakSesuaiBin: number | null;
-  }>;
-  checkedBins: Array<{
-    id: string;
-    taskId: string;
-    binId: string;
-    bin: string;
-    nama: string | null;
-    qtyBc: number | null;
-    qtySesuaiBin: number | null;
-    qtyTidakSesuaiBin: number | null;
-    notes: string | null;
-  }>;
-}
+/** Cek Bin has no fields of its own: what was scanned / is wrong is read live from BC. */
+export type CekBinData = TaskBase;
 export interface VmChecklistData extends TaskBase {
   shoeLaceShoeFillerPriceTagHangtagLabelK3L: boolean;
   lastPairAndPigskinHangtag: boolean;
@@ -358,7 +334,7 @@ const TASK_META: Record<
   },
   cek_bin: {
     title: "Cek Bin",
-    description: "Input total bin dan pilih minimal 30% bin untuk dicek.",
+    description: "Scan BIN di BC, lalu perbaiki barang yang masih salah.",
     Icon: Box,
     hasPhoto: false,
   },

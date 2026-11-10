@@ -145,7 +145,6 @@ export async function POST(req: NextRequest) {
       atmCardSelfiePhoto: toOptionalString(body.atmCardSelfiePhoto) ?? '',
       cashierPhoto: toOptionalString(body.cashierPhoto),
       atmCardPhoto: toOptionalString(body.atmCardPhoto),
-      salesCashPhoto: toOptionalString(body.salesCashPhoto),
       notes: toOptionalString(body.notes),
     });
 
@@ -207,9 +206,6 @@ export async function PATCH(req: NextRequest) {
     }
     if ('atmCardPhoto' in body) {
       patch.atmCardPhoto = toOptionalString(body.atmCardPhoto) ?? null;
-    }
-    if ('salesCashPhoto' in body) {
-      patch.salesCashPhoto = toOptionalString(body.salesCashPhoto) ?? null;
     }
     if ('notes' in body) {
       patch.notes = toOptionalString(body.notes);

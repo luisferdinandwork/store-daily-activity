@@ -4,13 +4,13 @@
 //
 // A month here is the Jakarta calendar month a request was *filed* in — what the
 // Date column shows. It is deliberately not petty_cash_transactions.year_month,
-// which is the petty cash PERIOD's month and lags behind the calendar for a
-// store that hasn't been refilled yet (see petty-cash-period.ts). Requests still
+// which is the petty cash PERIOD's month: from the 16th it is already the next
+// calendar month's (see petty-cash-period.ts). Requests still
 // waiting on Ops are listed whatever their month, so the queue never hides.
 //
 // Refills: every request is shown with what the store used. The spending behind
 // a refill is the petty cash "envelope" the store was drawing from when it asked
-// — the period the refill settles (`yearMonth`; it closed when the refill was sent,
+// — the period the refill settles (`yearMonth`; a period runs 16th → 15th and the calendar closes it,
 // see petty-cash-period.ts). Refills filed before periods worked that way have no
 // such period row, so their envelope is found the old way: the period after the
 // store's last received refill (else its first period). The refill it needs is

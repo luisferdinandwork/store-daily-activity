@@ -589,10 +589,10 @@ async function seedStore(target: Target, ctx: Ctx): Promise<Counts> {
         }
       }
 
-      // cek_bin — these stores have no BIN master data yet, so 0 of 0
+      // cek_bin — just the task row (scans + wrong items are read from BC)
       {
         const st = status(); const done = st === 'completed' ? at(a, 'morning', MORNING_WINDOW.cek_bin) : null;
-        T.cekBin.push({ ...base(a, morningId, st, done), ...(done ? { totalStoreBins: 0, minimumBinsToCheck: 0, checkedBinsCount: 0, ...geo() } : {}) });
+        T.cekBin.push({ ...base(a, morningId, st, done), ...(done ? geo() : {}) });
       }
 
       // vm_checklist

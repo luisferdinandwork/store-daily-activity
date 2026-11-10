@@ -56,6 +56,7 @@ const SIMPLE_TARGETS: SimpleTarget[] = [
     ],
   },
   { table: 'store_front_tasks', dateColumn: 'date', photoColumns: ['storefront_photos', 'rolling_door_closed_photo'] },
+  // sales_cash_photo is no longer written (2026-11-10) but stays listed to sweep photos already stored.
   { table: 'setoran_tasks', dateColumn: 'date', photoColumns: ['resi_photo', 'atm_card_selfie_photo', 'cashier_photo', 'atm_card_photo', 'sales_cash_photo'] },
   { table: 'setoran_money_storage', dateColumn: 'date', photoColumns: ['resi_photo', 'atm_card_selfie_photo', 'cashier_photo', 'atm_card_photo', 'sales_cash_photo'] },
   {
