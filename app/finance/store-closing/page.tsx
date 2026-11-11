@@ -302,6 +302,7 @@ function HoldsPanel({
                   <ClosingPhoto url={row.zReportPhoto} label={ZREPORT_LABEL} size="sm" onOpen={() => onOpenPhoto(row, 'zreport')} />
                 </td>
                 <td className="max-w-sm border-b border-slate-100 px-3 py-2 text-slate-700">
+                  {row.holdCategory && <p className="mb-0.5 text-[11px] font-semibold text-slate-900">{row.holdCategory}</p>}
                   {row.holdReason ?? <span className="italic text-slate-400">Tanpa alasan</span>}
                 </td>
                 <td className="border-b border-slate-100 px-3 py-2 text-xs text-slate-600 whitespace-nowrap">
@@ -524,6 +525,9 @@ function DetailPanel({
 
         {(row.isOnHold || row.holdReason) && (
           <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            {row.holdCategory && (
+              <p className="mb-1"><span className="font-semibold">Kategori: </span>{row.holdCategory}</p>
+            )}
             <span className="font-semibold">Alasan hold: </span>
             {row.holdReason ?? 'Tanpa alasan.'}
           </div>
@@ -739,7 +743,7 @@ export default function FinanceStoreClosingPage() {
       if (code && row.code !== code) return false;
       if (stateFilter && state !== stateFilter) return false;
       if (!q) return true;
-      return [row.storeNo, row.storeName, row.areaName, row.submittedBy, row.holdReason, ...row.scheduledStaff.map((s) => s.name)]
+      return [row.storeNo, row.storeName, row.areaName, row.submittedBy, row.holdReason, row.holdCategory, ...row.scheduledStaff.map((s) => s.name)]
         .some((v) => v?.toLowerCase().includes(q));
     });
   }, [lines, code, stateFilter, search]);

@@ -7,6 +7,7 @@
 
 import { ReactNode } from 'react';
 import { TaskStatusChip } from '@/components/status/TaskStatus';
+import type { Tone } from '@/lib/status-theme';
 import EmployeeAppBar from '@/components/employee/EmployeeAppBar';
 
 export type EmployeeTaskStatus =
@@ -22,6 +23,8 @@ interface TaskHeaderProps {
   /** Usually shiftLabel(task.shift). The status is shown as its own chip. */
   subtitle?: string;
   status?: EmployeeTaskStatus | string;
+  /** Overrides the status chip's own tone (see TaskStatusChip). */
+  statusTone?: Tone;
   saveIndicator?: ReactNode;
   onBack?: () => void;
 }
@@ -44,7 +47,7 @@ export function shiftLabel(shift: string | null | undefined): string | undefined
 // The status chip (words, icon, colours) is shared: components/status/TaskStatus.tsx.
 export { TaskStatusChip };
 
-export default function TaskHeader({ title, subtitle, status, saveIndicator, onBack }: TaskHeaderProps) {
+export default function TaskHeader({ title, subtitle, status, statusTone, saveIndicator, onBack }: TaskHeaderProps) {
   const hasMeta = Boolean(subtitle || status || saveIndicator);
 
   return (
@@ -55,7 +58,7 @@ export default function TaskHeader({ title, subtitle, status, saveIndicator, onB
         hasMeta ? (
           <>
             {subtitle && <span className="truncate">{subtitle}</span>}
-            <TaskStatusChip status={status} />
+            <TaskStatusChip status={status} tone={statusTone} />
             {saveIndicator}
           </>
         ) : undefined

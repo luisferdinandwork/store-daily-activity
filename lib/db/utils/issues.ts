@@ -528,7 +528,7 @@ export async function notifyIssueEvent(input: {
   );
 
   // The email copy never holds up (or fails) the request that raised the event.
-  void emailIssueRecipients(recipientRows, input.storeId, input.title, input.body).catch((err) =>
+  void emailIssueRecipients(recipientRows, input.issueId, input.storeId, input.title, input.body).catch((err) =>
     console.error('[issues] email notification failed:', err),
   );
 }
@@ -542,6 +542,7 @@ export async function notifyIssueEvent(input: {
  */
 async function emailIssueRecipients(
   recipients: { email: string | null; roleCode: string }[],
+  issueId: number,
   storeId: number,
   title: string,
   body: string | undefined,
@@ -561,6 +562,13 @@ async function emailIssueRecipients(
     .where(eq(stores.id, storeId))
     .limit(1);
 
+  // The email carries the issue's whole description (the employee's own words / the On Hold reason).
+  const [issueRow] = await db
+    .select({ description: issues.description })
+    .from(issues)
+    .where(eq(issues.id, issueId))
+    .limit(1);
+
   const base = appBaseUrl();
   // Subject + HTML are IT-editable (email_templates, /it/email-templates).
   const template = await getEmailTemplate('issue_notification');
@@ -571,6 +579,7 @@ async function emailIssueRecipients(
       issueEmailVars({
         title,
         body,
+        description: issueRow?.description ?? null,
         storeLabel: store ? `${store.storeNo} · ${store.name}` : null,
         areaName: store?.areaName ?? null,
         at,

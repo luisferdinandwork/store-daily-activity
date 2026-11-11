@@ -21,17 +21,31 @@
 // tick the employee sets: submit turns it on once the summary is complete.
 //
 // On Hold behavior:
-//   • Submit with openStatementDecision = 'on_hold' creates an Issue in Bahasa.
-//   • The generated Issue starts with status = 'draft'. It belongs to the whole
-//     store, not just the submitter: every employee of the store sees it and can
-//     send / solve it (computeIssuePermissionFlags), IT sees it too (/it/issues).
-//   • The Store Closing row stays with status = 'pending' and isOnHold=true.
+//   • Submit with openStatementDecision = 'on_hold' needs a written reason
+//     (holdReasonProblem) and — when IT has set up On Hold categories — one
+//     active category (holdCategoryProblem); it then creates an Issue in Bahasa
+//     from the IT-editable template (lib/db/utils/store-closing-hold.ts, IT page
+//     /it/store-closing-hold; a category may carry its own description).
+//   • The generated Issue is created already 'reported' (Ops + IT + Finance),
+//     the whole store sees it and can mark it solved (computeIssuePermissionFlags).
+//   • The Store Closing row stays with status = 'pending' and isOnHold=true;
+//     the picked category is kept on the row (id + a name snapshot).
 //   • Future days still generate their own Store Closing rows.
 //   • When the linked issue is resolved, syncResolvedStoreClosingHoldsForStores()
 //     reopens only that held task so the current employee can finish it.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { holdReasonProblem } from '@/lib/store-closing-hold';
+import {
+  HOLD_NO_CATEGORY_LABEL,
+  buildHoldIssueText,
+  holdCategoryProblem,
+  holdReasonProblem,
+} from '@/lib/store-closing-hold';
+import {
+  getHoldCategory,
+  getHoldTemplate,
+  listActiveHoldCategories,
+} from '@/lib/db/utils/store-closing-hold';
 import type { GeoPoint } from '@/lib/geo';
 import { assertInGeofence } from '@/lib/db/utils/geofence';
 import { db } from '@/lib/db';
@@ -57,6 +71,7 @@ import {
   storeClosingEdcEntries,
   storeClosingTasks,
   stores,
+  users,
   type Issue,
   type StoreClosingTask,
 } from '@/lib/db/schema';
@@ -122,6 +137,8 @@ export interface SubmitStoreClosingInput {
 
   openStatementDecision: StoreClosingOpenStatementDecision;
   openStatementHoldReason?: string;
+  /** The On Hold category picked from IT's list — required once IT has an active one. */
+  openStatementHoldCategoryId?: number | null;
   notes?: string;
 }
 
@@ -141,6 +158,7 @@ export interface AutoSaveStoreClosingPatch {
   storefrontLockedPhoto?: string | null;
   openStatementDecision?: StoreClosingOpenStatementDecision | null;
   openStatementHoldReason?: string | null;
+  openStatementHoldCategoryId?: number | null;
   notes?: string | null;
 }
 
@@ -349,14 +367,20 @@ async function createOpenStatementHoldIssue(input: {
   task: StoreClosingTask;
   userId: string;
   reason: string;
+  /** The category picked from IT's list (null when IT has none). Its own description wins over the default. */
+  category: { name: string; description: string | null } | null;
   eodEdcSettlementPhoto: string | null;
   storefrontLockedPhoto?: string | null;
 }): Promise<Issue> {
-  const [store] = await db
-    .select({ name: stores.name })
-    .from(stores)
-    .where(eq(stores.id, input.task.storeId))
-    .limit(1);
+  const [[store], [employee], template] = await Promise.all([
+    db
+      .select({ name: stores.name, storeNo: stores.storeNo })
+      .from(stores)
+      .where(eq(stores.id, input.task.storeId))
+      .limit(1),
+    db.select({ name: users.name }).from(users).where(eq(users.id, input.userId)).limit(1),
+    getHoldTemplate(),
+  ]);
 
   // Sent straight away to Ops, IT and Finance — no draft for the store to forward.
   const holdRoleIds = await getStoreClosingHoldIssueRoleIds();
@@ -367,19 +391,20 @@ async function createOpenStatementHoldIssue(input: {
   const storeName = store?.name ?? `Store #${input.task.storeId}`;
   const dateLabel = formatDateId(input.task.date);
 
-  const title = `Open Statement Tertunda - ${storeName} - ${dateLabel}`;
-  const holdReason = input.reason.trim() || 'Tidak ada alasan tambahan dari employee.';
-  const description = [
-    `Issue otomatis dari task Store Closing untuk toko ${storeName} pada tanggal ${dateLabel}.`,
-    '',
-    'Open Statement dipilih On Hold sehingga task Store Closing belum dapat diselesaikan.',
-    '',
-    `Alasan dari employee: ${holdReason}`,
-    '',
-    'Issue ini otomatis dikirim ke tim Operation, Finance, dan IT. Ops Area hanya melihat issue dari area toko ini, sedangkan Ops HO dapat melihat seluruh issue Operation.',
-    '',
-    'Setelah issue diselesaikan (Completed), task Store Closing terkait akan dibuka kembali agar employee bisa menyelesaikan Open Statement.',
-  ].join('\n');
+  // Title + description come from the IT-editable template (/it/store-closing-hold).
+  const { title, description } = buildHoldIssueText({
+    titleTemplate: template.title,
+    descriptionTemplate: template.description,
+    categoryDescription: input.category?.description,
+    vars: {
+      store: storeName,
+      storeCode: store?.storeNo ?? '',
+      date: dateLabel,
+      category: input.category?.name ?? HOLD_NO_CATEGORY_LABEL,
+      reason: input.reason.trim() || 'Tidak ada alasan tambahan dari employee.',
+      employee: employee?.name ?? '',
+    },
+  });
 
   const serialized = await createIssueWithRoles({
     title,
@@ -400,7 +425,9 @@ async function createOpenStatementHoldIssue(input: {
       storeId: input.task.storeId,
       assignedRoles: serialized.assignedToRoles,
       type: 'issue_reported',
-      title: `Open Statement On Hold: ${storeName}`,
+      title: input.category
+        ? `Open Statement On Hold (${input.category.name}): ${storeName}`
+        : `Open Statement On Hold: ${storeName}`,
       body: `Store Closing ${dateLabel} ditandai On Hold oleh employee. Issue otomatis dikirim ke Ops, Finance, dan IT.`,
       excludeUserId: input.userId,
     });
@@ -645,6 +672,14 @@ export async function autoSaveStoreClosing(
       update.openStatementHoldReason = input.patch.openStatementHoldReason ?? null;
     }
 
+    if ('openStatementHoldCategoryId' in input.patch) {
+      // A category IT deleted since the page loaded is just not kept (the FK would refuse it);
+      // the submit asks for a category again.
+      const wanted = Number(input.patch.openStatementHoldCategoryId);
+      const category = Number.isInteger(wanted) && wanted > 0 ? await getHoldCategory(wanted) : null;
+      update.openStatementHoldCategoryId = category?.id ?? null;
+    }
+
     if ('notes' in input.patch) {
       update.notes = input.patch.notes ?? null;
     }
@@ -773,10 +808,21 @@ export async function submitStoreClosing(
     const sideBySidePhoto = input.eodEdcSettlementPhoto?.trim() ?? null;
     const storefrontLockedPhoto = input.storefrontLockedPhoto?.trim() ?? null;
     const indodanaPhoto = isFilled(input.indodanaDashboardPhoto) ? input.indodanaDashboardPhoto.trim() : null;
-    // On Hold becomes an issue for Ops / IT / Finance, so the employee must say why.
+    // On Hold becomes an issue for Ops / IT / Finance, so the employee must say why — and,
+    // when IT has set categories up, which kind of problem it is.
+    let holdCategory: { id: number; name: string; description: string | null } | null = null;
     if (input.openStatementDecision === 'on_hold') {
       const problem = holdReasonProblem(input.openStatementHoldReason);
       if (problem) return { success: false, error: problem };
+
+      const active = await listActiveHoldCategories();
+      const categoryId = input.openStatementHoldCategoryId ?? null;
+      const categoryProblem = holdCategoryProblem(categoryId, active);
+      if (categoryProblem) return { success: false, error: categoryProblem };
+      if (categoryId != null) {
+        const row = await getHoldCategory(categoryId);
+        if (row) holdCategory = { id: row.id, name: row.name, description: row.description };
+      }
     }
     const holdReason = input.openStatementHoldReason?.trim() || null;
 
@@ -819,6 +865,9 @@ export async function submitStoreClosing(
 
       openStatementDecision: input.openStatementDecision,
       openStatementHoldReason: holdReason,
+      // Post Statement carries no category; On Hold keeps the id and a copy of its name.
+      openStatementHoldCategoryId: holdCategory?.id ?? null,
+      openStatementHoldCategory: holdCategory?.name ?? null,
       openStatementBy: input.userId,
       openStatementAt: now,
 
@@ -852,6 +901,7 @@ export async function submitStoreClosing(
             task: existing,
             userId: input.userId,
             reason: input.openStatementHoldReason ?? '',
+            category: holdCategory,
             eodEdcSettlementPhoto: sideBySidePhoto,
             storefrontLockedPhoto,
           });

@@ -156,6 +156,7 @@ export async function getStoreDayDetail(storeId: number, salesDate: string): Pro
     closingDetail = {
       state,
       holdReason: state === 'on_hold' ? closing.openStatementHoldReason?.trim() || null : null,
+      holdCategory: state === 'on_hold' ? closing.openStatementHoldCategory?.trim() || null : null,
       submittedBy: person(submitter),
       submittedAt: iso(closing.completedAt ?? closing.heldAt ?? closing.edcSummaryAt),
 

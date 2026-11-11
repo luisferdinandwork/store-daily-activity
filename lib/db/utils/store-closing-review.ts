@@ -129,6 +129,7 @@ async function toRows(
       decision: task?.openStatementDecision ?? null,
       isOnHold,
       holdReason: task?.openStatementHoldReason ?? null,
+      holdCategory: task?.openStatementHoldCategory ?? null,
       heldAt: iso(task?.heldAt),
       holdResolvedAt: iso(resolved),
       holdIssue: task?.holdIssueId != null

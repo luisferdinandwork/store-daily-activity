@@ -30,7 +30,9 @@ export interface EmailBodyFields {
   heading: string;
   /** Plain text; a blank line starts a new paragraph. */
   message: string;
-  /** Show the {{detailsTable}} (store, area, time) under the message. */
+  /** Show the {{descriptionBlock}} (the issue's full description, incl. the employee's reason) under the message. */
+  showDescription: boolean;
+  /** Show the {{detailsTable}} (store, area, time) under that. */
   showDetails: boolean;
   /** Show the {{openLink}} button under that. */
   showOpenLink: boolean;
@@ -117,6 +119,16 @@ ${rows
 </table>`;
 }
 
+/** The issue's description as a quiet quoted block (line breaks kept). Empty text → nothing. */
+export function descriptionBlock(text: string): string {
+  const clean = text.trim();
+  if (!clean) return '';
+  return `<div style="margin:20px 0;">
+<p style="margin:0 0 8px;font-size:13px;color:${MUTED};">Deskripsi</p>
+<div style="border-left:3px solid ${BRAND};padding:2px 0 2px 14px;font-size:14px;line-height:1.65;color:${TEXT};">${esc(clean).replace(/\r?\n/g, '<br>')}</div>
+</div>`;
+}
+
 /** A solid call-to-action button. */
 export function buttonLink(href: string, label: string): string {
   return `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:24px 0 4px;"><tr><td style="background:${BRAND};border-radius:8px;"><a href="${esc(href)}" style="display:inline-block;padding:12px 22px;font-size:14px;font-weight:600;color:#ffffff;text-decoration:none;">${esc(label)}</a></td></tr></table>`;
@@ -128,6 +140,7 @@ export function buildEmailHtml(fields: EmailBodyFields): string {
     heading: fields.heading,
     bodyHtml: [
       messageHtml(fields.message),
+      fields.showDescription ? '{{descriptionBlock}}' : '',
       fields.showDetails ? '{{detailsTable}}' : '',
       fields.showOpenLink ? '{{openLink}}' : '',
     ]
@@ -142,6 +155,7 @@ export function buildEmailHtml(fields: EmailBodyFields): string {
 const ISSUE_DEFAULT_FIELDS: EmailBodyFields = {
   heading: '{{title}}',
   message: '{{body}}',
+  showDescription: true,
   showDetails: true,
   showOpenLink: true,
   footnote: 'Anda menerima email ini karena issue ini diteruskan ke tim Anda.',
@@ -156,11 +170,13 @@ export const EMAIL_TEMPLATES = {
     placeholders: [
       { name: 'title', description: 'Headline of the event, e.g. "New issue: Printer rusak"', html: false, sample: 'New issue: Printer kasir rusak' },
       { name: 'body', description: 'Short sentence about the event', html: false, sample: 'An issue was reported and routed to your team.' },
+      { name: 'description', description: "The issue's full description as plain text — what the employee wrote, incl. the reason of a Store Closing On Hold (empty when none)", html: false, sample: 'Issue otomatis dari task Store Closing untuk toko Dummy Store.\n\nAlasan: Selisih EDC BCA Rp 150.000, menunggu konfirmasi Finance.' },
       { name: 'store', description: 'Store code · name (empty when unknown)', html: false, sample: 'FF001 · Fisik Football - Daan Mogot' },
       { name: 'area', description: 'Area of the store (empty when unknown)', html: false, sample: 'DKI - BALI' },
       { name: 'time', description: 'When it happened, WIB', html: false, sample: '23 Oktober 2026 pukul 08.41 WIB' },
       { name: 'link', description: "Web address of the recipient's own Issues page — Ops, Finance, IT or Audit (empty when the server URL is not set)", html: false, sample: 'https://prism.example.com/ops/issues' },
       { name: 'appName', description: 'The app name', html: false, sample: APP_NAME },
+      { name: 'descriptionBlock', description: 'Ready-made block with the full issue description (empty when the issue has none)', html: true, sample: '' },
       { name: 'detailsTable', description: 'Ready-made list with store, area and time (rows without a value are left out)', html: true, sample: '' },
       { name: 'openLink', description: 'Ready-made "Buka halaman Issues" button (empty without a link)', html: true, sample: '' },
     ],
@@ -265,6 +281,8 @@ export function parseBodyFields(raw: unknown, fallback: EmailBodyFields): EmailB
   return {
     heading: str(r.heading, fallback.heading),
     message: str(r.message, fallback.message),
+    // Templates saved before this toggle existed were built without the block → off, not the default.
+    showDescription: bool(r.showDescription, false),
     showDetails: bool(r.showDetails, fallback.showDetails),
     showOpenLink: bool(r.showOpenLink, fallback.showOpenLink),
     footnote: str(r.footnote, fallback.footnote),

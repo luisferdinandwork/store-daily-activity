@@ -59,6 +59,8 @@ export interface StoreClosingRow {
   decision: 'post_statement' | 'on_hold' | null;
   isOnHold: boolean;
   holdReason: string | null;
+  /** The On Hold category the store picked (name as it was then; null = none / older hold). */
+  holdCategory: string | null;
   heldAt: string | null;
   /** Set once a hold was resolved — by Finance ("fixed") or by Ops + a re-post. */
   holdResolvedAt: string | null;

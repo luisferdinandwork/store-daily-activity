@@ -1306,6 +1306,8 @@ export async function GET(request: NextRequest) {
 
               openStatementDecision: t.openStatementDecision,
               openStatementHoldReason: t.openStatementHoldReason,
+              openStatementHoldCategoryId: t.openStatementHoldCategoryId,
+              openStatementHoldCategory: t.openStatementHoldCategory,
               openStatementBy: t.openStatementBy,
               openStatementAt: toIso(t.openStatementAt),
 

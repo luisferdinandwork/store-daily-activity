@@ -309,6 +309,13 @@
       "when": 1793956312984,
       "tag": "0043_careful_turbo",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1794384563135,
+      "tag": "0044_store_closing_hold",
+      "breakpoints": true
     }
   ]
 }

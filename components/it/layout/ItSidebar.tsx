@@ -32,6 +32,7 @@
 //   Templates & Categories
 //     Issue Templates         /it/issue-templates (report presets employees pick)
 //     Email Templates         /it/email-templates (subject + HTML of outgoing emails)
+//     On Hold Statement       /it/store-closing-hold (Store Closing On Hold: issue text + categories)
 //     Petty Cash Categories   /it/petty-cash-categories
 //
 //   System
@@ -74,6 +75,7 @@ import {
   LockKeyhole,
   LogOut,
   MapPinned,
+  PauseCircle,
   Percent,
   Repeat,
   RotateCcw,
@@ -183,6 +185,7 @@ const NAV: NavSection[] = [
     items: [
       { href: '/it/issue-templates', label: 'Issue Templates', icon: ClipboardList },
       { href: '/it/email-templates', label: 'Email Templates', icon: Mail },
+      { href: '/it/store-closing-hold', label: 'On Hold Statement', icon: PauseCircle },
       { href: '/it/petty-cash-categories', label: 'Petty Cash Categories', icon: Tags },
     ],
   },

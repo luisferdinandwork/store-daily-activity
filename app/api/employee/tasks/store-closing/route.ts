@@ -91,6 +91,8 @@ export async function POST(req: NextRequest) {
       indodanaDashboardPhoto?: string | null;
       openStatementDecision?: StoreClosingOpenStatementDecision;
       openStatementHoldReason?: string;
+      // Picked from the IT list (GET /api/employee/store-closing/hold-categories).
+      openStatementHoldCategoryId?: number | string | null;
       notes?: string;
     };
 
@@ -143,6 +145,10 @@ export async function POST(req: NextRequest) {
       indodanaDashboardPhoto: body.indodanaDashboardPhoto ?? null,
       openStatementDecision,
       openStatementHoldReason: body.openStatementHoldReason,
+      openStatementHoldCategoryId:
+        body.openStatementHoldCategoryId == null || body.openStatementHoldCategoryId === ''
+          ? null
+          : Number(body.openStatementHoldCategoryId),
       notes: body.notes,
     });
 

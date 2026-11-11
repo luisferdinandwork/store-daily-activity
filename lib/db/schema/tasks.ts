@@ -15,6 +15,7 @@ import { taskStatusEnum } from './enums';
 import { schedules, users, stores, issues } from './core';
 import { shifts } from './lookups';
 import { itemTransferOrders } from './item-transfers';
+import { storeClosingHoldCategories } from './templates';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MORNING TASKS
@@ -984,6 +985,11 @@ export const storeClosingTasks = pgTable('store_closing_tasks', {
   // 5. Open Statement
   openStatementDecision:   text('open_statement_decision').$type<'post_statement' | 'on_hold' | null>(),
   openStatementHoldReason: text('open_statement_hold_reason'),
+  /** The On Hold category the employee picked (IT list, store_closing_hold_categories). */
+  openStatementHoldCategoryId: integer('open_statement_hold_category_id')
+    .references(() => storeClosingHoldCategories.id, { onDelete: 'set null' }),
+  /** Its name when the closing was submitted — survives a rename / delete of the category. */
+  openStatementHoldCategory: text('open_statement_hold_category'),
   openStatementBy:         text('open_statement_by').references(() => users.id),
   openStatementAt:         timestamp('open_statement_at'),
 

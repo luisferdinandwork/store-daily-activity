@@ -30,7 +30,6 @@ import {
   LogOut,
   RefreshCw,
   Loader2,
-  History,
   Lock,
   Check,
   ListOrdered,
@@ -1583,8 +1582,17 @@ function TaskCard({
     onOpen(item);
   };
 
-  const cfg = STATUS_CFG[status] ?? STATUS_CFG.not_started;
-  const statusTone = TONES[taskStatusTone(status)];
+  // A Store Closing whose Open Statement is On Hold is waiting on Ops / Finance / IT — nothing for
+  // the employee to fix. It reads as one calm "Ditahan" state (indigo), not the amber "Pending" +
+  // "Carry-forward" warning a task needing action gets. Only a SUBMITTED hold counts (`isOnHold`):
+  // merely ticking "On Hold" in the form is auto-saved as a draft choice and has sent nothing yet.
+  const isStoreClosingHold =
+    item.type === "store_closing" && (item.data as StoreClosingData).isOnHold;
+  const isHeld =
+    isStoreClosingHold && status !== "completed" && status !== "verified";
+
+  const cfg = STATUS_CFG[isHeld ? "on_hold" : status] ?? STATUS_CFG.not_started;
+  const statusTone = TONES[isHeld ? "active" : taskStatusTone(status)];
 
   const meta = TASK_META[item.type] ?? {
     title: item.type.replaceAll("_", " "),
@@ -1598,11 +1606,7 @@ function TaskCard({
 
   const isTerminal = status === "completed" || status === "verified";
   const isRejected = status === "rejected";
-  const isDiscrepancy = status === "pending";
-  const isStoreClosingHold =
-    item.type === "store_closing" &&
-    ((item.data as StoreClosingData).isOnHold ||
-      (item.data as StoreClosingData).openStatementDecision === "on_hold");
+  const isDiscrepancy = status === "pending" && !isHeld;
 
   const showCarryForward =
     isDiscrepancy && item.type === "store_closing";
@@ -1777,7 +1781,9 @@ function TaskCard({
                 "mt-1 line-clamp-2 text-[11.5px] leading-snug",
                 needsAttention
                   ? "text-amber-700 font-medium"
-                  : "text-muted-foreground",
+                  : isHeld
+                    ? cn(TONES.active.strong, "font-medium")
+                    : "text-muted-foreground",
               )}
             >
               {description}
@@ -1816,13 +1822,6 @@ function TaskCard({
                   className="h-[18px] px-1.5 text-[10px] text-muted-foreground border-border"
                 >
                   Optional
-                </Badge>
-              )}
-
-              {isStoreClosingHold && (
-                <Badge className="h-[18px] gap-1 px-1.5 text-[10px] font-semibold bg-indigo-500 text-white hover:bg-indigo-500">
-                  <History className="h-2.5 w-2.5" />
-                  On Hold
                 </Badge>
               )}
 

@@ -359,6 +359,12 @@ function TemplateEditor({
 
               <div className="grid gap-2 sm:grid-cols-2">
                 <Toggle
+                  checked={fields.showDescription}
+                  onChange={(v) => setField('showDescription', v)}
+                  label="Show description"
+                  hint="The full issue text, incl. the employee's reason."
+                />
+                <Toggle
                   checked={fields.showDetails}
                   onChange={(v) => setField('showDetails', v)}
                   label="Show details"

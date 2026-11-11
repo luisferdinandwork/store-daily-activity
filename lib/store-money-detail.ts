@@ -63,6 +63,8 @@ export const CLOSING_STATE_LABEL: Record<ClosingState, string> = {
 export interface DayClosingDetail {
   state: ClosingState;
   holdReason: string | null;
+  /** The On Hold category the store picked (null = none / older hold). */
+  holdCategory: string | null;
   /** Who submitted it (or, for a draft, who filled it in last). */
   submittedBy: DetailPerson | null;
   /** ISO instant. */

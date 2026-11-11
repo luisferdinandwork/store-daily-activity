@@ -228,6 +228,12 @@ function ClosingSection({ closing, detail, onOpenPhoto }: { closing: DayClosingD
 
           {closing.holdReason && (
             <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              {closing.holdCategory && (
+                <>
+                  <span className="block text-[11px] font-semibold uppercase tracking-wide text-amber-700">Kategori On Hold</span>
+                  <span className="mb-2 block font-semibold">{closing.holdCategory}</span>
+                </>
+              )}
               <span className="block text-[11px] font-semibold uppercase tracking-wide text-amber-700">Alasan On Hold</span>
               {closing.holdReason}
             </div>

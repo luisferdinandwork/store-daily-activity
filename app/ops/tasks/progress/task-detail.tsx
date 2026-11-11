@@ -1166,6 +1166,7 @@ function StoreClosingDetail({ task }: { task: FlatTask }) {
   const isOnHold    = !!e.isOnHold;
   const heldAt      = (e.heldAt as string | null | undefined) ?? null;
   const holdReason  = (e.openStatementHoldReason as string | null | undefined) ?? null;
+  const holdCategory = (e.openStatementHoldCategory as string | null | undefined) ?? null;
   const reopenedAt  = (e.reopenedAt as string | null | undefined) ?? null;
 
   const edc            = edcSummaryOf(e);
@@ -1301,6 +1302,9 @@ function StoreClosingDetail({ task }: { task: FlatTask }) {
           <InfoRow label="Hold selesai" value={<span className="text-indigo-600">{fmtTime(reopenedAt)}</span>} />
         )}
       </div>
+      {isOnHold && holdCategory && (
+        <InfoRow label="Kategori hold" value={<span className="font-bold text-slate-800">{holdCategory}</span>} />
+      )}
       {isOnHold && holdReason && (
         <div className="py-1.5">
           <p className="text-xs font-semibold text-slate-400">Alasan hold</p>

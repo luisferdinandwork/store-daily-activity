@@ -1,14 +1,20 @@
 'use client';
 // app/employee/tasks/store-closing/[id]/page.tsx
 
-import { HOLD_REASON_MAX, holdReasonProblem } from '@/lib/store-closing-hold';
+import {
+  HOLD_REASON_MAX,
+  holdCategoryProblem,
+  holdReasonProblem,
+  type HoldCategoryOption,
+} from '@/lib/store-closing-hold';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
-  Check, CloudOff, Save, Clock, Lock, Receipt, LayoutDashboard,
-  AlertTriangle, CheckCircle2, ChevronDown, StickyNote,
+  Check, CloudOff, Save, Lock, Receipt, LayoutDashboard,
+  AlertTriangle, CheckCircle2, ChevronDown, PauseCircle, StickyNote,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { TONES } from '@/lib/status-theme';
 import { toast } from 'sonner';
 import { useAutoSave } from '@/lib/hooks/useAutoSave';
 import { TaskDateCard, TaskHeader, TaskSubmitBar, SaveIndicator, shiftLabel } from '@/components/employee/tasks';
@@ -72,6 +78,9 @@ interface StoreClosingData {
   indodanaDashboardPhoto:  string | null;
   openStatementDecision:   OpenStatementDecision | null;
   openStatementHoldReason: string | null;
+  /** The On Hold category picked from IT's list, and its name as it was when submitted. */
+  openStatementHoldCategoryId: number | null;
+  openStatementHoldCategory:   string | null;
   isOnHold:                boolean;
   holdIssueId:             number | null;
   holdResolvedAt:          string | null;
@@ -131,15 +140,71 @@ function NotesInput({
 }
 
 // ─── Open Statement selector ──────────────────────────────────────────────────
+//
+// Colour: Post Statement = green (all good). On Hold = indigo, the shared "being handled"
+// tone (TONES.active) — the employee's part is only to report it, the fix is Ops / Finance /
+// IT's, so it must not look like the amber warning that means "you need to do something".
+// Amber stays for a carried-forward day; red marks only what is required or wrong.
+
+function HoldCategoryPicker({
+  categories, value, onChange, disabled,
+}: {
+  categories: HoldCategoryOption[];
+  value:      number | null;
+  onChange:   (id: number) => void;
+  disabled?:  boolean;
+}) {
+  return (
+    <div className="space-y-2">
+      <p className="text-xs font-bold text-foreground">
+        Kategori masalah <span className="text-red-500">*</span>
+      </p>
+      <div role="radiogroup" aria-label="Kategori masalah" className="overflow-hidden rounded-xl border border-border divide-y divide-border">
+        {categories.map(c => {
+          const selected = value === c.id;
+          return (
+            <button
+              key={c.id}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              onClick={() => !disabled && onChange(c.id)}
+              disabled={disabled}
+              className={cn(
+                'flex w-full items-center gap-3 px-3.5 py-3 text-left transition active:bg-secondary disabled:opacity-60',
+                selected ? TONES.active.tint : 'bg-background',
+              )}
+            >
+              <span className={cn('min-w-0 flex-1 text-sm', selected ? 'font-semibold text-foreground' : 'text-foreground')}>
+                {c.name}
+              </span>
+              <span className={cn(
+                'flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border-2 transition-colors',
+                selected ? cn('border-transparent', TONES.active.dot) : 'border-border bg-background',
+              )}>
+                {selected && <Check className="h-3 w-3 text-white" strokeWidth={3} />}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 function OpenStatementSelector({
-  value, onChange, holdReason, onHoldReasonChange, disabled,
+  value, onChange, holdReason, onHoldReasonChange,
+  categories, holdCategoryId, onHoldCategoryChange, disabled,
 }: {
-  value:              OpenStatementDecision | null;
-  onChange:           (v: OpenStatementDecision) => void;
-  holdReason:         string;
-  onHoldReasonChange: (v: string) => void;
-  disabled?:          boolean;
+  value:                OpenStatementDecision | null;
+  onChange:             (v: OpenStatementDecision) => void;
+  holdReason:           string;
+  onHoldReasonChange:   (v: string) => void;
+  /** Active On Hold categories from IT — none = the report only asks for the reason. */
+  categories:           HoldCategoryOption[];
+  holdCategoryId:       number | null;
+  onHoldCategoryChange: (id: number) => void;
+  disabled?:            boolean;
 }) {
   // Shown once something is typed — an untouched box just carries the usual note.
   const holdProblem = value === 'on_hold' && holdReason.length > 0 ? holdReasonProblem(holdReason) : null;
@@ -157,10 +222,10 @@ function OpenStatementSelector({
       value:       'on_hold' as const,
       label:       'On Hold',
       description: 'Ada selisih atau masalah, perlu dicek lebih lanjut.',
-      Icon:        AlertTriangle,
-      selected:    'bg-amber-50',
-      tint:        'text-amber-600',
-      dot:         'border-amber-500 bg-amber-500',
+      Icon:        PauseCircle,
+      selected:    TONES.active.tint,
+      tint:        TONES.active.text,
+      dot:         cn('border-transparent', TONES.active.dot),
     },
   ];
 
@@ -199,22 +264,35 @@ function OpenStatementSelector({
       </ListGroup>
 
       {value === 'on_hold' && (
-        <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3">
-          <p className="text-xs font-bold text-amber-800">
-            Alasan On Hold <span className="text-amber-600">*</span>
-          </p>
-          <textarea
-            value={holdReason}
-            onChange={e => onHoldReasonChange(e.target.value)}
-            disabled={disabled}
-            rows={3}
-            maxLength={HOLD_REASON_MAX}
-            placeholder="Jelaskan alasan mengapa open statement tidak bisa diposting sekarang…"
-            className="w-full resize-none rounded-xl border border-amber-200 bg-white px-3.5 py-2.5 text-base placeholder:text-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-300 disabled:opacity-60"
-          />
-          <p className={cn('text-[11px]', holdProblem ? 'font-semibold text-rose-600' : 'text-amber-700')}>
-            {holdProblem ?? 'Issue akan dibuat dan langsung dikirim otomatis ke Ops, Finance, dan IT untuk ditindaklanjuti.'}
-          </p>
+        // A plain form on the page's own card colours — the field must read as an input to fill in,
+        // not as a coloured warning box (the old amber one had near-invisible placeholder text).
+        <div className="space-y-4 rounded-xl border border-border bg-card px-3.5 py-3.5">
+          {categories.length > 0 && (
+            <HoldCategoryPicker
+              categories={categories}
+              value={holdCategoryId}
+              onChange={onHoldCategoryChange}
+              disabled={disabled}
+            />
+          )}
+
+          <div className="space-y-2">
+            <p className="text-xs font-bold text-foreground">
+              Alasan On Hold <span className="text-red-500">*</span>
+            </p>
+            <textarea
+              value={holdReason}
+              onChange={e => onHoldReasonChange(e.target.value)}
+              disabled={disabled}
+              rows={3}
+              maxLength={HOLD_REASON_MAX}
+              placeholder="Jelaskan alasan mengapa open statement tidak bisa diposting sekarang…"
+              className="w-full resize-none rounded-xl border border-border bg-background px-3.5 py-2.5 text-base placeholder:text-muted-foreground focus:border-primary focus:outline-none disabled:opacity-60"
+            />
+            <p className={cn('text-[11px]', holdProblem ? 'font-semibold text-red-600' : 'text-muted-foreground')}>
+              {holdProblem ?? 'Issue akan dibuat dan langsung dikirim otomatis ke Ops, Finance, dan IT untuk ditindaklanjuti.'}
+            </p>
+          </div>
         </div>
       )}
     </div>
@@ -255,6 +333,9 @@ export default function StoreClosingDetailPage() {
   const edcEdited = useRef(new Set<string>());
   const [openStatementDecision, setOpenStatementDecision] = useState<OpenStatementDecision | null>(null);
   const [holdReason,            setHoldReason]            = useState('');
+  // IT's On Hold categories (active ones) and the one picked for this closing.
+  const [holdCategories,        setHoldCategories]        = useState<HoldCategoryOption[]>([]);
+  const [holdCategoryId,        setHoldCategoryId]        = useState<number | null>(null);
   const [notes,                 setNotes]                 = useState('');
 
   // ─── Load ────────────────────────────────────────────────────────────────────
@@ -281,6 +362,7 @@ export default function StoreClosingDetailPage() {
         setEdcSummaryNotes(d.edcSummaryNotes ?? '');
         setOpenStatementDecision(d.openStatementDecision ?? null);
         setHoldReason(d.openStatementHoldReason ?? '');
+        setHoldCategoryId(d.openStatementHoldCategoryId ?? null);
         setNotes(d.notes ?? '');
       } else {
         setTaskData(null);
@@ -294,6 +376,19 @@ export default function StoreClosingDetailPage() {
   }, [taskId]);
 
   useEffect(() => { load(); }, [load]);
+
+  // The On Hold categories IT set up. A failed read just means none are asked for
+  // (the server applies the same rule), so it never blocks the page.
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/employee/store-closing/hold-categories')
+      .then(res => (res.ok ? res.json() : null))
+      .then((json: { categories?: HoldCategoryOption[] } | null) => {
+        if (!cancelled && Array.isArray(json?.categories)) setHoldCategories(json.categories);
+      })
+      .catch(() => { /* no categories */ });
+    return () => { cancelled = true; };
+  }, []);
 
   const scheduleId = taskData ? parseInt(taskData.scheduleId, 10) : 0;
   const storeId    = taskData ? parseInt(taskData.storeId,    10) : 0;
@@ -374,16 +469,22 @@ export default function StoreClosingDetailPage() {
 
   function handleOpenStatementDecision(v: OpenStatementDecision) {
     setOpenStatementDecision(v);
-    if (v !== 'on_hold') setHoldReason('');
+    if (v !== 'on_hold') { setHoldReason(''); setHoldCategoryId(null); }
     autoSave({
-      openStatementDecision:   v,
-      openStatementHoldReason: v === 'on_hold' ? holdReason || null : null,
+      openStatementDecision:       v,
+      openStatementHoldReason:     v === 'on_hold' ? holdReason || null : null,
+      openStatementHoldCategoryId: v === 'on_hold' ? holdCategoryId : null,
     }, { immediate: true });
   }
 
   function handleHoldReason(v: string) {
     setHoldReason(v);
     autoSave({ openStatementHoldReason: v || null });
+  }
+
+  function handleHoldCategory(id: number) {
+    setHoldCategoryId(id);
+    autoSave({ openStatementHoldCategoryId: id }, { immediate: true });
   }
 
   // ─── Submit ──────────────────────────────────────────────────────────────────
@@ -422,6 +523,7 @@ export default function StoreClosingDetailPage() {
             : {}),
           openStatementDecision,
           openStatementHoldReason: holdReason || undefined,
+          openStatementHoldCategoryId: openStatementDecision === 'on_hold' ? holdCategoryId : null,
           notes: notes || undefined,
         }),
       });
@@ -491,7 +593,11 @@ export default function StoreClosingDetailPage() {
         const indodanaRequired = moneyOn && edcSummary.banks.some(b => b.dashboardPhoto && b.total > 0);
         const indodanaPhotoSatisfied = !indodanaRequired || !!indodanaPhoto || openStatementDecision === 'on_hold';
 
-        // On Hold becomes an issue for Ops / IT / Finance — the reason is a must.
+        // On Hold becomes an issue for Ops / IT / Finance — the reason is a must, and so is a
+        // category once IT has set some up.
+        const holdCategoryMissing = openStatementDecision === 'on_hold'
+          ? holdCategoryProblem(holdCategoryId, holdCategories)
+          : null;
         const holdReasonMissing = openStatementDecision === 'on_hold' ? holdReasonProblem(holdReason) : null;
 
         const canSubmit =
@@ -505,6 +611,7 @@ export default function StoreClosingDetailPage() {
           indodanaPhotoSatisfied &&
           !!openStatementDecision &&
           openStmtSatisfied &&
+          !holdCategoryMissing &&
           !holdReasonMissing;
 
         // Same order as the page.
@@ -516,6 +623,7 @@ export default function StoreClosingDetailPage() {
           if (!storefrontLockedSatisfied) return 'Upload foto storefront terkunci.';
           if (!indodanaPhotoSatisfied) return `Upload ${INDODANA_PHOTO_LABEL} — ada transaksi Indodana.`;
           if (!openStatementDecision) return 'Pilih status Open Statement.';
+          if (holdCategoryMissing) return holdCategoryMissing;
           if (holdReasonMissing) return holdReasonMissing;
           return '';
         })();
@@ -525,7 +633,9 @@ export default function StoreClosingDetailPage() {
             <TaskHeader
               title="Store Closing"
               subtitle={shiftLabel(taskData?.shift)}
-              status={taskData?.status}
+              // A held closing reads "Ditahan" in the calm indigo tone, not amber "Pending".
+              status={isOnHold ? 'on_hold' : taskData?.status}
+              statusTone={isOnHold ? 'active' : undefined}
               saveIndicator={
                 !readonly && !loading && taskData ? (
                   <SaveIndicator status={saveStatus} lastSaved={lastSaved ?? null} />
@@ -543,16 +653,21 @@ export default function StoreClosingDetailPage() {
               {!readonly && !isOnHold && !loading && taskData && banner}
 
               {isOnHold && (
+                // Waiting on Ops / Finance / IT — nothing for the employee to fix, so the calm brand
+                // "info" tone, not the amber warning.
                 <Notice
-                  tone="warning"
-                  icon={Clock}
+                  tone="info"
+                  icon={PauseCircle}
                   title="Task sedang On Hold"
                   action={{ label: 'Lihat issue', onClick: () => router.push('/employee/issues') }}
                 >
                   Issue sudah dikirim otomatis ke Ops, Finance, dan IT. Task akan dibuka kembali
                   setelah issue terkait diselesaikan. Pantau statusnya lewat menu Issues.
+                  {taskData?.openStatementHoldCategory && (
+                    <p className="mt-1.5 font-semibold text-foreground">Kategori: {taskData.openStatementHoldCategory}</p>
+                  )}
                   {taskData?.openStatementHoldReason && (
-                    <p className="mt-1.5 italic">&ldquo;{taskData.openStatementHoldReason}&rdquo;</p>
+                    <p className="mt-1 italic">&ldquo;{taskData.openStatementHoldReason}&rdquo;</p>
                   )}
                 </Notice>
               )}
@@ -691,8 +806,9 @@ export default function StoreClosingDetailPage() {
                           icon={<Lock className="h-4 w-4" />}
                         />
                         {moneyOn && (
-                          // Required (amber "Wajib") when Indodana has a transaction; with none the row is
-                          // switched off and greyed. A photo already uploaded stays openable so it can be removed.
+                          // Required (red "Wajib", the usual required mark — amber is kept for warnings)
+                          // when Indodana has a transaction; with none the row is switched off and greyed.
+                          // A photo already uploaded stays openable so it can be removed.
                           <PhotoRow
                             title={INDODANA_PHOTO_LABEL}
                             hint={
@@ -708,7 +824,7 @@ export default function StoreClosingDetailPage() {
                             icon={<LayoutDashboard className="h-4 w-4" />}
                             badge={
                               indodanaRequired
-                                ? { label: 'Wajib', tone: 'warning', icon: AlertTriangle }
+                                ? { label: 'Wajib', tone: 'danger', icon: AlertTriangle }
                                 : { label: 'Tidak perlu', tone: 'neutral' }
                             }
                           />
@@ -722,6 +838,9 @@ export default function StoreClosingDetailPage() {
                         onChange={handleOpenStatementDecision}
                         holdReason={holdReason}
                         onHoldReasonChange={handleHoldReason}
+                        categories={holdCategories}
+                        holdCategoryId={holdCategoryId}
+                        onHoldCategoryChange={handleHoldCategory}
                         disabled={dis}
                       />
                     </Section>

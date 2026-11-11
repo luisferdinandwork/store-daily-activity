@@ -11,12 +11,15 @@ import {
   EMAIL_TEMPLATES,
   buttonLink,
   cleanDetailRows,
+  descriptionBlock,
   renderEmailTemplate,
 } from '@/lib/email/email-templates';
 
 export interface IssueEmailInput {
   title: string;
   body?: string;
+  /** The issue's full description (what the employee wrote); empty / omitted when unknown. */
+  description?: string | null;
   storeLabel: string | null;
   areaName: string | null;
   at: Date;
@@ -36,11 +39,13 @@ export function issueEmailVars(input: IssueEmailInput): Record<string, string> {
   return {
     title: input.title,
     body: input.body ?? '',
+    description: input.description?.trim() ?? '',
     store: input.storeLabel ?? '',
     area: input.areaName ?? '',
     time,
     link: input.link ?? '',
     appName: APP_NAME,
+    descriptionBlock: descriptionBlock(input.description ?? ''),
     detailsTable: cleanDetailRows(rows),
     openLink: input.link ? buttonLink(input.link, OPEN_LINK_LABEL) : '',
   };
@@ -50,6 +55,7 @@ export function issueEmailVars(input: IssueEmailInput): Record<string, string> {
 export function sampleIssueEmailVars(): Record<string, string> {
   const vars: Record<string, string> = {};
   for (const ph of EMAIL_TEMPLATES.issue_notification.placeholders) vars[ph.name] = ph.sample;
+  vars.descriptionBlock = descriptionBlock(vars.description);
   vars.detailsTable = cleanDetailRows(DETAILS_SAMPLE_ROWS);
   vars.openLink = buttonLink(vars.link, OPEN_LINK_LABEL);
   return vars;

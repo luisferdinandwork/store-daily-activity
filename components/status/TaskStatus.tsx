@@ -68,12 +68,12 @@ export function taskStatusTile(status: string | null | undefined, isPast = false
   return TONES[taskStatusTone(status, isPast)].soft;
 }
 
-/** Status chip on the dark employee app bar. */
-export function TaskStatusChip({ status }: { status?: string | null }) {
+/** Status chip on the dark employee app bar. `tone` overrides the status's own (e.g. a held Store Closing is calm, not "pending" amber). */
+export function TaskStatusChip({ status, tone }: { status?: string | null; tone?: Tone }) {
   if (!isTaskStatusKey(status)) return null;
   const info = TASK_STATUS[status];
   return (
-    <span className={cn('inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-px text-[10px] font-bold', TONES[taskStatusTone(status)].onDarkChip)}>
+    <span className={cn('inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-px text-[10px] font-bold', TONES[tone ?? taskStatusTone(status)].onDarkChip)}>
       <info.Icon className="h-2.5 w-2.5" />
       {info.label}
     </span>
