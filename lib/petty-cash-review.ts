@@ -66,6 +66,31 @@ export function reviewOutcome(review: string | null | undefined): ReviewOutcome 
   return isFinanceReview(review) ? review : 'none';
 }
 
+/**
+ * PIC 1 has sent the Refill of this period (or of a later one): from then on the employee page shows Finance's
+ * Diterima / Ditolak. `refillSentThrough` = the latest period the store has sent a Refill for, whatever OPS did with
+ * it since (latestRefilledMonth with includeRejected), so once shown a decision never disappears again.
+ */
+export const refillSentFor = (requestMonth: string, refillSentThrough: string | null | undefined): boolean =>
+  refillSentThrough != null && requestMonth <= refillSentThrough;
+
+/**
+ * Finance's decision as PIC 1 sees it (2026-11-13, by request): Diterima and Ditolak stay hidden — the request just
+ * reads Selesai — until the Refill of its period has been sent; Perlu Perbaikan always shows, because the request is
+ * back with PIC 1 to fix. Finance keeps seeing the real decision (and Pending Finance) everywhere.
+ */
+export function visibleReviewOutcome(
+  review: string | null | undefined,
+  requestMonth: string,
+  refillSentThrough: string | null | undefined,
+): ReviewOutcome {
+  const outcome = reviewOutcome(review);
+  if (outcome === 'accepted' || outcome === 'rejected') {
+    return refillSentFor(requestMonth, refillSentThrough) ? outcome : 'none';
+  }
+  return outcome;
+}
+
 /** Name of the "nobody at Finance has checked it yet" state, in Monitoring, Transactions and the request detail. */
 export const PENDING_FINANCE_LABEL = 'Pending Finance';
 

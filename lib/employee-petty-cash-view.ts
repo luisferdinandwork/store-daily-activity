@@ -21,43 +21,59 @@ export interface RequestViewRow {
   createdAt: string;
   /** The petty cash period it belongs to (YYYY-MM). */
   month: string;
-  /** Finance's decision (Perlu Perbaikan / Ditolak / Diterima). */
+  /** Finance's decision (Perlu Perbaikan / Ditolak / Diterima) — Diterima / Ditolak only once `refillSent`. */
   reviewOutcome: ReviewOutcome;
   financeComment: string | null;
   isReRequest: boolean;
+  /** PIC 1 has sent the Refill of the request's period: from then on Finance's result shows (else it reads Disetujui OPS). */
+  refillSent: boolean;
 }
 
 /** The one state a request is in, in the words the employee sees. */
-export type RequestGroup = 'action' | 'pending_ops' | 'done' | 'needs_fix' | 'rejected';
+export type RequestGroup = 'action' | 'pending_ops' | 'approved' | 'pending' | 'done' | 'needs_fix' | 'rejected';
 
 export const GROUP_LABEL: Record<RequestGroup, string> = {
   action: 'Perlu tindakan',
   pending_ops: 'Menunggu OPS',
+  // No status at all (no pill, no colour): confirmed, and Finance's result waits for the Refill.
+  approved: '',
+  pending: 'Pending',
   done: 'Selesai',
   needs_fix: 'Perlu Perbaikan',
   rejected: 'Ditolak',
 };
 
 /**
- * Ditolak is Ditolak whoever said no (OPS or Finance). A finished request Finance left alone is Selesai, unless
- * its receipt is still missing — that is something PIC 1 has to do.
+ * The state pill follows the OPS flow (2026-11-13, by request): Menunggu OPS → Perlu tindakan (OPS approved: photo +
+ * amount) → then NO status at all (`approved`: no pill, no colour) once confirmed, until PIC 1 has sent the Refill of
+ * the request's period. From then on Finance's result shows: Pending (Finance has not decided yet) · Selesai
+ * (Diterima — the only way to "Selesai") · Ditolak. Perlu Perbaikan always shows (the request is back with PIC 1 to
+ * fix). Ditolak is Ditolak whoever said no (OPS or Finance). An old finished request without its receipt photo still
+ * asks for it.
  */
-export function requestGroup(tx: Pick<RequestViewRow, 'status' | 'imageUrl' | 'reviewOutcome'>): RequestGroup {
+export function requestGroup(
+  tx: Pick<RequestViewRow, 'status' | 'imageUrl' | 'reviewOutcome' | 'refillSent'>,
+): RequestGroup {
   if (tx.status === 'ops_rejected') return 'rejected';
   // Sent back by Finance: the same request, with PIC 1 to fix and send to OPS again.
   if (tx.status === 'draft') return 'needs_fix';
   if (tx.status === 'pending_ops') return 'pending_ops';
   if (tx.status === 'ops_approved') return 'action';
-  if (tx.reviewOutcome === 'rejected') return 'rejected';
   if (tx.reviewOutcome === 'needs_fix') return 'needs_fix';
-  return tx.imageUrl ? 'done' : 'action';
+  if (!tx.imageUrl) return 'action';
+  if (!tx.refillSent) return 'approved';
+  if (tx.reviewOutcome === 'rejected') return 'rejected';
+  if (tx.reviewOutcome === 'accepted') return 'done';
+  return 'pending';
 }
 
 /** What a filter chip shows: one group, every request, or the re-requests (a flag, across groups). */
 export type RequestFilter = 'all' | RequestGroup | 're_request';
 
-/** Chip order: what needs the employee comes first. */
-export const FILTER_ORDER: RequestFilter[] = ['all', 'needs_fix', 'action', 'pending_ops', 'done', 'rejected', 're_request'];
+/** Chip order: what needs the employee comes first. The no-status requests have no chip of their own (only "Semua"). */
+export const FILTER_ORDER: RequestFilter[] = [
+  'all', 'needs_fix', 'action', 'pending_ops', 'pending', 'done', 'rejected', 're_request',
+];
 
 export const FILTER_LABEL: Record<RequestFilter, string> = {
   all: 'Semua',
@@ -138,7 +154,7 @@ export function filterRequests<T extends RequestViewRow>(rows: T[], s: RequestLi
 }
 
 export function countByFilter(rows: RequestViewRow[]): Record<RequestFilter, number> {
-  const out = Object.fromEntries(FILTER_ORDER.map((f) => [f, 0])) as Record<RequestFilter, number>;
+  const out = Object.fromEntries([...FILTER_ORDER, 'approved'].map((f) => [f, 0])) as Record<RequestFilter, number>;
   for (const r of rows) {
     out.all += 1;
     out[requestGroup(r)] += 1;
@@ -148,7 +164,9 @@ export function countByFilter(rows: RequestViewRow[]): Record<RequestFilter, num
 }
 
 /** What to look at first: Perlu Perbaikan, then what PIC 1 has to do, then waiting, finished, Ditolak. */
-const ATTENTION: Record<RequestGroup, number> = { needs_fix: 0, action: 1, pending_ops: 2, done: 3, rejected: 4 };
+const ATTENTION: Record<RequestGroup, number> = {
+  needs_fix: 0, action: 1, pending_ops: 2, approved: 3, pending: 4, done: 5, rejected: 6,
+};
 
 const newestFirst = (a: RequestViewRow, b: RequestViewRow) =>
   new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() || b.id - a.id;

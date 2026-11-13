@@ -4,12 +4,13 @@
 // cash it used in a month and which bank account its PIC 1 gave for the
 // refill.
 //
-// The Report only lists what Monitoring has finished (isStoreMonthComplete):
-// nothing waiting on OPS, on PIC 1's actual amount or being fixed after Perlu
-// Perbaikan, nothing Pending Finance — and PIC 1 has asked for the refill that
-// settles the month. Here Finance VERIFIES that refill (the only place it can).
-// Everything else is still being worked on in Monitoring, so it is left out
-// here and only counted (`incompleteCount`).
+// Only store-months whose refill PIC 1 has sent are listed (a refill request
+// for the month that OPS did not turn down) — without one nothing shows. A
+// listed month is finished (isStoreMonthComplete) once nothing waits on OPS, on
+// PIC 1's actual amount or a fix after Perlu Perbaikan and nothing is Pending
+// Finance; only then can Finance VERIFY its refill here (the only place it
+// can). An unfinished one is still listed (`complete: false`, with what is
+// still `open`) — the page draws it in light red.
 // Stores that are still getting ready to open have no petty cash and are
 // never listed.
 
@@ -66,9 +67,6 @@ export async function getPettyCashReport(month: string): Promise<PettyCashReport
       storeId: pettyCashTransactions.storeId,
       total: sql<string>`COALESCE(SUM(COALESCE(${pettyCashTransactions.actualAmount}, ${pettyCashTransactions.amount})) FILTER (WHERE ${accepted}), 0)`,
       count: sql<number>`COUNT(*) FILTER (WHERE ${accepted})::int`,
-      // The re-requests inside that total.
-      reTotal: sql<string>`COALESCE(SUM(COALESCE(${pettyCashTransactions.actualAmount}, ${pettyCashTransactions.amount})) FILTER (WHERE ${accepted} AND ${pettyCashTransactions.isReRequest}), 0)`,
-      reCount: sql<number>`COUNT(*) FILTER (WHERE ${accepted} AND ${pettyCashTransactions.isReRequest})::int`,
       anyCount: sql<number>`COUNT(*)::int`,
       pendingOps: sql<number>`COUNT(*) FILTER (WHERE ${pettyCashTransactions.status} = 'pending_ops')::int`,
       awaitingActual: sql<number>`COUNT(*) FILTER (WHERE ${pettyCashTransactions.status} = 'ops_approved')::int`,
@@ -157,11 +155,9 @@ export async function getPettyCashReport(month: string): Promise<PettyCashReport
       pendingFinanceCount: used?.pendingFinance ?? 0,
       refillAsked: request != null,
     });
-    if (!complete) {
-      // Something happened this month but Monitoring is not done with it — count it, don't list it.
-      if ((used?.anyCount ?? 0) > 0 || askedByStore.has(store.id)) incompleteCount += 1;
-      continue;
-    }
+    // No refill sent for the month yet: not listed at all (2026-11-13, by request).
+    if (request == null) continue;
+    if (!complete) incompleteCount += 1;
 
     // The account on the request being paid beats the store's latest one.
     const bank = request?.accountNumber ? request : bankByStore.get(store.id);
@@ -193,8 +189,14 @@ export async function getPettyCashReport(month: string): Promise<PettyCashReport
 
       totalUsed: Math.round(Number(used?.total ?? 0)),
       txCount: used?.count ?? 0,
-      reRequestCount: used?.reCount ?? 0,
-      reRequestAmount: Math.round(Number(used?.reTotal ?? 0)),
+
+      complete,
+      open: {
+        pendingOps: used?.pendingOps ?? 0,
+        awaitingActual: used?.awaitingActual ?? 0,
+        fixing: used?.fixing ?? 0,
+        pendingFinance: used?.pendingFinance ?? 0,
+      },
 
       pic1Name: bankByStore.get(store.id)?.requesterName ?? pic1ByStore.get(store.id)?.join(', ') ?? null,
       bankName: bank?.bankName ?? null,

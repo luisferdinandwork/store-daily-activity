@@ -38,7 +38,7 @@ import {
   type PettyCashCategoryOption,
 } from '@/lib/petty-cash-categories';
 import { RE_REQUEST_LABEL, fmtRequestDate } from '@/lib/petty-cash-re-request';
-import { addMonths, periodLabel, periodMonthName, periodRangeLabel, type DeadlineStatus } from '@/lib/petty-cash-period';
+import { addMonths, dayLabel, periodLabel, periodMonthName, periodRangeLabel, type DeadlineStatus } from '@/lib/petty-cash-period';
 import { jakartaYearMonth } from '@/lib/day-bucket';
 import {
   DEFAULT_LIST_STATE,
@@ -93,9 +93,11 @@ type TxRow = {
   createdAt: string;
   /** The petty cash period it belongs to (YYYY-MM) — the list covers every period. */
   month: string;
-  /** Finance's decision on it (Perlu Perbaikan / Ditolak / Diterima). */
+  /** Finance's decision on it (Perlu Perbaikan / Ditolak / Diterima) — Diterima / Ditolak only once `refillSent`. */
   reviewOutcome: ReviewOutcome;
   financeComment: string | null;
+  /** The Refill of its period has been sent — from then on the pill shows Finance's result, before that Disetujui OPS. */
+  refillSent: boolean;
   /** A Perlu Perbaikan request filed again, and the day PIC 1 gave as the day it was made (YYYY-MM-DD). */
   isReRequest: boolean;
   requestDate: string | null;
@@ -117,6 +119,11 @@ type PageData = {
    * (`month`). Nothing is blocked.
    */
   closedPeriod?: { month: string; refillState: string } | null;
+  /**
+   * A period that has ended (the 16th passed) and still has no Refill: PIC 1 must send it before filing any new
+   * request (the form is replaced by a reminder). Null when nothing is owed.
+   */
+  refillRequired?: string | null;
   /**
    * The Refill of the period before the one in use that has not been received yet. `balance` already leaves it
    * out — it only turns up in the balance once PIC 1 has uploaded the proof photos. `requested` = it was asked for.
@@ -206,11 +213,11 @@ function closedPeriodText(closed: { month: string; refillState: string }, usageM
   const usageName = periodLabel(usageMonth);
 
   if (closed.refillState === 'none') {
-    return `Refill ${closedName} belum diajukan — ajukan di tab Refill (ditandai Terlambat). Periode berganti otomatis tanggal 16 (atau begitu Refill-nya dikirim); request baru dihitung di periode ${usageName}.`;
+    return `Refill ${closedName} belum diajukan (Terlambat). PIC 1 harus mengirimnya dulu di tab Refill — sebelum itu request baru tidak bisa dibuat. Setelahnya request dihitung di periode ${usageName}.`;
   }
 
   if (closed.refillState === 'rejected') {
-    return `Refill ${closedName} ditolak OPS — ajukan Refill lagi di tab Refill. Request baru masuk ke periode ${usageName}.`;
+    return `Refill ${closedName} ditolak OPS — PIC 1 harus mengajukannya lagi di tab Refill sebelum bisa membuat request baru. Request baru masuk ke periode ${usageName}.`;
   }
 
   const where =
@@ -241,7 +248,9 @@ function needsReceipt(tx: TxRow) {
 }
 
 // One consistent status language across the whole page:
-//   sky     = waiting on someone else to act
+//   sky     = waiting on OPS
+//   (none)  = confirmed, before the Refill is sent: no pill and no colour — Finance's result shows once it is sent
+//   amber   = Pending: the Refill is sent, Finance has not decided yet
 //   indigo  = action needed from you now
 //   orange  = Perlu Perbaikan (file it again as a Re-request)
 //   emerald = done / approved
@@ -252,6 +261,8 @@ function needsReceipt(tx: TxRow) {
 const GROUP_DOT: Record<RequestGroup, string> = {
   action: 'bg-indigo-500',
   pending_ops: 'bg-sky-500',
+  approved: 'bg-transparent',
+  pending: 'bg-amber-500',
   done: 'bg-emerald-500',
   needs_fix: 'bg-orange-500',
   rejected: 'bg-rose-500',
@@ -260,6 +271,8 @@ const GROUP_DOT: Record<RequestGroup, string> = {
 const GROUP_PILL: Record<RequestGroup, string> = {
   action: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
   pending_ops: 'bg-sky-50 text-sky-700 ring-sky-200',
+  approved: '',
+  pending: 'bg-amber-50 text-amber-800 ring-amber-200',
   done: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
   needs_fix: 'bg-orange-50 text-orange-700 ring-orange-200',
   rejected: 'bg-rose-50 text-rose-700 ring-rose-200',
@@ -1071,6 +1084,8 @@ function ConfirmAmountAction({
 }) {
   const [amount, setAmount] = useState(() => String(Math.round(Number(tx.amount))));
   const amountNum = Number(amount.replace(/[^0-9]/g, ''));
+  // The receipt photo has to be in before the amount can be confirmed and cut (the server refuses too).
+  const hasPhoto = Boolean(tx.imageUrl);
 
   return (
     <div className="rounded-xl bg-indigo-50 px-3 py-3 ring-1 ring-indigo-200">
@@ -1080,42 +1095,9 @@ function ConfirmAmountAction({
       </p>
       <p className="mt-1 text-[11px] font-medium text-indigo-800">Diminta {idr(tx.amount)}</p>
 
+      {/* 1 — the receipt photo comes first: nothing is confirmed (or cut from the balance) without it. */}
       <div className="mt-3">
-        <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">
-          Jumlah terpakai (Rp)
-        </label>
-        <div className="relative">
-          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm font-bold text-muted-foreground">
-            Rp
-          </span>
-          <input
-            type="text"
-            inputMode="numeric"
-            value={amountNum ? amountNum.toLocaleString('id-ID') : ''}
-            onChange={(e) => setAmount(e.target.value.replace(/[^0-9]/g, ''))}
-            placeholder="0"
-            className="h-11 w-full rounded-xl border border-border bg-background pl-10 pr-4 text-right text-base font-bold tabular-nums text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-          />
-        </div>
-      </div>
-
-      <button
-        type="button"
-        onClick={() => onConfirm(tx, amountNum)}
-        disabled={confirming || !amountNum}
-        className={cn(
-          'mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-xl text-xs font-bold transition active:scale-[0.99] disabled:opacity-60',
-          confirming || !amountNum ? 'bg-secondary text-muted-foreground' : 'bg-indigo-600 text-white',
-        )}
-      >
-        {confirming ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Banknote className="h-3.5 w-3.5" />}
-        Konfirmasi & Potong {amountNum ? idr(amountNum) : ''}
-      </button>
-
-      <div className="mt-3 border-t border-indigo-200 pt-3">
-        <p className="mb-1.5 text-[11px] font-semibold text-muted-foreground">
-          Foto struk
-        </p>
+        <p className="mb-1.5 text-xs font-semibold text-muted-foreground">1 · Foto struk (wajib)</p>
         {tx.imageUrl ? (
           <div className="flex items-center gap-3">
             <button
@@ -1135,6 +1117,40 @@ function ConfirmAmountAction({
           <ReceiptCapture uploading={uploading} onConfirm={(file) => onUploadReceipt(tx, file)} />
         )}
       </div>
+
+      {/* 2 — what was really spent, cut from the balance: only once the receipt photo is in. */}
+      <div className={cn('mt-3 border-t border-indigo-200 pt-3', !hasPhoto && 'opacity-60')}>
+        <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">
+          2 · Jumlah terpakai (Rp)
+        </label>
+        <div className="relative">
+          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm font-bold text-muted-foreground">
+            Rp
+          </span>
+          <input
+            type="text"
+            inputMode="numeric"
+            value={amountNum ? amountNum.toLocaleString('id-ID') : ''}
+            onChange={(e) => setAmount(e.target.value.replace(/[^0-9]/g, ''))}
+            disabled={!hasPhoto}
+            placeholder="0"
+            className="h-11 w-full rounded-xl border border-border bg-background pl-10 pr-4 text-right text-base font-bold tabular-nums text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 disabled:cursor-not-allowed"
+          />
+        </div>
+
+        <button
+          type="button"
+          onClick={() => onConfirm(tx, amountNum)}
+          disabled={confirming || !amountNum || !hasPhoto}
+          className={cn(
+            'mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-xl text-xs font-bold transition active:scale-[0.99] disabled:opacity-60',
+            confirming || !amountNum || !hasPhoto ? 'bg-secondary text-muted-foreground' : 'bg-indigo-600 text-white',
+          )}
+        >
+          {confirming ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Banknote className="h-3.5 w-3.5" />}
+          {hasPhoto ? `Konfirmasi & Potong ${amountNum ? idr(amountNum) : ''}` : 'Unggah foto struk dulu'}
+        </button>
+      </div>
     </div>
   );
 }
@@ -1153,65 +1169,47 @@ function FinanceReviewNote({
   onFix: (txId: number) => void;
 }) {
   const outcome = tx.reviewOutcome;
-  if (outcome === 'none') return null;
+  // Diterima / Ditolak are only the state pill (Selesai / Ditolak) — no box under the request (2026-11-13, by
+  // request). Perlu Perbaikan keeps its box: Finance's comment says what to fix, and the button sends it.
+  if (outcome !== 'needs_fix') return null;
 
   const comment = tx.financeComment;
 
-  if (outcome === 'accepted') {
-    return (
-      <p className="rounded-xl bg-emerald-50 px-3 py-2 text-[11px] font-medium text-emerald-800 ring-1 ring-emerald-200">
-        Diterima Finance
-      </p>
-    );
-  }
-
-  if (outcome === 'needs_fix') {
-    return (
-      <div className="rounded-xl bg-orange-50 px-3 py-2.5 ring-1 ring-orange-200">
-        <p className="text-[11px] font-bold text-orange-700">Perlu Perbaikan</p>
-        {comment && (
-          <p className="mt-1 whitespace-pre-wrap break-words text-[12px] text-orange-950">{comment}</p>
-        )}
-        {tx.reRequestedAs != null ? (
-          // Sent back before 2026-11-13, when a fix was filed as a separate new request.
-          <p className="mt-2 flex items-center gap-1.5 text-[11px] font-semibold text-violet-700">
-            <RotateCcw className="h-3 w-3" />
-            Sudah diajukan ulang ({RE_REQUEST_LABEL} #{tx.reRequestedAs})
-          </p>
-        ) : tx.status === 'draft' ? (
-          <>
-            <p className="mt-1.5 text-[11px] leading-relaxed text-orange-800">
-              Perbaiki request ini lalu kirim lagi ke OPS
-              {tx.fixTarget ? ` — dihitung di periode ${periodLabel(tx.fixTarget.month)}` : ''}.
-            </p>
-            {isHolder && tx.canFix && (
-              <button
-                type="button"
-                onClick={() => onFix(tx.id)}
-                className="mt-2.5 flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 text-xs font-bold text-white transition active:scale-[0.99]"
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-                Perbaiki &amp; kirim ke OPS
-              </button>
-            )}
-          </>
-        ) : tx.status === 'pending_ops' ? (
-          <p className="mt-2 flex items-center gap-1.5 text-[11px] font-semibold text-violet-700">
-            <RotateCcw className="h-3 w-3" />
-            Sudah diperbaiki — menunggu persetujuan OPS
-          </p>
-        ) : null}
-      </div>
-    );
-  }
-
-  // outcome === 'rejected' — Ditolak, final
   return (
-    <div className="rounded-xl bg-rose-50 px-3 py-2.5 ring-1 ring-rose-200">
-      <p className="text-[11px] font-bold text-rose-700">Ditolak</p>
+    <div className="rounded-xl bg-orange-50 px-3 py-2.5 ring-1 ring-orange-200">
+      <p className="text-[11px] font-bold text-orange-700">Perlu Perbaikan</p>
       {comment && (
-        <p className="mt-1 whitespace-pre-wrap break-words text-[12px] text-rose-900">{comment}</p>
+        <p className="mt-1 whitespace-pre-wrap break-words text-[12px] text-orange-950">{comment}</p>
       )}
+      {tx.reRequestedAs != null ? (
+        // Sent back before 2026-11-13, when a fix was filed as a separate new request.
+        <p className="mt-2 flex items-center gap-1.5 text-[11px] font-semibold text-violet-700">
+          <RotateCcw className="h-3 w-3" />
+          Sudah diajukan ulang ({RE_REQUEST_LABEL} #{tx.reRequestedAs})
+        </p>
+      ) : tx.status === 'draft' ? (
+        <>
+          <p className="mt-1.5 text-[11px] leading-relaxed text-orange-800">
+            Perbaiki request ini lalu kirim lagi ke OPS
+            {tx.fixTarget ? ` — dihitung di periode ${periodLabel(tx.fixTarget.month)}` : ''}.
+          </p>
+          {isHolder && tx.canFix && (
+            <button
+              type="button"
+              onClick={() => onFix(tx.id)}
+              className="mt-2.5 flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 text-xs font-bold text-white transition active:scale-[0.99]"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Perbaiki &amp; kirim ke OPS
+            </button>
+          )}
+        </>
+      ) : tx.status === 'pending_ops' ? (
+        <p className="mt-2 flex items-center gap-1.5 text-[11px] font-semibold text-violet-700">
+          <RotateCcw className="h-3 w-3" />
+          Sudah diperbaiki — menunggu persetujuan OPS
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -1646,9 +1644,11 @@ function RequestRow({
           </span>
           <span className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-muted-foreground">
             <span>{fmtDay(tx.createdAt)}</span>
-            <span className={cn('rounded-full px-1.5 py-px text-[10px] font-bold ring-1', GROUP_PILL[group])}>
-              {GROUP_LABEL[group]}
-            </span>
+            {GROUP_LABEL[group] && (
+              <span className={cn('rounded-full px-1.5 py-px text-[10px] font-bold ring-1', GROUP_PILL[group])}>
+                {GROUP_LABEL[group]}
+              </span>
+            )}
             {tx.isReRequest && <ReRequestBadge className="rounded-full" />}
           </span>
         </span>
@@ -2045,6 +2045,12 @@ export default function EmployeePettyCashPage() {
       const body = await res.json();
 
       if (!res.ok || !body.success) {
+        if (body.refillRequired) {
+          // The period ended meanwhile without its Refill: the form gives way to the "Kirim Refill dulu" card.
+          setActionError(body.error ?? 'Kirim Refill dulu.');
+          void load({ silent: true });
+          return;
+        }
         setFormError(body.error ?? 'Request gagal.');
         return;
       }
@@ -2209,6 +2215,17 @@ export default function EmployeePettyCashPage() {
     Boolean(refillRequest.financeVerifiedAt) &&
     !refillRequest.balanceAfter;
   const fixableCount = useMemo(() => transactions.filter((tx) => tx.canFix).length, [transactions]);
+  // The period in use was used and its Refill is due within 5 days (by the 15th): remind PIC 1 to send it before the
+  // period changes — once it has, new requests wait for the Refill.
+  const refillDueSoon =
+    refillOverview?.settle &&
+    refillOverview.settle.month === data?.month &&
+    refillOverview.canRequest &&
+    refillOverview.deadline?.applies &&
+    refillOverview.deadline.daysLeft >= 0 &&
+    refillOverview.deadline.daysLeft <= 5
+      ? { month: refillOverview.settle.month, deadline: refillOverview.deadline.deadline }
+      : null;
 
   return (
     <div className="mx-auto w-full max-w-md">
@@ -2348,7 +2365,7 @@ export default function EmployeePettyCashPage() {
                 onClick={() => showOnly('action')}
                 className="flex w-full items-center justify-between gap-3 rounded-xl bg-indigo-50 px-3.5 py-2.5 text-left text-xs font-semibold text-indigo-800 ring-1 ring-indigo-200 active:scale-[0.99]"
               >
-                <span>{allCounts.action} request menunggu tindakanmu (konfirmasi jumlah / unggah struk)</span>
+                <span>{allCounts.action} request menunggu tindakanmu (unggah foto struk, lalu konfirmasi jumlah)</span>
                 <span className="shrink-0 text-indigo-600">Lihat ›</span>
               </button>
             )}
@@ -2365,7 +2382,23 @@ export default function EmployeePettyCashPage() {
           </section>
         )}
 
-        {!loading && !loadError && tab === 'request' && data?.closedPeriod && (
+        {/* The Refill of the period in use is due soon: send it before the period changes on the 16th. */}
+        {!loading && !loadError && tab === 'request' && isHolder && !data?.refillRequired && refillDueSoon && (
+          <section className="px-4">
+            <Notice
+              tone="warning"
+              title={`Kirim Refill ${periodLabel(refillDueSoon.month)} paling lambat ${dayLabel(refillDueSoon.deadline)}`}
+            >
+              Kalau periode sudah berganti (tanggal 16) dan Refill-nya belum dikirim, request baru tidak bisa dibuat
+              sampai Refill dikirim.{' '}
+              <button type="button" onClick={() => setTab('refill')} className="font-semibold underline">
+                Buka tab Refill
+              </button>
+            </Notice>
+          </section>
+        )}
+
+        {!loading && !loadError && tab === 'request' && data?.closedPeriod && !(isHolder && data.refillRequired) && (
           <section className="px-4">
             <Notice tone="info" title={`Periode ${periodLabel(data.closedPeriod.month)} sudah ditutup`}>
               {closedPeriodText(data.closedPeriod, data.month)}
@@ -2373,7 +2406,29 @@ export default function EmployeePettyCashPage() {
           </section>
         )}
 
-        {!loading && !loadError && tab === 'request' && isHolder && (
+        {/* An ended period still without its Refill: no new request until PIC 1 sends it. */}
+        {!loading && !loadError && tab === 'request' && isHolder && data?.refillRequired && (
+          <section className="px-4">
+            <SectionLabel>Request petty cash baru</SectionLabel>
+            <div className="rounded-2xl bg-rose-50 px-4 py-3.5 ring-1 ring-rose-200">
+              <p className="text-sm font-bold text-rose-800">Kirim Refill {periodLabel(data.refillRequired)} dulu</p>
+              <p className="mt-1 text-xs leading-relaxed text-rose-900">
+                Periode {periodLabel(data.refillRequired)} sudah berakhir dan Refill-nya belum dikirim (Terlambat).
+                Request baru bisa dibuat lagi setelah Refill dikirim.
+              </p>
+              <button
+                type="button"
+                onClick={() => setTab('refill')}
+                className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-rose-600 text-sm font-bold text-white active:opacity-80"
+              >
+                <Banknote className="h-4 w-4" />
+                Kirim Refill sekarang
+              </button>
+            </div>
+          </section>
+        )}
+
+        {!loading && !loadError && tab === 'request' && isHolder && !data?.refillRequired && (
           <section className="px-4">
             <SectionLabel>Request petty cash baru</SectionLabel>
 

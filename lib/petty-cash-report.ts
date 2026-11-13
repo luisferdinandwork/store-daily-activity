@@ -69,10 +69,11 @@ export function pickRefillByStore<
 }
 
 /**
- * A store's month shows in the Report once Monitoring is done with it — Completed: no request waiting on OPS, on
- * PIC 1's actual amount or being fixed after Perlu Perbaikan, none Pending Finance (every completed one is Diterima
- * / Ditolak) — and PIC 1 has asked for the refill that settles it. The Report is then where Finance VERIFIES that
- * refill (the only place it can).
+ * A store's month is finished once Monitoring is done with it — Completed: no request waiting on OPS, on PIC 1's
+ * actual amount or being fixed after Perlu Perbaikan, none Pending Finance (every completed one is Diterima /
+ * Ditolak) — and PIC 1 has asked for the refill that settles it. Only then can Finance VERIFY that refill on the
+ * Report (the only place it can). The Report lists a month only once its refill was sent; an unfinished one is
+ * drawn in light red, saying how many requests are still open in Monitoring.
  */
 export function isStoreMonthComplete(s: {
   pendingOpsCount: number;
@@ -111,6 +112,35 @@ export interface ReportRefill {
   transferFrozen: boolean;
 }
 
+/** Requests of a store's month that Monitoring is not done with yet. */
+export interface ReportOpenRequests {
+  /** Waiting OPS. */
+  pendingOps: number;
+  /** OPS approved, PIC 1 has not confirmed the amount spent yet. */
+  awaitingActual: number;
+  /** Sent back by Finance (Perlu Perbaikan), PIC 1 is fixing it. */
+  fixing: number;
+  /** Completed, nobody at Finance has decided on it yet. */
+  pendingFinance: number;
+}
+
+/** How many requests are still open (the number the Report shows on an unfinished row). */
+export const openRequestCount = (o: ReportOpenRequests): number =>
+  o.pendingOps + o.awaitingActual + o.fixing + o.pendingFinance;
+
+/** "2 Pending Finance · 1 Waiting OPS" — what an unfinished row is waiting on. */
+export function openRequestsText(o: ReportOpenRequests): string {
+  return [
+    [o.pendingFinance, 'Pending Finance'],
+    [o.pendingOps, 'Waiting OPS'],
+    [o.awaitingActual, 'Awaiting actual amount'],
+    [o.fixing, 'Perlu Perbaikan (sedang diperbaiki PIC 1)'],
+  ]
+    .filter(([n]) => (n as number) > 0)
+    .map(([n, label]) => `${n} ${label}`)
+    .join(' · ');
+}
+
 /** One store's line in the report: what it used, and where to send the refill. */
 export interface PettyCashReportRow {
   storeId: number;
@@ -127,9 +157,11 @@ export interface PettyCashReportRow {
   /** The month's requests Finance accepted (Diterima), actual amount, integer Rupiah. */
   totalUsed: number;
   txCount: number;
-  /** Of that spend, the re-requests (Ditolak requests filed again — lib/petty-cash-re-request.ts): how many and how much. */
-  reRequestCount: number;
-  reRequestAmount: number;
+
+  /** Monitoring is done with the month and its refill was asked for (isStoreMonthComplete) — only then can Finance verify it. */
+  complete: boolean;
+  /** What is still open in Monitoring (all zero once nothing is). */
+  open: ReportOpenRequests;
 
   pic1Name: string | null;
   /** Null until PIC 1 has filed a refill request with bank details. */
@@ -137,16 +169,27 @@ export interface PettyCashReportRow {
   accountNumber: string | null;
   accountHolderName: string | null;
 
-  /** The refill that settles this month — always verified or received (a month without one is not listed). */
+  /** The refill that settles this month (any state but turned down by OPS) — a month without one is not listed. */
   refill: ReportRefill | null;
 }
 
-/** What the Report API answers: the finished store-months, and how many are still open in Monitoring. */
+/** What the Report API answers: every store-month whose refill was sent, and how many of them are unfinished. */
 export interface PettyCashReport {
   rows: PettyCashReportRow[];
-  /** Stores with activity this month that Monitoring has not finished yet (so they are not in `rows`). */
+  /** Rows Monitoring has not finished yet (`complete: false`). */
   incompleteCount: number;
 }
+
+/** What an unfinished row says in its Refill column (null once finished): how many requests Monitoring still has to process. */
+export function unfinishedNote(row: Pick<PettyCashReportRow, 'complete' | 'open'>): string | null {
+  if (row.complete) return null;
+  const n = openRequestCount(row.open);
+  return n > 0 ? `${n} request belum diproses di Monitoring` : 'Belum selesai di Monitoring';
+}
+
+/** Finance can verify this row's refill now: the month is finished and OPS approved the refill. */
+export const needsVerify = (row: PettyCashReportRow): boolean =>
+  row.complete && row.refill?.state === 'awaiting_finance';
 
 /** FF001 → "FF", OD002 → "OD", DUMMY-001 → "DUMMY". */
 export function storeCodeOf(storeNo: string): string {
@@ -188,7 +231,7 @@ export interface StoreCodeGroup {
   totalUsed: number;
   /** Stores whose PIC 1 has filed bank details. */
   withBankCount: number;
-  /** Stores with an OPS-approved refill Finance hasn't verified yet. */
+  /** Finished stores with an OPS-approved refill Finance hasn't verified yet. */
   awaitingVerifyCount: number;
 }
 
@@ -228,7 +271,7 @@ export function groupByStoreCode(rows: PettyCashReportRow[]): StoreCodeGroup[] {
         storeCount: sorted.length,
         totalUsed: sorted.reduce((sum, r) => sum + r.totalUsed, 0),
         withBankCount: sorted.filter(hasBankDetails).length,
-        awaitingVerifyCount: sorted.filter((r) => r.refill?.state === 'awaiting_finance').length,
+        awaitingVerifyCount: sorted.filter(needsVerify).length,
       };
     });
 }

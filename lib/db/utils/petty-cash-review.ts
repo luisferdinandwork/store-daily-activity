@@ -32,11 +32,11 @@ import {
   userRoles,
   users,
 } from '@/lib/db/schema';
-import { isLockedByVerification, leavesOutOfTransfer, validateFinanceComment } from '@/lib/petty-cash-review';
+import { isLockedByVerification, leavesOutOfTransfer, refillSentFor, validateFinanceComment } from '@/lib/petty-cash-review';
 import { RE_REQUEST_LABEL } from '@/lib/petty-cash-re-request';
 import { addMonths, laterMonth, periodLabel } from '@/lib/petty-cash-period';
 import { createNotificationsForUsers } from './notifications';
-import { adjustPeriodBalance, ensureUpcomingPeriod, getActivePeriod } from './petty-cash-period';
+import { adjustPeriodBalance, ensureUpcomingPeriod, getActivePeriod, latestRefilledMonth } from './petty-cash-period';
 
 export type ReviewResult =
   | { success: true; /** Perlu Perbaikan: the period the draft is counted in now (YYYY-MM). */ periodMonth?: string }
@@ -151,6 +151,11 @@ async function fixPeriodFor(tx: TxRow): Promise<{ periodId: number; yearMonth: s
   return { periodId: period.id, yearMonth: period.yearMonth };
 }
 
+/** PIC 1 has sent the Refill of this request's period (or a later one) — only then does a Ditolak reach them. */
+async function refillSentForTx(tx: TxRow): Promise<boolean> {
+  return refillSentFor(tx.yearMonth, await latestRefilledMonth(tx.storeId, db, { includeRejected: true }));
+}
+
 export async function financeRejectTransaction(input: {
   txId: number;
   actorId: string;
@@ -226,6 +231,10 @@ export async function financeRejectTransaction(input: {
   });
   if (!updated) return { success: false, error: 'Gagal menyimpan keputusan. Muat ulang lalu coba lagi.', status: 409 };
 
+  // Ditolak reaches PIC 1 only once the period's Refill has been sent (visibleReviewOutcome) — before that, no
+  // message either. Perlu Perbaikan always does: the request is back with PIC 1 to fix.
+  if (!target && !(await refillSentForTx(tx))) return { success: true };
+
   const reason = comment.comment ? ` Alasan: ${comment.comment}` : '';
   await createNotificationsForUsers([tx.userId], {
     type: 'petty_cash_tx_rejected',
@@ -297,6 +306,8 @@ export async function financeAcceptTransaction(input: { txId: number; actorId: s
   if (!updated) return { success: false, error: 'Gagal memproses. Muat ulang lalu coba lagi.', status: 409 };
 
   if (!takingBack) return { success: true };
+  // A Ditolak PIC 1 never saw (its Refill not sent yet) is taken back silently.
+  if (previous === 'rejected' && !(await refillSentForTx(tx))) return { success: true };
 
   await createNotificationsForUsers([tx.userId], {
     type: 'petty_cash_tx_accepted',

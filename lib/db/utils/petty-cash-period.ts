@@ -121,11 +121,20 @@ export async function getActivePeriod(
  * The last period (YYYY-MM) of the store that already has its Refill: a refill request in any state but turned
  * down by OPS, or a month-end refill of the old flow. Sending that Refill ended the period; null = none yet.
  */
-export async function latestRefilledMonth(storeId: number, exec: DbExecutor = db): Promise<string | null> {
+export async function latestRefilledMonth(
+  storeId: number,
+  exec: DbExecutor = db,
+  /** Count a Refill OPS turned down too — "PIC 1 has sent it" (what the employee page uses to show Finance's decisions). */
+  opts: { includeRejected?: boolean } = {},
+): Promise<string | null> {
   const [requested] = await exec
     .select({ month: sql<string | null>`MAX(${pettyCashRefillRequests.yearMonth})` })
     .from(pettyCashRefillRequests)
-    .where(and(eq(pettyCashRefillRequests.storeId, storeId), ne(pettyCashRefillRequests.status, 'rejected')));
+    .where(
+      opts.includeRejected
+        ? eq(pettyCashRefillRequests.storeId, storeId)
+        : and(eq(pettyCashRefillRequests.storeId, storeId), ne(pettyCashRefillRequests.status, 'rejected')),
+    );
   const [legacy] = await exec
     .select({ month: sql<string | null>`MAX(${pettyCashRefills.yearMonth})` })
     .from(pettyCashRefills)

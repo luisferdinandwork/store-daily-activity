@@ -10,8 +10,8 @@ import { getPettyCashReport } from '@/lib/db/utils/petty-cash-report';
 import { currentYearMonthJakarta } from '@/lib/db/utils/petty-cash-refill';
 import type { PettyCashReportRow } from '@/lib/petty-cash-report';
 
-// Only store-months Monitoring has finished (see lib/petty-cash-report.ts → isStoreMonthComplete); `incompleteCount`
-// says how many more are still open there.
+// Every store-month whose refill PIC 1 has sent; `complete: false` rows are not finished in Monitoring yet (see
+// lib/petty-cash-report.ts → isStoreMonthComplete) and can't be verified yet; `incompleteCount` counts them.
 export type PettyCashReportResponse =
   | { success: true; month: string; data: PettyCashReportRow[]; incompleteCount: number }
   | { success: false; error: string };

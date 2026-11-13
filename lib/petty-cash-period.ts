@@ -113,6 +113,18 @@ export function refillNotYetOpen(settleMonth: string, today: string): string | n
   return isDayKey(today) && settleMonth > usagePeriodFor(today) ? periodWindow(settleMonth).from : null;
 }
 
+/**
+ * PIC 1 must send the Refill of a period that has ENDED before filing any new request (2026-11-13, by request): the
+ * calendar still changes the period on the 16th, but from then on the store can't file requests in the new period
+ * until the ended one's Refill has been sent (it is marked Terlambat). `settleMonth` = what a Refill sent now would
+ * cover (null while another one is on its way — then nothing is blocked, the store can't send one anyway),
+ * `usageMonth` = the period in use. Returns the month whose Refill has to be sent first, or null. Periods before the
+ * deadline rule are never asked for.
+ */
+export function refillRequiredFirst(settleMonth: string | null | undefined, usageMonth: string): string | null {
+  return settleMonth && settleMonth < usageMonth && settleMonth >= REFILL_DEADLINE_FIRST_PERIOD ? settleMonth : null;
+}
+
 /** "2026-11-16" → "16 Nov 2026". */
 export function dayLabel(dayKey: string): string {
   if (!isDayKey(dayKey)) return dayKey;
@@ -232,8 +244,9 @@ function daysBetween(fromKey: string, toKey: string): number {
  * The receipt photo of a request can be changed only until the request is finished (Selesai). Once it is
  * completed the photo is a record Finance may be looking at, so it is locked — the only way to put another
  * photo in is a Re-request. Two exceptions that are not "changing" it: an OPS-approved request (not finished
- * yet) can swap it freely, and a finished request that never got a photo can still have its first one added
- * (unless Finance already turned it down — then there is nothing left to upload).
+ * yet) can swap it freely, and a finished request that never got a photo can still have its first one added —
+ * Ditolak included, since PIC 1 may not see that decision yet (it shows only once the period's Refill is sent);
+ * an old Perlu Perbaikan row that was filed again as a separate request has nothing left to upload.
  */
 export function receiptPhotoAction(tx: {
   status: string;
@@ -242,6 +255,6 @@ export function receiptPhotoAction(tx: {
 }): 'replace' | 'add' | 'locked' | 'none' {
   if (tx.status === 'ops_approved') return tx.hasPhoto ? 'replace' : 'add';
   if (tx.status !== 'completed') return 'none';
-  if (tx.financeReview === 'needs_fix' || tx.financeReview === 'rejected') return tx.hasPhoto ? 'locked' : 'none';
+  if (tx.financeReview === 'needs_fix') return tx.hasPhoto ? 'locked' : 'none';
   return tx.hasPhoto ? 'locked' : 'add';
 }

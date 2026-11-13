@@ -29,12 +29,14 @@ import {
   receiptPhotoAction,
   refillDeadline,
   refillNotYetOpen,
+  refillRequiredFirst,
   reRequestPeriodMonth,
   uncoveredUsage,
   usagePeriodFor,
   type RefillCandidate,
 } from '../lib/petty-cash-period';
-import { isLockedByVerification } from '../lib/petty-cash-review';
+import { isLockedByVerification, visibleReviewOutcome } from '../lib/petty-cash-review';
+import { requestGroup } from '../lib/employee-petty-cash-view';
 
 let checks = 0;
 const ok = (name: string, fn: () => void) => {
@@ -188,11 +190,11 @@ ok('Selesai with a photo is locked — whatever Finance decided', () => {
   assert.equal(photo('completed', true, 'needs_fix'), 'locked');
   assert.equal(photo('completed', true, 'rejected'), 'locked');
 });
-ok('Selesai without a photo can still get its first one — unless Finance turned it down', () => {
+ok('Selesai without a photo can still get its first one — Ditolak too (PIC 1 may not see it yet)', () => {
   assert.equal(photo('completed', false), 'add');
   assert.equal(photo('completed', false, 'accepted'), 'add');
+  assert.equal(photo('completed', false, 'rejected'), 'add');
   assert.equal(photo('completed', false, 'needs_fix'), 'none');
-  assert.equal(photo('completed', false, 'rejected'), 'none');
 });
 
 console.log('Finance lock follows the period');
@@ -220,6 +222,51 @@ ok('a period that starts on the 16th can not be refilled before it (no running 2
 ok('the day is written the Indonesian way', () => {
   assert.equal(dayLabel('2026-11-16'), '16 Nov 2026');
   assert.equal(dayLabel('2026-12-16'), '16 Des 2026');
+});
+
+console.log('The Refill of an ended period comes before any new request');
+ok('a period that ended without its Refill blocks new requests until it is sent', () => {
+  // 20 Nov: December in use, November used and never asked for
+  assert.equal(refillRequiredFirst('2026-11', '2026-12'), '2026-11');
+});
+ok('the period in use itself never blocks (its Refill is simply due by the 15th)', () => {
+  assert.equal(refillRequiredFirst('2026-12', '2026-12'), null);
+});
+ok('nothing to send (or a Refill already on its way) blocks nothing', () => {
+  assert.equal(refillRequiredFirst(null, '2026-12'), null);
+  assert.equal(refillRequiredFirst(undefined, '2026-12'), null);
+});
+ok('periods before the deadline rule are never asked for', () => {
+  assert.equal(refillRequiredFirst('2026-10', '2026-11'), null);
+});
+
+console.log('What PIC 1 sees of Finance\'s decision');
+ok('Diterima / Ditolak stay hidden until the Refill of the request\'s period has been sent', () => {
+  assert.equal(visibleReviewOutcome('rejected', '2026-12', null), 'none');
+  assert.equal(visibleReviewOutcome('accepted', '2026-12', null), 'none');
+  assert.equal(visibleReviewOutcome('rejected', '2026-12', '2026-11'), 'none');
+  assert.equal(visibleReviewOutcome('rejected', '2026-12', '2026-12'), 'rejected');
+  assert.equal(visibleReviewOutcome('accepted', '2026-11', '2026-12'), 'accepted');
+});
+ok('Perlu Perbaikan always shows (the request is back with PIC 1), no decision shows nothing', () => {
+  assert.equal(visibleReviewOutcome('needs_fix', '2026-12', null), 'needs_fix');
+  assert.equal(visibleReviewOutcome(null, '2026-12', '2026-12'), 'none');
+});
+
+console.log('The state pill on the employee list');
+const pill = (status: string, review: 'none' | 'accepted' | 'rejected' | 'needs_fix', refillSent: boolean, imageUrl: string | null = 'x') =>
+  requestGroup({ status, reviewOutcome: review, refillSent, imageUrl });
+ok('the OPS flow: Menunggu OPS → Perlu tindakan → no status at all (never Selesai before the Refill)', () => {
+  assert.equal(pill('pending_ops', 'none', false), 'pending_ops');
+  assert.equal(pill('ops_approved', 'none', false, null), 'action');
+  assert.equal(pill('completed', 'none', false), 'approved');
+  assert.equal(pill('ops_rejected', 'none', false), 'rejected');
+});
+ok('after the Refill: Pending, Selesai only when Diterima, Ditolak; Perlu Perbaikan always', () => {
+  assert.equal(pill('completed', 'none', true), 'pending');
+  assert.equal(pill('completed', 'accepted', true), 'done');
+  assert.equal(pill('completed', 'rejected', true), 'rejected');
+  assert.equal(pill('draft', 'needs_fix', false), 'needs_fix');
 });
 
 console.log(`\n${checks} checks passed`);

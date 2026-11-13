@@ -10,10 +10,11 @@ import PanelPageHeader from '@/components/shared/PanelPageHeader';
 // bank account its PIC 1 gave for it (filled in on the refill request — see
 // RefillBankForm on the employee page).
 //
-// Only stores Monitoring has finished are listed (lib/petty-cash-report.ts →
-// isStoreMonthComplete): no request waiting on OPS, on PIC 1 or Pending Finance
-// — and PIC 1 has asked for the month's refill. The rest are only counted
-// ("Belum selesai di Monitoring").
+// Only store-months whose refill PIC 1 has sent are listed. One Monitoring has
+// not finished (lib/petty-cash-report.ts → isStoreMonthComplete: a request
+// still waiting on OPS, on PIC 1 or Pending Finance) is drawn in light red, its
+// Refill column saying how many requests are still open in Monitoring — its
+// refill can't be verified until that is done.
 //
 //   • "All Stores"      — a single flat sheet.
 //   • "By Store Code"   — subtotal per store code (FF / FS / FO / ODD / SS …),
@@ -38,7 +39,6 @@ import {
   FileSpreadsheet,
   Loader2,
   RefreshCw,
-  RotateCcw,
   Search,
   ShieldCheck,
   Undo2,
@@ -52,7 +52,10 @@ import {
   REFILL_STATE_LABEL,
   groupByStoreCode,
   hasBankDetails,
+  needsVerify,
+  openRequestsText,
   reportMonthLabel,
+  unfinishedNote,
   type PettyCashReportRow,
   type RefillState,
   type StoreCodeGroup,
@@ -81,8 +84,6 @@ const REFILL_CHIP: Record<RefillState, string> = {
   received: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
   rejected: 'bg-rose-50 text-rose-700 ring-rose-200',
 };
-
-const needsVerify = (r: PettyCashReportRow) => r.refill?.state === 'awaiting_finance';
 
 const fmtWhen = (iso: string | null) =>
   iso
@@ -145,6 +146,33 @@ function RefillCell({
   onUndo: () => void;
 }) {
   const refill = row.refill;
+  const note = unfinishedNote(row);
+  if (note) {
+    // Not finished in Monitoring: the refill (if asked) can't be verified yet — say what is left there.
+    const detail = openRequestsText(row.open);
+    return (
+      <span className="flex flex-col items-start gap-1">
+        {refill && (
+          <span
+            className={cn(
+              'inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-semibold ring-1 ring-inset',
+              REFILL_CHIP[refill.state],
+            )}
+          >
+            {REFILL_STATE_LABEL[refill.state]}
+          </span>
+        )}
+        <Link
+          href="/finance/petty-cash"
+          title={detail ? `${detail} — selesaikan di Monitoring` : undefined}
+          className="inline-flex items-center gap-1 text-[11px] font-semibold text-rose-700 hover:underline"
+        >
+          <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden />
+          {note}
+        </Link>
+      </span>
+    );
+  }
   if (!refill) return <span className="text-slate-300">–</span>;
 
   const verifiedNote = refill.verifiedAt
@@ -219,9 +247,18 @@ function StoreLine({
   onUndo: () => void;
 }) {
   const waiting = needsVerify(row);
+  // Not finished in Monitoring yet: the whole line is light red (the Refill column says why).
+  const unfinished = !row.complete;
+  // Missing bank details are flagged amber — but not over the light red of an unfinished line.
+  const flagMissing = (missing: boolean) => missing && !unfinished && 'bg-amber-50';
 
   return (
-    <tr className={cn('text-[13px]', selected ? 'bg-emerald-50' : 'bg-white hover:bg-emerald-50/40')}>
+    <tr
+      className={cn(
+        'text-[13px]',
+        unfinished ? 'bg-rose-50 hover:bg-rose-100/60' : selected ? 'bg-emerald-50' : 'bg-white hover:bg-emerald-50/40',
+      )}
+    >
       <td className={cn(TD, 'w-9 text-center')}>
         {waiting && (
           <input
@@ -253,17 +290,6 @@ function StoreLine({
       </td>
       <td className={cn(TD, 'w-36 text-right')}>
         <Amount value={row.totalUsed} />
-        {row.reRequestCount > 0 && (
-          // One quiet line under the total: the part of it that is Re-requests (already included).
-          <span
-            title={`Sudah termasuk ${row.reRequestCount} Re-request (Rp ${num(row.reRequestAmount)})`}
-            className="mt-0.5 flex items-center justify-end gap-1 whitespace-nowrap text-[10px] text-violet-600"
-          >
-            <RotateCcw className="h-2.5 w-2.5 shrink-0" aria-hidden />
-            Re-request
-            <span className="font-semibold tabular-nums">{num(row.reRequestAmount)}</span>
-          </span>
-        )}
       </td>
       <td
         className={cn(TD, 'w-36 text-right')}
@@ -275,7 +301,7 @@ function StoreLine({
       >
         {row.refill?.transfer != null ? <Amount value={row.refill.transfer} bold /> : <span className="text-slate-300">–</span>}
       </td>
-      <td className={cn(TD, 'min-w-44', !row.accountNumber && 'bg-amber-50')}>
+      <td className={cn(TD, 'min-w-44', flagMissing(!row.accountNumber))}>
         {row.accountNumber ? (
           <span className="flex items-center gap-1">
             <span className="font-mono text-xs tabular-nums text-slate-800">{row.accountNumber}</span>
@@ -286,10 +312,10 @@ function StoreLine({
         )}
       </td>
       <td className={cn(TD, 'min-w-36 text-slate-700')}>{row.pic1Name ?? <span className="text-slate-300">–</span>}</td>
-      <td className={cn(TD, 'w-32 whitespace-nowrap', !row.bankName && 'bg-amber-50')}>
+      <td className={cn(TD, 'w-32 whitespace-nowrap', flagMissing(!row.bankName))}>
         {row.bankName ?? <Missing>–</Missing>}
       </td>
-      <td className={cn(TD, 'min-w-44 uppercase', !row.accountHolderName && 'bg-amber-50')}>
+      <td className={cn(TD, 'min-w-44 uppercase', flagMissing(!row.accountHolderName))}>
         {row.accountHolderName ?? <Missing>–</Missing>}
       </td>
       <td className={cn(TD, 'min-w-52', waiting && 'bg-amber-50/60')}>
@@ -429,8 +455,6 @@ export default function FinancePettyCashReportPage() {
   const [search, setSearch] = useState('');
   const [onlyUsed, setOnlyUsed] = useState(false);
   const [onlyAwaiting, setOnlyAwaiting] = useState(false);
-  // Stores with activity this month that Monitoring has not finished yet (so they are not listed).
-  const [incompleteCount, setIncompleteCount] = useState(0);
 
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [confirmBulk, setConfirmBulk] = useState(false);
@@ -451,7 +475,6 @@ export default function FinancePettyCashReportPage() {
         if (body.success) {
           const data: PettyCashReportRow[] = body.data;
           setRows(data);
-          setIncompleteCount(body.incompleteCount ?? 0);
           // Keep ticks only for refills that still need verifying after a reload.
           const open = new Set(data.filter(needsVerify).map((r) => r.refill!.id));
           setSelected((prev) => new Set([...prev].filter((id) => open.has(id))));
@@ -493,6 +516,8 @@ export default function FinancePettyCashReportPage() {
   const withUsage = visibleRows.filter((r) => r.totalUsed > 0).length;
   const missingBank = visibleRows.filter((r) => !hasBankDetails(r)).length;
   const awaiting = visibleRows.filter(needsVerify).length;
+  // Listed in light red: Monitoring is not done with them yet.
+  const incompleteCount = visibleRows.filter((r) => !r.complete).length;
 
   const filtered = Boolean(code || search || onlyUsed || onlyAwaiting);
 
@@ -803,14 +828,8 @@ export default function FinancePettyCashReportPage() {
             <p className="text-sm font-semibold text-slate-600">
               {filtered
                 ? 'No stores match your filter.'
-                : `Belum ada toko yang selesai di Monitoring untuk ${reportMonthLabel(month)}.`}
+                : `Belum ada toko yang mengirim Refill untuk ${reportMonthLabel(month)}.`}
             </p>
-            {!filtered && incompleteCount > 0 && (
-              <p className="mt-1 text-xs text-slate-500">
-                {incompleteCount} toko masih dikerjakan di{' '}
-                <Link href="/finance/petty-cash" className="font-semibold text-emerald-700 underline">Monitoring</Link>.
-              </p>
-            )}
           </div>
         ) : (
           <>
@@ -859,8 +878,11 @@ export default function FinancePettyCashReportPage() {
             </div>
 
             <p className="text-[11px] text-slate-500">
-              Only stores finished in Monitoring with a refill asked for are listed. Total Terpakai = requests Finance
-              accepted (Diterima) in {reportMonthLabel(month)}; Transfer = the refill to send (locked once verified).
+              Only stores whose PIC 1 has sent the month&apos;s refill are listed.{' '}
+              <span className="font-semibold text-rose-700">Light red</span> = requests still open in Monitoring — its
+              refill can be verified once they are decided. Total Terpakai =
+              requests Finance accepted (Diterima) in {reportMonthLabel(month)}; Transfer = the refill to send (locked
+              once verified).
               Rekening comes from the
               refill request PIC 1 submitted (the one being paid, else their latest); amber cells mean none has been
               filed yet. Refill: <span className="font-semibold">Perlu verifikasi</span> = OPS approved, waiting for

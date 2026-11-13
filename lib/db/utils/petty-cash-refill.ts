@@ -54,6 +54,7 @@ import {
   periodLabel,
   pickRefillPeriod,
   refillNotYetOpen,
+  refillRequiredFirst,
   type DeadlineStatus,
   type RefillCandidate,
 } from '@/lib/petty-cash-period';
@@ -302,6 +303,19 @@ const nothingToRefill = (usage: Pick<PettyCashPeriod, 'yearMonth' | 'currentBala
   Number(usage.currentBalance) < PETTY_CASH_MAX_BALANCE
     ? `Refill periode ${periodLabel(usage.yearMonth)} sudah diajukan.`
     : `Belum ada pemakaian di periode ${periodLabel(usage.yearMonth)}, jadi belum ada yang perlu di-Refill.`;
+
+/**
+ * The period whose Refill PIC 1 must send before filing a new request (refillRequiredFirst), or null: a period that
+ * has ended, was used and has no Refill yet — while no other Refill is on its way.
+ */
+export async function refillRequiredBeforeRequest(
+  storeId: number,
+  today: string = jakartaTodayKey(),
+): Promise<string | null> {
+  if (await getLiveRefillRequest(storeId)) return null;
+  const { usage, settle } = await resolveSettlePeriod(storeId, today);
+  return refillRequiredFirst(settle?.yearMonth, usage.yearMonth);
+}
 
 /** Why a period's Refill can't be sent yet (refillNotYetOpen). */
 const refillTooEarly = (month: string, opensOn: string) =>

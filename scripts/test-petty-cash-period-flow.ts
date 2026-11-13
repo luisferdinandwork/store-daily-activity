@@ -44,7 +44,8 @@ import { describeTarget } from './lib/db-target';
 import { pettyCashPeriods, pettyCashRefillRequests, pettyCashTransactions } from '@/lib/db/schema';
 import { jakartaTodayKey } from '@/lib/day-bucket';
 import { addMonths, usagePeriodFor } from '@/lib/petty-cash-period';
-import { adjustPeriodBalance, getActivePeriod, getPeriod } from '@/lib/db/utils/petty-cash-period';
+import { adjustPeriodBalance, getActivePeriod, getPeriod, latestRefilledMonth } from '@/lib/db/utils/petty-cash-period';
+import { visibleReviewOutcome } from '@/lib/petty-cash-review';
 import {
   approveRefillRequest,
   attachRefillProof,
@@ -53,6 +54,7 @@ import {
   getRefillOutstanding,
   getRefillOverview,
   getSpendable,
+  refillRequiredBeforeRequest,
   verifyRefillRequests,
 } from '@/lib/db/utils/petty-cash-refill';
 import { approveFixedRequest, resubmitFixedRequest } from '@/lib/db/utils/petty-cash-re-request';
@@ -80,6 +82,9 @@ async function main() {
   const url = process.env.DATABASE_URL;
   if (!url) die('DATABASE_URL is not set.');
   const pool = new Pool({ connectionString: url, max: 2, connectionTimeoutMillis: 10_000 });
+  // A dropped idle connection must not kill the process before the backup is put back (it once left DUMMY-001
+  // half-reset with a session holding its rows locked).
+  pool.on('error', (e) => console.warn(`  (pool connection dropped: ${e.message})`));
 
   const dbName = (await pool.query('select current_database() d')).rows[0].d as string;
   console.log(`database : ${describeTarget(url as string)}  (current_database = ${dbName})`);
@@ -410,6 +415,32 @@ async function main() {
     assert.equal(await balanceOf(N), 910_000);
     ok('fixed and approved by OPS again → cut from N again (910.000)');
 
+    // Ditolak before the period's Refill is sent: Finance sees it, PIC 1 does not — no message, the request still
+    // reads Selesai on the employee page (visibleReviewOutcome). The balance logic is unchanged.
+    const notesFor = async (txId: number) =>
+      Number(
+        (
+          await pool.query(
+            `select count(*) n from notifications where id > $1 and related_id = $2 and type like 'petty\\_cash\\_tx\\_%' escape '\\'`,
+            [lastNotif, txId],
+          )
+        ).rows[0].n,
+      );
+    const sentThrough = () => latestRefilledMonth(storeId, db, { includeRejected: true });
+    const G = await mk('completed', 20_000, {}, (await getPeriod(storeId, N))!);
+    await spend(N, 20_000);
+    assert.equal((await financeRejectTransaction({ txId: G.id, actorId: financeId, kind: 'rejected', comment: 'bukan petty cash' })).success, true);
+    assert.equal(await balanceOf(N), 910_000);
+    assert.equal(await notesFor(G.id), 0);
+    assert.equal(visibleReviewOutcome('rejected', N, await sentThrough()), 'none');
+    ok(`a ${N} request Ditolak before ${N}'s Refill is sent: 20k back to ${N}, but PIC 1 gets no message and still sees Selesai`);
+    assert.equal((await financeAcceptTransaction({ txId: G.id, actorId: financeId })).success, true);
+    assert.equal(await notesFor(G.id), 0);
+    assert.equal((await financeRejectTransaction({ txId: G.id, actorId: financeId, kind: 'rejected' })).success, true);
+    assert.equal(await notesFor(G.id), 0);
+    assert.equal(await balanceOf(N), 910_000);
+    ok('taking it back (Diterima) and turning it down again are silent too');
+
     // ── 10. After the 15th, the previous period is settled → the new one ──────
     step('10. After the 15th, with the previous period settled');
     const afterSettled = await getRefillOverview(storeId, D16);
@@ -446,9 +477,13 @@ async function main() {
     assert.equal(lateView.deadline?.late, true);
     ok(`sent now, the refill is for ${N} (the period that just ended, 190.000), flagged late`);
 
+    assert.equal(await refillRequiredBeforeRequest(storeId, D16b), N);
+    ok(`until ${N}'s Refill is sent, PIC 1 can file no new request in ${P}`);
+
     const late = await createRefillRequest(storeId, pic, BANK, undefined, D16b);
     assert.equal(late.success, true);
     if (!late.success) return;
+    assert.equal(await refillRequiredBeforeRequest(storeId, D16b), null);
     assert.equal(late.periodMonth, N);
     assert.equal(late.usageMonth, P);
     assert.equal(late.late, true);
@@ -459,6 +494,11 @@ async function main() {
 
     assert.equal((await createRefillRequest(storeId, pic, BANK, undefined, D16b)).success, false);
     ok('and while it is on its way the next one has to wait');
+
+    assert.equal(visibleReviewOutcome('rejected', N, await sentThrough()), 'rejected');
+    assert.equal(visibleReviewOutcome('accepted', N, await sentThrough()), 'accepted');
+    assert.equal(visibleReviewOutcome(null, P, await sentThrough()), 'none');
+    ok(`${N}'s Refill is sent → PIC 1 now sees the Ditolak of ${N}; ${P}'s decisions stay hidden`);
 
     assert.equal((await approveRefillRequest(late.request.id, ops)).success, true);
     // Finance checks every request of N first (a Pending Finance one would block Verifikasi).

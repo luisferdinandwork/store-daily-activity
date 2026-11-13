@@ -18,15 +18,16 @@ import {
   getRefillReceivedWithin,
   getSpendable,
   isPettyCashHolder,
+  refillRequiredBeforeRequest,
 } from '@/lib/db/utils/petty-cash-refill';
-import { getActivePeriod, rollRequestToActivePeriod } from '@/lib/db/utils/petty-cash-period';
+import { getActivePeriod, latestRefilledMonth, rollRequestToActivePeriod } from '@/lib/db/utils/petty-cash-period';
 import {
   getPettyCashCategory,
   listPettyCashCategories,
 } from '@/lib/db/utils/petty-cash-categories';
 import { PETTY_CASH_REASON_MAX, pettyCashDescription } from '@/lib/petty-cash-categories';
 import { assertStoreOperational } from '@/lib/db/utils/store-status';
-import { reviewOutcome } from '@/lib/petty-cash-review';
+import { refillSentFor, visibleReviewOutcome } from '@/lib/petty-cash-review';
 import { jakartaDateKey } from '@/lib/day-bucket';
 import { addMonths, periodLabel, receiptPhotoAction } from '@/lib/petty-cash-period';
 import { refillStateOf } from '@/lib/petty-cash-report';
@@ -167,6 +168,11 @@ export async function GET() {
     .orderBy(desc(pettyCashTransactions.createdAt), desc(pettyCashTransactions.id))
     .limit(MAX_LISTED_REQUESTS);
 
+  // Finance's Diterima / Ditolak is shown to the store only once the Refill of the request's period has been sent
+  // (visibleReviewOutcome) — until then such a request just reads Selesai. Perlu Perbaikan always shows.
+  const refillSentThrough = await latestRefilledMonth(storeId, db, { includeRejected: true });
+  const shownReview = (t: (typeof txList)[number]) => visibleReviewOutcome(t.financeReview, t.yearMonth, refillSentThrough);
+
   // Which of these Perlu Perbaikan requests were already filed again (original id → the re-request's id).
   const reRequestedAs = new Map<number, number>();
   if (txList.length > 0) {
@@ -217,6 +223,8 @@ export async function GET() {
     success: true,
     storeName: store.name,
     closedPeriod,
+    // A period that has ended without its Refill: no new request until PIC 1 sends it (refillRequiredFirst).
+    refillRequired: await refillRequiredBeforeRequest(storeId),
     balance: String(spendable),
     // The refill of the previous period that has not been received yet (even if nobody asked for it yet): the
     // balance rises by this on receipt. `requested` = it has been asked for.
@@ -249,16 +257,24 @@ export async function GET() {
       imageUrl: t.imageUrl,
       // What PIC 1 may do about the receipt photo: replace it (OPS-approved, not finished yet), add the first one,
       // or nothing — a finished request's photo is locked, a Re-request is the way to change it.
-      receiptAction: receiptPhotoAction({ status: t.status, hasPhoto: Boolean(t.imageUrl), financeReview: t.financeReview }),
+      receiptAction: receiptPhotoAction({
+        status: t.status,
+        hasPhoto: Boolean(t.imageUrl),
+        financeReview: shownReview(t) === 'none' ? null : shownReview(t),
+      }),
       approvedAt: t.approvedAt ? new Date(t.approvedAt).toISOString() : null,
       rejectedAt: t.rejectedAt ? new Date(t.rejectedAt).toISOString() : null,
       rejectionReason: t.rejectionReason,
       createdAt: new Date(t.createdAt).toISOString(),
       // The petty cash period it was filed in (YYYY-MM) — not always the month it was filed in.
       month: t.yearMonth,
-      // Finance's decision on it (Perlu Perbaikan / Ditolak / Diterima) and its comment.
-      reviewOutcome: reviewOutcome(t.financeReview),
-      financeComment: t.financeComment,
+      // Finance's decision on it (Perlu Perbaikan / Ditolak / Diterima) and its comment — Diterima / Ditolak only
+      // once the period's Refill has been sent.
+      reviewOutcome: shownReview(t),
+      financeComment: shownReview(t) === 'none' ? null : t.financeComment,
+      // The Refill of its period has been sent: from then on the page shows Finance's result (Pending / Selesai /
+      // Ditolak) instead of "Disetujui OPS".
+      refillSent: refillSentFor(t.yearMonth, refillSentThrough),
       // A re-request (a Perlu Perbaikan request filed again): the day PIC 1 gave as the day it was made,
       // the request it files again, and — on the original — the re-request that did it.
       isReRequest: t.isReRequest,
@@ -350,8 +366,20 @@ export async function POST(req: NextRequest) {
   const inactive = await storeInactiveResponse(storeId);
   if (inactive) return inactive;
 
-  // A refill never blocks a request: this one is simply filed under the period the calendar says is in use now
-  // (up to the 15th this month's, from the 16th the next one's) — see getActivePeriod.
+  // A period that has ended (the 16th passed) without its Refill blocks new requests until PIC 1 sends it
+  // (refillRequiredFirst) — that is how the Refill is sent before the period changes. Otherwise the request is filed
+  // under the period in use (see getActivePeriod).
+  const refillFirst = await refillRequiredBeforeRequest(storeId);
+  if (refillFirst) {
+    return NextResponse.json(
+      {
+        error: `Periode ${periodLabel(refillFirst)} sudah berakhir dan Refill-nya belum dikirim. Kirim Refill dulu di tab Refill — setelah itu request baru bisa dibuat lagi.`,
+        refillRequired: refillFirst,
+      },
+      { status: 409 },
+    );
+  }
+
   const period = await ensurePettyCashPeriod(storeId);
 
   if (!period) {
@@ -484,10 +512,20 @@ export async function PATCH(req: NextRequest) {
     // What is spendable is the period's balance minus a refill still on its way (getRefillOutstanding), plus its
     // own refill once received (getRefillReceivedWithin) — `net` is what to add to the balance in the check below.
     const [owner] = await db
-      .select({ yearMonth: pettyCashTransactions.yearMonth })
+      .select({ yearMonth: pettyCashTransactions.yearMonth, imageUrl: pettyCashTransactions.imageUrl })
       .from(pettyCashTransactions)
       .where(and(eq(pettyCashTransactions.id, txId), eq(pettyCashTransactions.storeId, storeId)))
       .limit(1);
+
+    // The receipt photo comes first (2026-11-13, by request): nothing is confirmed — or cut from the balance —
+    // until the request has its photo (already uploaded, or sent along with this confirm).
+    if (owner && !owner.imageUrl && !imageUrl) {
+      return NextResponse.json(
+        { error: 'Unggah foto struk dulu — jumlah terpakai baru bisa dikonfirmasi setelah fotonya ada.' },
+        { status: 422 },
+      );
+    }
+
     const owed = owner ? await getRefillOutstanding(storeId, owner.yearMonth) : 0;
     const received = owner ? await getRefillReceivedWithin(storeId, owner.yearMonth) : 0;
     const net = received - owed;
@@ -499,6 +537,7 @@ export async function PATCH(req: NextRequest) {
         WHERE id = ${txId}
           AND store_id = ${storeId}
           AND status = 'ops_approved'
+          AND (image_url IS NOT NULL OR ${imageUrl ? sql`TRUE` : sql`FALSE`})
       ),
 
       updated_period AS (
@@ -561,8 +600,8 @@ export async function PATCH(req: NextRequest) {
   }
 
   // The receipt photo can be swapped only until the request is finished (receiptPhotoAction): while it is
-  // OPS-approved, or — as a first upload, not a replacement — on a finished request that has no photo yet and
-  // that Finance has not turned down. A finished request's photo is locked; a Re-request is how it is changed.
+  // OPS-approved, or — as a first upload, not a replacement — on a finished request that has no photo yet (a Ditolak
+  // one too: PIC 1 may not see that decision yet). A finished request's photo is locked; a Re-request is how it is changed.
   const result = await db.execute(sql`
     UPDATE petty_cash_transactions
     SET
@@ -576,7 +615,7 @@ export async function PATCH(req: NextRequest) {
         OR (
           status = 'completed'
           AND image_url IS NULL
-          AND (finance_review IS NULL OR finance_review = 'accepted')
+          AND (finance_review IS NULL OR finance_review IN ('accepted', 'rejected'))
         )
       )
     RETURNING id::int
