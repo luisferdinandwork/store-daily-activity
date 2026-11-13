@@ -3,7 +3,7 @@ import { config } from 'dotenv';
 config({ path: '.env.local' });
 config({ path: '.env' });
 
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import { DEFAULT_PETTY_CASH_CATEGORIES } from '@/lib/petty-cash-categories';
@@ -187,12 +187,15 @@ export async function seedPettyCash() {
   if (SEED_TRANSACTIONS) console.log(`   include pending: ${INCLUDE_PENDING ? 'yes' : 'no'}`);
   console.log(`   seed as closed/refilled: ${SEED_AS_CLOSED ? 'yes' : 'no'}`);
 
-  // Request categories — migration 0015 inserts these too; by name, so any
-  // category OPS already edited is left alone.
+  // Request categories — migrations 0041 + 0046 insert these too; by name, so any
+  // category IT already edited is left alone (only a missing IS is filled in).
   await db
     .insert(pettyCashCategories)
     .values(DEFAULT_PETTY_CASH_CATEGORIES)
-    .onConflictDoNothing({ target: pettyCashCategories.name });
+    .onConflictDoUpdate({
+      target: pettyCashCategories.name,
+      set: { isCode: sql`COALESCE(${pettyCashCategories.isCode}, excluded.is_code)` },
+    });
 
   const financeUser = await getFinanceUser();
 

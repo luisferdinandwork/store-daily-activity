@@ -8,6 +8,7 @@ import { resolveOpsScope } from '@/lib/performance/ops-scope';
 import { stores } from '@/lib/db/schema/core';
 import { pettyCashTransactions } from '@/lib/db/schema/petty-cash';
 import { adjustPeriodBalance } from '@/lib/db/utils/petty-cash-period';
+import { approveFixedRequest, isFixedRequest } from '@/lib/db/utils/petty-cash-re-request';
 import { leavesOutOfTransfer } from '@/lib/petty-cash-review';
 
 type Params = {
@@ -63,6 +64,8 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       id: pettyCashTransactions.id,
       storeId: pettyCashTransactions.storeId,
       status: pettyCashTransactions.status,
+      isReRequest: pettyCashTransactions.isReRequest,
+      actualAmount: pettyCashTransactions.actualAmount,
       storeAreaId: stores.areaId,
     })
     .from(pettyCashTransactions)
@@ -131,6 +134,16 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       txId: rejected.id,
       status: 'ops_rejected',
     });
+  }
+
+  // A request PIC 1 fixed after Finance's Perlu Perbaikan (marked Re-request): it already carries what was spent
+  // and the receipt, so approving it completes it — its amount is cut from its period — and it goes back to Finance.
+  if (isFixedRequest(requestRow)) {
+    const fixed = await approveFixedRequest({ txId, actorId: scope.userId });
+    if (!fixed.success) {
+      return NextResponse.json({ success: false, error: fixed.error }, { status: fixed.status });
+    }
+    return NextResponse.json({ success: true, txId: fixed.txId, status: 'completed' });
   }
 
   // OPS approval no longer deducts the balance — the requested amount is

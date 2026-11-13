@@ -48,6 +48,8 @@ export async function POST(req: NextRequest) {
       action,
       changed: result.changedIds.length,
       skipped: result.skipped,
+      // Refused because their period still has requests not decided yet (see verifyRefillRequests).
+      blocked: result.blocked ?? 0,
     });
   } catch (err) {
     console.error('[POST /api/finance/petty-cash/refill-requests/verify]', err);

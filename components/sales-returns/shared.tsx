@@ -20,6 +20,7 @@ import { TD as OPS_TD, TH as OPS_TH } from '@/components/ops/petty-cash/shared';
 import type { KpiItem } from '@/components/finance/shared/sheet-kit';
 import {
   fmtSalesReturnWhen,
+  salesReturnPhotos,
   type SalesReturnRow,
   type SalesReturnSummary,
 } from '@/lib/sales-returns';
@@ -42,14 +43,14 @@ export function useDebouncedValue<T>(value: T, ms = 300): T {
 
 export function salesReturnKpis(s: SalesReturnSummary): KpiItem[] {
   return [
-    { label: 'Sales returns', value: String(s.count), sub: 'in this period' },
-    { label: 'Today', value: String(s.today), sub: 'filed today' },
-    { label: 'Stores', value: String(s.stores), sub: 'with at least one return' },
-    { label: 'Employees', value: String(s.employees), sub: 'uploaded a receipt' },
+    { label: 'Retur penjualan', value: String(s.count), sub: 'pada periode ini' },
+    { label: 'Hari ini', value: String(s.today), sub: 'retur diunggah' },
+    { label: 'Toko', value: String(s.stores), sub: 'dengan pengajuan retur' },
+    { label: 'Karyawan', value: String(s.employees), sub: 'mengunggah struk' },
     {
-      label: 'Most returns',
+      label: 'Retur terbanyak',
       value: s.topStore?.storeNo ?? '–',
-      sub: s.topStore ? `${s.topStore.count} return${s.topStore.count === 1 ? '' : 's'}` : 'no returns yet',
+      sub: s.topStore ? `${s.topStore.count} retur` : 'belum ada retur',
     },
   ];
 }
@@ -59,12 +60,12 @@ export function salesReturnKpis(s: SalesReturnSummary): KpiItem[] {
 /** Receipt photo; degrades to an icon when the stored URL no longer loads. */
 function PhotoThumb({
   url,
-  n,
+  label,
   onOpen,
   hover,
 }: {
   url: string;
-  n: number;
+  label: string;
   onOpen: () => void;
   hover: string;
 }) {
@@ -74,7 +75,8 @@ function PhotoThumb({
     <button
       type="button"
       onClick={onOpen}
-      title={`Lihat foto struk ${n}`}
+      title={`Lihat ${label.toLowerCase()}`}
+      aria-label={`Lihat ${label.toLowerCase()}`}
       className={cn(
         'flex h-9 w-9 items-center justify-center overflow-hidden rounded border border-slate-300 bg-slate-100 transition',
         hover,
@@ -86,7 +88,7 @@ function PhotoThumb({
         // eslint-disable-next-line @next/next/no-img-element
         <img
           src={url}
-          alt={`Struk ${n}`}
+          alt={label}
           loading="lazy"
           onError={() => setFailed(true)}
           className="h-full w-full object-cover"
@@ -124,6 +126,7 @@ export function SalesReturnsTable({
   variant,
   showArea = false,
   onOpenPhoto,
+  onOpenDetail,
 }: {
   rows: SalesReturnRow[];
   /** Number of rows on earlier pages, so the gutter keeps counting. */
@@ -132,6 +135,7 @@ export function SalesReturnsTable({
   /** Ops HO: a second line under the store name with its area. */
   showArea?: boolean;
   onOpenPhoto: (row: SalesReturnRow, index: number) => void;
+  onOpenDetail?: (row: SalesReturnRow) => void;
 }) {
   const v = VARIANT[variant];
 
@@ -143,14 +147,19 @@ export function SalesReturnsTable({
           <th className={cn(v.th, 'text-left')}>Tanggal</th>
           <th className={cn(v.th, 'text-left')}>Kode</th>
           <th className={cn(v.th, 'text-left')}>Nama Toko</th>
-          <th className={cn(v.th, 'text-left')}>No. Struk</th>
+          <th className={cn(v.th, 'text-left')}>No. Struk Lama</th>
+          <th className={cn(v.th, 'text-left')}>No. Struk Baru</th>
           <th className={cn(v.th, 'text-left')}>Diunggah Oleh</th>
           <th className={cn(v.th, 'text-center')}>Foto Struk</th>
+          {onOpenDetail && <th className={cn(v.th, 'text-center')}>Detail</th>}
         </tr>
       </thead>
       <tbody>
         {rows.map((r, i) => (
-          <tr key={r.id} className={cn('bg-white text-[13px] transition-colors', v.rowHover)}>
+          <tr key={r.id} onClick={onOpenDetail ? (e) => {
+            if (!(e.target as HTMLElement).closest('button, a, input')) onOpenDetail(r);
+          } : undefined}
+            className={cn('bg-white text-[13px] transition-colors', v.rowHover, onOpenDetail && 'cursor-pointer')}>
             <td className={cn(SHEET_ROW_HEAD, 'w-11')}>{startIndex + i + 1}</td>
             <td className={cn(v.td, 'w-44 whitespace-nowrap text-slate-600')}>{fmtSalesReturnWhen(r.createdAt)}</td>
             <td className={cn(v.td, 'w-24 whitespace-nowrap font-mono text-xs font-semibold text-slate-600')}>
@@ -163,10 +172,14 @@ export function SalesReturnsTable({
               )}
             </td>
             <td className={cn(v.td, 'whitespace-nowrap')}>
+              <span className="font-mono text-xs text-slate-600">{r.oldReceiptNumber ?? '—'}</span>
+            </td>
+            <td className={cn(v.td, 'whitespace-nowrap')}>
               <span className="inline-flex items-center gap-1.5">
-                <span className="font-mono text-[13px] font-semibold text-slate-900">{r.receiptNumber}</span>
-                <CopyButton value={r.receiptNumber} label="Salin nomor struk" />
+                <span className="font-mono text-[13px] font-semibold text-slate-900">{r.newReceiptNumber ?? '—'}</span>
+                {r.newReceiptNumber && <CopyButton value={r.newReceiptNumber} label="Salin nomor struk baru" />}
               </span>
+              {!r.newReceiptNumber && <span className="block text-[10px] text-amber-700">Arsip: {r.receiptNumber} · jenis belum tercatat</span>}
             </td>
             <td className={cn(v.td, 'whitespace-nowrap text-slate-600')}>{r.uploadedBy}</td>
             <td className={cn(v.td, 'w-36 py-1')}>
@@ -179,18 +192,26 @@ export function SalesReturnsTable({
                     <ImageOff className="h-3.5 w-3.5 text-slate-300" />
                   </span>
                 ) : (
-                  r.imageUrls.map((url, n) => (
-                    <PhotoThumb
-                      key={url}
-                      url={url}
-                      n={n + 1}
-                      hover={v.thumbHover}
-                      onOpen={() => onOpenPhoto(r, n)}
-                    />
+                  salesReturnPhotos(r).map(({ url, label }, n) => (
+                    <span key={label} className="flex flex-col items-center gap-0.5">
+                      <PhotoThumb
+                        url={url}
+                        label={label}
+                        hover={v.thumbHover}
+                        onOpen={() => onOpenPhoto(r, n)}
+                      />
+                      <span className="text-[9px] font-semibold text-slate-500">
+                        {label === 'Foto struk lama' ? 'Lama' : label === 'Foto struk baru' ? 'Baru' : `Arsip ${n + 1}`}
+                      </span>
+                    </span>
                   ))
                 )}
               </span>
             </td>
+            {onOpenDetail && <td className={cn(v.td, 'text-center')}>
+              <button type="button" onClick={() => onOpenDetail(r)} aria-label={`Buka detail retur ${r.newReceiptNumber ?? r.receiptNumber}`}
+                className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50">Detail</button>
+            </td>}
           </tr>
         ))}
       </tbody>

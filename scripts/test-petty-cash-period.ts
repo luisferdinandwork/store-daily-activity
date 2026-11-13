@@ -18,6 +18,7 @@ import assert from 'node:assert/strict';
 
 import {
   addMonths,
+  dayLabel,
   deadlineStatus,
   isRefillLate,
   periodLabel,
@@ -27,6 +28,7 @@ import {
   pickRefillPeriod,
   receiptPhotoAction,
   refillDeadline,
+  refillNotYetOpen,
   reRequestPeriodMonth,
   uncoveredUsage,
   usagePeriodFor,
@@ -202,6 +204,22 @@ ok('November verified: November is locked, December (filed while it was on its w
   assert.equal(isLockedByVerification('2026-11', '2026-11'), true);
   assert.equal(isLockedByVerification('2026-10', '2026-11'), true);
   assert.equal(isLockedByVerification('2026-12', '2026-11'), false);
+});
+
+console.log('A refill ends its period, but never before the period has started');
+ok('the period in use (or an older one) can always be refilled', () => {
+  assert.equal(refillNotYetOpen('2026-11', '2026-11-10'), null);
+  assert.equal(refillNotYetOpen('2026-10', '2026-11-10'), null);
+  assert.equal(refillNotYetOpen('2026-12', '2026-11-16'), null);
+});
+ok('a period that starts on the 16th can not be refilled before it (no running 2 periods ahead)', () => {
+  assert.equal(refillNotYetOpen('2026-12', '2026-11-10'), '2026-11-16');
+  assert.equal(refillNotYetOpen('2026-12', '2026-11-15'), '2026-11-16');
+  assert.equal(refillNotYetOpen('2027-01', '2026-11-20'), '2026-12-16');
+});
+ok('the day is written the Indonesian way', () => {
+  assert.equal(dayLabel('2026-11-16'), '16 Nov 2026');
+  assert.equal(dayLabel('2026-12-16'), '16 Des 2026');
 });
 
 console.log(`\n${checks} checks passed`);

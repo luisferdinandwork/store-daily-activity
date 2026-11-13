@@ -2,22 +2,28 @@
 //
 // Period helpers for the petty cash feature (the rules and wording: lib/petty-cash-period.ts).
 //
-// THE CALENDAR decides which period a store spends from — the Refill does not. A period runs from the 16th of the
-// month before its name to the 15th of its name (Jakarta); from the 16th everything is counted in the next one.
-// Nothing runs at midnight: the first call that needs the period in use after the 15th moves the store forward
-// (`getActivePeriod` → rollForward) — it closes the period that ended, opens the new one and takes along the
-// requests that were still waiting. Every reader goes through `getActivePeriod`, so the stored `status` is never
-// stale for anyone who matters (Finance's per-month ledger reads the rows as they are).
+// TWO things move a store to its next period (2026-11-13, by request — before that only the calendar did):
+//   • THE CALENDAR: a period runs from the 16th of the month before its name to the 15th of its name (Jakarta);
+//     from the 16th everything is counted in the next one;
+//   • SENDING ITS REFILL: once PIC 1 has sent the Refill of the period in use (any state but turned down by OPS),
+//     that period is done — new requests, waiting ones and drafts sent back by Finance go to the next period at
+//     once, so the employee page shows the new period and its balance straight away.
+// So the period in use = the latest of: the calendar's, the month after the last period with a Refill request,
+// and any later OPEN period (never backwards). Nothing runs at midnight: the first call that needs the period in
+// use moves the store forward (`getActivePeriod` → rollForward) — it closes the period that ended, opens the new
+// one and takes along the requests that were still waiting. Every reader goes through `getActivePeriod`, so the
+// stored `status` is never stale for anyone who matters (Finance's per-month ledger reads the rows as they are).
 //
 //   status 'open'      takes new requests (one per store — the period the calendar says, or a later one an
 //                      earlier version of the flow opened, which is never taken back)
-//   status 'upcoming'  created ahead of time because a Re-request of the period in use has to be counted in the
-//                      NEXT period (lib/petty-cash-re-request.ts); it opens when the calendar reaches it
+//   status 'upcoming'  created ahead of time because a request Finance sent back has to be counted in the NEXT
+//                      period (lib/db/utils/petty-cash-review.ts); it opens when the store reaches it
 //   status 'closed'    its last day has passed (or Finance closed it at month end) — no new request lands in it.
 //                      Its balance still moves while Finance reviews the requests, until Finance verifies the
 //                      refill (adjustPeriodBalance), and then it is frozen
 //
-// Sending a Refill never touches a period (petty-cash-refill.ts): it only records which period it settles.
+// Sending a Refill records which period it settles (petty-cash-refill.ts); when that is the period in use, the store
+// moves on right away (createRefillRequest calls getActivePeriod inside its transaction).
 //
 // Finance's month-by-month dashboard is a per-month ledger, not a live balance view, so it deliberately does NOT
 // use getActivePeriod — it queries pettyCashPeriods for an exact yearMonth match only
@@ -30,6 +36,7 @@ import {
   PETTY_CASH_MAX_BALANCE,
   pettyCashPeriods,
   pettyCashRefillRequests,
+  pettyCashRefills,
   pettyCashTransactions,
   type PettyCashPeriod,
 } from '@/lib/db/schema/petty-cash';
@@ -47,8 +54,11 @@ export { addMonths };
 /** Either the pool or a transaction handle — every writer below takes one so it can join a transaction. */
 export type DbExecutor = Pick<typeof db, 'select' | 'insert' | 'update' | 'delete'>;
 
-/** Requests still waiting when their period ends move on with the store: they have not cost anything yet. */
-const MOVES_ON_CLOSE = ['pending_ops', 'ops_approved'];
+/**
+ * Requests still waiting when their period ends move on with the store: they have not cost anything yet. A `draft`
+ * (sent back by Finance with Perlu Perbaikan, being fixed by PIC 1) gave its amount back, so it moves on too.
+ */
+const MOVES_ON_CLOSE = ['draft', 'pending_ops', 'ops_approved'];
 
 const MAX = String(PETTY_CASH_MAX_BALANCE);
 
@@ -66,18 +76,18 @@ export async function getPeriod(
 }
 
 /**
- * The month of the period a store spends from on Jakarta day `today`: the one the calendar says
- * (`usagePeriodFor`) — or a later OPEN one, because the period in use never goes backwards (an earlier version of
- * the flow opened the next period as soon as a Refill was sent, and requests may already sit in it). A month that
- * is already closed is skipped.
+ * The month of the period a store spends from on Jakarta day `today`: the latest of the one the calendar says
+ * (`usagePeriodFor`), the month after the last period that already has its Refill (`settledThrough` — sending the
+ * Refill ends a period), and a later OPEN one (the period in use never goes backwards). A month that is already
+ * closed is skipped.
  */
-function usageMonthOf(periods: PettyCashPeriod[], today: string): string {
+export function usageMonthOf(periods: PettyCashPeriod[], today: string, settledThrough: string | null = null): string {
   const openAhead = periods
     .filter((p) => p.status === 'open')
     .map((p) => p.yearMonth)
     .sort()
     .pop();
-  let month = laterMonth(usagePeriodFor(today), openAhead ?? '');
+  let month = laterMonth(laterMonth(usagePeriodFor(today), openAhead ?? ''), settledThrough ? addMonths(settledThrough, 1) : '');
 
   const closed = new Set(periods.filter((p) => p.status === 'closed').map((p) => p.yearMonth));
   while (closed.has(month)) month = addMonths(month, 1);
@@ -99,12 +109,29 @@ export async function getActivePeriod(
 ): Promise<PettyCashPeriod> {
   const periods = await exec.select().from(pettyCashPeriods).where(eq(pettyCashPeriods.storeId, storeId));
 
-  const usageMonth = usageMonthOf(periods, today);
+  const usageMonth = usageMonthOf(periods, today, await latestRefilledMonth(storeId, exec));
   const current = periods.find((p) => p.yearMonth === usageMonth);
   const hasEnded = periods.some((p) => p.status !== 'closed' && p.yearMonth < usageMonth);
   if (current?.status === 'open' && !hasEnded) return current;
 
   return rollForward(exec, storeId, usageMonth);
+}
+
+/**
+ * The last period (YYYY-MM) of the store that already has its Refill: a refill request in any state but turned
+ * down by OPS, or a month-end refill of the old flow. Sending that Refill ended the period; null = none yet.
+ */
+export async function latestRefilledMonth(storeId: number, exec: DbExecutor = db): Promise<string | null> {
+  const [requested] = await exec
+    .select({ month: sql<string | null>`MAX(${pettyCashRefillRequests.yearMonth})` })
+    .from(pettyCashRefillRequests)
+    .where(and(eq(pettyCashRefillRequests.storeId, storeId), ne(pettyCashRefillRequests.status, 'rejected')));
+  const [legacy] = await exec
+    .select({ month: sql<string | null>`MAX(${pettyCashRefills.yearMonth})` })
+    .from(pettyCashRefills)
+    .where(eq(pettyCashRefills.storeId, storeId));
+  const months = [requested?.month, legacy?.month].filter((m): m is string => Boolean(m));
+  return months.length ? months.reduce(laterMonth) : null;
 }
 
 /**
@@ -265,7 +292,7 @@ export async function rollRequestToActivePeriod(
   today: string = jakartaTodayKey(),
 ): Promise<void> {
   const [row] = await db
-    .select({ status: pettyCashTransactions.status })
+    .select({ status: pettyCashTransactions.status, yearMonth: pettyCashTransactions.yearMonth })
     .from(pettyCashTransactions)
     .where(and(eq(pettyCashTransactions.id, txId), eq(pettyCashTransactions.storeId, storeId)))
     .limit(1);
@@ -274,6 +301,9 @@ export async function rollRequestToActivePeriod(
 
   // getActivePeriod also moves a store whose period has just ended — and the requests waiting in it.
   const active = await getActivePeriod(storeId, today);
+  // Only a request left BEHIND moves; one already parked in a later period (a fixed request Finance sent to the
+  // next period) stays where it is.
+  if (row.yearMonth >= active.yearMonth) return;
 
   await db
     .update(pettyCashTransactions)

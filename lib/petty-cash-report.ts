@@ -68,7 +68,31 @@ export function pickRefillByStore<
   return byStore;
 }
 
-/** The refill request tied to a report row — what Finance verifies. */
+/**
+ * A store's month shows in the Report once Monitoring is done with it — Completed: no request waiting on OPS, on
+ * PIC 1's actual amount or being fixed after Perlu Perbaikan, none Pending Finance (every completed one is Diterima
+ * / Ditolak) — and PIC 1 has asked for the refill that settles it. The Report is then where Finance VERIFIES that
+ * refill (the only place it can).
+ */
+export function isStoreMonthComplete(s: {
+  pendingOpsCount: number;
+  awaitingActualCount: number;
+  /** Drafts PIC 1 is fixing after Perlu Perbaikan. */
+  fixingCount: number;
+  pendingFinanceCount: number;
+  /** A refill request (not turned down by OPS) exists for the month. */
+  refillAsked: boolean;
+}): boolean {
+  return (
+    s.pendingOpsCount === 0 &&
+    s.awaitingActualCount === 0 &&
+    s.fixingCount === 0 &&
+    s.pendingFinanceCount === 0 &&
+    s.refillAsked
+  );
+}
+
+/** The refill request tied to a report row — what Finance verifies here. */
 export interface ReportRefill {
   id: number;
   yearMonth: string;
@@ -81,6 +105,10 @@ export interface ReportRefill {
   receivedAt: string | null;
   /** Both proof photos uploaded so far, 0–2. */
   proofCount: number;
+  /** What Finance sends: the refill (max − what the month has left); null when it can't be worked out. */
+  transfer: number | null;
+  /** True once Finance verified it — the amount no longer moves. */
+  transferFrozen: boolean;
 }
 
 /** One store's line in the report: what it used, and where to send the refill. */
@@ -93,10 +121,10 @@ export interface PettyCashReportRow {
   code: string;
   /** BC department dimension code — Finance + IT only. */
   deptCode: string | null;
-  /** Store lifecycle; ready_to_open stores are listed (Rp 0) but flagged. */
+  /** Store lifecycle (ready_to_open stores are never listed). */
   storeStatus: StoreStatus;
 
-  /** Completed petty cash spend in the month, integer Rupiah. */
+  /** The month's requests Finance accepted (Diterima), actual amount, integer Rupiah. */
   totalUsed: number;
   txCount: number;
   /** Of that spend, the re-requests (Ditolak requests filed again — lib/petty-cash-re-request.ts): how many and how much. */
@@ -109,8 +137,15 @@ export interface PettyCashReportRow {
   accountNumber: string | null;
   accountHolderName: string | null;
 
-  /** The refill request Finance is tracking for this store — null when there is none. */
+  /** The refill that settles this month — always verified or received (a month without one is not listed). */
   refill: ReportRefill | null;
+}
+
+/** What the Report API answers: the finished store-months, and how many are still open in Monitoring. */
+export interface PettyCashReport {
+  rows: PettyCashReportRow[];
+  /** Stores with activity this month that Monitoring has not finished yet (so they are not in `rows`). */
+  incompleteCount: number;
 }
 
 /** FF001 → "FF", OD002 → "OD", DUMMY-001 → "DUMMY". */

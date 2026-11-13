@@ -1,6 +1,6 @@
 // app/api/ops/petty-cash/categories/[id]/route.ts
 //
-// PATCH  — edit name / Pengertian / Contoh pengeluaran / active.
+// PATCH  — edit name / Pengertian / Contoh pengeluaran / IS / active.
 // DELETE — remove; past requests keep their category name snapshot.
 //
 // IT only (see ../_auth.ts).

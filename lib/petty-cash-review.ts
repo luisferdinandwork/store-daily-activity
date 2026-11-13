@@ -6,13 +6,17 @@
 // Finance checks petty cash once a month. On /finance/petty-cash it may turn a request down in one of
 // two ways, with or without a comment, until it verifies the refill that covers it:
 //
-//   Perlu Perbaikan (needs_fix)  PIC 1 files it again next month as a RE-REQUEST
-//                                (lib/petty-cash-re-request.ts) with what Finance asked for
+//   Perlu Perbaikan (needs_fix)  the SAME request goes back to PIC 1 as a draft (marked Re-request) to fix and
+//                                send through OPS again — lib/db/utils/petty-cash-re-request.ts
 //   Ditolak (rejected)           final — it can NOT be re-requested
 //
 //   null ──Perlu Perbaikan──▶ needs_fix ──Ditolak──▶ rejected
 //    └────────────Ditolak───────────────────────────▶
-//   (accept takes either decision back → accepted; a Perlu Perbaikan that already has a re-request can't be touched)
+//   A completed request nobody at Finance has decided on yet (review = null) is **Pending Finance**
+//   (`needsFinanceCheck`): Monitoring shows the store as Pending Finance until every one is checked, and the Report
+//   only lists a store's month once all of them are (and its refill has been verified). "Diterima" (accepted) is
+//   Finance saying "checked, fine" — straight from Pending Finance, or by taking a decision back.
+//   (accept takes either decision back→ accepted; a Perlu Perbaikan that already has a re-request can't be touched)
 //
 // A request Finance has not accepted (needs_fix or rejected) is not counted as used: the transfer is
 // what the store used minus those requests, while the store's petty cash still goes back to Rp 1.000.000
@@ -62,6 +66,13 @@ export function reviewOutcome(review: string | null | undefined): ReviewOutcome 
   return isFinanceReview(review) ? review : 'none';
 }
 
+/** Name of the "nobody at Finance has checked it yet" state, in Monitoring, Transactions and the request detail. */
+export const PENDING_FINANCE_LABEL = 'Pending Finance';
+
+/** A completed request that Finance has not decided on yet (not Diterima, Perlu Perbaikan nor Ditolak). */
+export const needsFinanceCheck = (status: string, review: string | null | undefined): boolean =>
+  status === 'completed' && !isFinanceReview(review);
+
 /** Only a Perlu Perbaikan request can be filed again; a Ditolak one is final. */
 export const canReRequest = (review: string | null | undefined): boolean => review === 'needs_fix';
 
@@ -80,7 +91,7 @@ export interface RefillTransfer {
 /** The Indonesian line PIC 1 gets with the refill (and Finance sees on the request). */
 export function rejectedNote(count: number, amount: number): string | null {
   if (count <= 0) return null;
-  return `${count} request Perlu Perbaikan / Ditolak (Rp ${amount.toLocaleString('id-ID')}) tidak dihitung sebagai terpakai dan tidak ikut ditransfer — nominal itu dibayar sendiri oleh karyawan di luar sistem`;
+  return `${count} request Ditolak (Rp ${amount.toLocaleString('id-ID')}) tidak dihitung sebagai terpakai dan tidak ikut ditransfer — nominal itu dibayar sendiri oleh karyawan di luar sistem`;
 }
 
 /** Trimmed optional comment, or an error message. */

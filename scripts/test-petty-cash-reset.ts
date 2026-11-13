@@ -18,6 +18,10 @@
 //   • resetting ALL periods removes everything of the store and opens one fresh period for this Jakarta month;
 //   • nothing else is touched (unrelated notifications survive), unknown periods / stores are refused;
 //   • the JSON backup the page offers restores the deleted rows.
+//
+// The Re-request here is the OLD shape (before 2026-11-13: a separate new row whose re_request_of_id points at a
+// completed Perlu Perbaikan original). The app no longer makes those — Perlu Perbaikan now sends the same request back
+// as a draft — but such rows stay in the data, so the reset must still handle them; the scenario writes them directly.
 
 import './lib/not-production';
 
@@ -41,8 +45,7 @@ import {
   getRefillOutstanding,
   verifyRefillRequests,
 } from '@/lib/db/utils/petty-cash-refill';
-import { createReRequest } from '@/lib/db/utils/petty-cash-re-request';
-import { financeRejectTransaction, financeUserIds } from '@/lib/db/utils/petty-cash-review';
+import { financeAcceptTransaction, financeUserIds } from '@/lib/db/utils/petty-cash-review';
 import { listPettyCashCategories } from '@/lib/db/utils/petty-cash-categories';
 import {
   exportResetBackup,
@@ -165,33 +168,61 @@ async function main() {
     const B = await mk('completed', 50_000);
     const C = await mk('pending_ops', 30_000);
     const D = await mk('ops_approved', 20_000);
-    await db.update(pettyCashPeriods).set({ currentBalance: String(MAX - 150_000) }).where(eq(pettyCashPeriods.id, period.id));
-    const needsFix = await financeRejectTransaction({ txId: B.id, actorId: financeId, kind: 'needs_fix', comment: 'foto kurang jelas' });
-    assert.equal(needsFix.success, true);
+    // B: an old-style Perlu Perbaikan (still completed, its 50k already given back) + the message PIC 1 got about it.
+    await db
+      .update(pettyCashTransactions)
+      .set({ financeReview: 'needs_fix', financeReviewBy: financeId, financeReviewAt: now, financeComment: 'foto kurang jelas' })
+      .where(eq(pettyCashTransactions.id, B.id));
+    await db.update(pettyCashPeriods).set({ currentBalance: String(MAX - 100_000) }).where(eq(pettyCashPeriods.id, period.id));
+    await pool.query(
+      `insert into notifications (user_id, type, title, related_type, related_id) values ($1, 'petty_cash_tx_rejected', 'Request petty cash perlu diperbaiki', 'petty_cash_transaction', $2)`,
+      [pic, B.id],
+    );
 
+    // Sending M's refill ends M at once: M closes, N opens, C and D (still waiting) go with it.
     const sent = await createRefillRequest(storeId, pic, BANK);
     assert.equal(sent.success, true);
     if (!sent.success) return;
+    assert.equal(sent.usageMonth, N);
+    assert.equal((await getPeriod(storeId, M))!.status, 'closed');
     assert.equal((await approveRefillRequest(sent.request.id, ops)).success, true);
+    // Finance checks A (Diterima) first — a request still Pending Finance would block the verification.
+    assert.equal((await financeAcceptTransaction({ txId: A.id, actorId: financeId })).success, true);
     assert.deepEqual((await verifyRefillRequests([sent.request.id], financeId)).changedIds, [sent.request.id]);
-    assert.equal((await getPeriod(storeId, M))!.status, 'open'); // sending / verifying a refill closes nothing
-    // The 16th: the calendar moves the store on — M closes, N opens, C and D (still waiting) go with it.
+    // The 16th changes nothing more: N is already in use.
     assert.equal((await getActivePeriod(storeId, D16)).yearMonth, N);
 
-    const re = await createReRequest({
-      originalTxId: B.id,
-      storeId,
-      userId: pic,
-      requestDate: today,
-      description: 'perbaikan struk',
-      actualAmount: 50_000,
-      categoryId: cat.id,
-      imageUrl: 'https://example.test/new-receipt.jpg',
-      imageKey: 'new-receipt',
-    });
-    assert.equal(re.success, true);
-    if (!re.success) return;
-    assert.equal(re.periodMonth, N);
+    // The old-style Re-request of B, counted in N (its 50k cut from N), + Finance's message about it.
+    const nPeriod = (await getPeriod(storeId, N))!;
+    const [legacyRe] = await db
+      .insert(pettyCashTransactions)
+      .values({
+        periodId: nPeriod.id,
+        userId: pic,
+        storeId,
+        amount: '50000.00',
+        actualAmount: '50000.00',
+        description: 'PERBAIKAN STRUK',
+        categoryId: cat.id,
+        categoryName: cat.name,
+        status: 'completed',
+        imageUrl: 'https://example.test/new-receipt.jpg',
+        yearMonth: N,
+        isReRequest: true,
+        reRequestOfId: B.id,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .returning();
+    await db
+      .update(pettyCashPeriods)
+      .set({ currentBalance: String(Number(nPeriod.currentBalance) - 50_000) })
+      .where(eq(pettyCashPeriods.id, nPeriod.id));
+    await pool.query(
+      `insert into notifications (user_id, type, title, related_type, related_id) values ($1, 'petty_cash_tx_re_request', 'Re-request petty cash dikirim', 'petty_cash_transaction', $2)`,
+      [financeId, legacyRe.id],
+    );
+    const re = { txId: legacyRe.id, periodMonth: N };
 
     const nBalance = await balanceOf(N);
     assert.equal(nBalance, 950_000);

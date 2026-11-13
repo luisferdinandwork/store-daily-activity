@@ -5,20 +5,27 @@ import PanelPageHeader from '@/components/shared/PanelPageHeader';
 //
 // Finance · Petty Cash Transactions
 //
-// Every petty cash request across the chain, newest first — the flat ledger
-// behind the per-store Monitoring view. Narrow it by store (searchable
-// dropdown) and by period (calendar range picker; the date is when the PIC
-// made the request), and optionally by status (pills with live counts). The
-// numbers in the strip follow the store + period, so picking one status still
-// shows the full breakdown. "Download Excel" exports every row the current
-// filters select (not just the page on screen).
+// Every petty cash request across the chain — the flat ledger behind the
+// per-store Monitoring view. Narrow it by period (calendar range picker; the
+// date is when the PIC made the request), free-text search, area, store
+// (searchable dropdown), category, Finance's decision (Pending Finance /
+// Diterima / Perlu Perbaikan / Ditolak), Re-request, receipt photo and amount,
+// and optionally by status (pills with live counts). Sort by any column (click
+// a header) or from the "Urutkan" picker. The numbers in the strip follow every
+// filter except the status, so picking one status still shows the full
+// breakdown. "Download Excel" exports every row the current filters select, in
+// the current order (not just the page on screen), as "Petty cash transaction"
+// — Business Central Purchase Invoice lines (lib/petty-cash-transactions-xlsx.ts).
 //
 // "Total used" counts completed requests only, at the actual amount the PIC
 // recorded — the same rule as Monitoring and the Report.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   ChevronLeft,
   ChevronRight,
   Download,
@@ -26,16 +33,32 @@ import {
   ImageOff,
   Loader2,
   RefreshCw,
+  Search,
+  SlidersHorizontal,
+  X,
 } from 'lucide-react';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import {
+  FINANCE_REQUEST_STATE_LABEL,
+  TX_PHOTO_FILTER_LABEL,
+  TX_REVIEW_FILTER_LABEL,
+  TX_REVIEW_FILTER_ORDER,
+  TX_SORT_KEYS,
+  TX_SORT_LABEL,
   TX_STATUS_LABEL,
   TX_STATUS_ORDER,
-  isTxStatus,
+  defaultSortDir,
+  financeRequestState,
+  type FinanceRequestState,
+  type SortDir,
   type TransactionRow,
   type TransactionsPage,
   type TransactionStoreOption,
+  type TxPhotoFilter,
+  type TxReviewFilter,
+  type TxSortKey,
   type TxStatus,
 } from '@/lib/petty-cash-transactions';
 import {
@@ -57,13 +80,22 @@ import {
 import { StoreCombobox } from '@/components/shared/store-combobox';
 import { ReRequestBadge } from '@/components/petty-cash/ReRequestBadge';
 import { fmtRequestDate } from '@/lib/petty-cash-re-request';
-import { FINANCE_REVIEW_LABEL, isFinanceReview } from '@/lib/petty-cash-review';
+import { PENDING_FINANCE_LABEL } from '@/lib/petty-cash-review';
 
-const STATUS_CHIP: Record<TxStatus, string> = {
-  pending_ops: 'bg-amber-50 text-amber-700 ring-amber-200',
-  ops_approved: 'bg-sky-50 text-sky-700 ring-sky-200',
-  completed: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-  ops_rejected: 'bg-rose-50 text-rose-700 ring-rose-200',
+const SELECT_CLS =
+  'h-9 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-700 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20';
+const INPUT_CLS =
+  'h-9 rounded-md border border-slate-300 bg-white px-3 text-sm placeholder-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20';
+
+// One chip per request: where it stands for Finance (lib/petty-cash-transactions.ts → financeRequestState).
+const STATE_CHIP: Record<FinanceRequestState, string> = {
+  waiting_ops: 'bg-amber-50 text-amber-700 ring-amber-200',
+  awaiting_actual: 'bg-sky-50 text-sky-700 ring-sky-200',
+  ops_rejected: 'bg-rose-50 text-rose-600 ring-rose-200',
+  pending_finance: 'bg-indigo-50 text-indigo-700 ring-indigo-200',
+  accepted: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+  needs_fix: 'bg-amber-50 text-amber-800 ring-amber-300',
+  rejected: 'bg-rose-50 text-rose-700 ring-rose-300',
 };
 
 const fmtWhen = (iso: string) =>
@@ -78,16 +110,17 @@ const fmtWhen = (iso: string) =>
 
 // ─── Cells ───────────────────────────────────────────────────────────────────
 
-function StatusChip({ status }: { status: string }) {
-  const known = isTxStatus(status);
+function StatusChip({ tx }: { tx: TransactionRow }) {
+  const state = financeRequestState(tx.status, tx.financeReview);
   return (
     <span
+      title={tx.financeComment ?? undefined}
       className={cn(
         'inline-flex items-center whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-semibold ring-1 ring-inset',
-        known ? STATUS_CHIP[status] : 'bg-slate-100 text-slate-600 ring-slate-200',
+        STATE_CHIP[state],
       )}
     >
-      {known ? TX_STATUS_LABEL[status] : status}
+      {FINANCE_REQUEST_STATE_LABEL[state]}
     </span>
   );
 }
@@ -151,6 +184,9 @@ function TxLine({
       <td className={cn(TD, 'whitespace-nowrap font-medium text-slate-700')}>
         {tx.categoryName ?? <span className="text-slate-300">–</span>}
       </td>
+      <td className={cn(TD, 'whitespace-nowrap font-mono text-[11px] font-medium text-slate-600')}>
+        {tx.isCode ?? <span className="font-sans text-slate-300">–</span>}
+      </td>
       <td className={cn(TD, 'min-w-64 max-w-sm')}>
         <p className="line-clamp-2 text-slate-700" title={tx.description}>
           {tx.isReRequest && <ReRequestBadge className="mr-1.5 align-middle" />}
@@ -167,23 +203,8 @@ function TxLine({
       <td className={cn(TD, 'w-32 text-right tabular-nums text-slate-900')}>
         {tx.actualAmount != null ? num(tx.actualAmount) : <span className="text-slate-300">–</span>}
       </td>
-      <td className={cn(TD, 'w-44')}>
-        <StatusChip status={tx.status} />
-        {isFinanceReview(tx.financeReview) && (
-          <span
-            className={cn(
-              'mt-0.5 block text-[10px] font-semibold',
-              tx.financeReview === 'accepted'
-                ? 'text-emerald-600'
-                : tx.financeReview === 'rejected'
-                  ? 'text-rose-600'
-                  : 'text-amber-600',
-            )}
-            title={tx.financeComment ?? undefined}
-          >
-            {FINANCE_REVIEW_LABEL[tx.financeReview]}
-          </span>
-        )}
+      <td className={cn(TD, 'w-40')}>
+        <StatusChip tx={tx} />
       </td>
       <td className={cn(TD, 'w-16 py-1')}>
         <span className="flex justify-center">
@@ -194,18 +215,128 @@ function TxLine({
   );
 }
 
+/** A labelled block inside the Filter popover. */
+function FilterField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-1.5">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+      {children}
+    </div>
+  );
+}
+
+/** A small one-of-many picker (Semua / … ) for the Filter popover. */
+function ChipGroup({
+  value,
+  onChange,
+  options,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  /** `count` (optional) is shown muted after the label, like the status pills. */
+  options: { value: string; label: string; count?: number }[];
+}) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {options.map((o) => (
+        <button
+          key={o.value || 'all'}
+          type="button"
+          aria-pressed={value === o.value}
+          onClick={() => onChange(o.value)}
+          className={cn(
+            'h-7 rounded-md border px-2.5 text-xs font-semibold transition',
+            value === o.value
+              ? 'border-emerald-600 bg-emerald-600 text-white'
+              : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50',
+          )}
+        >
+          {o.label}
+          {o.count != null && (
+            <span className={cn('ml-1 tabular-nums', value === o.value ? 'text-emerald-100' : 'text-slate-400')}>
+              {o.count}
+            </span>
+          )}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** A column header that sorts the list when clicked: first click = the column's natural order, second flips it. */
+function SortTh({
+  label,
+  sortKey,
+  sort,
+  onSort,
+  align = 'left',
+}: {
+  label: string;
+  sortKey: TxSortKey;
+  sort: { key: TxSortKey; dir: SortDir };
+  onSort: (key: TxSortKey) => void;
+  align?: 'left' | 'right';
+}) {
+  const active = sort.key === sortKey;
+  return (
+    <th
+      className={cn(TH, align === 'right' ? 'text-right' : 'text-left')}
+      aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+    >
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className={cn(
+          'inline-flex items-center gap-1 uppercase tracking-wide hover:text-slate-900',
+          active && 'text-slate-900',
+        )}
+      >
+        {label}
+        {active ? (
+          sort.dir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+        ) : (
+          <ArrowUpDown className="h-3 w-3 text-slate-300" />
+        )}
+      </button>
+    </th>
+  );
+}
+
 // ─── Page ────────────────────────────────────────────────────────────────────
 
 export default function FinancePettyCashTransactionsPage() {
   const [range, setRange] = useState<DateRangeValue>(thisMonthRange);
   const [storeId, setStoreId] = useState<number | null>(null);
+  const [areaId, setAreaId] = useState<number | null>(null);
   const [status, setStatus] = useState<TxStatus | ''>('');
+  const [category, setCategory] = useState('');
+  const [review, setReview] = useState<TxReviewFilter | ''>('');
+  const [reOnly, setReOnly] = useState(false);
+  const [photo, setPhoto] = useState<TxPhotoFilter | ''>('');
+  const [sort, setSort] = useState<{ key: TxSortKey; dir: SortDir }>({ key: 'date', dir: 'desc' });
   const [page, setPage] = useState(1);
+  const [moreOpen, setMoreOpen] = useState(false);
+
+  // Typed boxes (search, amount range) go to the server a moment after typing stops.
+  const [searchInput, setSearchInput] = useState('');
+  const [minInput, setMinInput] = useState('');
+  const [maxInput, setMaxInput] = useState('');
+  const [typed, setTyped] = useState({ q: '', min: '', max: '' });
+  useEffect(() => {
+    const t = setTimeout(() => {
+      const next = { q: searchInput.trim(), min: minInput, max: maxInput };
+      setTyped((prev) => (prev.q === next.q && prev.min === next.min && prev.max === next.max ? prev : next));
+      setPage(1); // a new search / amount starts again from the first page
+    }, 350);
+    return () => clearTimeout(t);
+  }, [searchInput, minInput, maxInput]);
 
   // Last good response — stays on screen (dimmed) while the next one loads.
   const [data, setData] = useState<TransactionsPage | null>(null);
-  // Kept apart from `data` so the store dropdown never empties while a reload is in flight.
+  // Kept apart from `data` so the pickers never empty while a reload is in flight.
   const [stores, setStores] = useState<TransactionStoreOption[]>([]);
+  const [areas, setAreas] = useState<TransactionsPage['areas']>([]);
+  const [categories, setCategories] = useState<string[]>([]);
   const [reloadKey, setReloadKey] = useState(0);
   // Which request last finished (and how) — "loading" is simply: the current request hasn't.
   const [settled, setSettled] = useState<{ key: string; error: string | null } | null>(null);
@@ -213,9 +344,23 @@ export default function FinancePettyCashTransactionsPage() {
   const [lightbox, setLightbox] = useState<{ title: string; url: string } | null>(null);
   const [downloading, setDownloading] = useState(false);
 
-  const query = new URLSearchParams({ from: range.from, to: range.to, page: String(page) });
-  if (storeId != null) query.set('storeId', String(storeId));
-  if (status) query.set('status', status);
+  // Every filter + the sort as the API's query string (the list adds its page; the Excel export does not).
+  function filterParams(): URLSearchParams {
+    const qs = new URLSearchParams({ from: range.from, to: range.to, sort: sort.key, dir: sort.dir });
+    if (storeId != null) qs.set('storeId', String(storeId));
+    if (areaId != null) qs.set('areaId', String(areaId));
+    if (status) qs.set('status', status);
+    if (category) qs.set('category', category);
+    if (review) qs.set('review', review);
+    if (reOnly) qs.set('reRequest', '1');
+    if (photo) qs.set('photo', photo);
+    if (typed.q) qs.set('q', typed.q);
+    if (typed.min) qs.set('min', typed.min);
+    if (typed.max) qs.set('max', typed.max);
+    return qs;
+  }
+  const query = filterParams();
+  query.set('page', String(page));
   const requestKey = `${query}#${reloadKey}`;
 
   const loading = settled?.key !== requestKey;
@@ -233,6 +378,8 @@ export default function FinancePettyCashTransactionsPage() {
         if (body.success) {
           setData(body);
           setStores(body.stores);
+          setAreas(body.areas);
+          setCategories(body.categories);
           setSettled({ key, error: null });
           // The server clamps a page past the end (rows vanished after a reload).
           if (body.page !== page) setPage(body.page);
@@ -250,18 +397,76 @@ export default function FinancePettyCashTransactionsPage() {
   // Any filter change goes back to the first page.
   const changeRange = (next: DateRangeValue) => { setRange(next); setPage(1); };
   const changeStore = (next: number | null) => { setStoreId(next); setPage(1); };
+  const changeArea = (next: number | null) => {
+    setAreaId(next);
+    // A store that is not in the new area can no longer be the one picked.
+    if (next != null && storeId != null && stores.find((s) => s.id === storeId)?.areaId !== next) setStoreId(null);
+    setPage(1);
+  };
   const changeStatus = (next: TxStatus | '') => { setStatus(next); setPage(1); };
-  const clearFilters = () => { setStoreId(null); setStatus(''); setPage(1); };
+  const changeCategory = (next: string) => { setCategory(next); setPage(1); };
+  const changeReview = (next: TxReviewFilter | '') => { setReview(next); setPage(1); };
+  const changeReOnly = (next: boolean) => { setReOnly(next); setPage(1); };
+  const changePhoto = (next: TxPhotoFilter | '') => { setPhoto(next); setPage(1); };
+  const changeSort = (key: TxSortKey, dir?: SortDir) => {
+    setSort((prev) => ({
+      key,
+      // Clicking the sorted column flips it; a new column starts in its natural order.
+      dir: dir ?? (prev.key === key ? (prev.dir === 'asc' ? 'desc' : 'asc') : defaultSortDir(key)),
+    }));
+    setPage(1);
+  };
+  // The filters inside the "Filter" popover (the OPS status is there too, as well as in the pills).
+  const clearMore = () => {
+    setStatus('');
+    setAreaId(null);
+    setCategory('');
+    setReview('');
+    setReOnly(false);
+    setPhoto('');
+    setMinInput('');
+    setMaxInput('');
+    setPage(1);
+  };
+  const clearFilters = () => {
+    clearMore();
+    setStoreId(null);
+    setStatus('');
+    setSearchInput('');
+  };
 
-  // Same filters as the list, minus the page — the export writes every matching row.
+  // Every filter set in the Filter popover (the OPS status included), as a removable chip under the bar.
+  const rupiahInput = (v: string) => Number(v).toLocaleString('id-ID');
+  const activeChips: { key: string; label: string; clear: () => void }[] = [
+    status ? { key: 'status', label: TX_STATUS_LABEL[status], clear: () => changeStatus('') } : null,
+    areaId != null
+      ? { key: 'area', label: `Area: ${areas.find((a) => a.id === areaId)?.name ?? areaId}`, clear: () => changeArea(null) }
+      : null,
+    category ? { key: 'category', label: `Kategori: ${category}`, clear: () => changeCategory('') } : null,
+    review ? { key: 'review', label: TX_REVIEW_FILTER_LABEL[review], clear: () => changeReview('') } : null,
+    reOnly ? { key: 're', label: 'Re-request', clear: () => changeReOnly(false) } : null,
+    photo ? { key: 'photo', label: TX_PHOTO_FILTER_LABEL[photo], clear: () => changePhoto('') } : null,
+    minInput || maxInput
+      ? {
+          key: 'amount',
+          label: `Nominal ${minInput ? rupiahInput(minInput) : '0'} – ${maxInput ? rupiahInput(maxInput) : '∞'}`,
+          clear: () => {
+            setMinInput('');
+            setMaxInput('');
+          },
+        }
+      : null,
+  ].filter((c): c is { key: string; label: string; clear: () => void } => c != null);
+  // The Filter button's badge: every filter set inside the popover.
+  const moreCount = activeChips.length;
+
+  // Same filters and order as the list, minus the page — the export writes every matching row.
   async function handleDownload() {
-    const qs = new URLSearchParams({ from: range.from, to: range.to });
-    if (storeId != null) qs.set('storeId', String(storeId));
-    if (status) qs.set('status', status);
+    const qs = filterParams();
 
     setDownloading(true);
     try {
-      await downloadXlsx(`/api/finance/petty-cash/transactions/export?${qs}`, `petty-cash-transaksi_${range.from}_${range.to}.xlsx`);
+      await downloadXlsx(`/api/finance/petty-cash/transactions/export?${qs}`, 'Petty cash transaction.xlsx');
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Download gagal.');
     } finally {
@@ -275,7 +480,22 @@ export default function FinancePettyCashTransactionsPage() {
     ...TX_STATUS_ORDER.map((s) => ({ key: s, label: TX_STATUS_LABEL[s], n: summary?.byStatus[s] })),
   ];
   const rows = data?.rows ?? [];
-  const filtered = storeId != null || status !== '';
+  const filtered =
+    storeId != null ||
+    areaId != null ||
+    status !== '' ||
+    category !== '' ||
+    review !== '' ||
+    reOnly ||
+    photo !== '' ||
+    searchInput !== '' ||
+    minInput !== '' ||
+    maxInput !== '';
+  // The store picker only offers the stores of the chosen area.
+  const storeOptions = useMemo(
+    () => (areaId == null ? stores : stores.filter((s) => s.areaId === areaId)),
+    [stores, areaId],
+  );
   const firstRow = data && data.matching > 0 ? (data.page - 1) * data.pageSize + 1 : 0;
   const lastRow = data ? (data.page - 1) * data.pageSize + rows.length : 0;
 
@@ -329,58 +549,233 @@ export default function FinancePettyCashTransactionsPage() {
         {summary && !error && (
           <KpiStrip
             items={[
-              { label: 'Total used', value: rp(summary.totalUsed), sub: 'completed requests, actual amount' },
+              { label: 'Total used', value: rp(summary.totalUsed), sub: 'Diterima Finance, actual amount' },
               { label: 'Transactions', value: String(summary.count), sub: `${summary.byStatus.completed} completed` },
               { label: 'Waiting OPS', value: String(summary.byStatus.pending_ops), sub: 'not yet approved' },
               { label: 'Awaiting actual amount', value: String(summary.byStatus.ops_approved), sub: 'approved, PIC yet to record' },
+              { label: PENDING_FINANCE_LABEL, value: String(summary.pendingFinance), sub: 'completed, not yet checked', warn: summary.pendingFinance > 0 },
               { label: 'Rejected', value: String(summary.byStatus.ops_rejected), sub: 'by OPS' },
               { label: 'Re-request', value: String(summary.reRequestCount), sub: 'ditolak Finance, diajukan ulang' },
             ]}
           />
         )}
 
-        {/* Filters */}
-        <div className="space-y-3">
-          <StoreCombobox
-            stores={stores}
-            value={storeId}
-            onChange={changeStore}
-            loading={stores.length === 0 && loading}
-            allLabel="Semua toko"
-            accent="emerald"
-          />
+        {/* Filters — one compact bar: search · store · Filter (the rest) · sort; below it the status + active filters */}
+        <div className="rounded-md border border-slate-300 bg-white">
+          <div className="flex flex-wrap items-center gap-2 p-2">
+            <div className="relative min-w-[220px] flex-1">
+              <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                placeholder="Cari toko, keterangan, kategori, IS, pengaju, #ID, nominal…"
+                aria-label="Cari transaksi"
+                className={cn(INPUT_CLS, 'w-full pl-9 pr-8')}
+              />
+              {searchInput && (
+                <button
+                  type="button"
+                  onClick={() => setSearchInput('')}
+                  aria-label="Hapus pencarian"
+                  className="absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-slate-400 hover:text-slate-700"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
 
-          <div className="flex flex-wrap items-center gap-1.5" role="tablist" aria-label="Filter status">
-            {statusPills.map(({ key, label, n }) => (
-              <button
-                key={key || 'all'}
-                type="button"
-                role="tab"
-                aria-selected={status === key}
-                onClick={() => changeStatus(key)}
-                className={cn(
-                  'h-8 rounded-full border px-3 text-xs font-bold transition',
-                  status === key
-                    ? 'border-emerald-600 bg-emerald-600 text-white'
-                    : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50',
-                )}
+            <StoreCombobox
+              stores={storeOptions}
+              value={storeId}
+              onChange={changeStore}
+              loading={stores.length === 0 && loading}
+              allLabel="Semua toko"
+              accent="emerald"
+              className="h-9 w-64 max-w-none rounded-md border-slate-300 shadow-none"
+            />
+
+            <Popover open={moreOpen} onOpenChange={setMoreOpen}>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  className={cn(
+                    'flex h-9 items-center gap-2 rounded-md border px-3 text-sm font-medium transition',
+                    moreCount > 0
+                      ? 'border-emerald-500 bg-emerald-50 text-emerald-800'
+                      : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50',
+                  )}
+                >
+                  <SlidersHorizontal className="h-4 w-4" />
+                  Filter
+                  {moreCount > 0 && (
+                    <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-emerald-600 px-1 text-[11px] font-bold text-white">
+                      {moreCount}
+                    </span>
+                  )}
+                </button>
+              </PopoverTrigger>
+              <PopoverContent align="end" sideOffset={6} className="w-[min(92vw,26rem)] rounded-lg border-slate-200 p-0 shadow-lg">
+                <div className="space-y-4 p-4">
+                  <FilterField label="Keputusan Finance">
+                    <ChipGroup
+                      value={review}
+                      onChange={(v) => changeReview(v as TxReviewFilter | '')}
+                      options={[
+                        { value: '', label: 'Semua' },
+                        ...TX_REVIEW_FILTER_ORDER.map((r) => ({ value: r, label: TX_REVIEW_FILTER_LABEL[r] })),
+                      ]}
+                    />
+                  </FilterField>
+
+                  {/* Where the request is in the OPS / PIC 1 flow. */}
+                  <FilterField label="Status by OPS">
+                    <ChipGroup
+                      value={status}
+                      onChange={(v) => changeStatus(v as TxStatus | '')}
+                      options={statusPills.map(({ key, label, n }) => ({ value: key, label, count: n }))}
+                    />
+                  </FilterField>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <FilterField label="Area">
+                      <select
+                        value={areaId ?? ''}
+                        onChange={(e) => changeArea(e.target.value ? Number(e.target.value) : null)}
+                        className={cn(SELECT_CLS, 'w-full')}
+                      >
+                        <option value="">Semua area</option>
+                        {areas.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                      </select>
+                    </FilterField>
+                    <FilterField label="Kategori">
+                      <select
+                        value={category}
+                        onChange={(e) => changeCategory(e.target.value)}
+                        className={cn(SELECT_CLS, 'w-full')}
+                      >
+                        <option value="">Semua kategori</option>
+                        {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    </FilterField>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <FilterField label="Jenis request">
+                      <ChipGroup
+                        value={reOnly ? 're' : ''}
+                        onChange={(v) => changeReOnly(v === 're')}
+                        options={[{ value: '', label: 'Semua' }, { value: 're', label: 'Re-request' }]}
+                      />
+                    </FilterField>
+                    <FilterField label="Foto struk">
+                      <ChipGroup
+                        value={photo}
+                        onChange={(v) => changePhoto(v as TxPhotoFilter | '')}
+                        options={[{ value: '', label: 'Semua' }, { value: 'with', label: 'Ada' }, { value: 'without', label: 'Tanpa' }]}
+                      />
+                    </FilterField>
+                  </div>
+
+                  <FilterField label="Nominal (Rp)">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={minInput}
+                        onChange={(e) => setMinInput(e.target.value.replace(/\D/g, ''))}
+                        placeholder="Min"
+                        aria-label="Nominal minimum"
+                        className={cn(INPUT_CLS, 'w-full tabular-nums')}
+                      />
+                      <span className="text-slate-400">–</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={maxInput}
+                        onChange={(e) => setMaxInput(e.target.value.replace(/\D/g, ''))}
+                        placeholder="Maks"
+                        aria-label="Nominal maksimum"
+                        className={cn(INPUT_CLS, 'w-full tabular-nums')}
+                      />
+                    </div>
+                  </FilterField>
+                </div>
+                <div className="flex items-center justify-between border-t border-slate-100 px-4 py-2.5">
+                  <button
+                    type="button"
+                    onClick={clearMore}
+                    disabled={moreCount === 0}
+                    className="text-xs font-semibold text-slate-500 hover:text-slate-800 disabled:opacity-40"
+                  >
+                    Reset filter
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMoreOpen(false)}
+                    className="h-8 rounded-md bg-emerald-600 px-3 text-xs font-semibold text-white hover:bg-emerald-700"
+                  >
+                    Selesai
+                  </button>
+                </div>
+              </PopoverContent>
+            </Popover>
+
+            {/* Sort: field + direction as one control */}
+            <div className="flex h-9 items-stretch overflow-hidden rounded-md border border-slate-300 bg-white text-sm">
+              <label htmlFor="tx-sort" className="flex items-center gap-1.5 pl-2.5 text-slate-500">
+                <ArrowUpDown className="h-3.5 w-3.5" />
+                <span className="sr-only">Urutkan</span>
+              </label>
+              <select
+                id="tx-sort"
+                value={sort.key}
+                onChange={(e) => changeSort(e.target.value as TxSortKey, defaultSortDir(e.target.value as TxSortKey))}
+                className="cursor-pointer border-0 bg-transparent py-0 pl-1.5 pr-7 font-medium text-slate-700 focus:outline-none focus:ring-0"
               >
-                {label}{' '}
-                <span className={cn('tabular-nums', status === key ? 'text-emerald-100' : 'text-slate-400')}>
-                  {n ?? '–'}
-                </span>
-              </button>
-            ))}
-            {filtered && (
+                {TX_SORT_KEYS.map((k) => <option key={k} value={k}>{TX_SORT_LABEL[k]}</option>)}
+              </select>
               <button
                 type="button"
-                onClick={clearFilters}
-                className="ml-1 text-xs font-semibold text-slate-500 underline hover:text-slate-700"
+                onClick={() => changeSort(sort.key, sort.dir === 'asc' ? 'desc' : 'asc')}
+                aria-label={sort.dir === 'asc' ? 'Urutan naik — klik untuk menurun' : 'Urutan turun — klik untuk menaik'}
+                title={sort.dir === 'asc' ? 'Naik (A → Z, kecil → besar, lama → baru)' : 'Turun (Z → A, besar → kecil, baru → lama)'}
+                className="flex w-9 items-center justify-center border-l border-slate-300 text-slate-600 hover:bg-slate-50"
               >
-                Clear
+                {sort.dir === 'asc' ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />}
               </button>
-            )}
+            </div>
           </div>
+
+          {/* The filters in use (set in the Filter popover), each removable — only when there are any. */}
+          {activeChips.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 border-t border-slate-200 px-2 py-1.5">
+            {activeChips.map((chip) => (
+              <span
+                key={chip.key}
+                className="inline-flex h-7 items-center gap-1 rounded-full bg-slate-100 pl-2.5 pr-1 text-xs font-medium text-slate-700"
+              >
+                {chip.label}
+                <button
+                  type="button"
+                  onClick={chip.clear}
+                  aria-label={`Hapus filter ${chip.label}`}
+                  className="flex h-5 w-5 items-center justify-center rounded-full text-slate-400 hover:bg-slate-200 hover:text-slate-700"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
+
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="ml-auto px-1 text-xs font-semibold text-slate-500 hover:text-slate-800"
+            >
+              Reset semua
+            </button>
+          </div>
+          )}
         </div>
 
         {error && (
@@ -417,15 +812,16 @@ export default function FinancePettyCashTransactionsPage() {
                 <thead>
                   <tr>
                     <th className={cn(TH, 'w-11 text-center')}>No</th>
-                    <th className={cn(TH, 'text-left')}>Tanggal</th>
+                    <SortTh label="Tanggal" sortKey="date" sort={sort} onSort={changeSort} />
                     <th className={cn(TH, 'text-left')}>Kode</th>
-                    <th className={cn(TH, 'text-left')}>Nama Toko</th>
-                    <th className={cn(TH, 'text-left')}>Kategori</th>
+                    <SortTh label="Nama Toko" sortKey="store" sort={sort} onSort={changeSort} />
+                    <SortTh label="Kategori" sortKey="category" sort={sort} onSort={changeSort} />
+                    <th className={cn(TH, 'text-left')} title="No. item Business Central">IS</th>
                     <th className={cn(TH, 'text-left')}>Keterangan</th>
-                    <th className={cn(TH, 'text-left')}>Diajukan Oleh</th>
-                    <th className={cn(TH, 'text-right')}>Diajukan (Rp)</th>
-                    <th className={cn(TH, 'text-right')}>Aktual (Rp)</th>
-                    <th className={cn(TH, 'text-left')}>Status</th>
+                    <SortTh label="Diajukan Oleh" sortKey="submitter" sort={sort} onSort={changeSort} />
+                    <SortTh label="Diajukan (Rp)" sortKey="amount" sort={sort} onSort={changeSort} align="right" />
+                    <SortTh label="Aktual (Rp)" sortKey="actual" sort={sort} onSort={changeSort} align="right" />
+                    <SortTh label="Status" sortKey="status" sort={sort} onSort={changeSort} />
                     <th className={cn(TH, 'text-center')}>Struk</th>
                   </tr>
                 </thead>
@@ -441,6 +837,22 @@ export default function FinancePettyCashTransactionsPage() {
                     />
                   ))}
                 </tbody>
+                {/* Total over EVERY matching transaction (all pages), not just the 50 on screen. */}
+                <tfoot>
+                  <tr className="text-[13px] font-semibold text-slate-900">
+                    <td className={cn(ROW_HEAD, 'sticky bottom-0 border-t-2 border-t-slate-400')} />
+                    <td colSpan={7} className={cn(TD, 'sticky bottom-0 border-t-2 border-t-slate-400 bg-emerald-50 text-right text-xs uppercase tracking-wide')}>
+                      Total · {data.matching} transaksi
+                    </td>
+                    <td className={cn(TD, 'sticky bottom-0 border-t-2 border-t-slate-400 bg-emerald-50 text-right tabular-nums')}>
+                      {num(data.totals.amount)}
+                    </td>
+                    <td className={cn(TD, 'sticky bottom-0 border-t-2 border-t-slate-400 bg-emerald-50 text-right tabular-nums')}>
+                      {num(data.totals.actual)}
+                    </td>
+                    <td colSpan={2} className={cn(TD, 'sticky bottom-0 border-t-2 border-t-slate-400 bg-emerald-50')} />
+                  </tr>
+                </tfoot>
               </table>
             </div>
 
@@ -481,7 +893,10 @@ export default function FinancePettyCashTransactionsPage() {
             <p className="text-[11px] text-slate-500">
               Tanggal = saat PIC mengajukan request. <span className="font-semibold">Diajukan</span> adalah perkiraan
               PIC; <span className="font-semibold">Aktual</span> baru terisi setelah PIC mencatat nominal yang benar-benar
-              dipakai — hanya request Completed yang memotong saldo dan dihitung di Total used.
+              dipakai. Total used = request yang Diterima Finance (nominal aktual); baris Total di bawah tabel
+              menjumlahkan semua transaksi sesuai filter (bukan hanya halaman ini). IS = No. item Business
+              Central dari kategorinya. Download Excel = &ldquo;Petty cash transaction&rdquo; dalam format baris Purchase
+              Invoice BC, berisi semua transaksi sesuai filter dan urutan di atas.
             </p>
           </>
         ) : null}

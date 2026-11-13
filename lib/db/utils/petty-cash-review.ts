@@ -2,9 +2,14 @@
 //
 // Finance's review of completed petty cash requests (rules + states: lib/petty-cash-review.ts).
 //
-//   financeRejectTransaction  Finance turns a request down — "Perlu Perbaikan" (PIC 1 files it again as a re-request,
-//                             counted in the next period) or "Ditolak" (final, can't be re-requested) — PIC 1 is told
-//   financeAcceptTransaction  Finance takes either decision back
+//   financeRejectTransaction  Finance turns a request down — "Perlu Perbaikan" or "Ditolak" (final) — PIC 1 is told.
+//                             Perlu Perbaikan sends the SAME request back to PIC 1 as a `draft` (no new request):
+//                             PIC 1 fixes it and sends it to OPS again (marked Re-request), OPS approves, and it comes
+//                             back to Finance (lib/db/utils/petty-cash-re-request.ts). Where it is counted: it STAYS in
+//                             its period while that period is still running and no refill has been asked for it;
+//                             otherwise (the period has ended, or PIC 1 already sent its refill) it moves to the next
+//                             period — made ahead as 'upcoming' when that is not the period in use yet.
+//   financeAcceptTransaction  Finance accepts a request (Diterima), or takes a Ditolak back
 //
 // Both stop once the refill that settles the request's period has been verified: that cash is already
 // sent (getVerifiedThrough). A request filed while the refill was on its way belongs to the NEXT period,
@@ -17,22 +22,24 @@
 // Finance verifies that refill). So "used", the balance and the refill (max − balance) all leave it out;
 // whatever the transfer doesn't cover is paid by the employee outside the system.
 
-import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import {
   pettyCashRefillRequests,
+  pettyCashRefills,
   pettyCashTransactions,
   userRoles,
   users,
 } from '@/lib/db/schema';
 import { isLockedByVerification, leavesOutOfTransfer, validateFinanceComment } from '@/lib/petty-cash-review';
 import { RE_REQUEST_LABEL } from '@/lib/petty-cash-re-request';
+import { addMonths, laterMonth, periodLabel } from '@/lib/petty-cash-period';
 import { createNotificationsForUsers } from './notifications';
-import { adjustPeriodBalance } from './petty-cash-period';
+import { adjustPeriodBalance, ensureUpcomingPeriod, getActivePeriod } from './petty-cash-period';
 
 export type ReviewResult =
-  | { success: true }
+  | { success: true; /** Perlu Perbaikan: the period the draft is counted in now (YYYY-MM). */ periodMonth?: string }
   | { success: false; error: string; status: 400 | 404 | 409 };
 
 const rp = (n: number) => `Rp ${Math.round(n).toLocaleString('id-ID')}`;
@@ -102,8 +109,47 @@ const labelOf = (tx: TxRow) => tx.categoryName ?? 'Request petty cash';
 
 // ─── Finance ─────────────────────────────────────────────────────────────────
 
-/** How Finance turns a request down: Perlu Perbaikan (re-requestable) or Ditolak (final). */
+/** How Finance turns a request down: Perlu Perbaikan (back to PIC 1 as a draft) or Ditolak (final). */
 export type RejectKind = 'needs_fix' | 'rejected';
+
+/**
+ * Where a request Finance sends back (Perlu Perbaikan) is counted from now on. It STAYS in its period while that
+ * period is still running (the one in use, or one made ahead) and nobody has asked for its refill yet — Finance
+ * will see it again in the same check. Otherwise (the period has ended, or PIC 1 already sent its refill, e.g. on
+ * the 15th) it moves to the NEXT period: the one after its own, never older than the period in use; a period that
+ * does not exist yet is made ahead as 'upcoming' and opens when the calendar reaches it.
+ */
+async function fixPeriodFor(tx: TxRow): Promise<{ periodId: number; yearMonth: string }> {
+  const active = await getActivePeriod(tx.storeId);
+
+  const [asked] = await db
+    .select({ id: pettyCashRefillRequests.id })
+    .from(pettyCashRefillRequests)
+    .where(
+      and(
+        eq(pettyCashRefillRequests.storeId, tx.storeId),
+        eq(pettyCashRefillRequests.yearMonth, tx.yearMonth),
+        ne(pettyCashRefillRequests.status, 'rejected'),
+      ),
+    )
+    .limit(1);
+  // A month-end refill of the old flow settles the period too.
+  const [legacyRefill] = asked
+    ? [asked]
+    : await db
+        .select({ id: pettyCashRefills.id })
+        .from(pettyCashRefills)
+        .where(and(eq(pettyCashRefills.storeId, tx.storeId), eq(pettyCashRefills.yearMonth, tx.yearMonth)))
+        .limit(1);
+
+  if (tx.yearMonth >= active.yearMonth && !legacyRefill && tx.periodId != null) {
+    return { periodId: tx.periodId, yearMonth: tx.yearMonth };
+  }
+
+  const month = laterMonth(addMonths(tx.yearMonth, 1), active.yearMonth);
+  const period = month === active.yearMonth ? active : await ensureUpcomingPeriod(tx.storeId, month);
+  return { periodId: period.id, yearMonth: period.yearMonth };
+}
 
 export async function financeRejectTransaction(input: {
   txId: number;
@@ -120,6 +166,9 @@ export async function financeRejectTransaction(input: {
   if (!found) return { success: false, error: 'Request tidak ditemukan.', status: 404 };
   const { tx } = found;
 
+  if (tx.status === 'draft' || (tx.isReRequest && tx.status !== 'completed' && tx.status !== 'ops_rejected')) {
+    return { success: false, error: 'Request ini sedang diperbaiki PIC 1 — bisa diputuskan lagi setelah disetujui OPS.', status: 409 };
+  }
   if (tx.status !== 'completed') {
     return { success: false, error: 'Hanya request yang sudah selesai (jumlah terpakai sudah diisi PIC 1) yang bisa diputuskan.', status: 409 };
   }
@@ -137,6 +186,9 @@ export async function financeRejectTransaction(input: {
     return { success: false, error: `Request ini sudah diajukan ulang sebagai ${RE_REQUEST_LABEL} (#${again}), jadi keputusannya tidak bisa diubah.`, status: 409 };
   }
 
+  // Perlu Perbaikan: the same request goes back to PIC 1 as a draft, in this period or the next one.
+  const target = kind === 'needs_fix' ? await fixPeriodFor(tx) : null;
+
   const now = new Date();
   const previous = tx.financeReview;
   const updated = await db.transaction(async (trx) => {
@@ -148,6 +200,15 @@ export async function financeRejectTransaction(input: {
         financeReviewAt: now,
         financeComment: comment.comment,
         updatedAt: now,
+        ...(target
+          ? {
+              status: 'draft',
+              // The mark OPS and Finance see when it comes back: a request fixed after Perlu Perbaikan.
+              isReRequest: true,
+              periodId: target.periodId,
+              yearMonth: target.yearMonth,
+            }
+          : {}),
       })
       .where(
         and(
@@ -158,7 +219,8 @@ export async function financeRejectTransaction(input: {
       )
       .returning({ id: pettyCashTransactions.id });
     // The amount stops counting as used: a request that was still counted (never reviewed, or accepted)
-    // gives it back; one that was already left out (needs_fix → rejected) did so before.
+    // gives it back to the period it was cut from; one that was already left out did so before. A draft is cut
+    // again (from the period it is in by then) when OPS approves the fixed request.
     if (row && (previous == null || previous === 'accepted')) await adjustPeriodBalance(trx, tx.periodId, amountOf(tx));
     return row;
   });
@@ -169,32 +231,50 @@ export async function financeRejectTransaction(input: {
     type: 'petty_cash_tx_rejected',
     title: kind === 'needs_fix' ? 'Request petty cash perlu diperbaiki' : 'Request petty cash ditolak',
     body:
-      kind === 'needs_fix'
-        ? `${labelOf(tx)} ${rp(amountOf(tx))} perlu diperbaiki dan tidak ikut ditransfer.${reason} Ajukan ulang lewat ${RE_REQUEST_LABEL} di halaman Petty Cash — dihitung di periode berikutnya.`
+      target
+        ? `${labelOf(tx)} ${rp(amountOf(tx))} perlu diperbaiki.${reason} Buka halaman Petty Cash, perbaiki request ini lalu kirim lagi ke OPS — dihitung di periode ${periodLabel(target.yearMonth)}.`
         : `${labelOf(tx)} ${rp(amountOf(tx))} ditolak dan tidak ikut ditransfer.${reason} Request yang ditolak tidak bisa diajukan ulang.`,
     link: '/employee/pettycash',
     relatedType: 'petty_cash_transaction',
     relatedId: tx.id,
   });
 
-  return { success: true };
+  return { success: true, periodMonth: target?.yearMonth };
 }
 
-/** Takes Finance's decision on a request back: it counts as used again. */
+/**
+ * "Diterima": Finance has checked the request and it is fine.
+ *  - from Pending Finance (no decision yet): just records the check — the amount was already counted as used, so
+ *    nothing moves and PIC 1 is not messaged. It still works after the refill was verified (the amount does not
+ *    change), so a month can always be completed.
+ *  - from Perlu Perbaikan / Ditolak: takes that decision back, so the request counts as used again (before the
+ *    refill is verified, and only while it has not been filed again as a re-request).
+ */
 export async function financeAcceptTransaction(input: { txId: number; actorId: string }): Promise<ReviewResult> {
   const found = await loadTransaction(input.txId);
   if (!found) return { success: false, error: 'Request tidak ditemukan.', status: 404 };
   const { tx } = found;
+  const previous = tx.financeReview;
 
-  if (!leavesOutOfTransfer(tx.financeReview)) {
-    return { success: false, error: 'Request ini tidak sedang menunggu keputusan Finance.', status: 409 };
+  if (tx.status === 'draft' || (tx.isReRequest && tx.status !== 'completed' && tx.status !== 'ops_rejected')) {
+    return { success: false, error: 'Request ini sedang diperbaiki PIC 1 — bisa diputuskan lagi setelah disetujui OPS.', status: 409 };
   }
-  if (await isLocked(tx)) {
-    return { success: false, error: 'Refill toko ini sudah diverifikasi — nominalnya sudah dikunci.', status: 409 };
+  if (tx.status !== 'completed') {
+    return { success: false, error: 'Hanya request yang sudah selesai (jumlah terpakai sudah diisi PIC 1) yang bisa diterima.', status: 409 };
   }
-  const again = await reRequestOf(tx.id);
-  if (again != null) {
-    return { success: false, error: `Request ini sudah diajukan ulang sebagai ${RE_REQUEST_LABEL} (#${again}), jadi keputusannya tidak bisa dibatalkan.`, status: 409 };
+  if (previous === 'accepted') {
+    return { success: false, error: 'Request ini sudah Diterima.', status: 409 };
+  }
+
+  const takingBack = leavesOutOfTransfer(previous);
+  if (takingBack) {
+    if (await isLocked(tx)) {
+      return { success: false, error: 'Refill toko ini sudah diverifikasi — nominalnya sudah dikunci.', status: 409 };
+    }
+    const again = await reRequestOf(tx.id);
+    if (again != null) {
+      return { success: false, error: `Request ini sudah diajukan ulang sebagai ${RE_REQUEST_LABEL} (#${again}), jadi keputusannya tidak bisa dibatalkan.`, status: 409 };
+    }
   }
 
   const now = new Date();
@@ -202,18 +282,26 @@ export async function financeAcceptTransaction(input: { txId: number; actorId: s
     const [row] = await trx
       .update(pettyCashTransactions)
       .set({ financeReview: 'accepted', financeReviewBy: input.actorId, financeReviewAt: now, updatedAt: now })
-      .where(and(eq(pettyCashTransactions.id, tx.id), eq(pettyCashTransactions.financeReview, tx.financeReview!)))
+      .where(
+        and(
+          eq(pettyCashTransactions.id, tx.id),
+          eq(pettyCashTransactions.status, 'completed'),
+          previous == null ? isNull(pettyCashTransactions.financeReview) : eq(pettyCashTransactions.financeReview, previous),
+        ),
+      )
       .returning({ id: pettyCashTransactions.id });
-    // Counted as used again: take the amount off the balance.
-    if (row) await adjustPeriodBalance(trx, tx.periodId, -amountOf(tx));
+    // Counted as used again: take the amount off the balance. (A plain check changes no amount.)
+    if (row && takingBack) await adjustPeriodBalance(trx, tx.periodId, -amountOf(tx));
     return row;
   });
   if (!updated) return { success: false, error: 'Gagal memproses. Muat ulang lalu coba lagi.', status: 409 };
 
+  if (!takingBack) return { success: true };
+
   await createNotificationsForUsers([tx.userId], {
     type: 'petty_cash_tx_accepted',
     title: 'Keputusan Finance atas request petty cash dibatalkan',
-    body: `${labelOf(tx)} ${rp(amountOf(tx))} tidak jadi ${tx.financeReview === 'rejected' ? 'ditolak' : 'diminta diperbaiki'} dan ikut dihitung di Refill.`,
+    body: `${labelOf(tx)} ${rp(amountOf(tx))} tidak jadi ${previous === 'rejected' ? 'ditolak' : 'diminta diperbaiki'} dan ikut dihitung di Refill.`,
     link: '/employee/pettycash',
     relatedType: 'petty_cash_transaction',
     relatedId: tx.id,

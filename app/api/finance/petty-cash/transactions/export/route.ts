@@ -1,17 +1,16 @@
 // app/api/finance/petty-cash/transactions/export/route.ts
 //
-// GET ?from=YYYY-MM-DD&to=YYYY-MM-DD[&storeId=][&status=] — the Petty Cash
-// Transactions list as a styled .xlsx: the same filters as the page (store,
-// period, status), but every matching row instead of one page.
+// GET — the same query string as the Transactions list (period, search, area, store, status, category, Finance
+// decision, Re-request, receipt photo, amount range, sort; lib/petty-cash-transactions.ts → parseTransactionQuery)
+// → "Petty cash transaction.xlsx": every matching request (not just the page on screen), in the page's order, laid
+// out as Business Central Purchase Invoice lines (lib/petty-cash-transactions-xlsx.ts).
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
 
-import { authOptions } from '@/lib/auth';
 import { resolveFinanceScope } from '@/lib/finance/scope';
-import { getPettyCashTransactionsForExport, getStoreOption } from '@/lib/db/utils/petty-cash-transactions';
+import { getPettyCashTransactionsForExport } from '@/lib/db/utils/petty-cash-transactions';
 import { parseTransactionQuery } from '@/lib/petty-cash-transactions';
-import { buildTransactionsWorkbook } from '@/lib/petty-cash-transactions-xlsx';
+import { PETTY_CASH_EXPORT_NAME, buildTransactionsWorkbook } from '@/lib/petty-cash-transactions-xlsx';
 
 export async function GET(req: NextRequest) {
   const scope = await resolveFinanceScope();
@@ -25,30 +24,9 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const [session, rows, store] = await Promise.all([
-      getServerSession(authOptions),
-      getPettyCashTransactionsForExport(query),
-      query.storeId != null ? getStoreOption(query.storeId) : Promise.resolve(null),
-    ]);
-    if (query.storeId != null && !store) {
-      return NextResponse.json({ success: false, error: 'Store not found.' }, { status: 404 });
-    }
-
-    const buffer = buildTransactionsWorkbook({
-      from: query.from,
-      to: query.to,
-      storeLabel: store ? `${store.storeNo} · ${store.name}` : null,
-      status: query.status,
-      rows,
-      exportedBy: session?.user?.name ?? scope.userId,
-    });
-
-    const period = query.from === query.to ? query.from : `${query.from}_${query.to}`;
-    const filename =
-      ['petty-cash-transaksi', period, store?.storeNo, query.status]
-        .filter(Boolean)
-        .join('_')
-        .replace(/[^\w.-]+/g, '-') + '.xlsx';
+    const rows = await getPettyCashTransactionsForExport(query);
+    const buffer = buildTransactionsWorkbook(rows);
+    const filename = `${PETTY_CASH_EXPORT_NAME}.xlsx`;
 
     return new NextResponse(new Uint8Array(buffer), {
       status: 200,

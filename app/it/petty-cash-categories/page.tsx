@@ -5,7 +5,8 @@ import PanelPageHeader from '@/components/shared/PanelPageHeader';
 //
 // Manage the categories a PIC picks when requesting petty cash (STATIONERY &
 // OFFICE SUPPLIES, PRINTING, …): add, edit the Pengertian + Contoh Pengeluaran
-// shown in the "!" help sheet of the employee Petty Cash page, hide, reorder,
+// shown in the "!" help sheet of the employee Petty Cash page and the IS
+// (Business Central item no. — Finance only, never shown to PIC), hide, reorder,
 // delete. A category has no preset Keterangan — the PIC always writes their own.
 // Employees see the active ones via GET /api/employee/petty-cash.
 
@@ -33,6 +34,9 @@ import {
   PETTY_CASH_CATEGORY_NAME_MAX,
   PETTY_CASH_CATEGORY_NOTE,
   PETTY_CASH_CATEGORY_TEXT_MAX,
+  PETTY_CASH_IS_CODE_MAX,
+  isValidIsCode,
+  normalizeIsCode,
 } from '@/lib/petty-cash-categories';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -42,14 +46,16 @@ type CategoryRow = {
   name: string;
   definition: string | null;
   examples: string | null;
+  /** IS — Business Central item no.; back office only (Finance lists + export), never shown to PIC. */
+  isCode: string | null;
   isActive: boolean;
   sortOrder: number;
   usageCount: number;
 };
 
-type Draft = { name: string; definition: string; examples: string };
+type Draft = { name: string; isCode: string; definition: string; examples: string };
 
-const EMPTY_DRAFT: Draft = { name: '', definition: '', examples: '' };
+const EMPTY_DRAFT: Draft = { name: '', isCode: '', definition: '', examples: '' };
 
 async function api(url: string, init?: RequestInit) {
   const res = await fetch(url, {
@@ -78,6 +84,7 @@ function CategoryDialog({
     editing
       ? {
           name: editing.name,
+          isCode: editing.isCode ?? '',
           definition: editing.definition ?? '',
           examples: editing.examples ?? '',
         }
@@ -86,9 +93,11 @@ function CategoryDialog({
   const [busy, setBusy] = useState(false);
 
   const name = draft.name.trim();
+  const isCode = normalizeIsCode(draft.isCode);
+  const isCodeOk = !isCode || isValidIsCode(isCode);
   const definition = draft.definition.trim();
   const examples = draft.examples.trim();
-  const canSave = name.length >= 2 && !busy;
+  const canSave = name.length >= 2 && isCodeOk && !busy;
 
   async function save() {
     if (!canSave) return;
@@ -96,6 +105,7 @@ function CategoryDialog({
     try {
       const body = JSON.stringify({
         name,
+        isCode: isCode ?? '',
         definition,
         examples,
       });
@@ -128,17 +138,37 @@ function CategoryDialog({
         </DialogHeader>
 
         <div className="space-y-4">
-          <label className="block space-y-1.5">
-            <span className="text-xs font-bold text-slate-600">Nama kategori</span>
-            <input
-              autoFocus
-              value={draft.name}
-              maxLength={PETTY_CASH_CATEGORY_NAME_MAX}
-              onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
-              placeholder="mis. PRINTING"
-              className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm focus:border-cyan-400 focus:outline-none"
-            />
-          </label>
+          <div className="grid grid-cols-[1fr_9rem] gap-3">
+            <label className="block space-y-1.5">
+              <span className="text-xs font-bold text-slate-600">Nama kategori</span>
+              <input
+                autoFocus
+                value={draft.name}
+                maxLength={PETTY_CASH_CATEGORY_NAME_MAX}
+                onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
+                placeholder="mis. PRINTING"
+                className="h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm focus:border-cyan-400 focus:outline-none"
+              />
+            </label>
+            <label className="block space-y-1.5">
+              <span className="text-xs font-bold text-slate-600">IS</span>
+              <input
+                value={draft.isCode}
+                maxLength={PETTY_CASH_IS_CODE_MAX}
+                onChange={(e) => setDraft((d) => ({ ...d, isCode: e.target.value.toUpperCase().replace(/\s+/g, '') }))}
+                placeholder="IS000022"
+                aria-invalid={!isCodeOk}
+                className={cn(
+                  'h-10 w-full rounded-lg border bg-white px-3 font-mono text-sm uppercase focus:outline-none',
+                  isCodeOk ? 'border-slate-200 focus:border-cyan-400' : 'border-rose-300 focus:border-rose-400',
+                )}
+              />
+            </label>
+          </div>
+          <p className="-mt-2 text-[11px] text-slate-400">
+            IS = No. item Business Central untuk pengeluaran ini. Hanya terlihat di Finance (daftar petty cash dan
+            export Purchase Invoice), tidak tampil ke PIC.
+          </p>
 
           <label className="block space-y-1.5">
             <span className="flex items-center justify-between text-xs font-bold text-slate-600">
@@ -274,6 +304,18 @@ function CategoryItem({
           <p className={cn('text-sm font-bold', category.isActive ? 'text-slate-900' : 'text-slate-400')}>
             {category.name}
           </p>
+          {category.isCode ? (
+            <span
+              title="IS — No. item Business Central (hanya Finance)"
+              className="rounded-md bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-slate-600"
+            >
+              {category.isCode}
+            </span>
+          ) : (
+            <span className="rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">
+              IS belum diisi
+            </span>
+          )}
           {!category.isActive && (
             <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-500">
               Disembunyikan

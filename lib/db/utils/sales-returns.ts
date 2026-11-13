@@ -8,7 +8,7 @@
 // timestamp (createdAt, set at upload), so the range is converted to the UTC
 // instants those Jakarta days start and end at — independent of the server's zone.
 
-import { and, desc, eq, gte, ilike, lt, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, ilike, lt, or, sql, type SQL } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import { areas, salesReturns as sr, stores, users } from '@/lib/db/schema';
@@ -29,8 +29,10 @@ export const SALES_RETURN_PAGE_SIZE = 50;
 export async function createSalesReturn(input: {
   storeId: number;
   userId: string;
-  receiptNumber: string;
-  imageUrls: string[];
+  oldReceiptNumber: string | null;
+  newReceiptNumber: string;
+  oldReceiptImageUrl: string;
+  newReceiptImageUrl: string;
 }): Promise<{ id: number; createdAt: string }> {
   const createdAt = new Date();
   const [row] = await db
@@ -38,8 +40,12 @@ export async function createSalesReturn(input: {
     .values({
       storeId: input.storeId,
       userId: input.userId,
-      receiptNumber: input.receiptNumber,
-      imageUrls: JSON.stringify(input.imageUrls),
+      receiptNumber: input.newReceiptNumber,
+      oldReceiptNumber: input.oldReceiptNumber,
+      newReceiptNumber: input.newReceiptNumber,
+      oldReceiptImageUrl: input.oldReceiptImageUrl,
+      newReceiptImageUrl: input.newReceiptImageUrl,
+      imageUrls: JSON.stringify([input.oldReceiptImageUrl, input.newReceiptImageUrl]),
       createdAt,
     })
     .returning({ id: sr.id });
@@ -53,6 +59,10 @@ export async function listStoreSalesReturns(storeId: number, userId: string): Pr
     .select({
       id: sr.id,
       receiptNumber: sr.receiptNumber,
+      oldReceiptNumber: sr.oldReceiptNumber,
+      newReceiptNumber: sr.newReceiptNumber,
+      oldReceiptImageUrl: sr.oldReceiptImageUrl,
+      newReceiptImageUrl: sr.newReceiptImageUrl,
       imageUrls: sr.imageUrls,
       userId: sr.userId,
       uploadedByName: sql<string>`COALESCE(${users.name}, 'Unknown')`,
@@ -67,6 +77,10 @@ export async function listStoreSalesReturns(storeId: number, userId: string): Pr
   return rows.map((r) => ({
     id: r.id,
     receiptNumber: r.receiptNumber,
+    oldReceiptNumber: r.oldReceiptNumber,
+    newReceiptNumber: r.newReceiptNumber,
+    oldReceiptImageUrl: r.oldReceiptImageUrl,
+    newReceiptImageUrl: r.newReceiptImageUrl,
     imageUrls: parseImageUrls(r.imageUrls),
     uploadedByName: r.uploadedByName,
     mine: r.userId === userId,
@@ -98,6 +112,8 @@ function filterCondition(f: SalesReturnFilters): SQL | undefined {
     pattern
       ? or(
           ilike(sr.receiptNumber, pattern),
+          ilike(sr.oldReceiptNumber, pattern),
+          ilike(sr.newReceiptNumber, pattern),
           ilike(users.name, pattern),
           ilike(stores.name, pattern),
           ilike(stores.storeNo, pattern),
@@ -141,7 +157,7 @@ export async function getSalesReturns(f: SalesReturnFilters): Promise<SalesRetur
       .orderBy(sql`COUNT(*) DESC`, stores.storeNo)
       .limit(1),
     db
-      .select({ id: stores.id, storeNo: stores.storeNo, name: stores.name })
+      .select({ id: stores.id, areaId: stores.areaId, storeNo: stores.storeNo, name: stores.name })
       .from(stores)
       .where(f.pickableAreaId != null ? eq(stores.areaId, f.pickableAreaId) : undefined)
       .orderBy(stores.storeNo),
@@ -155,6 +171,14 @@ export async function getSalesReturns(f: SalesReturnFilters): Promise<SalesRetur
   const matching = agg?.count ?? 0;
   const totalPages = Math.max(1, Math.ceil(matching / SALES_RETURN_PAGE_SIZE));
   const page = Math.min(Math.max(1, f.page), totalPages);
+  const sortColumn = {
+    date: sr.createdAt,
+    store: stores.name,
+    newReceipt: sr.newReceiptNumber,
+    oldReceipt: sr.oldReceiptNumber,
+    uploader: users.name,
+  }[f.sort];
+  const sortOrder = f.dir === 'asc' ? asc(sortColumn) : desc(sortColumn);
 
   const rows: SalesReturnRow[] =
     matching === 0
@@ -168,6 +192,10 @@ export async function getSalesReturns(f: SalesReturnFilters): Promise<SalesRetur
               storeName: stores.name,
               areaId: stores.areaId,
               receiptNumber: sr.receiptNumber,
+              oldReceiptNumber: sr.oldReceiptNumber,
+              newReceiptNumber: sr.newReceiptNumber,
+              oldReceiptImageUrl: sr.oldReceiptImageUrl,
+              newReceiptImageUrl: sr.newReceiptImageUrl,
               imageUrls: sr.imageUrls,
               uploadedBy: sql<string>`COALESCE(${users.name}, 'Unknown')`,
               createdAt: sr.createdAt,
@@ -176,7 +204,7 @@ export async function getSalesReturns(f: SalesReturnFilters): Promise<SalesRetur
             .innerJoin(stores, eq(stores.id, sr.storeId))
             .leftJoin(users, eq(users.id, sr.userId))
             .where(where)
-            .orderBy(desc(sr.createdAt), desc(sr.id))
+            .orderBy(sql`${sortOrder} NULLS LAST`, f.dir === 'asc' ? asc(sr.id) : desc(sr.id))
             .limit(SALES_RETURN_PAGE_SIZE)
             .offset((page - 1) * SALES_RETURN_PAGE_SIZE)
         ).map((r) => ({
@@ -186,6 +214,10 @@ export async function getSalesReturns(f: SalesReturnFilters): Promise<SalesRetur
           storeName: r.storeName,
           areaName: areaOptions.find((a) => a.id === r.areaId)?.name ?? '',
           receiptNumber: r.receiptNumber,
+          oldReceiptNumber: r.oldReceiptNumber,
+          newReceiptNumber: r.newReceiptNumber,
+          oldReceiptImageUrl: r.oldReceiptImageUrl,
+          newReceiptImageUrl: r.newReceiptImageUrl,
           imageUrls: parseImageUrls(r.imageUrls),
           uploadedBy: r.uploadedBy,
           createdAt: new Date(r.createdAt).toISOString(),

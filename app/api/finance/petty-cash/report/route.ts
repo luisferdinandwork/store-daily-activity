@@ -10,8 +10,10 @@ import { getPettyCashReport } from '@/lib/db/utils/petty-cash-report';
 import { currentYearMonthJakarta } from '@/lib/db/utils/petty-cash-refill';
 import type { PettyCashReportRow } from '@/lib/petty-cash-report';
 
+// Only store-months Monitoring has finished (see lib/petty-cash-report.ts → isStoreMonthComplete); `incompleteCount`
+// says how many more are still open there.
 export type PettyCashReportResponse =
-  | { success: true; month: string; data: PettyCashReportRow[] }
+  | { success: true; month: string; data: PettyCashReportRow[]; incompleteCount: number }
   | { success: false; error: string };
 
 export async function GET(req: NextRequest): Promise<NextResponse<PettyCashReportResponse>> {
@@ -25,6 +27,6 @@ export async function GET(req: NextRequest): Promise<NextResponse<PettyCashRepor
     return NextResponse.json({ success: false, error: 'Invalid month. Use YYYY-MM.' }, { status: 400 });
   }
 
-  const data = await getPettyCashReport(month);
-  return NextResponse.json({ success: true, month, data });
+  const { rows, incompleteCount } = await getPettyCashReport(month);
+  return NextResponse.json({ success: true, month, data: rows, incompleteCount });
 }

@@ -343,6 +343,9 @@ async function buildRefillRows(where: SQL | undefined): Promise<OpsRefillRow[]> 
 
       requestedAt: new Date(r.requestedAt).toISOString(),
       requestedByName: row.requestedByName,
+      bankName: r.bankName,
+      accountNumber: r.accountNumber,
+      accountHolderName: r.accountHolderName,
       notes: r.notes,
 
       periodMonth: r.yearMonth,

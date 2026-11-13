@@ -4,7 +4,7 @@
 // CRUD for the IT management page, plus the lookup the employee request form
 // uses. A category has a Pengertian + Contoh Pengeluaran (for the "!" help sheet)
 // and no preset Keterangan — the PIC always writes their own.
-import { and, asc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, ne, sql, type AnyColumn, type SQL } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import {
@@ -15,7 +15,21 @@ import {
 import {
   PETTY_CASH_CATEGORY_NAME_MAX,
   PETTY_CASH_CATEGORY_TEXT_MAX,
+  PETTY_CASH_IS_CODE_MAX,
+  isValidIsCode,
+  normalizeIsCode,
 } from '@/lib/petty-cash-categories';
+
+/**
+ * A request's IS, read live from its category (so IT fixing a category's IS fixes every request of it). Requests
+ * whose category was deleted, or that predate category ids, fall back to the category with the same name.
+ * Pass the request's `category_id` and `category_name` columns.
+ */
+export const categoryIsCodeSql = (categoryId: AnyColumn, categoryName: AnyColumn): SQL<string | null> =>
+  sql<string | null>`COALESCE(
+    (SELECT c.is_code FROM petty_cash_categories c WHERE c.id = ${categoryId}),
+    (SELECT c.is_code FROM petty_cash_categories c WHERE lower(c.name) = lower(${categoryName}) AND c.is_code IS NOT NULL LIMIT 1)
+  )`;
 
 export type TaskResult<T = void> =
   | { success: true; data: T }
@@ -25,6 +39,8 @@ export interface PettyCashCategoryInput {
   name?: unknown;
   definition?: unknown;
   examples?: unknown;
+  /** IS — Business Central item no.; '' clears it. */
+  isCode?: unknown;
   isActive?: unknown;
 }
 
@@ -73,6 +89,7 @@ type CleanFields = {
   name?: string;
   definition?: string | null;
   examples?: string | null;
+  isCode?: string | null;
   isActive?: boolean;
 };
 
@@ -96,6 +113,20 @@ function cleanInput(input: PettyCashCategoryInput): TaskResult<CleanFields> {
       return { success: false, error: `${label} maksimal ${PETTY_CASH_CATEGORY_TEXT_MAX} karakter.` };
     }
     out[key] = text || null;
+  }
+
+  if (input.isCode !== undefined) {
+    if (input.isCode !== null && typeof input.isCode !== 'string') {
+      return { success: false, error: 'IS tidak valid.' };
+    }
+    const code = normalizeIsCode(input.isCode);
+    if (code && !isValidIsCode(code)) {
+      return {
+        success: false,
+        error: `IS hanya boleh huruf, angka, titik, - atau _ (maksimal ${PETTY_CASH_IS_CODE_MAX} karakter).`,
+      };
+    }
+    out.isCode = code;
   }
 
   if (input.isActive !== undefined) {
@@ -129,7 +160,7 @@ export async function createPettyCashCategory(
 ): Promise<TaskResult<PettyCashCategory>> {
   const clean = cleanInput(input);
   if (!clean.success) return clean;
-  const { name, definition = null, examples = null, isActive = true } = clean.data;
+  const { name, definition = null, examples = null, isCode = null, isActive = true } = clean.data;
 
   if (!name) return { success: false, error: 'Nama kategori wajib diisi.' };
   if (await nameTaken(name)) return { success: false, error: `Kategori "${name}" sudah ada.` };
@@ -145,6 +176,7 @@ export async function createPettyCashCategory(
       name,
       definition,
       examples,
+      isCode,
       isActive,
       sortOrder: maxSort + 10,
     })
@@ -177,6 +209,7 @@ export async function updatePettyCashCategory(
       ...(patch.isActive !== undefined ? { isActive: patch.isActive } : {}),
       ...(patch.definition !== undefined ? { definition: patch.definition } : {}),
       ...(patch.examples !== undefined ? { examples: patch.examples } : {}),
+      ...(patch.isCode !== undefined ? { isCode: patch.isCode } : {}),
       updatedAt: new Date(),
     })
     .where(eq(pettyCashCategories.id, id))

@@ -29,6 +29,8 @@ export async function GET() {
       name: c.name,
       definition: c.definition,
       examples: c.examples,
+      // Back office only — the employee API (/api/employee/petty-cash) never sends it.
+      isCode: c.isCode,
       isActive: c.isActive,
       sortOrder: c.sortOrder,
       usageCount: c.usageCount,

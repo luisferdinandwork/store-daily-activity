@@ -6,20 +6,14 @@ import PanelPageHeader from '@/components/shared/PanelPageHeader';
 // Finance · Petty Cash Monitoring
 //
 // One row per store, drawn like a spreadsheet: code, store, area, balance,
-// what it used this month, how many requests, spend status and refill status.
-// Click a row to open its requests (with receipt photos) and, if PIC 1 has
-// asked for a refill, the bank account to send the cash to.
+// what Finance accepted this month (Used), how many requests and ONE status
+// (Pending / Completed). Click a row to open its requests (with receipt
+// photos), then a request for Finance's decision: Diterima, Perlu Perbaikan
+// (back to PIC 1 as a draft) or Ditolak.
 //
-// Finance has no approval actions here — spend-request approval and
-// refill-request approval both happen in OPS. This page is otherwise
-// visibility into the money. The one action is "Verifikasi" on an
-// OPS-approved refill: Finance records that it has refilled the store, which
-// is what lets PIC 1 confirm receipt (proof photos) on the employee page. It
-// is saved on the request (finance_verified_at) — the same verification the
-// Report page offers, with "Batal" while PIC 1 hasn't uploaded a photo yet.
-//
-// The month-by-month usage + bank-account report for all stores (and the
-// Excel export) lives at /finance/petty-cash/report.
+// Refills are NOT handled here: a store whose month is Completed moves to the
+// Report (/finance/petty-cash/report), and that is the only place Finance
+// verifies its refill (and sees the bank account to send it to).
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
@@ -29,41 +23,26 @@ import {
   ArrowUp,
   ChevronDown,
   ChevronRight,
-  CircleCheck,
   ImageOff,
-  Landmark,
-  Loader2,
   RefreshCw,
   Search,
-  ShieldCheck,
-  Undo2,
   Wallet,
-  X,
   ZoomIn,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { PettyCashStoreRow, PettyCashTxRow } from '@/app/api/finance/petty-cash/route';
+import { compareStoreCodes, reportMonthLabel, storeCodeDisplay, storeCodeOf } from '@/lib/petty-cash-report';
 import {
-  REFILL_STATE_LABEL,
-  compareStoreCodes,
-  pickRefillByStore,
-  refillStateOf,
-  reportMonthLabel,
-  storeCodeDisplay,
-  storeCodeOf,
-  type RefillState,
-} from '@/lib/petty-cash-report';
-import { TX_STATUS_LABEL } from '@/lib/petty-cash-transactions';
-import { FINANCE_REVIEW_LABEL, leavesOutOfTransfer, reviewOutcome, type RefillTransfer } from '@/lib/petty-cash-review';
-import { LateBadge, PeriodBadge } from '@/components/petty-cash/PeriodBadge';
-import { jakartaDateKey } from '@/lib/day-bucket';
-import { isRefillLate } from '@/lib/petty-cash-period';
+  FINANCE_REQUEST_STATE_LABEL,
+  FINANCE_REQUEST_STATE_TEXT,
+  financeRequestState,
+} from '@/lib/petty-cash-transactions';
+import { PENDING_FINANCE_LABEL, leavesOutOfTransfer } from '@/lib/petty-cash-review';
 import { fmtRequestDate } from '@/lib/petty-cash-re-request';
 import { ReRequestBadge } from '@/components/petty-cash/ReRequestBadge';
 import { STORE_STATUS_LABEL } from '@/lib/store-status';
 import { TxDetailModal, type ReviewHandler } from '@/components/finance/petty-cash/TxDetailModal';
 import {
-  CopyButton,
   MonthNavigator,
   PettyCashTabs,
   SHEET_ROW_HEAD as ROW_HEAD,
@@ -74,77 +53,43 @@ import {
   rp,
 } from '@/components/finance/petty-cash/shared';
 
-// ─── Refill requests (PIC-initiated top-ups) ─────────────────────────────────
-
-interface RefillRequestRow {
-  id: number;
-  storeId: number;
-  storeName: string;
-  yearMonth: string;
-  status: 'pending' | 'approved' | 'rejected';
-  requestedAt: string;
-  requestedByName: string | null;
-  notes: string | null;
-  approvedAt: string | null;
-  rejectionReason: string | null;
-  /** Set once Finance has verified the refill — unlocks PIC 1's receipt upload. */
-  financeVerifiedAt: string | null;
-  /** Set once both proof photos are in and the cash has been received. */
-  balanceAfter: string | null;
-  drawerPhotoUrl: string | null;
-  signaturePhotoUrl: string | null;
-  /** Null on requests made before bank details were required. */
-  bankName: string | null;
-  accountNumber: string | null;
-  accountHolderName: string | null;
-  /** What the store used, what Finance rejected and the cash to send (lib/petty-cash-review.ts). */
-  transfer: RefillTransfer | null;
-}
-
-const REFILL_CHIP: Record<RefillState, string> = {
-  pending: 'bg-slate-100 text-slate-600 ring-slate-200',
-  awaiting_finance: 'bg-amber-50 text-amber-800 ring-amber-200',
-  verified: 'bg-sky-50 text-sky-700 ring-sky-200',
-  received: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-  rejected: 'bg-rose-50 text-rose-700 ring-rose-200',
-};
-
-const REFILL_META: Record<RefillState, { label: string; chip: string }> = {
-  pending: { label: REFILL_STATE_LABEL.pending, chip: REFILL_CHIP.pending },
-  awaiting_finance: { label: REFILL_STATE_LABEL.awaiting_finance, chip: REFILL_CHIP.awaiting_finance },
-  verified: { label: REFILL_STATE_LABEL.verified, chip: REFILL_CHIP.verified },
-  received: { label: REFILL_STATE_LABEL.received, chip: REFILL_CHIP.received },
-  rejected: { label: REFILL_STATE_LABEL.rejected, chip: REFILL_CHIP.rejected },
-};
-
 // ─── Store status ────────────────────────────────────────────────────────────
 
-type StoreStatus = 'pending-ops' | 'ok' | 'refilled' | 'no-activity' | 'ready-to-open' | 'closed';
+// ONE status per store for the month. Pending = something is still open: a request waiting on OPS, on PIC 1's
+// actual amount, or completed but not yet checked by Finance. Completed = every request is through OPS and Finance
+// has decided on each one (Diterima / Perlu Perbaikan / Ditolak) — then, with its refill verified, the store moves
+// to the Report.
+type StoreStatus = 'pending' | 'completed' | 'refilled' | 'no-activity' | 'closed';
+
+const openCount = (s: PettyCashStoreRow) =>
+  s.pendingOpsCount + s.awaitingActualCount + s.fixingCount + s.pendingFinanceCount;
 
 function storeStatus(s: PettyCashStoreRow): StoreStatus {
-  if (s.storeStatus === 'ready_to_open') return 'ready-to-open';
   if (s.storeStatus === 'close') return 'closed';
   if (s.refillIssued) return 'refilled';
   if (s.transactions.length === 0) return 'no-activity';
-  if (s.pendingOpsCount > 0) return 'pending-ops';
-  return 'ok';
+  return openCount(s) > 0 ? 'pending' : 'completed';
 }
 
 const STATUS_META: Record<StoreStatus, { label: string; chip: string }> = {
-  'pending-ops': { label: 'Waiting OPS', chip: 'bg-amber-50 text-amber-700 ring-amber-200' },
-  ok: { label: 'OK', chip: 'bg-emerald-50 text-emerald-700 ring-emerald-200' },
+  pending: { label: 'Pending', chip: 'bg-amber-50 text-amber-700 ring-amber-200' },
+  completed: { label: 'Completed', chip: 'bg-emerald-50 text-emerald-700 ring-emerald-200' },
   refilled: { label: 'Refilled', chip: 'bg-slate-100 text-slate-600 ring-slate-200' },
   'no-activity': { label: 'No activity', chip: 'bg-slate-50 text-slate-400 ring-slate-200' },
-  'ready-to-open': { label: STORE_STATUS_LABEL.ready_to_open, chip: 'bg-sky-50 text-sky-700 ring-sky-200' },
   closed: { label: STORE_STATUS_LABEL.close, chip: 'bg-slate-100 text-slate-500 ring-slate-300' },
 };
 
-const TX_STATUS_META: Record<string, { label: string; text: string }> = {
-  pending_ops: { label: TX_STATUS_LABEL.pending_ops, text: 'text-amber-600' },
-  ops_approved: { label: TX_STATUS_LABEL.ops_approved, text: 'text-sky-600' },
-  completed: { label: TX_STATUS_LABEL.completed, text: 'text-emerald-600' },
-  ops_rejected: { label: TX_STATUS_LABEL.ops_rejected, text: 'text-rose-500' },
-};
+/** Hover text for a Pending chip: what is still open. */
+function pendingDetail(s: PettyCashStoreRow): string {
+  return [
+    s.pendingOpsCount > 0 ? `${s.pendingOpsCount} menunggu OPS` : null,
+    s.awaitingActualCount > 0 ? `${s.awaitingActualCount} menunggu jumlah aktual PIC 1` : null,
+    s.fixingCount > 0 ? `${s.fixingCount} sedang diperbaiki PIC 1 (Perlu Perbaikan)` : null,
+    s.pendingFinanceCount > 0 ? `${s.pendingFinanceCount} belum dicek Finance` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
 
 function Chip({ className, children }: { className: string; children: React.ReactNode }) {
   return (
@@ -174,38 +119,6 @@ function fmtDateTime(iso: string) {
   });
 }
 
-// ─── Image lightbox ──────────────────────────────────────────────────────────
-
-function Lightbox({ src, onClose }: { src: string; onClose: () => void }) {
-  useEffect(() => {
-    const handler = (e: globalThis.KeyboardEvent) => e.key === 'Escape' && onClose();
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [onClose]);
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
-      onClick={onClose}
-    >
-      <button
-        onClick={onClose}
-        aria-label="Close"
-        className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20"
-      >
-        <X className="h-5 w-5" />
-      </button>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={src}
-        alt="Photo"
-        className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      />
-    </div>
-  );
-}
-
 function PhotoThumb({ url, onView, label }: { url: string | null; onView: (url: string) => void; label: string }) {
   if (!url) {
     return (
@@ -230,121 +143,15 @@ function PhotoThumb({ url, onView, label }: { url: string | null; onView: (url: 
   );
 }
 
-// ─── Expanded detail: refill request + this month's requests ─────────────────
+// ─── Expanded detail: this month's requests ─────────────────────────────────
 
-function RefillPanel({ request, onViewImage }: { request: RefillRequestRow; onViewImage: (url: string) => void }) {
-  const state = refillStateOf(request);
-  const meta = REFILL_META[state];
-  const proofStarted = state === 'verified' || state === 'received';
-  const hasBank = Boolean(request.bankName && request.accountNumber);
-
-  return (
-    <div className="rounded-md border border-slate-300 bg-white">
-      <div className="flex items-center gap-2 border-b border-slate-200 px-3 py-2">
-        <Landmark className="h-3.5 w-3.5 text-slate-500" />
-        <span className="text-xs font-semibold text-slate-700">Refill request</span>
-        <Chip className={meta.chip}>{meta.label}</Chip>
-        <PeriodBadge month={request.yearMonth} />
-        {isRefillLate(request.yearMonth, jakartaDateKey(request.requestedAt)) && <LateBadge month={request.yearMonth} />}
-        <span className="ml-auto text-[11px] text-slate-400">
-          {request.requestedByName ?? 'PIC'} · {fmtDateTime(request.requestedAt)}
-        </span>
-      </div>
-
-      <dl className="grid gap-x-6 gap-y-2 px-3 py-2.5 text-[13px] sm:grid-cols-3">
-        <div>
-          <dt className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Bank</dt>
-          <dd className="font-medium text-slate-900">{request.bankName ?? <NoBank />}</dd>
-        </div>
-        <div>
-          <dt className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">No. Rekening</dt>
-          <dd className="flex items-center gap-1 font-mono text-slate-900">
-            {request.accountNumber ? (
-              <>
-                <span className="tabular-nums">{request.accountNumber}</span>
-                <CopyButton value={request.accountNumber} label="Copy account number" />
-              </>
-            ) : (
-              <NoBank />
-            )}
-          </dd>
-        </div>
-        <div>
-          <dt className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Atas Nama</dt>
-          <dd className="font-medium uppercase text-slate-900">{request.accountHolderName ?? <NoBank />}</dd>
-        </div>
-      </dl>
-
-      {request.transfer && request.status !== 'rejected' && <TransferLine transfer={request.transfer} />}
-
-      {!hasBank && (
-        <p className="border-t border-slate-100 bg-amber-50 px-3 py-1.5 text-[11px] text-amber-800">
-          No bank details on this request — it was made before PIC 1 had to provide them.
-        </p>
-      )}
-
-      {(request.notes || request.rejectionReason || state === 'awaiting_finance' || proofStarted) && (
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-slate-100 px-3 py-2 text-xs text-slate-600">
-          {request.notes && <span>Note: “{request.notes}”</span>}
-          {request.rejectionReason && <span className="text-rose-600">Rejected: {request.rejectionReason}</span>}
-          {state === 'awaiting_finance' && (
-            <span className="text-[11px] font-medium text-amber-800">
-              Approved by OPS — verify it once the cash has been sent; PIC 1 can confirm receipt only after that.
-            </span>
-          )}
-          {proofStarted && (
-            <span className="ml-auto flex items-center gap-2">
-              <span className="text-[11px] font-medium text-slate-400">Proof from PIC 1</span>
-              <PhotoThumb url={request.drawerPhotoUrl} onView={onViewImage} label="Petty cash drawer" />
-              <PhotoThumb url={request.signaturePhotoUrl} onView={onViewImage} label="Surat Terima" />
-            </span>
-          )}
-        </div>
-      )}
-    </div>
+/** A category's IS (Business Central item no.) as a quiet mono code; a dash when the category has none. */
+function IsCode({ code }: { code: string | null }) {
+  return code ? (
+    <span className="font-mono text-[11px] font-medium text-slate-600">{code}</span>
+  ) : (
+    <span className="text-slate-300">–</span>
   );
-}
-
-/** What the store used, minus the requests Finance rejected = the cash to send. */
-function TransferLine({ transfer: t }: { transfer: RefillTransfer }) {
-  return (
-    <dl className="grid gap-x-6 gap-y-2 border-t border-slate-100 px-3 py-2.5 text-[13px] sm:grid-cols-3">
-      <div>
-        <dt className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Dipakai toko</dt>
-        <dd className="font-medium tabular-nums text-slate-900">{rp(t.refill)}</dd>
-      </div>
-      <div>
-        <dt className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Ditolak</dt>
-        <dd className={cn('font-medium tabular-nums', t.rejectedCount > 0 ? 'text-rose-600' : 'text-slate-400')}>
-          {t.rejectedCount > 0 ? `${rp(t.rejectedAmount)} · ${t.rejectedCount} request` : '–'}
-          {t.rejectedCount > 0 && (
-            <span className="block text-[10px] font-normal text-slate-500">
-              Tidak dihitung terpakai — dibayar sendiri oleh karyawan di luar sistem
-            </span>
-          )}
-        </dd>
-      </div>
-      <div>
-        <dt className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-          Transfer {t.frozen ? '(terkunci)' : ''}
-        </dt>
-        <dd className="text-base font-bold tabular-nums text-slate-900">{rp(t.transfer)}</dd>
-      </div>
-    </dl>
-  );
-}
-
-function NoBank() {
-  return <span className="text-xs italic text-amber-700">not provided</span>;
-}
-
-/** Finance's verdict on a request, under its status (nothing when it was not reviewed). */
-function ReviewTag({ tx }: { tx: PettyCashTxRow }) {
-  const outcome = reviewOutcome(tx.financeReview);
-  if (outcome === 'none') return null;
-  const tone =
-    outcome === 'accepted' ? 'text-emerald-600' : outcome === 'needs_fix' ? 'text-amber-600' : 'text-rose-600';
-  return <span className={cn('block text-[10px] font-semibold', tone)}>{FINANCE_REVIEW_LABEL[outcome]}</span>;
 }
 
 function TxSheet({
@@ -372,6 +179,7 @@ function TxSheet({
           <tr className="bg-slate-100 text-[11px] font-semibold uppercase tracking-wide text-slate-600">
             <th className="border border-slate-300 px-2.5 py-1.5 text-left">Date</th>
             <th className="border border-slate-300 px-2.5 py-1.5 text-left">Category</th>
+            <th className="border border-slate-300 px-2.5 py-1.5 text-left" title="No. item Business Central">IS</th>
             <th className="border border-slate-300 px-2.5 py-1.5 text-left">Description</th>
             <th className="border border-slate-300 px-2.5 py-1.5 text-left">By</th>
             <th className="border border-slate-300 px-2.5 py-1.5 text-right">Amount</th>
@@ -381,7 +189,7 @@ function TxSheet({
         </thead>
         <tbody>
           {store.transactions.map((tx: PettyCashTxRow, i) => {
-            const meta = TX_STATUS_META[tx.status] ?? TX_STATUS_META.pending_ops;
+            const state = financeRequestState(tx.status, tx.financeReview);
             return (
               <tr
                 key={tx.id}
@@ -405,6 +213,7 @@ function TxSheet({
                   )}
                 </td>
                 <td className={cn(TD, 'whitespace-nowrap font-medium text-slate-700')}>{tx.categoryName ?? '–'}</td>
+                <td className={cn(TD, 'whitespace-nowrap')}><IsCode code={tx.isCode} /></td>
                 <td className={cn(TD, 'max-w-xs truncate text-slate-700')} title={tx.description}>
                   {tx.isReRequest && <ReRequestBadge className="mr-1.5 align-middle" />}
                   {tx.description}
@@ -418,16 +227,16 @@ function TxSheet({
                     <PhotoThumb url={tx.imageUrl} onView={() => onOpenTx(i)} label="Receipt" />
                   </span>
                 </td>
-                <td className={cn(TD, 'whitespace-nowrap text-xs font-semibold', meta.text)}>
-                  {meta.label}
-                  <ReviewTag tx={tx} />
+                <td className={cn(TD, 'whitespace-nowrap text-xs font-semibold', FINANCE_REQUEST_STATE_TEXT[state])}>
+                  {FINANCE_REQUEST_STATE_LABEL[state]}
                 </td>
               </tr>
             );
           })}
           <tr className="border-y-2 border-slate-400 bg-emerald-50 font-semibold text-slate-900">
-            <td colSpan={4} className={cn(TD, 'border-slate-300 text-right text-xs uppercase tracking-wide')}>
+            <td colSpan={5} className={cn(TD, 'border-slate-300 text-right text-xs uppercase tracking-wide')}>
               Used in {reportMonthLabel(month)}
+              <span className="ml-1 font-normal normal-case tracking-normal text-slate-500">(Diterima)</span>
             </td>
             <td className={cn(TD, 'border-slate-300 text-right tabular-nums')}>{num(store.monthlySpend)}</td>
             <td colSpan={2} className={cn(TD, 'border-slate-300')} />
@@ -446,10 +255,6 @@ function StoreLines({
   month,
   expanded,
   onToggle,
-  refillRequest,
-  refillBusy,
-  onRefillAction,
-  onViewImage,
   onOpenTx,
 }: {
   store: PettyCashStoreRow;
@@ -457,19 +262,9 @@ function StoreLines({
   month: string;
   expanded: boolean;
   onToggle: () => void;
-  refillRequest: RefillRequestRow | null;
-  refillBusy: boolean;
-  onRefillAction: (request: RefillRequestRow, action: 'verify' | 'unverify') => void;
-  onViewImage: (url: string) => void;
   onOpenTx: (index: number) => void;
 }) {
-  const state = refillRequest ? refillStateOf(refillRequest) : null;
-  const proofCount = refillRequest
-    ? [refillRequest.drawerPhotoUrl, refillRequest.signaturePhotoUrl].filter(Boolean).length
-    : 0;
-
   const status = storeStatus(store);
-  const statusMeta = STATUS_META[status];
 
   return (
     <>
@@ -498,63 +293,22 @@ function StoreLines({
         <td className={cn(TD, 'min-w-56 font-medium text-slate-900')}>{store.storeName}</td>
         <td className={cn(TD, 'whitespace-nowrap font-mono text-[11px] text-slate-500')}>{store.deptCode ?? <span className="text-slate-300">–</span>}</td>
         <td className={cn(TD, 'whitespace-nowrap text-slate-500')}>{store.areaName}</td>
-        <td className={cn(TD, 'w-32 text-right font-semibold tabular-nums', store.storeStatus === 'ready_to_open' ? 'text-slate-400' : balanceTone(Number(store.balance)))}>
+        <td className={cn(TD, 'w-32 text-right font-semibold tabular-nums', balanceTone(Number(store.balance)))}>
           {num(store.balance)}
         </td>
         <td className={cn(TD, 'w-32 text-right tabular-nums', Number(store.monthlySpend) === 0 ? 'text-slate-300' : 'text-slate-900')}>
           {Number(store.monthlySpend) === 0 ? '–' : num(store.monthlySpend)}
         </td>
         <td className={cn(TD, 'w-14 text-center tabular-nums text-slate-600')}>{store.transactions.length}</td>
-        <td className={cn(TD, 'w-32')}>
-          <Chip className={statusMeta.chip}>
-            {status === 'pending-ops' ? `${store.pendingOpsCount} pending` : statusMeta.label}
-          </Chip>
-        </td>
-        <td className={cn(TD, 'w-56', state === 'awaiting_finance' && 'bg-amber-50/60')} onClick={(e) => e.stopPropagation()}>
-          {refillRequest && state ? (
-            <span className="flex flex-wrap items-center gap-1.5">
-              <Chip className={REFILL_META[state].chip}>
-                {(state === 'verified' || state === 'received') && <ShieldCheck className="mr-1 h-3 w-3" />}
-                {REFILL_META[state].label}
-              </Chip>
-              {state === 'awaiting_finance' && (
-                <button
-                  type="button"
-                  onClick={() => onRefillAction(refillRequest, 'verify')}
-                  disabled={refillBusy}
-                  title="Tandai toko ini sudah di-refill — PIC 1 baru bisa konfirmasi penerimaan setelah ini."
-                  className="inline-flex h-6 items-center gap-1 rounded bg-emerald-600 px-2 text-[11px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
-                >
-                  {refillBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <CircleCheck className="h-3 w-3" />}
-                  Verifikasi
-                </button>
-              )}
-              {state === 'verified' && proofCount === 0 && (
-                <button
-                  type="button"
-                  onClick={() => onRefillAction(refillRequest, 'unverify')}
-                  disabled={refillBusy}
-                  title="Batalkan verifikasi (masih bisa selama PIC 1 belum mengunggah foto bukti)."
-                  className="inline-flex h-6 items-center gap-1 rounded border border-slate-300 bg-white px-1.5 text-[11px] font-semibold text-slate-500 hover:bg-slate-50 disabled:opacity-60"
-                >
-                  {refillBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Undo2 className="h-3 w-3" />}
-                  Batal
-                </button>
-              )}
-            </span>
-          ) : (
-            <span className="text-slate-300">–</span>
-          )}
+        <td className={cn(TD, 'w-32')} title={status === 'pending' ? pendingDetail(store) : undefined}>
+          <Chip className={STATUS_META[status].chip}>{STATUS_META[status].label}</Chip>
         </td>
       </tr>
 
       {expanded && (
         <tr>
-          <td colSpan={10} className="border-b border-slate-300 bg-slate-50 p-3">
-            <div className="space-y-3">
-              {refillRequest && <RefillPanel request={refillRequest} onViewImage={onViewImage} />}
-              <TxSheet store={store} month={month} onOpenTx={onOpenTx} />
-            </div>
+          <td colSpan={9} className="border-b border-slate-300 bg-slate-50 p-3">
+            <TxSheet store={store} month={month} onOpenTx={onOpenTx} />
           </td>
         </tr>
       )}
@@ -604,11 +358,8 @@ export default function FinancePettyCashPage() {
   const [areaFilter, setAreaFilter] = useState('');
   const [codeFilter, setCodeFilter] = useState('');
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' } | null>(null);
-  const [refillRequests, setRefillRequests] = useState<RefillRequestRow[]>([]);
-  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   // The request open in the detail modal: which store, and its position in that store's list.
   const [detail, setDetail] = useState<{ storeId: number; index: number } | null>(null);
-  const [busyRefillIds, setBusyRefillIds] = useState<Set<number>>(new Set());
 
   // `silent` refreshes in place (no skeleton) — used after a review, with the detail modal open.
   const load = useCallback(async (m: string, silent = false) => {
@@ -626,20 +377,9 @@ export default function FinancePettyCashPage() {
     }
   }, []);
 
-  const loadRefillRequests = useCallback(async () => {
-    try {
-      const res = await fetch('/api/finance/petty-cash/refill-requests', { cache: 'no-store' });
-      const body = await res.json();
-      if (body.success) setRefillRequests(body.requests);
-    } catch {
-      // Non-critical — the Refill column just stays empty.
-    }
-  }, []);
-
   useEffect(() => { void load(month); }, [load, month]);
-  useEffect(() => { void loadRefillRequests(); }, [loadRefillRequests]);
 
-  // Send a request back (Perlu Perbaikan) or turn it down (Ditolak) — comment optional — or accept PIC 1's correction; the refill's transfer follows.
+  // Diterima, Perlu Perbaikan (back to PIC 1 as a draft) or Ditolak — comment optional.
   const reviewTx: ReviewHandler = async (txId, action, comment) => {
     try {
       const res = await fetch(`/api/finance/petty-cash/transactions/${txId}/review`, {
@@ -650,60 +390,23 @@ export default function FinancePettyCashPage() {
       const body = await res.json();
       if (!body.success) {
         toast.error(body.error ?? 'Gagal memproses.');
-        await Promise.all([load(month, true), loadRefillRequests()]);
+        await load(month, true);
         return false;
       }
       toast.success(
         action === 'reject'
           ? 'Request ditolak — PIC 1 diberi tahu dan nominalnya tidak ikut ditransfer.'
           : action === 'revise'
-            ? 'Ditandai Perlu Perbaikan — PIC 1 mengajukan ulang (Re-request) bulan depan; nominalnya tidak ikut ditransfer.'
-            : 'Keputusan disimpan.',
+            ? `Dikembalikan ke PIC 1 untuk diperbaiki — request yang sama, disetujui OPS lagi sebelum kembali ke Finance${body.periodMonth ? ` (periode ${reportMonthLabel(body.periodMonth)})` : ''}.`
+            : 'Request diterima — selesai dicek Finance.',
       );
-      await Promise.all([load(month, true), loadRefillRequests()]);
+      await load(month, true);
       return true;
     } catch {
       toast.error('Network error.');
       return false;
     }
   };
-
-  async function handleRefillAction(request: RefillRequestRow, action: 'verify' | 'unverify') {
-    setBusyRefillIds((prev) => new Set(prev).add(request.id));
-    try {
-      const res = await fetch('/api/finance/petty-cash/refill-requests/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids: [request.id], action }),
-      });
-      const body = await res.json();
-      if (!body.success) toast.error(body.error ?? 'Gagal memproses.');
-      else if (body.changed === 0) {
-        toast.error(
-          action === 'verify'
-            ? 'Tidak bisa diverifikasi — status Refill sudah berubah.'
-            : 'Tidak bisa dibatalkan — PIC 1 sudah mengunggah foto bukti.',
-        );
-      } else {
-        toast.success(
-          action === 'verify'
-            ? `Refill ${request.storeName} diverifikasi — PIC 1 sekarang bisa mengonfirmasi penerimaan.`
-            : `Verifikasi Refill ${request.storeName} dibatalkan.`,
-        );
-      }
-      await loadRefillRequests();
-    } catch {
-      toast.error('Network error.');
-    } finally {
-      setBusyRefillIds((prev) => {
-        const next = new Set(prev);
-        next.delete(request.id);
-        return next;
-      });
-    }
-  }
-
-  const refillByStore = useMemo(() => pickRefillByStore(refillRequests, month), [refillRequests, month]);
 
   const areas = useMemo(() => [...new Set(allStores.map((s) => s.areaName))].sort(), [allStores]);
   const codes = useMemo(
@@ -751,20 +454,14 @@ export default function FinancePettyCashPage() {
     });
 
   const totalUsed = allStores.reduce((sum, s) => sum + Number(s.monthlySpend), 0);
-  const pendingStores = allStores.filter((s) => storeStatus(s) === 'pending-ops').length;
-  const openRefills = allStores.filter((s) => {
-    const r = refillByStore.get(s.storeId);
-    const st = r ? refillStateOf(r) : null;
-    return st === 'pending' || st === 'awaiting_finance' || st === 'verified';
-  }).length;
+  const pendingStores = allStores.filter((s) => storeStatus(s) === 'pending').length;
+  const completedStores = allStores.filter((s) => storeStatus(s) === 'completed').length;
 
   const filtered = Boolean(search || areaFilter || codeFilter);
   const detailStore = detail ? allStores.find((s) => s.storeId === detail.storeId) ?? null : null;
 
   return (
     <div className="min-h-full bg-slate-50">
-      {lightboxUrl && <Lightbox src={lightboxUrl} onClose={() => setLightboxUrl(null)} />}
-
       {detail && detailStore && (
         <TxDetailModal
           store={detailStore}
@@ -785,7 +482,7 @@ export default function FinancePettyCashPage() {
             <MonthNavigator month={month} onChange={setMonth} />
             <button
               type="button"
-              onClick={() => { void load(month); void loadRefillRequests(); }}
+              onClick={() => void load(month)}
               disabled={loading}
               className="flex h-9 items-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-60"
             >
@@ -804,8 +501,8 @@ export default function FinancePettyCashPage() {
             {[
               { label: `Used · ${reportMonthLabel(month)}`, value: rp(totalUsed) },
               { label: 'Stores', value: String(allStores.length) },
-              { label: 'Waiting OPS', value: String(pendingStores), warn: pendingStores > 0 },
-              { label: 'Refill in progress', value: String(openRefills), warn: openRefills > 0 },
+              { label: 'Pending', value: String(pendingStores), warn: pendingStores > 0 },
+              { label: 'Completed', value: String(completedStores) },
             ].map(({ label, value, warn }) => (
               <div key={label} className="px-4 py-3">
                 <dt className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{label}</dt>
@@ -901,7 +598,6 @@ export default function FinancePettyCashPage() {
                   <SortHeader label="Used" sortKey="used" sort={sort} onSort={toggleSort} align="right" />
                   <th className={cn(TH, 'text-center')}>Tx</th>
                   <th className={cn(TH, 'text-left')}>Status</th>
-                  <th className={cn(TH, 'text-left')}>Refill</th>
                 </tr>
               </thead>
               <tbody>
@@ -913,10 +609,6 @@ export default function FinancePettyCashPage() {
                     month={month}
                     expanded={expandedIds.has(store.storeId)}
                     onToggle={() => toggleExpanded(store.storeId)}
-                    refillRequest={refillByStore.get(store.storeId) ?? null}
-                    refillBusy={busyRefillIds.has(refillByStore.get(store.storeId)?.id ?? -1)}
-                    onRefillAction={handleRefillAction}
-                    onViewImage={setLightboxUrl}
                     onOpenTx={(index) => setDetail({ storeId: store.storeId, index })}
                   />
                 ))}
@@ -926,9 +618,12 @@ export default function FinancePettyCashPage() {
         )}
 
         <p className="text-[11px] text-slate-500">
-          Balance and Used are in Rupiah. Used counts completed requests only. Click a store for its requests and
-          refill details, then a request for its receipt photo and what the staff filled in; the full usage +
-          bank-account list for every store is under Report.
+          Balance and Used are in Rupiah. Used adds up only the requests you accepted (Diterima) — a request still
+          Pending Finance counts once you accept it. A store is{' '}
+          <span className="font-semibold">Pending</span> while any request waits on OPS, on PIC 1, or on you (
+          <span className="font-semibold">{PENDING_FINANCE_LABEL}</span> — open it and choose Diterima, Perlu Perbaikan
+          or Ditolak), and <span className="font-semibold">Completed</span> once every request is decided; with its
+          refill verified it then moves to Report. IS = the category&apos;s Business Central item no.
         </p>
       </div>
     </div>

@@ -241,6 +241,7 @@ const TX_CHIP: Record<TxStatus, string> = {
   ops_approved: 'bg-sky-50 text-sky-700 ring-sky-200',
   completed: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
   ops_rejected: 'bg-rose-50 text-rose-700 ring-rose-200',
+  draft: 'bg-orange-50 text-orange-700 ring-orange-200',
 };
 
 const REFILL_CHIP: Record<RefillState, string> = {

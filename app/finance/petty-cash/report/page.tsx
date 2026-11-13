@@ -6,15 +6,21 @@ import PanelPageHeader from '@/components/shared/PanelPageHeader';
 // Finance · Petty Cash Report
 //
 // Laid out like the spreadsheet Finance works from: one row per store with
-// what it used this month and the bank account its PIC 1 gave for the refill
-// (filled in on the refill request — see RefillBankForm on the employee page).
+// what Finance accepted this month (Diterima), the refill to transfer and the
+// bank account its PIC 1 gave for it (filled in on the refill request — see
+// RefillBankForm on the employee page).
+//
+// Only stores Monitoring has finished are listed (lib/petty-cash-report.ts →
+// isStoreMonthComplete): no request waiting on OPS, on PIC 1 or Pending Finance
+// — and PIC 1 has asked for the month's refill. The rest are only counted
+// ("Belum selesai di Monitoring").
 //
 //   • "All Stores"      — a single flat sheet.
 //   • "By Store Code"   — subtotal per store code (FF / FS / FO / ODD / SS …),
 //                         then the same sheet grouped under each code.
 //
-// The Refill column tracks each store's refill request and is where Finance
-// records that it has refilled the store: "Verifikasi" on an OPS-approved
+// The Refill column tracks each store's refill request and is the ONLY place
+// Finance records that it has refilled the store: "Verifikasi" on an OPS-approved
 // request (one by one, or tick several). Until it is verified PIC 1 can't
 // confirm receipt on the employee page. "Batal" takes it back while PIC 1
 // hasn't uploaded any proof photo yet.
@@ -22,6 +28,7 @@ import PanelPageHeader from '@/components/shared/PanelPageHeader';
 // "Download Excel" exports the same data (and the current code filter) as .xlsx.
 
 import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { toast } from 'sonner';
 import {
   AlertTriangle,
@@ -31,6 +38,7 @@ import {
   FileSpreadsheet,
   Loader2,
   RefreshCw,
+  RotateCcw,
   Search,
   ShieldCheck,
   Undo2,
@@ -38,7 +46,6 @@ import {
 import { cn } from '@/lib/utils';
 import { STORE_STATUS_BADGE, STORE_STATUS_LABEL } from '@/lib/store-status';
 import { LateBadge } from '@/components/petty-cash/PeriodBadge';
-import { ReRequestBadge } from '@/components/petty-cash/ReRequestBadge';
 import { jakartaDateKey } from '@/lib/day-bucket';
 import { isRefillLate } from '@/lib/petty-cash-period';
 import {
@@ -247,11 +254,26 @@ function StoreLine({
       <td className={cn(TD, 'w-36 text-right')}>
         <Amount value={row.totalUsed} />
         {row.reRequestCount > 0 && (
-          <span className="mt-0.5 flex items-center justify-end gap-1 text-[10px] font-semibold text-violet-700">
-            <ReRequestBadge />
-            {row.reRequestCount} · {num(row.reRequestAmount)}
+          // One quiet line under the total: the part of it that is Re-requests (already included).
+          <span
+            title={`Sudah termasuk ${row.reRequestCount} Re-request (Rp ${num(row.reRequestAmount)})`}
+            className="mt-0.5 flex items-center justify-end gap-1 whitespace-nowrap text-[10px] text-violet-600"
+          >
+            <RotateCcw className="h-2.5 w-2.5 shrink-0" aria-hidden />
+            Re-request
+            <span className="font-semibold tabular-nums">{num(row.reRequestAmount)}</span>
           </span>
         )}
+      </td>
+      <td
+        className={cn(TD, 'w-36 text-right')}
+        title={
+          row.refill?.transferFrozen
+            ? 'Terkunci saat diverifikasi'
+            : 'Refill = Rp 1.000.000 − sisa saldo periode (terkunci saat diverifikasi)'
+        }
+      >
+        {row.refill?.transfer != null ? <Amount value={row.refill.transfer} bold /> : <span className="text-slate-300">–</span>}
       </td>
       <td className={cn(TD, 'min-w-44', !row.accountNumber && 'bg-amber-50')}>
         {row.accountNumber ? (
@@ -277,7 +299,17 @@ function StoreLine({
   );
 }
 
-function TotalLine({ label, value, tone }: { label: string; value: number; tone: 'sub' | 'grand' }) {
+function TotalLine({
+  label,
+  value,
+  transfer,
+  tone,
+}: {
+  label: string;
+  value: number;
+  transfer: number;
+  tone: 'sub' | 'grand';
+}) {
   // Row borders don't render in a border-separate table, so the rule above the
   // total goes on its cells.
   const cls = tone === 'grand'
@@ -291,7 +323,8 @@ function TotalLine({ label, value, tone }: { label: string; value: number; tone:
       <td className={cn(TD, 'border-slate-300 text-right text-xs uppercase tracking-wide')}>{label}</td>
       <td className={cn(TD, 'border-slate-300')} />
       <td className={cn(TD, 'border-slate-300 text-right tabular-nums')}>{num(value)}</td>
-      <td colSpan={COLS - 6} className={cn(TD, 'border-slate-300')} />
+      <td className={cn(TD, 'border-slate-300 text-right tabular-nums')}>{num(transfer)}</td>
+      <td colSpan={COLS - 7} className={cn(TD, 'border-slate-300')} />
     </tr>
   );
 }
@@ -396,6 +429,8 @@ export default function FinancePettyCashReportPage() {
   const [search, setSearch] = useState('');
   const [onlyUsed, setOnlyUsed] = useState(false);
   const [onlyAwaiting, setOnlyAwaiting] = useState(false);
+  // Stores with activity this month that Monitoring has not finished yet (so they are not listed).
+  const [incompleteCount, setIncompleteCount] = useState(0);
 
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [confirmBulk, setConfirmBulk] = useState(false);
@@ -416,6 +451,7 @@ export default function FinancePettyCashReportPage() {
         if (body.success) {
           const data: PettyCashReportRow[] = body.data;
           setRows(data);
+          setIncompleteCount(body.incompleteCount ?? 0);
           // Keep ticks only for refills that still need verifying after a reload.
           const open = new Set(data.filter(needsVerify).map((r) => r.refill!.id));
           setSelected((prev) => new Set([...prev].filter((id) => open.has(id))));
@@ -453,6 +489,7 @@ export default function FinancePettyCashReportPage() {
   const visibleGroups = useMemo(() => groupByStoreCode(visibleRows), [visibleRows]);
 
   const totalUsed = visibleRows.reduce((s, r) => s + r.totalUsed, 0);
+  const totalTransfer = visibleRows.reduce((s, r) => s + (r.refill?.transfer ?? 0), 0);
   const withUsage = visibleRows.filter((r) => r.totalUsed > 0).length;
   const missingBank = visibleRows.filter((r) => !hasBankDetails(r)).length;
   const awaiting = visibleRows.filter(needsVerify).length;
@@ -487,15 +524,22 @@ export default function FinancePettyCashReportPage() {
         body: JSON.stringify({ ids, action }),
       });
       const body = await res.json();
+      // Refused by the server because their period still has requests not decided yet.
+      const blockedNote =
+        body.blocked > 0
+          ? `${body.blocked} Refill belum bisa diverifikasi — masih ada request di periodenya yang belum selesai diputuskan di Monitoring.`
+          : null;
       if (!body.success) {
         toast.error(body.error ?? 'Gagal memproses.');
       } else if (body.changed === 0) {
         toast.error(
-          action === 'verify'
-            ? 'Tidak ada yang bisa diverifikasi — status Refill sudah berubah.'
-            : 'Tidak bisa dibatalkan — PIC 1 sudah mengunggah foto bukti.',
+          blockedNote ??
+            (action === 'verify'
+              ? 'Tidak ada yang bisa diverifikasi — status Refill sudah berubah.'
+              : 'Tidak bisa dibatalkan — PIC 1 sudah mengunggah foto bukti.'),
         );
       } else {
+        if (blockedNote) toast.warning(blockedNote);
         toast.success(
           action === 'verify'
             ? `${label} diverifikasi — PIC 1 sekarang bisa mengonfirmasi penerimaan.`
@@ -574,13 +618,14 @@ export default function FinancePettyCashReportPage() {
       <div className="space-y-4 px-6 py-5 lg:px-8">
         {/* Key numbers — a plain strip, not cards */}
         {!loading && !error && (
-          <dl className="grid grid-cols-2 divide-x divide-slate-200 overflow-hidden rounded-md border border-slate-300 bg-white sm:grid-cols-5">
+          <dl className="grid grid-cols-2 divide-x divide-slate-200 overflow-hidden rounded-md border border-slate-300 bg-white sm:grid-cols-3 lg:grid-cols-6">
             {[
               { label: `Total used · ${reportMonthLabel(month)}`, value: rp(totalUsed) },
               { label: 'Stores', value: String(visibleRows.length) },
               { label: 'With usage', value: String(withUsage) },
               { label: 'No bank details yet', value: String(missingBank), warn: missingBank > 0 },
               { label: 'Refill perlu verifikasi', value: String(awaiting), warn: awaiting > 0 },
+              { label: 'Belum selesai di Monitoring', value: String(incompleteCount), warn: incompleteCount > 0 },
             ].map(({ label, value, warn }) => (
               <div key={label} className="px-4 py-3">
                 <dt className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{label}</dt>
@@ -756,8 +801,16 @@ export default function FinancePettyCashReportPage() {
           <div className="rounded-md border border-dashed border-slate-300 bg-white py-16 text-center">
             <FileSpreadsheet className="mx-auto mb-3 h-9 w-9 text-slate-300" />
             <p className="text-sm font-semibold text-slate-600">
-              {filtered ? 'No stores match your filter.' : 'No stores found.'}
+              {filtered
+                ? 'No stores match your filter.'
+                : `Belum ada toko yang selesai di Monitoring untuk ${reportMonthLabel(month)}.`}
             </p>
+            {!filtered && incompleteCount > 0 && (
+              <p className="mt-1 text-xs text-slate-500">
+                {incompleteCount} toko masih dikerjakan di{' '}
+                <Link href="/finance/petty-cash" className="font-semibold text-emerald-700 underline">Monitoring</Link>.
+              </p>
+            )}
           </div>
         ) : (
           <>
@@ -785,6 +838,7 @@ export default function FinancePettyCashReportPage() {
                     <th className={cn(TH, 'text-left')}>Nama Toko</th>
                     <th className={cn(TH, 'text-left')}>Dept Code</th>
                     <th className={cn(TH, 'text-right')}>Total Terpakai (Rp)</th>
+                    <th className={cn(TH, 'text-right')}>Transfer (Rp)</th>
                     <th className={cn(TH, 'text-left')}>No. Rekening</th>
                     <th className={cn(TH, 'text-left')}>PIC 1</th>
                     <th className={cn(TH, 'text-left')}>Bank</th>
@@ -799,13 +853,15 @@ export default function FinancePettyCashReportPage() {
                     : visibleGroups.map((g) => (
                         <GroupBlock key={g.code} group={g} renderLine={renderLine} />
                       ))}
-                  <TotalLine label="Total" value={totalUsed} tone="grand" />
+                  <TotalLine label="Total" value={totalUsed} transfer={totalTransfer} tone="grand" />
                 </tbody>
               </table>
             </div>
 
             <p className="text-[11px] text-slate-500">
-              Total Terpakai = completed petty cash spend in {reportMonthLabel(month)}. Rekening comes from the
+              Only stores finished in Monitoring with a refill asked for are listed. Total Terpakai = requests Finance
+              accepted (Diterima) in {reportMonthLabel(month)}; Transfer = the refill to send (locked once verified).
+              Rekening comes from the
               refill request PIC 1 submitted (the one being paid, else their latest); amber cells mean none has been
               filed yet. Refill: <span className="font-semibold">Perlu verifikasi</span> = OPS approved, waiting for
               Finance to send the cash — verify it to let PIC 1 confirm receipt on their app;{' '}
@@ -829,7 +885,12 @@ function GroupBlock({
     <>
       <GroupHeaderLine group={group} />
       {group.rows.map((row, i) => renderLine(row, i + 1))}
-      <TotalLine label={`Subtotal ${group.display}`} value={group.totalUsed} tone="sub" />
+      <TotalLine
+        label={`Subtotal ${group.display}`}
+        value={group.totalUsed}
+        transfer={group.rows.reduce((s, r) => s + (r.refill?.transfer ?? 0), 0)}
+        tone="sub"
+      />
     </>
   );
 }

@@ -41,6 +41,9 @@ export const pettyCashCategories = pgTable('petty_cash_categories', {
   name: text('name').notNull().unique(),
   definition: text('definition'),
   examples: text('examples'),
+  // "IS": the Business Central item no. Finance books this kind of spend to (IS000022, …). Back office only —
+  // IT edits it, Finance sees it on the petty cash lists and in the Purchase Invoice export; never sent to staff.
+  isCode: text('is_code'),
   // LEGACY (before 0041: a preset Keterangan / "PIC writes their own"). No longer read or written.
   defaultReason: text('default_reason'),
   requiresCustomReason: boolean('requires_custom_reason').default(false).notNull(),

@@ -3,7 +3,8 @@
 // Sales Return, staff app.
 //
 // GET  — the home store's latest returns (newest first), the employee's own marked.
-// POST — multipart/form-data: `receiptNumber` + 1–3 `files` (receipt photos); answers
+// POST — `newReceiptNumber`, optional `oldReceiptNumber`, and exactly one each of
+//        `oldReceiptPhoto` and `newReceiptPhoto` in multipart/form-data; answers
 //        with the new row's id (the app then reloads the list).
 //        The filer and the time are never taken from the request: the user is the
 //        session user, the date is the moment this handler stores the row. Photos
@@ -21,10 +22,8 @@ import { assertStoreOperational } from '@/lib/db/utils/store-status';
 import { deleteFromStorage, uploadToStorage } from '@/lib/storage';
 import { sniffImageOf } from '@/lib/upload-validation';
 import {
-  SALES_RETURN_MAX_PHOTOS,
-  SALES_RETURN_MAX_PHOTO_BYTES,
-  SALES_RETURN_MAX_TOTAL_BYTES,
-  validateReceiptNumber,
+  validateSalesReturnPhotos,
+  validateSalesReturnReceipts,
 } from '@/lib/sales-returns';
 import { todayJakarta } from '@/lib/finance/dates';
 
@@ -74,20 +73,15 @@ export async function POST(req: NextRequest) {
     return fail('Data tidak terbaca. Coba kirim ulang — ukuran foto mungkin terlalu besar.', 400);
   }
 
-  const receipt = validateReceiptNumber(String(form.get('receiptNumber') ?? ''));
+  const receipt = validateSalesReturnReceipts(
+    String(form.get('oldReceiptNumber') ?? ''),
+    String(form.get('newReceiptNumber') ?? ''),
+  );
   if (!receipt.ok) return fail(receipt.error, 400);
 
-  const files = form.getAll('files').filter((f): f is File => typeof f !== 'string');
-  if (files.length === 0) return fail('Foto struk wajib diunggah.', 400);
-  if (files.length > SALES_RETURN_MAX_PHOTOS) {
-    return fail(`Maksimal ${SALES_RETURN_MAX_PHOTOS} foto per retur.`, 400);
-  }
-  if (files.some((f) => f.size > SALES_RETURN_MAX_PHOTO_BYTES)) {
-    return fail(`Ukuran satu foto maksimal ${SALES_RETURN_MAX_PHOTO_BYTES / 1024 / 1024} MB.`, 413);
-  }
-  if (files.reduce((sum, f) => sum + f.size, 0) > SALES_RETURN_MAX_TOTAL_BYTES) {
-    return fail('Total ukuran foto terlalu besar. Kurangi jumlah foto atau perkecil ukurannya.', 413);
-  }
+  const photoCheck = validateSalesReturnPhotos(form);
+  if (!photoCheck.ok) return fail(photoCheck.error, photoCheck.status);
+  const { files } = photoCheck;
 
   // Validate every file before uploading any, so a bad second photo can't leave
   // the first orphaned in the bucket. Extension + Content-Type come from the bytes.
@@ -114,20 +108,24 @@ export async function POST(req: NextRequest) {
   const uploaded: (string | undefined)[] = [];
   let saved: { id: number; createdAt: string };
   try {
-    await Promise.all(
+    const uploads = await Promise.allSettled(
       photos.map(async ({ buffer, ext, mime }, i) => {
         uploaded[i] = await uploadToStorage(
           buffer,
-          `${folder}/${slug(receipt.value)}_${stamp}_${i + 1}.${ext}`,
+          `${folder}/${slug(receipt.newReceiptNumber)}_${stamp}_${i === 0 ? 'lama' : 'baru'}.${ext}`,
           mime,
         );
       }),
     );
+    // Include late successes in cleanup if the other upload failed.
+    if (uploads.some((result) => result.status === 'rejected')) throw new Error('Receipt upload failed');
     saved = await createSalesReturn({
       storeId: homeStoreId,
       userId,
-      receiptNumber: receipt.value,
-      imageUrls: uploaded as string[],
+      oldReceiptNumber: receipt.oldReceiptNumber,
+      newReceiptNumber: receipt.newReceiptNumber,
+      oldReceiptImageUrl: uploaded[0]!,
+      newReceiptImageUrl: uploaded[1]!,
     });
   } catch (err) {
     console.error('[POST /api/employee/sales-returns]', err);

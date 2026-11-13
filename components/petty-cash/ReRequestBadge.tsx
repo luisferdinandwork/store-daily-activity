@@ -11,7 +11,7 @@ import { RE_REQUEST_LABEL } from '@/lib/petty-cash-re-request';
 export function ReRequestBadge({ className }: { className?: string }) {
   return (
     <span
-      title="Request Perlu Perbaikan yang diajukan ulang oleh PIC 1 (tanpa persetujuan OPS)"
+      title="Request yang diperbaiki PIC 1 setelah Perlu Perbaikan dari Finance (lalu disetujui OPS lagi)"
       className={cn(
         'inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded bg-violet-50 px-1.5 py-0.5 text-[10px] font-bold text-violet-700 ring-1 ring-inset ring-violet-200',
         className,

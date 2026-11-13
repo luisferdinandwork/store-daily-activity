@@ -64,13 +64,13 @@ export interface KpiItem {
   warn?: boolean;
 }
 
-/** Plain strip of numbers (not cards) — 1px gaps draw the dividers. Five across by default, six when given six. */
+/** Plain strip of numbers (not cards) — 1px gaps draw the dividers. Five across by default, six or seven when given that many. */
 export function KpiStrip({ items }: { items: KpiItem[] }) {
   return (
     <dl
       className={cn(
         'grid grid-cols-2 gap-px overflow-hidden rounded-md border border-slate-300 bg-slate-300 sm:grid-cols-3',
-        items.length === 6 ? 'lg:grid-cols-6' : 'lg:grid-cols-5',
+        items.length === 7 ? 'lg:grid-cols-7' : items.length === 6 ? 'lg:grid-cols-6' : 'lg:grid-cols-5',
       )}
     >
       {items.map(({ label, value, sub, warn }) => (

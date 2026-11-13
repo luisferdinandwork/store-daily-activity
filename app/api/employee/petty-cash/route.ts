@@ -26,9 +26,9 @@ import {
 } from '@/lib/db/utils/petty-cash-categories';
 import { PETTY_CASH_REASON_MAX, pettyCashDescription } from '@/lib/petty-cash-categories';
 import { assertStoreOperational } from '@/lib/db/utils/store-status';
-import { canReRequest, reviewOutcome } from '@/lib/petty-cash-review';
+import { reviewOutcome } from '@/lib/petty-cash-review';
 import { jakartaDateKey } from '@/lib/day-bucket';
-import { addMonths, periodLabel, receiptPhotoAction, reRequestPeriodMonth } from '@/lib/petty-cash-period';
+import { addMonths, periodLabel, receiptPhotoAction } from '@/lib/petty-cash-period';
 import { refillStateOf } from '@/lib/petty-cash-report';
 
 /** How many of the store's requests the page lists (newest first) — it searches / filters them client-side. */
@@ -192,13 +192,13 @@ export async function GET() {
     closedPeriod = { month: previousMonth, refillState: previousRefill ? refillStateOf(previousRefill) : 'none' };
   }
 
-  // Where a Re-request of each Perlu Perbaikan request would be counted (the period after its own, or the one in
-  // use) and what that period has left — a period that doesn't exist yet starts at the maximum.
-  const isReRequestable = (t: (typeof txList)[number]) =>
-    t.status === 'completed' && canReRequest(t.financeReview) && !reRequestedAs.has(t.id);
-  const targetMonths = [
-    ...new Set(txList.filter(isReRequestable).map((t) => reRequestPeriodMonth(t.yearMonth, period.yearMonth))),
-  ];
+  // A request Finance sent back (Perlu Perbaikan) is a `draft` PIC 1 fixes and sends to OPS again — the SAME request.
+  // Finance already put it in the period it is counted in (its own, or the next one), so the fix form checks what
+  // was spent against what THAT period has left — a period that doesn't exist yet starts at the maximum.
+  const isFixable = (t: (typeof txList)[number]) => t.status === 'draft';
+  // A draft left in a period that has ended moves on to the period in use when it is sent (rollRequestToActivePeriod).
+  const fixMonth = (t: (typeof txList)[number]) => (t.yearMonth >= period.yearMonth ? t.yearMonth : period.yearMonth);
+  const targetMonths = [...new Set(txList.filter(isFixable).map(fixMonth))];
   // Spendable = the period's balance minus the refill of the period before it that has not arrived yet.
   const targetBalance = new Map<string, number>([[period.yearMonth, spendable]]);
   const missingMonths = targetMonths.filter((m) => !targetBalance.has(m));
@@ -265,14 +265,11 @@ export async function GET() {
       requestDate: t.requestDate ? jakartaDateKey(t.requestDate) : null,
       reRequestOfId: t.reRequestOfId,
       reRequestedAs: reRequestedAs.get(t.id) ?? null,
-      // Perlu Perbaikan, completed and not filed again yet — what the Re-request button needs.
-      canReRequest: isReRequestable(t),
-      // The period that Re-request would be counted in, and what it has left.
-      reRequestTarget: isReRequestable(t)
-        ? (() => {
-            const month = reRequestPeriodMonth(t.yearMonth, period.yearMonth);
-            return { month, balance: targetBalance.get(month) ?? PETTY_CASH_MAX_BALANCE };
-          })()
+      // Sent back by Finance (Perlu Perbaikan) and waiting for PIC 1 to fix it and send it to OPS again.
+      canFix: isFixable(t),
+      // The period it is counted in and what that period has left.
+      fixTarget: isFixable(t)
+        ? { month: fixMonth(t), balance: targetBalance.get(fixMonth(t)) ?? PETTY_CASH_MAX_BALANCE }
         : null,
     })),
   });

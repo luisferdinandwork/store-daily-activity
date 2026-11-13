@@ -53,8 +53,8 @@ import {
   StoreCell,
   TD,
   TH,
-  WhenCell,
   fmtDay,
+  fmtWhen,
   num,
   rp,
   useJsonFeed,
@@ -80,6 +80,7 @@ import {
 } from '@/lib/ops-petty-cash';
 import { LateBadge, PeriodBadge } from '@/components/petty-cash/PeriodBadge';
 import { ReRequestBadge } from '@/components/petty-cash/ReRequestBadge';
+import { RefillRecipient } from '@/components/ops/petty-cash/RefillRecipient';
 import { FINANCE_REVIEW_LABEL, leavesOutOfTransfer } from '@/lib/petty-cash-review';
 
 /** First day of this month in Jakarta, as YYYY-MM-01 (what OpsPageHeader's month picker works in). */
@@ -123,6 +124,7 @@ function ItemsPanel({
 
   return (
     <div className="space-y-2">
+      <RefillRecipient row={row} />
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <p className="text-xs font-semibold text-slate-700">
           Items used {row.sinceAt ? `since the last refill · ${fmtDay(row.sinceAt)}` : 'since the store started'}
@@ -272,7 +274,7 @@ export default function OpsPettyCashRefillsPage() {
 
   const allOpen = pageRows.length > 0 && pageRows.every((r) => expanded.has(r.id));
   const filtersActive = query.trim() !== '' || area !== 'all' || state !== 'all';
-  const colCount = 8;
+  const colCount = 9;
 
   function clearFilters() {
     setQuery('');
@@ -394,7 +396,7 @@ export default function OpsPettyCashRefillsPage() {
               setQuery(v);
               setPage(1);
             }}
-            placeholder="Search store, code or PIC…"
+            placeholder="Cari toko, karyawan, bank, no. rekening…"
           />
 
           <ChipScroller
@@ -512,7 +514,7 @@ export default function OpsPettyCashRefillsPage() {
                 setQuery(v);
                 setPage(1);
               }}
-              placeholder="Search store, code or PIC…"
+              placeholder="Cari toko, karyawan, bank, no. rekening…"
               className="max-w-md"
             />
 
@@ -597,12 +599,13 @@ export default function OpsPettyCashRefillsPage() {
         ) : feed.data ? (
           <>
             <SheetFrame dimmed={feed.loading}>
-              <table className="w-full min-w-[900px] border-separate border-spacing-0 text-left">
+              <table className="w-full min-w-[1100px] border-separate border-spacing-0 text-left">
                 <thead>
                   <tr>
                     <th className={cn(TH, 'w-14 text-center')}>No</th>
                     <SortTh label="Store" sortKey="store" active={sort.key} dir={sort.dir} onSort={sortBy} />
-                    <SortTh label="Requested / PIC" sortKey="date" active={sort.key} dir={sort.dir} onSort={sortBy} />
+                    <SortTh label="Diajukan" sortKey="date" active={sort.key} dir={sort.dir} onSort={sortBy} />
+                    <th className={cn(TH, 'text-left')}>Karyawan / Rekening Tujuan</th>
                     <th className={cn(TH, 'text-center')}>Items</th>
                     <SortTh label="Used (Rp)" sortKey="used" active={sort.key} dir={sort.dir} onSort={sortBy} align="right" />
                     <SortTh label="Refill (Rp)" sortKey="refill" active={sort.key} dir={sort.dir} onSort={sortBy} align="right" />
@@ -647,7 +650,10 @@ export default function OpsPettyCashRefillsPage() {
                             <StoreCell name={r.storeName} code={r.storeNo} area={isHo ? r.areaName : undefined} />
                           </td>
                           <td className={TD}>
-                            <WhenCell iso={r.requestedAt} who={r.requestedByName ?? 'PIC'} />
+                            <p className="whitespace-nowrap text-slate-600">{fmtWhen(r.requestedAt)}</p>
+                          </td>
+                          <td className={TD}>
+                            <RefillRecipient row={r} compact />
                           </td>
                           <td className={cn(TD, 'text-center tabular-nums text-slate-600')}>
                             {r.items.length === 0 ? <span className="text-slate-300">–</span> : r.items.length}

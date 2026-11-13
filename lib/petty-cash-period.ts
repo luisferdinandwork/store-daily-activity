@@ -3,24 +3,26 @@
 // Petty cash PERIOD rules (client-safe, no DB imports) — shared by the employee Petty Cash page, its APIs,
 // the refill / re-request logic and the Ops + Finance views.
 //
-// A store's petty cash runs in periods named after a month (YYYY-MM). THE CALENDAR decides which period is in
-// use, not the Refill: a period runs from the 16th of the month before its name to the 15th of its name, and
-// the day after the 15th everything filed is counted in the next one —
+// A store's petty cash runs in periods named after a month (YYYY-MM). A period runs from the 16th of the month
+// before its name to the 15th of its name, and the day after the 15th everything filed is counted in the next one —
 //
 //     November period            December period
 //     16 Okt ───────── 15 Nov │ 16 Nov ───────── 15 Des │ 16 Des …
-//                             ▲ the period changes by itself on the 16th (Jakarta), refill or not
+//                             ▲ the period changes by itself on the 16th (Jakarta)…
 //
-//   • the Refill of a period is due on or before its last day (the 15th). Sending it does NOT close anything —
-//     the period keeps taking requests until the 15th is over;
+//   • …or EARLIER, as soon as PIC 1 sends the Refill of the period in use (2026-11-13, by request): sending it ends
+//     the period — new requests, the ones still waiting and requests Finance sent back to fix count in the next
+//     period straight away (lib/db/utils/petty-cash-period.ts → usageMonthOf / latestRefilledMonth);
+//   • the Refill of a period is due on or before its last day (the 15th);
 //   • a Refill sent after the 15th settles the period that has just ended, as long as nobody has requested it
 //     yet (it is flagged "Terlambat"); once that period is settled, a Refill covers the period in use. Before
 //     or on the 15th it covers the period in use too — unless an older period is still waiting for its Refill,
 //     which always goes first (`pickRefillPeriod`);
 //   • a request still waiting on OPS (or OPS-approved and not yet confirmed) when the period ends moves to the
 //     new one with it — it has not cost anything yet;
-//   • a Re-request (a Perlu Perbaikan request filed again) is always counted in the period AFTER the one the
-//     original was filed in, so Finance sees it in its next monthly check, never in the one that sent it back.
+//   • a request Finance sends back (Perlu Perbaikan) stays in its period while that period still runs and has no
+//     Refill yet; otherwise it moves to the next one, and is cut from that period's balance once fixed and
+//     approved by OPS again (lib/db/utils/petty-cash-review.ts, lib/db/utils/petty-cash-re-request.ts).
 
 import { isDayKey } from '@/lib/day-bucket';
 
@@ -99,6 +101,23 @@ export function usagePeriodFor(dayKey: string): string {
   if (!isDayKey(dayKey)) return dayKey.slice(0, 7);
   const month = dayKey.slice(0, 7);
   return Number(dayKey.slice(8, 10)) > PERIOD_LAST_DAY ? addMonths(month, 1) : month;
+}
+
+/**
+ * Sending a period's Refill ends it (the store moves to the next period at once), so a Refill may only be sent once
+ * its period has STARTED on the calendar (from the 16th of the month before): otherwise a store could refill again
+ * and again and run months ahead of the calendar. At most one period ahead is possible this way. Returns the first
+ * day it can be sent (YYYY-MM-DD), or null when it can be sent now.
+ */
+export function refillNotYetOpen(settleMonth: string, today: string): string | null {
+  return isDayKey(today) && settleMonth > usagePeriodFor(today) ? periodWindow(settleMonth).from : null;
+}
+
+/** "2026-11-16" → "16 Nov 2026". */
+export function dayLabel(dayKey: string): string {
+  if (!isDayKey(dayKey)) return dayKey;
+  const [y, m, d] = dayKey.split('-').map(Number);
+  return `${d} ${MONTHS_SHORT_ID[m - 1] ?? m} ${y}`;
 }
 
 /** First and last day (YYYY-MM-DD) of a period: "2026-11" → 2026-10-16 … 2026-11-15. */

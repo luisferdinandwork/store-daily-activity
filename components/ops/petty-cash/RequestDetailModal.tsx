@@ -216,7 +216,16 @@ export function RequestDetailModal({
             {waiting && (
               <section className="mt-auto space-y-2 border-t border-slate-200 p-4">
                 <h3 className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Decision</h3>
-                <p className="text-xs text-slate-500">This request is waiting for Ops.</p>
+                {r.isReRequest && r.actualAmount != null ? (
+                  // Fixed by PIC 1 after Finance's Perlu Perbaikan (lib/db/utils/petty-cash-re-request.ts).
+                  <p className="rounded-md border border-violet-200 bg-violet-50 px-3 py-2 text-xs text-violet-900">
+                    <span className="font-semibold">Re-request</span> — PIC 1 fixed this request after Finance&apos;s
+                    Perlu Perbaikan. Approving completes it right away (the amount and receipt are already in) and sends
+                    it back to Finance.
+                  </p>
+                ) : (
+                  <p className="text-xs text-slate-500">This request is waiting for Ops.</p>
+                )}
                 <DecisionButtons busy={busy} onApprove={() => onApprove(r)} onReject={(reason) => onReject(r, reason)} />
               </section>
             )}

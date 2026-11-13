@@ -2,12 +2,19 @@
 //
 // Data behind Finance's Petty Cash Report: for every store, how much petty
 // cash it used in a month and which bank account its PIC 1 gave for the
-// refill. Unlike the monitoring view this lists ALL stores — a store that
-// spent nothing (or never filed a refill request) still gets a row, so
-// Finance can see who is missing bank details.
+// refill.
+//
+// The Report only lists what Monitoring has finished (isStoreMonthComplete):
+// nothing waiting on OPS, on PIC 1's actual amount or being fixed after Perlu
+// Perbaikan, nothing Pending Finance — and PIC 1 has asked for the refill that
+// settles the month. Here Finance VERIFIES that refill (the only place it can).
+// Everything else is still being worked on in Monitoring, so it is left out
+// here and only counted (`incompleteCount`).
+// Stores that are still getting ready to open have no petty cash and are
+// never listed.
 
 import { db } from '@/lib/db';
-import { and, desc, eq, isNotNull, sql } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, ne, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import {
   areas,
@@ -17,16 +24,23 @@ import {
   stores,
   users,
 } from '@/lib/db/schema';
-import { countsAsUsed } from './petty-cash-used';
 import {
-  pickRefillByStore,
+  isStoreMonthComplete,
   refillStateOf,
   storeCodeOf,
+  type PettyCashReport,
   type PettyCashReportRow,
   type ReportRefill,
 } from '@/lib/petty-cash-report';
+import { LEFT_OUT_REVIEWS } from '@/lib/petty-cash-review';
+import { getRefillRowsByIds } from './petty-cash-ops';
 
-export async function getPettyCashReport(month: string): Promise<PettyCashReportRow[]> {
+const decided = sql.raw([...LEFT_OUT_REVIEWS, 'accepted'].map((r) => `'${r}'`).join(', '));
+
+/** A completed request nobody at Finance has decided on yet (Pending Finance). */
+const pendingFinance = sql`(${pettyCashTransactions.status} = 'completed' AND (${pettyCashTransactions.financeReview} IS NULL OR ${pettyCashTransactions.financeReview} NOT IN (${decided})))`;
+
+export async function getPettyCashReport(month: string): Promise<PettyCashReport> {
   const storeRows = await db
     .select({
       id: stores.id,
@@ -37,24 +51,32 @@ export async function getPettyCashReport(month: string): Promise<PettyCashReport
       status: stores.status,
     })
     .from(stores)
-    .innerJoin(areas, eq(stores.areaId, areas.id));
+    .innerJoin(areas, eq(stores.areaId, areas.id))
+    .where(ne(stores.status, 'ready_to_open'));
 
-  if (storeRows.length === 0) return [];
+  if (storeRows.length === 0) return { rows: [], incompleteCount: 0 };
 
-  // Only 'completed' requests have actually been deducted — same rule as the
-  // monitoring view (ops_approved ones are still waiting on the actual amount).
+  // One pass over the month's requests per store: what was used and what is still waiting. "Used" (Total Terpakai)
+  // adds up only the completed requests Finance ACCEPTED (Diterima) — the same rule as Monitoring's Used; a request
+  // still Pending Finance, Perlu Perbaikan or Ditolak is not in it.
+  const usedCompleted = sql`${pettyCashTransactions.status} = 'completed'`;
+  const accepted = sql`${usedCompleted} AND ${pettyCashTransactions.financeReview} = 'accepted'`;
   const usedRows = await db
     .select({
       storeId: pettyCashTransactions.storeId,
-      // Requests Finance turned down (and not yet re-accepted) are not counted as used.
-      total: sql<string>`COALESCE(SUM(COALESCE(${pettyCashTransactions.actualAmount}, ${pettyCashTransactions.amount})) FILTER (WHERE ${countsAsUsed(pettyCashTransactions.financeReview)}), 0)`,
-      count: sql<number>`COUNT(*)::int`,
+      total: sql<string>`COALESCE(SUM(COALESCE(${pettyCashTransactions.actualAmount}, ${pettyCashTransactions.amount})) FILTER (WHERE ${accepted}), 0)`,
+      count: sql<number>`COUNT(*) FILTER (WHERE ${accepted})::int`,
       // The re-requests inside that total.
-      reTotal: sql<string>`COALESCE(SUM(COALESCE(${pettyCashTransactions.actualAmount}, ${pettyCashTransactions.amount})) FILTER (WHERE ${pettyCashTransactions.isReRequest} AND ${countsAsUsed(pettyCashTransactions.financeReview)}), 0)`,
-      reCount: sql<number>`COUNT(*) FILTER (WHERE ${pettyCashTransactions.isReRequest} AND ${countsAsUsed(pettyCashTransactions.financeReview)})::int`,
+      reTotal: sql<string>`COALESCE(SUM(COALESCE(${pettyCashTransactions.actualAmount}, ${pettyCashTransactions.amount})) FILTER (WHERE ${accepted} AND ${pettyCashTransactions.isReRequest}), 0)`,
+      reCount: sql<number>`COUNT(*) FILTER (WHERE ${accepted} AND ${pettyCashTransactions.isReRequest})::int`,
+      anyCount: sql<number>`COUNT(*)::int`,
+      pendingOps: sql<number>`COUNT(*) FILTER (WHERE ${pettyCashTransactions.status} = 'pending_ops')::int`,
+      awaitingActual: sql<number>`COUNT(*) FILTER (WHERE ${pettyCashTransactions.status} = 'ops_approved')::int`,
+      fixing: sql<number>`COUNT(*) FILTER (WHERE ${pettyCashTransactions.status} = 'draft')::int`,
+      pendingFinance: sql<number>`COUNT(*) FILTER (WHERE ${pendingFinance})::int`,
     })
     .from(pettyCashTransactions)
-    .where(and(eq(pettyCashTransactions.yearMonth, month), eq(pettyCashTransactions.status, 'completed')))
+    .where(eq(pettyCashTransactions.yearMonth, month))
     .groupBy(pettyCashTransactions.storeId);
 
   const usedByStore = new Map(usedRows.map((r) => [r.storeId, r]));
@@ -97,8 +119,9 @@ export async function getPettyCashReport(month: string): Promise<PettyCashReport
     else pic1ByStore.set(row.storeId, [row.name]);
   }
 
-  // The refill Finance is tracking per store (see pickRefillByStore), newest
-  // request first. The verifier is a second join onto users.
+  // The refill that settles THIS month (its yearMonth = the period), newest request first — any state but turned
+  // down by OPS (waiting on OPS, waiting for Finance's Verifikasi, verified, received). The verifier is a second
+  // join onto users.
   const verifier = alias(users, 'refill_verifier');
   const requestRows = await db
     .select({
@@ -107,53 +130,81 @@ export async function getPettyCashReport(month: string): Promise<PettyCashReport
     })
     .from(pettyCashRefillRequests)
     .leftJoin(verifier, eq(pettyCashRefillRequests.financeVerifiedBy, verifier.id))
+    .where(eq(pettyCashRefillRequests.yearMonth, month))
     .orderBy(desc(pettyCashRefillRequests.requestedAt));
 
   const verifierByRequest = new Map(requestRows.map((r) => [r.request.id, r.verifiedByName]));
-  const refillByStore = pickRefillByStore(requestRows.map((r) => r.request), month);
+  const askedByStore = new Map<number, (typeof requestRows)[number]['request']>();
+  for (const { request } of requestRows) {
+    if (request.status !== 'rejected' && !askedByStore.has(request.storeId)) askedByStore.set(request.storeId, request);
+  }
+  // What each one sends: the refill (frozen once Finance verified it) — the same figure Ops and Finance see elsewhere.
+  const transferById = new Map(
+    (await getRefillRowsByIds([...askedByStore.values()].map((r) => r.id))).map((r) => [r.id, r.transfer]),
+  );
 
-  return storeRows
-    .map((store): PettyCashReportRow => {
-      const used = usedByStore.get(store.id);
-      const request = refillByStore.get(store.id);
-      // The account on the request being paid beats the store's latest one.
-      const bank = request?.accountNumber ? request : bankByStore.get(store.id);
+  const rows: PettyCashReportRow[] = [];
+  let incompleteCount = 0;
 
-      const refill: ReportRefill | null = request
-        ? {
-            id: request.id,
-            yearMonth: request.yearMonth,
-            state: refillStateOf(request),
-            requestedAt: request.requestedAt.toISOString(),
-            approvedAt: request.approvedAt?.toISOString() ?? null,
-            verifiedAt: request.financeVerifiedAt?.toISOString() ?? null,
-            verifiedByName: verifierByRequest.get(request.id) ?? null,
-            receivedAt: request.balanceAfter ? request.proofUploadedAt?.toISOString() ?? null : null,
-            proofCount: [request.drawerPhotoUrl, request.signaturePhotoUrl].filter(Boolean).length,
-          }
-        : null;
+  for (const store of storeRows) {
+    const used = usedByStore.get(store.id);
+    const request = askedByStore.get(store.id) ?? null;
 
-      return {
-        storeId: store.id,
-        storeNo: store.storeNo,
-        storeName: store.name,
-        areaName: store.areaName,
-        code: storeCodeOf(store.storeNo),
-        deptCode: store.deptCode,
-        storeStatus: store.status,
+    const complete = isStoreMonthComplete({
+      pendingOpsCount: used?.pendingOps ?? 0,
+      awaitingActualCount: used?.awaitingActual ?? 0,
+      fixingCount: used?.fixing ?? 0,
+      pendingFinanceCount: used?.pendingFinance ?? 0,
+      refillAsked: request != null,
+    });
+    if (!complete) {
+      // Something happened this month but Monitoring is not done with it — count it, don't list it.
+      if ((used?.anyCount ?? 0) > 0 || askedByStore.has(store.id)) incompleteCount += 1;
+      continue;
+    }
 
-        totalUsed: Math.round(Number(used?.total ?? 0)),
-        txCount: used?.count ?? 0,
-        reRequestCount: used?.reCount ?? 0,
-        reRequestAmount: Math.round(Number(used?.reTotal ?? 0)),
+    // The account on the request being paid beats the store's latest one.
+    const bank = request?.accountNumber ? request : bankByStore.get(store.id);
 
-        pic1Name: bankByStore.get(store.id)?.requesterName ?? pic1ByStore.get(store.id)?.join(', ') ?? null,
-        bankName: bank?.bankName ?? null,
-        accountNumber: bank?.accountNumber ?? null,
-        accountHolderName: bank?.accountHolderName ?? null,
+    const refill: ReportRefill | null = request
+      ? {
+          id: request.id,
+          yearMonth: request.yearMonth,
+          state: refillStateOf(request),
+          requestedAt: request.requestedAt.toISOString(),
+          approvedAt: request.approvedAt?.toISOString() ?? null,
+          verifiedAt: request.financeVerifiedAt?.toISOString() ?? null,
+          verifiedByName: verifierByRequest.get(request.id) ?? null,
+          receivedAt: request.balanceAfter ? request.proofUploadedAt?.toISOString() ?? null : null,
+          proofCount: [request.drawerPhotoUrl, request.signaturePhotoUrl].filter(Boolean).length,
+          transfer: transferById.get(request.id)?.transfer ?? null,
+          transferFrozen: transferById.get(request.id)?.frozen ?? false,
+        }
+      : null;
 
-        refill,
-      };
-    })
-    .sort((a, b) => a.storeNo.localeCompare(b.storeNo, undefined, { numeric: true }));
+    rows.push({
+      storeId: store.id,
+      storeNo: store.storeNo,
+      storeName: store.name,
+      areaName: store.areaName,
+      code: storeCodeOf(store.storeNo),
+      deptCode: store.deptCode,
+      storeStatus: store.status,
+
+      totalUsed: Math.round(Number(used?.total ?? 0)),
+      txCount: used?.count ?? 0,
+      reRequestCount: used?.reCount ?? 0,
+      reRequestAmount: Math.round(Number(used?.reTotal ?? 0)),
+
+      pic1Name: bankByStore.get(store.id)?.requesterName ?? pic1ByStore.get(store.id)?.join(', ') ?? null,
+      bankName: bank?.bankName ?? null,
+      accountNumber: bank?.accountNumber ?? null,
+      accountHolderName: bank?.accountHolderName ?? null,
+
+      refill,
+    });
+  }
+
+  rows.sort((a, b) => a.storeNo.localeCompare(b.storeNo, undefined, { numeric: true }));
+  return { rows, incompleteCount };
 }

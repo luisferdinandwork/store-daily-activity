@@ -44,6 +44,8 @@ export const GROUP_LABEL: Record<RequestGroup, string> = {
  */
 export function requestGroup(tx: Pick<RequestViewRow, 'status' | 'imageUrl' | 'reviewOutcome'>): RequestGroup {
   if (tx.status === 'ops_rejected') return 'rejected';
+  // Sent back by Finance: the same request, with PIC 1 to fix and send to OPS again.
+  if (tx.status === 'draft') return 'needs_fix';
   if (tx.status === 'pending_ops') return 'pending_ops';
   if (tx.status === 'ops_approved') return 'action';
   if (tx.reviewOutcome === 'rejected') return 'rejected';

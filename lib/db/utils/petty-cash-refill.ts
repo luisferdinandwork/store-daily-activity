@@ -28,11 +28,12 @@
 // `requestedAt` says when.
 
 import { db } from '@/lib/db';
-import { and, desc, eq, inArray, isNotNull, isNull, or } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import {
   pettyCashPeriods,
   pettyCashRefillRequests,
   pettyCashRefills,
+  pettyCashTransactions,
   stores,
   users,
   type PettyCashPeriod,
@@ -47,10 +48,12 @@ import { getActivePeriod, getPeriod, type DbExecutor } from './petty-cash-period
 import {
   REFILL_DEADLINE_FIRST_PERIOD,
   addMonths,
+  dayLabel,
   deadlineStatus,
   isRefillLate,
   periodLabel,
   pickRefillPeriod,
+  refillNotYetOpen,
   type DeadlineStatus,
   type RefillCandidate,
 } from '@/lib/petty-cash-period';
@@ -300,6 +303,10 @@ const nothingToRefill = (usage: Pick<PettyCashPeriod, 'yearMonth' | 'currentBala
     ? `Refill periode ${periodLabel(usage.yearMonth)} sudah diajukan.`
     : `Belum ada pemakaian di periode ${periodLabel(usage.yearMonth)}, jadi belum ada yang perlu di-Refill.`;
 
+/** Why a period's Refill can't be sent yet (refillNotYetOpen). */
+const refillTooEarly = (month: string, opensOn: string) =>
+  `Periode ${periodLabel(month)} baru dimulai ${dayLabel(opensOn)} — Refill-nya bisa diajukan mulai tanggal itu.`;
+
 export async function getRefillOverview(storeId: number, today: string = jakartaTodayKey()): Promise<RefillOverview> {
   const { usage, settle } = await resolveSettlePeriod(storeId, today);
   const live = await getLiveRefillRequest(storeId);
@@ -330,14 +337,21 @@ export async function getRefillOverview(storeId: number, today: string = jakarta
 
   const balance = Number(settle.currentBalance);
   const refill = Math.max(0, PETTY_CASH_MAX_BALANCE - balance);
+  // The store is already a period ahead of the calendar (its last Refill ended the period early): this period's
+  // Refill waits until the period has started.
+  const opensOn = refillNotYetOpen(settle.yearMonth, today);
 
   return {
     request: latest,
     usageMonth: usage.yearMonth,
     settle: { month: settle.yearMonth, balance, refill, closed: settle.status === 'closed' },
     deadline: deadlineStatus(settle.yearMonth, today),
-    canRequest: refill > 0,
-    blockedReason: refill > 0 ? null : nothingToRefill(usage),
+    canRequest: refill > 0 && !opensOn,
+    blockedReason: opensOn
+      ? refillTooEarly(settle.yearMonth, opensOn)
+      : refill > 0
+        ? null
+        : nothingToRefill(usage),
   };
 }
 
@@ -367,8 +381,11 @@ export async function getLastBankDetails(userId: string): Promise<BankDetails | 
  *
  * The period it settles is worked out here (resolveSettlePeriod): before or on the 15th the period in use — unless
  * an older one is still waiting — and after the 15th the period that has just ended, as long as nobody asked for it.
- * The request is recorded against that period (balanceBefore = what it had left). Nothing else changes: no period
- * is closed or opened, no request moves — the calendar does that.
+ * The request is recorded against that period (balanceBefore = what it had left). When that is the period in use,
+ * sending its Refill ENDS it: in the same transaction the store moves to the next period (getActivePeriod →
+ * rollForward), which closes it, opens the next one and takes the waiting requests + drafts along — so new spending
+ * and fixed requests count in the new period and the employee page shows it at once. `usageMonth` in the result is
+ * the period in use after that.
  *
  * `today` is a Jakarta day (YYYY-MM-DD); only tests pass it.
  */
@@ -393,6 +410,9 @@ export async function createRefillRequest(
       return { ok: false, error: 'Refill sudah diajukan.' };
     }
 
+    const opensOn = refillNotYetOpen(settle.yearMonth, today);
+    if (opensOn) return { ok: false, error: refillTooEarly(settle.yearMonth, opensOn) };
+
     const fresh = (await getPeriod(storeId, settle.yearMonth, trx)) ?? settle;
     const balance = Number(fresh.currentBalance);
     if (PETTY_CASH_MAX_BALANCE - balance <= 0) return { ok: false, error: nothingToRefill(usage) };
@@ -414,7 +434,10 @@ export async function createRefillRequest(
       })
       .returning();
 
-    return { ok: true, request, period: fresh.yearMonth, usage: usage.yearMonth };
+    // Sending the Refill of the period in use ends it — move the store on now (no-op for an older period's refill).
+    const after = await getActivePeriod(storeId, today, trx);
+
+    return { ok: true, request, period: fresh.yearMonth, usage: after.yearMonth };
   });
 
   if (!outcome.ok) return { success: false, error: outcome.error };
@@ -497,6 +520,12 @@ export interface RefillVerifyResult {
   changedIds: number[];
   /** Ids left alone (already in that state, wrong status, or proof already uploaded). */
   skipped: number;
+  /**
+   * Verify only: of the skipped, how many were refused because their period still has requests nobody has finished
+   * deciding on (waiting on OPS / PIC 1, a fix after Perlu Perbaikan, or Pending Finance) — verifying freezes the
+   * amount, so every request of the period must be decided first.
+   */
+  blocked?: number;
 }
 
 /**
@@ -510,12 +539,32 @@ export async function verifyRefillRequests(ids: number[], actorUserId: string): 
   if (ids.length === 0) return { changedIds: [], skipped: 0 };
   const now = new Date();
 
+  // Verifying freezes what is sent, so the period it settles must be finished: no request still waiting on OPS or
+  // PIC 1, none being fixed after Perlu Perbaikan, none Pending Finance (every completed one Diterima / Ditolak).
+  // The Report only offers Verifikasi for such months; this keeps it true for any caller.
+  const openRequest = sql`EXISTS (
+    SELECT 1 FROM ${pettyCashTransactions} t
+    WHERE t.store_id = ${pettyCashRefillRequests.storeId}
+      AND t.year_month = ${pettyCashRefillRequests.yearMonth}
+      AND (
+        t.status IN ('draft', 'pending_ops', 'ops_approved')
+        OR (t.status = 'completed' AND (t.finance_review IS NULL OR t.finance_review NOT IN ('needs_fix', 'rejected', 'accepted')))
+      )
+  )`;
+  const blockedRows = await db
+    .select({ id: pettyCashRefillRequests.id })
+    .from(pettyCashRefillRequests)
+    .where(and(inArray(pettyCashRefillRequests.id, ids), isNull(pettyCashRefillRequests.financeVerifiedAt), openRequest));
+  const blocked = new Set(blockedRows.map((r) => r.id));
+  const allowed = ids.filter((id) => !blocked.has(id));
+  if (allowed.length === 0) return { changedIds: [], skipped: ids.length, blocked: blocked.size };
+
   const rows = await db
     .update(pettyCashRefillRequests)
     .set({ financeVerifiedBy: actorUserId, financeVerifiedAt: now })
     .where(
       and(
-        inArray(pettyCashRefillRequests.id, ids),
+        inArray(pettyCashRefillRequests.id, allowed),
         eq(pettyCashRefillRequests.status, 'approved'),
         isNull(pettyCashRefillRequests.financeVerifiedAt),
       ),
@@ -551,7 +600,7 @@ export async function verifyRefillRequests(ids: number[], actorUserId: string): 
         body:
           'Finance sudah memverifikasi Refill toko kamu' +
           (t ? `: ${rp(t.transfer)} ditransfer.` : '.') +
-          (rejected ? ` ${rejected}. Yang Perlu Perbaikan bisa diajukan ulang lewat Re-request di halaman Petty Cash (masuk periode berikutnya).` : '') +
+          (rejected ? ` ${rejected}.` : '') +
           ' Setelah uangnya diterima, unggah foto laci petty cash dan Surat Terima.',
         link: '/employee/pettycash',
         relatedType: 'petty_cash_refill_request',
@@ -560,7 +609,7 @@ export async function verifyRefillRequests(ids: number[], actorUserId: string): 
     }),
   );
 
-  return { changedIds: rows.map((r) => r.id), skipped: ids.length - rows.length };
+  return { changedIds: rows.map((r) => r.id), skipped: ids.length - rows.length, blocked: blocked.size };
 }
 
 /**

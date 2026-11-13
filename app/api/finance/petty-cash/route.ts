@@ -1,7 +1,7 @@
 // app/api/finance/petty-cash/route.ts
 
 import { NextRequest, NextResponse } from 'next/server';
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import { resolveFinanceScope } from '@/lib/finance/scope';
@@ -14,10 +14,11 @@ import {
 import { pettyCashDescription } from '@/lib/petty-cash-categories';
 import { jakartaDateKey } from '@/lib/day-bucket';
 import { getVerifiedThrough } from '@/lib/db/utils/petty-cash-review';
+import { categoryIsCodeSql } from '@/lib/db/utils/petty-cash-categories';
 import {
   isFinanceReview,
   isLockedByVerification,
-  leavesOutOfTransfer,
+  needsFinanceCheck,
   type FinanceReview,
 } from '@/lib/petty-cash-review';
 import type { StoreStatus } from '@/lib/store-status';
@@ -45,6 +46,8 @@ export type PettyCashTxRow = {
   actualAmount: string | null;
   description: string;
   categoryName: string | null;
+  /** The category's IS (Business Central item no.) — Finance only. */
+  isCode: string | null;
   status: string;
   imageUrl: string | null;
   submittedBy: string;
@@ -91,7 +94,7 @@ export type PettyCashStoreRow = {
   areaName: string;
   /** BC dept code — Finance + IT only. */
   deptCode: string | null;
-  /** Store lifecycle. ready_to_open stores are listed with a Rp 0 balance. */
+  /** Store lifecycle (ready_to_open stores are never listed here — they have no petty cash yet). */
   storeStatus: StoreStatus;
 
   openingBalance: string;
@@ -99,9 +102,16 @@ export type PettyCashStoreRow = {
   closingBalance: string | null;
   periodStatus: 'open' | 'closed';
 
+  /** Sum of the month's requests Finance accepted (Diterima), actual amount — integer Rupiah as text. */
   monthlySpend: string;
 
   pendingOpsCount: number;
+  /** Approved by OPS, PIC 1 has not recorded the actual amount yet. */
+  awaitingActualCount: number;
+  /** Sent back by Finance (Perlu Perbaikan): drafts PIC 1 is fixing, to go through OPS again. */
+  fixingCount: number;
+  /** Completed requests Finance has not decided on yet (Pending Finance) — they hold the month back from the Report. */
+  pendingFinanceCount: number;
   rejectedCount: number;
 
   refillIssued: boolean;
@@ -148,6 +158,8 @@ export async function GET(
     })
     .from(stores)
     .innerJoin(areas, eq(stores.areaId, areas.id))
+    // A store that is still getting ready to open has no petty cash yet — it is left out of the whole tab.
+    .where(ne(stores.status, 'ready_to_open'))
     .orderBy(stores.name);
 
   if (storeRows.length === 0) {
@@ -179,6 +191,7 @@ export async function GET(
       actualAmount: pettyCashTransactions.actualAmount,
       description: pettyCashTransactions.description,
       categoryName: pettyCashTransactions.categoryName,
+      isCode: categoryIsCodeSql(pettyCashTransactions.categoryId, pettyCashTransactions.categoryName),
       status: pettyCashTransactions.status,
       imageUrl: pettyCashTransactions.imageUrl,
       approvedAt: pettyCashTransactions.approvedAt,
@@ -259,34 +272,11 @@ export async function GET(
     txByStore.get(tx.storeId)?.push(tx);
   }
 
-  // A store shows once it has a period row for this month — or, while it is
-  // still preparing to open (ready_to_open), always, at Rp 0: petty cash is
-  // only provisioned when IT activates the store (changeStoreStatus).
+  // A store shows once it has a period row for this month.
   const data: PettyCashStoreRow[] = storeRows
-    .filter((store) => periodByStore.has(store.id) || store.status === 'ready_to_open')
+    .filter((store) => periodByStore.has(store.id))
     .map((store) => {
-    const period = periodByStore.get(store.id) ?? null;
-    if (!period) {
-      return {
-        storeId: store.id,
-        storeNo: store.storeNo,
-        storeName: store.name,
-        areaName: store.areaName,
-        deptCode: store.deptCode,
-        storeStatus: store.status,
-        openingBalance: '0',
-        balance: '0',
-        closingBalance: null,
-        periodStatus: 'open' as const,
-        monthlySpend: '0',
-        pendingOpsCount: 0,
-        rejectedCount: 0,
-        refillIssued: false,
-        refillAmount: null,
-        nextYearMonth: null,
-        transactions: [],
-      };
-    }
+    const period = periodByStore.get(store.id)!;
     const refill = refillByStore.get(store.id) ?? null;
     const txList = txByStore.get(store.id) ?? [];
 
@@ -295,12 +285,20 @@ export async function GET(
     // the actual amount used, so they don't count as spend yet.
     const completedTx = txList.filter((tx) => tx.status === 'completed');
 
-    // A request Finance turned down (until it is accepted again) is not used: its amount went back to the balance.
+    // "Used" on Finance's pages adds up only what Finance has accepted (Diterima): a request still Pending Finance
+    // is not counted yet, and Perlu Perbaikan / Ditolak never are. (The balance itself is the ledger and still
+    // deducts every completed request that is not turned down.)
     const monthlySpend = completedTx
-      .filter((tx) => !leavesOutOfTransfer(tx.financeReview))
+      .filter((tx) => tx.financeReview === 'accepted')
       .reduce((sum, tx) => sum + Number(tx.actualAmount ?? tx.amount), 0);
 
     const pendingOpsCount = txList.filter((tx) => tx.status === 'pending_ops').length;
+    // Approved by OPS, still waiting for PIC 1 to record the actual amount.
+    const awaitingActualCount = txList.filter((tx) => tx.status === 'ops_approved').length;
+    const fixingCount = txList.filter((tx) => tx.status === 'draft').length;
+
+    // Completed by PIC 1 but not yet checked by Finance (Diterima / Perlu Perbaikan / Ditolak).
+    const pendingFinanceCount = txList.filter((tx) => needsFinanceCheck(tx.status, tx.financeReview)).length;
 
     const rejectedCount = txList.filter((tx) => tx.status === 'ops_rejected').length;
 
@@ -322,6 +320,9 @@ export async function GET(
       monthlySpend: String(monthlySpend),
 
       pendingOpsCount,
+      awaitingActualCount,
+      fixingCount,
+      pendingFinanceCount,
       rejectedCount,
 
       refillIssued: Boolean(refill),
@@ -334,6 +335,7 @@ export async function GET(
         actualAmount: tx.actualAmount,
         description: pettyCashDescription(tx.description),
         categoryName: tx.categoryName,
+        isCode: tx.isCode,
         status: tx.status,
         imageUrl: tx.imageUrl,
         submittedBy: tx.submitterName,
@@ -370,9 +372,13 @@ export async function GET(
     };
   });
 
-  // Preparing stores sink to the bottom — nothing for Finance to act on yet.
+  // Stores needing attention first: anything still Pending, then the rest; refilled ones last.
   const rank = (row: PettyCashStoreRow) =>
-    row.storeStatus === 'ready_to_open' ? 3 : row.pendingOpsCount > 0 ? 0 : row.refillIssued ? 2 : 1;
+    row.pendingOpsCount + row.awaitingActualCount + row.fixingCount + row.pendingFinanceCount > 0
+      ? 0
+      : row.refillIssued
+        ? 2
+        : 1;
 
   data.sort((a, b) => {
     const priorityA = rank(a);

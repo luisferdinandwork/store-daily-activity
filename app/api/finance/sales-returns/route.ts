@@ -1,9 +1,9 @@
 // app/api/finance/sales-returns/route.ts
 //
-// GET ?from=YYYY-MM-DD&to=YYYY-MM-DD[&storeId=][&q=][&page=] — every sales return
+// GET ?from=YYYY-MM-DD&to=YYYY-MM-DD[&storeId=][&areaId=][&q=][&page=][&sort=][&dir=] — every sales return
 // filed in the period (Jakarta days, both ends inclusive) across all stores,
-// newest first, 50 per page. Defaults to this month so far. `q` matches the
-// receipt number, the uploader, or the store's name / code.
+// 50 per page, newest first by default. `q` matches old/new and legacy receipt
+// numbers, the uploader, or the store's name / code.
 
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -26,7 +26,7 @@ export async function GET(req: NextRequest): Promise<NextResponse<FinanceSalesRe
 
   try {
     // Finance sees every store: no area pinning.
-    const data = await getSalesReturns({ ...query, areaId: null });
+    const data = await getSalesReturns(query);
     return NextResponse.json({ success: true, ...data });
   } catch (err) {
     console.error('[GET /api/finance/sales-returns]', err);

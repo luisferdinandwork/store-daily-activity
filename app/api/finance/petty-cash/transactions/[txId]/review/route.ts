@@ -3,10 +3,11 @@
 // POST { action: 'revise' | 'reject' | 'accept', comment?: string }
 //
 // Finance's review of one completed petty cash request (rules: lib/petty-cash-review.ts):
-//   revise — "Perlu Perbaikan": send it back, with or without a comment; PIC 1 is notified and may correct it
-//   reject — "Ditolak": turn it down for good, with or without a comment; PIC 1 files it again next month as a re-request
-//   accept — accept PIC 1's correction, or take a decision back
-// All of them stop once the store's refill has been verified.
+//   revise — "Perlu Perbaikan": the SAME request goes back to PIC 1 as a draft (comment optional) to fix and send to
+//            OPS again; `periodMonth` in the answer = the period it is counted in now (its own, or the next one)
+//   reject — "Ditolak": turn it down for good, with or without a comment
+//   accept — "Diterima": Finance checked it and it is fine (from Pending Finance), or takes a decision back
+// Perlu Perbaikan / Ditolak (and taking them back) stop once the store's refill has been verified; a plain Diterima does not.
 
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveFinanceScope } from '@/lib/finance/scope';
@@ -45,7 +46,7 @@ export async function POST(req: NextRequest, { params }: Params) {
     if (!result.success) {
       return NextResponse.json({ success: false, error: result.error }, { status: result.status });
     }
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, periodMonth: result.periodMonth ?? null });
   } catch (err) {
     console.error('[POST /api/finance/petty-cash/transactions/[txId]/review]', err);
     return NextResponse.json({ success: false, error: 'Internal server error' }, { status: 500 });

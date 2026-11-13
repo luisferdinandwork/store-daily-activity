@@ -31,7 +31,7 @@ export async function GET(req: NextRequest) {
 
     const result = buildReportWorkbook({
       month,
-      rows: await getPettyCashReport(month),
+      rows: (await getPettyCashReport(month)).rows,
       code: params.get('code')?.trim().toUpperCase() || null,
       onlyUsed: params.get('onlyUsed') === '1',
       exportedBy: session?.user?.name ?? scope.userId,

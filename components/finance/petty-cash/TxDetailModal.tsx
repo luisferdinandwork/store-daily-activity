@@ -11,12 +11,12 @@
 // can't be re-requested) — lib/petty-cash-review.ts.
 
 import { useEffect, useState } from 'react';
-import { ChevronLeft, ChevronRight, ImageOff, Loader2, Lock, RotateCcw, ThumbsDown, Wrench } from 'lucide-react';
+import { Check, CircleCheck, ChevronLeft, ChevronRight, ImageOff, Loader2, Lock, RotateCcw, ThumbsDown, Wrench } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { ZoomableImage } from '@/components/shared/ZoomableImage';
 import { cn } from '@/lib/utils';
 import { TX_STATUS_LABEL, type TxStatus } from '@/lib/petty-cash-transactions';
-import { FINANCE_COMMENT_MAX, reviewOutcome } from '@/lib/petty-cash-review';
+import { FINANCE_COMMENT_MAX, PENDING_FINANCE_LABEL, needsFinanceCheck, reviewOutcome } from '@/lib/petty-cash-review';
 import { RE_REQUEST_LABEL, fmtRequestDate } from '@/lib/petty-cash-re-request';
 import { ReRequestBadge } from '@/components/petty-cash/ReRequestBadge';
 import type { PettyCashTxRow } from '@/app/api/finance/petty-cash/route';
@@ -54,7 +54,55 @@ const monthName = (ym: string) => {
   return new Date(y, m - 1, 1).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
 };
 
-/** Finance's decision on one request: its state, and the buttons that apply to it. */
+const DECISION_TONE = {
+  emerald: { idle: 'border-emerald-300 bg-white text-emerald-700 hover:bg-emerald-50', on: 'border-emerald-600 bg-emerald-600 text-white' },
+  amber: { idle: 'border-amber-300 bg-white text-amber-700 hover:bg-amber-50', on: 'border-amber-500 bg-amber-500 text-white' },
+  rose: { idle: 'border-rose-300 bg-white text-rose-700 hover:bg-rose-50', on: 'border-rose-600 bg-rose-600 text-white' },
+} as const;
+
+/** One of the three decisions: filled when it is the current one, greyed out (with the reason on hover) when not allowed. */
+function DecisionButton({
+  tone,
+  icon,
+  label,
+  current,
+  blockedReason,
+  busy,
+  onClick,
+}: {
+  tone: keyof typeof DECISION_TONE;
+  icon: React.ReactNode;
+  label: string;
+  current: boolean;
+  blockedReason: string | null;
+  busy: boolean;
+  onClick: () => void;
+}) {
+  const blocked = !current && blockedReason != null;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={busy || current || blocked}
+      aria-pressed={current}
+      title={current ? 'Keputusan saat ini' : blockedReason ?? undefined}
+      className={cn(
+        'inline-flex h-9 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border px-3 text-xs font-semibold transition',
+        current
+          ? DECISION_TONE[tone].on
+          : blocked
+            ? 'cursor-not-allowed border-slate-200 bg-slate-50 text-slate-400'
+            : DECISION_TONE[tone].idle,
+        busy && !current && 'opacity-60',
+      )}
+    >
+      {current ? <Check className="h-3.5 w-3.5" /> : icon}
+      {label}
+    </button>
+  );
+}
+
+/** Finance's decision on one request: its state, and the three decision buttons. */
 function ReviewPanel({ tx, onReview }: { tx: PettyCashTxRow; onReview: ReviewHandler }) {
   // Which of the two turn-downs the comment form is open for.
   const [asking, setAsking] = useState<'revise' | 'reject' | null>(null);
@@ -99,7 +147,7 @@ function ReviewPanel({ tx, onReview }: { tx: PettyCashTxRow; onReview: ReviewHan
       </label>
       <p className="text-[11px] leading-snug text-slate-500">
         {revising
-          ? `Nominalnya tidak ikut ditransfer. PIC 1 mengajukannya lagi bulan depan lewat ${RE_REQUEST_LABEL}.`
+          ? `Request yang sama kembali ke PIC 1 sebagai Draft untuk diperbaiki, lalu disetujui OPS lagi (ditandai ${RE_REQUEST_LABEL}). Tetap di periode ini kalau periodenya masih berjalan dan Refill-nya belum diajukan — kalau tidak, pindah ke periode berikutnya.`
           : `Ditolak bersifat final — tidak bisa diajukan ulang. Nominalnya tidak ikut ditransfer.`}
       </p>
       <div className="flex items-center justify-between gap-2">
@@ -127,27 +175,58 @@ function ReviewPanel({ tx, onReview }: { tx: PettyCashTxRow; onReview: ReviewHan
     </div>
   );
 
-  const reviseBtn = (
-    <button
-      type="button"
-      onClick={() => setAsking('revise')}
-      disabled={busy}
-      className={cn(btn, 'border border-amber-300 bg-white text-amber-700 hover:bg-amber-50')}
-    >
-      <Wrench className="h-3.5 w-3.5" />
-      Perlu Perbaikan
-    </button>
-  );
-  const rejectBtn = (
-    <button
-      type="button"
-      onClick={() => setAsking('reject')}
-      disabled={busy}
-      className={cn(btn, 'border border-rose-300 bg-white text-rose-700 hover:bg-rose-50')}
-    >
-      <ThumbsDown className="h-3.5 w-3.5" />
-      Ditolak
-    </button>
+  // The three decisions are always on screen. Diterima is only Finance's "checked, fine" flag; Perlu Perbaikan and
+  // Ditolak take the amount out of the refill (lib/petty-cash-review.ts), so they follow the server's rules — a button
+  // that can't be used right now is greyed out and says why (hover).
+  const completed = tx.status === 'completed';
+  const notYet = completed
+    ? null
+    : tx.status === 'draft'
+      ? 'Sedang diperbaiki PIC 1 — bisa diputuskan lagi setelah dikirim ulang dan disetujui OPS.'
+      : tx.isReRequest && tx.status === 'pending_ops'
+        ? 'Perbaikannya menunggu persetujuan OPS — setelah itu kembali ke Finance.'
+        : 'Bisa diputuskan setelah PIC 1 mengisi jumlah terpakai.';
+  const filedAgain = reRequested ? `Sudah diajukan ulang sebagai ${RE_REQUEST_LABEL} #${tx.reRequestedAs}.` : null;
+  const lockedMsg = 'Refill periode ini sudah diverifikasi — nominalnya terkunci.';
+
+  const acceptBlocked =
+    notYet ?? filedAgain ?? (tx.locked && outcome !== 'none' && outcome !== 'accepted' ? lockedMsg : null);
+  const reviseBlocked =
+    notYet ??
+    filedAgain ??
+    (tx.locked ? lockedMsg : outcome === 'rejected' ? 'Sudah Ditolak — pilih Diterima dulu untuk membatalkannya.' : null);
+  const rejectBlocked = notYet ?? filedAgain ?? (tx.locked ? lockedMsg : null);
+
+  const decisions = (
+    <div className="flex flex-wrap gap-2">
+      <DecisionButton
+        tone="emerald"
+        icon={<CircleCheck className="h-3.5 w-3.5" />}
+        label="Diterima"
+        current={outcome === 'accepted'}
+        blockedReason={acceptBlocked}
+        busy={busy}
+        onClick={() => void run('accept')}
+      />
+      <DecisionButton
+        tone="amber"
+        icon={<Wrench className="h-3.5 w-3.5" />}
+        label="Perlu Perbaikan"
+        current={outcome === 'needs_fix' || asking === 'revise'}
+        blockedReason={reviseBlocked}
+        busy={busy}
+        onClick={() => setAsking('revise')}
+      />
+      <DecisionButton
+        tone="rose"
+        icon={<ThumbsDown className="h-3.5 w-3.5" />}
+        label="Ditolak"
+        current={outcome === 'rejected' || asking === 'reject'}
+        blockedReason={rejectBlocked}
+        busy={busy}
+        onClick={() => setAsking('reject')}
+      />
+    </div>
   );
 
   return (
@@ -162,10 +241,13 @@ function ReviewPanel({ tx, onReview }: { tx: PettyCashTxRow; onReview: ReviewHan
             {tx.financeComment ?? <span className="italic text-amber-700">Tanpa komentar.</span>}
           </p>
           <p className="mt-1.5 text-amber-700">
-            Nominalnya tidak ikut ditransfer.{' '}
             {reRequested
-              ? `Sudah diajukan ulang sebagai ${RE_REQUEST_LABEL} #${tx.reRequestedAs}.`
-              : `PIC 1 bisa mengajukannya lagi bulan depan lewat ${RE_REQUEST_LABEL}.`}
+              ? `Nominalnya tidak ikut ditransfer. Sudah diajukan ulang sebagai ${RE_REQUEST_LABEL} #${tx.reRequestedAs}.`
+              : tx.status === 'draft'
+                ? 'Sedang diperbaiki PIC 1 (Draft). Setelah dikirim ulang dan disetujui OPS, request ini kembali ke Finance.'
+                : tx.status === 'pending_ops'
+                  ? `Sudah diperbaiki PIC 1 — menunggu persetujuan OPS (ditandai ${RE_REQUEST_LABEL}).`
+                  : 'Nominalnya tidak ikut ditransfer.'}
           </p>
         </div>
       )}
@@ -187,38 +269,31 @@ function ReviewPanel({ tx, onReview }: { tx: PettyCashTxRow; onReview: ReviewHan
         </p>
       )}
 
-      {/* Actions */}
-      {tx.status !== 'completed' ? (
-        <p className="text-xs text-slate-400">Request bisa diputuskan setelah PIC 1 mengisi jumlah terpakai.</p>
-      ) : tx.locked ? (
-        <p className="flex items-center gap-1.5 text-xs text-slate-400">
-          <Lock className="h-3.5 w-3.5" /> Refill sudah diverifikasi — nominal terkunci, keputusan tidak bisa diubah lagi.
+      {needsFinanceCheck(tx.status, tx.financeReview) && (
+        <p className="rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2.5 text-xs text-indigo-900">
+          <span className="font-semibold">{PENDING_FINANCE_LABEL}</span> — sudah selesai diisi PIC 1, belum kamu cek.
+          Pilih <span className="font-semibold">Diterima</span> kalau sudah sesuai dengan struknya.
         </p>
-      ) : reRequested ? (
-        <p className="text-xs text-slate-400">Sudah diajukan ulang — keputusan ini tidak bisa diubah.</p>
-      ) : asking ? (
-        commentForm
-      ) : (
-        <div className="flex flex-wrap gap-2">
-          {(outcome === 'needs_fix' || outcome === 'rejected') && (
-            <button
-              type="button"
-              onClick={() => run('accept')}
-              disabled={busy}
-              className={cn(btn, 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50')}
-            >
-              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
-              {outcome === 'needs_fix' ? 'Batalkan Perlu Perbaikan' : 'Batalkan penolakan'}
-            </button>
-          )}
-          {(outcome === 'none' || outcome === 'accepted') && (
-            <>
-              {reviseBtn}
-              {rejectBtn}
-            </>
-          )}
-          {outcome === 'needs_fix' && rejectBtn}
-        </div>
+      )}
+
+      {/* Decisions — always all three */}
+      {decisions}
+      {commentForm}
+
+      {(notYet || filedAgain || tx.locked) && (
+        <p className="flex items-start gap-1.5 text-[11px] leading-snug text-slate-400">
+          <Lock className="mt-px h-3 w-3 shrink-0" />
+          {notYet ??
+            filedAgain ??
+            (outcome === 'none'
+              ? `${lockedMsg} Perlu Perbaikan dan Ditolak tidak bisa dipilih lagi — Diterima tetap bisa.`
+              : `${lockedMsg} Keputusan tidak bisa diubah lagi.`)}
+        </p>
+      )}
+      {!asking && (outcome === 'needs_fix' || outcome === 'rejected') && !acceptBlocked && (
+        <p className="flex items-center gap-1.5 text-[11px] text-slate-400">
+          <RotateCcw className="h-3 w-3 shrink-0" /> Pilih Diterima untuk membatalkan keputusan ini.
+        </p>
       )}
     </section>
   );
@@ -352,7 +427,17 @@ export function TxDetailModal({
                 </span>
                 {tx.isReRequest && <ReRequestBadge className="ml-1.5" />}
               </Field>
-              <Field label="Kategori">{tx.categoryName ?? '–'}</Field>
+              <Field label="Kategori">
+                {tx.categoryName ?? '–'}
+                {tx.isCode && (
+                  <span
+                    title="IS — No. item Business Central"
+                    className="mt-0.5 block font-mono text-[11px] font-medium text-slate-500"
+                  >
+                    IS {tx.isCode}
+                  </span>
+                )}
+              </Field>
               <Field label="Jumlah diajukan">
                 <span className="tabular-nums">{rp(amount)}</span>
               </Field>
@@ -400,7 +485,9 @@ export function TxDetailModal({
 
             {tx.isReRequest && (
               <section className="space-y-1.5 border-t border-slate-200 bg-violet-50/40 p-4 text-xs">
-                <h3 className="text-[11px] font-bold uppercase tracking-wide text-violet-600">Request asal</h3>
+                <h3 className="text-[11px] font-bold uppercase tracking-wide text-violet-600">
+                  {tx.reRequestOf ? 'Request asal' : 'Diperbaiki setelah Perlu Perbaikan'}
+                </h3>
                 {tx.reRequestOf ? (
                   <>
                     <p className="font-semibold text-slate-800">
@@ -416,7 +503,18 @@ export function TxDetailModal({
                     </p>
                   </>
                 ) : (
-                  <p className="italic text-slate-500">Request asalnya sudah dihapus.</p>
+                  // The same request, sent back by Finance and fixed by PIC 1 (since 2026-11-13).
+                  <>
+                    <p className="text-slate-600">
+                      Request ini pernah dikembalikan Finance, diperbaiki PIC 1 dan disetujui OPS lagi.
+                    </p>
+                    {tx.financeComment && tx.financeReview == null && (
+                      <p className="text-amber-700">
+                        <span className="font-semibold">Komentar Perlu Perbaikan sebelumnya: </span>
+                        {tx.financeComment}
+                      </p>
+                    )}
+                  </>
                 )}
               </section>
             )}

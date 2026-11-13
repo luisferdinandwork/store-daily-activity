@@ -19,7 +19,7 @@ import { OpsFilterSelect, OpsSearchInput } from '@/components/ops/layout/OpsTool
 import { KpiStrip, PhotoLightbox, type LightboxPhoto } from '@/components/finance/shared/sheet-kit';
 import { Pager, SheetEmpty, SheetFrame, SheetSkeleton, useJsonFeed } from '@/components/ops/petty-cash/shared';
 import { SalesReturnsTable, salesReturnKpis, useDebouncedValue } from '@/components/sales-returns/shared';
-import { monthRange, type SalesReturnsPage } from '@/lib/sales-returns';
+import { monthRange, salesReturnPhotos, type SalesReturnsPage } from '@/lib/sales-returns';
 
 type OpsSalesReturnsResponse = SalesReturnsPage & { success: true; scope: 'all_areas' | 'area' };
 
@@ -158,7 +158,7 @@ export default function OpsSalesReturnsPage() {
                 onOpenPhoto={(r, index) =>
                   setLightbox({
                     title: `${r.storeNo} · ${r.receiptNumber}`,
-                    photos: r.imageUrls.map((url, n) => ({ url, label: `Struk ${n + 1}` })),
+                    photos: salesReturnPhotos(r),
                     index,
                   })
                 }
@@ -176,10 +176,8 @@ export default function OpsSalesReturnsPage() {
             />
 
             <p className="text-[11px] text-slate-500">
-              <span className="font-semibold">Tanggal</span> is when the employee uploaded the receipt, and{' '}
-              <span className="font-semibold">Diunggah Oleh</span> is the account signed in at that moment — both are
-              recorded automatically. <span className="font-semibold">No. Struk</span> is typed by the employee from the
-              return receipt; click a photo to enlarge it.
+              Tanggal dan pengunggah tercatat otomatis. Nomor struk baru wajib diisi; nomor struk lama opsional.
+              Klik foto struk lama atau baru untuk memperbesar. Pengajuan arsip tetap ditandai karena jenis struknya belum tercatat.
             </p>
           </>
         ) : null}

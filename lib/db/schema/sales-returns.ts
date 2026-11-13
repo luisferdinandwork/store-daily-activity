@@ -1,7 +1,7 @@
 // lib/db/schema/sales-returns.ts
 //
 // Sales Return — an employee files the POS receipt of a customer return from
-// the staff app: the receipt number typed in + 1–3 photos of the receipt(s).
+// the staff app: old/new receipt numbers + one identified photo of each receipt.
 // Who and when are never typed: `userId` is the session user and `createdAt`
 // is the moment of upload. Ops (own area) and Finance (all stores) browse them.
 //
@@ -26,6 +26,12 @@ export const salesReturns = pgTable(
 
     // The POS slip number, normalised on write (trimmed, no spaces, upper-case).
     receiptNumber: text('receipt_number').notNull(),
+
+    // Nullable for legacy submissions: their receipt/photo roles are unknown.
+    oldReceiptNumber: text('old_receipt_number'),
+    newReceiptNumber: text('new_receipt_number'),
+    oldReceiptImageUrl: text('old_receipt_image_url'),
+    newReceiptImageUrl: text('new_receipt_image_url'),
 
     // JSON array of public storage URLs (the codebase's photo-column convention).
     imageUrls: text('image_urls').notNull(),

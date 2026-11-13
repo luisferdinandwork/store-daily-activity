@@ -28,6 +28,7 @@ import { FINANCE_REVIEW_LABEL, leavesOutOfTransfer } from '@/lib/petty-cash-revi
 import { LateBadge, PeriodBadge } from '@/components/petty-cash/PeriodBadge';
 import { ReRequestBadge } from '@/components/petty-cash/ReRequestBadge';
 import { jakartaYearMonth } from '@/lib/day-bucket';
+import { RefillRecipient } from '@/components/ops/petty-cash/RefillRecipient';
 
 // ─── Header ──────────────────────────────────────────────────────────────────
 
@@ -503,7 +504,7 @@ export function RefillCard({
             <p className="truncate text-[15px] font-bold leading-snug text-slate-900">{row.storeName}</p>
             <p className="mt-0.5 truncate text-[11px] text-slate-400">
               <span className="font-mono">{row.storeNo}</span>
-              {isHo && <> · {row.areaName}</>} · {row.requestedByName ?? 'PIC'} · {fmtWhen(row.requestedAt)}
+              {isHo && <> · {row.areaName}</>} · {fmtWhen(row.requestedAt)}
             </p>
           </div>
           <RefillStateChip state={row.state} />
@@ -512,6 +513,10 @@ export function RefillCard({
         <div className="mt-2 flex flex-wrap gap-1">
           <PeriodBadge month={row.periodMonth} />
           {row.late && <LateBadge month={row.periodMonth} />}
+        </div>
+
+        <div className="mt-3">
+          <RefillRecipient row={row} />
         </div>
 
         <div className="mt-3 grid grid-cols-2 gap-2">

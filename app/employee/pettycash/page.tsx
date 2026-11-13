@@ -37,9 +37,9 @@ import {
   pettyCashDescription,
   type PettyCashCategoryOption,
 } from '@/lib/petty-cash-categories';
-import { RE_REQUEST_LABEL, fmtRequestDate, type ReRequestable } from '@/lib/petty-cash-re-request';
-import { periodLabel, periodMonthName, periodRangeLabel, type DeadlineStatus } from '@/lib/petty-cash-period';
-import { jakartaDateKey, jakartaTodayKey, jakartaYearMonth } from '@/lib/day-bucket';
+import { RE_REQUEST_LABEL, fmtRequestDate } from '@/lib/petty-cash-re-request';
+import { addMonths, periodLabel, periodMonthName, periodRangeLabel, type DeadlineStatus } from '@/lib/petty-cash-period';
+import { jakartaYearMonth } from '@/lib/day-bucket';
 import {
   DEFAULT_LIST_STATE,
   FILTER_LABEL,
@@ -74,7 +74,7 @@ import DocumentScanner from '@/components/shared/DocumentScanner';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type PettyCashStatus = 'pending_ops' | 'ops_approved' | 'completed' | 'ops_rejected';
+type PettyCashStatus = 'draft' | 'pending_ops' | 'ops_approved' | 'completed' | 'ops_rejected';
 
 type TxRow = {
   id: number;
@@ -103,10 +103,10 @@ type TxRow = {
   reRequestOfId: number | null;
   /** For a Perlu Perbaikan request: the re-request that filed it again. */
   reRequestedAs: number | null;
-  /** Perlu Perbaikan, finished, and not filed again yet. */
-  canReRequest: boolean;
-  /** The period a Re-request of it would be counted in (always after its own) and what that period has left. */
-  reRequestTarget: { month: string; balance: number } | null;
+  /** Sent back by Finance (Perlu Perbaikan, status `draft`): PIC 1 fixes it and sends it to OPS again. */
+  canFix: boolean;
+  /** The period it is counted in (its own, or the next one) and what that period has left. */
+  fixTarget: { month: string; balance: number } | null;
 };
 
 type PageData = {
@@ -206,7 +206,7 @@ function closedPeriodText(closed: { month: string; refillState: string }, usageM
   const usageName = periodLabel(usageMonth);
 
   if (closed.refillState === 'none') {
-    return `Refill ${closedName} belum diajukan — ajukan di tab Refill (ditandai Terlambat). Periode berganti otomatis tanggal 16; request baru dihitung di periode ${usageName}.`;
+    return `Refill ${closedName} belum diajukan — ajukan di tab Refill (ditandai Terlambat). Periode berganti otomatis tanggal 16 (atau begitu Refill-nya dikirim); request baru dihitung di periode ${usageName}.`;
   }
 
   if (closed.refillState === 'rejected') {
@@ -686,8 +686,9 @@ function RefillBankForm({
 }
 
 // ─── Refill: PIC 1 sends it, everyone at the store sees where it stands ─────────
-// The CALENDAR changes the period (on the 16th) — sending a Refill closes nothing, so requests carry on while the
-// Refill goes OPS → Finance → PIC 1's receipt photos. Which period it covers is decided by the server: on or
+// The period changes on the 16th (the calendar) — or earlier, as soon as the Refill of the period in use is SENT:
+// that ends it, and new requests (plus waiting ones and fixes after Perlu Perbaikan) count in the next period while
+// the Refill goes OPS → Finance → PIC 1's receipt photos. Which period it covers is decided by the server: on or
 // before the 15th the period in use (once the one before is settled), after the 15th the period that has just ended
 // while it is still waiting. It is due on or before the 15th; later is still accepted but marked "Terlambat"
 // (lib/petty-cash-period.ts).
@@ -876,7 +877,7 @@ function RefillRequestCard({
           <CalendarDays className="mt-px h-3 w-3 shrink-0" aria-hidden />
           <span>
             {overview?.usageMonth && overview.usageMonth > request.yearMonth
-              ? `Periode ${periodLabel(request.yearMonth)} sudah berakhir (${periodRangeLabel(request.yearMonth)}). Request baru tetap bisa dibuat — dihitung di periode ${periodLabel(overview.usageMonth)}.`
+              ? `Periode ${periodLabel(request.yearMonth)} sudah ditutup. Request baru tetap bisa dibuat — dihitung di periode ${periodLabel(overview.usageMonth)}.`
               : `Periode ${periodLabel(request.yearMonth)} masih berjalan (${periodRangeLabel(request.yearMonth)}); request baru tetap bisa dibuat dan dihitung di periode ini. Periode berganti otomatis tanggal 16.`}{' '}
             Saldo baru bertambah setelah Refill diterima (foto bukti diunggah).
           </span>
@@ -964,7 +965,7 @@ function RefillRequestCard({
               <span>
                 {settle.closed
                   ? `Periode ${periodLabel(settle.month)} (${periodRangeLabel(settle.month)}) sudah berakhir; request baru dihitung di periode ${periodLabel(overview?.usageMonth ?? settle.month)}.`
-                  : `Periode ${periodLabel(settle.month)} berjalan ${periodRangeLabel(settle.month)} dan berganti otomatis tanggal 16 — mengajukan Refill tidak menutupnya.`}{' '}
+                  : `Periode ${periodLabel(settle.month)} berjalan ${periodRangeLabel(settle.month)}. Begitu Refill ini dikirim, periode ${periodLabel(settle.month)} ditutup dan request baru masuk periode ${periodLabel(addMonths(settle.month, 1))} (paling lambat tanggal 16 periode berganti otomatis).`}{' '}
                 Saldo tidak langsung kembali ke Rp 1.000.000; saldo baru bertambah setelah Refill diterima.
               </span>
             </p>
@@ -1139,17 +1140,17 @@ function ConfirmAmountAction({
 }
 
 // ─── Finance's decision on a finished request ───────────────────────────────
-// Finance checks once a month. Perlu Perbaikan = PIC 1 files it again as a Re-request; Ditolak = final, it can
-// not be re-requested (lib/petty-cash-review.ts, lib/petty-cash-re-request.ts).
+// Finance checks once a month. Perlu Perbaikan = the SAME request comes back to PIC 1 to fix and send to OPS again
+// (marked Re-request); Ditolak = final (lib/petty-cash-review.ts, lib/petty-cash-re-request.ts).
 
 function FinanceReviewNote({
   tx,
   isHolder,
-  onReRequest,
+  onFix,
 }: {
   tx: TxRow;
   isHolder: boolean;
-  onReRequest: (txId: number) => void;
+  onFix: (txId: number) => void;
 }) {
   const outcome = tx.reviewOutcome;
   if (outcome === 'none') return null;
@@ -1172,23 +1173,34 @@ function FinanceReviewNote({
           <p className="mt-1 whitespace-pre-wrap break-words text-[12px] text-orange-950">{comment}</p>
         )}
         {tx.reRequestedAs != null ? (
+          // Sent back before 2026-11-13, when a fix was filed as a separate new request.
           <p className="mt-2 flex items-center gap-1.5 text-[11px] font-semibold text-violet-700">
             <RotateCcw className="h-3 w-3" />
             Sudah diajukan ulang ({RE_REQUEST_LABEL} #{tx.reRequestedAs})
           </p>
-        ) : (
-          isHolder &&
-          tx.canReRequest && (
-            <button
-              type="button"
-              onClick={() => onReRequest(tx.id)}
-              className="mt-2.5 flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 text-xs font-bold text-white transition active:scale-[0.99]"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-              Ajukan ulang ({RE_REQUEST_LABEL})
-            </button>
-          )
-        )}
+        ) : tx.status === 'draft' ? (
+          <>
+            <p className="mt-1.5 text-[11px] leading-relaxed text-orange-800">
+              Perbaiki request ini lalu kirim lagi ke OPS
+              {tx.fixTarget ? ` — dihitung di periode ${periodLabel(tx.fixTarget.month)}` : ''}.
+            </p>
+            {isHolder && tx.canFix && (
+              <button
+                type="button"
+                onClick={() => onFix(tx.id)}
+                className="mt-2.5 flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 text-xs font-bold text-white transition active:scale-[0.99]"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                Perbaiki &amp; kirim ke OPS
+              </button>
+            )}
+          </>
+        ) : tx.status === 'pending_ops' ? (
+          <p className="mt-2 flex items-center gap-1.5 text-[11px] font-semibold text-violet-700">
+            <RotateCcw className="h-3 w-3" />
+            Sudah diperbaiki — menunggu persetujuan OPS
+          </p>
+        ) : null}
       </div>
     );
   }
@@ -1204,7 +1216,7 @@ function FinanceReviewNote({
   );
 }
 
-/** "n/100" under a Keterangan box — rose once it is over the limit (an older request can be longer). */
+/** "n/50" under a Keterangan box — rose once it is over the limit (an older request can be longer). */
 function ReasonCounter({ value }: { value: string }) {
   return (
     <p className={cn('mt-1 text-right text-[11px] tabular-nums', value.length > PETTY_CASH_REASON_MAX ? 'font-semibold text-rose-600' : 'text-muted-foreground')}>
@@ -1213,37 +1225,43 @@ function ReasonCounter({ value }: { value: string }) {
   );
 }
 
-// ─── Re-request ───────────────────────────────────────────────────────────────
-// A request Finance sent back with Perlu Perbaikan is filed again, usually next month: say which day the request
-// was made, correct Keterangan / what was spent / the receipt. There is no OPS step — it goes straight to
-// Finance, marked Re-request, and today's date is recorded automatically (lib/petty-cash-re-request.ts).
+// ─── Fixing a Perlu Perbaikan request ───────────────────────────────────────
+// A request Finance sent back with Perlu Perbaikan is the SAME request, back with PIC 1 as a draft: correct the
+// category / Keterangan / what was spent / the receipt and send it to OPS again. OPS sees it marked Re-request; once
+// approved it goes back to Finance (lib/petty-cash-re-request.ts). No new request is made.
 
-/** What the sheet starts from: the request, its category and where the re-request would be counted. */
-type ReRequestSource = ReRequestable & {
+/** What the sheet starts from: the request and the period it is counted in. */
+type FixSource = {
+  id: number;
   categoryId: number | null;
-  /** The period the Re-request is counted in (after the original's) and what that period has left. */
+  categoryName: string | null;
+  description: string;
+  /** What was spent on it, Rupiah. */
+  amount: number;
+  imageUrl: string | null;
+  /** The period it is in now (YYYY-MM). */
+  month: string;
+  financeComment: string | null;
+  /** The period it is counted in and what that period has left. */
   target: { month: string; balance: number } | null;
 };
 
-function toReRequestable(tx: TxRow): ReRequestSource {
+function toFixSource(tx: TxRow): FixSource {
   return {
-    categoryId: tx.categoryId,
-    target: tx.reRequestTarget,
     id: tx.id,
+    categoryId: tx.categoryId,
     categoryName: tx.categoryName,
     description: tx.description,
     amount: Math.round(requestAmount(tx)),
     imageUrl: tx.imageUrl,
-    createdAt: tx.createdAt,
     month: tx.month,
     financeComment: tx.financeComment,
-    filedOn: jakartaDateKey(tx.createdAt),
-    isReRequest: tx.isReRequest,
+    target: tx.fixTarget,
   };
 }
 
-/** Bottom sheet: file a Perlu Perbaikan request again — the day it was made, Keterangan, what was spent, the receipt. */
-function ReRequestSheet({
+/** Bottom sheet: fix a Perlu Perbaikan request — category, Keterangan, what was spent, the receipt — and send it to OPS. */
+function FixRequestSheet({
   source,
   categories,
   balance,
@@ -1251,8 +1269,8 @@ function ReRequestSheet({
   onClose,
   onDone,
 }: {
-  source: ReRequestSource;
-  /** The categories PIC 1 can pick today — the original's may have been hidden since. */
+  source: FixSource;
+  /** The categories PIC 1 can pick today — the request's own may have been hidden since. */
   categories: PettyCashCategoryOption[];
   /** The period in use — a fallback when the sheet doesn't know the target period's balance. */
   balance: number;
@@ -1260,9 +1278,7 @@ function ReRequestSheet({
   onClose: () => void;
   onDone: (periodMonth: string | null) => void;
 }) {
-  const today = jakartaTodayKey();
-  // The Re-request is counted in a later period than the original (never one already closed), and is cut from
-  // THAT period's balance — not the one shown on the page.
+  // It is cut from the balance of the period it is counted in (maybe the next one) — not the one shown on the page.
   const available = source.target?.balance ?? balance;
   // Starts on the original's category (by id, else by name); empty when it is no longer on offer, so PIC 1 picks.
   const [categoryId, setCategoryId] = useState<number | null>(
@@ -1272,7 +1288,6 @@ function ReRequestSheet({
       null,
   );
   const selectedCategory = categories.find((c) => c.id === categoryId) ?? null;
-  const [requestDate, setRequestDate] = useState(source.filedOn);
   const [description, setDescription] = useState(pettyCashDescription(source.description));
   const [amount, setAmount] = useState(String(source.amount));
   const [photo, setPhoto] = useState<{ file: File; preview: string } | null>(null);
@@ -1289,8 +1304,6 @@ function ReRequestSheet({
   async function submit() {
     setError(null);
     if (!selectedCategory) { setError('Pilih kategori petty cash.'); return; }
-    if (!requestDate) { setError('Isi tanggal request.'); return; }
-    if (requestDate > today) { setError('Tanggal request tidak boleh di masa depan.'); return; }
     if (!description.trim()) { setError('Keterangan wajib diisi.'); return; }
     if (description.length > PETTY_CASH_REASON_MAX) {
       setError(`Keterangan maksimal ${PETTY_CASH_REASON_MAX} karakter (sekarang ${description.length}). Persingkat dulu.`);
@@ -1323,9 +1336,8 @@ function ReRequestSheet({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          originalTxId: source.id,
+          txId: source.id,
           categoryId: selectedCategory.id,
-          requestDate,
           description,
           actualAmount: amountNum,
           imageUrl,
@@ -1333,12 +1345,12 @@ function ReRequestSheet({
         }),
       });
       const body = await res.json();
-      if (!res.ok || !body.success) throw new Error(body.error ?? 'Gagal mengajukan ulang.');
+      if (!res.ok || !body.success) throw new Error(body.error ?? 'Gagal mengirim perbaikan.');
 
       onDone(typeof body.periodMonth === 'string' ? body.periodMonth : null);
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Gagal mengajukan ulang. Coba lagi.');
+      setError(e instanceof Error ? e.message : 'Gagal mengirim perbaikan. Coba lagi.');
     } finally {
       setBusy(false);
     }
@@ -1348,7 +1360,7 @@ function ReRequestSheet({
     <Sheet open onOpenChange={(open) => { if (!open && !busy) onClose(); }}>
       <SheetContent side="bottom" className="max-h-[92vh] gap-0 overflow-y-auto rounded-t-2xl p-0">
         <SheetHeader className="border-b border-border px-4 py-3 pr-12">
-          <SheetTitle className="text-base">Ajukan ulang ({RE_REQUEST_LABEL})</SheetTitle>
+          <SheetTitle className="text-base">Perbaiki request</SheetTitle>
           <SheetDescription>
             {source.categoryName ?? 'Request petty cash'} · {monthLabel(source.month)}
           </SheetDescription>
@@ -1362,17 +1374,15 @@ function ReRequestSheet({
             )}
           </div>
 
-          {source.target && (
-            <div className="rounded-xl bg-violet-50 px-3 py-2.5 ring-1 ring-violet-200">
-              <p className="text-[11px] font-bold text-violet-700">
-                Dihitung di periode {periodLabel(source.target.month)}
-              </p>
-              <p className="mt-0.5 text-[11px] leading-relaxed text-violet-900">
-                Finance sudah memeriksa periode {periodLabel(source.month)}, jadi {RE_REQUEST_LABEL} baru dinilai di
-                pemeriksaan periode berikutnya. Jumlah terpakai dipotong dari saldo periode itu.
-              </p>
-            </div>
-          )}
+          <div className="rounded-xl bg-violet-50 px-3 py-2.5 ring-1 ring-violet-200">
+            <p className="text-[11px] font-bold text-violet-700">
+              Dihitung di periode {periodLabel(source.target?.month ?? source.month)}
+            </p>
+            <p className="mt-0.5 text-[11px] leading-relaxed text-violet-900">
+              Ini request yang sama, bukan request baru. Setelah dikirim, OPS menyetujuinya lagi (ditandai{' '}
+              {RE_REQUEST_LABEL}), lalu jumlah terpakai dipotong dari saldo periode itu dan request kembali ke Finance.
+            </p>
+          </div>
 
           <div>
             <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">Kategori</label>
@@ -1409,17 +1419,6 @@ function ReRequestSheet({
             {selectedCategory?.definition && (
               <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">{selectedCategory.definition}</p>
             )}
-          </div>
-
-          <div>
-            <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">Tanggal request</label>
-            <input
-              type="date"
-              value={requestDate}
-              max={today}
-              onChange={(e) => setRequestDate(e.target.value)}
-              className="h-11 w-full rounded-xl border border-border bg-background px-3.5 text-base text-foreground focus:border-primary focus:outline-none"
-            />
           </div>
 
           <div>
@@ -1488,7 +1487,7 @@ function ReRequestSheet({
             className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 text-xs font-bold text-white transition active:scale-[0.99] disabled:opacity-60"
           >
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-            Kirim {RE_REQUEST_LABEL} ke Finance
+            Kirim perbaikan ke OPS
           </button>
         </div>
 
@@ -1612,7 +1611,7 @@ function RequestRow({
   onConfirm,
   onUploadReceipt,
   onViewImage,
-  onReRequest,
+  onFix,
 }: {
   tx: TxRow;
   isHolder: boolean;
@@ -1622,7 +1621,7 @@ function RequestRow({
   onConfirm: (tx: TxRow, actualAmount: number) => void;
   onUploadReceipt: (tx: TxRow, file: File) => void;
   onViewImage: (url: string) => void;
-  onReRequest: (txId: number) => void;
+  onFix: (txId: number) => void;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const group = requestGroup(tx);
@@ -1726,7 +1725,7 @@ function RequestRow({
           {/* The photo can be swapped only until the request is Selesai (the confirm form above). Once it is
               finished it is simply locked: no button, no message. A Re-request is the way to change it. */}
 
-          <FinanceReviewNote tx={tx} isHolder={isHolder} onReRequest={onReRequest} />
+          <FinanceReviewNote tx={tx} isHolder={isHolder} onFix={onFix} />
         </div>
       )}
     </li>
@@ -1820,7 +1819,7 @@ export default function EmployeePettyCashPage() {
 
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   // The Perlu Perbaikan request PIC 1 is filing again.
-  const [reRequesting, setReRequesting] = useState<ReRequestSource | null>(null);
+  const [fixing, setFixing] = useState<FixSource | null>(null);
   // The request list's search / filter / sort.
   const [list, setList] = useState<RequestListState>(() => ({
     ...DEFAULT_LIST_STATE,
@@ -1832,9 +1831,9 @@ export default function EmployeePettyCashPage() {
   // month picker is PIC 1's.
   const monthSeeded = useRef(false);
 
-  function startReRequest(txId: number) {
+  function startFix(txId: number) {
     const tx = data?.transactions.find((t) => t.id === txId);
-    if (tx?.canReRequest) setReRequesting(toReRequestable(tx));
+    if (tx?.canFix) setFixing(toFixSource(tx));
   }
 
   // A shortcut from the banners: show only that kind of request, and scroll to the list.
@@ -2209,7 +2208,7 @@ export default function EmployeePettyCashPage() {
     refillRequest?.status === 'approved' &&
     Boolean(refillRequest.financeVerifiedAt) &&
     !refillRequest.balanceAfter;
-  const reRequestableCount = useMemo(() => transactions.filter((tx) => tx.canReRequest).length, [transactions]);
+  const fixableCount = useMemo(() => transactions.filter((tx) => tx.canFix).length, [transactions]);
 
   return (
     <div className="mx-auto w-full max-w-md">
@@ -2217,17 +2216,17 @@ export default function EmployeePettyCashPage() {
         <Lightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />
       )}
 
-      {reRequesting && data && (
-        <ReRequestSheet
-          key={reRequesting.id}
-          source={reRequesting}
+      {fixing && data && (
+        <FixRequestSheet
+          key={fixing.id}
+          source={fixing}
           categories={categories}
           balance={balance}
           storeName={data.storeName}
-          onClose={() => setReRequesting(null)}
+          onClose={() => setFixing(null)}
           onDone={(periodMonth) => {
             setSuccessMessage(
-              `${RE_REQUEST_LABEL} dikirim ke Finance — dihitung di periode ${periodLabel(periodMonth ?? reRequesting.target?.month ?? data.month)}, jumlah terpakai sudah dipotong dari saldo periode itu.`,
+              `Perbaikan dikirim ke OPS (ditandai ${RE_REQUEST_LABEL}) — setelah disetujui, jumlah terpakai dipotong dari saldo periode ${periodLabel(periodMonth ?? fixing.target?.month ?? data.month)} dan request kembali ke Finance.`,
             );
             setTimeout(() => setSuccessMessage(null), 5000);
             void load({ silent: true });
@@ -2341,7 +2340,7 @@ export default function EmployeePettyCashPage() {
           )
         )}
 
-        {!loading && !loadError && tab === 'request' && isHolder && (allCounts.action > 0 || reRequestableCount > 0) && (
+        {!loading && !loadError && tab === 'request' && isHolder && (allCounts.action > 0 || fixableCount > 0) && (
           <section className="space-y-2 px-4">
             {allCounts.action > 0 && (
               <button
@@ -2353,13 +2352,13 @@ export default function EmployeePettyCashPage() {
                 <span className="shrink-0 text-indigo-600">Lihat ›</span>
               </button>
             )}
-            {reRequestableCount > 0 && (
+            {fixableCount > 0 && (
               <button
                 type="button"
                 onClick={() => showOnly('needs_fix')}
                 className="flex w-full items-center justify-between gap-3 rounded-xl bg-orange-50 px-3.5 py-2.5 text-left text-xs font-semibold text-orange-800 ring-1 ring-orange-200 active:scale-[0.99]"
               >
-                <span>{reRequestableCount} request Perlu Perbaikan — ajukan ulang lewat {RE_REQUEST_LABEL}</span>
+                <span>{fixableCount} request Perlu Perbaikan — perbaiki lalu kirim lagi ke OPS</span>
                 <span className="shrink-0 text-orange-600">Lihat ›</span>
               </button>
             )}
@@ -2534,7 +2533,7 @@ export default function EmployeePettyCashPage() {
                     onConfirm={handleConfirmActualAmount}
                     onUploadReceipt={handleUploadReceipt}
                     onViewImage={setLightboxSrc}
-                    onReRequest={startReRequest}
+                    onFix={startFix}
                   />
                 ))}
               </ul>

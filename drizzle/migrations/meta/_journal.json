@@ -323,6 +323,27 @@
       "when": 1794469125007,
       "tag": "0045_audit_cash_checks",
       "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1794536922851,
+      "tag": "0046_petty_cash_category_is",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1794541654113,
+      "tag": "0047_petty_cash_needs_fix_to_draft",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1794543380566,
+      "tag": "0048_plain_kronos",
+      "breakpoints": true
     }
   ]
 }

@@ -114,6 +114,10 @@ export interface OpsRefillRow {
 
   requestedAt: string;
   requestedByName: string | null;
+  /** Bank details saved on this request, rather than the employee's latest account. */
+  bankName: string | null;
+  accountNumber: string | null;
+  accountHolderName: string | null;
   notes: string | null;
 
   /** The period (YYYY-MM) this refill settles — it closed when PIC 1 sent the refill. */
@@ -165,6 +169,8 @@ export const TX_STATUS_TONE: Record<TxStatus, 'amber' | 'indigo' | 'emerald' | '
   ops_approved: 'indigo',
   completed: 'emerald',
   ops_rejected: 'rose',
+  // Sent back by Finance (Perlu Perbaikan): with PIC 1 to fix, then it comes back to OPS as a Re-request.
+  draft: 'amber',
 };
 
 export const REFILL_STATE_TONE: Record<RefillState, 'amber' | 'slate' | 'indigo' | 'emerald' | 'rose'> = {
@@ -286,7 +292,7 @@ export function totalsOfRequests(rows: OpsRequestRow[]): RequestTotals {
 }
 
 export function countRequestsByStatus(rows: OpsRequestRow[]): Record<TxStatus, number> {
-  const out = { pending_ops: 0, ops_approved: 0, completed: 0, ops_rejected: 0 } as Record<TxStatus, number>;
+  const out = { pending_ops: 0, ops_approved: 0, completed: 0, ops_rejected: 0, draft: 0 } as Record<TxStatus, number>;
   for (const r of rows) if (isTxStatus(r.status)) out[r.status] += 1;
   return out;
 }
@@ -312,7 +318,10 @@ export interface RefillFilters {
 export function filterRefillsExceptState(rows: OpsRefillRow[], f: Omit<RefillFilters, 'state'>): OpsRefillRow[] {
   return rows.filter((r) => {
     if (f.area !== 'all' && r.areaId !== f.area) return false;
-    return matchesQuery([r.storeNo, r.storeName, r.areaName, r.requestedByName, r.notes], f.query);
+    return matchesQuery(
+      [r.storeNo, r.storeName, r.areaName, r.requestedByName, r.bankName, r.accountNumber, r.accountHolderName, r.notes],
+      f.query,
+    );
   });
 }
 
