@@ -8,7 +8,7 @@ import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { STATUS_LABELS as ISSUE_STATUS_LABELS } from '@/lib/issues';
-import { AlertTriangle, ArrowRight, CheckCircle2, Eye, Loader2, AlertCircle, Shield } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Banknote, CheckCircle2, Eye, FileText, Loader2, AlertCircle, Shield, Wallet } from 'lucide-react';
 
 type IssueStatus = 'reported' | 'in_review' | 'solved' | 'completed';
 
@@ -103,6 +103,32 @@ export default function AuditDashboardPage() {
             ))}
           </div>
         )}
+
+        <div>
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Pemeriksaan Kas</p>
+          <div className="grid gap-3 sm:grid-cols-3">
+            {[
+              { href: '/audit/cek-modal', label: 'Cek Modal', hint: 'Hitung uang modal kasir', Icon: Banknote },
+              { href: '/audit/cek-petty-cash', label: 'Cek Petty Cash', hint: 'Cocokkan struk & hitung kas', Icon: Wallet },
+              { href: '/audit/berita-acara', label: 'Berita Acara', hint: 'Lihat & cetak', Icon: FileText },
+            ].map(({ href, label, hint, Icon }) => (
+              <Link
+                key={href}
+                href={href}
+                className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3.5 shadow-sm transition hover:border-amber-300 hover:bg-amber-50/50"
+              >
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
+                  <Icon className="h-5 w-5" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-bold text-slate-900">{label}</span>
+                  <span className="block truncate text-xs text-slate-500">{hint}</span>
+                </span>
+                <ArrowRight className="h-4 w-4 shrink-0 text-slate-300" />
+              </Link>
+            ))}
+          </div>
+        </div>
 
         <Link
           href="/audit/issues"

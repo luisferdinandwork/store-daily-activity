@@ -7,6 +7,11 @@
 //   Overview
 //     Dashboard         /audit
 //
+//   Pemeriksaan Kas
+//     Cek Modal         /audit/cek-modal       (cashier float count)
+//     Cek Petty Cash    /audit/cek-petty-cash  (requests Finance has not covered + petty cash count)
+//     Berita Acara      /audit/berita-acara    (the printable Berita Acara Pemeriksaan Kas)
+//
 //   Issues
 //     Issues            /audit/issues        (issues routed to Audit role)
 
@@ -15,10 +20,13 @@ import { usePathname } from 'next/navigation';
 import { signOut, useSession } from 'next-auth/react';
 import {
   AlertTriangle,
+  Banknote,
   ChevronRight,
+  FileText,
   KeyRound,
   LayoutDashboard,
   LogOut,
+  Wallet,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
@@ -49,6 +57,14 @@ const NAV: NavSection[] = [
     section: 'Overview',
     items: [
       { href: '/audit', label: 'Dashboard', icon: LayoutDashboard, exact: true },
+    ],
+  },
+  {
+    section: 'Pemeriksaan Kas',
+    items: [
+      { href: '/audit/cek-modal', label: 'Cek Modal', icon: Banknote },
+      { href: '/audit/cek-petty-cash', label: 'Cek Petty Cash', icon: Wallet },
+      { href: '/audit/berita-acara', label: 'Berita Acara', icon: FileText },
     ],
   },
   {

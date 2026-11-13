@@ -16,6 +16,7 @@ export * from './feature-switches';    // IT on/off switches
 export * from './sales-returns';       // Sales Return receipts
 export * from './store-visits';
 export * from './templates';           // IT-managed issue + email templates
+export * from './audit-cash-checks';   // Audit Pemeriksaan Kas (Berita Acara)
 
 import * as enums            from './enums';
 import * as lookups          from './lookups';
@@ -34,6 +35,7 @@ import * as featureSwitches  from './feature-switches';
 import * as salesReturns     from './sales-returns';
 import * as storeVisits      from './store-visits';
 import * as templates        from './templates';
+import * as auditCashChecks  from './audit-cash-checks';
 
 export const schema = {
   ...enums,
@@ -53,4 +55,5 @@ export const schema = {
   ...salesReturns,
   ...storeVisits,
   ...templates,
+  ...auditCashChecks,
 };

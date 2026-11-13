@@ -48,6 +48,14 @@ const ACCENTS = {
     item: 'data-[selected=true]:bg-emerald-50 data-[selected=true]:text-emerald-900',
     check: 'text-emerald-600',
   },
+  amber: {
+    icon: 'bg-amber-50 text-amber-600',
+    trigger: 'hover:border-amber-300 focus-visible:border-amber-400 focus-visible:ring-amber-100',
+    open: 'border-amber-400 ring-amber-100',
+    code: 'text-amber-700',
+    item: 'data-[selected=true]:bg-amber-50 data-[selected=true]:text-amber-900',
+    check: 'text-amber-600',
+  },
 } as const;
 
 export function StoreCombobox({

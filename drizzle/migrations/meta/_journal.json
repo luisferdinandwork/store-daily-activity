@@ -316,6 +316,13 @@
       "when": 1794384563135,
       "tag": "0044_store_closing_hold",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1794469125007,
+      "tag": "0045_audit_cash_checks",
+      "breakpoints": true
     }
   ]
 }
