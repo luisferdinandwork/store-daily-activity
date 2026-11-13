@@ -37,6 +37,7 @@ import {
 } from '../lib/petty-cash-period';
 import { isLockedByVerification, visibleReviewOutcome } from '../lib/petty-cash-review';
 import { requestGroup } from '../lib/employee-petty-cash-view';
+import { exampleItems } from '../lib/petty-cash-categories';
 
 let checks = 0;
 const ok = (name: string, fn: () => void) => {
@@ -267,6 +268,16 @@ ok('after the Refill: Pending, Selesai only when Diterima, Ditolak; Perlu Perbai
   assert.equal(pill('completed', 'accepted', true), 'done');
   assert.equal(pill('completed', 'rejected', true), 'rejected');
   assert.equal(pill('draft', 'needs_fix', false), 'needs_fix');
+});
+
+console.log('A category\'s Contoh Pengeluaran as tags (the "!" sheet)');
+ok('split on commas, "dan" and the final full stop dropped, first letter capitalised', () => {
+  assert.deepEqual(
+    exampleItems('Pengiriman dokumen melalui JNE/J&T/SiCepat, surat resmi, perangko, dan pengiriman paket kantor.'),
+    ['Pengiriman dokumen melalui JNE/J&T/SiCepat', 'Surat resmi', 'Perangko', 'Pengiriman paket kantor'],
+  );
+  assert.deepEqual(exampleItems(null), []);
+  assert.deepEqual(exampleItems(' '), []);
 });
 
 console.log(`\n${checks} checks passed`);

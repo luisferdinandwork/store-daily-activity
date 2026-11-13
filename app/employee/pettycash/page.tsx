@@ -34,6 +34,7 @@ import type { ReviewOutcome } from '@/lib/petty-cash-review';
 import {
   PETTY_CASH_CATEGORY_NOTE,
   PETTY_CASH_REASON_MAX,
+  exampleItems,
   pettyCashDescription,
   type PettyCashCategoryOption,
 } from '@/lib/petty-cash-categories';
@@ -1286,6 +1287,8 @@ function FixRequestSheet({
       null,
   );
   const selectedCategory = categories.find((c) => c.id === categoryId) ?? null;
+  // The category whose "!" was tapped (its Pengertian + Contoh Pengeluaran).
+  const [infoCategory, setInfoCategory] = useState<PettyCashCategoryOption | null>(null);
   const [description, setDescription] = useState(pettyCashDescription(source.description));
   const [amount, setAmount] = useState(String(source.amount));
   const [photo, setPhoto] = useState<{ file: File; preview: string } | null>(null);
@@ -1388,25 +1391,15 @@ function FixRequestSheet({
               <Notice tone="warning">Kategori petty cash belum diatur. Hubungi OPS.</Notice>
             ) : (
               <div className="flex flex-wrap gap-2">
-                {categories.map((c) => {
-                  const active = c.id === categoryId;
-                  return (
-                    <button
-                      key={c.id}
-                      type="button"
-                      onClick={() => { setCategoryId(c.id); setError(null); }}
-                      aria-pressed={active}
-                      className={cn(
-                        'rounded-full border px-3.5 py-2 text-sm font-semibold transition-colors',
-                        active
-                          ? 'border-primary bg-primary text-primary-foreground'
-                          : 'border-border bg-background text-foreground active:bg-secondary',
-                      )}
-                    >
-                      {c.name}
-                    </button>
-                  );
-                })}
+                {categories.map((c) => (
+                  <CategoryChip
+                    key={c.id}
+                    category={c}
+                    active={c.id === categoryId}
+                    onSelect={() => { setCategoryId(c.id); setError(null); }}
+                    onInfo={() => setInfoCategory(c)}
+                  />
+                ))}
               </div>
             )}
             {!selectedCategory && source.categoryName && (
@@ -1498,6 +1491,15 @@ function FixRequestSheet({
           }}
           title="Foto Struk"
         />
+
+        {infoCategory && (
+          <CategoryInfoSheet
+            category={infoCategory}
+            active={infoCategory.id === categoryId}
+            onSelect={() => { setCategoryId(infoCategory.id); setError(null); }}
+            onClose={() => setInfoCategory(null)}
+          />
+        )}
       </SheetContent>
     </Sheet>
   );
@@ -1732,6 +1734,123 @@ function RequestRow({
   );
 }
 
+// ─── A category chip with its own "!" ──────────────────────────────────────
+// Tapping the name picks the category; the "!" opens CategoryInfoSheet for just that one.
+
+function CategoryChip({
+  category,
+  active,
+  onSelect,
+  onInfo,
+}: {
+  category: PettyCashCategoryOption;
+  active: boolean;
+  onSelect: () => void;
+  onInfo: () => void;
+}) {
+  const hasInfo = Boolean(category.definition || category.examples);
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center rounded-full border transition-colors',
+        active ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background text-foreground',
+      )}
+    >
+      <button
+        type="button"
+        onClick={onSelect}
+        aria-pressed={active}
+        className={cn('rounded-full py-2 pl-3.5 text-sm font-semibold active:opacity-70', hasInfo ? 'pr-1' : 'pr-3.5')}
+      >
+        {category.name}
+      </button>
+      {hasInfo && (
+        <button
+          type="button"
+          onClick={onInfo}
+          aria-label={`Penjelasan kategori ${category.name}`}
+          title="Pengertian & contoh pengeluaran"
+          className="mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full active:scale-90"
+        >
+          <span
+            className={cn(
+              'flex h-[18px] w-[18px] items-center justify-center rounded-full text-[11px] font-black leading-none',
+              active ? 'bg-primary-foreground/25 text-primary-foreground' : 'bg-secondary text-muted-foreground',
+            )}
+          >
+            !
+          </span>
+        </button>
+      )}
+    </span>
+  );
+}
+
+// ─── "!" on one category: its Pengertian + Contoh Pengeluaran ────────────────
+
+function CategoryInfoSheet({
+  category,
+  active,
+  onSelect,
+  onClose,
+}: {
+  category: PettyCashCategoryOption;
+  /** It is the category picked already. */
+  active: boolean;
+  onSelect: () => void;
+  onClose: () => void;
+}) {
+  const examples = exampleItems(category.examples);
+  return (
+    <Sheet open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <SheetContent side="bottom" className="max-h-[85vh] gap-0 overflow-y-auto rounded-t-2xl p-0">
+        <SheetHeader className="px-4 pb-2 pt-4 pr-12 text-left">
+          <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Kategori</p>
+          <SheetTitle className="text-base leading-snug">{category.name}</SheetTitle>
+          <SheetDescription className="sr-only">Pengertian dan contoh pengeluaran kategori ini.</SheetDescription>
+        </SheetHeader>
+
+        <div className="space-y-4 px-4 pb-4 pt-2">
+          {category.definition && (
+            <section>
+              <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Pengertian</p>
+              <p className="mt-1 text-sm leading-relaxed text-foreground">{category.definition}</p>
+            </section>
+          )}
+
+          {examples.length > 0 && (
+            <section>
+              <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Contoh Pengeluaran</p>
+              <ul className="mt-1.5 flex flex-wrap gap-1.5">
+                {examples.map((e, i) => (
+                  <li key={`${e}-${i}`} className="rounded-full bg-secondary px-2.5 py-1 text-xs text-foreground">
+                    {e}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          <p className="text-[11px] leading-relaxed text-muted-foreground">{PETTY_CASH_CATEGORY_NOTE}</p>
+        </div>
+
+        <div className="border-t border-border p-4">
+          <button
+            type="button"
+            onClick={() => { if (!active) onSelect(); onClose(); }}
+            className={cn(
+              'flex h-11 w-full items-center justify-center gap-2 rounded-xl text-sm font-bold transition active:scale-[0.99]',
+              active ? 'bg-secondary text-foreground' : 'bg-primary text-primary-foreground',
+            )}
+          >
+            {active ? 'Tutup' : 'Pilih kategori ini'}
+          </button>
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
 // ─── "!" help: what each category means ─────────────────────────────────────
 // Kategori · Pengertian · Contoh Pengeluaran, straight from the category list
 // IT keeps — so PIC 1 picks the right one without a preset Keterangan.
@@ -1808,6 +1927,8 @@ export default function EmployeePettyCashPage() {
   // Two tabs so PIC 1 can focus on one thing at a time; the "!" button opens the category guide.
   const [tab, setTab] = useState<'request' | 'refill'>('request');
   const [helpOpen, setHelpOpen] = useState(false);
+  // The category whose "!" was tapped in the new-request form (its Pengertian + Contoh Pengeluaran).
+  const [infoCategory, setInfoCategory] = useState<PettyCashCategoryOption | null>(null);
 
   const [submitting, setSubmitting] = useState(false);
   const [uploadingTxId, setUploadingTxId] = useState<number | null>(null);
@@ -2251,6 +2372,15 @@ export default function EmployeePettyCashPage() {
         />
       )}
 
+      {infoCategory && (
+        <CategoryInfoSheet
+          category={infoCategory}
+          active={infoCategory.id === categoryId}
+          onSelect={() => selectCategory(infoCategory)}
+          onClose={() => setInfoCategory(null)}
+        />
+      )}
+
       {helpOpen && categories.length > 0 && (
         <CategoryHelpSheet categories={categories} onClose={() => setHelpOpen(false)} />
       )}
@@ -2444,25 +2574,15 @@ export default function EmployeePettyCashPage() {
                   </Notice>
                 ) : (
                   <div className="flex flex-wrap gap-2">
-                    {categories.map((c) => {
-                      const active = c.id === categoryId;
-                      return (
-                        <button
-                          key={c.id}
-                          type="button"
-                          onClick={() => selectCategory(c)}
-                          aria-pressed={active}
-                          className={cn(
-                            'rounded-full border px-3.5 py-2 text-sm font-semibold transition-colors',
-                            active
-                              ? 'border-primary bg-primary text-primary-foreground'
-                              : 'border-border bg-background text-foreground active:bg-secondary',
-                          )}
-                        >
-                          {c.name}
-                        </button>
-                      );
-                    })}
+                    {categories.map((c) => (
+                      <CategoryChip
+                        key={c.id}
+                        category={c}
+                        active={c.id === categoryId}
+                        onSelect={() => selectCategory(c)}
+                        onInfo={() => setInfoCategory(c)}
+                      />
+                    ))}
                   </div>
                 )}
 

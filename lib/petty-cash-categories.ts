@@ -110,6 +110,19 @@ export const DEFAULT_PETTY_CASH_CATEGORIES: PettyCashCategoryDefault[] = [
 export const PETTY_CASH_CATEGORY_NOTE =
   'Pengelompokan akhir mengikuti kebijakan Chart of Accounts (COA) dan ketentuan Finance perusahaan.';
 
+/**
+ * A category's Contoh Pengeluaran as a list, for the per-category "!" sheet on the employee page:
+ * "Pulpen, pensil, … dan pengiriman paket kantor." → ["Pulpen", "Pensil", …, "Pengiriman paket kantor"].
+ */
+export function exampleItems(text: string | null | undefined): string[] {
+  if (!text) return [];
+  return text
+    .split(/[,;\n]+/)
+    .map((s) => s.trim().replace(/^(dan|atau)\s+/i, '').replace(/[.;]+$/, '').trim())
+    .filter(Boolean)
+    .map((s) => s.charAt(0).toUpperCase() + s.slice(1));
+}
+
 /** What the employee request form needs to know about a category. */
 export interface PettyCashCategoryOption {
   id: number;
