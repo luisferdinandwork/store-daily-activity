@@ -47,10 +47,14 @@ interface Props {
   display?: 'all' | 'desktop' | 'mobile';
   /** `actions` is a lone icon-able button (refresh): on a phone it sits in the title row, next to the bell. */
   compactActions?: boolean;
+  /** The page puts its own tabs in a bottom bar on a phone, so the header drops its tab row below `md`. */
+  hideTabsOnPhone?: boolean;
+  /** The page shows these actions in its body on a phone (they would wrap into several header rows), so the header drops them below `md`. */
+  hideActionsOnPhone?: boolean;
 }
 
 /** A single compact identity/action row, rendered inside the panel's top navbar. */
-export default function PanelPageHeader({ scope, title, subtitle, actions, tabs, wideActions = false, display = 'all', compactActions = false }: Props) {
+export default function PanelPageHeader({ scope, title, subtitle, actions, tabs, wideActions = false, display = 'all', compactActions = false, hideTabsOnPhone = false, hideActionsOnPhone = false }: Props) {
   const header = usePanelPageHeader();
   const hydrated = useHydrated();
   const content = (
@@ -69,11 +73,12 @@ export default function PanelPageHeader({ scope, title, subtitle, actions, tabs,
         'flex min-w-0 flex-wrap items-center gap-2 [&_button]:min-h-10 [&_a]:min-h-10',
         header && 'col-span-full row-start-2 pb-1 pt-2',
         header && compactActions && 'max-md:col-span-1 max-md:col-start-3 max-md:row-start-1 max-md:p-0',
+        hideActionsOnPhone && 'max-md:hidden',
         header && (wideActions
           ? '@6xl:col-span-1 @6xl:col-start-4 @6xl:row-start-1 @6xl:py-0'
           : '@4xl:col-span-1 @4xl:col-start-4 @4xl:row-start-1 @4xl:py-0'),
       )}>{actions}</div>}
-      {tabs && <div className="col-span-full row-start-3 w-full border-t border-slate-100 pt-1">{tabs}</div>}
+      {tabs && <div className={cn('col-span-full row-start-3 w-full border-t border-slate-100 pt-1', hideTabsOnPhone && 'max-md:hidden')}>{tabs}</div>}
     </div>
   );
   // Server + hydration render nothing: the shell's portal target only exists on the client,

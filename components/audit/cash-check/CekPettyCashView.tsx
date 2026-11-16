@@ -1,25 +1,30 @@
 'use client';
 // components/audit/cash-check/CekPettyCashView.tsx — Audit "Cek Petty Cash": the PETTY CASH half of the Berita Acara.
 //
+// Built phone-first (the auditor stands at the store with a phone): one column, 44 px tap targets, a three-number
+// summary on top while the full one sits beside the form on desktop, steps numbered 1–5.
+//
 // 1. A checklist of every completed request Finance has not covered with a verified Refill yet — the period in use,
 //    plus the period before it while its Refill is not verified (lib/db/utils/audit-cash-check.ts). The auditor ticks
 //    the ones whose receipt matches; only ticked lines are printed under PENGELUARAN.
-// 2. Extra cash-outs the system does not have (typed by the auditor).
+// 2. Extra cash-outs the system does not have (typed by the auditor, each WITH a photo of its receipt).
 // 3. "Penggantian petty cash periode lalu yang belum diterima" — a Refill Finance sent that the store has not
 //    received; pre-filled from the system.
 // 4. The petty cash counted per denomination. Selisih = fisik − (dana − cashout − penggantian belum diterima).
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import {
+  Camera,
   Check,
   ChevronDown,
   ClipboardList,
   Coins,
   Hourglass,
-  ImageIcon,
+  ImagePlus,
   Info,
   ListChecks,
+  Loader2,
   NotebookPen,
   PencilLine,
   Plus,
@@ -31,7 +36,9 @@ import {
 } from 'lucide-react';
 
 import PanelPageHeader from '@/components/shared/PanelPageHeader';
+import DocumentScanner from '@/components/shared/DocumentScanner';
 import { ImageLightbox, type LightboxImage } from '@/components/shared/ImageLightbox';
+import { compressImageFile } from '@/lib/image-compress';
 import { cn } from '@/lib/utils';
 import {
   NOTES_MAX,
@@ -132,6 +139,29 @@ const shortDay = (day: string) =>
   new Date(`${day}T00:00:00Z`).toLocaleDateString('id-ID', { timeZone: 'UTC', day: 'numeric', month: 'short' });
 
 const newKey = () => `x${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+
+/** Sends one receipt photo to object storage (shrunk first) and returns its URL. */
+async function uploadExtraPhoto(storeId: number, date: string, file: File): Promise<string> {
+  const small = await compressImageFile(file);
+  const body = new FormData();
+  body.set('file', small);
+  body.set('storeId', String(storeId));
+  body.set('date', date);
+  const res = await fetch('/api/audit/cash-check/photo', { method: 'POST', body });
+  const data = (await res.json().catch(() => ({}))) as { success?: boolean; error?: string; url?: string };
+  if (!res.ok || data.success === false || !data.url) throw new Error(data.error || `Gagal mengunggah foto (${res.status})`);
+  return data.url;
+}
+
+/** One numbered step badge for a card title. */
+function Step({ n, children }: { n: number; children: React.ReactNode }) {
+  return (
+    <span className="flex items-center gap-2">
+      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-500 text-[11px] font-extrabold text-white">{n}</span>
+      {children}
+    </span>
+  );
+}
 
 export default function CekPettyCashView() {
   const { storeId, date, today, set, query } = useCashCheckParams();
@@ -255,9 +285,34 @@ export default function CekPettyCashView() {
     });
   };
 
+  const openExtraPhotos = (key: string) => {
+    if (!form) return;
+    const withPhoto = form.extras.filter((e) => e.photoUrl);
+    const index = withPhoto.findIndex((e) => e.key === key);
+    if (index < 0) return;
+    setLightbox({
+      images: withPhoto.map((e) => ({ url: e.photoUrl as string, label: `${shortDay(e.date)} · ${e.description} · ${rupiah(extraTotal(e))}` })),
+      index,
+    });
+  };
+
+  /** Puts a photo on a line that was saved before photos were required. */
+  async function attachExtraPhoto(key: string, file: File) {
+    if (!storeId) return;
+    const t = toast.loading('Mengunggah foto…');
+    try {
+      const url = await uploadExtraPhoto(storeId, date, file);
+      setForm((f) => (f ? { ...f, extras: f.extras.map((e) => (e.key === key ? { ...e, photoUrl: url } : e)) } : f));
+      toast.success('Foto tersimpan di baris — jangan lupa Simpan.', { id: t });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal mengunggah foto.', { id: t });
+    }
+  }
+
   const systemPending = data?.petty.pendingRefill ?? 0;
   const allIds = items.map((i) => i.txId);
   const allChecked = items.length > 0 && items.every((i) => i.checked);
+  const cashoutRows = totals ? totals.checkedCount + (form?.extras.length ?? 0) : 0;
 
   return (
     <div className="flex min-h-full flex-col bg-slate-50">
@@ -268,7 +323,7 @@ export default function CekPettyCashView() {
         tabs={<CashCheckTabs query={query} />}
       />
 
-      <div className="flex-1 space-y-4 p-4 sm:p-6 lg:p-8">
+      <div className="flex-1 space-y-3 p-3 sm:space-y-4 sm:p-6 lg:p-8">
         <ContextBar
           stores={stores}
           storesLoading={storesLoading}
@@ -289,7 +344,7 @@ export default function CekPettyCashView() {
         ) : error ? (
           <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
             {error}{' '}
-            <button type="button" className="font-bold underline" onClick={() => void load()}>
+            <button type="button" className="min-h-11 font-bold underline" onClick={() => void load()}>
               Coba lagi
             </button>
           </div>
@@ -304,22 +359,29 @@ export default function CekPettyCashView() {
               </div>
             )}
 
-            <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
-              <div className="space-y-4">
-                {/* ── Checklist ── */}
+            {/* Phone: the three numbers that matter, always at the top. Desktop has the full summary beside the form. */}
+            <div className="grid grid-cols-3 divide-x divide-slate-100 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs lg:hidden">
+              <MiniStat label={`Cashout · ${cashoutRows} baris`} value={rupiah(totals.cashout)} />
+              <MiniStat label="Sisa menurut buku" value={rupiah(totals.pettyBook)} />
+              <MiniStat label="Fisik kas" value={rupiah(totals.pettyPhysical)} />
+            </div>
+
+            <div className="grid items-start gap-3 sm:gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
+              <div className="min-w-0 space-y-3 sm:space-y-4">
+                {/* ── 1 · Checklist ── */}
                 <SectionCard
                   icon={ListChecks}
-                  title="Pengeluaran belum dicek Finance"
+                  title={<Step n={1}>Pengeluaran belum dicek Finance</Step>}
                   subtitle="Request selesai yang belum ditutup Refill terverifikasi Finance. Centang yang struknya sesuai — hanya yang dicentang masuk PENGELUARAN."
                   action={
                     items.length > 0 ? (
                       <button
                         type="button"
                         onClick={() => setAll(allIds, !allChecked)}
-                        className="mt-0.5 flex min-h-9 shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 text-xs font-bold text-slate-600 transition hover:border-amber-300 hover:bg-amber-50 hover:text-amber-800"
+                        className="flex min-h-11 w-full items-center justify-center gap-1.5 rounded-xl border border-slate-200 px-3 text-sm font-bold text-slate-600 transition active:bg-amber-50 hover:border-amber-300 hover:bg-amber-50 hover:text-amber-800 sm:min-h-9 sm:w-auto sm:rounded-lg sm:text-xs"
                       >
-                        {allChecked ? <X className="h-3.5 w-3.5" /> : <Check className="h-3.5 w-3.5" />}
-                        {allChecked ? 'Hapus centang' : 'Centang semua'}
+                        {allChecked ? <X className="h-4 w-4" /> : <Check className="h-4 w-4" />}
+                        {allChecked ? 'Hapus semua centang' : 'Centang semua'}
                       </button>
                     ) : undefined
                   }
@@ -351,9 +413,8 @@ export default function CekPettyCashView() {
                         const groupChecked = groupItems.filter((i) => i.checked).length;
                         return (
                           <div key={g.month}>
-                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-y border-slate-100 bg-slate-50 px-4 py-2 first:border-t-0">
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-y border-slate-100 bg-slate-50 px-4 py-2.5 first:border-t-0">
                               <p className="text-sm font-bold text-slate-800">Periode {monthLabelId(g.month)}</p>
-                              <p className="text-xs text-slate-400">{g.rangeLabel}</p>
                               <span
                                 className={cn(
                                   'rounded-full border px-2 py-0.5 text-[11px] font-semibold',
@@ -362,12 +423,13 @@ export default function CekPettyCashView() {
                               >
                                 {g.savedOnly ? 'Tersimpan sebelumnya' : PERIOD_REFILL_STATE_LABEL[g.refillState]}
                               </span>
-                              <span className="ml-auto text-xs font-semibold tabular-nums text-slate-500">
+                              <p className="w-full text-xs text-slate-400 min-[420px]:w-auto">{g.rangeLabel}</p>
+                              <span className="text-xs font-semibold tabular-nums text-slate-500 min-[420px]:ml-auto">
                                 {groupChecked}/{groupItems.length} · {rupiah(groupTotal)}
                               </span>
                             </div>
                             {g.verifiedAt && !g.savedOnly && (
-                              <p className="border-b border-slate-100 bg-violet-50/40 px-4 py-1.5 text-[11px] text-violet-700">
+                              <p className="border-b border-slate-100 bg-violet-50/40 px-4 py-1.5 text-[11px] leading-snug text-violet-700">
                                 Refill periode ini sudah diverifikasi Finance — hanya request setelah verifikasi yang ditampilkan.
                               </p>
                             )}
@@ -394,20 +456,20 @@ export default function CekPettyCashView() {
                       <button
                         type="button"
                         onClick={() => setShowInProgress((v) => !v)}
-                        className="flex w-full items-center gap-2 px-4 py-3 text-left text-xs font-semibold text-slate-500 hover:bg-slate-50"
+                        className="flex min-h-12 w-full items-center gap-2 px-4 py-3 text-left text-xs font-semibold text-slate-500 hover:bg-slate-50"
                       >
-                        <Hourglass className="h-3.5 w-3.5 text-sky-500" />
-                        <span className="flex-1">
+                        <Hourglass className="h-4 w-4 shrink-0 text-sky-500" />
+                        <span className="flex-1 leading-snug">
                           {data.petty.inProgress.length} request disetujui OPS, jumlah aktual belum dicatat PIC 1 (tidak dihitung)
                         </span>
-                        <ChevronDown className={cn('h-4 w-4 transition', showInProgress && 'rotate-180')} />
+                        <ChevronDown className={cn('h-4 w-4 shrink-0 transition', showInProgress && 'rotate-180')} />
                       </button>
                       {showInProgress && (
                         <ul className="divide-y divide-slate-100 bg-sky-50/30">
                           {data.petty.inProgress.map((t) => (
-                            <li key={t.txId} className="flex items-center gap-3 px-4 py-2.5 text-sm">
-                              <span className="w-14 shrink-0 text-xs text-slate-400">{shortDay(t.date)}</span>
-                              <span className="min-w-0 flex-1 truncate text-slate-600">{t.description}</span>
+                            <li key={t.txId} className="flex items-start gap-3 px-4 py-2.5 text-sm">
+                              <span className="w-12 shrink-0 pt-px text-xs text-slate-400">{shortDay(t.date)}</span>
+                              <span className="min-w-0 flex-1 text-slate-600">{t.description}</span>
                               <span className="shrink-0 tabular-nums text-slate-500">{rupiah(t.amount)}</span>
                             </li>
                           ))}
@@ -417,67 +479,55 @@ export default function CekPettyCashView() {
                   )}
                 </SectionCard>
 
-                {/* ── Extra lines ── */}
+                {/* ── 2 · Extra lines ── */}
                 <SectionCard
                   icon={ReceiptText}
-                  title="Pengeluaran lain"
-                  subtitle="Struk di kotak petty cash yang belum ada di sistem. Ikut dicetak di PENGELUARAN."
-                  action={
-                    !adding && form.extras.length < PETTY_EXTRA_MAX ? (
-                      <button
-                        type="button"
-                        onClick={() => setAdding(true)}
-                        className="mt-0.5 flex min-h-9 shrink-0 items-center gap-1 rounded-lg bg-amber-500 px-2.5 text-xs font-bold text-white transition hover:bg-amber-600"
-                      >
-                        <Plus className="h-3.5 w-3.5" /> Tambah
-                      </button>
-                    ) : undefined
-                  }
+                  title={<Step n={2}>Pengeluaran lain</Step>}
+                  subtitle="Struk di kotak petty cash yang belum ada di sistem. Foto struknya wajib dilampirkan. Ikut dicetak di PENGELUARAN."
                 >
-                  {form.extras.length === 0 && !adding ? (
-                    <p className="px-4 py-5 text-center text-xs text-slate-400">Tidak ada.</p>
-                  ) : (
+                  {form.extras.length > 0 && (
                     <ul className="divide-y divide-slate-100">
                       {form.extras.map((e) => (
-                        <li key={e.key} className="flex items-center gap-3 px-4 py-2.5">
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm font-semibold text-slate-800">{e.description}</p>
-                            <p className="text-xs text-slate-400">
-                              {shortDay(e.date)} · {e.qty} × {rupiah(e.price)}
-                            </p>
-                          </div>
-                          <span className="shrink-0 text-sm font-bold tabular-nums text-slate-900">{rupiah(extraTotal(e))}</span>
-                          <button
-                            type="button"
-                            onClick={() => patch({ extras: form.extras.filter((x) => x.key !== e.key) })}
-                            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
-                            aria-label={`Hapus ${e.description}`}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </li>
+                        <ExtraRow
+                          key={e.key}
+                          extra={e}
+                          onOpenPhoto={() => openExtraPhotos(e.key)}
+                          onAttach={(file) => void attachExtraPhoto(e.key, file)}
+                          onRemove={() => patch({ extras: form.extras.filter((x) => x.key !== e.key) })}
+                        />
                       ))}
                     </ul>
                   )}
-                  {adding && (
+                  {adding ? (
                     <ExtraEditor
                       defaultDate={date}
                       maxDate={today}
+                      upload={(file) => (storeId ? uploadExtraPhoto(storeId, date, file) : Promise.reject(new Error('Pilih toko dulu.')))}
                       onCancel={() => setAdding(false)}
                       onAdd={(e) => {
                         patch({ extras: [...form.extras, e] });
                         setAdding(false);
                       }}
                     />
-                  )}
+                  ) : form.extras.length < PETTY_EXTRA_MAX ? (
+                    <div className={cn('p-3', form.extras.length > 0 && 'border-t border-slate-100')}>
+                      <button
+                        type="button"
+                        onClick={() => setAdding(true)}
+                        className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-amber-300 bg-amber-50/50 text-sm font-bold text-amber-800 transition active:bg-amber-100 hover:bg-amber-50"
+                      >
+                        <Plus className="h-4 w-4" /> Tambah pengeluaran lain
+                      </button>
+                    </div>
+                  ) : null}
                 </SectionCard>
 
-                {/* ── Lain-lain ── */}
-                <SectionCard icon={RotateCcw} title="Lain-lain">
+                {/* ── 3 · Lain-lain ── */}
+                <SectionCard icon={RotateCcw} title={<Step n={3}>Lain-lain</Step>}>
                   <div className="space-y-2 p-4">
                     <MoneyInput
                       id="pending-refill"
-                      label="1. Penggantian petty cash periode lalu yang belum diterima"
+                      label="Penggantian petty cash periode lalu yang belum diterima"
                       value={form.pendingRefill}
                       onChange={(n) => patch({ pendingRefill: n })}
                       hint={
@@ -490,24 +540,29 @@ export default function CekPettyCashView() {
                       <button
                         type="button"
                         onClick={() => patch({ pendingRefill: systemPending })}
-                        className="flex min-h-9 items-center gap-1.5 rounded-lg px-1 text-xs font-bold text-amber-700 hover:underline"
+                        className="flex min-h-11 items-center gap-1.5 rounded-lg px-1 text-sm font-bold text-amber-700 hover:underline"
                       >
-                        <RotateCcw className="h-3.5 w-3.5" /> Pakai angka sistem ({rupiah(systemPending)})
+                        <RotateCcw className="h-4 w-4" /> Pakai angka sistem ({rupiah(systemPending)})
                       </button>
                     )}
                   </div>
                 </SectionCard>
 
-                {/* ── Rincian kas ── */}
+                {/* ── 4 · Rincian kas ── */}
                 <SectionCard
                   icon={Coins}
-                  title={<>Rincian Kas <span className="ml-1 text-xs font-semibold tabular-nums text-slate-400">{countsPieces(form.counts)} pcs</span></>}
+                  title={
+                    <Step n={4}>
+                      Rincian Kas <span className="text-xs font-semibold tabular-nums text-slate-400">{countsPieces(form.counts)} pcs</span>
+                    </Step>
+                  }
                   subtitle="Uang tunai di kotak petty cash, per pecahan."
                 >
                   <DenominationCounter idPrefix="petty" counts={form.counts} onChange={(update) => setForm((f) => (f ? { ...f, counts: update(f.counts) } : f))} />
                 </SectionCard>
 
-                <SectionCard icon={NotebookPen} title="Catatan" subtitle="Opsional — tidak dicetak di Berita Acara.">
+                {/* ── 5 · Catatan ── */}
+                <SectionCard icon={NotebookPen} title={<Step n={5}>Catatan</Step>} subtitle="Opsional — tidak dicetak di Berita Acara.">
                   <div className="p-4">
                     <textarea
                       value={form.notes}
@@ -521,11 +576,11 @@ export default function CekPettyCashView() {
                 </SectionCard>
               </div>
 
-              <aside className="space-y-4 lg:sticky lg:top-4">
+              <aside className="min-w-0 space-y-3 sm:space-y-4 lg:sticky lg:top-4">
                 <SectionCard icon={ClipboardList} title="Ringkasan Petty Cash">
                   <div className="px-4 py-3">
                     <SumLine label="Petty Cash" value={PETTY_CASH_FUND} />
-                    <SumLine label={`Total cashout (${totals.checkedCount + form.extras.length} baris)`} value={totals.cashout} sign="−" />
+                    <SumLine label={`Total cashout (${cashoutRows} baris)`} value={totals.cashout} sign="−" />
                     <SumLine label="Penggantian belum diterima" value={form.pendingRefill} sign="−" />
                     <SumLine label="Sisa petty cash menurut buku" value={totals.pettyBook} strong />
                     <div className="h-2" />
@@ -537,7 +592,7 @@ export default function CekPettyCashView() {
                       )}
                     >
                       <p className="text-xs font-semibold text-slate-500">Selisih Petty Cash menurut buku dengan fisik kas</p>
-                      <div className="mt-1 flex items-center justify-between gap-2">
+                      <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
                         <p className={cn('text-xl font-extrabold tabular-nums', diffTextClass(totals.pettyDiff))}>
                           {totals.pettyDiff > 0 ? '+' : ''}
                           {rupiah(totals.pettyDiff)}
@@ -591,6 +646,30 @@ export default function CekPettyCashView() {
   );
 }
 
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 px-2.5 py-2.5 text-center">
+      <p className="truncate text-[10px] font-semibold uppercase tracking-wide text-slate-400">{label}</p>
+      <p className="mt-0.5 truncate text-sm font-extrabold tabular-nums text-slate-900">{value}</p>
+    </div>
+  );
+}
+
+/** A receipt thumbnail that opens the lightbox. */
+function Thumb({ url, onOpen, label }: { url: string; onOpen: () => void; label: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-label={label}
+      className="relative h-14 w-14 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100 transition active:scale-95 hover:border-amber-300"
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={url} alt="" loading="lazy" className="h-full w-full object-cover" />
+    </button>
+  );
+}
+
 // ─── One checklist line ──────────────────────────────────────────────────────
 
 function ChecklistRow({
@@ -609,64 +688,63 @@ function ChecklistRow({
   onReceipt: () => void;
 }) {
   return (
-    <li className={cn('transition-colors', item.checked ? 'bg-emerald-50/40' : 'bg-white')}>
-      <div className="flex items-start gap-3 px-4 py-3">
-        <button
-          type="button"
-          role="checkbox"
-          aria-checked={item.checked}
-          onClick={onToggle}
+    <li className={cn('transition-colors', item.checked ? 'bg-emerald-50/50' : 'bg-white')}>
+      {/* The whole top part is one big tap target; the photo + note buttons below stay separate. */}
+      <button
+        type="button"
+        role="checkbox"
+        aria-checked={item.checked}
+        onClick={onToggle}
+        className="flex w-full items-start gap-3 px-4 pb-1 pt-3 text-left active:bg-slate-50"
+      >
+        <span
           className={cn(
-            'mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md border-2 transition active:scale-90',
-            item.checked ? 'border-emerald-500 bg-emerald-500 text-white' : 'border-slate-300 bg-white hover:border-amber-400',
+            'mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border-2 transition',
+            item.checked ? 'border-emerald-500 bg-emerald-500 text-white' : 'border-slate-300 bg-white',
           )}
-          aria-label={`Centang ${item.description}`}
+          aria-hidden="true"
         >
           {item.checked && <Check className="h-4 w-4" strokeWidth={3} />}
-        </button>
-
-        <button type="button" onClick={onToggle} className="min-w-0 flex-1 text-left">
-          <p className="flex flex-wrap items-center gap-x-1.5 text-[11px] font-semibold text-slate-400">
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="flex flex-wrap items-center gap-x-1.5 text-[11px] font-semibold text-slate-400">
             <span className="tabular-nums">{shortDay(item.date)}</span>
             {item.category && <span className="truncate">· {item.category}</span>}
             {item.isReRequest && <span className="rounded bg-violet-100 px-1 text-[10px] font-bold text-violet-700">Re-request</span>}
-          </p>
-          <p className={cn('mt-0.5 line-clamp-2 text-sm font-semibold leading-snug', item.checked ? 'text-slate-900' : 'text-slate-700')}>
+          </span>
+          <span className={cn('mt-0.5 block text-sm font-semibold leading-snug', item.checked ? 'text-slate-900' : 'text-slate-700')}>
             {item.description}
-          </p>
-          {item.requestedBy && <p className="mt-0.5 truncate text-[11px] text-slate-400">#{item.txId} · {item.requestedBy}</p>}
-        </button>
+          </span>
+          {item.requestedBy && <span className="mt-0.5 block truncate text-[11px] text-slate-400">#{item.txId} · {item.requestedBy}</span>}
+        </span>
+        <span className="shrink-0 pt-0.5 text-sm font-bold tabular-nums text-slate-900">{rupiah(item.amount)}</span>
+      </button>
 
-        <div className="flex shrink-0 flex-col items-end gap-1.5">
-          <p className="text-sm font-bold tabular-nums text-slate-900">{rupiah(item.amount)}</p>
-          <div className="flex gap-1">
-            <button
-              type="button"
-              onClick={onReceipt}
-              disabled={!item.imageUrl}
-              className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition hover:border-amber-300 hover:bg-amber-50 hover:text-amber-700 disabled:opacity-30"
-              aria-label="Lihat struk"
-              title={item.imageUrl ? 'Lihat struk' : 'Tidak ada foto struk'}
-            >
-              <ImageIcon className="h-4 w-4" />
-            </button>
-            <button
-              type="button"
-              onClick={onNoteToggle}
-              className={cn(
-                'flex h-8 w-8 items-center justify-center rounded-lg border transition',
-                item.note ? 'border-amber-300 bg-amber-50 text-amber-700' : 'border-slate-200 text-slate-500 hover:border-amber-300 hover:bg-amber-50 hover:text-amber-700',
-              )}
-              aria-label="Catatan baris"
-              title="Catatan"
-            >
-              <PencilLine className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
+      <div className="flex items-center gap-2 py-2 pl-[3.25rem] pr-4">
+        {item.imageUrl ? (
+          <Thumb url={item.imageUrl} onOpen={onReceipt} label={`Lihat struk ${item.description}`} />
+        ) : (
+          <span className="flex h-14 min-w-14 items-center justify-center rounded-xl border border-dashed border-slate-200 px-2 text-center text-[10px] font-semibold leading-tight text-slate-300">
+            Tanpa foto
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={onNoteToggle}
+          className={cn(
+            'flex min-h-11 items-center gap-1.5 rounded-xl border px-3 text-xs font-bold transition',
+            item.note || noteOpen
+              ? 'border-amber-300 bg-amber-50 text-amber-800'
+              : 'border-slate-200 text-slate-500 active:bg-amber-50 hover:border-amber-300 hover:bg-amber-50 hover:text-amber-700',
+          )}
+        >
+          <PencilLine className="h-4 w-4" />
+          {item.note ? 'Ubah catatan' : 'Catatan'}
+        </button>
       </div>
+
       {(noteOpen || item.note) && (
-        <div className="px-4 pb-3 pl-13">
+        <div className="px-4 pb-3 pl-[3.25rem]">
           {noteOpen ? (
             <input
               autoFocus
@@ -675,12 +753,10 @@ function ChecklistRow({
               onChange={(e) => onNote(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && onNoteToggle()}
               placeholder="Catatan auditor, mis. struk tidak ada"
-              className="h-10 w-full rounded-lg border border-amber-200 bg-white px-3 text-base text-slate-800 outline-none placeholder:text-slate-300 focus:border-amber-400 focus:ring-4 focus:ring-amber-100 sm:text-sm"
+              className="h-11 w-full rounded-xl border border-amber-200 bg-white px-3 text-base text-slate-800 outline-none placeholder:text-slate-300 focus:border-amber-400 focus:ring-4 focus:ring-amber-100 sm:text-sm"
             />
           ) : (
-            <button type="button" onClick={onNoteToggle} className="text-left text-xs italic text-amber-800">
-              “{item.note}”
-            </button>
+            <p className="text-xs italic leading-snug text-amber-800">“{item.note}”</p>
           )}
         </div>
       )}
@@ -688,16 +764,162 @@ function ChecklistRow({
   );
 }
 
+// ─── One extra line ──────────────────────────────────────────────────────────
+
+function ExtraRow({
+  extra,
+  onOpenPhoto,
+  onAttach,
+  onRemove,
+}: {
+  extra: PettyExtraItem;
+  onOpenPhoto: () => void;
+  onAttach: (file: File) => void;
+  onRemove: () => void;
+}) {
+  const pick = useRef<HTMLInputElement>(null);
+  return (
+    <li className="flex items-start gap-3 px-4 py-3">
+      {extra.photoUrl ? (
+        <Thumb url={extra.photoUrl} onOpen={onOpenPhoto} label={`Lihat foto struk ${extra.description}`} />
+      ) : (
+        <>
+          <button
+            type="button"
+            onClick={() => pick.current?.click()}
+            className="flex h-14 w-14 shrink-0 flex-col items-center justify-center gap-0.5 rounded-xl border-2 border-dashed border-rose-300 bg-rose-50 text-[10px] font-bold leading-tight text-rose-600 transition active:scale-95"
+            aria-label={`Tambah foto struk ${extra.description}`}
+          >
+            <Camera className="h-4 w-4" />
+            Foto
+          </button>
+          <input
+            ref={pick}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="sr-only"
+            tabIndex={-1}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = '';
+              if (f) onAttach(f);
+            }}
+          />
+        </>
+      )}
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-semibold leading-snug text-slate-800">{extra.description}</p>
+        <p className="mt-0.5 text-xs text-slate-400">
+          {shortDay(extra.date)} · {extra.qty} × {rupiah(extra.price)}
+        </p>
+        <p className="mt-1 text-sm font-bold tabular-nums text-slate-900">{rupiah(extraTotal(extra))}</p>
+        {!extra.photoUrl && <p className="mt-0.5 text-[11px] font-semibold text-rose-600">Belum ada foto struk</p>}
+      </div>
+      <button
+        type="button"
+        onClick={onRemove}
+        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-slate-400 transition active:bg-rose-100 hover:bg-rose-50 hover:text-rose-600"
+        aria-label={`Hapus ${extra.description}`}
+      >
+        <Trash2 className="h-4 w-4" />
+      </button>
+    </li>
+  );
+}
+
 // ─── Add an extra line ───────────────────────────────────────────────────────
+
+/** Receipt photo for a new extra line: scan with the in-app camera, or pick one from the gallery. */
+function ReceiptPhotoField({ file, onFile }: { file: File | null; onFile: (f: File | null) => void }) {
+  const [scan, setScan] = useState(false);
+  const gallery = useRef<HTMLInputElement>(null);
+  const preview = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
+  useEffect(
+    () => () => {
+      if (preview) URL.revokeObjectURL(preview);
+    },
+    [preview],
+  );
+
+  return (
+    <div>
+      <p className="mb-1 text-xs font-semibold text-slate-600">
+        Foto struk <span className="text-rose-500">*</span>
+      </p>
+      {preview ? (
+        <div className="flex items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50/60 p-2.5">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={preview} alt="Foto struk yang dipilih" className="h-20 w-20 shrink-0 rounded-xl border border-white object-cover shadow-xs" />
+          <div className="min-w-0 flex-1">
+            <p className="flex items-center gap-1 text-sm font-bold text-emerald-800">
+              <Check className="h-4 w-4" /> Foto siap
+            </p>
+            <div className="mt-1.5 flex flex-wrap gap-2">
+              <button type="button" onClick={() => setScan(true)} className="min-h-10 rounded-lg border border-emerald-200 bg-white px-3 text-xs font-bold text-emerald-800 active:bg-emerald-100">
+                Foto ulang
+              </button>
+              <button type="button" onClick={() => onFile(null)} className="min-h-10 rounded-lg px-3 text-xs font-semibold text-slate-500 active:bg-white">
+                Hapus
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => setScan(true)}
+            className="flex min-h-24 flex-col items-center justify-center gap-1.5 rounded-2xl border-2 border-dashed border-amber-300 bg-white text-sm font-bold text-amber-800 transition active:bg-amber-50"
+          >
+            <Camera className="h-6 w-6" />
+            Foto struk
+          </button>
+          <button
+            type="button"
+            onClick={() => gallery.current?.click()}
+            className="flex min-h-24 flex-col items-center justify-center gap-1.5 rounded-2xl border-2 border-dashed border-slate-300 bg-white text-sm font-bold text-slate-600 transition active:bg-slate-50"
+          >
+            <ImagePlus className="h-6 w-6" />
+            Dari galeri
+          </button>
+        </div>
+      )}
+      <input
+        ref={gallery}
+        type="file"
+        accept="image/*"
+        className="sr-only"
+        tabIndex={-1}
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          e.target.value = '';
+          if (f) onFile(f);
+        }}
+      />
+      <DocumentScanner
+        open={scan}
+        onClose={() => setScan(false)}
+        onCapture={(f) => {
+          setScan(false);
+          onFile(f);
+        }}
+        title="Foto struk"
+      />
+    </div>
+  );
+}
 
 function ExtraEditor({
   defaultDate,
   maxDate,
+  upload,
   onAdd,
   onCancel,
 }: {
   defaultDate: string;
   maxDate: string;
+  upload: (file: File) => Promise<string>;
   onAdd: (e: PettyExtraItem) => void;
   onCancel: () => void;
 }) {
@@ -705,14 +927,44 @@ function ExtraEditor({
   const [description, setDescription] = useState('');
   const [qty, setQty] = useState(1);
   const [price, setPrice] = useState(0);
-  const valid = description.trim().length > 0 && qty >= 1 && price > 0 && Boolean(day);
+  const [photo, setPhoto] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const valid = description.trim().length > 0 && qty >= 1 && price > 0 && Boolean(day) && photo != null;
+
+  async function add() {
+    if (!photo || !valid) return;
+    setBusy(true);
+    try {
+      const photoUrl = await upload(photo);
+      onAdd({ key: newKey(), date: day, description: description.trim(), qty, price, photoUrl });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Gagal mengunggah foto.');
+      setBusy(false);
+    }
+  }
 
   return (
-    <div className="space-y-3 border-t border-amber-100 bg-amber-50/40 p-4">
-      <div className="grid gap-3 min-[420px]:grid-cols-[150px_minmax(0,1fr)]">
+    <div className="space-y-3 border-t border-amber-100 bg-amber-50/40 p-3 sm:p-4">
+      <ReceiptPhotoField file={photo} onFile={setPhoto} />
+
+      <div>
+        <label htmlFor="extra-desc" className="mb-1 block text-xs font-semibold text-slate-600">
+          Keperluan
+        </label>
+        <input
+          id="extra-desc"
+          value={description}
+          maxLength={PETTY_EXTRA_DESCRIPTION_MAX}
+          onChange={(e) => setDescription(e.target.value.toLocaleUpperCase('id-ID'))}
+          placeholder="MIS. AIR MINUM ISI ULANG"
+          className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-base font-semibold text-slate-900 shadow-xs outline-none placeholder:font-normal placeholder:text-slate-300 focus:border-amber-400 focus:ring-4 focus:ring-amber-100 sm:text-sm"
+        />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
         <div>
           <label htmlFor="extra-date" className="mb-1 block text-xs font-semibold text-slate-600">
-            Tanggal
+            Tanggal struk
           </label>
           <input
             id="extra-date"
@@ -720,24 +972,9 @@ function ExtraEditor({
             value={day}
             max={maxDate}
             onChange={(e) => setDay(e.target.value)}
-            className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-base font-semibold text-slate-900 shadow-xs outline-none focus:border-amber-400 focus:ring-4 focus:ring-amber-100 sm:text-sm"
+            className="h-11 w-full min-w-0 rounded-xl border border-slate-200 bg-white px-3 text-base font-semibold text-slate-900 shadow-xs outline-none focus:border-amber-400 focus:ring-4 focus:ring-amber-100 sm:text-sm"
           />
         </div>
-        <div>
-          <label htmlFor="extra-desc" className="mb-1 block text-xs font-semibold text-slate-600">
-            Keperluan
-          </label>
-          <input
-            id="extra-desc"
-            value={description}
-            maxLength={PETTY_EXTRA_DESCRIPTION_MAX}
-            onChange={(e) => setDescription(e.target.value.toLocaleUpperCase('id-ID'))}
-            placeholder="MIS. AIR MINUM ISI ULANG"
-            className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-base font-semibold text-slate-900 shadow-xs outline-none placeholder:font-normal placeholder:text-slate-300 focus:border-amber-400 focus:ring-4 focus:ring-amber-100 sm:text-sm"
-          />
-        </div>
-      </div>
-      <div className="grid grid-cols-[96px_minmax(0,1fr)] gap-3">
         <div>
           <label htmlFor="extra-qty" className="mb-1 block text-xs font-semibold text-slate-600">
             Qty
@@ -747,26 +984,39 @@ function ExtraEditor({
             inputMode="numeric"
             value={qty || ''}
             onChange={(e) => setQty(Math.min(9_999, Number(e.target.value.replace(/\D/g, '') || 0)))}
+            onFocus={(e) => e.currentTarget.select()}
             className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-center text-base font-semibold tabular-nums text-slate-900 shadow-xs outline-none focus:border-amber-400 focus:ring-4 focus:ring-amber-100 sm:text-sm"
           />
         </div>
-        <MoneyInput id="extra-price" label="Harga satuan (Basic Price)" value={price} onChange={setPrice} />
       </div>
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-sm font-semibold tabular-nums text-slate-600">Total {rupiah(qty * price)}</p>
-        <div className="flex gap-2">
-          <button type="button" onClick={onCancel} className="min-h-10 rounded-xl px-3 text-sm font-semibold text-slate-500 hover:bg-white">
-            Batal
-          </button>
-          <button
-            type="button"
-            disabled={!valid}
-            onClick={() => onAdd({ key: newKey(), date: day, description: description.trim(), qty, price })}
-            className="min-h-10 rounded-xl bg-amber-500 px-4 text-sm font-bold text-white shadow-sm transition hover:bg-amber-600 disabled:opacity-40"
-          >
-            Tambahkan
-          </button>
-        </div>
+
+      <MoneyInput id="extra-price" label="Harga satuan (Basic Price)" value={price} onChange={setPrice} />
+
+      <div className="flex items-center justify-between rounded-xl bg-white px-3 py-2.5 ring-1 ring-inset ring-slate-100">
+        <span className="text-xs font-semibold text-slate-500">Total</span>
+        <span className="text-base font-extrabold tabular-nums text-slate-900">{rupiah(qty * price)}</span>
+      </div>
+
+      {!photo && <p className="text-[11px] font-semibold text-rose-600">Lampirkan foto struk dulu untuk menambahkan.</p>}
+
+      <div className="grid grid-cols-2 gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={busy}
+          className="min-h-12 rounded-xl border border-slate-200 bg-white text-sm font-semibold text-slate-600 transition active:bg-slate-50 disabled:opacity-50"
+        >
+          Batal
+        </button>
+        <button
+          type="button"
+          disabled={!valid || busy}
+          onClick={() => void add()}
+          className="flex min-h-12 items-center justify-center gap-2 rounded-xl bg-amber-500 text-sm font-bold text-white shadow-sm transition active:bg-amber-600 hover:bg-amber-600 disabled:opacity-40"
+        >
+          {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+          {busy ? 'Mengunggah…' : 'Tambahkan'}
+        </button>
       </div>
     </div>
   );

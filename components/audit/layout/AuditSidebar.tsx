@@ -12,6 +12,11 @@
 //     Cek Petty Cash    /audit/cek-petty-cash  (requests Finance has not covered + petty cash count)
 //     Berita Acara      /audit/berita-acara    (the printable Berita Acara Pemeriksaan Kas)
 //
+//   Cek Bin & Stock Opname
+//     Hasil Cek Bin     /audit/cek-bin          (every store's daily Cek Bin from BC: right vs wrong, averages)
+//     Stock Opname      /audit/stock-opname     (the audit's count of one store-day, pre-filled from BC)
+//     Berita Acara SO   /audit/berita-acara-so  (BA Stock Opname + Surat Pernyataan, printable)
+//
 //   Issues
 //     Issues            /audit/issues        (issues routed to Audit role)
 
@@ -22,10 +27,12 @@ import {
   AlertTriangle,
   Banknote,
   ChevronRight,
+  ClipboardCheck,
   FileText,
   KeyRound,
   LayoutDashboard,
   LogOut,
+  ScanLine,
   Wallet,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -68,6 +75,14 @@ const NAV: NavSection[] = [
     ],
   },
   {
+    section: 'Cek Bin & Stock Opname',
+    items: [
+      { href: '/audit/cek-bin', label: 'Hasil Cek Bin', icon: ScanLine },
+      { href: '/audit/stock-opname', label: 'Stock Opname', icon: ClipboardCheck },
+      { href: '/audit/berita-acara-so', label: 'Berita Acara SO', icon: FileText },
+    ],
+  },
+  {
     section: 'Issues',
     items: [
       { href: '/audit/issues', label: 'Issues', icon: AlertTriangle },
@@ -107,8 +122,9 @@ export default function AuditSidebar({ collapsed = false, userName = 'Audit' }: 
   const pathname = usePathname();
   const { data: session } = useSession();
 
+  // Whole path segments only: /audit/berita-acara must not light up on /audit/berita-acara-so.
   const isActive = (href: string, exact?: boolean) =>
-    exact ? pathname === href : pathname.startsWith(href);
+    exact ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
 
   const displayName = session?.user?.name ?? userName;
   const initial     = displayName.charAt(0).toUpperCase();

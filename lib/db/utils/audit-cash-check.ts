@@ -15,7 +15,7 @@
 // Requests Finance left out (Perlu Perbaikan / Ditolak) are not "used" (PIC 1 pays them back), so they are never
 // listed. With every line ticked, "Sisa petty cash menurut buku" equals what PRISM says the box holds (getSpendable).
 
-import { and, desc, eq, gte, inArray, isNull, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull, lt } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import {
@@ -46,7 +46,6 @@ import {
   PETTY_ITEM_NOTE_MAX,
   SIGNATORY_MAX,
   UANG_MODAL_MAX_TOTAL,
-  buildDocNumber,
   cashCheckTotals,
   holderCaptionFor,
   isDay,
@@ -59,9 +58,11 @@ import {
   type PettyCheckItem,
   type PettyExtraItem,
 } from '@/lib/audit-cash-check';
+import { newAuditDocNumber } from './audit-doc-number';
 import { countsAsUsed } from './petty-cash-used';
 import { getActivePeriod } from './petty-cash-period';
 import { getSpendable } from './petty-cash-refill';
+import { isStorageUrl } from '@/lib/storage';
 
 type Result<T> = { success: true; data: T } | { success: false; error: string; status?: number };
 
@@ -233,12 +234,8 @@ async function ensureRow(
   const existing = await findRow(storeId, day);
   if (existing) return existing;
 
-  const year = Number(day.slice(0, 4));
-  const [{ maxSeq }] = await db
-    .select({ maxSeq: sql<number>`COALESCE(MAX(${auditCashChecks.docSeq}), 0)` })
-    .from(auditCashChecks)
-    .where(sql`EXTRACT(YEAR FROM ${auditCashChecks.checkDate}) = ${year}`);
-  const seq = Number(maxSeq) + 1;
+  // Same number as the Stock Opname of this visit, if there is one; else the next of the year over both tables.
+  const doc = await newAuditDocNumber('cash', storeId, storeNo, day);
 
   const [last] = await db
     .select({
@@ -260,8 +257,8 @@ async function ensureRow(
     .values({
       storeId,
       checkDate: day,
-      docSeq: seq,
-      docNumber: buildDocNumber(seq, storeNo, day),
+      docSeq: doc.seq,
+      docNumber: doc.number,
       signCity: last?.signCity || DEFAULT_SIGN_CITY,
       signDate: day,
       holderUserId: holder.id,
@@ -622,12 +619,15 @@ function cleanExtras(input: unknown): PettyExtraItem[] | string {
     if (!Number.isFinite(qty) || qty < 1 || qty > 9_999) return `Qty pengeluaran lain #${i + 1} tidak valid.`;
     const price = toMoney(e.price);
     if (price <= 0) return `Harga pengeluaran lain #${i + 1} wajib diisi.`;
+    // Only a photo our own upload route stored may be kept — never an arbitrary URL.
+    const photoUrl = typeof e.photoUrl === 'string' && e.photoUrl.length <= 600 && isStorageUrl(e.photoUrl) ? e.photoUrl : null;
     out.push({
       key: typeof e.key === 'string' && e.key ? e.key.slice(0, 40) : `x${i}`,
       date: e.date as string,
       description: description.toLocaleUpperCase('id-ID'),
       qty,
       price,
+      photoUrl,
     });
   }
   return out;

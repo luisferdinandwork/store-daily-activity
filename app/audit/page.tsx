@@ -8,7 +8,7 @@ import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { STATUS_LABELS as ISSUE_STATUS_LABELS } from '@/lib/issues';
-import { AlertTriangle, ArrowRight, Banknote, CheckCircle2, Eye, FileText, Loader2, AlertCircle, Shield, Wallet } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Banknote, CheckCircle2, ClipboardCheck, Eye, FileText, Loader2, AlertCircle, ScanLine, Shield, Wallet } from 'lucide-react';
 
 type IssueStatus = 'reported' | 'in_review' | 'solved' | 'completed';
 
@@ -104,14 +104,28 @@ export default function AuditDashboardPage() {
           </div>
         )}
 
-        <div>
-          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Pemeriksaan Kas</p>
-          <div className="grid gap-3 sm:grid-cols-3">
-            {[
+        {[
+          {
+            title: 'Pemeriksaan Kas',
+            links: [
               { href: '/audit/cek-modal', label: 'Cek Modal', hint: 'Hitung uang modal kasir', Icon: Banknote },
               { href: '/audit/cek-petty-cash', label: 'Cek Petty Cash', hint: 'Cocokkan struk & hitung kas', Icon: Wallet },
               { href: '/audit/berita-acara', label: 'Berita Acara', hint: 'Lihat & cetak', Icon: FileText },
-            ].map(({ href, label, hint, Icon }) => (
+            ],
+          },
+          {
+            title: 'Cek Bin & Stock Opname',
+            links: [
+              { href: '/audit/cek-bin', label: 'Hasil Cek Bin', hint: 'Benar vs salah per hari, semua toko', Icon: ScanLine },
+              { href: '/audit/stock-opname', label: 'Stock Opname', hint: 'Hasil SO toko dari Business Central', Icon: ClipboardCheck },
+              { href: '/audit/berita-acara-so', label: 'Berita Acara SO', hint: 'BA SO & Surat Pernyataan', Icon: FileText },
+            ],
+          },
+        ].map(({ title, links }) => (
+        <div key={title}>
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-400">{title}</p>
+          <div className="grid gap-3 sm:grid-cols-3">
+            {links.map(({ href, label, hint, Icon }) => (
               <Link
                 key={href}
                 href={href}
@@ -129,6 +143,7 @@ export default function AuditDashboardPage() {
             ))}
           </div>
         </div>
+        ))}
 
         <Link
           href="/audit/issues"

@@ -3,6 +3,7 @@
 import type { ReactNode } from 'react';
 import { useSession } from 'next-auth/react';
 import AuditSidebar from '@/components/audit/layout/AuditSidebar';
+import SoBottomNav from '@/components/audit/stock-opname/SoBottomNav';
 import PanelShell from '@/components/shared/PanelShell';
 import HeaderProfileButton from '@/components/shared/HeaderProfileButton';
 import RoleSwitchBanner from '@/components/shared/RoleSwitchBanner';
@@ -18,6 +19,7 @@ export default function AuditShell({ children }: { children: ReactNode }) {
       sidebar={(collapsed) => <AuditSidebar collapsed={collapsed} userName={session?.user?.name ?? 'Audit'} />}
       banners={<><RoleSwitchBanner /><PasswordExpiryBanner /></>}
       right={<><AccountNotificationBell /><HeaderProfileButton /></>}
+      footer={<SoBottomNav />}
     >
       {children}
     </PanelShell>

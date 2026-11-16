@@ -344,6 +344,20 @@
       "when": 1794543380566,
       "tag": "0048_plain_kronos",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1794793184049,
+      "tag": "0049_audit_stock_opnames",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1794795973187,
+      "tag": "0050_audit_so_super_reward",
+      "breakpoints": true
     }
   ]
 }

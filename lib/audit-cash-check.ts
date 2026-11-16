@@ -151,7 +151,12 @@ export interface PettyExtraItem {
   description: string;
   qty: number;
   price: number;
+  /** Photo of the receipt (object-storage URL). Required for new lines; lines saved before it existed have none. */
+  photoUrl?: string | null;
 }
+
+/** Biggest receipt photo the upload route takes (the phone camera + scanner already send < 1 MB). */
+export const EXTRA_PHOTO_MAX_BYTES = 8 * 1024 * 1024;
 
 export const PETTY_ITEM_NOTE_MAX = 120;
 export const PETTY_EXTRA_DESCRIPTION_MAX = 100;

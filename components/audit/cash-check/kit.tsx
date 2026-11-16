@@ -149,6 +149,8 @@ export function ContextBar({
   staff,
   holderId,
   onHolder,
+  holderLabel = 'Pemegang Kas',
+  dateLabel = 'Tanggal pemeriksaan',
 }: {
   stores: StoreComboboxOption[];
   storesLoading: boolean;
@@ -160,15 +162,19 @@ export function ContextBar({
   staff?: StaffOption[];
   holderId?: string | null;
   onHolder?: (id: string) => void;
+  holderLabel?: string;
+  dateLabel?: string;
 }) {
   return (
-    <div className="grid gap-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-xs sm:p-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,0.8fr)_minmax(0,1fr)]">
-      <Field label="Toko">
+    // Phone: the store takes the full width, date + holder share the next row (the icon chips are dropped there — the
+    // half-width boxes need the room for the value).
+    <div className="grid grid-cols-2 gap-x-2.5 gap-y-3 rounded-2xl border border-slate-200 bg-white p-3 shadow-xs sm:p-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,0.8fr)_minmax(0,1fr)] lg:gap-3">
+      <Field label="Toko" className="col-span-2 lg:col-span-1">
         <StoreCombobox stores={stores} loading={storesLoading} value={storeId} onChange={onStore} accent="amber" className="max-w-none" />
       </Field>
-      <Field label="Tanggal pemeriksaan">
+      <Field label={dateLabel} className={cn(!(staff && onHolder) && 'col-span-2 lg:col-span-1')}>
         <label className="flex h-11 items-center gap-2.5 rounded-xl border border-slate-200 bg-white px-3 shadow-xs focus-within:border-amber-400 focus-within:ring-4 focus-within:ring-amber-100">
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-600">
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-600 max-sm:hidden">
             <CalendarDays className="h-4 w-4" />
           </span>
           <input
@@ -177,14 +183,14 @@ export function ContextBar({
             max={today}
             onChange={(e) => isDay(e.target.value) && onDate(e.target.value)}
             className="min-w-0 flex-1 bg-transparent text-base font-semibold text-slate-900 outline-none sm:text-sm"
-            aria-label="Tanggal pemeriksaan"
+            aria-label={dateLabel}
           />
         </label>
       </Field>
       {staff && onHolder && (
-        <Field label="Pemegang Kas">
+        <Field label={holderLabel}>
           <label className="flex h-11 items-center gap-2.5 rounded-xl border border-slate-200 bg-white px-3 shadow-xs focus-within:border-amber-400 focus-within:ring-4 focus-within:ring-amber-100">
-            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-600">
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-600 max-sm:hidden">
               <UserRound className="h-4 w-4" />
             </span>
             <select
@@ -192,9 +198,9 @@ export function ContextBar({
               onChange={(e) => onHolder(e.target.value)}
               disabled={!storeId || staff.length === 0}
               className="min-w-0 flex-1 truncate bg-transparent text-base font-semibold text-slate-900 outline-none disabled:text-slate-400 sm:text-sm"
-              aria-label="Pemegang Kas"
+              aria-label={holderLabel}
             >
-              {!holderId && <option value="">{staff.length ? 'Pilih pemegang kas…' : 'Tidak ada staf'}</option>}
+              {!holderId && <option value="">{staff.length ? `Pilih ${holderLabel.toLowerCase()}…` : 'Tidak ada staf'}</option>}
               {staff.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}
@@ -209,9 +215,9 @@ export function ContextBar({
   );
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+function Field({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
   return (
-    <div className="min-w-0">
+    <div className={cn('min-w-0', className)}>
       <p className="mb-1 px-0.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">{label}</p>
       {children}
     </div>
@@ -476,7 +482,7 @@ export function SaveBar({
   disabled?: boolean;
 }) {
   return (
-    <div className="sticky bottom-0 z-20 border-t border-slate-200 bg-white/95 px-4 py-3 shadow-[0_-8px_24px_-12px_rgba(15,23,42,0.18)] backdrop-blur supports-[backdrop-filter]:bg-white/85 sm:px-6 lg:px-8">
+    <div className="sticky bottom-0 z-20 border-t border-slate-200 bg-white/95 px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] shadow-[0_-8px_24px_-12px_rgba(15,23,42,0.18)] backdrop-blur supports-[backdrop-filter]:bg-white/85 sm:px-6 lg:px-8">
       <div className="flex items-center gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
