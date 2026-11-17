@@ -1,11 +1,14 @@
 'use client';
 // components/audit/cek-bin/CekBinReportView.tsx — Audit "Hasil Cek Bin".
 //
-// Pick a period (≤ 31 days) → every active store's daily Cek Bin as Business Central judged it: item lines RIGHT vs
-// WRONG, accuracy, and the daily averages. Two tables: "Per hari" (each day of the period, a store's day under it)
-// and "Per toko" (each store over the period). Area / store filters run on the loaded data (one BC query per period).
-// Rules: lib/audit-bin-report.ts. No item detail on purpose.
+// Pick a period (≤ 31 days) → every active store's daily Cek Bin as Business Central judged it: BINS right vs wrong
+// (a bin is wrong when one of its items is), accuracy, and the daily averages. Two tables: "Per hari" (each day of
+// the period, a store's day under it) and "Per toko" (each store over the period). Area / store filters run on the
+// loaded data (one BC query per period). Rules: lib/audit-bin-report.ts. A store-day opens its bins + items on
+// /audit/cek-bin/[storeId]/[date] (CekBinDetailView).
 
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
@@ -144,7 +147,7 @@ export default function CekBinReportView() {
       <PanelPageHeader
         scope="Audit · Cek Bin & SO"
         title={<><ScanLine />Hasil Cek Bin</>}
-        subtitle="Hasil Cek Bin toko menurut Business Central — item benar vs salah, rata-rata per hari"
+        subtitle="Hasil Cek Bin toko menurut Business Central — bin benar vs bin salah, rata-rata per hari"
         tabs={<SoTabs />}
         hideTabsOnPhone
         compactActions
@@ -252,23 +255,23 @@ export default function CekBinReportView() {
           <Kpi
             icon={CheckCircle2}
             tone="success"
-            label="Rata-rata benar / hari"
+            label="Bin benar / hari"
             value={loading ? null : formatAvg(totals.avgCorrect)}
-            hint={loading ? '' : `${totals.correct.toLocaleString('id-ID')} item benar`}
+            hint={loading ? '' : `${totals.correct.toLocaleString('id-ID')} bin benar`}
           />
           <Kpi
             icon={XCircle}
             tone="danger"
-            label="Rata-rata salah / hari"
+            label="Bin salah / hari"
             value={loading ? null : formatAvg(totals.avgWrong)}
-            hint={loading ? '' : `${totals.wrong.toLocaleString('id-ID')} item salah`}
+            hint={loading ? '' : `${totals.wrong.toLocaleString('id-ID')} bin salah · ${totals.wrongItems.toLocaleString('id-ID')} item salah`}
           />
           <Kpi
             icon={Target}
             tone={totals.accuracy == null ? 'neutral' : rateTone(totals.accuracy)}
-            label="Akurasi"
+            label="Akurasi bin"
             value={loading ? null : formatAccuracy(totals.accuracy)}
-            hint={loading ? '' : 'benar ÷ (benar + salah)'}
+            hint={loading ? '' : 'bin benar ÷ bin di-scan'}
           >
             {!loading && <SplitBar correct={totals.correct} wrong={totals.wrong} className="mt-2" />}
           </Kpi>
@@ -340,8 +343,9 @@ export default function CekBinReportView() {
         {!loading && data?.fetchedAt && (
           <p className="text-[11px] text-slate-400">
             Sumber: Business Central (PP Bin Content Check) · diambil{' '}
-            {new Date(data.fetchedAt).toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit' })} WIB. Satu
-            baris item = satu SKU di satu bin; &quot;salah&quot; = qty kurang / lebih, salah bin, atau tidak ditemukan.
+            {new Date(data.fetchedAt).toLocaleTimeString('id-ID', { timeZone: 'Asia/Jakarta', hour: '2-digit', minute: '2-digit' })} WIB. Yang
+            dihitung adalah bin: satu bin &quot;salah&quot; bila minimal satu item di dalamnya Qty Lower / Higher Than Bin, Misplaced, Not
+            Scanned atau Not Found; &quot;benar&quot; bila semua itemnya benar. Buka satu toko di satu hari untuk melihat item per bin.
           </p>
         )}
       </div>
@@ -354,6 +358,7 @@ export default function CekBinReportView() {
 const GRID_DAY = 'grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 @3xl:grid-cols-[minmax(0,1.3fr)_5rem_5rem_6rem_6rem_minmax(0,1.2fr)]';
 
 function DayTable({ groups, single, storeCount }: { groups: ReturnType<typeof groupByDay>; single: boolean; storeCount: number }) {
+  const router = useRouter();
   const [open, setOpen] = useState<Set<string>>(new Set());
   const toggle = (d: string) =>
     setOpen((prev) => {
@@ -386,8 +391,8 @@ function DayTable({ groups, single, storeCount }: { groups: ReturnType<typeof gr
         <span role="columnheader">Tanggal</span>
         <span role="columnheader" className="text-right">{single ? 'Bin' : 'Toko'}</span>
         <span role="columnheader" className="text-right">{single ? '' : 'Bin'}</span>
-        <span role="columnheader" className="text-right">Benar</span>
-        <span role="columnheader" className="text-right">Salah</span>
+        <span role="columnheader" className="text-right">Bin benar</span>
+        <span role="columnheader" className="text-right">Bin salah</span>
         <span role="columnheader">Akurasi</span>
       </div>
       <div className="divide-y divide-slate-100">
@@ -408,18 +413,23 @@ function DayTable({ groups, single, storeCount }: { groups: ReturnType<typeof gr
           const has = g.rows.length > 0;
           const expandable = has && !single;
           const isOpen = open.has(g.date);
+          // One store picked → the day IS one store-day, so the row opens its detail page straight away.
+          const detailHref = single && has ? `/audit/cek-bin/${g.rows[0].storeId}/${g.date}` : null;
+          const activate = expandable ? () => toggle(g.date) : detailHref ? () => router.push(detailHref) : undefined;
           return (
             <Fragment key={g.date}>
               <div
                 role="row"
-                tabIndex={expandable ? 0 : undefined}
-                onClick={expandable ? () => toggle(g.date) : undefined}
-                onKeyDown={expandable ? (e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), toggle(g.date)) : undefined}
-                className={cn(GRID_DAY, 'px-4 py-2.5', expandable && 'cursor-pointer hover:bg-amber-50/40', !has && 'text-slate-400')}
+                tabIndex={activate ? 0 : undefined}
+                onClick={activate}
+                onKeyDown={activate ? (e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), activate()) : undefined}
+                className={cn(GRID_DAY, 'px-4 py-2.5', (expandable || detailHref) && 'cursor-pointer hover:bg-amber-50/40', detailHref && 'active:bg-amber-50', !has && 'text-slate-400')}
               >
                 <div role="cell" className="flex min-w-0 items-center gap-2.5">
                   {expandable ? (
                     isOpen ? <ChevronDown className="h-4 w-4 shrink-0 text-slate-400" /> : <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" />
+                  ) : detailHref ? (
+                    <ChevronRight className="h-4 w-4 shrink-0 text-amber-500" />
                   ) : (
                     <span className="w-4 shrink-0" />
                   )}
@@ -460,10 +470,18 @@ function DayTable({ groups, single, storeCount }: { groups: ReturnType<typeof gr
               {expandable && isOpen && (
                 <div className="bg-slate-50/60">
                   {g.rows.map((r) => (
-                    <div key={r.storeId} role="row" className={cn(GRID_DAY, 'border-t border-slate-100/80 py-2 pl-11 pr-4')}>
+                    <Link
+                      key={r.storeId}
+                      href={`/audit/cek-bin/${r.storeId}/${g.date}`}
+                      role="row"
+                      className={cn(GRID_DAY, 'border-t border-slate-100/80 py-2 pl-11 pr-4 transition-colors hover:bg-amber-50/60 active:bg-amber-50')}
+                    >
                       <div role="cell" className="min-w-0">
                         <p className="truncate text-sm font-semibold text-slate-800">
                           <span className="font-mono text-xs text-amber-700">{r.location}</span> {r.storeName}
+                          <span className="ml-2 inline-flex items-center text-[11px] font-bold text-amber-600">
+                            Detail <ChevronRight className="h-3 w-3" />
+                          </span>
                         </p>
                         <p className="truncate text-xs text-slate-500 @3xl:hidden">
                           {r.bins} bin · {r.correct} benar · {r.wrong} salah
@@ -474,7 +492,7 @@ function DayTable({ groups, single, storeCount }: { groups: ReturnType<typeof gr
                       <span role="cell" className={cn('hidden text-right text-sm tabular-nums @3xl:block', TONES.success.strong)}>{r.correct}</span>
                       <span role="cell" className={cn('hidden text-right text-sm tabular-nums @3xl:block', r.wrong ? TONES.danger.strong : 'text-slate-400')}>{r.wrong}</span>
                       <AccuracyCell totals={binTotals([r])} />
-                    </div>
+                    </Link>
                   ))}
                 </div>
               )}
@@ -488,7 +506,7 @@ function DayTable({ groups, single, storeCount }: { groups: ReturnType<typeof gr
 
 // ─── Per toko ────────────────────────────────────────────────────────────────
 
-const GRID_STORE = 'grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 @3xl:grid-cols-[minmax(0,1.6fr)_5rem_5rem_6rem_6rem_minmax(0,1.2fr)]';
+const GRID_STORE = 'grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 @3xl:grid-cols-[minmax(0,1.6fr)_4.5rem_5rem_7.5rem_7.5rem_minmax(0,1.2fr)]';
 
 function StoreTable({ groups }: { groups: ReturnType<typeof sortStoreGroups> }) {
   if (groups.length === 0) return <Empty title="Tidak ada toko" body="Ubah filter area atau toko." />;
@@ -498,8 +516,8 @@ function StoreTable({ groups }: { groups: ReturnType<typeof sortStoreGroups> }) 
         <span role="columnheader">Toko</span>
         <span role="columnheader" className="text-right">Hari</span>
         <span role="columnheader" className="text-right">Bin/hari</span>
-        <span role="columnheader" className="text-right">Benar/hari</span>
-        <span role="columnheader" className="text-right">Salah/hari</span>
+        <span role="columnheader" className="text-right">Bin benar/hari</span>
+        <span role="columnheader" className="text-right">Bin salah/hari</span>
         <span role="columnheader">Akurasi</span>
       </div>
       <div className="divide-y divide-slate-100">
@@ -513,7 +531,7 @@ function StoreTable({ groups }: { groups: ReturnType<typeof sortStoreGroups> }) 
                 </p>
                 <p className="truncate text-xs text-slate-500">
                   <span className="@3xl:hidden">
-                    {has ? `${totals.storeDays} hari · ${formatAvg(totals.avgCorrect)} benar · ${formatAvg(totals.avgWrong)} salah / hari` : 'Tidak ada cek bin'}
+                    {has ? `${totals.storeDays} hari · ${formatAvg(totals.avgCorrect)} bin benar · ${formatAvg(totals.avgWrong)} bin salah / hari` : 'Tidak ada cek bin'}
                   </span>
                   <span className="hidden @3xl:inline">{store.areaName ?? ''}</span>
                 </p>
@@ -592,7 +610,7 @@ function PhoneSummary({
       <div className="px-4 pb-3 pt-3.5">
         <div className="flex items-end justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Akurasi Cek Bin</p>
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">Akurasi bin</p>
             {loading ? (
               <div className="mt-1.5 h-9 w-24 animate-pulse rounded bg-slate-100" />
             ) : (
@@ -602,14 +620,14 @@ function PhoneSummary({
           <p className="shrink-0 pb-0.5 text-right text-[11px] leading-snug text-slate-400">
             {loading ? '' : single ? `${totals.storeDays} dari ${dayCount} hari` : `${totals.stores} dari ${storeCount} toko`}
             <br />
-            {loading ? '' : `${totals.correct.toLocaleString('id-ID')} benar · ${totals.wrong.toLocaleString('id-ID')} salah`}
+            {loading ? '' : `${totals.correct.toLocaleString('id-ID')} bin benar · ${totals.wrong.toLocaleString('id-ID')} bin salah`}
           </p>
         </div>
         {!loading && <SplitBar correct={totals.correct} wrong={totals.wrong} className="mt-3 h-2.5" />}
       </div>
       <dl className="grid grid-cols-3 divide-x divide-slate-100 border-t border-slate-100 bg-slate-50/60">
-        <PhoneStat label="Benar / hari" value={loading ? null : formatAvg(totals.avgCorrect)} valueClass={TONES.success.strong} />
-        <PhoneStat label="Salah / hari" value={loading ? null : formatAvg(totals.avgWrong)} valueClass={totals.wrong ? TONES.danger.strong : 'text-slate-400'} />
+        <PhoneStat label="Bin benar / hari" value={loading ? null : formatAvg(totals.avgCorrect)} valueClass={TONES.success.strong} />
+        <PhoneStat label="Bin salah / hari" value={loading ? null : formatAvg(totals.avgWrong)} valueClass={totals.wrong ? TONES.danger.strong : 'text-slate-400'} />
         <PhoneStat label="Bin / hari" value={loading ? null : formatAvg(totals.avgBins)} valueClass="text-slate-800" />
       </dl>
     </section>
@@ -643,7 +661,7 @@ function SplitBar({ correct, wrong, className }: { correct: number; wrong: numbe
     <div
       className={cn('h-2 overflow-hidden rounded-full bg-slate-100', className)}
       role="img"
-      aria-label={all ? `${correct} benar, ${wrong} salah` : 'Belum ada data'}
+      aria-label={all ? `${correct} bin benar, ${wrong} bin salah` : 'Belum ada data'}
     >
       {all > 0 && (
         <div className="flex h-full w-full">

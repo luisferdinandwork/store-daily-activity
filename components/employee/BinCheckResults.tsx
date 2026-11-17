@@ -2,8 +2,9 @@
 // components/employee/BinCheckResults.tsx
 //
 // Cek Bin · "Hasil scan BC": what Business Central says was WRONG in the bins the
-// store scanned that day, as one small table per kind of mistake (Qty kurang · Qty lebih ·
-// Salah bin · Item tidak ditemukan). Correct results are never listed — if everything
+// store scanned that day, as one small table per kind of mistake, titled with BC's own status
+// names (Qty Lower Than Bin · Qty Higher Than Bin · Misplaced · Not Scanned · Not Found — see
+// BIN_CHECK_REASON_META). Correct results are never listed — if everything
 // is right there is a friendly all-clear instead of empty tables. A BC outage / missing
 // setup shows a calm "belum tersedia" card; it never blocks the task itself.
 //
@@ -14,7 +15,7 @@
 
 import { useCallback, useEffect, useMemo, useState, type ComponentType } from 'react';
 import {
-  ArrowDown, ArrowRightLeft, ArrowUp, CheckCircle2, ChevronDown, CircleHelp, CloudOff, RefreshCw, ScanLine, SearchX,
+  ArrowDown, ArrowRightLeft, ArrowUp, CheckCircle2, ChevronDown, CircleHelp, CloudOff, RefreshCw, ScanBarcode, ScanLine, SearchX,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
@@ -42,16 +43,17 @@ function endpointFor(source: BinCheckSource, force: boolean): string {
   return force ? `${base}&refresh=1` : base;
 }
 
-/** How each kind of mistake looks: icon, soft tile + count pill colours, and the colour of a wrong "Scan qty". */
+/** How each kind of mistake looks: icon, soft tile + count pill colours, and the colour of a wrong "Qty Scan". */
 const LOOK: Record<
   BinCheckReason,
   { icon: ComponentType<{ className?: string }>; tile: string; pill: string; scanQty: string }
 > = {
-  qty_lower:  { icon: ArrowDown,      tile: 'bg-amber-50 text-amber-600',  pill: 'bg-amber-50 text-amber-700',  scanQty: 'text-amber-600' },
-  qty_higher: { icon: ArrowUp,        tile: 'bg-sky-50 text-sky-600',      pill: 'bg-sky-50 text-sky-700',      scanQty: 'text-sky-600' },
-  misplaced:  { icon: ArrowRightLeft, tile: 'bg-primary/10 text-primary',  pill: 'bg-primary/10 text-primary',  scanQty: 'text-primary' },
-  not_found:  { icon: SearchX,        tile: 'bg-red-50 text-red-600',      pill: 'bg-red-50 text-red-700',      scanQty: 'text-red-600' },
-  unknown:    { icon: CircleHelp,     tile: 'bg-secondary text-muted-foreground', pill: 'bg-secondary text-muted-foreground', scanQty: 'text-foreground' },
+  qty_lower:   { icon: ArrowDown,      tile: 'bg-amber-50 text-amber-600',   pill: 'bg-amber-50 text-amber-700',   scanQty: 'text-amber-600' },
+  qty_higher:  { icon: ArrowUp,        tile: 'bg-sky-50 text-sky-600',       pill: 'bg-sky-50 text-sky-700',       scanQty: 'text-sky-600' },
+  misplaced:   { icon: ArrowRightLeft, tile: 'bg-primary/10 text-primary',   pill: 'bg-primary/10 text-primary',   scanQty: 'text-primary' },
+  not_scanned: { icon: ScanBarcode,    tile: 'bg-orange-50 text-orange-600', pill: 'bg-orange-50 text-orange-700', scanQty: 'text-orange-600' },
+  not_found:   { icon: SearchX,        tile: 'bg-red-50 text-red-600',       pill: 'bg-red-50 text-red-700',       scanQty: 'text-red-600' },
+  unknown:     { icon: CircleHelp,     tile: 'bg-secondary text-muted-foreground', pill: 'bg-secondary text-muted-foreground', scanQty: 'text-foreground' },
 };
 
 function dayLabel(day: string): string {
@@ -66,7 +68,7 @@ const qty = (n: number | null) => (n == null ? '–' : n.toLocaleString('id-ID')
 
 // ─── One table per reason ────────────────────────────────────────────────────
 
-function IssueRow({ issue, scanQtyClass }: { issue: BinCheckIssue; scanQtyClass: string }) {
+function IssueRow({ issue, scanQtyClass, showCorrectBin }: { issue: BinCheckIssue; scanQtyClass: string; showCorrectBin: boolean }) {
   const qtyDiffers = issue.scanQuantity != null && issue.binQuantity != null && issue.scanQuantity !== issue.binQuantity;
 
   return (
@@ -79,14 +81,20 @@ function IssueRow({ issue, scanQtyClass }: { issue: BinCheckIssue; scanQtyClass:
         )}
       </td>
       <td className="px-1 py-2.5">
-        {/* BC may list several bins an item belongs in ("GDM1A3|GDM1B1|GDM1B2-D1") — one per line */}
-        {issue.correctBins.map((bin) => (
-          <p key={bin} className="break-all font-mono text-[11px] font-bold leading-snug text-foreground">{bin}</p>
-        ))}
-      </td>
-      <td className="px-1 py-2.5">
         <p className="break-all font-mono text-[11px] text-muted-foreground">{issue.binCode}</p>
       </td>
+      {showCorrectBin && (
+        <td className="px-1 py-2.5">
+          {/* BC may list several bins an item belongs in ("GDM1A3|GDM1B1|GDM1B2-D1") — one per line; none sent = "–" */}
+          {issue.correctBins.length ? (
+            issue.correctBins.map((bin) => (
+              <p key={bin} className="break-all font-mono text-[11px] font-bold leading-snug text-foreground">{bin}</p>
+            ))
+          ) : (
+            <p className="font-mono text-[11px] text-muted-foreground">–</p>
+          )}
+        </td>
+      )}
       <td className={cn('px-1 py-2.5 text-center text-sm font-bold tabular-nums', qtyDiffers ? scanQtyClass : 'text-foreground')}>
         {qty(issue.scanQuantity)}
       </td>
@@ -103,6 +111,8 @@ function ReasonSection({ reason, issues }: { reason: BinCheckReason; issues: Bin
   const look = LOOK[reason];
   const Icon = look.icon;
   const shown = expanded ? issues : issues.slice(0, PREVIEW_ROWS);
+  // Not Found: BC sends no bin the item belongs in, so the section has no "Actual Bin" column at all.
+  const showCorrectBin = meta.hasCorrectBin;
 
   return (
     <Card className="overflow-hidden">
@@ -125,22 +135,22 @@ function ReasonSection({ reason, issues }: { reason: BinCheckReason; issues: Bin
         <caption className="sr-only">{meta.label}</caption>
         <colgroup>
           <col />
-          <col className="w-[16%]" />
-          <col className="w-[16%]" />
+          <col className={showCorrectBin ? 'w-[16%]' : 'w-[20%]'} />
+          {showCorrectBin && <col className="w-[16%]" />}
           <col className="w-[12%]" />
           <col className="w-[12%]" />
         </colgroup>
         <thead>
           <tr className="bg-secondary/50 text-[10px] font-semibold leading-tight text-muted-foreground">
             <th scope="col" className="py-2 pl-4 pr-2">SKU</th>
-            <th scope="col" className="px-1 py-2">Bin benar</th>
             <th scope="col" className="px-1 py-2">Bin scan</th>
-            <th scope="col" className="px-1 py-2 text-center">Scan qty</th>
-            <th scope="col" className="py-2 pl-1 pr-3 text-center">Bin qty</th>
+            {showCorrectBin && <th scope="col" className="px-1 py-2">Actual Bin</th>}
+            <th scope="col" className="px-1 py-2 text-center">Qty Scan</th>
+            <th scope="col" className="py-2 pl-1 pr-3 text-center">Qty BIN</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-border">
-          {shown.map((issue) => <IssueRow key={issue.key} issue={issue} scanQtyClass={look.scanQty} />)}
+          {shown.map((issue) => <IssueRow key={issue.key} issue={issue} scanQtyClass={look.scanQty} showCorrectBin={showCorrectBin} />)}
         </tbody>
       </table>
 

@@ -88,7 +88,7 @@ export function sampleHeaders(location: string, day: string, expandLines: boolea
       ? {
           ppBinContentCheckLines: b.lines.map((l) => ({
             date: day, location, binCode: b.binCode, itemNo: l.itemNo, variantCode: l.variantCode,
-            unitOfMeasureCode: 'PCS', actualBinCodes: l.actualBin ?? b.binCode,
+            unitOfMeasureCode: 'PCS', actualBinCodes: l.status === 'Not Found' ? '' : (l.actualBin ?? b.binCode), // BC sends none for Not Found
             scanQuantity: l.scan, binQuantity: l.inBin, binContentCheckStatus: odata(l.status), dateKey: dateKey(day),
           })),
         }

@@ -12,6 +12,7 @@
 import assert from 'node:assert/strict';
 
 import {
+  BIN_CHECK_REASON_META,
   buildBinCheckIssues,
   decodeODataText,
   groupIssuesByReason,
@@ -134,14 +135,41 @@ async function main() {
 
   await ok('known statuses map to a reason; right ones are not wrong', () => {
     const wrong = (s: string, a: number | null = 1, b: number | null = 4) => judgeStatus(s, a, b);
-    // "Not Scanned" is shown as "not found" — there is no separate "belum di-scan" any more.
-    assert.deepEqual(wrong('Not_x0020_Scanned'), { wrong: true, reason: 'not_found', statusText: null });
+    // Every BC status is its own reason (and section), named as BC names it.
+    assert.deepEqual(wrong('Not_x0020_Scanned'), { wrong: true, reason: 'not_scanned', statusText: null });
     assert.deepEqual(wrong('Qty_x0020_Lower_x0020_Than_x0020_Bin'), { wrong: true, reason: 'qty_lower', statusText: null });
     assert.deepEqual(wrong('Qty_x0020_Higher_x0020_Than_x0020_Bin'), { wrong: true, reason: 'qty_higher', statusText: null });
     assert.deepEqual(wrong('Misplaced'), { wrong: true, reason: 'misplaced', statusText: null });
     assert.deepEqual(wrong('Not_x0020_Found'), { wrong: true, reason: 'not_found', statusText: null });
     assert.deepEqual(wrong('OK'), { wrong: false });
     assert.deepEqual(wrong(''), { wrong: false });
+  });
+
+  await ok('"Actual Bin": BC\'s actualBinCodes; the scanned bin stands in only where the item belongs in it', () => {
+    const r = buildBinCheckIssues({
+      headers: [{
+        date: DAY, location: 'FF001', binCode: 'GDM1A1', checked: true,
+        ppBinContentCheckLines: [
+          line({ itemNo: 'NF', actualBinCodes: '', scanQuantity: 1, binQuantity: 0, binContentCheckStatus: 'Not_x0020_Found' }),
+          line({ itemNo: 'MP', actualBinCodes: '', scanQuantity: 1, binQuantity: 0, binContentCheckStatus: 'Misplaced' }),
+          line({ itemNo: 'NS', actualBinCodes: '', scanQuantity: 0, binQuantity: 2, binContentCheckStatus: 'Not_x0020_Scanned' }),
+          line({ itemNo: 'QL', actualBinCodes: '', scanQuantity: 1, binQuantity: 2 }),
+        ],
+      }],
+      summaries: [{ date: DAY, location: 'FF001', binCode: 'GDM1A1', skuNotFound: 'SNF-S', skuMisplaced: 'SMP-S' }],
+      location: 'FF001', day: DAY,
+    });
+    const bins = Object.fromEntries(r.issues.map((i) => [i.itemNo, i.correctBins]));
+    assert.deepEqual(bins, { NF: [], MP: [], NS: ['GDM1A1'], QL: ['GDM1A1'], SNF: [], SMP: [] });
+    assert.equal(BIN_CHECK_REASON_META.not_found.hasCorrectBin, false, 'the Not Found section has no Actual Bin column');
+  });
+
+  await ok('every mistake is named exactly as BC sends the status (decoded)', () => {
+    for (const raw of ['Qty_x0020_Lower_x0020_Than_x0020_Bin', 'Qty_x0020_Higher_x0020_Than_x0020_Bin', 'Misplaced', 'Not_x0020_Scanned', 'Not_x0020_Found']) {
+      const v = judgeStatus(raw, 1, 4);
+      assert.ok(v.wrong, raw);
+      assert.equal(BIN_CHECK_REASON_META[v.reason].label, decodeODataText(raw));
+    }
   });
 
   await ok('an unknown status is judged by the quantities', () => {
@@ -176,7 +204,7 @@ async function main() {
     assert.deepEqual(lower.correctBins, ['GDM1A1']);
 
     const notScanned = byItem.get('SPE2010107-M')!;
-    assert.equal(notScanned.reason, 'not_found', 'BC "Not Scanned" → not found');
+    assert.equal(notScanned.reason, 'not_scanned', 'BC "Not Scanned" stays Not Scanned');
     assert.equal(notScanned.scanQuantity, 0, 'headers win over the summary duplicate (quantities kept)');
 
     const misplaced = byItem.get('PUM08447502-050')!;
@@ -188,22 +216,24 @@ async function main() {
 
     // Items only the summary knows: listed, without quantities.
     const summaryOnly = byItem.get('B-S')!;
-    assert.deepEqual([summaryOnly.itemNo, summaryOnly.variantCode, summaryOnly.reason], ['B', 'S', 'not_found']);
+    assert.deepEqual([summaryOnly.itemNo, summaryOnly.variantCode, summaryOnly.reason], ['B', 'S', 'not_scanned']);
     assert.equal(summaryOnly.scanQuantity, null);
     const notFound = byItem.get('ASC1203A611.200-095')!;
     assert.deepEqual([notFound.itemNo, notFound.variantCode, notFound.reason], ['ASC1203A611.200', '095', 'not_found']);
+    assert.deepEqual(notFound.correctBins, [], 'Not Found has no "Actual Bin" — the scanned bin never stands in');
+    assert.deepEqual(summaryOnly.correctBins, ['GDM1A1'], 'Not Scanned belongs in the bin that was checked');
 
-    // Grouped by the "Bin benar" column, most serious first within a bin (the misplaced
+    // Grouped by the "Actual Bin" column, most serious first within a bin (the misplaced
     // item belongs in GDM2B2, so it follows the GDM1A1 rows).
-    assert.deepEqual(r.issues.map((i) => i.reason), ['qty_lower', 'not_found', 'not_found', 'not_found', 'misplaced']);
-    assert.deepEqual(r.issues.map((i) => i.correctBins[0]), ['GDM1A1', 'GDM1A1', 'GDM1A1', 'GDM1A1', 'GDM2B2']);
+    assert.deepEqual(r.issues.map((i) => i.reason), ['qty_lower', 'not_scanned', 'not_scanned', 'not_found', 'misplaced']);
+    assert.deepEqual(r.issues.map((i) => i.correctBins[0] ?? `(${i.binCode})`), ['GDM1A1', 'GDM1A1', 'GDM1A1', '(GDM1A1)', 'GDM2B2']);
     // One table per reason, in the order the sections are shown.
     assert.deepEqual(groupIssuesByReason(r.issues).map((g) => [g.reason, g.issues.length]), [
-      ['qty_lower', 1], ['misplaced', 1], ['not_found', 3],
+      ['qty_lower', 1], ['misplaced', 1], ['not_scanned', 2], ['not_found', 1],
     ]);
   });
 
-  await ok('a real BC answer (FF001, 2026-11-10 shape): " " status = right, several correct bins, Not Scanned = not found', () => {
+  await ok('a real BC answer (FF001, 2026-11-10 shape): " " status = right, several correct bins, Not Scanned kept as BC names it', () => {
     const rl = (over: Record<string, unknown>) => ({
       date: '2026-11-10', location: 'FF001', unitOfMeasureCode: 'PCS', dateKey: '20261110', ...over,
     });
@@ -236,7 +266,7 @@ async function main() {
     assert.equal(r.okItems, 3, 'the three " " lines are right and never listed');
     assert.equal(r.issues.length, 5);
     assert.deepEqual(groupIssuesByReason(r.issues).map((g) => [g.reason, g.issues.length]), [
-      ['qty_lower', 1], ['misplaced', 2], ['not_found', 2],
+      ['qty_lower', 1], ['misplaced', 2], ['not_scanned', 2],
     ]);
     const m = r.issues.find((i) => i.itemNo === 'SPE2040034' && i.variantCode === 'M' && i.reason === 'misplaced')!;
     assert.deepEqual(m.correctBins, ['DISPLAY', 'GDM1A3', 'GDM1B1', 'GDM1B2-D1'], 'every bin of actualBinCodes, in order');
@@ -453,13 +483,14 @@ async function main() {
       assert.ok(!r.issues.some((i) => i.itemNo === 'SHOULDNOTSHOW'));
       assert.ok(!r.issues.some((i) => i.binCode === 'GDM1A2'), 'the fully correct bin lists nothing');
       assert.ok(!r.issues.some((i) => i.itemNo === 'NIK1000231'), 'a correct line is never listed');
-      // "Not Scanned" (10) and "Not Found" (2) are one section: 12 items not found.
+      // "Not Scanned" (10) and "Not Found" (2) are two sections, as BC names them.
       assert.deepEqual(
         groupIssuesByReason(r.issues).map((g) => [g.reason, g.issues.length]),
-        [['qty_lower', 1], ['qty_higher', 1], ['misplaced', 1], ['not_found', 12]],
+        [['qty_lower', 1], ['qty_higher', 1], ['misplaced', 1], ['not_scanned', 10], ['not_found', 2]],
       );
       const misplaced = r.issues.find((i) => i.reason === 'misplaced')!;
       assert.deepEqual(misplaced.correctBins, ['GDM2B2']);
+      assert.ok(r.issues.filter((i) => i.reason === 'not_found').every((i) => i.correctBins.length === 0), 'Not Found: no Actual Bin');
       const summaryOnly = r.issues.find((i) => i.itemNo === 'ASC9999999')!;
       assert.equal(summaryOnly.scanQuantity, null, 'listed by the summary feed only → no quantities');
     });

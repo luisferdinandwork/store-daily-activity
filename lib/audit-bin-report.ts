@@ -1,15 +1,16 @@
 // lib/audit-bin-report.ts
 // ─────────────────────────────────────────────────────────────────────────────
 // Audit "Hasil Cek Bin" — pure, client-safe rules (no I/O). The page /audit/cek-bin shows, for a period, every
-// store's daily Cek Bin as Business Central judged it: how many item lines were RIGHT and how many WRONG, and the
-// daily averages. No item detail on purpose (the store's own Cek Bin page lists the items).
+// store's daily Cek Bin as Business Central judged it: how many BINS were RIGHT and how many WRONG, and the daily
+// averages. The items inside a bin are on the store-day's detail page (lib/audit-bin-detail.ts).
 //
 // Source: BC `ppBinContentCheckHeaders` with their lines (lib/bc/bin-check-audit.ts) for the whole period in ONE
 // query. A line is right or wrong by the same rule the staff app uses (`judgeStatus` in lib/bin-check.ts:
-// "Matched" / blank = right; Qty lebih / kurang, Salah bin, Not Scanned / Not Found = wrong). Headers with
-// `checked: false` (a bin on BC's list nobody scanned) are not results.
+// "Matched" / blank = right; Qty Lower / Higher Than Bin, Misplaced, Not Scanned, Not Found = wrong). A BIN is wrong
+// as soon as ONE of its lines is wrong, right when every line is right (a scanned bin with no lines is right).
+// Headers with `checked: false` (a bin on BC's list nobody scanned) are not results.
 //
-//   accuracy (akurasi)     = right ÷ (right + wrong)
+//   accuracy (akurasi)     = right bins ÷ scanned bins
 //   daily average          = Σ over the store-days that HAVE a Cek Bin ÷ the number of those store-days
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -25,12 +26,14 @@ export interface BinDayStat {
   location: string;
   /** YYYY-MM-DD */
   date: string;
-  /** Bins scanned (headers with checked ≠ false). */
+  /** Bins scanned (headers with checked ≠ false) = correct + wrong. */
   bins: number;
-  /** Item lines BC judged right. */
+  /** Scanned bins where every item line is right. */
   correct: number;
-  /** Item lines BC judged wrong. */
+  /** Scanned bins with at least one wrong item line. */
   wrong: number;
+  /** Item lines BC judged wrong (inside the wrong bins) — context only, not what accuracy counts. */
+  wrongItems: number;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -48,7 +51,8 @@ const toQty = (v: unknown): number | null => {
  * without a location are dropped (the `$filter` should already guarantee it).
  */
 export function summarizeBinCheckHeaders(headers: unknown[], from: string, to: string): BinDayStat[] {
-  const map = new Map<string, BinDayStat & { binSet: Set<string> }>();
+  // Per store-day: bin code → has a wrong line. One bin can come in several headers on a day; it is wrong if any is.
+  const map = new Map<string, { location: string; date: string; bins: Map<string, boolean>; wrongItems: number }>();
   for (const raw of headers) {
     if (!isBcBinCheckHeader(raw)) continue;
     if (raw.checked === false) continue;
@@ -59,22 +63,29 @@ export function summarizeBinCheckHeaders(headers: unknown[], from: string, to: s
     const key = `${location}|${date}`;
     let stat = map.get(key);
     if (!stat) {
-      stat = { location, date, bins: 0, correct: 0, wrong: 0, binSet: new Set() };
+      stat = { location, date, bins: new Map(), wrongItems: 0 };
       map.set(key, stat);
     }
-    stat.binSet.add(raw.binCode.trim().toUpperCase());
+    const bin = raw.binCode.trim().toUpperCase();
+    let binWrong = stat.bins.get(bin) ?? false;
 
     const lines = Array.isArray(raw.ppBinContentCheckLines) ? raw.ppBinContentCheckLines : [];
     for (const rawLine of lines) {
       if (!isRecord(rawLine)) continue;
       const line = rawLine as BcBinCheckLine;
       const verdict = judgeStatus(line.binContentCheckStatus, toQty(line.scanQuantity), toQty(line.binQuantity));
-      if (verdict.wrong) stat.wrong += 1;
-      else stat.correct += 1;
+      if (verdict.wrong) {
+        stat.wrongItems += 1;
+        binWrong = true;
+      }
     }
+    stat.bins.set(bin, binWrong);
   }
   return [...map.values()]
-    .map(({ binSet, ...s }) => ({ ...s, bins: binSet.size }))
+    .map(({ bins, ...s }): BinDayStat => {
+      const wrong = [...bins.values()].filter(Boolean).length;
+      return { ...s, bins: bins.size, correct: bins.size - wrong, wrong };
+    })
     .sort((a, b) => b.date.localeCompare(a.date) || a.location.localeCompare(b.location, 'en', { numeric: true }));
 }
 
@@ -87,14 +98,19 @@ export interface BinTotals {
   days: number;
   /** Distinct stores with at least one result. */
   stores: number;
+  /** Scanned bins = correct + wrong. */
   bins: number;
+  /** Right bins. */
   correct: number;
+  /** Wrong bins (≥ 1 wrong item line). */
   wrong: number;
+  /** Wrong item lines inside the wrong bins. */
+  wrongItems: number;
   /** Per store-day with a result; null when there is none. */
   avgCorrect: number | null;
   avgWrong: number | null;
   avgBins: number | null;
-  /** 0–100, null when nothing was judged. */
+  /** Right bins ÷ scanned bins, 0–100; null when no bin was scanned. */
   accuracy: number | null;
 }
 
@@ -103,11 +119,12 @@ export function accuracyOf(correct: number, wrong: number): number | null {
   return all > 0 ? (correct / all) * 100 : null;
 }
 
-export function binTotals(rows: readonly Pick<BinDayStat, 'location' | 'date' | 'bins' | 'correct' | 'wrong'>[]): BinTotals {
+export function binTotals(rows: readonly Pick<BinDayStat, 'location' | 'date' | 'bins' | 'correct' | 'wrong' | 'wrongItems'>[]): BinTotals {
   const storeDays = rows.length;
   const correct = rows.reduce((s, r) => s + r.correct, 0);
   const wrong = rows.reduce((s, r) => s + r.wrong, 0);
   const bins = rows.reduce((s, r) => s + r.bins, 0);
+  const wrongItems = rows.reduce((s, r) => s + r.wrongItems, 0);
   return {
     storeDays,
     days: new Set(rows.map((r) => r.date)).size,
@@ -115,6 +132,7 @@ export function binTotals(rows: readonly Pick<BinDayStat, 'location' | 'date' | 
     bins,
     correct,
     wrong,
+    wrongItems,
     avgCorrect: storeDays ? correct / storeDays : null,
     avgWrong: storeDays ? wrong / storeDays : null,
     avgBins: storeDays ? bins / storeDays : null,
@@ -206,7 +224,7 @@ export type BinStoreSort = 'accuracy_asc' | 'accuracy_desc' | 'days_desc' | 'wro
 export const BIN_STORE_SORT_LABEL: Record<BinStoreSort, string> = {
   accuracy_asc: 'Akurasi terendah',
   accuracy_desc: 'Akurasi tertinggi',
-  wrong_desc: 'Salah terbanyak / hari',
+  wrong_desc: 'Bin salah terbanyak / hari',
   days_desc: 'Hari cek bin terbanyak',
   store: 'Kode toko',
 };

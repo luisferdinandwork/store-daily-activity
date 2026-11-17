@@ -16,13 +16,14 @@
 // ─── What the API hands the staff app ────────────────────────────────────────
 
 /**
- * Why a line is wrong. BC's "Not Scanned" (in the bin's list, never scanned) and
- * "Not Found" are ONE reason for the employee — `not_found` — "the item wasn't found".
+ * Why a line is wrong — one reason per BC `binContentCheckStatus` (Qty Lower Than Bin · Qty Higher Than Bin ·
+ * Misplaced · Not Scanned · Not Found), plus `unknown` for a status PRISM does not know yet.
  */
 export type BinCheckReason =
   | 'qty_lower'
   | 'qty_higher'
   | 'misplaced'
+  | 'not_scanned'
   | 'not_found'
   | 'unknown';
 
@@ -34,7 +35,11 @@ export interface BinCheckIssue {
   key: string;
   /** The bin that was being checked/scanned. */
   binCode: string;
-  /** Where the item belongs (BC `actualBinCodes`); falls back to `binCode`. */
+  /**
+   * Where the item belongs (BC `actualBinCodes`). Empty when BC sends none and the scanned bin can't stand in for it:
+   * Not Found never has one, and a Misplaced item is by definition NOT in the scanned bin. For the other reasons the
+   * item belongs in the bin that was checked, so `binCode` stands in.
+   */
   correctBins: string[];
   itemNo: string;
   variantCode: string;
@@ -65,37 +70,64 @@ export interface BinCheckResult {
 
 // ─── Words ───────────────────────────────────────────────────────────────────
 
-/** One table section per reason, in this `order`; `label` is the section title, `hint` the line under it. */
+/**
+ * One table section per reason, in this `order`. `label` is BC's own status name (what the API sends in
+ * `binContentCheckStatus`, decoded), so every screen names a mistake the way Business Central does; `hint` is the
+ * Indonesian line under it. `unknown` is PRISM's own fallback (the row shows BC's text as well).
+ * `hasCorrectBin` = BC tells where the item belongs (`actualBinCodes`) for this status — false for Not Found, whose
+ * section therefore has no "Actual Bin" column (showing the scanned bin there would only mislead the staff).
+ */
 export const BIN_CHECK_REASON_META: Record<
   BinCheckReason,
-  { label: string; hint: string; order: number }
+  { label: string; hint: string; order: number; hasCorrectBin: boolean }
 > = {
   qty_lower: {
-    label: 'Qty kurang',
+    label: 'Qty Lower Than Bin',
     hint: 'Jumlah yang di-scan lebih sedikit dari qty di bin.',
     order: 0,
+    hasCorrectBin: true,
   },
   qty_higher: {
-    label: 'Qty lebih',
+    label: 'Qty Higher Than Bin',
     hint: 'Jumlah yang di-scan lebih banyak dari qty di bin.',
     order: 1,
+    hasCorrectBin: true,
   },
   misplaced: {
-    label: 'Salah bin',
+    label: 'Misplaced',
     hint: 'Barang ada di bin yang salah. Pindahkan ke bin yang benar.',
     order: 2,
+    hasCorrectBin: true,
+  },
+  not_scanned: {
+    label: 'Not Scanned',
+    hint: 'Menurut BC barang ada di bin ini, tapi tidak ikut ter-scan. Cari lagi di bin-nya.',
+    order: 3,
+    hasCorrectBin: true,
   },
   not_found: {
-    label: 'Item tidak ditemukan',
+    label: 'Not Found',
     hint: 'Barang tidak ketemu saat scan. Cari lagi di bin-nya atau tanya tim OPS.',
-    order: 3,
+    order: 4,
+    hasCorrectBin: false,
   },
   unknown: {
     label: 'Perlu dicek',
     hint: 'Hasil scan belum sesuai. Cek lagi barang dan bin-nya.',
-    order: 4,
+    order: 5,
+    hasCorrectBin: true,
   },
 };
+
+/**
+ * "Actual Bin" for an item: BC's `actualBinCodes` when it sends them; otherwise the scanned bin, but only when the item
+ * belongs there (Qty Lower / Higher, Not Scanned, unknown) — never for Not Found (BC has no bin for it) or Misplaced
+ * (the scanned bin is exactly the wrong one).
+ */
+export function correctBinsFor(reason: BinCheckReason, actualBinCodes: string[], scannedBin: string): string[] {
+  if (actualBinCodes.length) return actualBinCodes;
+  return reason === 'not_found' || reason === 'misplaced' ? [] : [scannedBin];
+}
 
 // ─── BC row shapes (all fields optional on the wire) ─────────────────────────
 
@@ -159,8 +191,8 @@ function compactStatus(raw: string): string {
 const OK_STATUSES = new Set(['', 'ok', 'correct', 'match', 'matched', 'sesuai', 'equal', 'none', 'valid']);
 
 function reasonFromWords(compact: string): BinCheckReason | null {
-  // "Not Scanned" = BC expected it in the bin and it never turned up → the same "not found".
-  if (compact.includes('notscanned') || compact.includes('unscanned')) return 'not_found';
+  // "Not Scanned" = BC expected it in the bin and it never turned up; "Not Found" is its own BC status.
+  if (compact.includes('notscanned') || compact.includes('unscanned')) return 'not_scanned';
   if (compact.includes('notfound') || compact.includes('missing')) return 'not_found';
   if (compact.includes('misplace')) return 'misplaced';
   if (compact.includes('lower')) return 'qty_lower';
@@ -228,7 +260,7 @@ const SUMMARY_FIELDS: ReadonlyArray<readonly [keyof BcBinCheckSummary, BinCheckR
   ['skuQtyLowerThanBin', 'qty_lower'],
   ['skuQtyHigherThanBin', 'qty_higher'],
   ['skuMisplaced', 'misplaced'],
-  ['skuNotScanned', 'not_found'],
+  ['skuNotScanned', 'not_scanned'],
   ['skuNotFound', 'not_found'],
 ];
 
@@ -290,11 +322,10 @@ export function buildBinCheckIssues(input: {
         const key = keyOf(binCode, skuToken(itemNo, variantCode), verdict.reason);
         if (issues.has(key)) continue;
 
-        const correctBins = splitBins(line.actualBinCodes);
         issues.set(key, {
           key,
           binCode,
-          correctBins: correctBins.length ? correctBins : [binCode],
+          correctBins: correctBinsFor(verdict.reason, splitBins(line.actualBinCodes), binCode),
           itemNo,
           variantCode,
           scanQuantity: scan,
@@ -323,7 +354,7 @@ export function buildBinCheckIssues(input: {
           issues.set(key, {
             key,
             binCode: bin,
-            correctBins: [bin],
+            correctBins: correctBinsFor(reason, [], bin),
             itemNo,
             variantCode,
             scanQuantity: null,

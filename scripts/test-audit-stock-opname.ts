@@ -7,6 +7,7 @@
 // statuses "Matched", "_x0020_", "Not_x0020_Scanned", "Misplaced", "Qty_x0020_Lower/Higher_x0020_Than_x0020_Bin".
 
 import assert from 'node:assert/strict';
+import { binDetailTotals, binViews, buildBinDetail, detailSku, lineHighlights } from '../lib/audit-bin-detail';
 
 import {
   binTotals,
@@ -101,23 +102,44 @@ const RANGE = [
 
 const stats = summarizeBinCheckHeaders(RANGE, '2026-11-01', '2026-11-16');
 
-check('one stat per store + day, newest first, out-of-range and unchecked bins dropped', () => {
+check('one stat per store + day, counted per BIN (one wrong item = wrong bin), out-of-range and unchecked bins dropped', () => {
   assert.deepEqual(
-    stats.map((s) => `${s.date} ${s.location} bins=${s.bins} ok=${s.correct} wrong=${s.wrong}`),
-    ['2026-11-12 FF001 bins=1 ok=1 wrong=0', '2026-11-12 FO001 bins=1 ok=0 wrong=1', '2026-11-10 FF001 bins=2 ok=2 wrong=3'],
+    stats.map((s) => `${s.date} ${s.location} bins=${s.bins} ok=${s.correct} wrong=${s.wrong} wrongItems=${s.wrongItems}`),
+    [
+      '2026-11-12 FF001 bins=1 ok=1 wrong=0 wrongItems=0',
+      '2026-11-12 FO001 bins=1 ok=0 wrong=1 wrongItems=1',
+      // GDM1A1 (2 wrong of 3) and GDM1B1 (1 wrong of 2) are both wrong bins; GDM9Z9 was never scanned.
+      '2026-11-10 FF001 bins=2 ok=0 wrong=2 wrongItems=3',
+    ],
   );
 });
 
-check('totals: averages per store-day with a result, accuracy = right ÷ all', () => {
+check('a bin is right only when every item is; the same bin in two headers is one bin; an empty scanned bin is right', () => {
+  const s = summarizeBinCheckHeaders(
+    [
+      header('A', '2026-11-11', 'FF001', true, [line('A', 'X', '', 1, 1, 'Matched'), line('A', 'Y', '', 2, 2, '_x0020_')]),
+      header('B', '2026-11-11', 'FF001', true, [line('B', 'X', '', 1, 1, 'Matched')]),
+      header('B', '2026-11-11', 'FF001', true, [line('B', 'Z', '', 0, 1, 'Not_x0020_Found')]),
+      header('C', '2026-11-11', 'FF001', true, []),
+    ],
+    '2026-11-11',
+    '2026-11-11',
+  );
+  assert.deepEqual(s.map((r) => [r.bins, r.correct, r.wrong, r.wrongItems]), [[3, 2, 1, 1]]);
+});
+
+check('totals: averages per store-day with a result, accuracy = right bins ÷ scanned bins', () => {
   const t = binTotals(stats);
   assert.equal(t.storeDays, 3);
   assert.equal(t.days, 2);
   assert.equal(t.stores, 2);
-  assert.equal(t.correct, 3);
-  assert.equal(t.wrong, 4);
-  assert.equal(t.avgCorrect, 1);
-  assert.equal(t.avgWrong, 4 / 3);
-  assert.equal(Math.round((t.accuracy ?? 0) * 10) / 10, 42.9);
+  assert.equal(t.bins, 4);
+  assert.equal(t.correct, 1);
+  assert.equal(t.wrong, 3);
+  assert.equal(t.wrongItems, 4);
+  assert.equal(t.avgCorrect, 1 / 3);
+  assert.equal(t.avgWrong, 1);
+  assert.equal(t.accuracy, 25);
   assert.equal(binTotals([]).accuracy, null);
   assert.equal(binTotals([]).avgCorrect, null);
 });
@@ -340,6 +362,59 @@ check('sort (PIC 1 → PIC 2 → SA → none), clean-up and paper dates', () => 
   assert.equal(sheetDate('2026-09-16'), '16-Sep-26');
   assert.equal(sheetDate(null), '');
   assert.equal(rewardTitle('FS020', 'FISIK SPORT  PLAZA MEDAN FAIR'), 'LAMPIRAN REGULAR REWARD STOCK OPNAME FS020 FISIK SPORT PLAZA MEDAN FAIR');
+});
+
+console.log('\nCek Bin detail');
+
+check('bin detail: every line kept, verdict per line, extra fields become columns', () => {
+  const headers = [
+    {
+      date: '2026-11-10T00:00:00Z', location: 'FF001', binCode: 'A-01', checked: true,
+      ppBinContentCheckLines: [
+        { binCode: 'A-01', itemNo: 'SPE1', variantCode: 'M', unitOfMeasureCode: 'PCS', actualBinCodes: 'A-01', scanQuantity: 2, binQuantity: 2, binContentCheckStatus: '_x0020_', unitPrice: 150000 },
+        { binCode: 'A-01', itemNo: 'SPE2', variantCode: '', unitOfMeasureCode: 'PCS', actualBinCodes: 'B-02|B-03', scanQuantity: 1, binQuantity: 0, binContentCheckStatus: 'Misplaced', unitPrice: 99000 },
+      ],
+    },
+    { date: '2026-11-10T00:00:00Z', location: 'FF001', binCode: 'Z-99', checked: false, ppBinContentCheckLines: [{ itemNo: 'SPE3', scanQuantity: 0, binQuantity: 4, binContentCheckStatus: 'Not Scanned' }] },
+  ];
+  const d = buildBinDetail(headers);
+  assert.equal(d.lines.length, 3);
+  assert.deepEqual(d.extraColumns, ['unitPrice']);
+  assert.equal(d.lines[0].wrong, false);
+  assert.equal(d.lines[1].wrong, true);
+  assert.equal(d.lines[1].actualBinCodes, 'B-02|B-03');
+  assert.equal(d.lines[0].extra.unitPrice, 150000);
+  assert.equal(detailSku(d.lines[0]), 'SPE1-M');
+  assert.equal(detailSku(d.lines[1]), 'SPE2');
+  const t = binDetailTotals(d);
+  assert.deepEqual([t.bins, t.unscannedBins, t.correctBins, t.wrongBins, t.accuracy], [1, 1, 0, 1, 0], 'A-01 has a wrong item -> a wrong bin');
+  assert.deepEqual([t.lines, t.correctLines, t.wrongLines], [2, 1, 1]);
+  assert.deepEqual(t.reasons, [{ reason: 'misplaced', count: 1 }]);
+  assert.deepEqual(lineHighlights(d.lines[1]), { scanQuantity: true, actualBinCodes: true }, 'misplaced: scan differs and it belongs elsewhere');
+  assert.deepEqual(lineHighlights(d.lines[0]), { scanQuantity: false, actualBinCodes: false }, 'a right line marks nothing');
+});
+
+check('bin detail per bin: wrong bins first, wrong items split from right ones, filters by verdict / mistake / search', () => {
+  const h = (bin: string, lines: unknown[], checked = true) => ({ date: '2026-11-10', location: 'FF001', binCode: bin, checked, ppBinContentCheckLines: lines });
+  const d = buildBinDetail([
+    h('B-02', [line('B-02', 'K', '', 1, 1, 'Matched')]),
+    h('A-01', [line('A-01', 'M', 'S', 1, 1, 'Matched'), line('A-01', 'N', '', 0, 2, 'Not_x0020_Scanned'), line('A-01', 'P', '', 1, 2, 'Qty_x0020_Lower_x0020_Than_x0020_Bin')]),
+    h('C-03', [line('C-03', 'Q', '', 3, 0, 'Misplaced', { actualBinCodes: 'A-01' })]),
+    h('Z-99', [line('Z-99', 'R', '', 0, 1, 'Not_x0020_Scanned')], false),
+  ]);
+  const base = { verdict: 'all', reason: null, query: '', withUnscanned: false, sort: 'wrong' } as const;
+  const all = binViews(d, base);
+  assert.deepEqual(all.map((v) => v.bin.binCode), ['A-01', 'C-03', 'B-02'], 'most wrong items first, the unscanned bin hidden');
+  assert.deepEqual(all[0].wrongLines.map((l) => l.itemNo), ['N', 'P']);
+  assert.deepEqual(all[0].rightLines.map((l) => l.itemNo), ['M']);
+  assert.deepEqual(binViews(d, { ...base, sort: 'bc' }).map((v) => v.bin.binCode), ['B-02', 'A-01', 'C-03']);
+  assert.deepEqual(binViews(d, { ...base, verdict: 'right' }).map((v) => v.bin.binCode), ['B-02']);
+  assert.deepEqual(binViews(d, { ...base, withUnscanned: true }).map((v) => v.bin.binCode), ['A-01', 'C-03', 'B-02', 'Z-99'], 'unscanned last');
+  const misplaced = binViews(d, { ...base, reason: 'misplaced' });
+  assert.deepEqual(misplaced.map((v) => [v.bin.binCode, v.wrongLines.length, v.rightLines.length]), [['C-03', 1, 0]]);
+  assert.deepEqual(binViews(d, { ...base, query: 'not scanned' }).map((v) => [v.bin.binCode, v.wrongLines.map((l) => l.itemNo)]), [['A-01', ['N']]]);
+  assert.deepEqual(binViews(d, { ...base, query: 'a-01' }).map((v) => v.bin.binCode), ['A-01', 'C-03'], 'a bin code match keeps the bin; belongs-in A-01 matches too');
+  assert.equal(binViews(d, { ...base, query: 'a-01' })[0].rightLines.length, 1, 'a bin found by its code keeps all its lines');
 });
 
 console.log(`\n${passed} checks passed`);
