@@ -2,40 +2,26 @@
 //
 // GET /api/ops/dashboard?date=YYYY-MM-DD
 //
-// Single aggregate feed for the OPS dashboard (app/ops/page.tsx):
-//   - task completion rate for today, split by shift, plus month-to-date
+// The two rates the OPS dashboard (app/ops/page.tsx) leads with, for one day, plus every
+// store's own figure so the page can list the stores that need attention:
+//   - task completion for today (overall + per store)
 //   - attendance for today across every store in the actor's scope
-//   - recent petty cash requests this month
-//   - unreviewed (status = 'reported') issues routed to OPS
+//
+// What is waiting on Ops (petty cash, issues, transfer orders, visits) is a separate feed:
+// GET /api/ops/dashboard/queues.
 //
 // Scope is resolved server-side via resolveOpsScope() — OPS HO / IT sees every
 // store, OPS Area is limited to stores in their assigned area.
 
 import { NextRequest, NextResponse } from 'next/server';
-import { and, desc, eq, gte, inArray, isNull, lt, or } from 'drizzle-orm';
+import { and, eq, gte, inArray, isNull, lt } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import { jakartaDateKey, jakartaDayRange } from '@/lib/day-bucket';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
 import { todayInStoreTimezone } from '@/lib/schedule-utils';
-import {
-  attendance,
-  issueRoleAssignments,
-  issues,
-  monthlyScheduleEntries,
-  schedules,
-  shifts,
-  stores,
-  userRoles,
-  users,
-} from '@/lib/db/schema';
-import { pettyCashTransactions } from '@/lib/db/schema/petty-cash';
-import {
-  getAllTaskOverview,
-  getAreaTaskOverview,
-  getShiftTaskSummary,
-  getStoreSummariesForRange,
-} from '@/lib/db/utils/tasks';
+import { attendance, monthlyScheduleEntries, schedules, stores, userRoles, users } from '@/lib/db/schema';
+import { getAllTaskOverview, getAreaTaskOverview } from '@/lib/db/utils/tasks';
 import { parseDate } from '../tasks/_helpers';
 import { EMPTY_COUNTS, addCounts, tallyPeople, type AttendanceCounts } from '@/lib/attendance-health';
 
@@ -63,7 +49,7 @@ export async function GET(req: NextRequest) {
   const date = dateParsed.date;
 
   const storeRows = await db
-    .select({ id: stores.id, name: stores.name, areaId: stores.areaId })
+    .select({ id: stores.id, storeNo: stores.storeNo, name: stores.name, areaId: stores.areaId })
     .from(stores)
     .where(
       scope.scope === 'area'
@@ -72,8 +58,9 @@ export async function GET(req: NextRequest) {
     );
 
   const storeIds = storeRows.map((s) => s.id);
+  const storeNoById = new Map(storeRows.map((s) => [s.id, s.storeNo]));
 
-  // ── Tasks: today (+ shift split) and month-to-date ──────────────────────────
+  // ── Tasks: today, overall and per store ─────────────────────────────────────
   const overview =
     scope.scope === 'all_areas'
       ? await getAllTaskOverview(date)
@@ -95,6 +82,7 @@ export async function GET(req: NextRequest) {
     .filter((s) => s.summary.total > 0)
     .map((s) => ({
       storeId: s.id,
+      storeNo: storeNoById.get(s.id) ?? '',
       storeName: s.name,
       completed: s.summary.completed,
       total: s.summary.total,
@@ -102,35 +90,22 @@ export async function GET(req: NextRequest) {
     }))
     .sort((a, b) => a.completionRate - b.completionRate);
 
-  const shiftRows = storeIds.length ? await getShiftTaskSummary(storeIds, date) : [];
-  // Shift names come from the shifts table, like everywhere else in Ops.
-  const shiftLabels = new Map(
-    (await db.select({ code: shifts.code, label: shifts.label }).from(shifts)).map((s) => [s.code, s.label]),
-  );
-
-  const monthStart = new Date(date.getFullYear(), date.getMonth(), 1);
-  const monthSummaries = storeIds.length
-    ? await getStoreSummariesForRange(storeIds, monthStart, date)
-    : [];
-  const month = monthSummaries.reduce(
-    (acc, s) => {
-      acc.completed += s.completed;
-      acc.total += s.total;
-      return acc;
-    },
-    { completed: 0, total: 0 },
-  );
-
   // ── Attendance: today, every store in scope ──────────────────────────────────
   // The Jakarta calendar day, matched on both stored encodings (lib/day-bucket.ts).
   const { start: dayStart, end: dayEnd } = jakartaDayRange(jakartaDateKey(date));
 
   // `noSchedule` sits beside the counts, not in them: it's roster people with no
   // shift today, so it isn't one of the day's scheduled shifts (`total`).
-  type StoreAttendance = { storeId: string; storeName: string; noSchedule: number } & AttendanceCounts;
+  type StoreAttendance = { storeId: string; storeNo: string; storeName: string; noSchedule: number } & AttendanceCounts;
   const attendanceStoreMap = new Map<number, StoreAttendance>();
   for (const s of storeRows) {
-    attendanceStoreMap.set(s.id, { storeId: String(s.id), storeName: s.name, noSchedule: 0, ...EMPTY_COUNTS });
+    attendanceStoreMap.set(s.id, {
+      storeId: String(s.id),
+      storeNo: s.storeNo,
+      storeName: s.name,
+      noSchedule: 0,
+      ...EMPTY_COUNTS,
+    });
   }
 
   let attendanceTotal: AttendanceCounts = { ...EMPTY_COUNTS };
@@ -219,92 +194,6 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // ── Petty cash: recent requests this month ────────────────────────────────────
-  const yearMonth = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-
-  const pettyCashRows = storeIds.length
-    ? await db
-        .select({
-          id: pettyCashTransactions.id,
-          amount: pettyCashTransactions.amount,
-          description: pettyCashTransactions.description,
-          status: pettyCashTransactions.status,
-          createdAt: pettyCashTransactions.createdAt,
-          storeName: stores.name,
-          submittedByName: users.name,
-        })
-        .from(pettyCashTransactions)
-        .innerJoin(stores, eq(stores.id, pettyCashTransactions.storeId))
-        .innerJoin(users, eq(users.id, pettyCashTransactions.userId))
-        .where(
-          and(
-            eq(pettyCashTransactions.yearMonth, yearMonth),
-            inArray(pettyCashTransactions.storeId, storeIds),
-          ),
-        )
-        .orderBy(desc(pettyCashTransactions.createdAt))
-    : [];
-
-  const pettyCashPendingCount = pettyCashRows.filter((r) => r.status === 'pending_ops').length;
-
-  // ── Issues: unreviewed (status = 'reported') routed to OPS ────────────────────
-  const [opsRole] = await db
-    .select({ id: userRoles.id })
-    .from(userRoles)
-    .where(eq(userRoles.code, 'ops'))
-    .limit(1);
-
-  let unreviewedIssues: Array<{
-    id: string;
-    title: string;
-    storeName: string;
-    reporterName: string;
-    createdAt: string;
-  }> = [];
-
-  if (opsRole) {
-    const assignedRows = await db
-      .select({ issueId: issueRoleAssignments.issueId })
-      .from(issueRoleAssignments)
-      .where(eq(issueRoleAssignments.roleId, opsRole.id));
-
-    const assignedIssueIds = [
-      ...new Set(assignedRows.map((r) => r.issueId).filter((id): id is number => Number.isFinite(id))),
-    ];
-
-    const routingConditions = [eq(issues.assignedToRoleId, opsRole.id)];
-    if (assignedIssueIds.length) {
-      routingConditions.push(inArray(issues.id, assignedIssueIds));
-    }
-
-    const conditions = [eq(issues.status, 'reported'), or(...routingConditions)!];
-    if (scope.scope === 'area') {
-      conditions.push(eq(stores.areaId, scope.areaId));
-    }
-
-    const rows = await db
-      .select({
-        id: issues.id,
-        title: issues.title,
-        createdAt: issues.createdAt,
-        storeName: stores.name,
-        reporterName: users.name,
-      })
-      .from(issues)
-      .innerJoin(stores, eq(issues.storeId, stores.id))
-      .innerJoin(users, eq(issues.userId, users.id))
-      .where(and(...conditions))
-      .orderBy(desc(issues.createdAt));
-
-    unreviewedIssues = rows.map((r) => ({
-      id: String(r.id),
-      title: r.title,
-      storeName: r.storeName,
-      reporterName: r.reporterName,
-      createdAt: r.createdAt.toISOString(),
-    }));
-  }
-
   return NextResponse.json({
     success: true,
     date: toDateKey(date),
@@ -313,12 +202,6 @@ export async function GET(req: NextRequest) {
     tasks: {
       today: { ...today, completionRate: completionRate(today.completed, today.total) },
       todayByStore,
-      shiftToday: shiftRows.map((s) => ({
-        ...s,
-        label: shiftLabels.get(s.shift) ?? 'Other',
-        completionRate: completionRate(s.completed, s.total),
-      })),
-      month: { ...month, completionRate: completionRate(month.completed, month.total) },
     },
     attendance: {
       ...attendanceTotal,
@@ -330,22 +213,6 @@ export async function GET(req: NextRequest) {
         .filter((s) => s.total > 0 || s.noSchedule > 0)
         .map((s) => ({ ...s, rate: s.total > 0 ? completionRate(s.present + s.late, s.total) : null }))
         .sort((a, b) => (a.rate ?? 101) - (b.rate ?? 101) || b.noSchedule - a.noSchedule),
-    },
-    pettyCash: {
-      pendingCount: pettyCashPendingCount,
-      recent: pettyCashRows.slice(0, 8).map((r) => ({
-        id: r.id,
-        amount: r.amount,
-        description: r.description,
-        status: r.status,
-        storeName: r.storeName,
-        submittedByName: r.submittedByName,
-        createdAt: r.createdAt.toISOString(),
-      })),
-    },
-    issues: {
-      unreviewedCount: unreviewedIssues.length,
-      recent: unreviewedIssues.slice(0, 8),
     },
   });
 }

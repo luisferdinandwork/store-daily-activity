@@ -1,8 +1,12 @@
 // lib/ops-dashboard.ts
 //
-// Shape of GET /api/ops/dashboard, shared by the Ops Dashboard's desktop layout
-// (app/ops/page.tsx) and its phone layout (components/ops/mobile/DashboardMobile.tsx),
-// plus the one colour rule both use. Client-safe.
+// Shape of GET /api/ops/dashboard — the two rates of today (attendance + task
+// completion) with every store's figure — shared by the Ops Dashboard's desktop
+// layout (app/ops/page.tsx) and its phone layout (components/ops/mobile/DashboardMobile.tsx),
+// plus the rule that picks the stores worth a look. Client-safe.
+//
+// The "waiting on Ops" lists (petty cash, issues, transfer orders, visits) have their own
+// feed: lib/ops-dashboard-queues.ts.
 
 import { rateTone as sharedRateTone } from '@/lib/status-theme';
 
@@ -15,17 +19,10 @@ export type TaskBucket = {
   completionRate: number;
 };
 
-export type ShiftBucket = {
-  shift: string;
-  /** shifts.label, e.g. "Morning" ("Other" for tasks without a shift). */
-  label: string;
-  completed: number;
-  total: number;
-  completionRate: number;
-};
-
 export type StoreTaskRow = {
   storeId: number;
+  /** BC / POS store code, e.g. FF001. */
+  storeNo: string;
   storeName: string;
   completed: number;
   total: number;
@@ -34,6 +31,8 @@ export type StoreTaskRow = {
 
 export type StoreAttendanceRow = {
   storeId: string;
+  /** BC / POS store code, e.g. FF001. */
+  storeNo: string;
   storeName: string;
   total: number;
   present: number;
@@ -48,24 +47,6 @@ export type StoreAttendanceRow = {
   rate: number | null;
 };
 
-export type PettyCashRow = {
-  id: number;
-  amount: string;
-  description: string;
-  status: 'pending_ops' | 'ops_approved' | 'ops_rejected' | string;
-  storeName: string;
-  submittedByName: string;
-  createdAt: string;
-};
-
-export type IssueRow = {
-  id: string;
-  title: string;
-  storeName: string;
-  reporterName: string;
-  createdAt: string;
-};
-
 export type DashboardData = {
   date: string;
   scope: 'all_areas' | 'area';
@@ -73,8 +54,6 @@ export type DashboardData = {
   tasks: {
     today: TaskBucket;
     todayByStore: StoreTaskRow[];
-    shiftToday: ShiftBucket[];
-    month: { completed: number; total: number; completionRate: number };
   };
   attendance: {
     total: number;
@@ -88,37 +67,48 @@ export type DashboardData = {
     rate: number;
     stores: StoreAttendanceRow[];
   };
-  pettyCash: {
-    pendingCount: number;
-    recent: PettyCashRow[];
-  };
-  issues: {
-    unreviewedCount: number;
-    recent: IssueRow[];
-  };
 };
 
-/** Same bands (80 / 50) as the Stores page's task-progress legend. */
-export function rateTone(rate: number): 'emerald' | 'amber' | 'rose' {
-  const tone = sharedRateTone(rate); // the bands live in lib/status-theme.ts
-  return tone === 'success' ? 'emerald' : tone === 'warning' ? 'amber' : 'rose';
+/** The three bands of a completion / attendance rate (80 / 50 — lib/status-theme.ts `rateTone`). */
+export type RateBand = 'success' | 'warning' | 'danger';
+
+export function rateBand(rate: number): RateBand {
+  return sharedRateTone(rate) as RateBand;
 }
 
-export const RATE_WORD: Record<'emerald' | 'amber' | 'rose', string> = {
-  emerald: 'On track',
-  amber: 'In progress',
-  rose: 'Behind',
+export const RATE_WORD: Record<RateBand, string> = {
+  success: 'On track',
+  warning: 'In progress',
+  danger: 'Behind',
 };
 
+/** How many stores each "needs attention" list shows. */
+export const ATTENTION_LIMIT = 5;
+
 /**
- * Stores worth a look today: tasks below 100%, and attendance below 100%, with
- * people the schedule doesn't cover, or with no shifts at all.
+ * Stores worth a look today, worst first: tasks below 100%, and attendance below 100% or
+ * with people the schedule doesn't cover (or no shifts at all). `*Total` is how many there
+ * are before the list is cut to `limit`.
  */
-export function storesBehind(data: DashboardData | null) {
+export function storesBehind(data: DashboardData | null, limit = ATTENTION_LIMIT) {
+  const tasks = (data?.tasks.todayByStore ?? [])
+    .filter((s) => s.completionRate < 100)
+    .sort(
+      (a, b) =>
+        a.completionRate - b.completionRate ||
+        b.total - b.completed - (a.total - a.completed) ||
+        a.storeNo.localeCompare(b.storeNo),
+    );
+  const attendance = (data?.attendance.stores ?? [])
+    .filter((s) => s.rate === null || s.rate < 100 || s.noSchedule > 0)
+    .sort(
+      (a, b) =>
+        (a.rate ?? 101) - (b.rate ?? 101) || b.noSchedule - a.noSchedule || a.storeNo.localeCompare(b.storeNo),
+    );
   return {
-    tasks: (data?.tasks.todayByStore ?? []).filter((s) => s.completionRate < 100),
-    attendance: (data?.attendance.stores ?? []).filter(
-      (s) => s.rate === null || s.rate < 100 || s.noSchedule > 0,
-    ),
+    tasks: tasks.slice(0, limit),
+    tasksTotal: tasks.length,
+    attendance: attendance.slice(0, limit),
+    attendanceTotal: attendance.length,
   };
 }

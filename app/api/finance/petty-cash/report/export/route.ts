@@ -1,18 +1,12 @@
 // app/api/finance/petty-cash/report/export/route.ts
 //
-// GET ?month=YYYY-MM[&code=FF][&onlyUsed=1] — the Petty Cash Report as a
-// styled .xlsx (see lib/petty-cash-report-xlsx.ts for the sheets). `code`
-// narrows the file to that one code's sheet; `onlyUsed=1` drops stores that
-// used nothing.
+// Bank-transfer CSV for the report's current filters and ordering.
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-
-import { authOptions } from '@/lib/auth';
 import { resolveFinanceScope } from '@/lib/finance/scope';
 import { getPettyCashReport } from '@/lib/db/utils/petty-cash-report';
 import { currentYearMonthJakarta } from '@/lib/db/utils/petty-cash-refill';
-import { buildReportWorkbook } from '@/lib/petty-cash-report-xlsx';
+import { buildReportCsv } from '@/lib/petty-cash-report-csv';
 
 export async function GET(req: NextRequest) {
   const scope = await resolveFinanceScope();
@@ -27,27 +21,39 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Invalid month. Use YYYY-MM.' }, { status: 400 });
     }
 
-    const session = await getServerSession(authOptions);
-
-    const result = buildReportWorkbook({
-      month,
-      rows: (await getPettyCashReport(month)).rows,
-      code: params.get('code')?.trim().toUpperCase() || null,
-      onlyUsed: params.get('onlyUsed') === '1',
-      exportedBy: session?.user?.name ?? scope.userId,
-    });
-    if (!result.ok) {
-      return NextResponse.json({ success: false, error: result.error }, { status: 404 });
+    const sort = params.get('sort') ?? 'store';
+    if (sort !== 'store' && sort !== 'bank_asc' && sort !== 'bank_desc') {
+      return NextResponse.json({ success: false, error: 'Invalid sort order.' }, { status: 400 });
     }
 
-    const filename = `petty-cash-report_${month}${result.suffix}.xlsx`;
+    const csv = buildReportCsv({
+      month,
+      rows: (await getPettyCashReport(month)).rows,
+      filters: {
+        code: params.get('code'),
+        bank: params.get('bank'),
+        search: params.get('search') ?? '',
+        onlyUsed: params.get('onlyUsed') === '1',
+        onlyAwaiting: params.get('onlyAwaiting') === '1',
+        sort,
+      },
+      grouped: params.get('view') === 'code',
+    });
 
-    return new NextResponse(new Uint8Array(result.buffer), {
+    const suffix = [params.get('code'), params.get('bank')]
+      .map((value) => value?.trim().toUpperCase().replace(/[^A-Z0-9-]+/g, '_'))
+      .filter(Boolean)
+      .join('_');
+    const filename = `petty-cash-report_${month}${suffix ? `_${suffix}` : ''}.csv`;
+    const bytes = new TextEncoder().encode(csv);
+
+    return new NextResponse(bytes, {
       status: 200,
       headers: {
-        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'Content-Type': 'text/csv; charset=utf-8',
         'Content-Disposition': `attachment; filename="${filename}"`,
-        'Content-Length': String(result.buffer.length),
+        'Content-Length': String(bytes.length),
+        'Cache-Control': 'no-store',
       },
     });
   } catch (err) {

@@ -1386,29 +1386,17 @@ function FixRequestSheet({
           </div>
 
           <div>
-            <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">Kategori</label>
-            {categories.length === 0 ? (
-              <Notice tone="warning">Kategori petty cash belum diatur. Hubungi OPS.</Notice>
-            ) : (
-              <div className="flex flex-wrap gap-2">
-                {categories.map((c) => (
-                  <CategoryChip
-                    key={c.id}
-                    category={c}
-                    active={c.id === categoryId}
-                    onSelect={() => { setCategoryId(c.id); setError(null); }}
-                    onInfo={() => setInfoCategory(c)}
-                  />
-                ))}
-              </div>
-            )}
+            <CategoryPicker
+              id="fix-petty-cash-category"
+              categories={categories}
+              value={categoryId}
+              onSelect={(category) => { setCategoryId(category.id); setError(null); }}
+              onInfo={setInfoCategory}
+            />
             {!selectedCategory && source.categoryName && (
               <p className="mt-1.5 text-[11px] text-muted-foreground">
                 Kategori sebelumnya ({source.categoryName}) sudah tidak dipakai — pilih kategori yang baru.
               </p>
-            )}
-            {selectedCategory?.definition && (
-              <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">{selectedCategory.definition}</p>
             )}
           </div>
 
@@ -1734,55 +1722,76 @@ function RequestRow({
   );
 }
 
-// ─── A category chip with its own "!" ──────────────────────────────────────
-// Tapping the name picks the category; the "!" opens CategoryInfoSheet for just that one.
+// ─── Category dropdown and the selected category's "!" ─────────────────────
 
-function CategoryChip({
-  category,
-  active,
+function CategoryPicker({
+  id,
+  categories,
+  value,
   onSelect,
   onInfo,
 }: {
-  category: PettyCashCategoryOption;
-  active: boolean;
-  onSelect: () => void;
-  onInfo: () => void;
+  id: string;
+  categories: PettyCashCategoryOption[];
+  value: number | null;
+  onSelect: (category: PettyCashCategoryOption) => void;
+  onInfo: (category: PettyCashCategoryOption) => void;
 }) {
-  const hasInfo = Boolean(category.definition || category.examples);
+  const selectedCategory = categories.find((category) => category.id === value) ?? null;
+
   return (
-    <span
-      className={cn(
-        'inline-flex items-center rounded-full border transition-colors',
-        active ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background text-foreground',
+    <div>
+      <label htmlFor={id} className="mb-1.5 block text-xs font-semibold text-muted-foreground">
+        Kategori
+      </label>
+
+      {categories.length === 0 ? (
+        <Notice tone="warning">Kategori petty cash belum diatur. Hubungi OPS.</Notice>
+      ) : (
+        <div className="flex items-center gap-2">
+          <div className="relative min-w-0 flex-1">
+            <select
+              id={id}
+              value={selectedCategory?.id ?? ''}
+              onChange={(event) => {
+                const category = categories.find((option) => option.id === Number(event.target.value));
+                if (category) onSelect(category);
+              }}
+              aria-describedby={selectedCategory?.definition ? `${id}-definition` : undefined}
+              title={selectedCategory?.name}
+              className={cn(
+                'h-12 w-full min-w-0 appearance-none truncate rounded-xl border border-border bg-background pl-3.5 pr-10 text-base font-semibold focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20',
+                selectedCategory ? 'text-foreground' : 'text-muted-foreground',
+              )}
+            >
+              <option value="" disabled>Pilih kategori</option>
+              {categories.map((category) => (
+                <option key={category.id} value={category.id}>{category.name}</option>
+              ))}
+            </select>
+            <ChevronDown aria-hidden="true" className="pointer-events-none absolute right-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          </div>
+          {selectedCategory && (
+            <button
+              type="button"
+              onClick={() => onInfo(selectedCategory)}
+              aria-label={`Penjelasan kategori ${selectedCategory.name}`}
+              aria-haspopup="dialog"
+              title="Pengertian & contoh pengeluaran"
+              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-primary/20 bg-primary/10 text-xl font-black text-primary transition active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+            >
+              <span aria-hidden="true">!</span>
+            </button>
+          )}
+        </div>
       )}
-    >
-      <button
-        type="button"
-        onClick={onSelect}
-        aria-pressed={active}
-        className={cn('rounded-full py-2 pl-3.5 text-sm font-semibold active:opacity-70', hasInfo ? 'pr-1' : 'pr-3.5')}
-      >
-        {category.name}
-      </button>
-      {hasInfo && (
-        <button
-          type="button"
-          onClick={onInfo}
-          aria-label={`Penjelasan kategori ${category.name}`}
-          title="Pengertian & contoh pengeluaran"
-          className="mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full active:scale-90"
-        >
-          <span
-            className={cn(
-              'flex h-[18px] w-[18px] items-center justify-center rounded-full text-[11px] font-black leading-none',
-              active ? 'bg-primary-foreground/25 text-primary-foreground' : 'bg-secondary text-muted-foreground',
-            )}
-          >
-            !
-          </span>
-        </button>
+
+      {selectedCategory?.definition && (
+        <p id={`${id}-definition`} className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+          {selectedCategory.definition}
+        </p>
       )}
-    </span>
+    </div>
   );
 }
 
@@ -2563,35 +2572,13 @@ export default function EmployeePettyCashPage() {
             <SectionLabel>Request petty cash baru</SectionLabel>
 
             <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">
-                  Kategori
-                </label>
-
-                {categories.length === 0 ? (
-                  <Notice tone="warning">
-                    Kategori petty cash belum diatur. Hubungi OPS.
-                  </Notice>
-                ) : (
-                  <div className="flex flex-wrap gap-2">
-                    {categories.map((c) => (
-                      <CategoryChip
-                        key={c.id}
-                        category={c}
-                        active={c.id === categoryId}
-                        onSelect={() => selectCategory(c)}
-                        onInfo={() => setInfoCategory(c)}
-                      />
-                    ))}
-                  </div>
-                )}
-
-                {selectedCategory?.definition && (
-                  <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-                    {selectedCategory.definition}
-                  </p>
-                )}
-              </div>
+              <CategoryPicker
+                id="petty-cash-category"
+                categories={categories}
+                value={categoryId}
+                onSelect={selectCategory}
+                onInfo={setInfoCategory}
+              />
 
               <div>
                 <label className="mb-1.5 block text-xs font-semibold text-muted-foreground">

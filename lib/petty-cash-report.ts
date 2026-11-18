@@ -1,6 +1,6 @@
 // lib/petty-cash-report.ts
 // Shapes + grouping for Finance's Petty Cash Report (client-safe, no DB
-// imports) — shared by the report page, its API and the Excel export.
+// imports) — shared by the report page, its API and the exports.
 
 import type { StoreStatus } from '@/lib/store-status';
 
@@ -239,6 +239,50 @@ export function hasBankDetails(row: PettyCashReportRow): boolean {
   return Boolean(row.bankName && row.accountNumber && row.accountHolderName);
 }
 
+export type PettyCashReportSort = 'store' | 'bank_asc' | 'bank_desc';
+
+export interface PettyCashReportFilters {
+  code?: string | null;
+  bank?: string | null;
+  search?: string;
+  onlyUsed?: boolean;
+  onlyAwaiting?: boolean;
+  sort?: PettyCashReportSort;
+}
+
+/** Match bank names consistently, including older values with different casing or spacing. */
+export function reportBankKey(name: string | null): string {
+  return name?.trim().replace(/\s+/g, ' ').toUpperCase() ?? '';
+}
+
+function compareReportRows(a: PettyCashReportRow, b: PettyCashReportRow, sort: PettyCashReportSort): number {
+  if (sort !== 'store') {
+    const aBank = reportBankKey(a.bankName);
+    const bBank = reportBankKey(b.bankName);
+    // Keep missing bank names last in both directions.
+    if (!aBank && bBank) return 1;
+    if (aBank && !bBank) return -1;
+    const bankOrder = aBank.localeCompare(bBank, 'id', { numeric: true });
+    if (bankOrder) return sort === 'bank_desc' ? -bankOrder : bankOrder;
+  }
+  return a.storeNo.localeCompare(b.storeNo, 'id', { numeric: true });
+}
+
+/** The page and CSV use the same filters and ordering, so exports follow the visible set. */
+export function selectReportRows(rows: PettyCashReportRow[], filters: PettyCashReportFilters = {}): PettyCashReportRow[] {
+  const q = filters.search?.trim().toLowerCase();
+  const code = filters.code?.trim().toUpperCase();
+  const bank = reportBankKey(filters.bank ?? null);
+  return rows.filter((row) => {
+    if (code && row.code !== code && storeCodeDisplay(row.code).toUpperCase() !== code) return false;
+    if (bank && reportBankKey(row.bankName) !== bank) return false;
+    if (filters.onlyUsed && row.totalUsed <= 0) return false;
+    if (filters.onlyAwaiting && !needsVerify(row)) return false;
+    return !q || [row.storeNo, row.storeName, row.deptCode, row.pic1Name, row.bankName, row.accountNumber, row.accountHolderName]
+      .some((value) => value?.toLowerCase().includes(q));
+  }).sort((a, b) => compareReportRows(a, b, filters.sort ?? 'store'));
+}
+
 function codeRank(code: string): number {
   const i = STORE_CODE_ORDER.indexOf(code);
   return i === -1 ? STORE_CODE_ORDER.length : i;
@@ -249,7 +293,7 @@ export function compareStoreCodes(a: string, b: string): number {
   return codeRank(a) - codeRank(b) || a.localeCompare(b);
 }
 
-export function groupByStoreCode(rows: PettyCashReportRow[]): StoreCodeGroup[] {
+export function groupByStoreCode(rows: PettyCashReportRow[], sort: PettyCashReportSort = 'store'): StoreCodeGroup[] {
   const byCode = new Map<string, PettyCashReportRow[]>();
   for (const row of rows) {
     const list = byCode.get(row.code);
@@ -260,9 +304,7 @@ export function groupByStoreCode(rows: PettyCashReportRow[]): StoreCodeGroup[] {
   return [...byCode.entries()]
     .sort(([a], [b]) => compareStoreCodes(a, b))
     .map(([code, list]) => {
-      const sorted = [...list].sort((a, b) =>
-        a.storeNo.localeCompare(b.storeNo, undefined, { numeric: true }),
-      );
+      const sorted = [...list].sort((a, b) => compareReportRows(a, b, sort));
       return {
         code,
         display: storeCodeDisplay(code),

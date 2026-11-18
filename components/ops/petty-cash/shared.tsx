@@ -192,6 +192,8 @@ export function usePettyCashPending() {
 const TABS = [
   { href: '/ops/petty-cash/requests', label: 'Requests', key: 'requests' },
   { href: '/ops/petty-cash/refills', label: 'Refills', key: 'refills' },
+  // Read-only overview — no "waiting" badge of its own.
+  { href: '/ops/petty-cash/stores', label: 'Stores', key: null },
 ] as const;
 
 export function PettyCashTabs({ pending }: { pending: PettyCashPending | null }) {
@@ -201,7 +203,7 @@ export function PettyCashTabs({ pending }: { pending: PettyCashPending | null })
     <nav className="flex gap-1" aria-label="Petty cash sections">
       {TABS.map((tab) => {
         const active = pathname.startsWith(tab.href);
-        const waiting = pending?.[tab.key] ?? 0;
+        const waiting = tab.key ? (pending?.[tab.key] ?? 0) : 0;
 
         return (
           <Link

@@ -16,6 +16,7 @@ import { db } from '@/lib/db';
 import { itemTransferOrders, itemReturnEntries, itemDroppingEntries, stores, areas } from '@/lib/db/schema';
 import { ensureWarehouseCodes, isWarehouseCode } from '@/lib/db/utils/item-transfers';
 import { effectiveToCreatedAt } from '@/lib/transfer-order-metrics';
+import { resolveTransferPhase } from '@/lib/transfer-order-phase';
 import { refreshReceivingStatus, refreshTransferRegistry } from '@/lib/db/utils/transfer-order-refresh';
 import { getOpsActor } from '@/app/api/ops/tasks/_helpers';
 
@@ -25,36 +26,8 @@ import { getOpsActor } from '@/app/api/ops/tasks/_helpers';
 const REGISTRY_MAX_AGE_MS = 60_000;
 const RECEIVING_MAX_AGE_MS = 3 * 60_000;
 
-type Phase = 'return' | 'shipping' | 'receiving' | 'received' | 'to_warehouse';
-
-/**
- * A transfer order whose destination is a warehouse code (a store sending
- * stock/returns back to DM, not store-to-store) gets its receivedAt closed
- * by syncReceivingStatus as soon as the origin store submits its Item Return
- * (see lib/db/utils/item-transfers.ts) — there's no employee on the other
- * end to confirm receipt or a BC receipt to necessarily wait for the way a
- * store-to-store leg has. `to_warehouse` below is a defensive fallback for
- * the brief window before that sync has run (receivedAt takes priority the
- * moment it's set), instead of leaving the row stuck showing "Dalam
- * Perjalanan" forever.
- */
-function resolvePhase(row: typeof itemTransferOrders.$inferSelect): Phase {
-  if (row.receivedAt) return 'received';
-  if (row.droppingSubmittedAt) return 'receiving';
-  if (row.returnSubmittedAt) {
-    const toIsWarehouse = row.toStoreId == null && isWarehouseCode(row.transferToCode);
-    return toIsWarehouse ? 'to_warehouse' : 'shipping';
-  }
-  // A DM warehouse origin has no employee to hand anything to a courier, so
-  // returnSubmittedAt will never be set — the transfer is in transit the moment
-  // BC creates its Warehouse Shipment. Without this every DM → store transfer
-  // sat under "Menunggu Diambil" until BC posted the receipt (on staging:
-  // 0 "Dalam Perjalanan" next to ~150 shipments that had already left).
-  if (row.fromStoreId == null && isWarehouseCode(row.transferFromCode) && row.whseShipmentNo) {
-    return 'shipping';
-  }
-  return 'return';
-}
+// Phase rules live in lib/transfer-order-phase.ts (shared with the Ops Dashboard).
+const resolvePhase = (row: typeof itemTransferOrders.$inferSelect) => resolveTransferPhase(row, isWarehouseCode);
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);

@@ -130,7 +130,7 @@ const TRANSFER_ORDER_ITEM: NavItem = {
   ],
 };
 
-// Petty Cash is two pages: spending requests and top-up (refill) requests.
+// Petty Cash: spending requests, top-up (refill) requests, and the per-store overview (read-only).
 const PETTY_CASH_ITEM: NavItem = {
   href: '/ops/petty-cash',
   label: 'Petty Cash',
@@ -138,6 +138,7 @@ const PETTY_CASH_ITEM: NavItem = {
   children: [
     { href: '/ops/petty-cash/requests', label: 'Requests' },
     { href: '/ops/petty-cash/refills', label: 'Refills' },
+    { href: '/ops/petty-cash/stores', label: 'Stores' },
   ],
 };
 
@@ -396,7 +397,7 @@ export default function OpsSidebar({ storeName = 'Ops', collapsed = false, drawe
                       : 'text-muted-foreground hover:bg-secondary hover:text-foreground',
                   );
 
-                  // ── Accordion group (Visit Toko ▸ Visits / Upcoming Visit / Report, Impact Visit ▸ Impact Visits / Hasil Impact Visit / Monthly Report, Petty Cash ▸ Requests / Refills) ──
+                  // ── Accordion group (Visit Toko ▸ Visits / Upcoming Visit / Report, Impact Visit ▸ Impact Visits / Hasil Impact Visit / Monthly Report, Petty Cash ▸ Requests / Refills / Stores) ──
                   if (children) {
                     // The icon-only rail has no room for a sub-menu: the icon goes
                     // straight to the group's first page.

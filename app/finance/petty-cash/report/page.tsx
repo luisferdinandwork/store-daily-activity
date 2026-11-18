@@ -26,7 +26,7 @@ import PanelPageHeader from '@/components/shared/PanelPageHeader';
 // confirm receipt on the employee page. "Batal" takes it back while PIC 1
 // hasn't uploaded any proof photo yet.
 //
-// "Download Excel" exports the same data (and the current code filter) as .xlsx.
+// "Unduh CSV" exports the current filters in Finance's bank-transfer template.
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
@@ -55,8 +55,12 @@ import {
   needsVerify,
   openRequestsText,
   reportMonthLabel,
+  reportBankKey,
+  selectReportRows,
   unfinishedNote,
+  type PettyCashReportFilters,
   type PettyCashReportRow,
+  type PettyCashReportSort,
   type RefillState,
   type StoreCodeGroup,
 } from '@/lib/petty-cash-report';
@@ -92,14 +96,19 @@ const fmtWhen = (iso: string | null) =>
       })
     : '';
 
-// ─── Excel download ──────────────────────────────────────────────────────────
+// ─── CSV download ────────────────────────────────────────────────────────────
 
-async function downloadReport(params: { month: string; code: string | null; onlyUsed: boolean }) {
+async function downloadReport(params: PettyCashReportFilters & { month: string; view: View }) {
   const qs = new URLSearchParams({ month: params.month });
   if (params.code) qs.set('code', params.code);
+  if (params.bank) qs.set('bank', params.bank);
+  if (params.search) qs.set('search', params.search);
   if (params.onlyUsed) qs.set('onlyUsed', '1');
+  if (params.onlyAwaiting) qs.set('onlyAwaiting', '1');
+  if (params.sort) qs.set('sort', params.sort);
+  qs.set('view', params.view);
 
-  const res = await fetch(`/api/finance/petty-cash/report/export?${qs}`);
+  const res = await fetch(`/api/finance/petty-cash/report/export?${qs}`, { cache: 'no-store' });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body?.error ?? `HTTP ${res.status}`);
@@ -108,7 +117,7 @@ async function downloadReport(params: { month: string; code: string | null; only
   const blob = await res.blob();
   const filename =
     res.headers.get('content-disposition')?.match(/filename="(.+)"/)?.[1] ??
-    `petty-cash-report_${params.month}.xlsx`;
+    `petty-cash-report_${params.month}.csv`;
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -452,6 +461,8 @@ export default function FinancePettyCashReportPage() {
 
   const [view, setView] = useState<View>('all');
   const [code, setCode] = useState<string | null>(null);
+  const [bank, setBank] = useState<string | null>(null);
+  const [sort, setSort] = useState<PettyCashReportSort>('store');
   const [search, setSearch] = useState('');
   const [onlyUsed, setOnlyUsed] = useState(false);
   const [onlyAwaiting, setOnlyAwaiting] = useState(false);
@@ -490,26 +501,24 @@ export default function FinancePettyCashReportPage() {
 
   // Chips + counts come from every store, so they don't shrink as you search.
   const allGroups = useMemo(() => groupByStoreCode(rows), [rows]);
+  const banks = useMemo(
+    () => [...new Set(rows.map((row) => reportBankKey(row.bankName)).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'id')),
+    [rows],
+  );
 
   // Search + usage filters, before the code filter — the by-code summary
   // still lists every code so you can switch between them.
-  const matching = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return rows.filter((r) => {
-      if (onlyUsed && r.totalUsed === 0) return false;
-      if (onlyAwaiting && !needsVerify(r)) return false;
-      if (!q) return true;
-      return [r.storeNo, r.storeName, r.deptCode, r.pic1Name, r.bankName, r.accountNumber, r.accountHolderName]
-        .some((v) => v?.toLowerCase().includes(q));
-    });
-  }, [rows, onlyUsed, onlyAwaiting, search]);
+  const matching = useMemo(
+    () => selectReportRows(rows, { bank, sort, onlyUsed, onlyAwaiting, search }),
+    [rows, bank, sort, onlyUsed, onlyAwaiting, search],
+  );
 
   const summaryGroups = useMemo(() => groupByStoreCode(matching), [matching]);
   const visibleRows = useMemo(
     () => (code ? matching.filter((r) => r.code === code) : matching),
     [matching, code],
   );
-  const visibleGroups = useMemo(() => groupByStoreCode(visibleRows), [visibleRows]);
+  const visibleGroups = useMemo(() => groupByStoreCode(visibleRows, sort), [visibleRows, sort]);
 
   const totalUsed = visibleRows.reduce((s, r) => s + r.totalUsed, 0);
   const totalTransfer = visibleRows.reduce((s, r) => s + (r.refill?.transfer ?? 0), 0);
@@ -519,7 +528,7 @@ export default function FinancePettyCashReportPage() {
   // Listed in light red: Monitoring is not done with them yet.
   const incompleteCount = visibleRows.filter((r) => !r.complete).length;
 
-  const filtered = Boolean(code || search || onlyUsed || onlyAwaiting);
+  const filtered = Boolean(code || bank || search || onlyUsed || onlyAwaiting);
 
   const selectableIds = visibleRows.filter(needsVerify).map((r) => r.refill!.id);
   const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selected.has(id));
@@ -585,7 +594,7 @@ export default function FinancePettyCashReportPage() {
     setDownloading(true);
     setDownloadError(null);
     try {
-      await downloadReport({ month, code, onlyUsed });
+      await downloadReport({ month, code, bank, sort, search, onlyUsed, onlyAwaiting, view });
     } catch (e) {
       setDownloadError(e instanceof Error ? e.message : 'Download failed.');
     } finally {
@@ -629,11 +638,12 @@ export default function FinancePettyCashReportPage() {
             <button
               type="button"
               onClick={handleDownload}
-              disabled={loading || downloading || rows.length === 0}
+              disabled={loading || Boolean(error) || downloading || visibleRows.length === 0}
+              title="Unduh baris yang sesuai dengan semua filter aktif"
               className="flex h-9 items-center gap-2 rounded-md bg-emerald-600 px-3.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
             >
               {downloading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
-              Download Excel{code ? ` (${allGroups.find((g) => g.code === code)?.display ?? code})` : ''}
+              Unduh CSV ({visibleRows.length})
             </button>
           </div>
         }
@@ -718,12 +728,38 @@ export default function FinancePettyCashReportPage() {
             <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
+              aria-label="Cari toko, PIC, bank, atau rekening"
               placeholder="Search store, PIC, bank, account…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="h-9 w-full rounded-md border border-slate-300 bg-white pl-9 pr-3 text-sm placeholder-slate-400 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
             />
           </div>
+
+          <label className="flex items-center gap-2 text-xs font-medium text-slate-600">
+            Bank
+            <select
+              value={bank ?? ''}
+              onChange={(e) => setBank(e.target.value || null)}
+              className="h-9 max-w-48 rounded-md border border-slate-300 bg-white px-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+            >
+              <option value="">Semua bank</option>
+              {banks.map((name) => <option key={name} value={name}>{name}</option>)}
+            </select>
+          </label>
+
+          <label className="flex items-center gap-2 text-xs font-medium text-slate-600">
+            Urutkan
+            <select
+              value={sort}
+              onChange={(e) => setSort(e.target.value as PettyCashReportSort)}
+              className="h-9 rounded-md border border-slate-300 bg-white px-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+            >
+              <option value="store">Kode toko</option>
+              <option value="bank_asc">Bank A–Z</option>
+              <option value="bank_desc">Bank Z–A</option>
+            </select>
+          </label>
 
           <label className="flex cursor-pointer select-none items-center gap-2 text-xs font-medium text-slate-600">
             <input
@@ -748,13 +784,17 @@ export default function FinancePettyCashReportPage() {
           {filtered && (
             <button
               type="button"
-              onClick={() => { setCode(null); setSearch(''); setOnlyUsed(false); setOnlyAwaiting(false); }}
+              onClick={() => { setCode(null); setBank(null); setSearch(''); setOnlyUsed(false); setOnlyAwaiting(false); }}
               className="text-xs font-semibold text-slate-500 underline hover:text-slate-700"
             >
               Clear
             </button>
           )}
         </div>
+
+        <p className="text-xs text-slate-500">
+          CSV mengikuti semua filter aktif dan urutan tabel. Tanggal transfer memakai tanggal hari ini (WIB).
+        </p>
 
         {(error || downloadError) && (
           <div className="flex items-center gap-3 rounded-md border border-rose-200 bg-rose-50 px-4 py-3">
@@ -860,8 +900,8 @@ export default function FinancePettyCashReportPage() {
                     <th className={cn(TH, 'text-right')}>Transfer (Rp)</th>
                     <th className={cn(TH, 'text-left')}>No. Rekening</th>
                     <th className={cn(TH, 'text-left')}>PIC 1</th>
-                    <th className={cn(TH, 'text-left')}>Bank</th>
-                    <th className={cn(TH, 'text-left')}>Atas Nama</th>
+                    <th className={cn(TH, 'text-left')} aria-sort={sort === 'bank_asc' ? 'ascending' : sort === 'bank_desc' ? 'descending' : 'none'}>Bank</th>
+                    <th className={cn(TH, 'text-left')}>Beneficiary Name</th>
                     <th className={cn(TH, 'text-left')}>Refill</th>
                   </tr>
                 </thead>

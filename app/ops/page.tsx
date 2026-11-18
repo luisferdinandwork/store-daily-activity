@@ -1,72 +1,27 @@
 'use client';
 // app/ops/page.tsx
 //
-// Ops Dashboard. One data fetch, two layouts: the desktop panel below, and the
-// phone layout (components/ops/mobile/DashboardMobile.tsx) below `md`.
+// Ops Dashboard. Two data feeds, two layouts: the desktop panel below, and the phone layout
+// (components/ops/mobile/DashboardMobile.tsx) below `md`.
+//
+//   /api/ops/dashboard          today's Attendance Rate + Completion Rate, every store's figure
+//   /api/ops/dashboard/queues   what is waiting on Ops, longest first: petty cash, issues,
+//                               transfer orders — and, for Ops HO / IT only, store visits
+//
+// Top to bottom: the stores that need attention today, the trend, approvals & reviews,
+// transfer orders, and (HO) the stores that still need a visit this week.
 
-import { useCallback, useEffect, type ReactNode } from 'react';
+import { useCallback, useEffect } from 'react';
+
 import { useApi } from '@/lib/client/use-api';
-import Link from 'next/link';
-import {
-  AlertTriangle,
-  ArrowRight,
-  CheckCircle2,
-  ChevronRight,
-  ListChecks,
-  Users,
-  Wallet,
-} from 'lucide-react';
-
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
-import { AttendanceCountsLine } from '@/components/status/AttendanceStatus';
 import DashboardMobile from '@/components/ops/mobile/DashboardMobile';
 import TrendChart from '@/components/ops/dashboard/TrendChart';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { EMPTY_COUNTS, showedUp } from '@/lib/attendance-health';
-import { RATE_WORD, rateTone, storesBehind, type DashboardData } from '@/lib/ops-dashboard';
-
-// ─── Design tokens ───────────────────────────────────────────────────────────
-// One small palette, reused everywhere as dots / bars / chips — color always
-// carries meaning (status), never decoration.
-
-const TONE = {
-  emerald: { ring: '#10b981', chip: 'bg-emerald-50', text: 'text-emerald-600' },
-  amber: { ring: '#f59e0b', chip: 'bg-amber-50', text: 'text-amber-600' },
-  rose: { ring: '#e11d48', chip: 'bg-rose-50', text: 'text-rose-600' },
-  sky: { ring: '#0ea5e9', chip: 'bg-sky-50', text: 'text-sky-600' },
-  indigo: { ring: '#4f46e5', chip: 'bg-indigo-50', text: 'text-indigo-600' },
-  slate: { ring: '#cbd5e1', chip: 'bg-slate-50', text: 'text-slate-400' },
-} as const;
-
-type Tone = keyof typeof TONE;
-
-// Same bands (80 / 50) and words as the Stores page's task-progress legend.
-const STATUS_WORD = RATE_WORD;
-
-const SHIFT_DOT: Record<string, string> = {
-  morning: '#f59e0b',
-  middle: '#14b8a6',
-  evening: '#7c3aed',
-  full_day: '#0ea5e9',
-  unknown: '#94a3b8',
-};
-
-// Same words as the Ops Petty Cash page: everything OPS approved (still
-// waiting on the PIC's actual amount, or completed) reads "Approved".
-const PETTY_CASH_STATUS: Record<string, { label: string; tone: Tone }> = {
-  pending_ops: { label: 'Waiting OPS', tone: 'amber' },
-  ops_approved: { label: 'Approved', tone: 'emerald' },
-  completed: { label: 'Approved', tone: 'emerald' },
-  ops_rejected: { label: 'Rejected', tone: 'rose' },
-};
-
-// ─── Formatting helpers ─────────────────────────────────────────────────────
-
-const IDR = new Intl.NumberFormat('id-ID', {
-  style: 'currency',
-  currency: 'IDR',
-  maximumFractionDigits: 0,
-});
+import TodayCards from '@/components/ops/dashboard/TodayCards';
+import { IssueQueue, PettyCashQueue, TransferQueue, VisitQueue } from '@/components/ops/dashboard/QueueWidgets';
+import { SectionHeading } from '@/components/ops/dashboard/widgets';
+import type { DashboardData } from '@/lib/ops-dashboard';
+import type { DashboardQueues } from '@/lib/ops-dashboard-queues';
 
 function todayKey() {
   const d = new Date();
@@ -86,225 +41,52 @@ function timeShort(d: Date) {
   return d.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
 }
 
-function relativeTime(iso: string) {
-  const diffMs = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diffMs / 60_000);
-  const hours = Math.floor(diffMs / 3_600_000);
-  const days = Math.floor(diffMs / 86_400_000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  if (hours < 24) return `${hours}h ago`;
-  if (days < 7) return `${days}d ago`;
-  return new Date(iso).toLocaleDateString('id-ID', { day: '2-digit', month: 'short' });
-}
-
-// ─── Shared visual atoms ────────────────────────────────────────────────────
-
-function SectionHeading({ children, right }: { children: ReactNode; right?: ReactNode }) {
-  return (
-    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-      <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">{children}</p>
-      {right && <div className="text-[11px] text-slate-400">{right}</div>}
-    </div>
-  );
-}
-
-function CardIcon({ icon: Icon, tone }: { icon: typeof Users; tone: Tone }) {
-  return (
-    <span
-      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${TONE[tone].chip} ${TONE[tone].text}`}
-    >
-      <Icon className="h-3.5 w-3.5" />
-    </span>
-  );
-}
-
-function TrendChip({ tone, children }: { tone: Tone; children: ReactNode }) {
-  return (
-    <span
-      className={`inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-semibold ${TONE[tone].chip} ${TONE[tone].text}`}
-    >
-      {children}
-    </span>
-  );
-}
-
-function Bar({ pct, tone }: { pct: number; tone: Tone }) {
-  const clamped = Math.max(0, Math.min(100, pct));
-  return (
-    <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
-      <div
-        className="h-full rounded-full transition-all duration-700 ease-out"
-        style={{ width: `${clamped}%`, background: TONE[tone].ring }}
-      />
-    </div>
-  );
-}
-
-function ViewLink({ href, children }: { href: string; children: ReactNode }) {
-  return (
-    <Link
-      href={href}
-      className="group flex shrink-0 items-center gap-1 text-xs font-medium text-slate-500 transition-colors hover:text-indigo-600"
-    >
-      {children}
-      <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
-    </Link>
-  );
-}
-
-// ─── Store ranking card (operations health) ─────────────────────────────────
-// Ranks stores worst-first on a single rate, so ops can see *where* to act
-// instead of re-reading the same system-wide total from the KPI row above.
-
-function StoreRankCard({
-  icon,
-  tone,
-  title,
-  viewHref,
-  rows,
-  emptyLabel,
-  moreCount = 0,
-}: {
-  icon: typeof Users;
-  tone: Tone;
-  title: string;
-  viewHref: string;
-  /** `detail` sits beside the rate; `breakdown` sits under the bar. */
-  rows: Array<{ key: string | number; name: string; rate: number | null; detail?: string; breakdown?: ReactNode }>;
-  emptyLabel: string;
-  moreCount?: number;
-}) {
-  return (
-    <Card className="rounded-2xl border-slate-200 bg-white shadow-sm">
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <CardTitle className="flex items-center gap-2.5 text-sm font-semibold text-slate-900">
-            <CardIcon icon={icon} tone={tone} />
-            {title}
-          </CardTitle>
-          <ViewLink href={viewHref}>View all</ViewLink>
-        </div>
-      </CardHeader>
-      <CardContent className="p-6 pt-2">
-        {rows.length === 0 ? (
-          <div className="flex flex-col items-center gap-1.5 py-8 text-center">
-            <CheckCircle2 className="h-5 w-5 text-emerald-500" />
-            <p className="text-sm text-slate-500">{emptyLabel}</p>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {rows.map((row) => {
-              const t = row.rate === null ? null : rateTone(row.rate);
-              return (
-                <div key={row.key}>
-                  <div className="mb-1 flex items-baseline justify-between gap-2">
-                    <p className="truncate text-sm font-medium text-slate-800">{row.name}</p>
-                    <span className="flex shrink-0 items-baseline gap-1.5">
-                      {row.detail && <span className="text-xs text-slate-400">{row.detail}</span>}
-                      {row.rate !== null && t && (
-                        <span className={`text-xs font-semibold ${TONE[t].text}`}>{row.rate}%</span>
-                      )}
-                    </span>
-                  </div>
-                  {row.rate !== null && t && <Bar pct={row.rate} tone={t} />}
-                  {row.breakdown && <div className="mt-1.5">{row.breakdown}</div>}
-                </div>
-              );
-            })}
-            {moreCount > 0 && (
-              <p className="pt-1 text-xs text-slate-400">+{moreCount} more store{moreCount === 1 ? '' : 's'} need attention</p>
-            )}
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-// ─── KPI card (top row) ──────────────────────────────────────────────────────
-
-function KpiCard({
-  label,
-  value,
-  tone,
-  footer,
-}: {
-  label: string;
-  value: string;
-  tone?: 'emerald' | 'amber' | 'rose';
-  footer?: ReactNode;
-}) {
-  return (
-    <Card className="rounded-2xl border-slate-200 bg-white shadow-sm transition-shadow hover:shadow-md">
-      <CardContent className="p-5">
-        <div className="flex items-start justify-between gap-2">
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">{label}</p>
-          {tone && <TrendChip tone={tone}>{STATUS_WORD[tone]}</TrendChip>}
-        </div>
-        <p className="mt-2 text-[32px] font-semibold leading-none tracking-tight text-slate-900">{value}</p>
-        {footer && <div className="mt-4">{footer}</div>}
-      </CardContent>
-    </Card>
-  );
-}
-
-function KpiSkeleton() {
-  return (
-    <Card className="rounded-2xl border-slate-200 bg-white shadow-sm">
-      <CardContent className="p-5">
-        <div className="h-3 w-24 animate-pulse rounded bg-slate-100" />
-        <div className="mt-3 h-8 w-16 animate-pulse rounded bg-slate-100" />
-        <div className="mt-4 h-1.5 w-full animate-pulse rounded-full bg-slate-100" />
-      </CardContent>
-    </Card>
-  );
-}
-
-// ─── Main ─────────────────────────────────────────────────────────────────────
+// Cards sit in a fluid grid: as many columns as fit, never narrower than the minimum — the Ops
+// sidebar takes a quarter of the screen, so the viewport width says little about the room left.
+const GRID_2 = 'grid grid-cols-[repeat(auto-fit,minmax(min(100%,24rem),1fr))] gap-5';
+const GRID_3 = 'grid grid-cols-[repeat(auto-fit,minmax(min(100%,18.5rem),1fr))] gap-5';
 
 export default function OpsDashboardPage() {
   // Cached + background-revalidated (lib/client/use-api.ts): returning to the
   // dashboard shows the last numbers instantly while fresh ones load.
   const dash = useApi<DashboardData & { success?: boolean }>(`/api/ops/dashboard?date=${todayKey()}`);
+  const queuesApi = useApi<DashboardQueues | { success: false; error?: string }>('/api/ops/dashboard/queues');
+
   const data = dash.data?.success ? dash.data : null;
+  const queues = queuesApi.data?.success ? (queuesApi.data as DashboardQueues) : null;
   const loading = dash.loading;
-  const refreshing = dash.validating && !dash.loading;
+  const queuesLoading = queuesApi.loading;
+  const refreshing = (dash.validating || queuesApi.validating) && !dash.loading;
   const lastUpdated = dash.updatedAt ? new Date(dash.updatedAt) : null;
-  const { refresh } = dash;
-  const load = useCallback(() => refresh(), [refresh]);
+  const refreshDash = dash.refresh;
+  const refreshQueues = queuesApi.refresh;
+  const load = useCallback(() => {
+    void refreshDash();
+    void refreshQueues();
+  }, [refreshDash, refreshQueues]);
 
   useEffect(() => {
-    const id = setInterval(() => void refresh(), 60_000);
+    const id = setInterval(load, 60_000);
     return () => clearInterval(id);
-  }, [refresh]);
+  }, [load]);
 
-  const today = data?.tasks.today;
-  const month = data?.tasks.month;
-  const shiftToday = (data?.tasks.shiftToday ?? []).filter((s) => s.total > 0);
-  const att = data?.attendance;
-  const pettyCashPending = data?.pettyCash.pendingCount ?? 0;
-  const issuesUnreviewed = data?.issues.unreviewedCount ?? 0;
-  const needsAttentionTotal = pettyCashPending + issuesUnreviewed;
-
-  // Store-level rankings power the "Stores Needing Attention" section — the
-  // top KPI row shows the system-wide pulse, this shows *where* to act.
-  const behind = storesBehind(data);
-  const taskStoresBehind = behind.tasks;
-  const attendanceStoresBehind = behind.attendance;
+  // Area + Ops Area are for HO: an Ops Area user is looking at their own area already.
+  const showArea = queues?.scope === 'all_areas';
 
   const scopeLabel = data
-    ? `${data.scope === 'all_areas' ? 'All areas' : 'Area'} ·${data.storeCount} store${data.storeCount === 1 ? '' : 's'}`
+    ? `${data.scope === 'all_areas' ? 'All areas' : 'Area'} · ${data.storeCount} store${data.storeCount === 1 ? '' : 's'}`
     : '';
 
   return (
     <>
       <DashboardMobile
         data={data}
+        queues={queues}
         loading={loading}
+        queuesLoading={queuesLoading}
         refreshing={refreshing}
         lastUpdated={lastUpdated}
-        onRefresh={() => void load()}
+        onRefresh={load}
       />
 
       <div className="hidden min-h-full bg-slate-50 md:block">
@@ -312,16 +94,13 @@ export default function OpsDashboardPage() {
           scope="OPS · Overview"
           title="Dashboard"
           subtitle={todayFull()}
-          onRefresh={() => void load()}
+          onRefresh={load}
           refreshing={refreshing}
           contentClassName="w-full"
         />
 
         <div className="space-y-10 p-6 lg:p-10">
-          {/* ── Trend: task completion + attendance over a period ─────────── */}
-          <TrendChart />
-
-          {/* ── Snapshot ─────────────────────────────────────────────────────── */}
+          {/* ── Today: the two rates, and the stores that need attention ───── */}
           <section>
             <SectionHeading
               right={
@@ -333,258 +112,40 @@ export default function OpsDashboardPage() {
                 )
               }
             >
-              Today&apos;s Snapshot
+              Today&apos;s Stores Needing Attention
             </SectionHeading>
-
-            {loading ? (
-              <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-                {Array.from({ length: 4 }).map((_, i) => (
-                  <KpiSkeleton key={i} />
-                ))}
-              </div>
-            ) : (
-              <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-                <KpiCard
-                  label="Attendance Rate"
-                  value={`${att?.rate ?? 0}%`}
-                  tone={rateTone(att?.rate ?? 0)}
-                  footer={
-                    <>
-                      <Bar pct={att?.rate ?? 0} tone={rateTone(att?.rate ?? 0)} />
-                      <AttendanceCountsLine counts={att ?? EMPTY_COUNTS} className="mt-2.5 text-[11px]" />
-                      <p className="mt-1 text-[11px] text-slate-400">
-                        Rate = Present + Late: {att ? showedUp(att) : 0} of {att?.total ?? 0} scheduled
-                      </p>
-                    </>
-                  }
-                />
-
-                <KpiCard
-                  label="Completion — Today"
-                  value={`${today?.completionRate ?? 0}%`}
-                  tone={rateTone(today?.completionRate ?? 0)}
-                  footer={
-                    <>
-                      <Bar pct={today?.completionRate ?? 0} tone={rateTone(today?.completionRate ?? 0)} />
-                      <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1">
-                        {shiftToday.length ? (
-                          shiftToday.map((s) => (
-                            <span key={s.shift} className="flex items-center gap-1.5 text-[11px] text-slate-500">
-                              <span
-                                className="h-1.5 w-1.5 shrink-0 rounded-full"
-                                style={{ background: SHIFT_DOT[s.shift] ?? SHIFT_DOT.unknown }}
-                              />
-                              {s.label}
-                              <span className="font-semibold text-slate-900">{s.completionRate}%</span>
-                            </span>
-                          ))
-                        ) : (
-                          <span className="text-[11px] text-slate-400">Belum ada task hari ini</span>
-                        )}
-                      </div>
-                    </>
-                  }
-                />
-
-                <KpiCard
-                  label="Completion — Month"
-                  value={`${month?.completionRate ?? 0}%`}
-                  tone={rateTone(month?.completionRate ?? 0)}
-                  footer={
-                    <>
-                      <Bar pct={month?.completionRate ?? 0} tone={rateTone(month?.completionRate ?? 0)} />
-                      <p className="mt-2 text-xs text-slate-500">
-                        {month?.completed ?? 0} dari {month?.total ?? 0} task bulan ini
-                      </p>
-                    </>
-                  }
-                />
-
-                <KpiCard
-                  label="Needs Attention"
-                  value={String(needsAttentionTotal)}
-                  tone={needsAttentionTotal > 0 ? 'amber' : 'emerald'}
-                  footer={
-                    <div className="-mx-1.5 space-y-0.5">
-                      <Link
-                        href="/ops/petty-cash/requests"
-                        className="flex items-center justify-between rounded-lg px-1.5 py-1 text-xs text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
-                      >
-                        <span className="flex items-center gap-2">
-                          <span className="h-1.5 w-1.5 rounded-full" style={{ background: TONE.amber.ring }} />
-                          Petty cash pending
-                        </span>
-                        <span className="flex items-center gap-0.5 font-semibold text-slate-900">
-                          {pettyCashPending}
-                          <ChevronRight className="h-3 w-3 text-slate-300" />
-                        </span>
-                      </Link>
-                      <Link
-                        href="/ops/issues"
-                        className="flex items-center justify-between rounded-lg px-1.5 py-1 text-xs text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900"
-                      >
-                        <span className="flex items-center gap-2">
-                          <span className="h-1.5 w-1.5 rounded-full" style={{ background: TONE.rose.ring }} />
-                          Unreviewed issues
-                        </span>
-                        <span className="flex items-center gap-0.5 font-semibold text-slate-900">
-                          {issuesUnreviewed}
-                          <ChevronRight className="h-3 w-3 text-slate-300" />
-                        </span>
-                      </Link>
-                    </div>
-                  }
-                />
-              </div>
-            )}
+            <TodayCards data={data} loading={loading} />
           </section>
 
-          {/* ── Operations health ────────────────────────────────────────────── */}
-          <section>
-            <SectionHeading>Stores Needing Attention</SectionHeading>
-            <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-              <StoreRankCard
-                icon={ListChecks}
-                tone="indigo"
-                title="Task Completion by Store"
-                viewHref="/ops/tasks/progress"
-                emptyLabel="Semua toko sudah menyelesaikan task hari ini"
-                rows={taskStoresBehind.slice(0, 6).map((s) => ({
-                  key: s.storeId,
-                  name: s.storeName,
-                  rate: s.completionRate,
-                  detail: `${s.completed}/${s.total} task`,
-                }))}
-                moreCount={Math.max(0, taskStoresBehind.length - 6)}
-              />
+          {/* ── Trend: task completion + attendance over a period ─────────── */}
+          <TrendChart />
 
-              <StoreRankCard
-                icon={Users}
-                tone="emerald"
-                title="Attendance by Store"
-                viewHref="/ops/attendance"
-                emptyLabel="Semua toko hadir lengkap dan terjadwal hari ini"
-                rows={attendanceStoresBehind.slice(0, 6).map((s) => ({
-                  key: s.storeId,
-                  name: s.storeName,
-                  rate: s.rate,
-                  detail: s.rate === null ? 'Tidak ada shift hari ini' : undefined,
-                  breakdown: <AttendanceCountsLine counts={s} className="text-[11px]" />,
-                }))}
-                moreCount={Math.max(0, attendanceStoresBehind.length - 6)}
-              />
+          {/* ── Waiting for Ops to approve / review ──────────────────────── */}
+          <section>
+            <SectionHeading right="Longest waiting first">Approvals &amp; Reviews</SectionHeading>
+            <div className={GRID_2}>
+              <PettyCashQueue queues={queues} loading={queuesLoading} showArea={showArea} />
+              <IssueQueue queues={queues} loading={queuesLoading} />
             </div>
           </section>
 
-          {/* ── Requests & follow-ups ────────────────────────────────────────── */}
+          {/* ── Transfer orders held up in each phase ────────────────────── */}
           <section>
-            <SectionHeading>Requests &amp; Follow-ups</SectionHeading>
-            <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-              <Card className="rounded-2xl border-slate-200 bg-white shadow-sm">
-                <CardHeader className="pb-3">
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="flex items-center gap-2.5 text-sm font-semibold text-slate-900">
-                      <CardIcon icon={Wallet} tone="amber" />
-                      Recent Petty Cash
-                      {pettyCashPending > 0 && <TrendChip tone="amber">{pettyCashPending} pending</TrendChip>}
-                    </CardTitle>
-                    <ViewLink href="/ops/petty-cash/requests">View all</ViewLink>
-                  </div>
-                </CardHeader>
-                <CardContent className="overflow-x-auto p-0 pb-2">
-                  {!data?.pettyCash.recent.length ? (
-                    <div className="flex flex-col items-center gap-1.5 py-10 text-center">
-                      <Wallet className="h-5 w-5 text-slate-300" />
-                      <p className="text-sm text-slate-500">Belum ada request bulan ini</p>
-                    </div>
-                  ) : (
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-slate-100 text-left text-[11px] uppercase tracking-wide text-slate-400">
-                          <th className="px-6 py-2.5 font-medium">Store</th>
-                          <th className="px-6 py-2.5 font-medium">Amount</th>
-                          <th className="px-6 py-2.5 font-medium">Status</th>
-                          <th className="px-6 py-2.5 font-medium">When</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {data.pettyCash.recent.map((row) => {
-                          const meta = PETTY_CASH_STATUS[row.status] ?? { label: row.status, tone: 'slate' as Tone };
-                          return (
-                            <tr
-                              key={row.id}
-                              className="border-b border-slate-50 transition-colors last:border-0 hover:bg-slate-50/70"
-                            >
-                              <td className="max-w-[140px] truncate px-6 py-3 text-slate-700">{row.storeName}</td>
-                              <td className="whitespace-nowrap px-6 py-3 font-medium text-slate-900">
-                                {IDR.format(Number(row.amount))}
-                              </td>
-                              <td className="px-6 py-3">
-                                <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-600">
-                                  <span className="h-1.5 w-1.5 rounded-full" style={{ background: TONE[meta.tone].ring }} />
-                                  {meta.label}
-                                </span>
-                              </td>
-                              <td className="whitespace-nowrap px-6 py-3 text-xs text-slate-500">
-                                {relativeTime(row.createdAt)}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  )}
-                </CardContent>
-              </Card>
-
-              <Card className="rounded-2xl border-slate-200 bg-white shadow-sm">
-                <CardHeader className="pb-3">
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="flex items-center gap-2.5 text-sm font-semibold text-slate-900">
-                      <CardIcon icon={AlertTriangle} tone="rose" />
-                      Unreviewed Issues
-                      {issuesUnreviewed > 0 && <TrendChip tone="rose">{issuesUnreviewed} open</TrendChip>}
-                    </CardTitle>
-                    <ViewLink href="/ops/issues">View all</ViewLink>
-                  </div>
-                </CardHeader>
-                <CardContent className="overflow-x-auto p-0 pb-2">
-                  {!data?.issues.recent.length ? (
-                    <div className="flex flex-col items-center gap-1.5 py-10 text-center">
-                      <CheckCircle2 className="h-5 w-5 text-emerald-500" />
-                      <p className="text-sm text-slate-500">Semua issue sudah direview</p>
-                    </div>
-                  ) : (
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-slate-100 text-left text-[11px] uppercase tracking-wide text-slate-400">
-                          <th className="px-6 py-2.5 font-medium">Issue</th>
-                          <th className="px-6 py-2.5 font-medium">Store</th>
-                          <th className="px-6 py-2.5 font-medium">Reporter</th>
-                          <th className="px-6 py-2.5 font-medium">When</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {data.issues.recent.map((row) => (
-                          <tr
-                            key={row.id}
-                            className="border-b border-slate-50 transition-colors last:border-0 hover:bg-slate-50/70"
-                          >
-                            <td className="max-w-[180px] truncate px-6 py-3 font-medium text-slate-900">{row.title}</td>
-                            <td className="max-w-[120px] truncate px-6 py-3 text-slate-700">{row.storeName}</td>
-                            <td className="max-w-[120px] truncate px-6 py-3 text-slate-500">{row.reporterName}</td>
-                            <td className="whitespace-nowrap px-6 py-3 text-xs text-slate-500">
-                              {relativeTime(row.createdAt)}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                </CardContent>
-              </Card>
+            <SectionHeading right="Still open, longest first">Transfer Orders</SectionHeading>
+            <div className={GRID_3}>
+              <TransferQueue kind="return" queues={queues} loading={queuesLoading} />
+              <TransferQueue kind="shipping" queues={queues} loading={queuesLoading} />
+              <TransferQueue kind="receiving" queues={queues} loading={queuesLoading} />
             </div>
           </section>
+
+          {/* ── Ops HO / IT only: the week's visits still to make ────────── */}
+          {queues?.visits && (
+            <section>
+              <SectionHeading right="Ops HO">Store Visits</SectionHeading>
+              <VisitQueue visits={queues.visits} limit={10} />
+            </section>
+          )}
         </div>
       </div>
     </>

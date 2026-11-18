@@ -129,6 +129,7 @@ const DOT: Record<string, string> = {
   amber: 'bg-amber-400',
   rose: 'bg-rose-500',
   indigo: 'bg-indigo-500',
+  sky: 'bg-sky-400',
   slate: 'bg-slate-300',
 };
 

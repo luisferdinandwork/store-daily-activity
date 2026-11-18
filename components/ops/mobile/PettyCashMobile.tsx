@@ -35,9 +35,11 @@ import { RefillRecipient } from '@/components/ops/petty-cash/RefillRecipient';
 const TABS = [
   { href: '/ops/petty-cash/requests', label: 'Requests', key: 'requests' },
   { href: '/ops/petty-cash/refills', label: 'Refills', key: 'refills' },
+  // Read-only overview — no "waiting" badge of its own.
+  { href: '/ops/petty-cash/stores', label: 'Stores', key: null },
 ] as const;
 
-/** Sticky: title + Requests / Refills tabs. The month stepper scrolls with the list (keeps this short). */
+/** Sticky: title + Requests / Refills / Stores tabs. The month stepper scrolls with the list (keeps this short). */
 export function PettyCashMobileHeader({
   isHo,
   pending,
@@ -59,10 +61,10 @@ export function PettyCashMobileHeader({
       refreshing={refreshing}
     >
       {/* Requests / Refills */}
-      <nav className="grid grid-cols-2 gap-1 rounded-xl bg-slate-200/60 p-1" aria-label="Petty cash sections">
+      <nav className="grid grid-cols-3 gap-1 rounded-xl bg-slate-200/60 p-1" aria-label="Petty cash sections">
         {TABS.map((tab) => {
           const active = pathname.startsWith(tab.href);
-          const waiting = pending?.[tab.key] ?? 0;
+          const waiting = tab.key ? (pending?.[tab.key] ?? 0) : 0;
           return (
             <Link
               key={tab.href}
