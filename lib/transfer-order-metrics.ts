@@ -13,6 +13,8 @@
 //   wsToReturn    WS Diposting → Foto Serah Terima
 //   delivery      Foto Serah Terima → Terima Fisik Barang di Toko
 //   bcReceiving   Terima Fisik Barang di Toko → WR Diposting
+//   total         TO Dibuat → WR Diposting — the whole order, start to finish
+//                 (added 2026-11-18; runs to "now" while the order is open)
 // (a "Total Proses Item Return" = TO Dibuat → Foto Serah Terima used to sit here
 // too; removed 2026-11-18 by request — it repeated the first two and confused OPS.)
 //
@@ -33,7 +35,7 @@
 // seconds earlier but its time is not stored).
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type MetricKey = 'bcProcessing' | 'wsToReturn' | 'delivery' | 'bcReceiving';
+export type MetricKey = 'bcProcessing' | 'wsToReturn' | 'delivery' | 'bcReceiving' | 'total';
 
 /** The ISO timestamps + warehouse flags `/api/ops/item-transfers` returns. */
 export interface MetricInput {
@@ -91,6 +93,8 @@ export interface TransferMetric {
    */
   skipped: boolean;
   skippedLabel: string;
+  /** Its end was recorded before its start (one of the `skipped` cases) — "waktu terbalik". */
+  reversed: boolean;
 }
 
 /** What each end of a metric is called when it is the recorded step (not a stand-in). */
@@ -99,6 +103,7 @@ const END_NAMES: Record<MetricKey, { start: string; end: string }> = {
   wsToReturn: { start: 'WS Diposting', end: 'Foto Serah Terima' },
   delivery: { start: 'Foto Serah Terima', end: 'Terima Fisik' },
   bcReceiving: { start: 'Terima Fisik', end: 'WR Diposting' },
+  total: { start: 'TO Dibuat', end: 'WR Diposting' },
 };
 
 /** Why a finished order has no WS Diposting — shown on every metric that needed it. */
@@ -122,6 +127,8 @@ const AUTO_FILL: Record<MetricKey, { start: boolean; end: EndFill[] }> = {
   wsToReturn: { start: false, end: [TERIMA_FISIK, WR_DIPOSTING] },
   delivery: { start: true, end: [WR_DIPOSTING] },
   bcReceiving: { start: true, end: [WR_DIPOSTING] },
+  // Both ends are BC's own (first seen / WR) — nothing to stand in for.
+  total: { start: false, end: [] },
 };
 
 export function buildTransferMetrics(t: MetricInput): TransferMetric[] {
@@ -148,7 +155,9 @@ export function buildTransferMetrics(t: MetricInput): TransferMetric[] {
     const skippedLabel = backwards
       ? `tidak tercatat — ${endName} lebih awal dari ${startName}`
       : missing
-        ? (t.droppingDetectedAt ? 'tidak tercatat — TO sudah selesai di BC' : WS_NOT_RECORDED)
+        ? m.key === 'total'
+          ? 'tidak tercatat — TO Dibuat tidak terbaca dari BC'
+          : t.droppingDetectedAt ? 'tidak tercatat — TO sudah selesai di BC' : WS_NOT_RECORDED
         : '';
     const filled = [autoStart && 'dari WS Diposting', autoEnd && `sampai ${autoEndLabel}`].filter(Boolean).join(', ');
     return {
@@ -162,13 +171,14 @@ export function buildTransferMetrics(t: MetricInput): TransferMetric[] {
       autoNote: auto ? `Selesai otomatis — tidak diproses di PRISM, dihitung ${filled}` : '',
       skipped: missing || backwards,
       skippedLabel,
+      reversed: backwards,
     };
   });
 }
 
 function buildRawMetrics(
   t: MetricInput,
-): Omit<TransferMetric, 'auto' | 'autoStart' | 'autoEnd' | 'autoEndLabel' | 'autoNote' | 'skipped' | 'skippedLabel'>[] {
+): Omit<TransferMetric, 'auto' | 'autoStart' | 'autoEnd' | 'autoEndLabel' | 'autoNote' | 'skipped' | 'skippedLabel' | 'reversed'>[] {
   // Item Return is the ORIGIN store handing goods to the courier. A DM
   // warehouse origin has no employee in this app, so there is no photo ever.
   const returnApplicable = !t.fromIsWarehouse;
@@ -193,7 +203,7 @@ function buildRawMetrics(
     {
       key: 'wsToReturn',
       label: 'WS Diposting → Foto Serah Terima',
-      shortLabel: 'WS → Foto',
+      shortLabel: 'WS → Terima Kurir',
       ongoingLabel: 'menunggu foto serah terima',
       notStartedLabel: 'WS belum diposting',
       start: t.droppingDetectedAt,
@@ -225,6 +235,18 @@ function buildRawMetrics(
       end: t.receivedAt,
       applicable: bcReceivingApplicable,
       naReason: NA_WAREHOUSE,
+      signed: false,
+    },
+    {
+      key: 'total',
+      label: 'Total Proses (TO Dibuat → WR Diposting)',
+      shortLabel: 'Total',
+      ongoingLabel: 'masih berjalan',
+      notStartedLabel: 'TO belum terdeteksi',
+      start: t.returnDetectedAt,
+      end: t.receivedAt,
+      applicable: true,
+      naReason: '',
       signed: false,
     },
   ];

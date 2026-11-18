@@ -20,6 +20,9 @@ import {
 import { dueThisWeek, storesAboveAverage, waitingLabel, waitingMinutes, waitingTone, weekOf, weekRangeLabel } from '../lib/ops-dashboard-queues';
 import { legsNotProcessedInPrism, resolveTransferPhase, type TransferPhaseInput } from '../lib/transfer-order-phase';
 import { WS_NOT_RECORDED, buildTransferMetrics, minutesBetween, type MetricInput } from '../lib/transfer-order-metrics';
+import {
+  EMPTY_FILTERS, dayInRange, matchesFilters, routeOf, rowFacts, sortTransfers, type ListTransfer,
+} from '../lib/transfer-order-list';
 
 let checks = 0;
 const ok = (name: string, fn: () => void) => {
@@ -339,6 +342,65 @@ ok('the month average pools every completed process; only stores above it are li
   assert.equal(r.timed, 6);
   assert.deepEqual(r.above.map((x) => [x.report.id, x.avgMinutes]), [[4, 400]]);
   assert.deepEqual(storesAboveAverage([{ minutes: 0, timed: 0 }]), { monthAvgMinutes: null, timed: 0, above: [] });
+});
+
+// ─── Transfer Order list: Total Proses, filters, sorts ───────────────────────
+
+const listRow = (id: string, over: Partial<ListTransfer>): ListTransfer => ({
+  id, toaNo: `TOA${id}`, transferFromCode: 'FF001', transferToCode: 'FF002', qtyOrdered: 1, phase: 'received',
+  fromStore: { id: '1', name: 'Toko A', storeNo: 'FF001', areaId: '10' },
+  toStore: { id: '2', name: 'Toko B', storeNo: 'FF002', areaId: '20' },
+  returnDetectedAt: null, returnSubmittedAt: null, droppingDetectedAt: null, droppingSubmittedAt: null, receivedAt: null,
+  fromIsWarehouse: false, toIsWarehouse: false, ...over,
+});
+const NOW_MS = new Date('2026-11-18T05:00:00Z').getTime();
+
+ok('Total Proses = TO Dibuat → WR Diposting; still running while the TO is open', () => {
+  const done = metricsOf({ returnDetectedAt: TO, droppingDetectedAt: WS, receivedAt: WR });
+  assert.equal(done.total.start, TO);
+  assert.equal(done.total.end, WR);
+  assert.equal(minutesBetween(done.total.start, done.total.end), 26 * 60);
+  const open = rowFacts(listRow('o', { returnDetectedAt: '2026-11-17T05:00:00Z', phase: 'return' }), NOW_MS);
+  assert.equal(open.minutes.total, 24 * 60); // running to "now"
+});
+
+ok('TO list filters: route, area, TO Dibuat range, Total longer than, data flags', () => {
+  assert.equal(routeOf({ fromIsWarehouse: false, toIsWarehouse: false }), 'store_store');
+  assert.equal(routeOf({ fromIsWarehouse: false, toIsWarehouse: true }), 'to_warehouse');
+  assert.equal(routeOf({ fromIsWarehouse: true, toIsWarehouse: false }), 'from_warehouse');
+  assert.equal(dayInRange('2026-11-12', '7d', '2026-11-18'), true);
+  assert.equal(dayInRange('2026-11-11', '7d', '2026-11-18'), false);
+  assert.equal(dayInRange('2026-10-31', 'last_month', '2026-11-18'), true);
+  assert.equal(dayInRange('2026-12-31', 'last_month', '2027-01-05'), true);
+
+  const slow = listRow('s', { returnDetectedAt: '2026-11-10T01:00:00Z', droppingDetectedAt: '2026-11-10T03:00:00Z', receivedAt: '2026-11-15T01:00:00Z' });
+  const quick = listRow('q', { returnDetectedAt: '2026-11-17T01:00:00Z', droppingDetectedAt: '2026-11-17T03:00:00Z', receivedAt: '2026-11-17T09:00:00Z' });
+  const noWs = listRow('n', { returnDetectedAt: '2026-11-17T01:00:00Z', receivedAt: '2026-11-17T09:00:00Z' });
+  const f = (over: Partial<typeof EMPTY_FILTERS>, t: ListTransfer) =>
+    matchesFilters(t, rowFacts(t, NOW_MS), { ...EMPTY_FILTERS, ...over }, '2026-11-18');
+  assert.equal(f({ longerThan: '3d' }, slow), true);
+  assert.equal(f({ longerThan: '3d' }, quick), false);
+  assert.equal(f({ area: '20' }, quick), true); // the destination's area counts too
+  assert.equal(f({ area: '30' }, quick), false);
+  assert.equal(f({ created: 'today' }, quick), false);
+  assert.equal(f({ created: '7d' }, quick), true);
+  assert.equal(f({ data: 'no_ws' }, noWs), true);
+  assert.equal(f({ data: 'no_ws' }, quick), false);
+  assert.equal(f({ store: '2', direction: 'from' }, quick), false); // store 2 is the destination
+  assert.equal(f({ store: '2', direction: 'to' }, quick), true);
+  assert.equal(f({ route: 'to_warehouse' }, quick), false);
+  assert.equal(f({ search: 'toko b' }, quick), true);
+});
+
+ok('TO list sort by a duration: longest first, rows with no number always last', () => {
+  const rows = [
+    listRow('a', { returnDetectedAt: '2026-11-17T01:00:00Z', receivedAt: '2026-11-17T03:00:00Z' }), // 2 h
+    listRow('b', { returnDetectedAt: null, receivedAt: '2026-11-17T03:00:00Z' }), // no TO Dibuat
+    listRow('c', { returnDetectedAt: '2026-11-16T01:00:00Z', receivedAt: '2026-11-17T01:00:00Z' }), // 24 h
+  ];
+  const facts = new Map(rows.map((r) => [r.id, rowFacts(r, NOW_MS)]));
+  assert.deepEqual(sortTransfers(rows, facts, 'total', 'desc').map((r) => r.id), ['c', 'a', 'b']);
+  assert.deepEqual(sortTransfers(rows, facts, 'total', 'asc').map((r) => r.id), ['a', 'c', 'b']);
 });
 
 console.log(`\n${checks} checks passed`);

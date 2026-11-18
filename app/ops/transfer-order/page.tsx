@@ -1,19 +1,21 @@
 'use client';
 
-// app/ops/transfer-order/page.tsx — OPS Transfer Order pipeline dashboard.
+// app/ops/transfer-order/page.tsx — OPS Transfer Order pipeline.
 //
 // Shows every BC-synced transfer order across its 3 phases (Item Return →
-// Shipping → Item Receiving), sourced live from /api/ops/item-transfers
-// (API route path kept as-is — only this page's own route was renamed),
-// which re-syncs Business Central on every load/refresh. Mirrors the
-// app/ops/issues/page.tsx convention: store-filterable card list + a
-// right-side slide-in drawer with the full phase timeline.
+// Shipping → Item Receiving), sourced from /api/ops/item-transfers. Laid out
+// like Ops · Petty Cash · Stores (2026-11-18, by request): no stat tiles — one
+// compact bar (search · area · store · Filter popover · sort) with the status
+// chips under it, then the list (one row per TO, unchanged) and a pager. A row
+// opens the right-side drawer with the full timeline. Filter / sort rules:
+// lib/transfer-order-list.ts; the timing metrics: lib/transfer-order-metrics.ts.
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Package, Truck, PackageCheck, CheckCircle2, Store as StoreIcon,
   MapPin, Loader2, X, Globe2, Shield, AlertTriangle,
-  Factory, Send, Inbox, Warehouse, Maximize2, Camera, ArrowRight, Bot, ImageOff,
+  Factory, Send, Inbox, Warehouse, Maximize2, Camera, ArrowRight, Bot, ImageOff, Timer,
+  SlidersHorizontal, ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import { ImageLightbox } from '@/components/shared/ImageLightbox';
 import {
@@ -29,11 +31,18 @@ import { cn } from '@/lib/utils';
 import { TONES, TONE_HEX, type Tone } from '@/lib/status-theme';
 import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
 import { OpsList, OpsListRow, OpsListSkeleton } from '@/components/ops/layout/OpsList';
-import { OpsFilterSelect, OpsSearchInput } from '@/components/ops/layout/OpsToolbar';
-import { MetricTile } from '@/components/tasks/MetricTile';
-import StorePickerCombobox, {
-  type AreaGroupOption, type StoreOption,
-} from '@/components/ops/impact-visits/StorePickerCombobox';
+import {
+  OpsChipTabs, OpsFilterSelect, OpsSearchInput, OpsSortControl, type OpsChipItem,
+} from '@/components/ops/layout/OpsToolbar';
+import { StoreCombobox } from '@/components/shared/store-combobox';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { jakartaDateKey } from '@/lib/day-bucket';
+import {
+  CREATED_LABEL, DATA_FLAG_LABEL, DIRECTION_LABEL, EMPTY_FILTERS, LIST_PAGE_SIZE, LIST_SORT_OPTIONS, LONGER_LABEL,
+  ROUTE_LABEL, defaultListSortDir, matchesFilters, moreFilterCount, rowFacts, sortTransfers,
+  type CreatedRange, type DataFlag, type Direction, type ListFilters, type ListSortKey, type LongerThan,
+  type RouteKind, type RowFacts,
+} from '@/lib/transfer-order-list';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -99,7 +108,12 @@ const PHASE_CFG: Record<Phase, { label: string; tone: Tone; accent: string; Icon
 // a side branch off "return" (see resolvePhase), not a 5th step on this
 // path, so it's deliberately excluded — see TransferDrawer for its own view.
 const PHASE_ORDER: Phase[] = ['return', 'shipping', 'receiving', 'received'];
-const PHASE_TILE_ORDER: Phase[] = [...PHASE_ORDER, 'auto_completed', 'to_warehouse'];
+// The status chips above the list, in the order an order moves through them.
+const PHASE_CHIP_ORDER: Phase[] = ['return', 'shipping', 'receiving', 'to_warehouse', 'received', 'auto_completed'];
+// OpsChipTabs dot colours for the phase tones.
+const CHIP_DOT: Partial<Record<Tone, OpsChipItem<string>['tone']>> = {
+  warning: 'amber', info: 'sky', active: 'indigo', success: 'emerald', sick: 'orange', neutral: 'slate',
+};
 
 /** "FF001 · Toko X" — which store skipped the step, for the note. */
 function legWho(t: Transfer, leg: TransferLeg): string {
@@ -130,6 +144,7 @@ const METRIC_ICON: Record<MetricKey, typeof Factory> = {
   wsToReturn: Camera,
   delivery: Send,
   bcReceiving: Inbox,
+  total: Timer,
 };
 
 function buildMetrics(t: Transfer): Metric[] {
@@ -440,7 +455,8 @@ function TransferDrawer({ transfer, onClose }: { transfer: Transfer; onClose: ()
             <p className="mt-2 text-[10px] leading-snug text-slate-400">
               TO Dibuat = saat sistem pertama kali mendeteksi TO di Business Central (BC tidak menyediakan jam pembuatan TO).
               WS Diposting = jam Warehouse Shipment diposting di BC. Foto Serah Terima = saat toko mengirim konfirmasi serah terima ke kurir
-              beserta foto. Terima Fisik Barang di Toko = saat toko mengonfirmasi barang diterima dari kurir. WR Diposting = saat sistem
+              beserta foto. Terima Fisik Barang di Toko = saat toko mengonfirmasi barang diterima dari kurir. Total Proses = TO Dibuat
+              sampai WR Diposting (masih berjalan selama TO belum selesai). WR Diposting = saat sistem
               pertama kali melihat Warehouse Receipt diposting di BC (BC hanya memberi tanggal; bila diposting di hari sebelumnya, dipakai
               akhir hari posting; TO ke gudang DM selesai saat gudang memposting WR). Selesai Otomatis = TO sudah diposting di BC tanpa
               diproses toko di PRISM (tidak ada foto); foto yang tidak ada diganti waktu lain — mulai dari WS Diposting, selesai di Terima Fisik (bila toko tujuan
@@ -519,29 +535,31 @@ function TransferDrawer({ transfer, onClose }: { transfer: Transfer; onClose: ()
 // ─── Transfer row ─────────────────────────────────────────────────────────────
 
 // One list row per transfer order (OpsList). Wide container (`@5xl`, ~1000px of
-// list): a single line — TO code · status · route · the four timing metrics — whose
-// columns line up with the header row above. Narrower: two lines, code + status +
-// route on top and the four metrics under them, each with its small label, so the
+// list): a single line — TO code · status · route · the four timing metrics + Total —
+// whose columns line up with the header row above. Narrower: two lines, code + status +
+// route on top and the five times under them, each with its small label, so the
 // list never scrolls sideways beside the sidebar.
-const ROW_GRID = '@5xl:grid @5xl:grid-cols-[112px_156px_minmax(0,1fr)_repeat(4,78px)] @5xl:items-center @5xl:gap-x-3';
+const ROW_GRID = '@5xl:grid @5xl:grid-cols-[112px_156px_minmax(0,1fr)_78px_100px_repeat(3,78px)] @5xl:items-center @5xl:gap-x-3';
 
 // Short header text per metric; the full wording (lib/transfer-order-metrics.ts)
 // is the hover title.
 const METRIC_HEAD: Record<MetricKey, string> = {
   bcProcessing: 'TO → WS',
-  wsToReturn: 'WS → Foto',
+  wsToReturn: 'WS → Terima Kurir',
   delivery: 'Delivery',
   bcReceiving: 'Terima BC',
+  total: 'Total',
 };
 
 const METRIC_HEAD_TITLE: Record<MetricKey, string> = {
   bcProcessing: 'TO Dibuat → WS Diposting',
-  wsToReturn: 'WS Diposting → Foto Serah Terima',
+  wsToReturn: 'WS Diposting → Terima Kurir (Foto Serah Terima)',
   delivery: 'Waktu Pengiriman (Delivery Time)',
   bcReceiving: 'Terima Fisik Barang di Toko → WR Diposting (BC)',
+  total: 'Total Proses — TO Dibuat → WR Diposting',
 };
 
-const METRIC_ORDER: MetricKey[] = ['bcProcessing', 'wsToReturn', 'delivery', 'bcReceiving'];
+const METRIC_ORDER: MetricKey[] = ['bcProcessing', 'wsToReturn', 'delivery', 'bcReceiving', 'total'];
 
 function TransferTableHead() {
   const th = 'text-[10px] font-bold uppercase tracking-wide text-slate-500';
@@ -553,7 +571,7 @@ function TransferTableHead() {
       {METRIC_ORDER.map((key) => {
         const Icon = METRIC_ICON[key];
         return (
-          <span key={key} title={METRIC_HEAD_TITLE[key]} className={cn(th, 'flex items-center justify-center gap-1 whitespace-nowrap')}>
+          <span key={key} title={METRIC_HEAD_TITLE[key]} className={cn(th, 'flex items-center justify-center gap-1 text-center leading-tight')}>
             <Icon className="h-3 w-3 shrink-0" />
             {METRIC_HEAD[key]}
           </span>
@@ -606,7 +624,7 @@ function TransferRow({ transfer, onClick }: { transfer: Transfer; onClick: () =>
             <span className="shrink-0 text-[11px] tabular-nums text-slate-400 @5xl:hidden" title="Qty pesanan">×{transfer.qtyOrdered}</span>
           </span>
         </div>
-        <div className="grid grid-cols-4 gap-1.5 @5xl:contents">
+        <div className="grid grid-cols-5 gap-1.5 @5xl:contents">
           {metrics.map((m) => (
             <div key={m.key} className="min-w-0">
               <p className="mb-0.5 truncate text-center text-[9px] font-semibold uppercase tracking-wide text-slate-400 @5xl:hidden">{METRIC_HEAD[m.key]}</p>
@@ -616,6 +634,87 @@ function TransferRow({ transfer, onClick }: { transfer: Transfer; onClick: () =>
         </div>
       </div>
     </OpsListRow>
+  );
+}
+
+// ─── Toolbar pieces ───────────────────────────────────────────────────────────
+
+/** One group of the Filter popover: a label and a row of pick-one chips. */
+function ChoiceChips<T extends string>({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: T;
+  onChange: (value: T) => void;
+  options: { value: T; label: string }[];
+}) {
+  return (
+    <div>
+      <p className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-400">{label}</p>
+      <div className="flex flex-wrap gap-1.5">
+        {options.map((o) => {
+          const active = o.value === value;
+          return (
+            <button
+              key={o.value}
+              type="button"
+              aria-pressed={active}
+              onClick={() => onChange(o.value)}
+              className={cn(
+                'h-8 rounded-full px-3 text-xs font-semibold transition',
+                active
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'bg-white text-slate-600 ring-1 ring-inset ring-slate-200 hover:bg-slate-50',
+              )}
+            >
+              {o.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** "Menampilkan 1–50 dari 1238 transfer order" + ‹ › */
+function ListPager({ page, pages, from, to, total, onPage }: {
+  page: number; pages: number; from: number; to: number; total: number; onPage: (page: number) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-slate-600">
+      <p>
+        Menampilkan <span className="font-semibold tabular-nums">{from}–{to}</span> dari{' '}
+        <span className="font-semibold tabular-nums">{total}</span> transfer order
+      </p>
+      {pages > 1 && (
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => onPage(page - 1)}
+            disabled={page <= 1}
+            aria-label="Halaman sebelumnya"
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <span className="tabular-nums">
+            Halaman <span className="font-semibold">{page}</span> / {pages}
+          </span>
+          <button
+            type="button"
+            onClick={() => onPage(page + 1)}
+            disabled={page >= pages}
+            aria-label="Halaman berikutnya"
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -632,14 +731,13 @@ export default function OpsItemTransfersPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [syncWarnings, setSyncWarnings] = useState<string[]>([]);
+  const [loadedAt, setLoadedAt] = useState(() => Date.now());
+
   const [phaseFilter, setPhaseFilter] = useState<Phase | 'all'>('all');
-  const [storeFilter, setStoreFilter] = useState<string>('all');
-  // 'from' = this store is shipping out (Item Return task); 'to' = this
-  // store is receiving (Item Dropping/Receiving task). Independent of
-  // storeFilter — e.g. picking 'from' with "All stores" shows every Item
-  // Return leg system-wide, regardless of which store filter is selected.
-  const [direction, setDirection] = useState<'all' | 'from' | 'to'>('all');
-  const [search, setSearch] = useState('');
+  const [filters, setFilters] = useState<ListFilters>(EMPTY_FILTERS);
+  const [sort, setSort] = useState<{ key: ListSortKey; dir: 'asc' | 'desc' }>({ key: 'created', dir: 'desc' });
+  const [page, setPage] = useState(1);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [selected, setSelected] = useState<Transfer | null>(null);
 
   useEffect(() => {
@@ -658,6 +756,7 @@ export default function OpsItemTransfersPage() {
       setTransfers(data.transfers ?? []);
       setScope(data.scope ?? 'area');
       setSyncWarnings(data.syncWarnings ?? []);
+      setLoadedAt(Date.now());
     } catch {
       // silent
     } finally {
@@ -667,63 +766,92 @@ export default function OpsItemTransfersPage() {
 
   useEffect(() => { if (isOps) load(); }, [isOps, load]);
 
-  // Same StorePickerCombobox used on the Schedules and Impact Visit pages —
-  // a searchable list scales far better than a plain <select> once the
-  // store roster grows past a couple of entries.
-  const storeGroups = useMemo<AreaGroupOption[]>(() => {
-    const m = new Map<string, { id: number; name: string; stores: StoreOption[] }>();
-    let syntheticId = 0;
+  /** Change one filter and go back to page 1. */
+  const setFilter = <K extends keyof ListFilters>(key: K, value: ListFilters[K]) => {
+    setFilters((f) => ({ ...f, [key]: value }));
+    setPage(1);
+    setSelected(null);
+  };
+
+  // Every store / area that appears on either end of a TO in scope.
+  const { areaOptions, storeOptions } = useMemo(() => {
+    const areas = new Map<string, string>();
+    const stores = new Map<string, { id: number; storeNo: string; name: string; areaId: string | null }>();
     for (const t of transfers) {
-      for (const store of [t.fromStore, t.toStore]) {
-        if (!store) continue;
-        const key = store.areaName ?? '—';
-        if (!m.has(key)) m.set(key, { id: store.areaId ? Number(store.areaId) : --syntheticId, name: key, stores: [] });
-        const list = m.get(key)!.stores;
-        if (!list.some((s) => s.id === Number(store.id))) {
-          list.push({ id: Number(store.id), storeNo: store.storeNo, name: store.name });
-        }
+      for (const st of [t.fromStore, t.toStore]) {
+        if (!st) continue;
+        if (st.areaId) areas.set(st.areaId, st.areaName ?? '—');
+        stores.set(st.id, { id: Number(st.id), storeNo: st.storeNo, name: st.name, areaId: st.areaId });
       }
     }
-    return [...m.values()].sort((a, b) => a.name.localeCompare(b.name));
+    return {
+      areaOptions: [...areas].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name)),
+      storeOptions: [...stores.values()].sort((a, b) => a.name.localeCompare(b.name)),
+    };
   }, [transfers]);
+  // The store picker follows the area picked.
+  const storePickList = filters.area === 'all' ? storeOptions : storeOptions.filter((s) => s.areaId === filters.area);
 
-  const allStoreOptions = useMemo(() => storeGroups.flatMap((g) => g.stores), [storeGroups]);
+  // Route + every metric's minutes, worked out once per load (open ones run to the load time).
+  const facts = useMemo(() => {
+    const m = new Map<string, RowFacts>();
+    for (const t of transfers) m.set(t.id, rowFacts(t, loadedAt));
+    return m;
+  }, [transfers, loadedAt]);
 
-  const storeScoped = useMemo(() => transfers.filter((t) => {
-    if (direction === 'from') return storeFilter === 'all' ? !!t.fromStore : t.fromStore?.id === storeFilter;
-    if (direction === 'to') return storeFilter === 'all' ? !!t.toStore : t.toStore?.id === storeFilter;
-    return storeFilter === 'all' || t.fromStore?.id === storeFilter || t.toStore?.id === storeFilter;
-  }), [transfers, storeFilter, direction]);
-
-  const searchScoped = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return storeScoped;
-    return storeScoped.filter((t) =>
-      t.toaNo.toLowerCase().includes(q) ||
-      t.transferFromCode.toLowerCase().includes(q) ||
-      t.transferToCode.toLowerCase().includes(q) ||
-      (t.fromStore?.name.toLowerCase().includes(q) ?? false) ||
-      (t.toStore?.name.toLowerCase().includes(q) ?? false),
-    );
-  }, [storeScoped, search]);
-
-  const meta = useMemo(() => ({
-    all: searchScoped.length,
-    return: searchScoped.filter((t) => t.phase === 'return').length,
-    shipping: searchScoped.filter((t) => t.phase === 'shipping').length,
-    receiving: searchScoped.filter((t) => t.phase === 'receiving').length,
-    received: searchScoped.filter((t) => t.phase === 'received').length,
-    auto_completed: searchScoped.filter((t) => t.phase === 'auto_completed').length,
-    to_warehouse: searchScoped.filter((t) => t.phase === 'to_warehouse').length,
-  }), [searchScoped]);
-
-  const visible = useMemo(
-    () => phaseFilter === 'all' ? searchScoped : searchScoped.filter((t) => t.phase === phaseFilter),
-    [searchScoped, phaseFilter],
+  const today = jakartaDateKey(new Date(loadedAt));
+  const scoped = useMemo(
+    () => transfers.filter((t) => matchesFilters(t, facts.get(t.id)!, filters, today)),
+    [transfers, facts, filters, today],
   );
 
-  const filtered = phaseFilter !== 'all' || storeFilter !== 'all' || direction !== 'all' || search.trim() !== '';
-  const clearFilters = () => { setPhaseFilter('all'); setStoreFilter('all'); setDirection('all'); setSearch(''); setSelected(null); };
+  const phaseCounts = useMemo(() => {
+    const c = Object.fromEntries(PHASE_CHIP_ORDER.map((p) => [p, 0])) as Record<Phase, number>;
+    for (const t of scoped) c[t.phase] += 1;
+    return c;
+  }, [scoped]);
+
+  const sorted = useMemo(
+    () => sortTransfers(phaseFilter === 'all' ? scoped : scoped.filter((t) => t.phase === phaseFilter), facts, sort.key, sort.dir),
+    [scoped, phaseFilter, facts, sort],
+  );
+
+  const pages = Math.max(1, Math.ceil(sorted.length / LIST_PAGE_SIZE));
+  const currentPage = Math.min(page, pages);
+  const offset = (currentPage - 1) * LIST_PAGE_SIZE;
+  const pageRows = sorted.slice(offset, offset + LIST_PAGE_SIZE);
+
+  const isHo = scope === 'all_areas';
+  const moreCount = moreFilterCount(filters);
+  const filtersActive =
+    phaseFilter !== 'all' || filters.search.trim() !== '' || filters.area !== 'all' || filters.store !== 'all' || moreCount > 0;
+
+  const clearFilters = () => {
+    setPhaseFilter('all');
+    setFilters(EMPTY_FILTERS);
+    setPage(1);
+    setSelected(null);
+  };
+  const clearMore = () => setFilters((f) => ({ ...f, direction: 'all', route: 'all', created: 'all', longerThan: 'all', data: 'all' }));
+
+  const phaseChips: OpsChipItem<Phase | 'all'>[] = [
+    { key: 'all', label: 'Semua', count: scoped.length },
+    ...PHASE_CHIP_ORDER.map((p) => ({
+      key: p,
+      label: PHASE_CFG[p].label,
+      count: phaseCounts[p],
+      tone: CHIP_DOT[PHASE_CFG[p].tone] ?? null,
+    })),
+  ];
+
+  // The Filter popover's choices in use, each removable from the line under the bar.
+  const activeChips: { key: string; label: string; clear: () => void }[] = [
+    filters.direction !== 'all' && { key: 'direction', label: DIRECTION_LABEL[filters.direction as Exclude<Direction, 'all'>], clear: () => setFilter('direction', 'all') },
+    filters.route !== 'all' && { key: 'route', label: ROUTE_LABEL[filters.route as RouteKind], clear: () => setFilter('route', 'all') },
+    filters.created !== 'all' && { key: 'created', label: `Dibuat: ${CREATED_LABEL[filters.created as Exclude<CreatedRange, 'all'>]}`, clear: () => setFilter('created', 'all') },
+    filters.longerThan !== 'all' && { key: 'longer', label: LONGER_LABEL[filters.longerThan as Exclude<LongerThan, 'all'>], clear: () => setFilter('longerThan', 'all') },
+    filters.data !== 'all' && { key: 'data', label: DATA_FLAG_LABEL[filters.data as Exclude<DataFlag, 'all'>], clear: () => setFilter('data', 'all') },
+  ].filter((c): c is { key: string; label: string; clear: () => void } => Boolean(c));
 
   if (authStatus === 'loading' || !session) return (
     <div className="flex min-h-full items-center justify-center bg-slate-50"><Loader2 className="h-6 w-6 animate-spin text-indigo-400" /></div>
@@ -740,11 +868,11 @@ export default function OpsItemTransfersPage() {
   return (
     <div className="min-h-full bg-slate-50">
       <OpsPageHeader
-        scope={scope === 'all_areas' ? 'OPS · Head Office' : 'OPS · Area'}
+        scope={isHo ? 'OPS · Head Office' : 'OPS · Area'}
         title="Transfer Orders"
         subtitle={
           <span className="inline-flex items-center gap-1.5">
-            {scope === 'all_areas' ? (<><Globe2 className="h-3.5 w-3.5" />Semua area</>) : (<><MapPin className="h-3.5 w-3.5" />Area kamu</>)}
+            {isHo ? (<><Globe2 className="h-3.5 w-3.5" />Semua area</>) : (<><MapPin className="h-3.5 w-3.5" />Area kamu</>)}
             <span>·</span>
             <span>{transfers.length} transfer order</span>
           </span>
@@ -754,9 +882,9 @@ export default function OpsItemTransfersPage() {
         contentClassName="w-full"
       />
 
-      <div className="space-y-6 p-6 lg:p-8">
+      <div className="space-y-4 px-4 py-5 sm:px-6 lg:px-8">
         {syncWarnings.length > 0 && (
-          <div className="flex items-start gap-2.5 rounded-2xl border border-red-200 bg-red-50 px-4 py-3.5">
+          <div className="flex items-start gap-2.5 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
             <div className="min-w-0 flex-1">
               <p className="text-xs font-bold text-red-700">Sebagian sinkronisasi Business Central gagal</p>
@@ -767,75 +895,212 @@ export default function OpsItemTransfersPage() {
           </div>
         )}
 
-        {/* Summary — one tile per phase; a tile is also the phase filter (click again to clear) */}
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-          {PHASE_TILE_ORDER.map((phase) => {
-            const cfg = PHASE_CFG[phase];
-            const active = phaseFilter === phase;
-            return (
-              <MetricTile
-                key={phase}
-                label={cfg.label}
-                value={loading ? '–' : meta[phase]}
-                tone={meta[phase] > 0 ? cfg.tone : 'default'}
-                active={active}
-                onClick={() => { setPhaseFilter(active ? 'all' : phase); setSelected(null); }}
-              />
-            );
-          })}
-        </div>
-
-        {/* Search / store / direction */}
-        <div className="flex flex-wrap items-center gap-2">
-          <OpsSearchInput value={search} onChange={(v) => { setSearch(v); setSelected(null); }} placeholder="Cari no. TO, nama / kode toko…" className="max-w-sm" />
-          <div className="w-60 shrink-0 [&_button]:h-10">
-            <StorePickerCombobox
-              storeGroups={storeGroups}
-              selectedValue={storeFilter}
-              triggerLabel={storeFilter === 'all' ? 'Semua toko' : (allStoreOptions.find((s) => String(s.id) === storeFilter)?.name ?? '')}
-              onSelect={(v) => { setStoreFilter(v); setSelected(null); }}
-              extraOption={{ value: 'all', label: 'Semua toko' }}
+        {/* Search / area / store / Filter / sort — then the status chips */}
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <OpsSearchInput
+              value={filters.search}
+              onChange={(v) => setFilter('search', v)}
+              placeholder="Cari no. TO, nama / kode toko…"
+              className="max-w-md"
             />
+
+            {isHo && areaOptions.length > 1 && (
+              <OpsFilterSelect
+                label="Area"
+                value={filters.area}
+                onChange={(v) => { setFilters((f) => ({ ...f, area: v, store: 'all' })); setPage(1); setSelected(null); }}
+              >
+                <option value="all">Semua area</option>
+                {areaOptions.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+              </OpsFilterSelect>
+            )}
+
+            {storePickList.length > 1 && (
+              <StoreCombobox
+                stores={storePickList}
+                value={filters.store === 'all' ? null : Number(filters.store)}
+                onChange={(id) => setFilter('store', id == null ? 'all' : String(id))}
+                allLabel="Semua toko"
+                className="w-64"
+              />
+            )}
+
+            <Popover open={moreOpen} onOpenChange={setMoreOpen}>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  className={cn(
+                    'flex h-10 items-center gap-2 rounded-xl border px-3 text-sm font-semibold transition',
+                    moreCount > 0
+                      ? 'border-indigo-300 bg-indigo-50 text-indigo-800'
+                      : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50',
+                  )}
+                >
+                  <SlidersHorizontal className="h-4 w-4" />
+                  Filter
+                  {moreCount > 0 && (
+                    <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-indigo-600 px-1 text-[11px] font-bold text-white">
+                      {moreCount}
+                    </span>
+                  )}
+                </button>
+              </PopoverTrigger>
+              <PopoverContent align="start" sideOffset={6} className="w-[min(92vw,26rem)] rounded-xl border-slate-200 p-0 shadow-lg">
+                <div className="space-y-4 p-4">
+                  <ChoiceChips<Direction>
+                    label="Arah (dari sisi toko yang dipilih)"
+                    value={filters.direction}
+                    onChange={(v) => setFilter('direction', v)}
+                    options={[
+                      { value: 'all', label: 'Semua' },
+                      { value: 'from', label: DIRECTION_LABEL.from },
+                      { value: 'to', label: DIRECTION_LABEL.to },
+                    ]}
+                  />
+                  <ChoiceChips<'all' | RouteKind>
+                    label="Rute"
+                    value={filters.route}
+                    onChange={(v) => setFilter('route', v)}
+                    options={[
+                      { value: 'all', label: 'Semua' },
+                      { value: 'store_store', label: ROUTE_LABEL.store_store },
+                      { value: 'to_warehouse', label: ROUTE_LABEL.to_warehouse },
+                      { value: 'from_warehouse', label: ROUTE_LABEL.from_warehouse },
+                    ]}
+                  />
+                  <ChoiceChips<CreatedRange>
+                    label="TO Dibuat"
+                    value={filters.created}
+                    onChange={(v) => setFilter('created', v)}
+                    options={[
+                      { value: 'all', label: 'Semua' },
+                      ...(Object.keys(CREATED_LABEL) as Exclude<CreatedRange, 'all'>[]).map((k) => ({ value: k, label: CREATED_LABEL[k] })),
+                    ]}
+                  />
+                  <ChoiceChips<LongerThan>
+                    label="Total Proses lebih dari"
+                    value={filters.longerThan}
+                    onChange={(v) => setFilter('longerThan', v)}
+                    options={[
+                      { value: 'all', label: 'Semua' },
+                      { value: '1d', label: '1 hari' },
+                      { value: '3d', label: '3 hari' },
+                      { value: '7d', label: '7 hari' },
+                    ]}
+                  />
+                  <ChoiceChips<DataFlag>
+                    label="Perlu dicek"
+                    value={filters.data}
+                    onChange={(v) => setFilter('data', v)}
+                    options={[
+                      { value: 'all', label: 'Semua' },
+                      { value: 'no_ws', label: DATA_FLAG_LABEL.no_ws },
+                      { value: 'reversed', label: DATA_FLAG_LABEL.reversed },
+                    ]}
+                  />
+                </div>
+                <div className="flex items-center justify-between border-t border-slate-100 px-4 py-2.5">
+                  <button
+                    type="button"
+                    onClick={clearMore}
+                    disabled={moreCount === 0}
+                    className="text-xs font-semibold text-slate-500 hover:text-slate-800 disabled:opacity-40"
+                  >
+                    Reset filter
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMoreOpen(false)}
+                    className="h-8 rounded-lg bg-indigo-600 px-3 text-xs font-semibold text-white hover:bg-indigo-700"
+                  >
+                    Selesai
+                  </button>
+                </div>
+              </PopoverContent>
+            </Popover>
+
+            <div className="ml-auto">
+              <OpsSortControl
+                options={LIST_SORT_OPTIONS}
+                sortKey={sort.key}
+                sortDir={sort.dir}
+                onChange={({ key, dir, keyChanged }) => {
+                  setSort({ key, dir: keyChanged ? defaultListSortDir(key) : dir });
+                  setPage(1);
+                }}
+              />
+            </div>
           </div>
-          <OpsFilterSelect label="Arah" value={direction} onChange={(v) => { setDirection(v as typeof direction); setSelected(null); }}>
-            <option value="all">Semua arah</option>
-            <option value="from">Keluar · Item Return</option>
-            <option value="to">Masuk · Item Receiving</option>
-          </OpsFilterSelect>
+
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <OpsChipTabs
+              items={phaseChips}
+              value={phaseFilter}
+              onChange={(p) => { setPhaseFilter(p); setPage(1); setSelected(null); }}
+            />
+            {filtersActive && (
+              <button type="button" onClick={clearFilters} className="text-xs font-semibold text-slate-500 underline hover:text-slate-700">
+                Hapus filter
+              </button>
+            )}
+          </div>
+
+          {activeChips.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {activeChips.map((chip) => (
+                <span
+                  key={chip.key}
+                  className="inline-flex h-7 items-center gap-1 rounded-full bg-indigo-50 pl-2.5 pr-1 text-xs font-semibold text-indigo-800 ring-1 ring-inset ring-indigo-200"
+                >
+                  {chip.label}
+                  <button
+                    type="button"
+                    onClick={chip.clear}
+                    aria-label={`Hapus filter ${chip.label}`}
+                    className="flex h-5 w-5 items-center justify-center rounded-full text-indigo-400 hover:bg-indigo-100 hover:text-indigo-700"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* List */}
         {loading ? (
           <OpsListSkeleton rows={8} />
-        ) : visible.length === 0 ? (
+        ) : sorted.length === 0 ? (
           <div className="flex flex-col items-center gap-4 rounded-2xl border border-dashed border-slate-200 bg-white py-16 text-center">
             <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-50"><Package className="h-7 w-7 text-slate-300" /></div>
             <div>
               <p className="text-sm font-bold text-slate-700">Tidak ada transfer order</p>
               <p className="mt-1 text-xs text-slate-400">
-                {filtered ? 'Tidak ada yang cocok dengan filter.' : 'Belum ada yang tersinkron dari Business Central.'}
+                {filtersActive ? 'Tidak ada yang cocok dengan filter.' : 'Belum ada yang tersinkron dari Business Central.'}
               </p>
             </div>
-            {filtered && (
+            {filtersActive && (
               <button type="button" onClick={clearFilters} className="text-xs font-semibold text-indigo-600 hover:underline">Hapus filter</button>
             )}
           </div>
         ) : (
-          <div className="@container overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-4 py-2.5 sm:px-5">
-              <p className="text-sm font-semibold text-slate-800">
-                {visible.length} transfer order
-                {filtered && <span className="ml-2 text-xs font-normal text-slate-400">dari {transfers.length}</span>}
-              </p>
-              {filtered && (
-                <button type="button" onClick={clearFilters} className="text-xs font-semibold text-indigo-600 hover:underline">Hapus filter</button>
-              )}
+          <>
+            <div className={cn('@container overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm', refreshing && 'opacity-60')}>
+              <TransferTableHead />
+              <OpsList className="rounded-none border-0 shadow-none">
+                {pageRows.map((t) => <TransferRow key={t.id} transfer={t} onClick={() => setSelected(t)} />)}
+              </OpsList>
             </div>
-            <TransferTableHead />
-            <OpsList className="rounded-none border-0 shadow-none">
-              {visible.map((t) => <TransferRow key={t.id} transfer={t} onClick={() => setSelected(t)} />)}
-            </OpsList>
-          </div>
+            <ListPager
+              page={currentPage}
+              pages={pages}
+              from={offset + 1}
+              to={offset + pageRows.length}
+              total={sorted.length}
+              onPage={setPage}
+            />
+          </>
         )}
       </div>
 
