@@ -1,13 +1,14 @@
 // lib/db/utils/ops-dashboard-queues.ts
 //
 // Data behind the Ops Dashboard's "waiting on Ops" lists (GET /api/ops/dashboard/queues).
-// Every list is the few items that have waited the LONGEST, plus how many there are in all.
+// Every list is the few items that need Ops most (waited longest / slowest), plus how many there are in all.
 //
 //   petty cash   status pending_ops requests + pending refills, any month (same as the tab badges)
 //   issues       status 'reported' and routed to Ops — the same rule the Issues inbox uses
-//   transfers    open BC transfer orders by phase (lib/transfer-order-phase.ts — the Ops
-//                Transfer Order page's own definition); database only, the 5-minute cron keeps
-//                it fresh, so the dashboard never calls Business Central
+//   transfers    this month's stores slower than the month's average, per process (Item
+//                Return / Item Receiving / Item Delivery) — the TO Report's own counting
+//                (lib/transfer-order-report.ts, completed processes only); database only, the
+//                5-minute cron keeps it fresh, so the dashboard never calls Business Central
 //   visits       Ops HO / IT only: stores whose visit cycle still owes a visit and ends this
 //                week (same cycle maths as Visit Toko ▸ Upcoming Visit)
 //
@@ -22,7 +23,6 @@ import {
   employeeTypes,
   issueRoleAssignments,
   issues,
-  itemTransferOrders,
   pettyCashTransactions,
   storeVisitPolicies,
   storeVisits,
@@ -30,25 +30,26 @@ import {
   userRoles,
   users,
 } from '@/lib/db/schema';
-import { ensureWarehouseCodes, isWarehouseCode } from '@/lib/db/utils/item-transfers';
 import { getOpsRefillRows } from '@/lib/db/utils/petty-cash-ops';
+import { getReportRows, getReportStores } from '@/lib/db/utils/transfer-order-report';
 import type { OpsScope } from '@/lib/performance/ops-scope';
 import {
   QUEUE_LIMIT,
   VISIT_QUEUE_LIMIT,
   dueThisWeek,
+  storesAboveAverage,
   weekOf,
   type DashboardQueues,
   type IssueWaitingRow,
   type PettyCashWaitingRow,
   type QueueList,
   type QueueStore,
-  type TransferWaitingRow,
+  type TransferAverageList,
   type VisitWaitingRow,
 } from '@/lib/ops-dashboard-queues';
 import { pettyCashDescription } from '@/lib/petty-cash-categories';
-import { effectiveToCreatedAt } from '@/lib/transfer-order-metrics';
-import { resolveTransferPhase } from '@/lib/transfer-order-phase';
+import { periodDays } from '@/lib/task-progress';
+import { PROCESSES, buildStoreReports, type Process } from '@/lib/transfer-order-report';
 import { visitCycleView } from '@/lib/store-visit/cycles';
 import { dueTone } from '@/lib/store-visit/upcoming';
 
@@ -205,93 +206,48 @@ async function issueQueue(areaId: number | null, qs: (r: StoreRow) => QueueStore
 
 // ─── Transfer orders ─────────────────────────────────────────────────────────
 
-async function transferQueues(
+/**
+ * This month (Jakarta), per process: the stores whose own average is above the month's
+ * average — exactly the TO Report's Bulanan numbers for the same scope (active stores;
+ * Ops Area = own area), so a store listed here has the same average on the report page.
+ */
+async function transferAverages(
   areaId: number | null,
-  qs: (r: StoreRow) => QueueStore,
+  opsByArea: Map<number, string[]>,
 ): Promise<DashboardQueues['transfers']> {
-  await ensureWarehouseCodes();
+  const today = jakartaTodayKey();
+  const days = periodDays('monthly', today);
+  const from = days[0];
+  const to = days[days.length - 1];
+  const now = new Date();
 
-  const t = itemTransferOrders;
-  const open = await db
-    .select({
-      id: t.id,
-      toaNo: t.toaNo,
-      transferFromCode: t.transferFromCode,
-      transferToCode: t.transferToCode,
-      fromStoreId: t.fromStoreId,
-      toStoreId: t.toStoreId,
-      qtyOrdered: t.qtyOrdered,
-      whseShipmentNo: t.whseShipmentNo,
-      returnDetectedAt: t.returnDetectedAt,
-      returnSubmittedAt: t.returnSubmittedAt,
-      droppingDetectedAt: t.droppingDetectedAt,
-      droppingSubmittedAt: t.droppingSubmittedAt,
-      receivedAt: t.receivedAt,
-      createdAt: t.createdAt,
-    })
-    .from(t)
-    .where(and(isNull(t.receivedAt), or(isNotNull(t.fromStoreId), isNotNull(t.toStoreId))));
+  const stores = await getReportStores({ isOpsHo: areaId == null, areaId });
+  const storeIds = stores.map((s) => s.id);
+  const asQueueStore = (s: (typeof stores)[number]): QueueStore => ({
+    id: s.id,
+    storeNo: s.storeNo,
+    name: s.name,
+    areaName: s.areaName ?? '',
+    opsNames: s.areaId != null ? (opsByArea.get(Number(s.areaId)) ?? []) : [],
+  });
 
-  // A "DM…" (or IT-listed) code is a warehouse, never a store — whatever a store row says.
-  const ends = open.map((r) => ({
-    ...r,
-    fromStoreId: isWarehouseCode(r.transferFromCode) ? null : r.fromStoreId,
-    toStoreId: isWarehouseCode(r.transferToCode) ? null : r.toStoreId,
-  }));
-
-  const storeIds = [...new Set(ends.flatMap((r) => [r.fromStoreId, r.toStoreId]).filter((v): v is number => v != null))];
-  const storeRows = storeIds.length
-    ? await db
-        .select({ id: stores.id, storeNo: stores.storeNo, name: stores.name, areaId: stores.areaId, areaName: areas.name })
-        .from(stores)
-        .innerJoin(areas, eq(areas.id, stores.areaId))
-        .where(inArray(stores.id, storeIds))
-    : [];
-  const storeById = new Map(storeRows.map((s) => [s.id, s]));
-
-  const endLabel = (code: string, storeId: number | null) => {
-    const s = storeId != null ? storeById.get(storeId) : undefined;
-    if (s) return s.storeNo;
-    return isWarehouseCode(code) ? `Gudang (${code})` : code;
+  const one = async (process: Process): Promise<TransferAverageList> => {
+    const rows = await getReportRows(process, from, to, storeIds);
+    const { monthAvgMinutes, timed, above } = storesAboveAverage(buildStoreReports(stores, rows, days, process, now));
+    return {
+      monthAvgMinutes,
+      timed,
+      total: above.length,
+      items: above.slice(0, QUEUE_LIMIT).map(({ report, avgMinutes }) => ({
+        store: asQueueStore(report),
+        avgMinutes,
+        timed: report.timed,
+      })),
+    };
   };
 
-  const lists: Record<'return' | 'shipping' | 'receiving', TransferWaitingRow[]> = { return: [], shipping: [], receiving: [] };
-
-  for (const r of ends) {
-    const phase = resolveTransferPhase(r, isWarehouseCode);
-    if (phase !== 'return' && phase !== 'shipping' && phase !== 'receiving') continue;
-
-    // The store the wait is at: the pickup at the origin store; otherwise the store the goods are for.
-    const primaryId = phase === 'return' ? r.fromStoreId : r.toStoreId;
-    const primary = primaryId != null ? storeById.get(primaryId) : undefined;
-    if (!primary) continue;
-    if (areaId != null && primary.areaId !== areaId) continue;
-
-    const since =
-      phase === 'return'
-        ? (effectiveToCreatedAt(r.returnDetectedAt, r.droppingDetectedAt, r.returnSubmittedAt) ?? r.droppingDetectedAt ?? r.createdAt)
-        : phase === 'shipping'
-          ? (r.returnSubmittedAt ?? r.droppingDetectedAt ?? r.createdAt)
-          : r.droppingSubmittedAt;
-
-    lists[phase].push({
-      id: String(r.id),
-      toaNo: r.toaNo,
-      store: qs(primary),
-      otherEnd:
-        phase === 'return'
-          ? `Ke ${endLabel(r.transferToCode, r.toStoreId)}`
-          : `Dari ${endLabel(r.transferFromCode, r.fromStoreId)}`,
-      qty: r.qtyOrdered,
-      since: since ? since.toISOString() : null,
-    });
-  }
-
-  const cut = (rows: TransferWaitingRow[]): QueueList<TransferWaitingRow> => ({
-    total: rows.length,
-    items: [...rows].sort(byAge).slice(0, QUEUE_LIMIT),
-  });
-  return { return: cut(lists.return), shipping: cut(lists.shipping), receiving: cut(lists.receiving) };
+  const [ret, receiving, delivery] = await Promise.all(PROCESSES.map(one));
+  return { month: today.slice(0, 7), return: ret, receiving, delivery };
 }
 
 // ─── Store visits (Ops HO / IT) ──────────────────────────────────────────────
@@ -371,7 +327,7 @@ export async function getDashboardQueues(scope: Scope): Promise<DashboardQueues>
   const [pettyCash, issueList, transfers, visits] = await Promise.all([
     pettyCashQueue(areaId, qs),
     issueQueue(areaId, qs),
-    transferQueues(areaId, qs),
+    transferAverages(areaId, opsByArea),
     scope.scope === 'all_areas' ? visitQueue(qs) : Promise.resolve(null),
   ]);
 

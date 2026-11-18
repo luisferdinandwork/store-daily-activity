@@ -9,9 +9,10 @@
 //  • single-flight: callers arriving while a refresh is running share it;
 //  • throttle: a refresh that finished within `maxAgeMs` is reused, so N
 //    employees + OPS cost one BC sweep per window, not N;
-//  • a LIGHT sweep (last 14 days, no pruning) by default — cheap enough to run
-//    every few minutes just to notice new orders/shipments — and a FULL sweep
-//    (90 days + reconcile/prune) at most every 6 hours (and on first run);
+//  • a LIGHT sweep (last 14 days) by default — cheap enough to run every few
+//    minutes to notice new orders/shipments and settle recent orders BC
+//    cancelled or finished — and a FULL sweep (90 days, every open order
+//    reconciled) at most every 6 hours (and on first run);
 //  • the "new transfer order" notifications run after every sweep, even a
 //    failed one (they only read the DB), so a store that wasn't staffed when
 //    an order landed is still told as soon as somebody is scheduled.
@@ -43,7 +44,10 @@ export interface RegistryRefresh {
   /** The Business Central sweep failed (data may be stale). */
   error: string | null;
   synced: number;
-  pruned: number;
+  /** Orders BC cancelled (gone from BC, no Posted Whse Receipt) — removed from PRISM. */
+  cancelled: number;
+  /** Orders BC finished (gone from BC, receipt posted) — completed in PRISM. */
+  autoCompleted: number;
   notified: TransferNotifyResult | null;
   /** The sweep worked but announcing to stores failed. */
   notifyError: string | null;
@@ -53,7 +57,8 @@ export interface ReceivingRefresh {
   ran: boolean;
   error: string | null;
   closed: number;
-  removed: number;
+  /** Of `closed`: orders with a store leg nobody processed in PRISM (Selesai Otomatis). */
+  autoCompleted: number;
 }
 
 interface Slot<T> {
@@ -107,12 +112,14 @@ async function runRegistry(): Promise<RegistryRefresh> {
 
   let error: string | null = null;
   let synced = 0;
-  let pruned = 0;
+  let cancelled = 0;
+  let autoCompleted = 0;
 
   const res = await syncTransferOrderRegistry(full ? {} : { lookbackDays: LIGHT_LOOKBACK_DAYS, prune: false });
   if (res.success) {
     synced = res.data.synced;
-    pruned = res.data.pruned;
+    cancelled = res.data.cancelled;
+    autoCompleted = res.data.autoCompleted;
     if (full) state.lastFullAt = startedAt;
   } else {
     error = res.error;
@@ -133,16 +140,16 @@ async function runRegistry(): Promise<RegistryRefresh> {
     console.error('[transfer-orders] notify failed:', err);
   }
 
-  return { ran: true, full, error, synced, pruned, notified, notifyError };
+  return { ran: true, full, error, synced, cancelled, autoCompleted, notified, notifyError };
 }
 
 async function runReceiving(): Promise<ReceivingRefresh> {
   const res = await syncReceivingStatus('all');
   if (!res.success) {
     console.error('[transfer-orders] receiving sweep failed:', res.error);
-    return { ran: true, error: res.error, closed: 0, removed: 0 };
+    return { ran: true, error: res.error, closed: 0, autoCompleted: 0 };
   }
-  return { ran: true, error: null, closed: res.data.closed, removed: res.data.removed };
+  return { ran: true, error: null, closed: res.data.closed, autoCompleted: res.data.autoCompleted };
 }
 
 /**
@@ -153,7 +160,7 @@ async function runReceiving(): Promise<ReceivingRefresh> {
 export function refreshTransferRegistry(opts: { maxAgeMs: number }): Promise<RegistryRefresh> {
   return throttled(state.registry, opts.maxAgeMs, () =>
     runRegistry().catch((err): RegistryRefresh => ({
-      ran: true, full: false, error: `${err}`, synced: 0, pruned: 0, notified: null, notifyError: null,
+      ran: true, full: false, error: `${err}`, synced: 0, cancelled: 0, autoCompleted: 0, notified: null, notifyError: null,
     })),
   );
 }
@@ -162,7 +169,7 @@ export function refreshTransferRegistry(opts: { maxAgeMs: number }): Promise<Reg
 export function refreshReceivingStatus(opts: { maxAgeMs: number }): Promise<ReceivingRefresh> {
   return throttled(state.receiving, opts.maxAgeMs, () =>
     runReceiving().catch((err): ReceivingRefresh => ({
-      ran: true, error: `${err}`, closed: 0, removed: 0,
+      ran: true, error: `${err}`, closed: 0, autoCompleted: 0,
     })),
   );
 }

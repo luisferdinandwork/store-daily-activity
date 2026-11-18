@@ -3,15 +3,18 @@
 //
 // Impact Visit · Monthly Report — every store in scope (OPS Area: their own area, HO / IT: all, with an area
 // filter) × the 12 months of a year. Each month shows the score of that month's submitted visit for the
-// Impact Visit checklist and the VM Checklist side by side (green = lulus / grade A, red = tidak lulus), plus
-// the year's average per store. A store row opens the store's own page (./[storeId]) with the month strip and
-// the item-by-item comparison. Logic: lib/impact-visit/report.ts; data: GET /api/ops/impact-visits/report.
+// Impact Visit checklist and the VM Checklist side by side (green = lulus / grade A, red = tidak lulus), then
+// per store the average — of the year, or of all time ("Rata-rata" switch) — and, in its own column, an arrow
+// saying whether that average went up or down against last month (no number, by request). A store row opens
+// the store's own page (./[storeId]) with the month strip and the item-by-item comparison.
+// Logic: lib/impact-visit/report.ts; data: GET /api/ops/impact-visits/report.
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   ArrowDownRight,
+  ArrowRight,
   ArrowUpRight,
   ChevronLeft,
   ChevronRight,
@@ -41,10 +44,13 @@ import {
   REPORT_SORT_OPTIONS,
   buildListRows,
   defaultReportSortDir,
+  isAverageScope,
+  monthLabel,
   reportListHref,
   reportTotals,
   sortReportRows,
   storeReportHref,
+  type AverageScope,
   type ImpactReportResponse,
   type ReportCellSummary,
   type ReportListRow,
@@ -131,26 +137,53 @@ function MonthCell({ cell, month, show, future }: { cell: ReportCellSummary | nu
   );
 }
 
-/** The year's average of one checklist, coloured against its pass line, with the move of the latest visit. */
-function AverageLine({ row, kind }: { row: ReportListRow; kind: ScoreKind }) {
-  const avg = row.summary.avg[kind];
-  const trend = row.summary.trend[kind];
+/** The average of one checklist (this year or all time), coloured against its pass line. */
+function AverageLine({ row, kind, compact }: { row: ReportListRow; kind: ScoreKind; compact: boolean }) {
+  const avg = row.average.avg[kind];
   const meta = KIND_META[kind];
-  if (avg == null) return <span className="text-xs text-slate-300">—</span>;
+  if (avg == null) return <span className="flex h-5 items-center justify-end text-xs text-slate-300">—</span>;
   const pass = avg >= meta.pass;
   return (
-    <span className="flex items-center justify-end gap-1.5 whitespace-nowrap text-xs">
-      <span className="text-[10px] font-semibold text-slate-400">{meta.short}</span>
+    <span
+      className="flex h-5 items-center justify-end gap-1.5 whitespace-nowrap text-xs"
+      title={`${meta.label}: rata-rata ${row.average.months} bulan`}
+    >
+      {compact && <span className="text-[10px] font-semibold text-slate-400">{meta.short}</span>}
       <span className={cn("font-bold tabular-nums", pass ? TONES.success.strong : TONES.danger.strong)}>{fmtScore(avg)}</span>
-      {trend != null && trend !== 0 && (
-        <span
-          title={`Visit terakhir ${trend > 0 ? "naik" : "turun"} ${Math.abs(trend)} poin dari visit sebelumnya`}
-          className={cn("inline-flex items-center text-[10px] font-semibold tabular-nums", trend > 0 ? TONES.success.text : TONES.danger.text)}
-        >
-          {trend > 0 ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
-          {Math.abs(trend)}
-        </span>
-      )}
+    </span>
+  );
+}
+
+/** Which way that average went against last month — an arrow only, no number. */
+function TrendMark({ row, kind, compact }: { row: ReportListRow; kind: ScoreKind; compact: boolean }) {
+  const trend = row.average.trend[kind];
+  const meta = KIND_META[kind];
+  const { latestMonth, previousMonth } = row.average;
+  const span = "flex h-5 items-center justify-center gap-1";
+  if (trend == null || !latestMonth || !previousMonth) {
+    return (
+      <span className={span} title="Belum ada bulan sebelumnya untuk dibandingkan">
+        {compact && <span className="text-[10px] font-semibold text-slate-300">{meta.short}</span>}
+        <span className="text-xs text-slate-300">—</span>
+      </span>
+    );
+  }
+  const words = trend === "up" ? "naik" : trend === "down" ? "turun" : "tetap";
+  const Icon = trend === "up" ? ArrowUpRight : trend === "down" ? ArrowDownRight : ArrowRight;
+  return (
+    <span
+      className={span}
+      title={`${meta.label}: rata-rata ${words} dibanding bulan lalu (s/d ${monthLabel(previousMonth)} → s/d ${monthLabel(latestMonth)})`}
+      aria-label={`${meta.label} ${words}`}
+    >
+      {compact && <span className="text-[10px] font-semibold text-slate-400">{meta.short}</span>}
+      <Icon
+        className={cn(
+          "h-4 w-4",
+          trend === "up" ? TONES.success.text : trend === "down" ? TONES.danger.text : "text-slate-400",
+        )}
+        strokeWidth={2.5}
+      />
     </span>
   );
 }
@@ -210,14 +243,17 @@ function Segmented<T extends string>({
 export default function ReportStoreList({
   initialYear,
   initialType,
+  initialAvg,
 }: {
   initialYear: number;
   initialType: ReportVisitType;
+  initialAvg: AverageScope;
 }) {
   const router = useRouter();
   const [year, setYear] = useState(initialYear);
   const [visitType, setVisitType] = useState<ReportVisitType>(initialType);
   const [show, setShow] = useState<Show>("both");
+  const [avgScope, setAvgScope] = useState<AverageScope>(initialAvg);
   const [query, setQuery] = useState("");
   const [area, setArea] = useState<"all" | number>("all");
   const [visitedOnly, setVisitedOnly] = useState(false);
@@ -228,10 +264,12 @@ export default function ReportStoreList({
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
 
-  // Keep the year + visit type in the address bar (the store page's "back" and a reload land on the same view).
+  // Keep the year + visit type (+ the average's scope) in the address bar (the store page's "back" and a
+  // reload land on the same view).
   useEffect(() => {
-    window.history.replaceState(window.history.state, "", reportListHref(year, visitType));
-  }, [year, visitType]);
+    const href = reportListHref(year, visitType) + (avgScope === "all" ? "&avg=all" : "");
+    window.history.replaceState(window.history.state, "", href);
+  }, [year, visitType, avgScope]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -263,8 +301,11 @@ export default function ReportStoreList({
   );
 
   const allRows = useMemo(
-    () => (data ? buildListRows(data.groups, data.stores, visitType) : []),
-    [data, visitType],
+    () =>
+      data
+        ? buildListRows(data.groups, data.stores, visitType, { year: data.year, scope: avgScope, history: data.history })
+        : [],
+    [data, visitType, avgScope],
   );
   const rows = allRows.filter(
     (r) =>
@@ -289,6 +330,7 @@ export default function ReportStoreList({
   };
 
   const typeLabel = visitType === "virtual" ? "Virtual" : "On Location";
+  const avgScopeLabel = avgScope === "all" ? `sepanjang waktu (s/d ${year})` : `tahun ${year}`;
 
   return (
     <div className="min-h-full bg-slate-50">
@@ -347,6 +389,15 @@ export default function ReportStoreList({
               { value: "vm", label: "VM Checklist" },
             ]}
           />
+          <Segmented
+            label="Rata-rata"
+            value={avgScope}
+            onChange={(v) => isAverageScope(v) && setAvgScope(v)}
+            options={[
+              { value: "year", label: `Tahun ${year}` },
+              { value: "all", label: "Sepanjang waktu" },
+            ]}
+          />
         </section>
 
         {error ? (
@@ -375,8 +426,8 @@ export default function ReportStoreList({
                 value={totals.avg.checklist == null ? "—" : fmtScore(totals.avg.checklist)}
                 sub={
                   totals.passRate.checklist == null
-                    ? `dari ${IMPACT_CHECKLIST_MAX_SCORE} poin`
-                    : `dari ${IMPACT_CHECKLIST_MAX_SCORE} · ${totals.passRate.checklist}% visit lulus (≥ ${IMPACT_CHECKLIST_PASS_THRESHOLD})`
+                    ? `dari ${IMPACT_CHECKLIST_MAX_SCORE} poin · ${avgScopeLabel}`
+                    : `dari ${IMPACT_CHECKLIST_MAX_SCORE} · ${totals.passRate.checklist}% visit lulus (≥ ${IMPACT_CHECKLIST_PASS_THRESHOLD}) · ${avgScopeLabel}`
                 }
                 tone={totals.avg.checklist == null ? undefined : totals.avg.checklist >= IMPACT_CHECKLIST_PASS_THRESHOLD ? "pass" : "fail"}
               />
@@ -385,8 +436,8 @@ export default function ReportStoreList({
                 value={totals.avg.vm == null ? "—" : fmtScore(totals.avg.vm)}
                 sub={
                   totals.passRate.vm == null
-                    ? `dari ${VM_CHECKLIST_MAX_SCORE} poin`
-                    : `dari ${VM_CHECKLIST_MAX_SCORE} · ${totals.passRate.vm}% visit lulus (≥ ${VM_CHECKLIST_PASS_THRESHOLD})`
+                    ? `dari ${VM_CHECKLIST_MAX_SCORE} poin · ${avgScopeLabel}`
+                    : `dari ${VM_CHECKLIST_MAX_SCORE} · ${totals.passRate.vm}% visit lulus (≥ ${VM_CHECKLIST_PASS_THRESHOLD}) · ${avgScopeLabel}`
                 }
                 tone={totals.avg.vm == null ? undefined : totals.avg.vm >= VM_CHECKLIST_PASS_THRESHOLD ? "pass" : "fail"}
               />
@@ -480,7 +531,7 @@ export default function ReportStoreList({
                     loading && "opacity-60",
                   )}
                 >
-                  <table className="w-full min-w-[1100px] border-separate border-spacing-0 text-xs">
+                  <table className="w-full min-w-[1180px] border-separate border-spacing-0 text-xs">
                     <caption className="sr-only">
                       Skor Impact Visit dan VM Checklist per toko per bulan, {year}, {typeLabel}
                     </caption>
@@ -506,9 +557,21 @@ export default function ReportStoreList({
                         ))}
                         <th
                           scope="col"
-                          className="min-w-28 border-b border-l border-slate-200 bg-slate-100 px-3 py-3 text-right text-slate-600"
+                          className="min-w-24 border-b border-l border-slate-200 bg-slate-100 px-3 py-3 text-right text-slate-600"
+                          title={`Rata-rata ${avgScopeLabel}`}
                         >
                           Rata-rata
+                          <span className="block text-[10px] font-normal text-slate-400">
+                            {avgScope === "all" ? "Sepanjang waktu" : `Tahun ${year}`}
+                          </span>
+                        </th>
+                        <th
+                          scope="col"
+                          className="min-w-20 border-b border-slate-200 bg-slate-100 px-2 py-3 text-center text-slate-600"
+                          title="Rata-rata naik / turun dibanding bulan lalu"
+                        >
+                          Tren
+                          <span className="block text-[10px] font-normal text-slate-400">vs bulan lalu</span>
                         </th>
                         <th
                           scope="col"
@@ -562,8 +625,18 @@ export default function ReportStoreList({
                             ))}
                             <td className="border-b border-l border-slate-100 px-3 py-1.5 group-hover:bg-indigo-50/40">
                               <span className="flex flex-col gap-1">
-                                {(show === "both" || show === "checklist") && <AverageLine row={r} kind="checklist" />}
-                                {(show === "both" || show === "vm") && <AverageLine row={r} kind="vm" />}
+                                {(show === "both" || show === "checklist") && (
+                                  <AverageLine row={r} kind="checklist" compact={show === "both"} />
+                                )}
+                                {(show === "both" || show === "vm") && <AverageLine row={r} kind="vm" compact={show === "both"} />}
+                              </span>
+                            </td>
+                            <td className="border-b border-slate-100 px-2 py-1.5 group-hover:bg-indigo-50/40">
+                              <span className="flex flex-col gap-1">
+                                {(show === "both" || show === "checklist") && (
+                                  <TrendMark row={r} kind="checklist" compact={show === "both"} />
+                                )}
+                                {(show === "both" || show === "vm") && <TrendMark row={r} kind="vm" compact={show === "both"} />}
                               </span>
                             </td>
                             <td className="border-b border-slate-100 px-3 py-1.5 text-center group-hover:bg-indigo-50/40">
@@ -584,8 +657,9 @@ export default function ReportStoreList({
             <p className="flex items-start gap-1.5 text-[11px] text-slate-500">
               <ClipboardCheck className="mt-px h-3.5 w-3.5 shrink-0 text-indigo-400" />
               Skor = nilai asli saat visit disubmit (visit terakhir bulan itu bila ada lebih dari satu). Rata-rata dihitung
-              dari bulan yang ada visit; panah = naik / turun visit terakhir dibanding visit sebelumnya. Arahkan kursor ke
-              sel untuk tanggal, pengunjung dan jumlah temuan.
+              dari bulan yang ada visit — tahun {year} saja, atau sepanjang waktu (semua visit sampai akhir {year}). Tren =
+              rata-rata naik (↗) atau turun (↘) dibanding bulan lalu: rata-rata dengan bulan visit terakhir dibanding
+              rata-rata sebelum bulan itu. Arahkan kursor ke sel untuk tanggal, pengunjung dan jumlah temuan.
             </p>
           </>
         ) : null}

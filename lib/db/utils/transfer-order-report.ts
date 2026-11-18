@@ -53,7 +53,8 @@ export async function getStoreNamesByCode(): Promise<Map<string, string>> {
  *   • receiving — the store is the destination and BC posted the Warehouse
  *                 Shipment in range;
  *   • delivery  — the store is the destination of a store → store TO whose origin
- *                 handed it over (Foto Serah Terima) in range.
+ *                 handed it over (Foto Serah Terima) in range — or, finished in BC
+ *                 without that photo, whose WS was posted in range.
  * The timestamp columns are UTC instants stored without a zone, so the bounds
  * go in as ISO strings cast to `timestamp` (the same encoding Drizzle writes).
  */
@@ -73,13 +74,15 @@ export async function getReportRows(
 
   // least() skips NULLs; a TO can't be created after its shipment or its photo.
   const toCreated = sql`least(${t.returnDetectedAt}, ${t.droppingDetectedAt}, ${t.returnSubmittedAt})`;
+  // deliveryStartOf(): Foto Serah Terima, or WS Diposting once BC finished it without one.
+  const deliveryStart = sql`coalesce(${t.returnSubmittedAt}, case when ${t.receivedAt} is not null then ${t.droppingDetectedAt} end)`;
 
   const where =
     process === 'return'
       ? and(inArray(t.fromStoreId, storeIds), inRange(toCreated))
       : process === 'receiving'
         ? and(inArray(t.toStoreId, storeIds), isNotNull(t.whseShipmentNo), inRange(t.droppingDetectedAt))
-        : and(inArray(t.toStoreId, storeIds), isNotNull(t.fromStoreId), inRange(t.returnSubmittedAt));
+        : and(inArray(t.toStoreId, storeIds), isNotNull(t.fromStoreId), inRange(deliveryStart));
 
   return db
     .select({

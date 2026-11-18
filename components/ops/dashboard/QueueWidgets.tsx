@@ -7,21 +7,23 @@
 //
 //   PettyCashQueue     requests + refills waiting for Ops to approve (area + Ops Area shown to HO)
 //   IssueQueue         reported issues nobody has reviewed yet
-//   TransferQueue      Item Return · On Delivery · Item Receiving that are still open
+//   TransferAverage    Item Return · Item Receiving · Item Delivery: stores slower than this month's average
 //   VisitQueue         Ops HO / IT only: stores that still need a visit this week (+ area + Ops Area)
 
 import { AlertTriangle, CalendarClock, Package, PackageCheck, Truck, Wallet } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import { TONES } from '@/lib/status-theme';
 import { TONE as VISIT_TONE } from '@/components/ops/store-visits/tones';
 import {
   rupiah,
   weekRangeLabel,
   type DashboardQueues,
   type PettyCashWaitingRow,
-  type TransferWaitingRow,
   type VisitWaitingRow,
 } from '@/lib/ops-dashboard-queues';
+import { formatMinutes } from '@/lib/transfer-order-metrics';
+import type { Process } from '@/lib/transfer-order-report';
 import { cycleName } from '@/lib/store-visit/cycles';
 import { daysLeftLabel, deadlineLabel } from '@/lib/store-visit/upcoming';
 import type { Tone } from '@/lib/status-theme';
@@ -137,58 +139,66 @@ export function IssueQueue({ queues, loading }: { queues: Queues; loading: boole
 
 // ─── Transfer orders ─────────────────────────────────────────────────────────
 
-// The same phases (and tones) as the Transfer Order page's PHASE_CFG.
-const TRANSFER_KIND = {
-  return: { title: 'Item Return', subtitle: 'Waiting for pickup', tone: 'warning' as Tone, icon: Package, empty: 'Tidak ada Item Return yang menunggu diambil' },
-  shipping: { title: 'On Delivery', subtitle: 'On the road to the store', tone: 'info' as Tone, icon: Truck, empty: 'Tidak ada kiriman yang sedang di perjalanan' },
-  receiving: { title: 'Item Receiving', subtitle: 'Waiting for BC to post the receipt', tone: 'active' as Tone, icon: PackageCheck, empty: 'Tidak ada Item Receiving yang menunggu BC' },
-} as const;
+// The same tones as the Transfer Order page's phases; each opens its TO Report page on "Bulanan".
+const TRANSFER_KIND: Record<Process, { title: string; range: string; tone: Tone; icon: typeof Package }> = {
+  return: { title: 'Item Return', range: 'TO Dibuat → Foto Serah Terima', tone: 'warning', icon: Package },
+  receiving: { title: 'Item Receiving', range: 'Terima Fisik → WR Diposting', tone: 'active', icon: PackageCheck },
+  delivery: { title: 'Item Delivery', range: 'Foto Serah Terima → Terima Fisik', tone: 'info', icon: Truck },
+};
 
-export function TransferQueue({
-  kind,
-  queues,
-  loading,
-}: {
-  kind: keyof typeof TRANSFER_KIND;
-  queues: Queues;
-  loading: boolean;
-}) {
+const MONTH_NAME = (yearMonth: string) =>
+  new Date(`${yearMonth}-01T00:00:00Z`).toLocaleDateString('id-ID', { month: 'long', timeZone: 'UTC' });
+
+/** One process: the stores whose average this month is above the month's average, slowest first. */
+export function TransferAverage({ kind, queues, loading }: { kind: Process; queues: Queues; loading: boolean }) {
   const cfg = TRANSFER_KIND[kind];
-  const q = queues?.transfers[kind];
+  const t = queues?.transfers;
+  const q = t?.[kind];
+  const href = `/ops/transfer-order/report/${kind}?period=monthly`;
 
   return (
     <DashCard
       icon={cfg.icon}
       tone={cfg.tone}
       title={cfg.title}
-      subtitle={cfg.subtitle}
+      subtitle={
+        q && t && q.monthAvgMinutes != null
+          ? `Above ${MONTH_NAME(t.month)} average · ${formatMinutes(q.monthAvgMinutes)}`
+          : 'Stores slower than this month\'s average'
+      }
       count={q?.total}
-      href="/ops/transfer-order"
+      href={href}
     >
       {loading || !q ? (
         <QueueSkeleton />
+      ) : q.monthAvgMinutes == null ? (
+        <QueueEmpty>Belum ada {cfg.title} yang selesai bulan ini</QueueEmpty>
       ) : q.items.length === 0 ? (
-        <QueueEmpty>{cfg.empty}</QueueEmpty>
+        <QueueEmpty>Tidak ada toko di atas rata-rata bulan ini</QueueEmpty>
       ) : (
         <>
           <ul className="divide-y divide-slate-100">
-            {q.items.map((row: TransferWaitingRow) => (
-              <QueueRow key={row.id} href="/ops/transfer-order">
+            {q.items.map((row) => (
+              <QueueRow key={row.store.id} href={href}>
                 <div className="flex items-center gap-3">
                   <StoreName storeNo={row.store.storeNo} name={row.store.name} className="min-w-0 flex-1" />
-                  <WaitChip since={row.since} />
+                  <span
+                    title={`Rata-rata ${cfg.range} dari ${row.timed} proses selesai`}
+                    className={cn(
+                      'inline-flex shrink-0 items-center whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-semibold tabular-nums',
+                      TONES[cfg.tone].chip,
+                    )}
+                  >
+                    {formatMinutes(row.avgMinutes)}
+                  </span>
                 </div>
                 <p className="mt-0.5 truncate text-[11px] text-slate-500">
-                  <span className="font-medium text-slate-600">{row.toaNo}</span>
-                  <span className="text-slate-300"> · </span>
-                  {row.otherEnd}
-                  <span className="text-slate-300"> · </span>
-                  {row.qty.toLocaleString('id-ID')} pcs
+                  Rata-rata dari {row.timed} selesai
                 </p>
               </QueueRow>
             ))}
           </ul>
-          <MoreLink href="/ops/transfer-order" count={q.total - q.items.length} noun="open" />
+          <MoreLink href={href} count={q.total - q.items.length} noun={q.total - q.items.length === 1 ? 'store' : 'stores'} />
         </>
       )}
     </DashCard>

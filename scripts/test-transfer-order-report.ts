@@ -99,23 +99,107 @@ const receivingRows: ReportRow[] = [
   row({ droppingDetectedAt: at('2026-11-04T00:00:00') }),
 ];
 
-ok('Item Receiving divides by timed, not done, and leaves open ones out', () => {
+ok('Item Receiving: a photographed one is timed from the photo, a Selesai Otomatis one from WS Diposting', () => {
   const [b] = buildStoreReports([B], receivingRows, DAYS, 'receiving', NOW);
   assert.equal(b.total, 4);
   assert.equal(b.done, 2);
-  assert.equal(b.timed, 1);
-  assert.equal(avgMinutes(b), 180);
-  assert.equal(b.notStarted, 1);
-  assert.equal(summarise([b]).avgMinutes, 180);
-  assert.equal(summarise([b]).timed, 1);
+  // photo 01:00 → WR 04:00 = 180 min; no photo, BC closed it: WS 00:00 → WR 05:00 = 300 min
+  assert.equal(b.timed, 2);
+  assert.equal(b.auto, 1);
+  assert.equal(avgMinutes(b), 240);
+  assert.equal(b.notStarted, 1); // the open, unphotographed one still has no clock
+  assert.equal(summarise([b]).avgMinutes, 240);
+  assert.equal(summarise([b]).timed, 2);
 });
 
-ok('the receiving sheet: no duration for the unphotographed or the no-photo-closed item', () => {
+ok('the receiving sheet: durations for both finished items, a wait only for the photographed open one', () => {
   const items = buildStoreItems(2, receivingRows, DAYS, 'receiving', opts);
-  const withMinutes = items.filter((i) => i.minutes != null);
-  assert.equal(withMinutes.length, 1);
-  assert.equal(withMinutes[0].minutes, 180);
-  assert.equal(items.filter((i) => i.waitingMinutes != null).length, 1); // the photographed open one
+  assert.deepEqual(items.filter((i) => i.minutes != null).map((i) => i.minutes).sort(), [180, 300]);
+  assert.equal(items.filter((i) => i.waitingMinutes != null).length, 1);
+  const auto = items.find((i) => i.auto)!;
+  assert.equal(auto.minutes, 300);
+  assert.deepEqual(auto.steps.map((x) => [x.label, x.at != null]), [
+    ['WS Diposting', true], ['Terima Fisik Barang di Toko', false], ['WR Diposting · selesai otomatis', true],
+  ]);
+});
+
+// ── Selesai Otomatis: BC posted the WR while the store never did its PRISM step ──
+// The time is kept: BC's time stands in for the missing photo.
+const autoReturnRows: ReportRow[] = [
+  // photographed: 60 min, a normal finish
+  row({ returnDetectedAt: at('2026-11-02T01:00:00'), returnSubmittedAt: at('2026-11-02T02:00:00'), receivedAt: at('2026-11-02T09:00:00') }),
+  // never photographed, BC finished it: TO Dibuat 02 Nov 01:00 → WR 04 Nov 09:00 = 56 h
+  row({ returnDetectedAt: at('2026-11-02T01:00:00'), receivedAt: at('2026-11-04T09:00:00') }),
+];
+
+ok('an Item Return BC finished without the photo is done + auto, timed TO Dibuat → WR Diposting', () => {
+  const [a] = buildStoreReports([A], autoReturnRows, DAYS, 'return', NOW);
+  assert.equal(a.total, 2);
+  assert.equal(a.done, 2);
+  assert.equal(a.auto, 1);
+  assert.equal(a.timed, 2);
+  assert.equal(avgMinutes(a), (60 + 56 * 60) / 2);
+  assert.equal(a.oldestOpenMinutes, null); // finished — no longer "waiting"
+  assert.equal(summarise([a]).auto, 1);
+  const auto = buildStoreItems(1, autoReturnRows, DAYS, 'return', opts).find((i) => i.auto)!;
+  assert.equal(auto.done, true);
+  assert.equal(auto.minutes, 56 * 60);
+  assert.equal(auto.waitingMinutes, null);
+  assert.deepEqual(auto.steps.map((x) => [x.label, x.at != null]), [
+    ['TO Dibuat', true], ['WS Diposting', false], ['Foto Serah Terima', false], ['WR Diposting · selesai otomatis', true],
+  ]);
+});
+
+ok('half done (only the destination photographed): the Item Return stops at Terima Fisik, not WR Diposting', () => {
+  const rows = [row({
+    returnDetectedAt: at('2026-11-02T01:00:00'), droppingDetectedAt: at('2026-11-02T03:00:00'),
+    droppingSubmittedAt: at('2026-11-02T09:00:00'), receivedAt: at('2026-11-04T09:00:00'),
+  })];
+  const [a] = buildStoreReports([A], rows, DAYS, 'return', NOW);
+  assert.equal(a.done, 1);
+  assert.equal(a.auto, 1);
+  assert.equal(avgMinutes(a), 8 * 60); // TO Dibuat 01:00 → Terima Fisik 09:00
+  const item = buildStoreItems(1, rows, DAYS, 'return', opts)[0];
+  assert.equal(item.steps.at(-1)!.label, 'Terima Fisik di toko tujuan · selesai otomatis');
+});
+
+ok('a delivery whose WR is dated before the Foto Serah Terima is done but has no clock — never a 0 in the average', () => {
+  const rows = [
+    // normal: Foto 02 Nov 02:00 → WR 03 Nov 02:00 = 24 h
+    row({ returnDetectedAt: at('2026-11-02T01:00:00'), returnSubmittedAt: at('2026-11-02T02:00:00'), receivedAt: at('2026-11-03T02:00:00') }),
+    // backwards: Foto 04 Nov 08:00, but BC posted the WR on 02 Nov
+    row({ returnDetectedAt: at('2026-11-02T01:00:00'), returnSubmittedAt: at('2026-11-02T08:00:00'), receivedAt: at('2026-11-02T05:00:00') }),
+  ];
+  const [b] = buildStoreReports([B], rows, DAYS, 'delivery', NOW);
+  assert.equal(b.done, 2);
+  assert.equal(b.timed, 1);
+  assert.equal(avgMinutes(b), 24 * 60);
+});
+
+ok('Item Delivery: origin photographed, destination did not → Foto Serah Terima → WR Diposting', () => {
+  const rows = [row({ returnDetectedAt: at('2026-11-02T01:00:00'), returnSubmittedAt: at('2026-11-02T02:00:00'), receivedAt: at('2026-11-03T02:00:00') })];
+  const [b] = buildStoreReports([B], rows, DAYS, 'delivery', NOW);
+  assert.equal(b.done, 1);
+  assert.equal(b.auto, 1);
+  assert.equal(b.timed, 1);
+  assert.equal(avgMinutes(b), 24 * 60);
+});
+
+ok('no photo at all, store → store: Item Delivery AND Item Receiving are both WS Diposting → WR Diposting', () => {
+  const rows = [row({
+    returnDetectedAt: at('2026-11-02T22:00:00'), droppingDetectedAt: at('2026-11-03T00:00:00'), receivedAt: at('2026-11-03T06:00:00'),
+  })];
+  const [delivery] = buildStoreReports([B], rows, DAYS, 'delivery', NOW);
+  const [receiving] = buildStoreReports([B], rows, DAYS, 'receiving', NOW);
+  for (const r of [delivery, receiving]) {
+    assert.equal(r.total, 1);
+    assert.equal(r.done, 1);
+    assert.equal(r.auto, 1);
+    assert.equal(avgMinutes(r), 360);
+  }
+  // still open (no WR yet) and no Foto Serah Terima → no delivery yet
+  const open = [row({ droppingDetectedAt: at('2026-11-03T00:00:00') })];
+  assert.equal(buildStoreReports([B], open, DAYS, 'delivery', NOW)[0].total, 0);
 });
 
 console.log(`\n${checks} checks passed.`);

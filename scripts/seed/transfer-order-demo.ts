@@ -12,9 +12,10 @@
 // Item Receiving = a TO arriving at DUMMY-001 with a Warehouse Shipment its staff hasn't confirmed yet
 //                  (to_store = DUMMY-001, whse_shipment_no set, dropping_submitted_at NULL).
 //
-// All demo TOs are numbered TOA-DUMMY-*. Heads-up: the full Business Central sweep (every 6 h, only where BC
-// credentials are set) deletes unconfirmed TOs that BC doesn't know — these fake ones included. Confirm them
-// in the app, or just run this again with --replace.
+// All demo TOs are numbered TOA-DUMMY-*. Heads-up: the Business Central sweep (only where BC credentials are
+// set) treats a TO that BC doesn't list and has no Posted Whse Receipt for as CANCELLED and removes it —
+// confirmed or not, so these fake ones go too (the full sweep every 6 h; the 5-minute light sweep once their
+// posting date is within its 14 days). Just run this again with --replace.
 //
 // Refuses to run against production (scripts/lib/not-production.ts).
 

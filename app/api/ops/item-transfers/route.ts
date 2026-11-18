@@ -16,7 +16,7 @@ import { db } from '@/lib/db';
 import { itemTransferOrders, itemReturnEntries, itemDroppingEntries, stores, areas } from '@/lib/db/schema';
 import { ensureWarehouseCodes, isWarehouseCode } from '@/lib/db/utils/item-transfers';
 import { effectiveToCreatedAt } from '@/lib/transfer-order-metrics';
-import { resolveTransferPhase } from '@/lib/transfer-order-phase';
+import { legsNotProcessedInPrism, resolveTransferPhase } from '@/lib/transfer-order-phase';
 import { refreshReceivingStatus, refreshTransferRegistry } from '@/lib/db/utils/transfer-order-refresh';
 import { getOpsActor } from '@/app/api/ops/tasks/_helpers';
 
@@ -131,6 +131,9 @@ export async function GET(req: Request) {
     postingDate: r.postingDate?.toISOString() ?? null,
     whseShipmentNo: r.whseShipmentNo,
     phase: resolvePhase(r),
+    // Store legs nobody processed in PRISM on an order BC already posted — the
+    // page marks those "Selesai Otomatis · tidak diproses di PRISM".
+    notProcessedLegs: legsNotProcessedInPrism(r, isWarehouseCode),
     fromIsWarehouse: r.fromStoreId == null && isWarehouseCode(r.transferFromCode),
     toIsWarehouse: r.toStoreId == null && isWarehouseCode(r.transferToCode),
     // "TO Dibuat", never later than the shipment or the Item Return photo it led to.

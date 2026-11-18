@@ -5,8 +5,9 @@
 //
 //   petty cash   requests + refills still waiting for Ops to approve
 //   issues       reported, not yet reviewed
-//   transfers    Item Return (waiting pickup) · On Delivery (on the road) · Item Receiving
-//                (waiting for BC), each the ones open the longest
+//   transfers    Item Return · Item Receiving · Item Delivery: this month's STORES whose own
+//                average time is above the month's average (the TO Report's numbers —
+//                lib/transfer-order-report.ts — completed processes only), slowest first
 //   visits       Ops HO / IT only: stores that still owe a visit before this week ends
 
 import type { Tone } from '@/lib/status-theme';
@@ -51,17 +52,21 @@ export interface IssueWaitingRow {
   since: string;
 }
 
-export interface TransferWaitingRow {
-  id: string;
-  /** BC transfer order no, e.g. TOA26003644. */
-  toaNo: string;
-  /** The store the wait is at: where the pickup is (Item Return) or who is waiting for the goods. */
+/** A store slower than the month's average for one Transfer Order process. */
+export interface TransferAverageRow {
   store: QueueStore;
-  /** The other end — "Dari FF001 …" / "Ke FF002 …" / a warehouse. */
-  otherEnd: string;
-  qty: number;
-  /** ISO — when this leg started waiting; null if BC never gave one. */
-  since: string | null;
+  /** This store's mean minutes over its COMPLETED processes of the month. */
+  avgMinutes: number;
+  /** How many completed processes that mean is made of. */
+  timed: number;
+}
+
+/** One process (Item Return / Item Receiving / Item Delivery) of the month. */
+export interface TransferAverageList extends QueueList<TransferAverageRow> {
+  /** Mean of every completed process of the month in scope (null = none finished yet). */
+  monthAvgMinutes: number | null;
+  /** How many completed processes the month mean is made of. */
+  timed: number;
 }
 
 export interface VisitWaitingRow {
@@ -83,9 +88,11 @@ export interface DashboardQueues {
   pettyCash: QueueList<PettyCashWaitingRow> & { requests: number; refills: number };
   issues: QueueList<IssueWaitingRow>;
   transfers: {
-    return: QueueList<TransferWaitingRow>;
-    shipping: QueueList<TransferWaitingRow>;
-    receiving: QueueList<TransferWaitingRow>;
+    /** YYYY-MM — the Jakarta month the averages cover. */
+    month: string;
+    return: TransferAverageList;
+    receiving: TransferAverageList;
+    delivery: TransferAverageList;
   };
   /** Ops HO / IT only (null for Ops Area). */
   visits: (QueueList<VisitWaitingRow> & { weekStart: string; weekEnd: string }) | null;
@@ -95,6 +102,31 @@ export interface DashboardQueues {
 export const QUEUE_LIMIT = 5;
 /** The visit list is longer — it is the HO's whole to-do for the week. */
 export const VISIT_QUEUE_LIMIT = 20;
+
+// ─── Transfer Order averages ─────────────────────────────────────────────────
+
+/**
+ * The stores whose own average is ABOVE the pooled average of the month (every
+ * completed process of every store, `minutes` ÷ `timed` — the TO Report's KPI),
+ * slowest first. A store with nothing finished has no average and is never listed.
+ */
+export function storesAboveAverage<T extends { minutes: number; timed: number }>(
+  reports: T[],
+): { monthAvgMinutes: number | null; timed: number; above: { report: T; avgMinutes: number }[] } {
+  let sum = 0;
+  let timed = 0;
+  for (const r of reports) {
+    sum += r.minutes;
+    timed += r.timed;
+  }
+  if (timed === 0) return { monthAvgMinutes: null, timed: 0, above: [] };
+  const monthAvg = sum / timed;
+  const above = reports
+    .filter((r) => r.timed > 0 && r.minutes / r.timed > monthAvg)
+    .map((report) => ({ report, avgMinutes: Math.round(report.minutes / report.timed) }))
+    .sort((a, b) => b.avgMinutes - a.avgMinutes);
+  return { monthAvgMinutes: Math.round(monthAvg), timed, above };
+}
 
 // ─── Waiting time ────────────────────────────────────────────────────────────
 

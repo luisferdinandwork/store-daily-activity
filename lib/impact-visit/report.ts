@@ -9,6 +9,11 @@
 // API: GET /api/ops/impact-visits/report?year=YYYY[&storeId=N]. Without a store the cells are summaries (no
 // per-item answers — 50 stores × 24 cells of answers would be megabytes); with one they carry the answers too.
 // Only submitted visits count; when a month has more than one visit of the same type, the latest one wins.
+//
+// The store list's "Rata-rata" is either the selected YEAR's months or EVERY month up to the end of that year
+// (`AverageScope`, the list's "Sepanjang waktu" — the API sends `history`, scores only, for that). Next to it,
+// a separate arrow says whether that average went UP or DOWN against last month: the average with the latest
+// visited month vs the average as it stood without it (`averageView`). No number — just the direction.
 
 import type { ChecklistResponses } from './scoring';
 
@@ -56,6 +61,14 @@ export interface ReportAreaGroup {
   stores: ReportStoreOption[];
 }
 
+/** One month's scores of one visit type — what an average is made of. */
+export interface ScoreMonth {
+  /** YYYY-MM (Jakarta). */
+  ym: string;
+  checklist: { score: number; max: number; pass: boolean };
+  vm: { score: number; max: number; pass: boolean };
+}
+
 export interface ImpactReportResponse<C extends ReportCellSummary = ReportCellSummary> {
   success: true;
   isHO: boolean;
@@ -64,6 +77,11 @@ export interface ImpactReportResponse<C extends ReportCellSummary = ReportCellSu
   groups: ReportAreaGroup[];
   /** Stores with at least one submitted visit in the year. */
   stores: StoreReportRow<C>[];
+  /**
+   * Store list only: every visited month of every store in scope from the first visit up to the end of `year`,
+   * oldest first, per visit type (same "latest visit of the month wins" rule) — the all-time average.
+   */
+  history?: Record<string, Record<ReportVisitType, ScoreMonth[]>>;
 }
 
 export const REPORT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
@@ -117,8 +135,6 @@ export interface YearSummary {
   passed: Record<ScoreKind, number>;
   /** The latest visited month's cell. */
   latest: ReportCellSummary | null;
-  /** Change of the latest score against the visit before it (raw points); null = fewer than two visits. */
-  trend: Record<ScoreKind, number | null>;
 }
 
 export function yearSummary(cells: (ReportCellSummary | null)[]): YearSummary {
@@ -128,8 +144,6 @@ export function yearSummary(cells: (ReportCellSummary | null)[]): YearSummary {
   const avgPctOf = (k: ScoreKind) =>
     visited.length ? Math.round(visited.reduce((s, c) => s + scorePct(c[k]), 0) / visited.length) : null;
   const latest = visited.at(-1) ?? null;
-  const before = visited.at(-2) ?? null;
-  const trendOf = (k: ScoreKind) => (latest && before ? latest[k].score - before[k].score : null);
 
   return {
     visited: visited.length,
@@ -140,9 +154,68 @@ export function yearSummary(cells: (ReportCellSummary | null)[]): YearSummary {
       vm: visited.filter((c) => c.vm.pass).length,
     },
     latest,
-    trend: { checklist: trendOf('checklist'), vm: trendOf('vm') },
   };
 }
+
+// ─── Average: this year or all time, and which way it moved ──────────────────
+
+/** "year" = the selected year's months; "all" = every month up to the end of that year. */
+export type AverageScope = 'year' | 'all';
+
+export const isAverageScope = (v: unknown): v is AverageScope => v === 'year' || v === 'all';
+
+export type TrendDirection = 'up' | 'down' | 'flat';
+
+export interface AverageView {
+  /** Months the average is made of. */
+  months: number;
+  /** Raw points, one decimal; null = no visit. */
+  avg: Record<ScoreKind, number | null>;
+  /** % of the maximum, for sorting / colouring. */
+  avgPct: Record<ScoreKind, number | null>;
+  /**
+   * Did the average go up or down against last month — the average WITH the latest visited month vs the average
+   * as it stood WITHOUT it. Null with fewer than two months (nothing to compare with).
+   */
+  trend: Record<ScoreKind, TrendDirection | null>;
+  /** YYYY-MM of the latest month, and of the month the comparison goes back to. */
+  latestMonth: string | null;
+  previousMonth: string | null;
+}
+
+const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+
+export function averageView(monthsIn: ScoreMonth[]): AverageView {
+  const months = [...monthsIn].sort((a, b) => a.ym.localeCompare(b.ym));
+  const n = months.length;
+  const avgOf = (k: ScoreKind) => (n ? Math.round(mean(months.map((m) => m[k].score)) * 10) / 10 : null);
+  const avgPctOf = (k: ScoreKind) => (n ? Math.round(mean(months.map((m) => scorePct(m[k])))) : null);
+  const trendOf = (k: ScoreKind): TrendDirection | null => {
+    if (n < 2) return null;
+    const now = mean(months.map((m) => m[k].score));
+    const before = mean(months.slice(0, -1).map((m) => m[k].score));
+    const diff = now - before;
+    return Math.abs(diff) < 0.05 ? 'flat' : diff > 0 ? 'up' : 'down';
+  };
+  return {
+    months: n,
+    avg: { checklist: avgOf('checklist'), vm: avgOf('vm') },
+    avgPct: { checklist: avgPctOf('checklist'), vm: avgPctOf('vm') },
+    trend: { checklist: trendOf('checklist'), vm: trendOf('vm') },
+    latestMonth: months.at(-1)?.ym ?? null,
+    previousMonth: months.at(-2)?.ym ?? null,
+  };
+}
+
+/** The 12 cells of a year as score months (empty months dropped). */
+export function cellsToScoreMonths(year: number, cells: (ReportCellSummary | null)[]): ScoreMonth[] {
+  return cells.flatMap((c, i) =>
+    c ? [{ ym: `${year}-${String(i + 1).padStart(2, '0')}`, checklist: c.checklist, vm: c.vm }] : [],
+  );
+}
+
+/** "Nov 2026" from YYYY-MM. */
+export const monthLabel = (ym: string) => `${REPORT_MONTHS[Number(ym.slice(5, 7)) - 1]} ${ym.slice(0, 4)}`;
 
 export interface ReportListRow {
   storeId: number;
@@ -152,6 +225,9 @@ export interface ReportListRow {
   areaName: string;
   cells: (ReportCellSummary | null)[];
   summary: YearSummary;
+  /** The months the "Rata-rata" column is made of (this year, or all time — `AverageScope`). */
+  averageMonths: ScoreMonth[];
+  average: AverageView;
 }
 
 /** Every store in scope as a list row — stores with no visit in the year included (empty cells). */
@@ -159,11 +235,16 @@ export function buildListRows(
   groups: ReportAreaGroup[],
   reports: StoreReportRow<ReportCellSummary>[],
   type: ReportVisitType,
+  opts: { year: number; scope: AverageScope; history?: ImpactReportResponse['history'] },
 ): ReportListRow[] {
   const byId = new Map(reports.map((r) => [r.storeId, r]));
   return groups.flatMap((g) =>
     g.stores.map((s) => {
       const cells = monthCells(byId.get(String(s.id)), type);
+      const averageMonths =
+        opts.scope === 'all' && opts.history
+          ? (opts.history[String(s.id)]?.[type] ?? [])
+          : cellsToScoreMonths(opts.year, cells);
       return {
         storeId: s.id,
         storeNo: s.storeNo,
@@ -172,6 +253,8 @@ export function buildListRows(
         areaName: g.name,
         cells,
         summary: yearSummary(cells),
+        averageMonths,
+        average: averageView(averageMonths),
       };
     }),
   );
@@ -199,9 +282,9 @@ export function sortReportRows(rows: ReportListRow[], key: ReportSortKey, dir: '
   const value = (r: ReportListRow): number | null => {
     switch (key) {
       case 'avg_checklist':
-        return r.summary.avgPct.checklist;
+        return r.average.avgPct.checklist;
       case 'avg_vm':
-        return r.summary.avgPct.vm;
+        return r.average.avgPct.vm;
       case 'latest_checklist':
         return r.summary.latest ? scorePct(r.summary.latest.checklist) : null;
       case 'latest_vm':
@@ -229,19 +312,21 @@ export interface ReportTotals {
   stores: number;
   /** Stores with at least one visit of the type in the year. */
   visitedStores: number;
+  /** Visits in the year. */
   visits: number;
-  /** Average over every visit (not over stores), raw points; null = no visit. */
+  /** Average over every visit the "Rata-rata" column uses (this year / all time), raw points; null = none. */
   avg: Record<ScoreKind, number | null>;
-  /** Share of visits that passed, %; null = no visit. */
+  /** Share of those visits that passed (grade A), %; null = none. */
   passRate: Record<ScoreKind, number | null>;
 }
 
 export function reportTotals(rows: ReportListRow[]): ReportTotals {
   const cells = rows.flatMap((r) => r.cells.filter((c): c is ReportCellSummary => c != null));
+  const months = rows.flatMap((r) => r.averageMonths);
   const avg = (k: ScoreKind) =>
-    cells.length ? Math.round((cells.reduce((s, c) => s + c[k].score, 0) / cells.length) * 10) / 10 : null;
+    months.length ? Math.round((months.reduce((s, m) => s + m[k].score, 0) / months.length) * 10) / 10 : null;
   const pass = (k: ScoreKind) =>
-    cells.length ? Math.round((cells.filter((c) => c[k].pass).length / cells.length) * 100) : null;
+    months.length ? Math.round((months.filter((m) => m[k].pass).length / months.length) * 100) : null;
   return {
     stores: rows.length,
     visitedStores: rows.filter((r) => r.summary.visited > 0).length,

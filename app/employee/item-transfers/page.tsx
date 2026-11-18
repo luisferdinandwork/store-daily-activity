@@ -13,7 +13,7 @@ import { useGeo } from '@/lib/hooks/useGeo';
 import type { GeoPoint } from '@/lib/geo';
 import {
   CheckCircle2, Loader2, AlertCircle,
-  Store, Warehouse, Clock, Truck, Package, Inbox, Search, X,
+  Store, Warehouse, Clock, Truck, Package, Inbox, Search, X, Bot,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -69,6 +69,8 @@ interface EntryData {
   whseShipmentLines?: WhseShipmentLine[];
   inTransitSince?: string | null;
   receivedAt?: string | null;
+  /** Item Return completed by itself: where its clock stops (Terima Fisik at the destination, else WR Diposting). */
+  autoDoneAt?: string | null;
   returnDetectedAt?: string | null;
 }
 
@@ -366,14 +368,24 @@ function ConfirmedEntryCard({ kind, entry }: { kind: Kind; entry: EntryData }) {
   // event that happens afterward — shown as its own status line below
   // instead of being folded into one blended number.
   const since = isDropping ? entry.inTransitSince : entry.returnDetectedAt;
-  const ownDuration = formatDurationBetween(since, entry.submittedAt);
   const cfg = KIND_CFG[kind];
+  // BC posted the receipt while this store never confirmed its own step here:
+  // PRISM completed the order by itself (see lib/transfer-order-phase.ts). The
+  // time still counts — up to the destination's Terima Fisik, else WR Diposting
+  // (lib/transfer-order-metrics.ts).
+  const auto = !entry.submittedAt && Boolean(entry.receivedAt);
+  const ownDuration = formatDurationBetween(since, auto ? (entry.autoDoneAt ?? entry.receivedAt) : entry.submittedAt);
 
   return (
-    <div className="rounded-2xl border border-green-200 bg-card px-4 py-3.5">
+    <div className={cn('rounded-2xl border bg-card px-4 py-3.5', auto ? 'border-orange-200' : 'border-green-200')}>
       <div className="flex items-center gap-3">
-        <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-green-100 text-green-600">
-          <CheckCircle2 className="h-5 w-5" />
+        <div
+          className={cn(
+            'flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl',
+            auto ? 'bg-orange-100 text-orange-600' : 'bg-green-100 text-green-600',
+          )}
+        >
+          {auto ? <Bot className="h-5 w-5" /> : <CheckCircle2 className="h-5 w-5" />}
         </div>
         <div className="min-w-0 flex-1">
           <p className="font-mono text-sm font-bold text-foreground">{entry.toaNo}</p>
@@ -386,16 +398,28 @@ function ConfirmedEntryCard({ kind, entry }: { kind: Kind; entry: EntryData }) {
           </p>
         </div>
         <div className="flex-shrink-0 text-right">
-          <p className="text-xs font-bold text-green-700">{ownDuration}</p>
+          <p className={cn('text-xs font-bold', auto ? 'text-orange-700' : 'text-green-700')}>{ownDuration}</p>
           <p className="text-[10px] text-muted-foreground">
             {entry.submittedAt
               ? new Date(entry.submittedAt).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
-              : ''}
+              : auto ? 'Otomatis' : ''}
           </p>
         </div>
       </div>
 
-      {isDropping && (
+      {auto && (
+        <div className="mt-3 flex items-start gap-2 rounded-xl bg-orange-50 px-3 py-2">
+          <Bot className="mt-0.5 h-3.5 w-3.5 shrink-0 text-orange-600" />
+          <p className="text-[11px] font-semibold leading-snug text-orange-700">
+            Tidak diproses di PRISM — selesai otomatis karena sudah diposting di BC
+            {entry.receivedAt
+              ? ` (${new Date(entry.receivedAt).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })})`
+              : ''}
+          </p>
+        </div>
+      )}
+
+      {isDropping && !auto && (
         <div
           className={cn(
             'mt-3 flex items-center gap-2 rounded-xl px-3 py-2',
@@ -410,9 +434,7 @@ function ConfirmedEntryCard({ kind, entry }: { kind: Kind; entry: EntryData }) {
           <p className={cn('text-[11px] font-semibold', stillAwaitingBcReceive ? 'text-amber-700' : 'text-muted-foreground')}>
             {stillAwaitingBcReceive
               ? `Menunggu BC posting Warehouse Receipt · ${formatElapsedSince(entry.submittedAt)}`
-              : entry.submittedAt
-                ? `Diterima BC dalam ${formatDurationBetween(entry.submittedAt, entry.receivedAt)}`
-                : 'Selesai otomatis oleh BC — toko tidak perlu konfirmasi'}
+              : `Diterima BC dalam ${formatDurationBetween(entry.submittedAt, entry.receivedAt)}`}
           </p>
         </div>
       )}
@@ -522,7 +544,7 @@ function FlowSection({
           {confirmedEntries.length > 0 && (
             <section className="space-y-2.5">
               <p className="px-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                Sudah dikonfirmasi · {confirmedEntries.length}
+                Selesai · {confirmedEntries.length}
               </p>
               {confirmedEntries.map((entry) => (
                 <ConfirmedEntryCard key={entry.id} kind={kind} entry={entry} />

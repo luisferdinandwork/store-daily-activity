@@ -4,7 +4,8 @@
 //
 // Covers: which stores "need attention" and in what order (lib/ops-dashboard.ts), the waiting-time
 // wording + colour bands and the Monday–Sunday week (lib/ops-dashboard-queues.ts), and the
-// transfer-order phase rule the dashboard shares with the Transfer Order page.
+// transfer-order phase rule the dashboard shares with the Transfer Order page, and which stores the
+// Transfer Orders cards list (slower than the month average).
 
 import assert from 'node:assert/strict';
 
@@ -16,8 +17,9 @@ import {
   type StoreAttendanceRow,
   type StoreTaskRow,
 } from '../lib/ops-dashboard';
-import { dueThisWeek, waitingLabel, waitingMinutes, waitingTone, weekOf, weekRangeLabel } from '../lib/ops-dashboard-queues';
-import { resolveTransferPhase, type TransferPhaseInput } from '../lib/transfer-order-phase';
+import { dueThisWeek, storesAboveAverage, waitingLabel, waitingMinutes, waitingTone, weekOf, weekRangeLabel } from '../lib/ops-dashboard-queues';
+import { legsNotProcessedInPrism, resolveTransferPhase, type TransferPhaseInput } from '../lib/transfer-order-phase';
+import { WS_NOT_RECORDED, buildTransferMetrics, minutesBetween, type MetricInput } from '../lib/transfer-order-metrics';
 
 let checks = 0;
 const ok = (name: string, fn: () => void) => {
@@ -193,9 +195,37 @@ ok('handed to the courier → shipping; store confirmed the goods → receiving;
     'receiving',
   );
   assert.equal(
-    resolveTransferPhase(to({ droppingSubmittedAt: at('2026-11-17T12:00:00'), receivedAt: at('2026-11-17T13:00:00') }), isWarehouse),
+    resolveTransferPhase(to({
+      returnSubmittedAt: at('2026-11-17T08:00:00'), droppingSubmittedAt: at('2026-11-17T12:00:00'), receivedAt: at('2026-11-17T13:00:00'),
+    }), isWarehouse),
     'received',
   );
+});
+
+ok('BC posted it while a store leg was never processed in PRISM → auto_completed, naming the leg', () => {
+  // Origin never sent Foto Serah Terima.
+  const noReturn = to({ droppingSubmittedAt: at('2026-11-17T12:00:00'), receivedAt: at('2026-11-17T13:00:00') });
+  assert.equal(resolveTransferPhase(noReturn, isWarehouse), 'auto_completed');
+  assert.deepEqual(legsNotProcessedInPrism(noReturn, isWarehouse), ['return']);
+  // Nobody processed anything.
+  const none = to({ whseShipmentNo: 'WS1', receivedAt: at('2026-11-17T13:00:00') });
+  assert.deepEqual(legsNotProcessedInPrism(none, isWarehouse), ['return', 'receiving']);
+  // A DM origin has no Item Return to miss — only the store's Terima Fisik.
+  const fromDm = to({ fromStoreId: null, transferFromCode: 'DM-JKT', whseShipmentNo: 'WS1', receivedAt: at('2026-11-17T13:00:00') });
+  assert.deepEqual(legsNotProcessedInPrism(fromDm, isWarehouse), ['receiving']);
+  // Still open → nothing is "missing" yet.
+  assert.deepEqual(legsNotProcessedInPrism(to({ whseShipmentNo: 'WS1' }), isWarehouse), []);
+});
+
+ok('store → DM: with Foto Serah Terima, the warehouse WR is a normal finish; without it, Selesai Otomatis', () => {
+  // The store sent its Foto Serah Terima; the warehouse posted the WR later.
+  const back = to({ toStoreId: null, transferToCode: 'DM-JKT', returnSubmittedAt: at('2026-11-17T08:00:00'), receivedAt: at('2026-11-19T16:59:59') });
+  assert.equal(resolveTransferPhase(back, isWarehouse), 'received');
+  assert.deepEqual(legsNotProcessedInPrism(back, isWarehouse), []);
+  // No Foto Serah Terima, but the warehouse posted the WR: nothing was done in PRISM.
+  const noPhoto = to({ toStoreId: null, transferToCode: 'DM-JKT', whseShipmentNo: 'WS1', receivedAt: at('2026-11-19T16:59:59') });
+  assert.equal(resolveTransferPhase(noPhoto, isWarehouse), 'auto_completed');
+  assert.deepEqual(legsNotProcessedInPrism(noPhoto, isWarehouse), ['return']);
 });
 
 ok('a warehouse (DM) origin is on the road as soon as BC has made the shipment', () => {
@@ -204,9 +234,111 @@ ok('a warehouse (DM) origin is on the road as soon as BC has made the shipment',
   assert.equal(resolveTransferPhase({ ...dm, whseShipmentNo: 'WS1' }, isWarehouse), 'shipping');
 });
 
-ok('a store sending back to a warehouse is "to_warehouse", never listed as on delivery', () => {
+ok('a store sending back to a warehouse is "to_warehouse" until the DM posts its WR, never listed as on delivery', () => {
   const back = to({ toStoreId: null, transferToCode: 'DM-JKT', returnSubmittedAt: at('2026-11-17T08:00:00') });
   assert.equal(resolveTransferPhase(back, isWarehouse), 'to_warehouse');
+  assert.deepEqual(legsNotProcessedInPrism(back, isWarehouse), []); // still open
+});
+
+// ─── Transfer Order page metrics of a Selesai Otomatis order ─────────────────
+// The time is kept: a missing photo is replaced by BC's time (start → WS Diposting,
+// end → WR Diposting), never a blank.
+
+const metricsOf = (over: Partial<MetricInput>) => {
+  const all = buildTransferMetrics({
+    returnDetectedAt: null, returnSubmittedAt: null, droppingDetectedAt: null, droppingSubmittedAt: null, receivedAt: null,
+    fromIsWarehouse: false, toIsWarehouse: false, ...over,
+  });
+  return Object.fromEntries(all.map((m) => [m.key, m])) as Record<(typeof all)[number]['key'], (typeof all)[number]>;
+};
+const TO = '2026-11-17T01:00:00Z';
+const WS = '2026-11-17T03:00:00Z';
+const WR = '2026-11-18T03:00:00Z';
+
+ok('no photo at all: Delivery and Item Receiving both read WS Diposting → WR Diposting', () => {
+  const m = metricsOf({ returnDetectedAt: TO, droppingDetectedAt: WS, receivedAt: WR });
+  for (const key of ['delivery', 'bcReceiving'] as const) {
+    assert.equal(m[key].start, WS);
+    assert.equal(m[key].end, WR);
+    assert.equal(m[key].auto, true);
+    assert.equal(m[key].skipped, false);
+    assert.equal(minutesBetween(m[key].start, m[key].end), 24 * 60);
+  }
+  // the running Item Return wait stops at WR Diposting instead of disappearing
+  assert.equal(m.wsToReturn.start, WS);
+  assert.equal(m.wsToReturn.end, WR);
+  assert.equal(m.wsToReturn.autoEndLabel, 'WR Diposting');
+  // "Total Return" is gone (it only repeated TO → WS + WS → Foto)
+  assert.equal('returnTotal' in m, false);
+  // TO Dibuat → WS Diposting has no photo in it: untouched, not auto
+  assert.equal(m.bcProcessing.auto, false);
+  assert.equal(m.bcProcessing.end, WS);
+});
+
+ok('photos that exist are kept; only the missing end is filled in', () => {
+  const photo = '2026-11-17T05:00:00Z';
+  const m = metricsOf({ returnDetectedAt: TO, droppingDetectedAt: WS, returnSubmittedAt: photo, receivedAt: WR });
+  assert.equal(m.delivery.start, photo);
+  assert.equal(m.delivery.autoStart, false);
+  assert.equal(m.delivery.end, WR);
+  assert.equal(m.delivery.autoEnd, true);
+  assert.equal(m.wsToReturn.end, photo);
+  assert.equal(m.wsToReturn.auto, false);
+});
+
+ok('half done (only the destination photographed): the Item Return stops at Terima Fisik, not WR Diposting', () => {
+  const terima = '2026-11-17T09:00:00Z';
+  const m = metricsOf({ returnDetectedAt: TO, droppingDetectedAt: WS, droppingSubmittedAt: terima, receivedAt: WR });
+  assert.equal(m.wsToReturn.end, terima);
+  assert.equal(m.wsToReturn.autoEndLabel, 'Terima Fisik');
+  assert.equal(minutesBetween(m.wsToReturn.start, m.wsToReturn.end), 6 * 60);
+  // Delivery: WS Diposting (no Foto Serah Terima) → Terima Fisik; Item Receiving untouched
+  assert.equal(m.delivery.start, WS);
+  assert.equal(m.delivery.end, terima);
+  assert.equal(m.delivery.autoEnd, false);
+  assert.equal(m.bcReceiving.start, terima);
+  assert.equal(m.bcReceiving.auto, false);
+});
+
+ok('an order still open is not filled in; a fully photographed one is not auto', () => {
+  const open = metricsOf({ returnDetectedAt: TO, droppingDetectedAt: WS });
+  assert.equal(open.delivery.start, null);
+  assert.equal(open.bcReceiving.auto, false);
+  const done = metricsOf({
+    returnDetectedAt: TO, droppingDetectedAt: WS, returnSubmittedAt: '2026-11-17T05:00:00Z', droppingSubmittedAt: '2026-11-17T09:00:00Z', receivedAt: WR,
+  });
+  assert.equal(Object.values(done).some((x) => x.auto || x.skipped), false);
+});
+
+ok('finished with no WS ever recorded (TOA26013717): every WS metric says why, and a WR before the photo is not "0m"', () => {
+  // TO Dibuat 14 Okt, BC posted the WR 16 Okt, the origin only sent its Foto Serah Terima 19 Okt; no WS.
+  const m = metricsOf({
+    returnDetectedAt: '2026-10-14T02:32:59Z', returnSubmittedAt: '2026-10-19T08:48:59Z', receivedAt: '2026-10-16T16:59:59Z',
+  });
+  for (const key of ['bcProcessing', 'wsToReturn', 'bcReceiving'] as const) {
+    assert.equal(m[key].skipped, true, key);
+    assert.equal(m[key].skippedLabel, WS_NOT_RECORDED, key);
+  }
+  // Delivery = Foto Serah Terima (19 Okt) → WR Diposting (16 Okt): backwards — no duration, says why.
+  assert.equal(m.delivery.skipped, true);
+  assert.equal(m.delivery.skippedLabel, 'tidak tercatat — WR Diposting lebih awal dari Foto Serah Terima');
+});
+
+// ─── Transfer Orders cards: stores slower than the month average ─────────────
+
+ok('the month average pools every completed process; only stores above it are listed, slowest first', () => {
+  const reports = [
+    { id: 1, minutes: 600, timed: 2 },  // avg 300
+    { id: 2, minutes: 100, timed: 1 },  // avg 100
+    { id: 3, minutes: 0, timed: 0 },    // nothing finished — no average, never listed
+    { id: 4, minutes: 1200, timed: 3 }, // avg 400
+  ];
+  // pooled: (600 + 100 + 1200) / 6 = 316.67 — NOT the mean of the store averages (266.67)
+  const r = storesAboveAverage(reports);
+  assert.equal(r.monthAvgMinutes, 317);
+  assert.equal(r.timed, 6);
+  assert.deepEqual(r.above.map((x) => [x.report.id, x.avgMinutes]), [[4, 400]]);
+  assert.deepEqual(storesAboveAverage([{ minutes: 0, timed: 0 }]), { monthAvgMinutes: null, timed: 0, above: [] });
 });
 
 console.log(`\n${checks} checks passed`);

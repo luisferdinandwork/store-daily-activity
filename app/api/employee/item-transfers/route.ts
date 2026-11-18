@@ -180,6 +180,16 @@ export async function GET() {
     transferToCode: transferOrder?.transferToCode ?? null,
     bcStatus: transferOrder?.bcStatus ?? null,
     returnDetectedAt: (transferOrder?.returnDetectedAt ?? entry.createdAt)?.toISOString() ?? null,
+    // BC already posted the receipt: the order is finished, whether or not
+    // this store sent its Foto Serah Terima (no photo = completed by itself,
+    // shown as "Tidak diproses di PRISM").
+    receivedAt: transferOrder?.receivedAt?.toISOString() ?? null,
+    // Where the clock of an Item Return PRISM completed by itself stops: the
+    // destination's Terima Fisik photo when there is one (the hand-off was over
+    // by then), else WR Diposting (lib/transfer-order-metrics.ts).
+    autoDoneAt: transferOrder?.receivedAt
+      ? (transferOrder.droppingSubmittedAt ?? transferOrder.receivedAt).toISOString()
+      : null,
   }));
 
   return NextResponse.json({

@@ -11,6 +11,9 @@
 // `groups` is every store in scope by area (active stores, plus any other store that has a visit that year) — the
 // store picker, and the rows of the stores nobody visited. Only 'submitted' visits count; when more than one visit
 // of the same type lands in the same month, the most recently submitted one wins.
+//
+// The store list also gets `history`: every visited month of every store in scope from its first visit up to the
+// end of `year` (scores only, same "latest of the month wins" rule) — the list's all-time average.
 
 import { NextRequest, NextResponse } from 'next/server';
 import { and, eq, gte, lt, type SQL } from 'drizzle-orm';
@@ -24,6 +27,8 @@ import type {
   ReportAreaGroup,
   ReportCell,
   ReportCellSummary,
+  ReportVisitType,
+  ScoreMonth,
   StoreReportRow,
 } from '@/lib/impact-visit/report';
 import type { ChecklistResponses } from '@/lib/impact-visit/scoring';
@@ -56,7 +61,7 @@ export async function GET(req: NextRequest) {
   const inScope: SQL | undefined = scope.scope === 'area' ? eq(stores.areaId, scope.areaId) : undefined;
   const oneStore: SQL | undefined = storeId != null ? eq(stores.id, storeId) : undefined;
 
-  const [rows, storeRows] = await Promise.all([
+  const [rows, storeRows, historyRows] = await Promise.all([
     db
       .select({
         visit: impactVisits,
@@ -96,6 +101,25 @@ export async function GET(req: NextRequest) {
       // Not narrowed to `storeId`: the one-store page's picker lists every store in scope.
       .where(inScope)
       .orderBy(areas.name, stores.name),
+    // Scores of every visit up to the end of the year (the store list's "Sepanjang waktu" average).
+    withAnswers
+      ? Promise.resolve([])
+      : db
+          .select({
+            storeId: impactVisits.storeId,
+            visitType: impactVisits.visitType,
+            visitDate: impactVisits.visitDate,
+            checklistScore: impactVisits.checklistScore,
+            checklistMaxScore: impactVisits.checklistMaxScore,
+            checklistGrade: impactVisits.checklistGrade,
+            vmChecklistScore: impactVisits.vmChecklistScore,
+            vmChecklistMaxScore: impactVisits.vmChecklistMaxScore,
+            vmChecklistGrade: impactVisits.vmChecklistGrade,
+          })
+          .from(impactVisits)
+          .innerJoin(stores, eq(impactVisits.storeId, stores.id))
+          .where(and(eq(impactVisits.status, 'submitted'), lt(impactVisits.visitDate, yearEnd), inScope))
+          .orderBy(impactVisits.updatedAt, impactVisits.id),
   ]);
 
   if (storeId != null && !storeRows.some((s) => s.id === storeId)) {
@@ -157,12 +181,38 @@ export async function GET(req: NextRequest) {
     groupMap.set(s.areaId, g);
   }
 
+  // store → type → YYYY-MM → that month's latest visit (rows come oldest-updatedAt first, so the last write wins).
+  const historyMap = new Map<number, Record<ReportVisitType, Map<string, ScoreMonth>>>();
+  for (const h of historyRows) {
+    if (!h.visitType) continue;
+    const slot: ReportVisitType = h.visitType === 'virtual' ? 'virtual' : 'onLocation';
+    const ym = jakartaDateKey(h.visitDate).slice(0, 7);
+    const entry = historyMap.get(h.storeId) ?? { virtual: new Map(), onLocation: new Map() };
+    entry[slot].set(ym, {
+      ym,
+      checklist: { score: h.checklistScore, max: h.checklistMaxScore, pass: h.checklistGrade === 'A' },
+      vm: { score: h.vmChecklistScore, max: h.vmChecklistMaxScore, pass: h.vmChecklistGrade === 'A' },
+    });
+    historyMap.set(h.storeId, entry);
+  }
+  const sortedMonths = (m: Map<string, ScoreMonth>) => [...m.values()].sort((a, b) => a.ym.localeCompare(b.ym));
+
   const body: ImpactReportResponse<ReportCellSummary | ReportCell> = {
     success: true,
     isHO: scope.scope === 'all_areas',
     year,
     groups: [...groupMap.values()],
     stores: [...byStore.values()].sort((a, b) => a.storeName.localeCompare(b.storeName)),
+    ...(withAnswers
+      ? {}
+      : {
+          history: Object.fromEntries(
+            [...historyMap].map(([id, e]) => [
+              String(id),
+              { virtual: sortedMonths(e.virtual), onLocation: sortedMonths(e.onLocation) },
+            ]),
+          ),
+        }),
   };
 
   return NextResponse.json(body);

@@ -22,8 +22,15 @@
 //        end:   receivedAt          — BC Posted Whse Receipts confirms
 //                                     put-away (sourceNo match); no employee
 //                                     action, closed by sync only. The receipt
-//                                     feed has no timestamp either, so this is
-//                                     the sync that first saw it.
+//                                     feed has a date but no time, so this is
+//                                     the sync that first saw it (or the end of
+//                                     the posting day, if that was earlier).
+//
+// A TO BC no longer lists is either CANCELLED (no Posted Whse Receipt — the
+// row is removed) or COMPLETED (receipt posted — receivedAt set, row kept).
+// A finished TO with a store leg nobody photographed is "Selesai Otomatis ·
+// tidak diproses di PRISM" (lib/transfer-order-phase.ts); its times are kept,
+// BC's WS / WR time standing in for the missing photo.
 //
 // `droppingDetectedAt` is "Warehouse Shipment created" — taken from BC's own
 // `systemCreatedAt` on the shipment lines (exact), falling back to the sync

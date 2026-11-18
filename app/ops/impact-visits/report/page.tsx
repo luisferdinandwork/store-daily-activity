@@ -2,10 +2,11 @@
 //
 // Impact Visit · Monthly Report — the store list: every store in scope × the 12 months of a year, each month
 // showing its visit's Impact Visit and VM Checklist scores. A store opens its own page (./[storeId]). The year
-// and visit type live in the URL (?year=&type=) so the store page's "back" lands on the same view.
+// and visit type live in the URL (?year=&type=) so the store page's "back" lands on the same view; `&avg=all`
+// switches the "Rata-rata" column to all time (default: the year).
 
 import { jakartaDateKey } from '@/lib/day-bucket';
-import { parseReportType, parseReportYear } from '@/lib/impact-visit/report';
+import { isAverageScope, parseReportType, parseReportYear } from '@/lib/impact-visit/report';
 import ReportStoreList from './ReportStoreList';
 
 export default async function ImpactVisitReportPage({
@@ -16,5 +17,13 @@ export default async function ImpactVisitReportPage({
   const sp = await searchParams;
   const thisYear = Number(jakartaDateKey(new Date()).slice(0, 4));
 
-  return <ReportStoreList initialYear={parseReportYear(sp.year, thisYear)} initialType={parseReportType(sp.type)} />;
+  const avg = Array.isArray(sp.avg) ? sp.avg[0] : sp.avg;
+
+  return (
+    <ReportStoreList
+      initialYear={parseReportYear(sp.year, thisYear)}
+      initialType={parseReportType(sp.type)}
+      initialAvg={isAverageScope(avg) ? avg : 'year'}
+    />
+  );
 }

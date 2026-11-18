@@ -153,7 +153,7 @@ function Timeline({ steps }: { steps: ReportItem['steps'] }) {
 
 function ItemCard({ item }: { item: ReportItem }) {
   const Icon = ICON[item.process];
-  const tone = item.done ? TONES.success : TONES.warning;
+  const tone = item.auto ? TONES.sick : item.done ? TONES.success : TONES.warning;
   const note = DURATION_NOTE[item.process];
   return (
     <li className="rounded-xl border border-slate-100 bg-white px-3.5 py-3 shadow-[0_1px_0_rgba(15,23,42,0.02)]">
@@ -172,17 +172,23 @@ function ItemCard({ item }: { item: ReportItem }) {
           {item.process === 'receiving' && (
             <p className="mt-0.5 text-[11px] text-slate-400">WS diposting {formatStamp(item.anchorAt)}</p>
           )}
+          {item.auto && (
+            <p className={cn('mt-1 text-[11px] font-semibold leading-snug', TONES.sick.strong)}>
+              Tidak diproses di PRISM — selesai otomatis karena sudah diposting di BC
+              {item.doneAt ? ` (${formatStamp(item.doneAt)})` : ''}
+            </p>
+          )}
         </div>
 
         <div className="shrink-0 text-right">
           <span className={cn('inline-flex rounded-full border px-2 py-0.5 text-[10px] font-bold', tone.chip)}>
-            {item.done ? 'Selesai' : 'Belum'}
+            {item.auto ? 'Selesai Otomatis' : item.done ? 'Selesai' : 'Belum'}
           </span>
           {/* Done: the duration the averages use. Open: the running wait, which never does. */}
           {item.done && item.minutes != null ? (
             <>
               <p className={cn('mt-1.5 text-sm font-bold tabular-nums', tone.strong)}>{formatMinutes(item.minutes)}</p>
-              <p className="text-[10px] text-slate-400">{note.done}</p>
+              <p className="text-[10px] text-slate-400">{item.auto ? 'sampai WR Diposting (otomatis)' : note.done}</p>
             </>
           ) : !item.done && item.waitingMinutes != null ? (
             <>
@@ -192,7 +198,7 @@ function ItemCard({ item }: { item: ReportItem }) {
           ) : (
             <>
               <p className="mt-1.5 text-sm font-bold text-slate-300">—</p>
-              <p className="text-[10px] text-slate-400">{item.done ? note.noneDone : note.noneOpen}</p>
+              <p className="text-[10px] text-slate-400">{item.auto ? 'tanpa durasi' : item.done ? note.noneDone : note.noneOpen}</p>
             </>
           )}
         </div>

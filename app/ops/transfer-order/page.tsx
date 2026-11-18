@@ -13,13 +13,16 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Package, Truck, PackageCheck, CheckCircle2, Store as StoreIcon,
   MapPin, Loader2, X, Globe2, Shield, AlertTriangle,
-  Factory, Send, Inbox, Warehouse, Maximize2, Camera, ClipboardCheck, ArrowRight,
+  Factory, Send, Inbox, Warehouse, Maximize2, Camera, ArrowRight, Bot, ImageOff,
 } from 'lucide-react';
 import { ImageLightbox } from '@/components/shared/ImageLightbox';
 import {
   buildTransferMetrics, durationBetween, finishedEarly, formatStamp,
   type MetricKey, type TransferMetric,
 } from '@/lib/transfer-order-metrics';
+import {
+  AUTO_COMPLETED_LABEL, AUTO_COMPLETED_NOTE, LEG_SHORT_LABEL, LEG_STEP_LABEL, type TransferLeg,
+} from '@/lib/transfer-order-phase';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
@@ -35,11 +38,14 @@ import StorePickerCombobox, {
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 // 'to_warehouse' — a transfer whose destination is a DM warehouse/return
-// location, not a real store. There's no employee on that end to ever
-// confirm receipt, so it's a separate terminal state instead of a 5th step
-// on the normal return → shipping → receiving → received path (see
-// isWarehouseCode in app/api/ops/item-transfers/route.ts).
-type Phase = 'return' | 'shipping' | 'receiving' | 'received' | 'to_warehouse';
+// location, not a real store: the store handed it over and it waits for the
+// warehouse to post the Warehouse Receipt in BC. Nobody confirms it in PRISM,
+// so it is a side branch instead of a 5th step on the normal return →
+// shipping → receiving → received path.
+// 'auto_completed' — BC already posted it (Posted Whse Receipt) while a store
+// leg was never processed in PRISM (no photo), so the sync completed it by
+// itself (lib/transfer-order-phase.ts legsNotProcessedInPrism).
+type Phase = 'return' | 'shipping' | 'receiving' | 'received' | 'auto_completed' | 'to_warehouse';
 
 interface StoreRef {
   id: string;
@@ -61,6 +67,8 @@ interface Transfer {
   postingDate: string | null;
   whseShipmentNo: string | null;
   phase: Phase;
+  /** Store legs nobody processed in PRISM (only on an order BC already finished). */
+  notProcessedLegs: TransferLeg[];
   fromIsWarehouse: boolean;
   toIsWarehouse: boolean;
   returnDetectedAt: string | null;
@@ -83,6 +91,7 @@ const PHASE_CFG: Record<Phase, { label: string; tone: Tone; accent: string; Icon
   shipping: { label: 'Dalam Perjalanan', tone: 'info', accent: TONE_HEX.info, Icon: Truck },
   receiving: { label: 'Menunggu Diterima BC', tone: 'active', accent: TONE_HEX.active, Icon: PackageCheck },
   received: { label: 'Selesai', tone: 'success', accent: TONE_HEX.success, Icon: CheckCircle2 },
+  auto_completed: { label: AUTO_COMPLETED_LABEL, tone: 'sick', accent: TONE_HEX.sick, Icon: Bot },
   to_warehouse: { label: 'Dikirim ke Gudang', tone: 'neutral', accent: TONE_HEX.neutral, Icon: Warehouse },
 };
 
@@ -90,7 +99,14 @@ const PHASE_CFG: Record<Phase, { label: string; tone: Tone; accent: string; Icon
 // a side branch off "return" (see resolvePhase), not a 5th step on this
 // path, so it's deliberately excluded — see TransferDrawer for its own view.
 const PHASE_ORDER: Phase[] = ['return', 'shipping', 'receiving', 'received'];
-const PHASE_TILE_ORDER: Phase[] = [...PHASE_ORDER, 'to_warehouse'];
+const PHASE_TILE_ORDER: Phase[] = [...PHASE_ORDER, 'auto_completed', 'to_warehouse'];
+
+/** "FF001 · Toko X" — which store skipped the step, for the note. */
+function legWho(t: Transfer, leg: TransferLeg): string {
+  const code = leg === 'return' ? t.transferFromCode : t.transferToCode;
+  const store = leg === 'return' ? t.fromStore : t.toStore;
+  return `${code}${store ? ` · ${store.name}` : ''}`;
+}
 
 // ─── Time helpers ─────────────────────────────────────────────────────────────
 
@@ -112,7 +128,6 @@ type Metric = TransferMetric;
 const METRIC_ICON: Record<MetricKey, typeof Factory> = {
   bcProcessing: Factory,
   wsToReturn: Camera,
-  returnTotal: ClipboardCheck,
   delivery: Send,
   bcReceiving: Inbox,
 };
@@ -163,7 +178,7 @@ function PhaseBadge({ phase, compact }: { phase: Phase; compact?: boolean }) {
 // ─── Metric pill (compact, used on the card list) ──────────────────────────────
 
 function MetricPill({ metric }: { metric: Metric }) {
-  useTicking(metric.applicable && metric.start && !metric.end ? 30_000 : false);
+  useTicking(metric.applicable && !metric.skipped && metric.start && !metric.end ? 30_000 : false);
   const { start, end } = metric;
   const Icon = METRIC_ICON[metric.key];
 
@@ -172,6 +187,16 @@ function MetricPill({ metric }: { metric: Metric }) {
       <span className="flex w-full items-center justify-center gap-1 rounded-md bg-slate-50 px-1 py-0.5 text-slate-300" title={`${metric.label} — ${metric.naReason}`}>
         <Icon className="h-3 w-3" />
         <span className="text-[10px] font-semibold">N/A</span>
+      </span>
+    );
+  }
+
+  // Finished in BC, and not even BC's times can close this one.
+  if (metric.skipped) {
+    return (
+      <span className="flex w-full items-center justify-center gap-1 rounded-md bg-slate-50 px-1 py-0.5 text-slate-400" title={`${metric.label} — ${metric.skippedLabel}`}>
+        <Icon className="h-3 w-3" />
+        <span className="text-[10px] font-semibold">—</span>
       </span>
     );
   }
@@ -191,9 +216,10 @@ function MetricPill({ metric }: { metric: Metric }) {
     <span
       className={cn(
         'flex w-full items-center justify-center gap-1 rounded-md px-1 py-0.5',
-        early ? TONES.info.soft : ongoing ? TONES.warning.soft : TONES.success.soft,
+        // Selesai Otomatis: a real duration, but one end is BC's time — orange, not green.
+        metric.auto ? TONES.sick.soft : early ? TONES.info.soft : ongoing ? TONES.warning.soft : TONES.success.soft,
       )}
-      title={early ? `${metric.label} — ${metric.earlyNote}` : metric.label}
+      title={metric.auto ? `${metric.label} — ${metric.autoNote}` : early ? `${metric.label} — ${metric.earlyNote}` : metric.label}
     >
       <Icon className="h-3 w-3" />
       <span className="text-[10px] font-bold tabular-nums">{durationBetween(start, end, { signed: metric.signed })}</span>
@@ -204,12 +230,15 @@ function MetricPill({ metric }: { metric: Metric }) {
 // ─── Metric card (full, used in the drawer) ────────────────────────────────────
 
 function MetricCard({ metric }: { metric: Metric }) {
-  useTicking(metric.applicable && metric.start && !metric.end ? 30_000 : false);
+  useTicking(metric.applicable && !metric.skipped && metric.start && !metric.end ? 30_000 : false);
   const { start, end } = metric;
   const Icon = METRIC_ICON[metric.key];
   const ongoing = Boolean(start) && !end;
   const early = finishedEarly(metric);
-  const accent = !metric.applicable ? TONE_HEX.muted : !start ? TONE_HEX.neutral : early ? TONE_HEX.info : ongoing ? TONE_HEX.warning : TONE_HEX.success;
+  const accent = !metric.applicable ? TONE_HEX.muted
+    : metric.skipped ? TONE_HEX.neutral
+      : metric.auto ? TONE_HEX.sick
+        : !start ? TONE_HEX.neutral : early ? TONE_HEX.info : ongoing ? TONE_HEX.warning : TONE_HEX.success;
 
   return (
     <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2.5">
@@ -222,6 +251,24 @@ function MetricCard({ metric }: { metric: Metric }) {
           <p className="text-[11px] text-slate-400">
             {!metric.applicable
               ? metric.naReason
+              : metric.skipped
+                ? (
+                  <>
+                    {start && formatStamp(start)}
+                    {start && end && ` → ${formatStamp(end)}`}
+                    {start && ' · '}
+                    {metric.skippedLabel}
+                  </>
+                )
+              : metric.auto && start && end
+                ? (
+                  <>
+                    {formatStamp(start)}{metric.autoStart && ' (WS Diposting)'}
+                    {' → '}
+                    {formatStamp(end)}{metric.autoEnd && ` (${metric.autoEndLabel})`}
+                    <span className={cn('block font-semibold', TONES.sick.text)}>Selesai otomatis — tidak diproses di PRISM</span>
+                  </>
+                )
               : !start
                 ? metric.notStartedLabel
                 : (
@@ -235,7 +282,7 @@ function MetricCard({ metric }: { metric: Metric }) {
         </div>
       </div>
       <p className="shrink-0 text-sm font-bold tabular-nums" style={{ color: accent }}>
-        {!metric.applicable ? 'N/A' : start ? durationBetween(start, end, { signed: metric.signed }) : '—'}
+        {!metric.applicable ? 'N/A' : metric.skipped ? '—' : start ? durationBetween(start, end, { signed: metric.signed }) : '—'}
       </p>
     </div>
   );
@@ -245,7 +292,9 @@ function MetricCard({ metric }: { metric: Metric }) {
 
 function TransferDrawer({ transfer, onClose }: { transfer: Transfer; onClose: () => void }) {
   const cfg = PHASE_CFG[transfer.phase];
-  const currentIdx = PHASE_ORDER.indexOf(transfer.phase);
+  const isAuto = transfer.phase === 'auto_completed';
+  // An order PRISM completed by itself is finished too — the stepper runs to the end.
+  const currentIdx = PHASE_ORDER.indexOf(isAuto ? 'received' : transfer.phase);
   const metrics = buildMetrics(transfer);
 
   // The employees' courier-sign photos, previewed in a modal (ImageLightbox)
@@ -287,7 +336,8 @@ function TransferDrawer({ transfer, onClose }: { transfer: Transfer; onClose: ()
             <div className="flex items-center gap-2.5 rounded-2xl border p-3.5" style={{ borderColor: cfg.accent + '33', background: cfg.accent + '0d' }}>
               <Warehouse className="h-5 w-5 shrink-0" style={{ color: cfg.accent }} />
               <p className="text-xs leading-snug text-slate-600">
-                Tujuan adalah lokasi gudang (DM) — toko sudah menyerahkan barang, tidak ada tracking pengiriman/penerimaan lebih lanjut di sistem ini.
+                Tujuan adalah lokasi gudang (DM) — toko sudah menyerahkan barang. Menunggu gudang memposting Warehouse Receipt di BC;
+                setelah itu TO selesai.
               </p>
             </div>
           ) : (
@@ -295,13 +345,14 @@ function TransferDrawer({ transfer, onClose }: { transfer: Transfer; onClose: ()
               {PHASE_ORDER.map((phase, i) => {
                 const done = i <= currentIdx;
                 const isLast = i === PHASE_ORDER.length - 1;
+                const dotAccent = isAuto ? cfg.accent : PHASE_CFG[phase].accent;
                 return (
                   <div key={phase} className="flex flex-1 items-center gap-1">
                     <div
                       className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 text-[10px] font-bold transition-colors"
                       style={{
-                        borderColor: done ? PHASE_CFG[phase].accent : '#e2e8f0',
-                        background: done ? PHASE_CFG[phase].accent : 'white',
+                        borderColor: done ? dotAccent : '#e2e8f0',
+                        background: done ? dotAccent : 'white',
                         color: done ? 'white' : '#94a3b8',
                       }}
                     >
@@ -310,12 +361,36 @@ function TransferDrawer({ transfer, onClose }: { transfer: Transfer; onClose: ()
                     {!isLast && (
                       <div
                         className="mx-1 h-px flex-1"
-                        style={{ background: i < currentIdx ? PHASE_CFG[phase].accent : '#e2e8f0' }}
+                        style={{ background: i < currentIdx ? dotAccent : '#e2e8f0' }}
                       />
                     )}
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {isAuto && (
+            <div className={cn('rounded-2xl border p-4', TONES.sick.border, TONES.sick.tint)}>
+              <div className="flex items-start gap-2.5">
+                <Bot className={cn('mt-0.5 h-5 w-5 shrink-0', TONES.sick.text)} />
+                <div className="min-w-0 space-y-1.5">
+                  <p className={cn('text-sm font-bold', TONES.sick.strong)}>Tidak diproses di PRISM</p>
+                  <p className="text-xs leading-snug text-slate-600">
+                    TO ini sudah diposting di Business Central (Posted Whse Receipt), jadi PRISM menyelesaikannya
+                    otomatis{transfer.receivedAt ? ` pada ${formatStamp(transfer.receivedAt)}` : ''}. Langkah ini tidak
+                    dikerjakan toko di PRISM (tidak ada foto):
+                  </p>
+                  <ul className="space-y-1">
+                    {transfer.notProcessedLegs.map((leg) => (
+                      <li key={leg} className="flex items-start gap-1.5 text-xs text-slate-700">
+                        <ImageOff className={cn('mt-0.5 h-3.5 w-3.5 shrink-0', TONES.sick.text)} />
+                        <span><span className="font-semibold">{LEG_STEP_LABEL[leg]}</span> — {legWho(transfer, leg)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
             </div>
           )}
 
@@ -350,20 +425,44 @@ function TransferDrawer({ transfer, onClose }: { transfer: Transfer; onClose: ()
             <div className="space-y-2">
               {metrics.map((m) => <MetricCard key={m.key} metric={m} />)}
             </div>
+            {/* BC drops a finished order's shipment from its feeds, so a WS PRISM did not read
+                while the order was open is gone for good (lib/transfer-order-metrics.ts). */}
+            {transfer.receivedAt && !transfer.droppingDetectedAt && (
+              <p className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] leading-snug text-slate-600">
+                <span className="font-semibold">WS Diposting tidak tercatat.</span> TO ini sudah diterima di BC sebelum PRISM
+                membaca pengirimannya — setelah TO selesai, BC tidak lagi menampilkan Warehouse Shipment-nya. Karena itu
+                {transfer.toIsWarehouse ? '' : ' toko tujuan tidak mendapat TO ini di Item Receiving, dan'} waktu yang dimulai dari
+                WS tidak bisa dihitung.
+              </p>
+            )}
             {/* BC's transfer-order feed carries no creation time, so be explicit
                 about what each end of the first range actually is. */}
             <p className="mt-2 text-[10px] leading-snug text-slate-400">
               TO Dibuat = saat sistem pertama kali mendeteksi TO di Business Central (BC tidak menyediakan jam pembuatan TO).
               WS Diposting = jam Warehouse Shipment diposting di BC. Foto Serah Terima = saat toko mengirim konfirmasi serah terima ke kurir
-              beserta foto. Total Proses Item Return = TO Dibuat sampai Foto Serah Terima. Terima Fisik Barang di Toko = saat toko mengonfirmasi
-              barang diterima dari kurir. WR Diposting = saat sistem pertama kali melihat Warehouse Receipt diposting di BC.
+              beserta foto. Terima Fisik Barang di Toko = saat toko mengonfirmasi barang diterima dari kurir. WR Diposting = saat sistem
+              pertama kali melihat Warehouse Receipt diposting di BC (BC hanya memberi tanggal; bila diposting di hari sebelumnya, dipakai
+              akhir hari posting; TO ke gudang DM selesai saat gudang memposting WR). Selesai Otomatis = TO sudah diposting di BC tanpa
+              diproses toko di PRISM (tidak ada foto); foto yang tidak ada diganti waktu lain — mulai dari WS Diposting, selesai di Terima Fisik (bila toko tujuan
+              sudah memfoto) atau WR Diposting.
             </p>
           </div>
 
-          {photos.length > 0 && (
+          {(photos.length > 0 || isAuto) && (
             <div>
               <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Bukti Foto Karyawan</p>
               <div className="grid grid-cols-2 gap-3">
+                {/* A leg PRISM never processed: say so where its photo would be. */}
+                {transfer.notProcessedLegs.map((leg) => (
+                  <div key={`missing-${leg}`}>
+                    <p className="mb-1 text-[10px] font-semibold text-slate-500">{LEG_SHORT_LABEL[leg]}</p>
+                    <div className={cn('flex h-32 flex-col items-center justify-center gap-1 rounded-xl border border-dashed px-3 text-center', TONES.sick.border, TONES.sick.tint)}>
+                      <ImageOff className={cn('h-5 w-5', TONES.sick.text)} />
+                      <p className={cn('text-[11px] font-semibold leading-tight', TONES.sick.strong)}>Tidak ada foto</p>
+                      <p className="text-[10px] leading-tight text-slate-500">tidak diproses di PRISM</p>
+                    </div>
+                  </div>
+                ))}
                 {photos.map((photo, i) => (
                   <button
                     key={photo.label}
@@ -404,7 +503,11 @@ function TransferDrawer({ transfer, onClose }: { transfer: Transfer; onClose: ()
           )}
 
           {transfer.whseShipmentNo && (
-            <p className="text-[11px] text-slate-400">Whse Shipment: <span className="font-mono">{transfer.whseShipmentNo}</span></p>
+            <p className="text-[11px] text-slate-400">
+              {/* TSA… = shipped straight from the transfer order (no Warehouse Shipment), seen on the TO itself. */}
+              {/^TS/i.test(transfer.whseShipmentNo) ? 'Transfer Shipment' : 'Whse Shipment'}:{' '}
+              <span className="font-mono">{transfer.whseShipmentNo}</span>
+            </p>
           )}
         </div>
       </div>
@@ -416,18 +519,17 @@ function TransferDrawer({ transfer, onClose }: { transfer: Transfer; onClose: ()
 // ─── Transfer row ─────────────────────────────────────────────────────────────
 
 // One list row per transfer order (OpsList). Wide container (`@5xl`, ~1000px of
-// list): a single line — TO code · status · route · the five timing metrics — whose
+// list): a single line — TO code · status · route · the four timing metrics — whose
 // columns line up with the header row above. Narrower: two lines, code + status +
-// route on top and the five metrics under them, each with its small label, so the
+// route on top and the four metrics under them, each with its small label, so the
 // list never scrolls sideways beside the sidebar.
-const ROW_GRID = '@5xl:grid @5xl:grid-cols-[112px_156px_minmax(0,1fr)_repeat(5,78px)] @5xl:items-center @5xl:gap-x-3';
+const ROW_GRID = '@5xl:grid @5xl:grid-cols-[112px_156px_minmax(0,1fr)_repeat(4,78px)] @5xl:items-center @5xl:gap-x-3';
 
 // Short header text per metric; the full wording (lib/transfer-order-metrics.ts)
 // is the hover title.
 const METRIC_HEAD: Record<MetricKey, string> = {
   bcProcessing: 'TO → WS',
   wsToReturn: 'WS → Foto',
-  returnTotal: 'Total Return',
   delivery: 'Delivery',
   bcReceiving: 'Terima BC',
 };
@@ -435,12 +537,11 @@ const METRIC_HEAD: Record<MetricKey, string> = {
 const METRIC_HEAD_TITLE: Record<MetricKey, string> = {
   bcProcessing: 'TO Dibuat → WS Diposting',
   wsToReturn: 'WS Diposting → Foto Serah Terima',
-  returnTotal: 'Total Proses Item Return (TO Dibuat → Foto Serah Terima)',
   delivery: 'Waktu Pengiriman (Delivery Time)',
   bcReceiving: 'Terima Fisik Barang di Toko → WR Diposting (BC)',
 };
 
-const METRIC_ORDER: MetricKey[] = ['bcProcessing', 'wsToReturn', 'returnTotal', 'delivery', 'bcReceiving'];
+const METRIC_ORDER: MetricKey[] = ['bcProcessing', 'wsToReturn', 'delivery', 'bcReceiving'];
 
 function TransferTableHead() {
   const th = 'text-[10px] font-bold uppercase tracking-wide text-slate-500';
@@ -486,7 +587,18 @@ function TransferRow({ transfer, onClick }: { transfer: Transfer; onClick: () =>
             <span className="block truncate font-mono text-xs font-bold text-slate-800">{transfer.toaNo}</span>
             <span className="hidden text-[10px] tabular-nums text-slate-400 @5xl:block">Qty {transfer.qtyOrdered}</span>
           </div>
-          <span><PhaseBadge phase={transfer.phase} compact /></span>
+          <span className="flex flex-col items-start gap-0.5">
+            <PhaseBadge phase={transfer.phase} compact />
+            {transfer.phase === 'auto_completed' && (
+              <span
+                className={cn('inline-flex items-center gap-1 text-[10px] font-semibold leading-tight', TONES.sick.text)}
+                title={`${AUTO_COMPLETED_NOTE} Tanpa foto: ${transfer.notProcessedLegs.map((l) => LEG_STEP_LABEL[l]).join(', ')}.`}
+              >
+                <ImageOff className="h-3 w-3 shrink-0" />
+                Tidak diproses di PRISM
+              </span>
+            )}
+          </span>
           <span className="flex min-w-0 flex-1 basis-64 items-center gap-1.5 @5xl:flex-col @5xl:items-stretch @5xl:gap-0.5">
             <RouteEnd store={transfer.fromStore} code={transfer.transferFromCode} isWarehouse={transfer.fromIsWarehouse} />
             <ArrowRight className="h-3 w-3 shrink-0 text-slate-300 @5xl:hidden" />
@@ -494,7 +606,7 @@ function TransferRow({ transfer, onClick }: { transfer: Transfer; onClick: () =>
             <span className="shrink-0 text-[11px] tabular-nums text-slate-400 @5xl:hidden" title="Qty pesanan">×{transfer.qtyOrdered}</span>
           </span>
         </div>
-        <div className="grid grid-cols-5 gap-1.5 @5xl:contents">
+        <div className="grid grid-cols-4 gap-1.5 @5xl:contents">
           {metrics.map((m) => (
             <div key={m.key} className="min-w-0">
               <p className="mb-0.5 truncate text-center text-[9px] font-semibold uppercase tracking-wide text-slate-400 @5xl:hidden">{METRIC_HEAD[m.key]}</p>
@@ -601,6 +713,7 @@ export default function OpsItemTransfersPage() {
     shipping: searchScoped.filter((t) => t.phase === 'shipping').length,
     receiving: searchScoped.filter((t) => t.phase === 'receiving').length,
     received: searchScoped.filter((t) => t.phase === 'received').length,
+    auto_completed: searchScoped.filter((t) => t.phase === 'auto_completed').length,
     to_warehouse: searchScoped.filter((t) => t.phase === 'to_warehouse').length,
   }), [searchScoped]);
 
@@ -655,7 +768,7 @@ export default function OpsItemTransfersPage() {
         )}
 
         {/* Summary — one tile per phase; a tile is also the phase filter (click again to clear) */}
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
           {PHASE_TILE_ORDER.map((phase) => {
             const cfg = PHASE_CFG[phase];
             const active = phaseFilter === phase;

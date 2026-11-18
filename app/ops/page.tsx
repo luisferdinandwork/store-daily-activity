@@ -18,7 +18,7 @@ import OpsPageHeader from '@/components/ops/layout/OpsPageHeader';
 import DashboardMobile from '@/components/ops/mobile/DashboardMobile';
 import TrendChart from '@/components/ops/dashboard/TrendChart';
 import TodayCards from '@/components/ops/dashboard/TodayCards';
-import { IssueQueue, PettyCashQueue, TransferQueue, VisitQueue } from '@/components/ops/dashboard/QueueWidgets';
+import { IssueQueue, PettyCashQueue, TransferAverage, VisitQueue } from '@/components/ops/dashboard/QueueWidgets';
 import { SectionHeading } from '@/components/ops/dashboard/widgets';
 import type { DashboardData } from '@/lib/ops-dashboard';
 import type { DashboardQueues } from '@/lib/ops-dashboard-queues';
@@ -129,13 +129,13 @@ export default function OpsDashboardPage() {
             </div>
           </section>
 
-          {/* ── Transfer orders held up in each phase ────────────────────── */}
+          {/* ── Transfer orders: stores slower than this month's average ─── */}
           <section>
-            <SectionHeading right="Still open, longest first">Transfer Orders</SectionHeading>
+            <SectionHeading right="This month, slowest first">Transfer Orders</SectionHeading>
             <div className={GRID_3}>
-              <TransferQueue kind="return" queues={queues} loading={queuesLoading} />
-              <TransferQueue kind="shipping" queues={queues} loading={queuesLoading} />
-              <TransferQueue kind="receiving" queues={queues} loading={queuesLoading} />
+              <TransferAverage kind="return" queues={queues} loading={queuesLoading} />
+              <TransferAverage kind="receiving" queues={queues} loading={queuesLoading} />
+              <TransferAverage kind="delivery" queues={queues} loading={queuesLoading} />
             </div>
           </section>
 

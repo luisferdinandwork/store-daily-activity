@@ -8,8 +8,17 @@ import { notFound } from 'next/navigation';
 import { isProcess } from '@/lib/transfer-order-report';
 import ReportView from '../report-view';
 
-export default async function TransferOrderReportPage({ params }: { params: Promise<{ process: string }> }) {
+export default async function TransferOrderReportPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ process: string }>;
+  searchParams: Promise<{ period?: string }>;
+}) {
   const { process } = await params;
   if (!isProcess(process)) notFound();
-  return <ReportView process={process} />;
+  // ?period=daily|weekly|monthly — the Ops Dashboard links straight to "Bulanan".
+  const { period } = await searchParams;
+  const initialPeriod = period === 'daily' || period === 'weekly' || period === 'monthly' ? period : undefined;
+  return <ReportView process={process} initialPeriod={initialPeriod} />;
 }

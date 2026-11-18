@@ -15,7 +15,7 @@ import type { DashboardQueues } from '@/lib/ops-dashboard-queues';
 import { MobileSectionTitle } from './MobileKit';
 import TrendChart from '@/components/ops/dashboard/TrendChart';
 import TodayCards from '@/components/ops/dashboard/TodayCards';
-import { IssueQueue, PettyCashQueue, TransferQueue, VisitQueue } from '@/components/ops/dashboard/QueueWidgets';
+import { IssueQueue, PettyCashQueue, TransferAverage, VisitQueue } from '@/components/ops/dashboard/QueueWidgets';
 
 function greeting() {
   const hour = Number(
@@ -110,9 +110,9 @@ export default function DashboardMobile({
       {/* ── Transfer orders ──────────────────────────────────────────────── */}
       <section className="space-y-4 px-4 pt-6">
         <MobileSectionTitle>Transfer Orders</MobileSectionTitle>
-        <TransferQueue kind="return" queues={queues} loading={queuesLoading} />
-        <TransferQueue kind="shipping" queues={queues} loading={queuesLoading} />
-        <TransferQueue kind="receiving" queues={queues} loading={queuesLoading} />
+        <TransferAverage kind="return" queues={queues} loading={queuesLoading} />
+        <TransferAverage kind="receiving" queues={queues} loading={queuesLoading} />
+        <TransferAverage kind="delivery" queues={queues} loading={queuesLoading} />
       </section>
 
       {/* ── Ops HO / IT: this week's visits ──────────────────────────────── */}

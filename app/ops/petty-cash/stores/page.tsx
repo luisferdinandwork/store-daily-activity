@@ -170,7 +170,7 @@ export default function OpsPettyCashStoresPage() {
     {
       label: 'Waiting OPS',
       value: String(totals.waitingOps),
-      sub: totals.waitingOps > 0 ? 'requests + refills to approve' : 'nothing to approve',
+      sub: totals.waitingOps > 0 ? '# requests + refills to approve' : 'nothing to approve',
       warn: totals.waitingOps > 0,
     },
     {

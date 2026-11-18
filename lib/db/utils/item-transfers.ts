@@ -35,6 +35,8 @@ import { getActiveBusinessCentralSettings } from '@/lib/performance/business-cen
 import { fetchAllBusinessCentralRows } from '@/lib/bc/client';
 import { getActiveItemReturnTask } from '@/lib/db/utils/item-return';
 import { getActiveItemDroppingTask } from '@/lib/db/utils/item-dropping';
+import { legsNotProcessedInPrism } from '@/lib/transfer-order-phase';
+import { jakartaDateKey } from '@/lib/day-bucket';
 
 export type TaskResult<T = void> =
   | { success: true; data: T }
@@ -126,6 +128,25 @@ interface BcTransferOrderRow {
   postingDate?: string;
   status?: string;
   totalQtyOrder?: number;
+  /**
+   * Shipping state of the order itself. BC fills these when ANY shipment is
+   * posted — through a Warehouse Shipment or straight from the transfer order
+   * ("Post → Ship", no WS at all). `lastShipmentNo` is the posted Transfer
+   * Shipment (TSA…).
+   */
+  totalQtyShipped?: number;
+  completelyShipped?: boolean;
+  lastShipmentNo?: string;
+}
+
+/**
+ * The posted Transfer Shipment no when BC says the order has shipped, else null.
+ * Used as the shipment marker when the Warehouse Shipment feed never showed one.
+ */
+function shippedTransferShipmentNo(row: BcTransferOrderRow): string | null {
+  const shipped = (row.totalQtyShipped ?? 0) > 0 || row.completelyShipped === true;
+  const no = typeof row.lastShipmentNo === 'string' ? row.lastShipmentNo.trim() : '';
+  return shipped && no ? no : null;
 }
 
 function isBcTransferOrderRow(row: unknown): row is BcTransferOrderRow {
@@ -164,6 +185,8 @@ function isBcWhseShipmentRow(row: unknown): row is BcWhseShipmentRow {
 
 interface BcWhseReceiptRow {
   sourceNo: string;
+  /** Date only ("2026-11-18") — the feed has no time of day (systemCreatedAt etc. are rejected). */
+  postingDate?: string;
 }
 
 function isBcWhseReceiptRow(row: unknown): row is BcWhseReceiptRow {
@@ -230,6 +253,27 @@ async function fetchTransferOrders(lookbackDays: number): Promise<BcTransferOrde
   const filter = `postingDate ge ${lookbackDate(lookbackDays)}`;
   const rows = await fetchAllBusinessCentralRows(bcRequestUrl(settings.apiUrl, filter), settings);
   return rows.filter(isBcTransferOrderRow);
+}
+
+/**
+ * Which of these TO numbers BC's transfer-order feed still lists — asked by
+ * number (`no eq 'A' or no eq 'B'`, one field so OData accepts the OR), with
+ * no posting-date window. The reconcile uses it as a second opinion before it
+ * calls an order gone: an order the windowed company-wide pull did not return
+ * may simply have had its posting date moved, and a missing row is never
+ * trusted on one query alone.
+ */
+async function fetchTransferOrderNosStillInBc(nos: string[]): Promise<Set<string>> {
+  const unique = [...new Set(nos.filter(Boolean))];
+  if (unique.length === 0) return new Set();
+  const settings = await getActiveBusinessCentralSettings('transfer_orders');
+  if (!settings) throw new Error('BC Transfer Orders belum dikonfigurasi.');
+  const perChunk = await mapPool(chunk(unique, RECEIPT_FILTER_CHUNK), RECEIPT_FETCH_CONCURRENCY, async (group) => {
+    const filter = group.map((n) => `no eq '${escapeODataString(n)}'`).join(' or ');
+    const rows = await fetchAllBusinessCentralRows(bcRequestUrl(settings.apiUrl, filter), settings);
+    return rows.filter(isBcTransferOrderRow).map((r) => r.no);
+  });
+  return new Set(perChunk.flat());
 }
 
 // The `whse_shipments`/`whse_receipts` feeds are company-wide and carry
@@ -301,6 +345,56 @@ const RECEIPT_FETCH_CONCURRENCY = 4;
  * trips). This replaces the old unbounded "every TOA receipt in the last N
  * days" pull.
  */
+/**
+ * The TO numbers among `sourceNos` that have a Posted Whse Receipt in BC, each
+ * with the Jakarta day its earliest receipt was posted (null if BC sent none).
+ */
+async function receivedInBc(sourceNos: string[]): Promise<Map<string, string | null>> {
+  const receipts = await fetchWhseReceiptsFor(sourceNos);
+  const out = new Map<string, string | null>();
+  for (const r of receipts) {
+    const day = typeof r.postingDate === 'string' && /^\d{4}-\d{2}-\d{2}/.test(r.postingDate) ? r.postingDate.slice(0, 10) : null;
+    const prev = out.get(r.sourceNo);
+    out.set(r.sourceNo, prev == null ? day : day != null && day < prev ? day : prev);
+  }
+  return out;
+}
+
+/**
+ * "WR Diposting" for an order the sweep just found received. BC's receipt feed
+ * has a date but no time: the cron sees a new receipt within minutes, so
+ * "first seen" (`now`) is the honest time — unless the receipt was posted on
+ * an EARLIER day (a backlog after the sweep was down), where `now` would add
+ * whole days to Delivery / Item Receiving; then it is the last moment of the
+ * posting day (Jakarta), the latest the posting can have happened.
+ */
+function wrPostedAt(postingDay: string | null | undefined, now: Date): Date {
+  if (!postingDay || postingDay >= jakartaDateKey(now)) return now;
+  return new Date(`${postingDay}T23:59:59+07:00`);
+}
+
+/** Sets receivedAt on still-open rows, each to its own WR time; returns the updated rows. */
+async function markReceived(
+  rows: { id: number; toaNo: string }[],
+  received: Map<string, string | null>,
+  now: Date,
+): Promise<ItemTransferOrder[]> {
+  const byTime = new Map<number, number[]>();
+  for (const r of rows) {
+    const at = wrPostedAt(received.get(r.toaNo), now).getTime();
+    byTime.set(at, [...(byTime.get(at) ?? []), r.id]);
+  }
+  const out: ItemTransferOrder[] = [];
+  for (const [at, ids] of byTime) {
+    out.push(...await db
+      .update(itemTransferOrders)
+      .set({ receivedAt: new Date(at), updatedAt: now })
+      .where(and(inArray(itemTransferOrders.id, ids), isNull(itemTransferOrders.receivedAt)))
+      .returning());
+  }
+  return out;
+}
+
 async function fetchWhseReceiptsFor(sourceNos: string[]): Promise<BcWhseReceiptRow[]> {
   const unique = [...new Set(sourceNos.filter(Boolean))];
   if (unique.length === 0) return [];
@@ -424,6 +518,14 @@ async function batchUpsertTransferOrdersFromToRows(
     postingDate: row.postingDate ? new Date(row.postingDate) : null,
     // BC's own creation instant when the feed has one, else "first seen".
     returnDetectedAt: parseBcInstant(row.systemCreatedAt) ?? now,
+    // Shipped, seen on the ORDER itself — a fallback for the Warehouse Shipment
+    // feed (see the onConflict rules below): the posted Transfer Shipment no and
+    // "first seen". BC drops a TO's shipment rows from the WS feed as soon as the
+    // order is fully received, and an order shipped without a WS never has any,
+    // so without this such an order never reached the destination's Item
+    // Receiving list and its WS Diposting stayed "tidak tercatat" for good.
+    whseShipmentNo: shippedTransferShipmentNo(row),
+    droppingDetectedAt: shippedTransferShipmentNo(row) ? now : null,
     createdAt: now,
     updatedAt: now,
   }));
@@ -450,10 +552,16 @@ async function batchUpsertTransferOrdersFromToRows(
         // instant (if the feed ever carries one) replaces a "first seen" guess
         // while a later "first seen" never overwrites anything.
         returnDetectedAt: sql`least(item_transfer_orders.return_detected_at, excluded.return_detected_at, item_transfer_orders.dropping_detected_at)`,
+        // Fill-only: a WS number / BC's WS time from the shipment feed always
+        // wins (that upsert runs right after this one and moves the time to
+        // BC's own `systemCreatedAt` via least()).
+        whseShipmentNo: sql`coalesce(item_transfer_orders.whse_shipment_no, excluded.whse_shipment_no)`,
+        droppingDetectedAt: sql`coalesce(item_transfer_orders.dropping_detected_at, excluded.dropping_detected_at)`,
         updatedAt: now,
       },
       setWhere: sql`(
-        item_transfer_orders.transfer_from_code is distinct from excluded.transfer_from_code
+        (item_transfer_orders.whse_shipment_no is null and excluded.whse_shipment_no is not null)
+        or item_transfer_orders.transfer_from_code is distinct from excluded.transfer_from_code
         or item_transfer_orders.transfer_to_code is distinct from excluded.transfer_to_code
         or item_transfer_orders.qty_ordered is distinct from excluded.qty_ordered
         or item_transfer_orders.bc_status is distinct from excluded.bc_status
@@ -603,9 +711,8 @@ export interface SyncContext {
  * the "new transfer order" notification (transfer-order-notifications.ts) all
  * build on these two predicates — they cannot drift apart from each other.
  *
- * `receivedAt` closes BOTH legs: once BC has posted the receipt (or the
- * warehouse-bound return was handed over) there is nothing left for either
- * store to do. Before, only the dropping leg checked it, so a transfer the
+ * `receivedAt` closes BOTH legs: once BC has posted the receipt there is
+ * nothing left for either store to do. Before, only the dropping leg checked it, so a transfer the
  * destination had already received kept the ORIGIN store's badge lit forever
  * while the employee page (which already treats receivedAt as done) showed it
  * under "Sudah dikonfirmasi".
@@ -784,12 +891,107 @@ export async function syncItemDroppingForStore(
 // looked at yet. Callers go through refreshTransferRegistry() (single-flight +
 // throttle) rather than calling this directly.
 
+/** What the registry reconcile did: orders BC dropped, sorted into the two outcomes. */
+export interface ReconcileResult {
+  /** Gone from BC with NO Posted Whse Receipt — cancelled in BC, removed from PRISM. */
+  cancelled: number;
+  /** Gone from BC WITH a Posted Whse Receipt — completed (receivedAt set), row kept. */
+  autoCompleted: number;
+}
+
+/**
+ * A TO whose stored posting date sits this close to the fetch window's edge is
+ * never judged by a windowed sweep (a date rounding / time-zone hair could
+ * leave it just outside the window while BC still has it).
+ */
+const WINDOW_EDGE_DAYS = 2;
+
+/**
+ * The two rules for a transfer order BC's transfer-order feed no longer lists.
+ * BC removes a TO in exactly two situations, and the Posted Whse Receipts feed
+ * (which keeps its records after the TO is gone) tells them apart:
+ *
+ *  1. **Cancelled** — deleted in BC before it was received: no Posted Whse
+ *     Receipt for it. PRISM removes it too (the row and every Item Return /
+ *     Item Receiving entry pointing at it, confirmed or not), so neither the
+ *     store nor OPS keeps seeing an order that no longer exists.
+ *  2. **Completed** — BC deletes a TO once it is fully received: a Posted Whse
+ *     Receipt exists. PRISM completes it (`receivedAt`) and keeps the row,
+ *     whether or not the stores ever took their photos — a store leg nobody
+ *     processed shows as "Selesai Otomatis · tidak diproses di PRISM"
+ *     (legsNotProcessedInPrism in lib/transfer-order-phase.ts).
+ *
+ * `seen` = the TO numbers the windowed company-wide pull just returned.
+ * `judgeSince` = only rows whose stored posting date is on/after it are judged
+ * (the light sweep only looked back 14 days, so it can't speak for older
+ * rows); null = every open row (the full sweep). Before anything is removed,
+ * BC is asked again by number, without a date window — an order still listed
+ * there is not gone, whatever the windowed pull said.
+ */
+async function reconcileVanishedTransferOrders(
+  seen: Set<string>,
+  judgeSince: string | null,
+): Promise<ReconcileResult> {
+  const result: ReconcileResult = { cancelled: 0, autoCompleted: 0 };
+
+  const open = await db
+    .select({ id: itemTransferOrders.id, toaNo: itemTransferOrders.toaNo })
+    .from(itemTransferOrders)
+    .where(and(
+      isNull(itemTransferOrders.receivedAt),
+      judgeSince ? sql`${itemTransferOrders.postingDate} >= ${judgeSince}::timestamp` : undefined,
+    ));
+
+  // Warehouse-bound orders too: they stay open until the DM posts its receipt.
+  const candidates = open.filter((r) => !seen.has(r.toaNo));
+  if (candidates.length === 0) return result;
+
+  const stillInBc = await fetchTransferOrderNosStillInBc(candidates.map((c) => c.toaNo));
+  const vanished = candidates.filter((c) => !stillInBc.has(c.toaNo));
+  if (vanished.length === 0) return result;
+
+  const received = await receivedInBc(vanished.map((v) => v.toaNo));
+  const now = new Date();
+
+  const toComplete = vanished.filter((v) => received.has(v.toaNo));
+  if (toComplete.length > 0) {
+    const done = await markReceived(toComplete, received, now);
+    result.autoCompleted = done.length;
+  }
+
+  const cancelled = vanished.filter((v) => !received.has(v.toaNo));
+  if (cancelled.length > 0) {
+    const ids = cancelled.map((c) => c.id);
+    // Entries first — transferOrderId has no ON DELETE cascade.
+    const [ret, drop] = await Promise.all([
+      db.delete(itemReturnEntries).where(inArray(itemReturnEntries.transferOrderId, ids))
+        .returning({ id: itemReturnEntries.id, submittedAt: itemReturnEntries.submittedAt }),
+      db.delete(itemDroppingEntries).where(inArray(itemDroppingEntries.transferOrderId, ids))
+        .returning({ id: itemDroppingEntries.id, submittedAt: itemDroppingEntries.submittedAt }),
+    ]);
+    const deleted = await db
+      .delete(itemTransferOrders)
+      .where(and(inArray(itemTransferOrders.id, ids), isNull(itemTransferOrders.receivedAt)))
+      .returning({ id: itemTransferOrders.id });
+    result.cancelled = deleted.length;
+    const confirmedLost = [...ret, ...drop].filter((e) => e.submittedAt != null).length;
+    console.warn(
+      `[transfer-orders] removed ${deleted.length} TO(s) cancelled in BC (no Posted Whse Receipt): ` +
+      `${cancelled.map((c) => c.toaNo).join(', ')}` +
+      (confirmedLost > 0 ? ` — incl. ${confirmedLost} store confirmation(s) already sent` : ''),
+    );
+  }
+
+  return result;
+}
+
 export async function syncTransferOrderRegistry(
   opts: { lookbackDays?: number; prune?: boolean } = {},
-): Promise<TaskResult<{ synced: number; pruned: number }>> {
+): Promise<TaskResult<{ synced: number } & ReconcileResult>> {
   const lookbackDays = opts.lookbackDays ?? REGISTRY_LOOKBACK_DAYS;
-  // Pruning compares the DB against the feeds, so it is only sound over the
-  // FULL window — the light, frequent refresh never prunes.
+  // `prune` = the full sweep: judge EVERY open row against BC. The light sweep
+  // (prune: false) still judges the rows its 14-day window can speak for, so a
+  // cancelled / completed recent order is settled within minutes, not hours.
   const prune = opts.prune ?? true;
 
   try {
@@ -809,133 +1011,64 @@ export async function syncTransferOrderRegistry(
     await batchUpsertTransferOrdersFromToRows(toRows, storeIdByCode);
     await batchUpsertTransferOrdersFromShipmentGroups(shipmentGroups, storeIdByCode);
 
-    let pruned = 0;
-    if (prune) {
-      // Reconcile: drop rows BC no longer knows about in EITHER feed, as long
-      // as nobody has acted on them and they aren't already received. This
-      // clears "shows on the website but not in BC" ghosts (e.g. a TO deleted
-      // in BC after its stub was created from a posted shipment).
-      const seen = new Set<string>([
-        ...toRows.map((r) => r.no),
-        ...shipmentGroups.map((g) => g.transferOrderNo),
-      ]);
-      const candidates = await db
-        .select({ id: itemTransferOrders.id, toaNo: itemTransferOrders.toaNo })
-        .from(itemTransferOrders)
-        .where(
-          and(
-            isNull(itemTransferOrders.receivedAt),
-            isNull(itemTransferOrders.returnSubmittedAt),
-            isNull(itemTransferOrders.droppingSubmittedAt),
-          ),
-        );
-      const maybeStale = candidates.filter((c) => !seen.has(c.toaNo)).map((c) => c.id);
-      if (maybeStale.length) {
-        // Never delete one an employee has actually CONFIRMED (submittedAt
-        // set — real qty/photo/timestamp, genuine audit trail). An
-        // unconfirmed entry is just an empty placeholder no one ever acted
-        // on — same reasoning as syncReceivingStatus's delete path — so it's
-        // deleted alongside the parent (no onDelete cascade on
-        // transferOrderId, so it has to go first or the parent delete fails).
-        const [returnRefs, droppingRefs] = await Promise.all([
-          db.select({ id: itemReturnEntries.transferOrderId, confirmed: itemReturnEntries.submittedAt })
-            .from(itemReturnEntries).where(inArray(itemReturnEntries.transferOrderId, maybeStale)),
-          db.select({ id: itemDroppingEntries.transferOrderId, confirmed: itemDroppingEntries.submittedAt })
-            .from(itemDroppingEntries).where(inArray(itemDroppingEntries.transferOrderId, maybeStale)),
-        ]);
-        const confirmed = new Set<number>([
-          ...returnRefs.filter((r) => r.confirmed != null).map((r) => r.id).filter((v): v is number => v != null),
-          ...droppingRefs.filter((r) => r.confirmed != null).map((r) => r.id).filter((v): v is number => v != null),
-        ]);
-        const staleIds = maybeStale.filter((id) => !confirmed.has(id));
-        if (staleIds.length) {
-          await Promise.all([
-            db.delete(itemReturnEntries)
-              .where(and(inArray(itemReturnEntries.transferOrderId, staleIds), isNull(itemReturnEntries.submittedAt))),
-            db.delete(itemDroppingEntries)
-              .where(and(inArray(itemDroppingEntries.transferOrderId, staleIds), isNull(itemDroppingEntries.submittedAt))),
-          ]);
-          const deleted = await db
-            .delete(itemTransferOrders)
-            .where(inArray(itemTransferOrders.id, staleIds))
-            .returning({ id: itemTransferOrders.id });
-          pruned = deleted.length;
-        }
-      }
+    // Reconcile against the TRANSFER ORDER feed only: it lists every order BC
+    // still has open (Open + Released) and drops one only when it is cancelled
+    // or fully received. The shipment feed keeps posted shipments forever, so
+    // it can't say whether an order still exists. An empty TO pull is far more
+    // likely a BC hiccup than "every order vanished" — never judge on one.
+    let reconcile: ReconcileResult = { cancelled: 0, autoCompleted: 0 };
+    if (toRows.length > 0) {
+      const judgeSince = prune ? null : lookbackDate(Math.max(0, lookbackDays - WINDOW_EDGE_DAYS));
+      reconcile = await reconcileVanishedTransferOrders(new Set(toRows.map((r) => r.no)), judgeSince);
+    } else {
+      console.warn('[transfer-orders] BC returned no transfer orders — reconcile skipped');
     }
 
-    return { success: true, data: { synced: toRows.length + shipmentGroups.length, pruned } };
+    return { success: true, data: { synced: toRows.length + shipmentGroups.length, ...reconcile } };
   } catch (err) {
     return { success: false, error: `syncTransferOrderRegistry: ${err}` };
   }
 }
 
 /**
- * Closes phase 3 (Item Receiving) two different ways depending on the leg:
+ * Closes a transfer order (receivedAt = "WR Diposting") as soon as Business
+ * Central posts the matching Warehouse Receipt (`sourceNo` = TOA no), whether
+ * or not anyone ever tapped "confirm receiving" locally — BC's own record is
+ * authoritative on its own. Checked: every shipped order, plus every order the
+ * origin store already handed over (a DM-RETURN / DM-BAD return can be received
+ * with no WS in our feed). Deliberately NOT narrowed to `toStoreId IS NOT NULL`
+ * — a TO whose destination is some other real store this app has no employee
+ * for (e.g. FF014) would otherwise never get checked and linger forever.
  *
- *  - Shipped legs of any kind (store-bound OR a leg to/from a store this app
- *    doesn't manage, e.g. a real Panatrade store not onboarded here): as
- *    soon as Business Central posts the matching Warehouse Receipt
- *    (`sourceNo` = TOA no), whether or not anyone ever tapped "confirm
- *    receiving" locally — BC's own record is authoritative on its own.
- *    Deliberately NOT narrowed to `toStoreId IS NOT NULL` — a TO whose
- *    destination is some other real store this app has no employee for
- *    (e.g. FF014) will otherwise never get checked at all and lingers
- *    forever, which is exactly how zombie rows accumulate.
- *  - Warehouse-bound legs (Item Return → a DM* code, see isWarehouseCode):
- *    there is no destination store to ever confirm receiving, and BC may
- *    never post a matching receipt the way a store-to-store leg does — the
- *    origin store's photo-verified return submission (returnSubmittedAt) IS
- *    the completion event instead, so receivedAt is stamped with THAT
- *    moment, not with whenever this sweep happened to run.
+ * A warehouse-bound order (→ a DM / listed code) is closed the SAME way: when
+ * the warehouse posts its receipt, not at the store's photo (that was the rule
+ * before 2026-11-18 — `redateWarehouseReceipts` moves those old rows to the
+ * warehouse's real WR). With the store's Foto Serah Terima it is a normal
+ * finish; without it, "Selesai Otomatis" like any other order.
  *
- * Either way, once BC confirms a TO is done: if a real employee already
- * confirmed their own leg (a submitted item_return_entries/
- * item_dropping_entries row — real qty/photo/timestamp, worth keeping), the
- * row is preserved with receivedAt set, same as before. If NOBODY ever
- * confirmed anything locally, there's no audit trail to protect — the whole
- * point of this app's copy of the TO is done, so it (and its empty,
- * never-acted-on entry) is deleted outright instead of lingering as a
- * permanently-"open" ghost that a stale-BC-view backfill keeps recreating.
+ * Once BC has posted the receipt the TO is COMPLETE in PRISM too — always kept,
+ * never deleted (it used to be deleted when no store had confirmed anything,
+ * which made a store that ignores the app look better than it is in the TO
+ * Report). A store leg nobody processed shows as "Selesai Otomatis · tidak
+ * diproses di PRISM" (legsNotProcessedInPrism in lib/transfer-order-phase.ts);
+ * `autoCompleted` counts the orders closed that way.
  */
 export async function syncReceivingStatus(
   scope: 'all' | number[] = 'all',
-): Promise<TaskResult<{ closed: number; removed: number }>> {
+): Promise<TaskResult<{ closed: number; autoCompleted: number }>> {
   try {
     const now = new Date();
     let closed = 0;
-    let removed = 0;
+    let autoCompleted = 0;
 
     await ensureWarehouseCodes();
-    const warehouseCandidates = await db
-      .select({ id: itemTransferOrders.id, transferToCode: itemTransferOrders.transferToCode })
-      .from(itemTransferOrders)
-      .where(and(
-        isNull(itemTransferOrders.receivedAt),
-        isNotNull(itemTransferOrders.returnSubmittedAt),
-        isNull(itemTransferOrders.toStoreId),
-      ));
-    const warehouseIds = warehouseCandidates
-      .filter((r) => isWarehouseCode(r.transferToCode))
-      .map((r) => r.id);
+    if (scope === 'all') await redateWarehouseReceipts(now);
 
-    // Warehouse-bound legs always have a confirmed return entry by
-    // construction (returnSubmittedAt only gets set via confirmItemReturn,
-    // which requires a photo) — always preserve, never delete.
-    if (warehouseIds.length > 0) {
-      const warehouseClosed = await db
-        .update(itemTransferOrders)
-        .set({ receivedAt: sql`${itemTransferOrders.returnSubmittedAt}`, updatedAt: now })
-        .where(inArray(itemTransferOrders.id, warehouseIds))
-        .returning({ id: itemTransferOrders.id });
-      closed += warehouseClosed.length;
-    }
-
-    // Any other shipped-but-unreceived TO, regardless of which side (or
-    // neither side) is a store this app manages.
+    // Every shipped-or-handed-over but unreceived TO, regardless of which side
+    // (or neither side) is a store this app manages.
     const openConditions = [
       isNull(itemTransferOrders.receivedAt),
-      isNotNull(itemTransferOrders.whseShipmentNo),
+      or(isNotNull(itemTransferOrders.whseShipmentNo), isNotNull(itemTransferOrders.returnSubmittedAt))!,
     ];
     if (scope !== 'all') {
       openConditions.push(or(
@@ -950,59 +1083,77 @@ export async function syncReceivingStatus(
       .where(and(...openConditions));
 
     if (openOrders.length > 0) {
-      const receipts = await fetchWhseReceiptsFor(openOrders.map((o) => o.toaNo));
-      const receivedNos = new Set(receipts.map((r) => r.sourceNo));
-      const doneIds = openOrders.filter((o) => receivedNos.has(o.toaNo)).map((o) => o.id);
+      const received = await receivedInBc(openOrders.map((o) => o.toaNo));
+      const toClose = openOrders.filter((o) => received.has(o.toaNo));
 
-      if (doneIds.length > 0) {
-        const [confirmedReturn, confirmedDropping] = await Promise.all([
-          db.select({ transferOrderId: itemReturnEntries.transferOrderId }).from(itemReturnEntries)
-            .where(and(inArray(itemReturnEntries.transferOrderId, doneIds), isNotNull(itemReturnEntries.submittedAt))),
-          db.select({ transferOrderId: itemDroppingEntries.transferOrderId }).from(itemDroppingEntries)
-            .where(and(inArray(itemDroppingEntries.transferOrderId, doneIds), isNotNull(itemDroppingEntries.submittedAt))),
-        ]);
-        const hasConfirmedEntry = new Set<number>([
-          ...confirmedReturn.map((r) => r.transferOrderId).filter((v): v is number => v != null),
-          ...confirmedDropping.map((r) => r.transferOrderId).filter((v): v is number => v != null),
-        ]);
-
-        const toClose = doneIds.filter((id) => hasConfirmedEntry.has(id));
-        const toDelete = doneIds.filter((id) => !hasConfirmedEntry.has(id));
-
-        if (toClose.length > 0) {
-          const storeClosed = await db
-            .update(itemTransferOrders)
-            .set({ receivedAt: now, updatedAt: now })
-            .where(inArray(itemTransferOrders.id, toClose))
-            .returning({ id: itemTransferOrders.id });
-          closed += storeClosed.length;
-        }
-
-        if (toDelete.length > 0) {
-          // No confirmed entry exists for any of these (guaranteed by the
-          // filter above), so any entry still pointing at them is an empty,
-          // never-acted-on placeholder — safe to delete alongside the
-          // parent row (the FK has no onDelete cascade, so the parent
-          // delete would otherwise fail while these still reference it).
-          await Promise.all([
-            db.delete(itemReturnEntries)
-              .where(and(inArray(itemReturnEntries.transferOrderId, toDelete), isNull(itemReturnEntries.submittedAt))),
-            db.delete(itemDroppingEntries)
-              .where(and(inArray(itemDroppingEntries.transferOrderId, toDelete), isNull(itemDroppingEntries.submittedAt))),
-          ]);
-          const deleted = await db
-            .delete(itemTransferOrders)
-            .where(inArray(itemTransferOrders.id, toDelete))
-            .returning({ id: itemTransferOrders.id });
-          removed += deleted.length;
-        }
+      if (toClose.length > 0) {
+        const done = await markReceived(toClose, received, now);
+        closed += done.length;
+        autoCompleted += done.filter((r) => legsNotProcessedInPrism(r, isWarehouseCode).length > 0).length;
       }
     }
 
-    return { success: true, data: { closed, removed } };
+    return { success: true, data: { closed, autoCompleted } };
   } catch (err) {
     return { success: false, error: `syncReceivingStatus: ${err}` };
   }
+}
+
+/**
+ * Before 2026-11-18 a warehouse-bound order was closed the moment the origin
+ * store sent its Foto Serah Terima (receivedAt = returnSubmittedAt, within a
+ * second). The warehouse posts its own receipt later (often days), so those
+ * rows are moved to the real WR Diposting when BC has it, and reopened
+ * ("Dikirim ke Gudang", waiting for the warehouse) when it has none yet — the
+ * normal sweep closes them at the WR then. Idempotent: neither kind matches
+ * again (receivedAt is no longer the photo time, or is null). Only rows of the
+ * last REGISTRY_LOOKBACK_DAYS are touched; older ones stay as they were.
+ */
+async function redateWarehouseReceipts(now: Date): Promise<number> {
+  const legacy = await db
+    .select({ id: itemTransferOrders.id, toaNo: itemTransferOrders.toaNo, transferToCode: itemTransferOrders.transferToCode })
+    .from(itemTransferOrders)
+    .where(and(
+      isNull(itemTransferOrders.toStoreId),
+      isNotNull(itemTransferOrders.returnSubmittedAt),
+      isNotNull(itemTransferOrders.receivedAt),
+      sql`abs(extract(epoch from (${itemTransferOrders.receivedAt} - ${itemTransferOrders.returnSubmittedAt}))) < 60`,
+      sql`${itemTransferOrders.returnSubmittedAt} >= ${lookbackDate(REGISTRY_LOOKBACK_DAYS)}::timestamp`,
+    ));
+  const rows = legacy.filter((r) => isWarehouseCode(r.transferToCode));
+  if (rows.length === 0) return 0;
+
+  const received = await receivedInBc(rows.map((r) => r.toaNo));
+  let moved = 0;
+  const waiting: number[] = [];
+  for (const r of rows) {
+    if (!received.has(r.toaNo)) {
+      waiting.push(r.id);
+      continue;
+    }
+    const done = await db
+      .update(itemTransferOrders)
+      .set({ receivedAt: wrPostedAt(received.get(r.toaNo), now), updatedAt: now })
+      .where(eq(itemTransferOrders.id, r.id))
+      .returning({ id: itemTransferOrders.id });
+    moved += done.length;
+  }
+  let reopened = 0;
+  if (waiting.length > 0) {
+    const done = await db
+      .update(itemTransferOrders)
+      .set({ receivedAt: null, updatedAt: now })
+      .where(inArray(itemTransferOrders.id, waiting))
+      .returning({ id: itemTransferOrders.id });
+    reopened = done.length;
+  }
+  if (moved > 0 || reopened > 0) {
+    console.warn(
+      `[transfer-orders] warehouse-bound TOs closed at the store's photo: ${moved} moved to the warehouse's WR Diposting, ` +
+      `${reopened} reopened to wait for it`,
+    );
+  }
+  return moved + reopened;
 }
 
 // ─── Confirm (per-transfer-order, employee action) ─────────────────────────
@@ -1016,6 +1167,24 @@ export interface ConfirmEntryInput {
   skipGeo?: boolean;
   qtyCounted: number;
   courierSignPhoto: string;
+}
+
+const TO_FINISHED_IN_BC =
+  'TO ini sudah selesai otomatis karena sudah diposting di BC — tidak perlu dikonfirmasi lagi. Muat ulang halaman.';
+
+/**
+ * The order is already finished (BC posted the receipt). A late confirm from a
+ * page left open would rewrite an order PRISM completed by itself as
+ * "processed in PRISM", so it is refused.
+ */
+async function finishedInBc(transferOrderId: number | null): Promise<boolean> {
+  if (transferOrderId == null) return false;
+  const [row] = await db
+    .select({ receivedAt: itemTransferOrders.receivedAt })
+    .from(itemTransferOrders)
+    .where(eq(itemTransferOrders.id, transferOrderId))
+    .limit(1);
+  return row?.receivedAt != null;
 }
 
 function validateConfirmInput(input: ConfirmEntryInput): string | null {
@@ -1042,6 +1211,7 @@ export async function confirmItemReturn(
     if (!entry) return { success: false, error: 'Item return tidak ditemukan.' };
     if (entry.storeId !== input.storeId) return { success: false, error: 'Item return ini bukan milik toko ini.' };
     if (entry.submittedAt) return { success: false, error: 'Item return ini sudah dikonfirmasi.' };
+    if (await finishedInBc(entry.transferOrderId)) return { success: false, error: TO_FINISHED_IN_BC };
 
     const now = new Date();
     const qtyCounted = Math.floor(input.qtyCounted);
@@ -1093,6 +1263,7 @@ export async function confirmItemDropping(
     if (!entry) return { success: false, error: 'Item dropping tidak ditemukan.' };
     if (entry.storeId !== input.storeId) return { success: false, error: 'Item dropping ini bukan milik toko ini.' };
     if (entry.submittedAt) return { success: false, error: 'Item dropping ini sudah dikonfirmasi.' };
+    if (await finishedInBc(entry.transferOrderId)) return { success: false, error: TO_FINISHED_IN_BC };
 
     const now = new Date();
     const qtyCounted = Math.floor(input.qtyCounted);

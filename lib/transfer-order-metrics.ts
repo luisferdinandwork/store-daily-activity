@@ -11,18 +11,29 @@
 //
 //   bcProcessing  TO Dibuat → WS Diposting
 //   wsToReturn    WS Diposting → Foto Serah Terima
-//   returnTotal   TO Dibuat → Foto Serah Terima     ("Total Proses Item
-//                 Return", i.e. bcProcessing + wsToReturn when the photo follows
-//                 the WS)
 //   delivery      Foto Serah Terima → Terima Fisik Barang di Toko
 //   bcReceiving   Terima Fisik Barang di Toko → WR Diposting
+// (a "Total Proses Item Return" = TO Dibuat → Foto Serah Terima used to sit here
+// too; removed 2026-11-18 by request — it repeated the first two and confused OPS.)
+//
+// SELESAI OTOMATIS (BC posted the WR while a store never did its PRISM step):
+// the times that exist are kept and a missing photo is replaced by another
+// recorded time, so nothing turns into a blank — a missing START (a photo that
+// would have started the clock) becomes WS Diposting, a missing END becomes the
+// next thing that really happened:
+//   wsToReturn    … → (Terima Fisik | WR Diposting) — the destination store
+//                 photographing the goods proves the hand-off was over by then
+//                 ("half done": only the receiving store used PRISM)
+//   delivery      (Foto Serah Terima | WS Diposting) → (Terima Fisik | WR Diposting)
+//   bcReceiving   (Terima Fisik | WS Diposting) → WR Diposting
+// so with no photo at all Delivery and Item Receiving both read WS → WR.
 //
 // "Foto Serah Terima" is `returnSubmittedAt`: the moment the store submits the
 // confirmation, which requires the courier-signed photo (an upload happens
 // seconds earlier but its time is not stored).
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type MetricKey = 'bcProcessing' | 'wsToReturn' | 'returnTotal' | 'delivery' | 'bcReceiving';
+export type MetricKey = 'bcProcessing' | 'wsToReturn' | 'delivery' | 'bcReceiving';
 
 /** The ISO timestamps + warehouse flags `/api/ops/item-transfers` returns. */
 export interface MetricInput {
@@ -59,12 +70,105 @@ export interface TransferMetric {
   signed: boolean;
   /** Extra note when `signed` and the end really is before the start. */
   earlyNote?: string;
+  /**
+   * Selesai Otomatis: one end is another recorded time standing in for a step
+   * nobody processed in PRISM (`autoStart` = WS Diposting, `autoEnd` = Terima
+   * Fisik or WR Diposting — `autoEndLabel` says which). The duration is real and
+   * final; `autoNote` says which end was filled in.
+   */
+  auto: boolean;
+  autoStart: boolean;
+  autoEnd: boolean;
+  /** 'Terima Fisik' / 'WR Diposting' — what the filled-in end is ('' when not filled). */
+  autoEndLabel: string;
+  autoNote: string;
+  /**
+   * No duration can honestly be shown — the page shows `skippedLabel` ("—"):
+   *  - the order is finished but even the stand-in times can't close it (no WS
+   *    Diposting was ever recorded — BC drops a finished order's shipment rows);
+   *  - or its end was recorded BEFORE its start (e.g. the store sent the Foto
+   *    Serah Terima days after BC had posted the WR) — a 0 would be a lie.
+   */
+  skipped: boolean;
+  skippedLabel: string;
 }
+
+/** What each end of a metric is called when it is the recorded step (not a stand-in). */
+const END_NAMES: Record<MetricKey, { start: string; end: string }> = {
+  bcProcessing: { start: 'TO Dibuat', end: 'WS Diposting' },
+  wsToReturn: { start: 'WS Diposting', end: 'Foto Serah Terima' },
+  delivery: { start: 'Foto Serah Terima', end: 'Terima Fisik' },
+  bcReceiving: { start: 'Terima Fisik', end: 'WR Diposting' },
+};
+
+/** Why a finished order has no WS Diposting — shown on every metric that needed it. */
+export const WS_NOT_RECORDED =
+  'WS Diposting tidak tercatat — BC sudah menghapus data pengiriman TO ini sebelum PRISM membacanya';
 
 const NA_WAREHOUSE = 'Tidak berlaku — tujuan/asal gudang (DM), tidak ada konfirmasi karyawan.';
 const NA_NO_RETURN = 'Tidak berlaku — asal TO adalah gudang (DM), tidak ada Item Return dari toko.';
 
+/**
+ * Which end of a metric may be filled in once the order is finished (see the
+ * header): a missing start → WS Diposting; a missing end → the first of `end`
+ * that exists. TO Dibuat → WS Diposting has no photo in it, so it is never filled.
+ */
+type EndFill = { at: (t: MetricInput) => string | null; label: string };
+const TERIMA_FISIK: EndFill = { at: (t) => t.droppingSubmittedAt, label: 'Terima Fisik' };
+const WR_DIPOSTING: EndFill = { at: (t) => t.receivedAt, label: 'WR Diposting' };
+const AUTO_FILL: Record<MetricKey, { start: boolean; end: EndFill[] }> = {
+  bcProcessing: { start: false, end: [] },
+  // Half done: the destination photographed the goods, so the Item Return was over by then.
+  wsToReturn: { start: false, end: [TERIMA_FISIK, WR_DIPOSTING] },
+  delivery: { start: true, end: [WR_DIPOSTING] },
+  bcReceiving: { start: true, end: [WR_DIPOSTING] },
+};
+
 export function buildTransferMetrics(t: MetricInput): TransferMetric[] {
+  const finished = Boolean(t.receivedAt);
+  return buildRawMetrics(t).map((m) => {
+    let { start, end } = m;
+    let autoStart = false;
+    let autoEndLabel = '';
+    if (finished && m.applicable) {
+      const fill = AUTO_FILL[m.key];
+      if (!start && fill.start && t.droppingDetectedAt) { start = t.droppingDetectedAt; autoStart = true; }
+      if (!end) {
+        const by = fill.end.find((f) => f.at(t));
+        if (by) { end = by.at(t); autoEndLabel = by.label; }
+      }
+    }
+    const autoEnd = autoEndLabel !== '';
+    const auto = autoStart || autoEnd;
+    const missing = finished && m.applicable && (!start || !end);
+    // A non-signed range whose end was recorded before its start has no real duration.
+    const backwards = m.applicable && !m.signed && Boolean(start && end) && new Date(end!).getTime() < new Date(start!).getTime();
+    const startName = autoStart ? 'WS Diposting' : END_NAMES[m.key].start;
+    const endName = autoEnd ? autoEndLabel : END_NAMES[m.key].end;
+    const skippedLabel = backwards
+      ? `tidak tercatat — ${endName} lebih awal dari ${startName}`
+      : missing
+        ? (t.droppingDetectedAt ? 'tidak tercatat — TO sudah selesai di BC' : WS_NOT_RECORDED)
+        : '';
+    const filled = [autoStart && 'dari WS Diposting', autoEnd && `sampai ${autoEndLabel}`].filter(Boolean).join(', ');
+    return {
+      ...m,
+      start,
+      end,
+      auto,
+      autoStart,
+      autoEnd,
+      autoEndLabel,
+      autoNote: auto ? `Selesai otomatis — tidak diproses di PRISM, dihitung ${filled}` : '',
+      skipped: missing || backwards,
+      skippedLabel,
+    };
+  });
+}
+
+function buildRawMetrics(
+  t: MetricInput,
+): Omit<TransferMetric, 'auto' | 'autoStart' | 'autoEnd' | 'autoEndLabel' | 'autoNote' | 'skipped' | 'skippedLabel'>[] {
   // Item Return is the ORIGIN store handing goods to the courier. A DM
   // warehouse origin has no employee in this app, so there is no photo ever.
   const returnApplicable = !t.fromIsWarehouse;
@@ -98,18 +202,6 @@ export function buildTransferMetrics(t: MetricInput): TransferMetric[] {
       naReason: NA_NO_RETURN,
       signed: true,
       earlyNote: 'foto diambil sebelum WS diposting di BC',
-    },
-    {
-      key: 'returnTotal',
-      label: 'Total Proses Item Return',
-      shortLabel: 'Total Return',
-      ongoingLabel: 'menunggu foto serah terima',
-      notStartedLabel: 'TO belum terdeteksi',
-      start: t.returnDetectedAt,
-      end: t.returnSubmittedAt,
-      applicable: returnApplicable,
-      naReason: NA_NO_RETURN,
-      signed: false,
     },
     {
       key: 'delivery',

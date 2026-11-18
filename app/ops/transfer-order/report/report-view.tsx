@@ -108,6 +108,14 @@ function ProgressFigure({ store }: { store: StoreReport }) {
         <span className={cn('inline-flex items-center rounded-full border px-2 py-px text-[11px] font-bold tabular-nums', TONES[rateTone(p)].chip)}>{p}%</span>
       </div>
       <RateBar rate={p} className="mt-1.5" />
+      {store.auto > 0 && (
+        <p
+          className={cn('mt-1 truncate text-[10px] font-semibold', TONES.sick.text)}
+          title="Selesai otomatis karena sudah diposting di BC — toko tidak memproses di PRISM (tanpa foto)"
+        >
+          {store.auto} otomatis · tidak diproses di PRISM
+        </p>
+      )}
     </div>
   );
 }
@@ -185,11 +193,11 @@ function ColumnHeads() {
 
 // ─── View ────────────────────────────────────────────────────────────────────
 
-export default function ReportView({ process }: { process: Process }) {
+export default function ReportView({ process, initialPeriod }: { process: Process; initialPeriod?: Period }) {
   const meta = PROCESS_META[process];
 
   const [date, setDate] = useState(jakartaTodayKey());
-  const [period, setPeriod] = useState<Period>('weekly');
+  const [period, setPeriod] = useState<Period>(initialPeriod ?? 'weekly');
   const [search, setSearch] = useState('');
   const [area, setArea] = useState('all');
   const [sort, setSort] = useState<ReportSort>('attention');
@@ -251,8 +259,10 @@ export default function ReportView({ process }: { process: Process }) {
             <Info className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
             <p>
               {meta.howItCounts} Rata-rata hanya dihitung dari proses yang sudah selesai — proses yang masih menunggu tidak ikut, dan
-              hanya tampil sebagai &ldquo;Belum selesai&rdquo; dan &ldquo;Menunggu terlama&rdquo;. Yang tampil adalah TO yang tercatat di sistem; TO yang
-              sudah selesai di Business Central tanpa konfirmasi toko tidak terhitung. Waktu dalam WIB.
+              hanya tampil sebagai &ldquo;Belum selesai&rdquo; dan &ldquo;Menunggu terlama&rdquo;. TO yang sudah diposting di Business Central
+              (Posted Whse Receipt) tanpa diproses toko di PRISM dihitung selesai sebagai &ldquo;Selesai Otomatis&rdquo;; waktunya tetap
+              dihitung dengan waktu BC sebagai ganti foto yang tidak ada (mulai WS Diposting, selesai WR Diposting) dan ikut rata-rata.
+              TO yang dibatalkan di Business Central dihapus dan tidak dihitung. Waktu dalam WIB.
             </p>
           </div>
         </details>
@@ -263,7 +273,11 @@ export default function ReportView({ process }: { process: Process }) {
             label="Selesai"
             value={noTotal ? '–' : `${totals.rate}%`}
             tone={noTotal ? 'default' : rateTone(totals.rate)}
-            hint={noTotal ? 'Belum ada proses pada periode ini' : `${totals.done} dari ${totals.total} proses · ${totals.storesWithTo} toko`}
+            hint={
+              noTotal
+                ? 'Belum ada proses pada periode ini'
+                : `${totals.done} dari ${totals.total} proses · ${totals.storesWithTo} toko${totals.auto > 0 ? ` · ${totals.auto} otomatis (tidak diproses di PRISM)` : ''}`
+            }
             footer={!noTotal ? <RateBar rate={totals.rate} /> : undefined}
           />
           <MetricTile
@@ -282,7 +296,7 @@ export default function ReportView({ process }: { process: Process }) {
             hint={
               totals.avgMinutes == null
                 ? 'Belum ada proses selesai untuk dirata-rata'
-                : `rata-rata dari ${totals.timed} selesai${unclocked > 0 ? ` · ${unclocked} selesai tanpa foto toko tidak dihitung` : ''}`
+                : `rata-rata dari ${totals.timed} selesai${totals.auto > 0 ? ` · ${totals.auto} otomatis (waktu BC)` : ''}${unclocked > 0 ? ` · ${unclocked} tanpa waktu tidak dihitung` : ''}`
             }
           />
           <MetricTile

@@ -29,6 +29,17 @@
 // For Item Return and Item Delivery that is the same clock as above; for Item
 // Receiving it is Terima Fisik → WR Diposting, i.e. the whole timeline.
 //
+// A process BC finished while the store never did its PRISM step (no photo —
+// BC posted the Warehouse Receipt, the sync completed the order by itself) is
+// DONE and `auto` ("Selesai Otomatis · tidak diproses di PRISM"). Its time is
+// KEPT, with BC's time standing in for the missing photo (same rule as the Ops
+// page, lib/transfer-order-metrics.ts): the end becomes WR Diposting, a missing
+// start becomes WS Diposting — so with no photo at all Item Receiving and Item
+// Delivery both run WS Diposting → WR Diposting, and Item Return runs TO Dibuat
+// → WR Diposting. When only the DESTINATION used PRISM (Terima Fisik photo, no
+// Foto Serah Terima) the Item Return stops at Terima Fisik instead. Those
+// durations count in the averages like any other.
+//
 // A DM warehouse end gives no process on that side. Days are Jakarta calendar
 // days, and a process belongs to the day it STARTED (a cohort): "of what began
 // this week, how much is done" — it doesn't drift when something finishes later.
@@ -77,7 +88,8 @@ export const PROCESS_META: Record<Process, ProcessMeta> = {
     waitHint: 'proses terbuka yang paling lama',
     howItCounts:
       'Satu proses per TO untuk toko asal, dihitung pada hari TO dibuat. Selesai saat toko asal mengirim foto serah terima ke kurir. ' +
-      'TO dari gudang (DM) tidak punya Item Return.',
+      'Bila BC sudah memposting WR tanpa foto toko asal (Selesai Otomatis), waktunya dihitung sampai Terima Fisik di toko tujuan ' +
+      '(bila toko tujuan sudah memfoto) atau sampai WR Diposting. TO dari gudang (DM) tidak punya Item Return.',
   },
   receiving: {
     label: 'Item Receiving',
@@ -92,7 +104,8 @@ export const PROCESS_META: Record<Process, ProcessMeta> = {
     howItCounts:
       'Satu proses per TO untuk toko tujuan, dihitung pada hari WS diposting di Business Central (sejak itu TO muncul di aplikasi toko). ' +
       'Waktu baru dihitung setelah toko memfoto terima fisik barang, dan proses selesai saat WR diposting di Business Central. ' +
-      'Sebelum ada foto, proses terbuka tanpa waktu berjalan. TO ke gudang (DM) tidak punya Item Receiving.',
+      'Sebelum ada foto, proses terbuka tanpa waktu berjalan. Bila BC sudah memposting WR tanpa foto toko (Selesai Otomatis), ' +
+      'waktunya dihitung dari WS Diposting sampai WR Diposting. TO ke gudang (DM) tidak punya Item Receiving.',
   },
   delivery: {
     label: 'Item Delivery',
@@ -106,7 +119,8 @@ export const PROCESS_META: Record<Process, ProcessMeta> = {
     waitHint: 'proses terbuka yang paling lama',
     howItCounts:
       'Satu proses per TO antar toko untuk toko tujuan, dihitung pada hari toko asal mengirim foto serah terima. Selesai saat toko ' +
-      'tujuan mengonfirmasi barang diterima secara fisik. Pengiriman dari/ke gudang (DM) tidak dihitung di sini (lihat Item Receiving).',
+      'tujuan mengonfirmasi barang diterima secara fisik. Bila BC sudah memposting WR tanpa foto toko (Selesai Otomatis), foto yang tidak ada ' +
+      'diganti waktu BC: mulai dari WS Diposting, selesai di WR Diposting. Pengiriman dari/ke gudang (DM) tidak dihitung di sini (lihat Item Receiving).',
   },
 };
 
@@ -153,10 +167,21 @@ export interface LegItem {
   /** When its clock started. Null = not yet (an Item Receiving before the store's photo). */
   startedAt: Date | null;
   doneAt: Date | null;
+  /** Done by BC (WR Diposting) without the store's PRISM step — "Selesai Otomatis", no clock. */
+  auto: boolean;
   /** Jakarta day the process entered the report — its bucket. */
   day: string;
   /** What gets recorded for the item, in order (see the header of this file). */
   steps: LegStep[];
+}
+
+/**
+ * When an Item Delivery starts: the origin's Foto Serah Terima, or — for an order
+ * BC finished without that photo (Selesai Otomatis) — WS Diposting. Null = no
+ * delivery yet. getReportRows buckets by the same moment (SQL twin there).
+ */
+export function deliveryStartOf(row: Pick<ReportRow, 'returnSubmittedAt' | 'receivedAt' | 'droppingDetectedAt'>): Date | null {
+  return row.returnSubmittedAt ?? (row.receivedAt ? row.droppingDetectedAt : null);
 }
 
 export function legsOf(row: ReportRow): LegItem[] {
@@ -165,45 +190,73 @@ export function legsOf(row: ReportRow): LegItem[] {
   if (row.fromStoreId != null) {
     const startedAt = effectiveToCreatedAt(row.returnDetectedAt, row.droppingDetectedAt, row.returnSubmittedAt);
     if (startedAt) {
+      const auto = !row.returnSubmittedAt && row.receivedAt != null;
+      // Half done: the destination store photographed the goods (Terima Fisik) while the
+      // origin never sent its Foto Serah Terima — the hand-off was over by then, so the
+      // clock stops at Terima Fisik, not at WR Diposting.
+      const autoEnd = auto
+        ? row.droppingSubmittedAt
+          ? { label: 'Terima Fisik di toko tujuan · selesai otomatis', at: row.droppingSubmittedAt }
+          : { label: 'WR Diposting · selesai otomatis', at: row.receivedAt }
+        : null;
       out.push({
         rowId: row.id, toaNo: row.toaNo, process: 'return', storeId: row.fromStoreId,
         counterpartCode: row.transferToCode, qty: row.qtyOrdered,
-        anchorAt: startedAt, startedAt, doneAt: row.returnSubmittedAt, day: jakartaDateKey(startedAt),
+        anchorAt: startedAt, startedAt, doneAt: row.returnSubmittedAt ?? autoEnd?.at ?? null, auto, day: jakartaDateKey(startedAt),
         // TO Dibuat → WS Diposting → Foto Serah Terima
         steps: [
           { label: 'TO Dibuat', at: startedAt },
           { label: 'WS Diposting', at: row.droppingDetectedAt },
           { label: 'Foto Serah Terima', at: row.returnSubmittedAt, signed: true },
+          ...(autoEnd ? [autoEnd] : []),
         ],
       });
     }
   }
 
   if (row.toStoreId != null && row.whseShipmentNo && row.droppingDetectedAt) {
+    const auto = !row.droppingSubmittedAt && row.receivedAt != null;
     out.push({
       rowId: row.id, toaNo: row.toaNo, process: 'receiving', storeId: row.toStoreId,
       counterpartCode: row.transferFromCode, qty: row.qtyOrdered,
       // Listed (and bucketed) from WS Diposting, timed from the store's photo, done at WR Diposting.
-      anchorAt: row.droppingDetectedAt, startedAt: row.droppingSubmittedAt, doneAt: row.receivedAt,
+      // Selesai Otomatis (no photo): timed from WS Diposting instead.
+      anchorAt: row.droppingDetectedAt,
+      startedAt: row.droppingSubmittedAt ?? (auto ? row.droppingDetectedAt : null),
+      doneAt: row.receivedAt,
+      auto,
       day: jakartaDateKey(row.droppingDetectedAt),
-      // Terima Fisik Barang di Toko → WR Diposting
-      steps: [
-        { label: 'Terima Fisik Barang di Toko', at: row.droppingSubmittedAt },
-        { label: 'WR Diposting', at: row.receivedAt },
-      ],
+      // Terima Fisik Barang di Toko → WR Diposting  (auto: WS Diposting → WR Diposting)
+      steps: auto
+        ? [
+          { label: 'WS Diposting', at: row.droppingDetectedAt },
+          { label: 'Terima Fisik Barang di Toko', at: null },
+          { label: 'WR Diposting · selesai otomatis', at: row.receivedAt },
+        ]
+        : [
+          { label: 'Terima Fisik Barang di Toko', at: row.droppingSubmittedAt },
+          { label: 'WR Diposting', at: row.receivedAt },
+        ],
     });
   }
 
-  // Store → store, once the origin has handed the goods over.
-  if (row.toStoreId != null && row.fromStoreId != null && row.returnSubmittedAt) {
+  // Store → store, once the origin has handed the goods over — or, when BC
+  // finished it with no Foto Serah Terima, from WS Diposting (deliveryStartOf).
+  const deliveryStart = deliveryStartOf(row);
+  if (row.toStoreId != null && row.fromStoreId != null && deliveryStart) {
+    const auto = row.receivedAt != null && (!row.returnSubmittedAt || !row.droppingSubmittedAt);
     out.push({
       rowId: row.id, toaNo: row.toaNo, process: 'delivery', storeId: row.toStoreId,
       counterpartCode: row.transferFromCode, qty: row.qtyOrdered,
-      anchorAt: row.returnSubmittedAt, startedAt: row.returnSubmittedAt, doneAt: row.droppingSubmittedAt,
-      day: jakartaDateKey(row.returnSubmittedAt),
+      anchorAt: deliveryStart, startedAt: deliveryStart, doneAt: row.droppingSubmittedAt ?? row.receivedAt,
+      auto,
+      day: jakartaDateKey(deliveryStart),
       steps: [
-        { label: 'Foto Serah Terima', at: row.returnSubmittedAt },
+        row.returnSubmittedAt
+          ? { label: 'Foto Serah Terima', at: row.returnSubmittedAt }
+          : { label: 'WS Diposting', at: row.droppingDetectedAt },
         { label: 'Terima Fisik Barang di Toko', at: row.droppingSubmittedAt },
+        ...(!row.droppingSubmittedAt && row.receivedAt ? [{ label: 'WR Diposting · selesai otomatis', at: row.receivedAt }] : []),
       ],
     });
   }
@@ -233,12 +286,14 @@ export interface StoreReport extends StoreMeta {
   timed: number;
   /** Open ones whose clock hasn't started — an Item Receiving the store hasn't photographed yet. */
   notStarted: number;
+  /** Of `done`: finished by BC without the store's PRISM step (Selesai Otomatis — tidak diproses di PRISM). */
+  auto: number;
   /** How long the longest-waiting open one (with a running clock) has been waiting (null = none). */
   oldestOpenMinutes: number | null;
 }
 
 export function emptyStoreReport(meta: StoreMeta): StoreReport {
-  return { ...meta, total: 0, done: 0, minutes: 0, timed: 0, notStarted: 0, oldestOpenMinutes: null };
+  return { ...meta, total: 0, done: 0, minutes: 0, timed: 0, notStarted: 0, auto: 0, oldestOpenMinutes: null };
 }
 
 function minutes(a: Date, b: Date): number {
@@ -251,7 +306,11 @@ function minutes(a: Date, b: Date): number {
  * completed one with no clock (an Item Receiving BC closed without the store's photo).
  */
 export function completedMinutes(item: Pick<LegItem, 'startedAt' | 'doneAt'>): number | null {
-  return item.doneAt && item.startedAt ? minutes(item.startedAt, item.doneAt) : null;
+  if (!item.doneAt || !item.startedAt) return null;
+  // Done recorded BEFORE it started (e.g. the Foto Serah Terima sent days after BC posted
+  // the WR): there is no real duration — counting it as 0 would pull every average down.
+  if (item.doneAt.getTime() < item.startedAt.getTime()) return null;
+  return minutes(item.startedAt, item.doneAt);
 }
 
 /** How long an OPEN process has been waiting (null = done, or its clock hasn't started). */
@@ -280,6 +339,7 @@ export function buildStoreReports(
 
       if (item.doneAt) {
         store.done += 1;
+        if (item.auto) store.auto += 1;
         const took = completedMinutes(item);
         if (took != null) {
           store.minutes += took;
@@ -309,6 +369,8 @@ export interface ReportTotals {
   storesOpen: number;
   /** Open ones whose clock hasn't started (Item Receiving not yet photographed). */
   notStarted: number;
+  /** Of `done`: Selesai Otomatis — finished by BC, not processed in PRISM. */
+  auto: number;
   /** Mean duration over COMPLETED ones that had a clock (null = none yet) — open ones never count. */
   avgMinutes: number | null;
   /** How many completed ones `avgMinutes` is the mean of ("rata-rata dari N selesai"). */
@@ -321,7 +383,7 @@ export const pct = (done: number, total: number): number => (total > 0 ? Math.ro
 
 export function summarise(reports: StoreReport[]): ReportTotals {
   const t: ReportTotals = {
-    total: 0, done: 0, open: 0, rate: 0, storesWithTo: 0, storesOpen: 0, notStarted: 0, avgMinutes: null, timed: 0, longestWaitMinutes: null,
+    total: 0, done: 0, open: 0, rate: 0, storesWithTo: 0, storesOpen: 0, notStarted: 0, auto: 0, avgMinutes: null, timed: 0, longestWaitMinutes: null,
   };
   let sum = 0;
 
@@ -329,6 +391,7 @@ export function summarise(reports: StoreReport[]): ReportTotals {
     t.total += s.total;
     t.done += s.done;
     t.notStarted += s.notStarted;
+    t.auto += s.auto;
     sum += s.minutes;
     t.timed += s.timed;
     if (s.total > 0) t.storesWithTo += 1;
@@ -422,6 +485,8 @@ export interface ReportItem {
   startedAt: string | null;
   doneAt: string | null;
   done: boolean;
+  /** Selesai Otomatis: BC finished it, the store never did its step in PRISM. */
+  auto: boolean;
   /** Start → done of a COMPLETED item — what the averages are made of. Null while open, or with no clock (closed in BC with no store photo). */
   minutes: number | null;
   /** How long an OPEN item has been waiting (start → now). Never averaged. Null once done, or before its clock starts. */
@@ -460,6 +525,7 @@ export function buildStoreItems(
         startedAt: leg.startedAt?.toISOString() ?? null,
         doneAt: leg.doneAt?.toISOString() ?? null,
         done: leg.doneAt != null,
+        auto: leg.auto,
         minutes: completedMinutes(leg),
         waitingMinutes: waitingMinutes(leg, opts.now),
         steps: leg.steps.map((s) => ({ label: s.label, at: s.at?.toISOString() ?? null, signed: s.signed === true })),
