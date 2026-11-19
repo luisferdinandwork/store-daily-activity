@@ -508,15 +508,16 @@ export async function notifyIssueEvent(input: {
 }): Promise<void> {
   const recipients = await getIssueNotificationRecipients(input.assignedRoles, input.storeId);
   const userIds = recipients.filter((id) => id !== input.excludeUserId);
-  if (!userIds.length) return;
 
   // Each role opens the issue inbox of its OWN panel — one /ops/issues link would
   // bounce Finance / Audit to their panel home (proxy.ts RBAC redirect).
-  const recipientRows = await db
-    .select({ id: users.id, email: users.email, roleCode: userRoles.code })
-    .from(users)
-    .innerJoin(userRoles, eq(userRoles.id, users.roleId))
-    .where(inArray(users.id, userIds));
+  const recipientRows = userIds.length
+    ? await db
+        .select({ id: users.id, email: users.email, roleCode: userRoles.code })
+        .from(users)
+        .innerJoin(userRoles, eq(userRoles.id, users.roleId))
+        .where(inArray(users.id, userIds))
+    : [];
 
   const idsByPath = new Map<string, string[]>();
   for (const row of recipientRows) {
@@ -529,18 +530,29 @@ export async function notifyIssueEvent(input: {
     ),
   );
 
+  // Email goes out ONLY when an issue is reported (sent to its roles) — the later
+  // stages (in review, completed, solved, Berita Acara) stay in-app only.
+  if (input.type !== ISSUE_EMAIL_EVENT) return;
+
   // The email copy never holds up (or fails) the request that raised the event.
   void emailIssueRecipients(recipientRows, input.issueId, input.storeId, input.title, input.body).catch((err) =>
     console.error('[issues] email notification failed:', err),
   );
 }
 
+/** The one issue event that is also emailed (every other event is in-app only). */
+const ISSUE_EMAIL_EVENT = 'issue_reported';
+
+/** Where the store mailbox's copy links to — the staff app's issue list. */
+const STORE_ISSUES_PATH = '/employee/issues';
+
 /**
  * Mails the same recipients as the in-app notification — the ones who have an
- * email set (users.email, optional). The recipients are already scoped: Ops Area
+ * email set (users.email, optional) — plus the store's own mailbox
+ * (stores.email, IT-maintained). The recipients are already scoped: Ops Area
  * only for their own area's stores (Ops HO for all), Finance / IT / Audit as a
  * whole role. One mail per address, so a shared mailbox is not mailed twice. The
- * button opens the recipient role's own issue page (signing in first if needed).
+ * button opens the recipient's own issue page (signing in first if needed).
  */
 async function emailIssueRecipients(
   recipients: { email: string | null; roleCode: string }[],
@@ -549,20 +561,23 @@ async function emailIssueRecipients(
   title: string,
   body: string | undefined,
 ): Promise<void> {
+  const [store] = await db
+    .select({ storeNo: stores.storeNo, name: stores.name, email: stores.email, areaName: areas.name })
+    .from(stores)
+    .leftJoin(areas, eq(areas.id, stores.areaId))
+    .where(eq(stores.id, storeId))
+    .limit(1);
+
   // address → issues path of the (first) role that owns it
   const pathByAddress = new Map<string, string>();
   for (const r of recipients) {
     const address = r.email?.trim().toLowerCase();
     if (address && !pathByAddress.has(address)) pathByAddress.set(address, issuesPathFor(r.roleCode));
   }
+  // The store's mailbox gets a copy too (unless it is already one of the recipients).
+  const storeAddress = store?.email?.trim().toLowerCase();
+  if (storeAddress && !pathByAddress.has(storeAddress)) pathByAddress.set(storeAddress, STORE_ISSUES_PATH);
   if (!pathByAddress.size) return;
-
-  const [store] = await db
-    .select({ storeNo: stores.storeNo, name: stores.name, areaName: areas.name })
-    .from(stores)
-    .leftJoin(areas, eq(areas.id, stores.areaId))
-    .where(eq(stores.id, storeId))
-    .limit(1);
 
   // The email carries the issue's whole description (the employee's own words / the On Hold reason).
   const [issueRow] = await db

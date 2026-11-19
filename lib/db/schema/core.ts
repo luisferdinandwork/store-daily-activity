@@ -63,7 +63,8 @@ export const stores = pgTable('stores', {
   /**
    * The store's shared mailbox. "Lupa password" asks for it together with the
    * NIK, and every reset email (request received, the link, success) goes
-   * here — see lib/db/utils/password-reset.ts. IT-only; stored lowercase.
+   * here — see lib/db/utils/password-reset.ts. It also gets a copy of every
+   * issue reported for the store (lib/db/utils/issues.ts). IT-only; stored lowercase.
    */
   email: text('email'),
 
@@ -107,7 +108,7 @@ export const users = pgTable('users', {
 
   /**
    * Work mailbox, optional for every account. Back-office users get an email
-   * copy of every issue routed to them (lib/db/utils/issue-emails.ts); a user
+   * copy when an issue is reported to them (lib/db/utils/issues.ts); a user
    * without one is notified in-app only.
    */
   email: text('email'),

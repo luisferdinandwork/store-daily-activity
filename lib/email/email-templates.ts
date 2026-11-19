@@ -166,7 +166,8 @@ export const EMAIL_TEMPLATES = {
     title: 'Issue notification',
     description:
       'Sent to the people an issue is routed to (Ops of the store\'s area, Ops HO, Finance, IT, Audit) who have an ' +
-      'email set, on every issue event: reported, in review, completed, …',
+      'email set, plus the store\'s own mailbox (Store Management email) — only when an issue is reported; ' +
+      'later stages (in review, completed, solved) are in-app only.',
     placeholders: [
       { name: 'title', description: 'Headline of the event, e.g. "New issue: Printer rusak"', html: false, sample: 'New issue: Printer kasir rusak' },
       { name: 'body', description: 'Short sentence about the event', html: false, sample: 'An issue was reported and routed to your team.' },
