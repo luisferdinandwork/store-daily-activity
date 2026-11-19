@@ -10,10 +10,12 @@
 // (never "everything, filtered locally"), in parallel, over HTTP Basic auth with
 // credentials that live only in the server environment:
 //
+//   BC_API_BIN_BASE_URL                         (required — the company root OR a full entity
+//                                                URL pasted from Postman, see normalizeBinCheckBaseUrl)
 //   BC_API_BIN_USERNAME / BC_API_BIN_PASSWORD   (required)
-//   BC_API_BIN_BASE_URL                         (optional — replaces the UAT base below; the
-//                                                company root OR a full entity URL pasted from
-//                                                Postman, see normalizeBinCheckBaseUrl)
+//
+// The BC address is never written in code (the repo is shared): all three live only in
+// `.env.local` (dev) and the server's own `.env.local`. Any one missing = `not_configured`.
 //
 // This module NEVER throws. Missing credentials, a rejected login, a timeout, a
 // bad payload … all come back as a BinCheckResult with state `not_configured` /
@@ -25,14 +27,6 @@ import { fetchAllBusinessCentralRows } from '@/lib/bc/client';
 import type { ResolvedBusinessCentralSettings } from '@/lib/performance/business-central-settings';
 import { addDaysKey, isDayKey, jakartaTodayKey } from '@/lib/day-bucket';
 import { buildBinCheckIssues, type BinCheckResult } from '@/lib/bin-check';
-
-/**
- * BC company API root — UAT for now. Production will differ: set
- * BC_API_BIN_BASE_URL (the root ending in `.../companies(<guid>)/`; a full entity URL
- * is accepted too) instead of editing code.
- */
-export const BC_BIN_CHECK_DEFAULT_BASE_URL =
-  'https://bc.panatradeprestasi.com:7248/UAT/api/panatradeprestasi/pntpri/v1.0/companies(fdc329b5-9a4a-ed11-ac38-81e458651713)/';
 
 const HEADERS_ENTITY = 'ppBinContentCheckHeaders';
 const SUMMARY_ENTITY = 'ppBinContentChecks';
@@ -74,9 +68,10 @@ export function normalizeBinCheckBaseUrl(raw: string): string {
 export function resolveBinCheckConfig(env: NodeJS.ProcessEnv = process.env): BinCheckConfig | null {
   const username = clean(env.BC_API_BIN_USERNAME);
   const password = clean(env.BC_API_BIN_PASSWORD);
-  if (!username || !password) return null;
+  const rawBase = clean(env.BC_API_BIN_BASE_URL);
+  if (!username || !password || !rawBase) return null;
 
-  const baseUrl = normalizeBinCheckBaseUrl(clean(env.BC_API_BIN_BASE_URL) || BC_BIN_CHECK_DEFAULT_BASE_URL);
+  const baseUrl = normalizeBinCheckBaseUrl(rawBase);
 
   return {
     baseUrl,
@@ -156,7 +151,7 @@ async function loadBinCheck(location: string, day: string): Promise<BinCheckResu
   if (!config) {
     logThrottled(
       'not-configured',
-      '[bin-check] BC_API_BIN_USERNAME / BC_API_BIN_PASSWORD are not set — Cek Bin BC results are switched off until they are.',
+      '[bin-check] BC_API_BIN_BASE_URL / BC_API_BIN_USERNAME / BC_API_BIN_PASSWORD are not all set — Cek Bin BC results are switched off until they are.',
     );
     return empty('not_configured', location, day);
   }

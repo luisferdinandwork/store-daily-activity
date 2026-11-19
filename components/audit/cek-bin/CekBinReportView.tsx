@@ -243,7 +243,7 @@ export default function CekBinReportView() {
         {problem && <Notice tone="warning" title={problem} body={`Pilih periode paling lama ${BIN_REPORT_MAX_DAYS} hari, sampai hari ini.`} />}
         {!problem && !loading && data?.error && <Notice tone="danger" title="Gagal memuat" body={data.error} />}
         {!problem && !loading && !data?.error && data?.state === 'not_configured' && (
-          <Notice tone="warning" title="Business Central belum diatur" body="Login BC untuk Cek Bin (BC_API_BIN_USERNAME / PASSWORD) belum diisi di server." />
+          <Notice tone="warning" title="Business Central belum diatur" body="Alamat + login BC untuk Cek Bin (BC_API_BIN_BASE_URL / USERNAME / PASSWORD) belum diisi di server." />
         )}
         {!problem && !loading && !data?.error && data?.state === 'unavailable' && (
           <Notice tone="danger" title="Data Business Central belum tersedia" body="BC tidak bisa dihubungi saat ini. Coba Muat ulang sebentar lagi." />

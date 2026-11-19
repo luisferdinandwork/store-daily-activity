@@ -27,7 +27,7 @@ import {
   storePhase,
   type PoolBin,
 } from '../lib/bin-round';
-import { groupBinListRows } from '../lib/bc/bin-round';
+import { binListUrl, groupBinListRows, normalizeBinListEndpoint, resolveBinListConfig } from '../lib/bc/bin-round';
 
 let checks = 0;
 const ok = (name: string, fn: () => void) => {
@@ -213,6 +213,36 @@ ok('stats: progress, accuracy, days left, phase', () => {
   assert.equal(storePhase({ stats: { ...s, checkedBins: 318 } }), 'done');
   assert.equal(storePhase({ stats: null }), 'no_list');
   assert.equal(accuracyPct({ correctBins: 0, wrongBins: 0 }), null);
+});
+
+console.log('Bin list endpoint (BC_API_BIN_LIST_URL)');
+
+ok('the pasted ppBinContentsAPI URL is used as is (query dropped); a company root gets the entity', () => {
+  const ep = 'https://bc.example.test/UAT/api/x/v1.0/companies(abc)/ppBinContentsAPI';
+  for (const raw of [ep, `${ep}/`, `"${ep}"`, `${ep}?$schemaversion=2.0`, 'https://bc.example.test/UAT/api/x/v1.0/companies(abc)/']) {
+    assert.equal(normalizeBinListEndpoint(raw), ep, raw);
+  }
+  assert.equal(normalizeBinListEndpoint('  '), '');
+  const url = binListUrl(ep, "FF0'01");
+  assert.ok(url.startsWith(`${ep}?`));
+  assert.ok(decodeURIComponent(url).includes("locationCode eq 'FF0''01'"));
+});
+
+ok('own URL required; login falls back to the Cek Bin login, its own login wins', () => {
+  const ep = 'https://bc.example.test/x/companies(abc)/ppBinContentsAPI';
+  const bin = { BC_API_BIN_USERNAME: 'bin', BC_API_BIN_PASSWORD: 'p1', BC_API_BIN_BASE_URL: 'https://other.test/companies(abc)/' };
+  assert.equal(resolveBinListConfig(bin as unknown as NodeJS.ProcessEnv), null, 'BC_API_BIN_BASE_URL alone is not the bin list');
+  assert.equal(resolveBinListConfig({ BC_API_BIN_LIST_URL: ep } as unknown as NodeJS.ProcessEnv), null, 'no login');
+  const shared = resolveBinListConfig({ ...bin, BC_API_BIN_LIST_URL: ep } as unknown as NodeJS.ProcessEnv)!;
+  assert.equal(shared.endpoint, ep);
+  assert.equal(shared.settings.username, 'bin');
+  const own = resolveBinListConfig({
+    ...bin,
+    BC_API_BIN_LIST_URL: ep,
+    BC_API_BIN_LIST_USERNAME: 'list',
+    BC_API_BIN_LIST_PASSWORD: 'p2',
+  } as unknown as NodeJS.ProcessEnv)!;
+  assert.deepEqual([own.settings.username, own.settings.password], ['list', 'p2']);
 });
 
 console.log(`\n${checks} checks passed.`);

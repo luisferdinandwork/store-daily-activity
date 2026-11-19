@@ -1,7 +1,7 @@
 "use client";
 // app/employee/page.tsx
 
-import { useState, type ElementType } from "react";
+import { useEffect, useState, type ElementType } from "react";
 import { useApi } from "@/lib/client/use-api";
 import { useSession } from "next-auth/react";
 import Link from "next/link";
@@ -20,7 +20,15 @@ import {
   Receipt,
   CircleDollarSign,
   Truck,
+  Coffee,
 } from "lucide-react";
+import {
+  BREAK_REMINDER_MINUTES,
+  breakClock,
+  breakMinutesElapsed,
+  breakReminderDueAt,
+  isBreakOverdue,
+} from "@/lib/break-reminder";
 import { ATTENDANCE_STATUSES, type AttendanceStatus } from "@/lib/attendance-status";
 import { STATUS } from "@/components/status/AttendanceStatus";
 import { cn } from "@/lib/utils";
@@ -45,6 +53,7 @@ interface AttSlot {
     checkInTime: string | null;
     checkOutTime: string | null;
     onBreak: boolean;
+    breaks?: { breakLabel?: string; breakOutTime: string; returnTime: string | null }[];
   } | null;
 }
 
@@ -348,6 +357,30 @@ export default function EmployeeDashboard() {
   const isOnBreak = primaryAtt?.onBreak ?? false;
   const attCfg = primaryAtt ? ATT_CFG[primaryAtt.status] : null;
 
+  // An open break (any shift of today): the employee is out of the store, and
+  // tasks stay locked until they come back and check in again. The banner
+  // turns red once the break has run BREAK_REMINDER_MINUTES — the same moment
+  // the bell gets its reminder (lib/db/utils/break-reminders.ts).
+  const openBreak = attSlots
+    .map((s) => {
+      const a = s.attendance;
+      if (!a?.onBreak || a.checkOutTime) return null;
+      const b = (a.breaks ?? []).filter((x) => !x.returnTime).at(-1);
+      return b ? { ...b, shiftLabel: s.schedule.shiftLabel ?? null } : null;
+    })
+    .find((b) => b != null) ?? null;
+
+  // Re-render every 30 s while on break so the banner turns red on time.
+  const [now, setNow] = useState(() => new Date());
+  const onBreakSince = openBreak?.breakOutTime ?? null;
+  useEffect(() => {
+    if (!onBreakSince) return;
+    setNow(new Date());
+    const id = setInterval(() => setNow(new Date()), 30_000);
+    return () => clearInterval(id);
+  }, [onBreakSince]);
+  const breakOverdue = openBreak ? isBreakOverdue(openBreak.breakOutTime, now) : false;
+
   // Shift(s) that have already started today but have no check-in at all yet.
   const missedCheckIns = attSlots.filter(
     (s) => !s.attendance && s.schedule.startTime && new Date() > todayAt(s.schedule.startTime),
@@ -480,6 +513,52 @@ export default function EmployeeDashboard() {
                 </p>
               </div>
               <ChevronRight className="h-4 w-4 shrink-0 text-rose-200/60" />
+            </Link>
+          )}
+
+          {/* On-break alert — like the missed check-in one: amber while the
+              break runs, red once it has run 30 minutes ("kembali & absen
+              masuk"). Tasks are locked until the employee checks in again. */}
+          {!loading && openBreak && (
+            <Link
+              href="/employee/attendance"
+              className={cn(
+                "flex items-center gap-3 rounded-2xl border px-3.5 py-3 transition-colors active:scale-[0.99]",
+                breakOverdue
+                  ? "border-rose-400/40 bg-rose-500/15"
+                  : "border-amber-400/40 bg-amber-500/15",
+              )}
+            >
+              <div
+                className={cn(
+                  "flex h-8 w-8 shrink-0 items-center justify-center rounded-xl",
+                  breakOverdue ? "bg-rose-500/20" : "bg-amber-500/20",
+                )}
+              >
+                <Coffee className={cn("h-4 w-4", breakOverdue ? "text-rose-200" : "text-amber-200")} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className={cn("text-xs font-bold", breakOverdue ? "text-rose-100" : "text-amber-100")}>
+                  {breakOverdue
+                    ? `Istirahat sudah ${breakMinutesElapsed(openBreak.breakOutTime, now)} menit — kembali ke toko`
+                    : "Sedang istirahat"}
+                </p>
+                <p
+                  className={cn(
+                    "mt-0.5 text-[11px] leading-snug",
+                    breakOverdue ? "text-rose-200/80" : "text-amber-200/80",
+                  )}
+                >
+                  {breakOverdue
+                    ? `Sejak ${breakClock(openBreak.breakOutTime)}. Absen masuk lagi sekarang — task terkunci sampai kamu kembali.`
+                    : `Sejak ${breakClock(openBreak.breakOutTime)} · kembali & absen masuk sebelum ${breakClock(
+                        breakReminderDueAt(openBreak.breakOutTime),
+                      )} (${BREAK_REMINDER_MINUTES} menit). Task terkunci selama istirahat.`}
+                </p>
+              </div>
+              <ChevronRight
+                className={cn("h-4 w-4 shrink-0", breakOverdue ? "text-rose-200/60" : "text-amber-200/60")}
+              />
             </Link>
           )}
 

@@ -5,7 +5,8 @@ import type { GeoPoint } from './useGeo';
 
 export type AccessStatus =
   | { status: 'ok' }
-  | { status: 'not_checked_in' }
+  /** onBreak: checked in but out on a break — back + check in again first. */
+  | { status: 'not_checked_in'; onBreak?: boolean; breakOutTime?: string | null }
   | { status: 'outside_geofence'; distanceM: number; radiusM: number; accuracyM?: number | null }
   | { status: 'geo_unavailable' }
   | { status: 'validation_unavailable'; error?: string };

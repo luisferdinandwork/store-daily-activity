@@ -27,7 +27,7 @@
 
 import { ReactNode } from 'react';
 import {
-  Loader2, LogIn, Navigation, NavigationOff, RefreshCw,
+  Coffee, Loader2, LogIn, Navigation, NavigationOff, RefreshCw,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Notice } from '@/components/employee/ui';
@@ -35,6 +35,7 @@ import { useGeo, type GeoPoint } from '@/lib/hooks/useGeo';
 import { useAccessStatus, type AccessStatus } from '@/lib/hooks/useAccessStatus';
 import { useTaskLocationSetting } from '@/lib/hooks/useTaskLocationSetting';
 import { isPoorAccuracy, WEAK_GPS_TIP } from '@/lib/geo';
+import { BREAK_REMINDER_MINUTES, breakClock, isBreakOverdue } from '@/lib/break-reminder';
 
 export interface AccessGuardSlots {
   geo:            GeoPoint | null;
@@ -220,6 +221,22 @@ export function AccessBanner({
     </Notice>;
   }
 
+  if (accessStatus.status === 'not_checked_in' && accessStatus.onBreak) {
+    const since = accessStatus.breakOutTime;
+    const overdue = since ? isBreakOverdue(since) : false;
+    return (
+      <Notice
+        tone={overdue ? 'error' : 'warning'}
+        icon={Coffee}
+        title={overdue ? `Istirahat sudah lebih dari ${BREAK_REMINDER_MINUTES} menit` : 'Sedang istirahat'}
+        action={{ label: 'Cek ulang', onClick: onRefreshAccess, icon: RefreshCw }}
+      >
+        {since && <>Istirahat sejak {breakClock(since)}. </>}
+        Task terkunci — kembali ke toko dan absen masuk lagi di halaman Attendance.
+      </Notice>
+    );
+  }
+
   if (accessStatus.status === 'not_checked_in') {
     return (
       <Notice
@@ -294,16 +311,19 @@ export function LockedOverlay({
   if (!requireGeo && accessStatus.status !== 'not_checked_in') return null;
 
   const isCheckIn = accessStatus.status === 'not_checked_in';
+  const onBreak = accessStatus.status === 'not_checked_in' && !!accessStatus.onBreak;
   return (
     <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-start gap-2 rounded-2xl bg-background/75 pt-16 backdrop-blur-[2px]">
       <div className={cn(
         'flex h-12 w-12 items-center justify-center rounded-2xl',
         isCheckIn ? 'bg-red-100 text-red-600' : 'bg-amber-100 text-amber-600',
       )}>
-        {isCheckIn ? <LogIn className="h-6 w-6" /> : <NavigationOff className="h-6 w-6" />}
+        {onBreak ? <Coffee className="h-6 w-6" /> : isCheckIn ? <LogIn className="h-6 w-6" /> : <NavigationOff className="h-6 w-6" />}
       </div>
       <p className={cn('text-sm font-bold', isCheckIn ? 'text-red-700' : 'text-amber-800')}>
-        {isCheckIn
+        {onBreak
+          ? 'Kembali dari istirahat dulu'
+          : isCheckIn
           ? 'Absen masuk dulu'
           : accessStatus.status === 'geo_unavailable' ? 'Lokasi wajib aktif' : 'Kamu di luar area toko'}
       </p>

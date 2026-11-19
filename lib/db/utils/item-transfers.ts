@@ -17,6 +17,7 @@
 import type { GeoPoint } from '@/lib/geo';
 import { assertInGeofence } from '@/lib/db/utils/geofence';
 import { db } from '@/lib/db';
+import { taskAttendanceProblem } from '@/lib/db/utils/task-attendance-gate';
 import { and, eq, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import {
   itemTransferOrders,
@@ -26,7 +27,6 @@ import {
   itemDroppingTasks,
   warehouseCodes,
   stores,
-  attendance,
   type ItemTransferOrder,
   type ItemReturnEntry,
   type ItemDroppingEntry,
@@ -46,18 +46,9 @@ export type { GeoPoint };
 
 // ─── Guard helpers (mirrors item-return.ts/item-dropping.ts) ──────────────────
 
+// Checked in AND not out on a break (lib/db/utils/task-attendance-gate.ts).
 async function assertCheckedIn(scheduleId: number): Promise<string | null> {
-  const [att] = await db
-    .select({ checkInTime: attendance.checkInTime })
-    .from(attendance)
-    .where(eq(attendance.scheduleId, scheduleId))
-    .limit(1);
-
-  if (!att?.checkInTime) {
-    return 'Kamu belum absen masuk. Lakukan absensi masuk terlebih dahulu sebelum mengerjakan task.';
-  }
-
-  return null;
+  return taskAttendanceProblem(scheduleId);
 }
 
 async function assertCanProgressTask(

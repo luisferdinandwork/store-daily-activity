@@ -2,6 +2,7 @@
 import type { GeoPoint } from '@/lib/geo';
 import { assertInGeofence } from '@/lib/db/utils/geofence';
 import { db } from '@/lib/db';
+import { taskAttendanceProblem } from '@/lib/db/utils/task-attendance-gate';
 import { eq, and, gte, lte } from 'drizzle-orm';
 import { UANG_MODAL_DENOMINATIONS, UANG_MODAL_MAX_TOTAL } from '@/lib/uang-modal-review';
 import {
@@ -9,7 +10,6 @@ import {
   cekUangModalDenominations,
   stores,
   schedules,
-  attendance,
   type CekUangModalTask,
   type CekUangModalDenomination,
 } from '@/lib/db/schema';
@@ -98,18 +98,9 @@ function formatRupiah(value: number): string {
   return `Rp ${value.toLocaleString('id-ID')}`;
 }
 
+// Checked in AND not out on a break (lib/db/utils/task-attendance-gate.ts).
 async function assertCheckedIn(scheduleId: number): Promise<string | null> {
-  const [att] = await db
-    .select({ checkInTime: attendance.checkInTime })
-    .from(attendance)
-    .where(eq(attendance.scheduleId, scheduleId))
-    .limit(1);
-
-  if (!att?.checkInTime) {
-    return 'Kamu belum absen masuk. Lakukan absensi masuk terlebih dahulu sebelum mengerjakan task.';
-  }
-
-  return null;
+  return taskAttendanceProblem(scheduleId);
 }
 
 async function assertCanProgressTask(

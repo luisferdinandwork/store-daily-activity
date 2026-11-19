@@ -11,6 +11,7 @@
  */
 
 import { db } from "@/lib/db";
+import { settleBreakReminder } from "@/lib/db/utils/break-reminders";
 import { DINAS_SHIFT_CODE, baseShiftCode, isOpeningShift } from "@/lib/shift-tasks";
 import {
   STORE_TIME_ZONE,
@@ -2261,6 +2262,8 @@ export async function endBreak(
         updatedAt: new Date(),
       })
       .where(eq(breakSessions.id, openBreak.id));
+
+    await settleBreakReminder(openBreak.id);
 
     const [updatedAtt] = await db
       .update(attendance)

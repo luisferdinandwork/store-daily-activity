@@ -9,8 +9,8 @@ import { assertInGeofence } from '@/lib/db/utils/geofence';
 import { and, eq, gte, lte } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
+import { taskAttendanceProblem } from '@/lib/db/utils/task-attendance-gate';
 import {
-  attendance,
   briefingTasks,
   schedules,
   stores,
@@ -42,18 +42,9 @@ export interface SubmitBriefingInput {
   skipGeo?: boolean;
 }
 
+// Checked in AND not out on a break (lib/db/utils/task-attendance-gate.ts).
 async function assertCheckedIn(scheduleId: number): Promise<string | null> {
-  const [att] = await db
-    .select({ checkInTime: attendance.checkInTime })
-    .from(attendance)
-    .where(eq(attendance.scheduleId, scheduleId))
-    .limit(1);
-
-  if (!att?.checkInTime) {
-    return 'Kamu belum absen masuk. Lakukan absensi masuk terlebih dahulu sebelum mengerjakan task.';
-  }
-
-  return null;
+  return taskAttendanceProblem(scheduleId);
 }
 
 async function assertCanProgressTask(

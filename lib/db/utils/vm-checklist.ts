@@ -2,10 +2,10 @@
 import type { GeoPoint } from '@/lib/geo';
 import { assertInGeofence } from '@/lib/db/utils/geofence';
 import { db } from '@/lib/db';
+import { taskAttendanceProblem } from '@/lib/db/utils/task-attendance-gate';
 import { taskShiftIdFor } from '@/lib/db/utils/shift-lookup';
 import { eq, and, gte, lte } from 'drizzle-orm';
 import {
-  attendance,
   stores,
   vmChecklistTasks,
   type VmChecklistTask,
@@ -59,18 +59,9 @@ function endOfDay(d: Date): Date {
   return r;
 }
 
+// Checked in AND not out on a break (lib/db/utils/task-attendance-gate.ts).
 async function assertCheckedIn(scheduleId: number): Promise<string | null> {
-  const [att] = await db
-    .select({ checkInTime: attendance.checkInTime })
-    .from(attendance)
-    .where(eq(attendance.scheduleId, scheduleId))
-    .limit(1);
-
-  if (!att?.checkInTime) {
-    return 'Kamu belum absen masuk. Lakukan absensi masuk terlebih dahulu sebelum mengerjakan task.';
-  }
-
-  return null;
+  return taskAttendanceProblem(scheduleId);
 }
 
 async function findByScheduleId(scheduleId: number): Promise<VmChecklistTask | null> {

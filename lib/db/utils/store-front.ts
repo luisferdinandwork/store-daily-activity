@@ -4,10 +4,10 @@
 import type { GeoPoint } from '@/lib/geo';
 import { assertInGeofence } from '@/lib/db/utils/geofence';
 import { db } from '@/lib/db';
+import { taskAttendanceProblem } from '@/lib/db/utils/task-attendance-gate';
 import { taskShiftIdFor } from '@/lib/db/utils/shift-lookup';
 import { eq, and, gte, lte } from 'drizzle-orm';
 import {
-  attendance,
   storeFrontTasks,
   stores,
   type StoreFrontTask,
@@ -70,22 +70,9 @@ function parsePhotos(raw: string | null | undefined): string[] {
   }
 }
 
+// Checked in AND not out on a break (lib/db/utils/task-attendance-gate.ts).
 async function assertCheckedIn(scheduleId: number, userId?: string): Promise<string | null> {
-  const where = userId
-    ? and(eq(attendance.scheduleId, scheduleId), eq(attendance.userId, userId))
-    : eq(attendance.scheduleId, scheduleId);
-
-  const [att] = await db
-    .select({ checkInTime: attendance.checkInTime })
-    .from(attendance)
-    .where(where)
-    .limit(1);
-
-  if (!att?.checkInTime) {
-    return 'Kamu belum absen masuk. Lakukan absensi masuk terlebih dahulu sebelum mengerjakan task.';
-  }
-
-  return null;
+  return taskAttendanceProblem(scheduleId, userId);
 }
 
 async function assertCanProgressTask(

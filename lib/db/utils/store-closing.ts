@@ -49,6 +49,7 @@ import {
 import type { GeoPoint } from '@/lib/geo';
 import { assertInGeofence } from '@/lib/db/utils/geofence';
 import { db } from '@/lib/db';
+import { judgeAttendanceRow } from '@/lib/db/utils/task-attendance-gate';
 import { isClosingShift } from '@/lib/shift-tasks';
 import { taskShiftIdFor } from '@/lib/db/utils/shift-lookup';
 import {
@@ -203,23 +204,25 @@ async function assertCheckedIn(
   scheduleId: number,
   opts?: { userId?: string; storeId?: number },
 ): Promise<string | null> {
+  // Checked in AND not out on a break (lib/db/utils/task-attendance-gate.ts).
   const [att] = await db
-    .select({ checkInTime: attendance.checkInTime })
+    .select({ id: attendance.id, userId: attendance.userId, checkInTime: attendance.checkInTime, onBreak: attendance.onBreak })
     .from(attendance)
     .where(eq(attendance.scheduleId, scheduleId))
     .limit(1);
 
-  if (att?.checkInTime) return null;
+  const gate = await judgeAttendanceRow(att);
+  if (gate.ok && (!opts?.userId || att?.userId === opts.userId)) return null;
 
   // Defensive fallback for shared Store Closing rows:
-  // if the client accidentally sends the original shared row scheduleId, still
-  // allow the logged-in employee when they are checked in for their own schedule
-  // at the same store today.
-  if (opts?.userId && opts?.storeId) {
+  // if the client accidentally sends the original shared row scheduleId (a
+  // colleague's), judge the logged-in employee's own attendance for their
+  // schedule at the same store today instead — their break, not the colleague's.
+  if (opts?.userId && opts?.storeId && att?.userId !== opts.userId) {
     const now = new Date();
 
-    const [ownAttendance] = await db
-      .select({ checkInTime: attendance.checkInTime })
+    const own = await db
+      .select({ id: attendance.id, checkInTime: attendance.checkInTime, onBreak: attendance.onBreak })
       .from(attendance)
       .innerJoin(schedules, eq(schedules.id, attendance.scheduleId))
       .where(
@@ -230,13 +233,21 @@ async function assertCheckedIn(
           gte(schedules.date, startOfDay(now)),
           lte(schedules.date, endOfDay(now)),
         ),
-      )
-      .limit(1);
+      );
 
-    if (ownAttendance?.checkInTime) return null;
+    if (own.length) {
+      const verdicts = await Promise.all(own.map((row) => judgeAttendanceRow(row)));
+      if (verdicts.some((v) => v.ok)) return null;
+      const onBreak = verdicts.find((v) => !v.ok && v.reason === 'on_break');
+      const blocked = onBreak ?? verdicts[0];
+      return blocked.ok ? null : blocked.message;
+    }
+    // No attendance of their own today: a checked-in colleague's row keeps
+    // the old behaviour (allowed), anything else is refused below.
+    if (gate.ok) return null;
   }
 
-  return 'Kamu belum absen masuk. Lakukan absensi masuk terlebih dahulu sebelum mengerjakan task.';
+  return gate.ok ? null : gate.message;
 }
 
 async function assertCanProgressTask(

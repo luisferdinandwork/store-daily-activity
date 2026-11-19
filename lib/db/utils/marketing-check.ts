@@ -4,10 +4,10 @@ import { assertInGeofence } from '@/lib/db/utils/geofence';
 import { and, eq, gte, lte } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
+import { taskAttendanceProblem } from '@/lib/db/utils/task-attendance-gate';
 import { isOpeningShift } from '@/lib/shift-tasks';
 import { taskShiftIdFor } from '@/lib/db/utils/shift-lookup';
 import {
-  attendance,
   marketingCheckTasks,
   schedules,
   shifts,
@@ -96,16 +96,9 @@ function endOfDay(date: Date): Date {
   return result;
 }
 
+// Checked in AND not out on a break (lib/db/utils/task-attendance-gate.ts).
 async function assertCheckedIn(scheduleId: number): Promise<string | null> {
-  const [row] = await db
-    .select({ checkInTime: attendance.checkInTime })
-    .from(attendance)
-    .where(eq(attendance.scheduleId, scheduleId))
-    .limit(1);
-
-  return row?.checkInTime
-    ? null
-    : 'Kamu belum absen masuk. Lakukan absensi masuk terlebih dahulu sebelum mengerjakan task.';
+  return taskAttendanceProblem(scheduleId);
 }
 
 async function assertCanProgressTask(input: {

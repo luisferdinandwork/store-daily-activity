@@ -7,7 +7,7 @@
 // Covers the pure rules (lib/bin-check.ts: status decoding, wrong-only, merging the
 // headers + summary feeds, store/day scoping) and the server module
 // (lib/bc/bin-content-check.ts: URL/$filter/auth, cache, fail-soft states, pagination,
-// timeout, env override).
+// timeout, base URL from env).
 
 import assert from 'node:assert/strict';
 
@@ -22,7 +22,6 @@ import {
   splitSkuToken,
 } from '../lib/bin-check';
 import {
-  BC_BIN_CHECK_DEFAULT_BASE_URL,
   binCheckHeadersUrl,
   binCheckSummaryUrl,
   clearBinCheckCache,
@@ -117,7 +116,9 @@ function reset(env: Record<string, string | undefined>, h: typeof handler = happ
   handler = h;
 }
 
-const CREDS = { BC_API_BIN_USERNAME: 'bin-user', BC_API_BIN_PASSWORD: 's3cret' };
+// A made-up address: the real BC address lives only in .env.local, never in the repo.
+const TEST_BASE = 'https://bc.example.test/UAT/api/x/v1.0/companies(test)/';
+const CREDS = { BC_API_BIN_USERNAME: 'bin-user', BC_API_BIN_PASSWORD: 's3cret', BC_API_BIN_BASE_URL: TEST_BASE };
 const DAY = '2026-10-29';
 
 // Silence the (intentional) server error logs while failure paths are exercised.
@@ -305,8 +306,7 @@ async function main() {
   console.log('Server module');
 
   await ok('URLs: base, $expand, $schemaversion and the store + day $filter', () => {
-    const base = BC_BIN_CHECK_DEFAULT_BASE_URL;
-    assert.ok(base.endsWith('companies(fdc329b5-9a4a-ed11-ac38-81e458651713)/'));
+    const base = TEST_BASE;
     const h = binCheckHeadersUrl(base, "FF0'01", DAY);
     assert.ok(h.startsWith(`${base}ppBinContentCheckHeaders?`));
     assert.ok(h.includes('$expand=ppBinContentCheckLines'));
@@ -322,8 +322,9 @@ async function main() {
     assert.ok(decodeURIComponent(s).includes('date lt 2027-01-01'), 'crosses the year');
   });
 
-  await ok('no credentials → "not_configured", BC is never called, nothing throws', async () => {
-    for (const env of [{}, { BC_API_BIN_USERNAME: 'u' }, { BC_API_BIN_USERNAME: ' ', BC_API_BIN_PASSWORD: '' }]) {
+  await ok('no credentials or no base URL → "not_configured", BC is never called, nothing throws', async () => {
+    const noBase = { BC_API_BIN_USERNAME: 'bin-user', BC_API_BIN_PASSWORD: 's3cret' };
+    for (const env of [{}, { BC_API_BIN_USERNAME: 'u' }, { BC_API_BIN_USERNAME: ' ', BC_API_BIN_PASSWORD: '' }, noBase, { ...noBase, BC_API_BIN_BASE_URL: '  ' }]) {
       reset(env);
       const r = await getBinCheckResult({ location: 'FF001', day: DAY });
       assert.equal(r.state, 'not_configured');
@@ -346,7 +347,7 @@ async function main() {
     assert.ok(calls.every((c) => c.auth === expected));
     assert.ok(calls.some((c) => c.url.includes('/ppBinContentCheckHeaders?') && c.url.includes('$expand=ppBinContentCheckLines')));
     assert.ok(calls.every((c) => decodeURIComponent(c.url).includes("location eq 'FF001' and date ge 2026-10-29 and date lt 2026-10-30")));
-    assert.ok(calls.every((c) => c.url.startsWith(BC_BIN_CHECK_DEFAULT_BASE_URL)));
+    assert.ok(calls.every((c) => c.url.startsWith(TEST_BASE)));
     assert.ok(!JSON.stringify(r).includes('s3cret'), 'no secret in the result');
   });
 
@@ -418,7 +419,7 @@ async function main() {
     assert.equal(calls.filter((c) => c.url.includes('ppBinContentCheckHeaders')).length, 2);
   });
 
-  await ok('BC_API_BIN_BASE_URL overrides the UAT base (trailing slash added)', async () => {
+  await ok('BC_API_BIN_BASE_URL is the base (trailing slash added)', async () => {
     reset({ ...CREDS, BC_API_BIN_BASE_URL: 'https://bc.example.test/PROD/api/x/v1.0/companies(abc)' });
     await getBinCheckResult({ location: 'FF001', day: DAY });
     assert.ok(calls.every((c) => c.url.startsWith('https://bc.example.test/PROD/api/x/v1.0/companies(abc)/ppBinContent')));

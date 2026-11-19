@@ -1,10 +1,10 @@
 // lib/db/utils/tasks.ts
 import { db }                                          from '@/lib/db';
+import { getTaskAttendanceGate, taskAttendanceProblem } from '@/lib/db/utils/task-attendance-gate';
 import { baseShiftCode, isClosingShift, isOpeningShift } from '@/lib/shift-tasks';
 import { eq, and, gte, lt, lte, inArray, isNull, or } from 'drizzle-orm';
 import {
-  schedules, stores, shifts, attendance,
-  monthlySchedules, monthlyScheduleEntries,
+  schedules, stores, shifts, monthlySchedules, monthlyScheduleEntries,
 
   storeOpeningTasks,
   setoranTasks,
@@ -57,7 +57,8 @@ export type { GeoPoint };
 
 export type TaskAccessStatus =
   | { status: 'ok' }
-  | { status: 'not_checked_in' }
+  /** onBreak: checked in but out on a break — back + check in again first. */
+  | { status: 'not_checked_in'; onBreak?: boolean; breakOutTime?: string | null }
   | { status: 'outside_geofence'; distanceM: number; radiusM: number; accuracyM: number | null }
   | { status: 'geo_unavailable' };
 
@@ -181,15 +182,9 @@ async function getShiftIdMap(): Promise<Record<string, number>> {
 
 // ─── Guard helpers ────────────────────────────────────────────────────────────
 
+// Checked in AND not out on a break (lib/db/utils/task-attendance-gate.ts).
 async function assertCheckedIn(scheduleId: number): Promise<string | null> {
-  const [att] = await db
-    .select({ checkInTime: attendance.checkInTime })
-    .from(attendance)
-    .where(eq(attendance.scheduleId, scheduleId))
-    .limit(1);
-  if (!att?.checkInTime)
-    return 'Kamu belum absen masuk. Lakukan absensi masuk terlebih dahulu sebelum mengerjakan task.';
-  return null;
+  return taskAttendanceProblem(scheduleId);
 }
 
 async function assertCanProgressTask(
@@ -213,8 +208,12 @@ export async function getTaskAccessStatus(
   geo:        GeoPoint | null,
   requireGeo = true,
 ): Promise<TaskAccessStatus> {
-  const checkInErr = await assertCheckedIn(scheduleId);
-  if (checkInErr) return { status: 'not_checked_in' };
+  const gate = await getTaskAttendanceGate(scheduleId);
+  if (!gate.ok) {
+    return gate.reason === 'on_break'
+      ? { status: 'not_checked_in', onBreak: true, breakOutTime: gate.breakOutTime?.toISOString() ?? null }
+      : { status: 'not_checked_in' };
+  }
   if (!requireGeo) return { status: 'ok' };
   if (!geo)       return { status: 'geo_unavailable' };
 

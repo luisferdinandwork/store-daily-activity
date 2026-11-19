@@ -153,7 +153,7 @@ export default function CekBinDetailView({ storeId, date }: { storeId: number; d
 
         {!loading && data?.error && <Notice tone="danger" title="Gagal memuat" body={data.error} />}
         {!loading && !data?.error && data?.state === 'not_configured' && (
-          <Notice tone="warning" title="Business Central belum diatur" body="Login BC untuk Cek Bin (BC_API_BIN_USERNAME / PASSWORD) belum diisi di server." />
+          <Notice tone="warning" title="Business Central belum diatur" body="Alamat + login BC untuk Cek Bin (BC_API_BIN_BASE_URL / USERNAME / PASSWORD) belum diisi di server." />
         )}
         {!loading && !data?.error && data?.state === 'unavailable' && (
           <Notice tone="danger" title="Data Business Central belum tersedia" body="BC tidak bisa dihubungi saat ini. Coba Muat ulang sebentar lagi." />

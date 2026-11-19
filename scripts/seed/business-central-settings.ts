@@ -6,8 +6,9 @@ config({ path: '.env' });
 import { db } from '@/lib/db';
 import { businessCentralSettings } from '@/lib/db/schema';
 
-const BC_COMPANY_BASE =
-  'https://bc.panatradeprestasi.com:7248/UAT/api/panatradeprestasi/pntpri/v1.0/companies(fdc329b5-9a4a-ed11-ac38-81e458651713)';
+// The BC address is never written in code (the repo is shared) — it comes from `.env.local` only:
+// each feed's own *_URL, or else BC_COMPANY_BASE_URL (`…/companies(<guid>)`) + the entity below.
+const BC_COMPANY_BASE = (process.env.BC_COMPANY_BASE_URL ?? '').trim().replace(/\/+$/, '');
 
 const salesEntriesUrl =
   process.env.BC_SALES_ENTRIES_URL ??
@@ -40,6 +41,12 @@ export async function seedBusinessCentralSettings() {
   if (!username || !password) {
     throw new Error(
       'Missing BC credentials. Set BC_API_USERNAME and BC_API_PASSWORD in .env.local first.',
+    );
+  }
+  const missing = SETTINGS.filter((s) => !/^https?:\/\/[^/]/.test(s.apiUrl)).map((s) => s.code);
+  if (missing.length > 0) {
+    throw new Error(
+      `Missing BC URL for ${missing.join(', ')}. Set BC_COMPANY_BASE_URL (or each BC_*_URL) in .env.local first.`,
     );
   }
 

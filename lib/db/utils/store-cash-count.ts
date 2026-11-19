@@ -7,6 +7,7 @@
 // as a witness, and the two take a selfie together. All five are mandatory,
 // enforced at checkout (requiredCashCountSessionsForShift).
 import { db } from '@/lib/db';
+import { taskAttendanceProblem } from '@/lib/db/utils/task-attendance-gate';
 import {
   CASH_COUNT_SESSIONS,
   CASH_COUNT_SESSION_INFO,
@@ -148,17 +149,9 @@ export async function listCoScheduledEmployees(
   return Array.from(byUser.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
 
+// Checked in AND not out on a break (lib/db/utils/task-attendance-gate.ts).
 async function assertCheckedIn(scheduleId: number): Promise<string | null> {
-  const [att] = await db
-    .select({ checkInTime: attendance.checkInTime })
-    .from(attendance)
-    .where(eq(attendance.scheduleId, scheduleId))
-    .limit(1);
-
-  if (!att?.checkInTime) {
-    return 'Kamu belum absen masuk. Lakukan absensi masuk terlebih dahulu.';
-  }
-  return null;
+  return taskAttendanceProblem(scheduleId);
 }
 
 async function sessionAlreadyCounted(

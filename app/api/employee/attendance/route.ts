@@ -5,6 +5,7 @@ import { asc, and, eq, gte, lte, inArray } from 'drizzle-orm';
 
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
+import { sendDueBreakReminders } from '@/lib/db/utils/break-reminders';
 import {
   schedules,
   attendance,
@@ -287,6 +288,7 @@ export async function GET(_req: NextRequest) {
     // Close out any of this employee's own shifts left open past their end
     // time before reading today's rows, so the response is always current.
     await autoCheckoutOverdueAttendance({ userId });
+    await sendDueBreakReminders({ userId });
 
     const today = todayInStoreTimezone();
     const dayStart = startOfDay(today);

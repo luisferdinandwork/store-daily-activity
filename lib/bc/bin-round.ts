@@ -1,8 +1,13 @@
 // lib/bc/bin-round.ts
 // ─────────────────────────────────────────────────────────────────────────────
-// Server-side only: the Business Central reads behind the monthly bin round (lib/bin-round.ts). Same company API +
-// login as the staff Cek Bin (BC_API_BIN_BASE_URL / BC_API_BIN_USERNAME / BC_API_BIN_PASSWORD, see
-// lib/bc/bin-content-check.ts → resolveBinCheckConfig).
+// Server-side only: the Business Central reads behind the monthly bin round (lib/bin-round.ts). Two sources:
+//
+//   • the BIN LIST has its own endpoint: BC_API_BIN_LIST_URL (the full `…/ppBinContentsAPI` URL; a query string
+//     pasted with it is ignored). Login = BC_API_BIN_LIST_USERNAME / _PASSWORD, or else the Cek Bin login below.
+//   • the SCAN RESULTS use the staff Cek Bin API (BC_API_BIN_BASE_URL / BC_API_BIN_USERNAME / BC_API_BIN_PASSWORD,
+//     see lib/bc/bin-content-check.ts → resolveBinCheckConfig).
+//
+// Every address lives only in `.env.local` (never in code — the repo is shared).
 //
 //   fetchStoreBinList        ppBinContentsAPI of ONE location: every bin the store has (one row per bin × item —
 //                            FF001 ≈ 15 000 rows / 318 bins), grouped to one entry per bin. Slow (10–90 s on UAT),
@@ -16,6 +21,7 @@
 
 import { fetchAllBusinessCentralRows } from '@/lib/bc/client';
 import { resolveBinCheckConfig } from '@/lib/bc/bin-content-check';
+import type { ResolvedBusinessCentralSettings } from '@/lib/performance/business-central-settings';
 import { addDaysKey, isDayKey, jakartaTodayKey } from '@/lib/day-bucket';
 import { normalizeBinCode, type BcFeedState } from '@/lib/bin-round';
 
@@ -47,8 +53,35 @@ export type StoreBinListResult =
   | { state: 'ok'; bins: StoreBinListEntry[] }
   | { state: 'not_configured' | 'unavailable'; bins: []; error: string };
 
-export function binListUrl(baseUrl: string, location: string): string {
-  return `${baseUrl}${BIN_LIST_ENTITY}?${query([
+/**
+ * The bin-list endpoint as pasted into `.env.local`: the full entity URL (query/hash dropped, trailing slash
+ * trimmed). A bare company root (`…/companies(<guid>)`) gets the entity appended.
+ */
+export function normalizeBinListEndpoint(raw: string): string {
+  let url = raw.trim().replace(/^["']+|["']+$/g, '');
+  url = url.split(/[?#]/, 1)[0].replace(/\/+$/, '');
+  if (!url) return '';
+  const last = url.slice(url.lastIndexOf('/') + 1);
+  return last.toLowerCase().startsWith('companies(') ? `${url}/${BIN_LIST_ENTITY}` : url;
+}
+
+interface BinListConfig {
+  endpoint: string;
+  settings: ResolvedBusinessCentralSettings;
+}
+
+/** Read per call, so editing `.env.local` + restarting is all it takes. Null = not set up. */
+export function resolveBinListConfig(env: NodeJS.ProcessEnv = process.env): BinListConfig | null {
+  const clean = (v: string | undefined) => v?.trim() || '';
+  const endpoint = normalizeBinListEndpoint(clean(env.BC_API_BIN_LIST_URL));
+  const username = clean(env.BC_API_BIN_LIST_USERNAME) || clean(env.BC_API_BIN_USERNAME);
+  const password = clean(env.BC_API_BIN_LIST_PASSWORD) || clean(env.BC_API_BIN_PASSWORD);
+  if (!endpoint || !username || !password) return null;
+  return { endpoint, settings: { apiUrl: endpoint, authType: 'basic', username, password, source: 'env' } };
+}
+
+export function binListUrl(endpoint: string, location: string): string {
+  return `${endpoint}?${query([
     ['$select', 'binCode,quantityBase'],
     ['$schemaversion', SCHEMA_VERSION],
     ['$filter', `locationCode eq ${quote(location)}`],
@@ -76,11 +109,11 @@ export function groupBinListRows(rows: readonly unknown[]): StoreBinListEntry[] 
 
 export async function fetchStoreBinList(location: string): Promise<StoreBinListResult> {
   const loc = location.trim().toUpperCase();
-  const config = resolveBinCheckConfig();
-  if (!config) return { state: 'not_configured', bins: [], error: 'BC_API_BIN_USERNAME / BC_API_BIN_PASSWORD belum diisi.' };
+  const config = resolveBinListConfig();
+  if (!config) return { state: 'not_configured', bins: [], error: 'BC_API_BIN_LIST_URL (+ login BC_API_BIN_USERNAME / PASSWORD) belum diisi.' };
   if (!loc) return { state: 'unavailable', bins: [], error: 'Kode toko kosong.' };
   try {
-    const rows = await fetchAllBusinessCentralRows(binListUrl(config.baseUrl, loc), config.settings, {
+    const rows = await fetchAllBusinessCentralRows(binListUrl(config.endpoint, loc), config.settings, {
       timeoutMs: BIN_LIST_TIMEOUT_MS,
     });
     return { state: 'ok', bins: groupBinListRows(rows) };

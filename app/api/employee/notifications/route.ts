@@ -8,6 +8,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { getUnreadCount, listNotifications, markAllNotificationsRead } from '@/lib/db/utils/notifications';
+import { sendDueBreakReminders } from '@/lib/db/utils/break-reminders';
 
 export async function GET() {
   const session = await getServerSession(authOptions);
@@ -15,6 +16,10 @@ export async function GET() {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
   }
   const userId = (session.user as any).id as string;
+
+  // A break that has run 30 minutes gets its "come back" reminder here, so it
+  // reaches the bell on the next 60 s poll (the cron covers closed apps).
+  await sendDueBreakReminders({ userId });
 
   const [notifications, unreadCount] = await Promise.all([
     listNotifications(userId),

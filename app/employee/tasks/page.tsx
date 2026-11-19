@@ -4,6 +4,7 @@
 import { useEffect, useState, useCallback, type ElementType } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -34,6 +35,7 @@ import {
   Check,
   ListOrdered,
   PauseCircle,
+  Coffee,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -43,6 +45,7 @@ import {
   taskDayInfo,
 } from "@/components/employee/tasks";
 import { baseShiftCode } from "@/lib/shift-tasks";
+import { BREAK_REMINDER_MINUTES, breakClock, isBreakOverdue } from "@/lib/break-reminder";
 import { EmptyState, Notice, SkeletonBlocks } from "@/components/employee/ui";
 
 // ─── Task types ────────────────────────────────────────────────────────────────
@@ -97,6 +100,7 @@ interface AttendanceShiftSlot {
     checkOutTime?: string | null;
     onBreak?: boolean;
     notes?: string | null;
+    breaks?: { breakOutTime: string; returnTime: string | null }[];
   } | null;
 }
 
@@ -106,6 +110,10 @@ type AttendanceStatus = {
   checkedOut: boolean;
   checkInAt: string | null;
   checkOutAt: string | null;
+  /** Out on a break (no shift of today checked in and at work) — tasks locked. */
+  onBreak: boolean;
+  /** When that break started (open break of the shift on break). */
+  breakOutAt: string | null;
 };
 
 interface TaskBase {
@@ -817,6 +825,18 @@ function notifyNotCheckedIn() {
   });
 }
 
+const ON_BREAK_TOAST_ID = "on-break";
+
+function notifyOnBreak(breakOutAt: string | null) {
+  toast.warning("Sedang istirahat", {
+    id: ON_BREAK_TOAST_ID,
+    description:
+      `${breakOutAt ? `Istirahat sejak ${breakClock(breakOutAt)}. ` : ""}` +
+      "Kembali ke toko dan absen masuk lagi sebelum mengerjakan task.",
+    duration: 3500,
+  });
+}
+
 function AttendanceCheckCard({
   attendance,
   loading,
@@ -860,6 +880,22 @@ function AttendanceCheckCard({
   // above the task list.
   if (!attendance.checkedIn) {
     return null;
+  }
+
+  if (attendance.onBreak) {
+    const overdue = attendance.breakOutAt ? isBreakOverdue(attendance.breakOutAt) : false;
+    return (
+      <Link href="/employee/attendance" className="block">
+        <Notice
+          tone={overdue ? "error" : "warning"}
+          icon={Coffee}
+          title={overdue ? `Istirahat sudah lebih dari ${BREAK_REMINDER_MINUTES} menit` : "Sedang istirahat"}
+        >
+          {attendance.breakOutAt && <>Istirahat sejak {breakClock(attendance.breakOutAt)}. </>}
+          Task terkunci sampai kamu kembali ke toko dan absen masuk lagi. Ketuk untuk ke Attendance.
+        </Notice>
+      </Link>
+    );
   }
 
   if (attendance.checkedOut) {
@@ -1012,6 +1048,8 @@ export default function EmployeeTasksPage() {
           checkedOut: false,
           checkInAt: null,
           checkOutAt: null,
+          onBreak: false,
+          breakOutAt: null,
         });
         return;
       }
@@ -1020,6 +1058,10 @@ export default function EmployeeTasksPage() {
       const checkOutTimes: string[] = [];
       let slotsWithCheckIn = 0;
       let slotsWithCheckOut = 0;
+      // At work = checked in, not checked out, not on a break. Tasks lock
+      // while every checked-in, still-open shift is out on a break.
+      let slotsAtWork = 0;
+      let breakOutAt: string | null = null;
 
       for (const slot of slots) {
         const att = slot.attendance;
@@ -1033,6 +1075,15 @@ export default function EmployeeTasksPage() {
         if (att.checkOutTime) {
           checkOutTimes.push(att.checkOutTime);
           slotsWithCheckOut += 1;
+        }
+
+        if (att.checkInTime && !att.checkOutTime) {
+          if (att.onBreak) {
+            const open = (att.breaks ?? []).filter((b) => !b.returnTime).at(-1);
+            if (open) breakOutAt = open.breakOutTime;
+          } else {
+            slotsAtWork += 1;
+          }
         }
       }
 
@@ -1051,6 +1102,8 @@ export default function EmployeeTasksPage() {
           slotsWithCheckIn > 0 && slotsWithCheckOut === slotsWithCheckIn,
         checkInAt: earliestCheckIn,
         checkOutAt: latestCheckOut,
+        onBreak: slotsWithCheckIn > slotsWithCheckOut && slotsAtWork === 0,
+        breakOutAt,
       });
     } catch (e) {
       console.error("[EmployeeTasksPage] attendance load error:", e);
@@ -1085,6 +1138,14 @@ export default function EmployeeTasksPage() {
         if (attendance?.hasSchedule && !attendance.checkedIn) {
           notifyNotCheckedIn();
         }
+        void loadAttendance();
+        return;
+      }
+
+      // Out on a break: back to the store + check in again first. Finished
+      // tasks stay viewable (their pages are read-only).
+      if (attendance.onBreak && !["completed", "verified"].includes(String(item.data.status))) {
+        notifyOnBreak(attendance.breakOutAt);
         void loadAttendance();
         return;
       }
