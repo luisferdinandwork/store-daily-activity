@@ -16,6 +16,7 @@ import { PETTY_CASH_MAX_BALANCE } from '@/lib/db/schema/petty-cash';
 import { topUpPeriodToMax } from '@/lib/db/utils/petty-cash-period';
 import { todayJakarta } from '@/lib/finance/dates';
 import { usagePeriodFor } from '@/lib/petty-cash-period';
+import { getHiddenStores, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 import {
   canTransitionStoreStatus,
   isStoreOperational,
@@ -46,10 +47,12 @@ export async function assertStoreOperational(storeId: number): Promise<string | 
 /** Subset of `storeIds` that are `active` — for rollups that must skip prep/closed stores. */
 export async function filterActiveStoreIds(storeIds: number[]): Promise<number[]> {
   if (storeIds.length === 0) return [];
+  // Read paths only: IT-only test stores are dropped for viewers who mustn't see them.
+  const hidden = await getHiddenStores();
   const rows = await db
     .select({ id: stores.id })
     .from(stores)
-    .where(and(inArray(stores.id, storeIds), eq(stores.status, 'active')));
+    .where(and(inArray(stores.id, storeIds), eq(stores.status, 'active'), notHiddenStore(stores.id, hidden.storeIds)));
   return rows.map((r) => r.id);
 }
 

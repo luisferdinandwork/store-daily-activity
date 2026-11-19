@@ -19,6 +19,7 @@ import {
   serializeImpactVisit,
 } from '@/lib/db/utils/impact-visits';
 import { emptyCashMoneyData } from '@/lib/impact-visit/checklist-config';
+import { getHiddenStores, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 
 export async function GET(req: NextRequest) {
   const scope = await resolveOpsScope();
@@ -27,7 +28,8 @@ export async function GET(req: NextRequest) {
   }
 
   const storeIdParam = req.nextUrl.searchParams.get('storeId');
-  const conditions = [];
+  // IT-only test stores (DUMMY…) are hidden from non-IT viewers.
+  const conditions = [notHiddenStore(impactVisits.storeId, (await getHiddenStores()).storeIds)];
 
   if (scope.scope === 'area') {
     conditions.push(eq(stores.areaId, scope.areaId));

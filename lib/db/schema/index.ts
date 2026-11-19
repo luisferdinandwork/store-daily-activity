@@ -18,6 +18,7 @@ export * from './store-visits';
 export * from './templates';           // IT-managed issue + email templates
 export * from './audit-cash-checks';   // Audit Pemeriksaan Kas (Berita Acara)
 export * from './audit-stock-opnames'; // Audit Stock Opname (BA SO + Surat Pernyataan)
+export * from './bin-rounds';          // Cek Bin monthly bin round
 
 import * as enums            from './enums';
 import * as lookups          from './lookups';
@@ -38,6 +39,7 @@ import * as storeVisits      from './store-visits';
 import * as templates        from './templates';
 import * as auditCashChecks  from './audit-cash-checks';
 import * as auditStockOpnames from './audit-stock-opnames';
+import * as binRounds        from './bin-rounds';
 
 export const schema = {
   ...enums,
@@ -59,4 +61,5 @@ export const schema = {
   ...templates,
   ...auditCashChecks,
   ...auditStockOpnames,
+  ...binRounds,
 };

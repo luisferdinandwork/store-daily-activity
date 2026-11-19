@@ -29,6 +29,7 @@ import type {
   DetailPhoto,
   StoreDayDetail,
 } from '@/lib/store-money-detail';
+import { isStoreHidden } from '@/lib/db/utils/it-only-stores';
 
 const toInt = (v: string | number | null | undefined): number =>
   v == null || v === '' || !Number.isFinite(Number(v)) ? 0 : Math.round(Number(v));
@@ -43,6 +44,8 @@ const photo = (p: { key: string; label: string; url: string | null | undefined; 
 const present = (list: (DetailPhoto | null)[]): DetailPhoto[] => list.filter((p): p is DetailPhoto => p !== null);
 
 export async function getStoreDayDetail(storeId: number, salesDate: string): Promise<StoreDayDetail | null> {
+  // IT-only test stores (DUMMY…) don't exist for Finance (IT sees them).
+  if (await isStoreHidden(storeId)) return null;
   const setoranDate = addDaysKey(salesDate, 1);
   const closingRange = jakartaDaysRange(salesDate, salesDate);
   const setoranRange = jakartaDaysRange(setoranDate, setoranDate);

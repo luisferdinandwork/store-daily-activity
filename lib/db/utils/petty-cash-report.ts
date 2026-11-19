@@ -35,6 +35,7 @@ import {
 } from '@/lib/petty-cash-report';
 import { LEFT_OUT_REVIEWS } from '@/lib/petty-cash-review';
 import { getRefillRowsByIds } from './petty-cash-ops';
+import { getHiddenStores, notHiddenStore } from './it-only-stores';
 
 const decided = sql.raw([...LEFT_OUT_REVIEWS, 'accepted'].map((r) => `'${r}'`).join(', '));
 
@@ -42,6 +43,7 @@ const decided = sql.raw([...LEFT_OUT_REVIEWS, 'accepted'].map((r) => `'${r}'`).j
 const pendingFinance = sql`(${pettyCashTransactions.status} = 'completed' AND (${pettyCashTransactions.financeReview} IS NULL OR ${pettyCashTransactions.financeReview} NOT IN (${decided})))`;
 
 export async function getPettyCashReport(month: string): Promise<PettyCashReport> {
+  const hidden = await getHiddenStores();
   const storeRows = await db
     .select({
       id: stores.id,
@@ -53,7 +55,8 @@ export async function getPettyCashReport(month: string): Promise<PettyCashReport
     })
     .from(stores)
     .innerJoin(areas, eq(stores.areaId, areas.id))
-    .where(ne(stores.status, 'ready_to_open'));
+    // IT-only test stores (DUMMY…) are hidden from Finance (IT sees them).
+    .where(and(ne(stores.status, 'ready_to_open'), notHiddenStore(stores.id, hidden.storeIds)));
 
   if (storeRows.length === 0) return { rows: [], incompleteCount: 0 };
 

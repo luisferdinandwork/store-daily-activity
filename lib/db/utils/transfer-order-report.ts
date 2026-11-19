@@ -11,6 +11,7 @@ import { db } from '@/lib/db';
 import { areas, itemTransferOrders as t, stores } from '@/lib/db/schema';
 import { jakartaDaysRange } from '@/lib/day-bucket';
 import type { Process, ReportRow, StoreMeta } from '@/lib/transfer-order-report';
+import { getHiddenStores, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 
 /**
  * The stores a report covers: active stores only (prep / closed stores take no
@@ -19,6 +20,8 @@ import type { Process, ReportRow, StoreMeta } from '@/lib/transfer-order-report'
  */
 export async function getReportStores(scope: { isOpsHo: boolean; areaId: number | null }): Promise<StoreMeta[]> {
   if (!scope.isOpsHo && scope.areaId == null) return [];
+  // IT-only test stores (DUMMY…) are hidden from OPS HO (IT sees them).
+  const hidden = await getHiddenStores();
 
   const rows = await db
     .select({ id: stores.id, name: stores.name, storeNo: stores.storeNo, areaId: stores.areaId, areaName: areas.name })
@@ -26,7 +29,7 @@ export async function getReportStores(scope: { isOpsHo: boolean; areaId: number 
     .leftJoin(areas, eq(areas.id, stores.areaId))
     .where(and(
       eq(stores.status, 'active'),
-      scope.isOpsHo ? undefined : eq(stores.areaId, scope.areaId!),
+      scope.isOpsHo ? notHiddenStore(stores.id, hidden.storeIds) : eq(stores.areaId, scope.areaId!),
     ))
     .orderBy(asc(stores.name));
 

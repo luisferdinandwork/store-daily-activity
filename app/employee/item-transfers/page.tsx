@@ -13,7 +13,7 @@ import { useGeo } from '@/lib/hooks/useGeo';
 import type { GeoPoint } from '@/lib/geo';
 import {
   CheckCircle2, Loader2, AlertCircle,
-  Store, Warehouse, Clock, Truck, Package, Inbox, Search, X, Bot,
+  Store, Warehouse, Clock, Truck, Package, Inbox, Search, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -68,9 +68,6 @@ interface EntryData {
   whseShipmentNo?: string | null;
   whseShipmentLines?: WhseShipmentLine[];
   inTransitSince?: string | null;
-  receivedAt?: string | null;
-  /** Item Return completed by itself: where its clock stops (Terima Fisik at the destination, else WR Diposting). */
-  autoDoneAt?: string | null;
   returnDetectedAt?: string | null;
 }
 
@@ -349,14 +346,12 @@ function OpenEntryCard({
 // ─── Confirmed entry card ─────────────────────────────────────────────────────
 
 function ConfirmedEntryCard({ kind, entry }: { kind: Kind; entry: EntryData }) {
-  // Dropping's real "finish line" is Business Central posting the warehouse
-  // receipt (receivedAt), not this store's local courier hand-off scan
-  // (entry.submittedAt) — that scan just unlocks the confirm form. Keep
-  // ticking until BC actually posts it.
+  // The API only sends transfers whose Warehouse Receipt BC has NOT posted yet
+  // (a posted one — confirmed here or completed automatically — is gone), so
+  // every confirmed card is "waiting for BC". Keep ticking until it disappears.
   const [previewOpen, setPreviewOpen] = useState(false);
   const isDropping = kind === 'dropping';
-  const stillAwaitingBcReceive = isDropping && !entry.receivedAt;
-  useTicking(stillAwaitingBcReceive ? 30_000 : false);
+  useTicking(30_000);
 
   const store = isDropping ? entry.fromStore : entry.toStore;
   const code = isDropping ? entry.transferFromCode : entry.transferToCode;
@@ -369,23 +364,13 @@ function ConfirmedEntryCard({ kind, entry }: { kind: Kind; entry: EntryData }) {
   // instead of being folded into one blended number.
   const since = isDropping ? entry.inTransitSince : entry.returnDetectedAt;
   const cfg = KIND_CFG[kind];
-  // BC posted the receipt while this store never confirmed its own step here:
-  // PRISM completed the order by itself (see lib/transfer-order-phase.ts). The
-  // time still counts — up to the destination's Terima Fisik, else WR Diposting
-  // (lib/transfer-order-metrics.ts).
-  const auto = !entry.submittedAt && Boolean(entry.receivedAt);
-  const ownDuration = formatDurationBetween(since, auto ? (entry.autoDoneAt ?? entry.receivedAt) : entry.submittedAt);
+  const ownDuration = formatDurationBetween(since, entry.submittedAt);
 
   return (
-    <div className={cn('rounded-2xl border bg-card px-4 py-3.5', auto ? 'border-orange-200' : 'border-green-200')}>
+    <div className="rounded-2xl border border-green-200 bg-card px-4 py-3.5">
       <div className="flex items-center gap-3">
-        <div
-          className={cn(
-            'flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl',
-            auto ? 'bg-orange-100 text-orange-600' : 'bg-green-100 text-green-600',
-          )}
-        >
-          {auto ? <Bot className="h-5 w-5" /> : <CheckCircle2 className="h-5 w-5" />}
+        <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-green-100 text-green-600">
+          <CheckCircle2 className="h-5 w-5" />
         </div>
         <div className="min-w-0 flex-1">
           <p className="font-mono text-sm font-bold text-foreground">{entry.toaNo}</p>
@@ -398,46 +383,21 @@ function ConfirmedEntryCard({ kind, entry }: { kind: Kind; entry: EntryData }) {
           </p>
         </div>
         <div className="flex-shrink-0 text-right">
-          <p className={cn('text-xs font-bold', auto ? 'text-orange-700' : 'text-green-700')}>{ownDuration}</p>
+          <p className="text-xs font-bold text-green-700">{ownDuration}</p>
           <p className="text-[10px] text-muted-foreground">
             {entry.submittedAt
               ? new Date(entry.submittedAt).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
-              : auto ? 'Otomatis' : ''}
+              : ''}
           </p>
         </div>
       </div>
 
-      {auto && (
-        <div className="mt-3 flex items-start gap-2 rounded-xl bg-orange-50 px-3 py-2">
-          <Bot className="mt-0.5 h-3.5 w-3.5 shrink-0 text-orange-600" />
-          <p className="text-[11px] font-semibold leading-snug text-orange-700">
-            Tidak diproses di PRISM — selesai otomatis karena sudah diposting di BC
-            {entry.receivedAt
-              ? ` (${new Date(entry.receivedAt).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })})`
-              : ''}
-          </p>
-        </div>
-      )}
-
-      {isDropping && !auto && (
-        <div
-          className={cn(
-            'mt-3 flex items-center gap-2 rounded-xl px-3 py-2',
-            stillAwaitingBcReceive ? 'bg-amber-50' : 'bg-secondary',
-          )}
-        >
-          {stillAwaitingBcReceive ? (
-            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-amber-600" />
-          ) : (
-            <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          )}
-          <p className={cn('text-[11px] font-semibold', stillAwaitingBcReceive ? 'text-amber-700' : 'text-muted-foreground')}>
-            {stillAwaitingBcReceive
-              ? `Menunggu BC posting Warehouse Receipt · ${formatElapsedSince(entry.submittedAt)}`
-              : `Diterima BC dalam ${formatDurationBetween(entry.submittedAt, entry.receivedAt)}`}
-          </p>
-        </div>
-      )}
+      <div className="mt-3 flex items-center gap-2 rounded-xl bg-amber-50 px-3 py-2">
+        <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-amber-600" />
+        <p className="text-[11px] font-semibold text-amber-700">
+          Menunggu BC posting Warehouse Receipt · {formatElapsedSince(entry.submittedAt)}
+        </p>
+      </div>
 
       {entry.courierSignPhoto && (
         <>
@@ -495,12 +455,11 @@ function FlowSection({
 }) {
   const cfg = KIND_CFG[kind];
   const searched = payload.entries.filter((e) => matchesSearch(e, search));
-  // receivedAt can now close a transfer on its own (BC's Warehouse Receipt
-  // for a store-bound leg, or this store's own Item Return submission for a
-  // warehouse-bound leg) without this entry's own submittedAt ever being
-  // set — treat either as "nothing left to do here".
-  const openEntries = searched.filter((e) => !e.submittedAt && !e.receivedAt);
-  const confirmedEntries = searched.filter((e) => e.submittedAt || e.receivedAt);
+  // The API sends only transfers BC has not posted a Warehouse Receipt for:
+  // either this store still has to take its photo (open), or it did and BC has
+  // not posted yet (waiting). Posted ones never reach the page.
+  const openEntries = searched.filter((e) => !e.submittedAt);
+  const confirmedEntries = searched.filter((e) => e.submittedAt);
 
   return (
     <div className="space-y-3">
@@ -544,7 +503,7 @@ function FlowSection({
           {confirmedEntries.length > 0 && (
             <section className="space-y-2.5">
               <p className="px-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                Selesai · {confirmedEntries.length}
+                Menunggu BC · {confirmedEntries.length}
               </p>
               {confirmedEntries.map((entry) => (
                 <ConfirmedEntryCard key={entry.id} kind={kind} entry={entry} />
@@ -651,11 +610,11 @@ export default function ItemTransfersPage() {
   // Same "still open" predicate as FlowSection's own openEntries split —
   // this badge and that section must never disagree about what's pending.
   const droppingOpenCount = useMemo(
-    () => dropping.entries.filter((e) => !e.submittedAt && !e.receivedAt).length,
+    () => dropping.entries.filter((e) => !e.submittedAt).length,
     [dropping.entries],
   );
   const returnOpenCount = useMemo(
-    () => returnData.entries.filter((e) => !e.submittedAt && !e.receivedAt).length,
+    () => returnData.entries.filter((e) => !e.submittedAt).length,
     [returnData.entries],
   );
 

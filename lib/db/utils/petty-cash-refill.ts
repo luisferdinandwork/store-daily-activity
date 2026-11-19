@@ -42,6 +42,7 @@ import {
 import { PETTY_CASH_MAX_BALANCE } from '@/lib/db/schema/petty-cash';
 import { jakartaTodayKey } from '@/lib/day-bucket';
 import { createNotificationsForUsers, getOpsUserIdsForArea } from './notifications';
+import { getHiddenStores, notHiddenStore } from './it-only-stores';
 import { getRefillRowsByIds } from './petty-cash-ops';
 import { rejectedNote, type RefillTransfer } from '@/lib/petty-cash-review';
 import { getActivePeriod, getPeriod, type DbExecutor } from './petty-cash-period';
@@ -744,6 +745,8 @@ export async function listRefillRequestsForFinance(limit = 50): Promise<RefillRe
     .from(pettyCashRefillRequests)
     .innerJoin(stores, eq(pettyCashRefillRequests.storeId, stores.id))
     .leftJoin(users, eq(pettyCashRefillRequests.requestedBy, users.id))
+    // IT-only test stores (DUMMY…) are hidden from Finance (IT sees them).
+    .where(notHiddenStore(stores.id, (await getHiddenStores()).storeIds))
     .orderBy(desc(pettyCashRefillRequests.requestedAt))
     .limit(limit);
 

@@ -10,6 +10,7 @@ import { pettyCashTransactions } from '@/lib/db/schema/petty-cash';
 import { adjustPeriodBalance } from '@/lib/db/utils/petty-cash-period';
 import { approveFixedRequest, isFixedRequest } from '@/lib/db/utils/petty-cash-re-request';
 import { leavesOutOfTransfer } from '@/lib/petty-cash-review';
+import { isStoreHidden } from '@/lib/db/utils/it-only-stores';
 
 type Params = {
   params: Promise<{
@@ -73,7 +74,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     .where(eq(pettyCashTransactions.id, txId))
     .limit(1);
 
-  if (!requestRow) {
+  if (!requestRow || (await isStoreHidden(requestRow.storeId))) {
     return NextResponse.json(
       { success: false, error: 'Petty cash request not found.' },
       { status: 404 },

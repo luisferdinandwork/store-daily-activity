@@ -45,6 +45,7 @@ import type {
 } from '@/lib/ops-petty-cash-stores';
 import { countsAsUsed } from './petty-cash-used';
 import { usageMonthOf } from './petty-cash-period';
+import { getHiddenStores, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 
 /** From this many days before the 15th the Refill of the period in use shows as due (the employee app's reminder). */
 const DUE_SOON_DAYS = 5;
@@ -178,6 +179,8 @@ interface StoreBase {
 }
 
 async function loadStores(where: ReturnType<typeof and>): Promise<StoreBase[]> {
+  // IT-only test stores (DUMMY…) are hidden from non-IT viewers (list + detail).
+  const hidden = await getHiddenStores();
   return db
     .select({
       id: stores.id,
@@ -190,7 +193,7 @@ async function loadStores(where: ReturnType<typeof and>): Promise<StoreBase[]> {
     .from(stores)
     .innerJoin(areas, eq(areas.id, stores.areaId))
     // A store still getting ready to open has no petty cash yet (same as Finance's tab).
-    .where(and(ne(stores.status, 'ready_to_open'), where))
+    .where(and(ne(stores.status, 'ready_to_open'), where, notHiddenStore(stores.id, hidden.storeIds)))
     .orderBy(stores.name);
 }
 

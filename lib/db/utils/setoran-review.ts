@@ -27,6 +27,7 @@ import {
   type SetoranMonthRow,
   type SetoranStoreRow,
 } from '@/lib/setoran-review';
+import { getHiddenStores, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 
 const toInt = (v: string | number | null | undefined): number =>
   v == null || v === '' || !Number.isFinite(Number(v)) ? 0 : Math.round(Number(v));
@@ -91,10 +92,12 @@ export async function getSetoranDay(dateStr: string): Promise<SetoranStoreRow[]>
       .where(and(gte(setoranMoneyStorage.date, dayStart), lt(setoranMoneyStorage.date, dayEnd))),
   ]);
 
+  // IT-only test stores (DUMMY…) are hidden from Finance (IT sees them).
+  const hidden = await getHiddenStores();
   const storeIds = [...new Set([
     ...scheduleRows.map((r) => r.storeId),
     ...taskRows.map((t) => t.storeId),
-  ])];
+  ])].filter((id) => !hidden.storeIds.includes(id));
   if (storeIds.length === 0) return [];
 
   const taskByStore = new Map(taskRows.map((t) => [t.storeId, t]));
@@ -208,7 +211,8 @@ export async function getSetoranMonth(month: string, todayStr: string): Promise<
   const storeRows = await db
     .select({ id: stores.id, storeNo: stores.storeNo, name: stores.name, areaName: areas.name })
     .from(stores)
-    .innerJoin(areas, eq(areas.id, stores.areaId));
+    .innerJoin(areas, eq(areas.id, stores.areaId))
+    .where(notHiddenStore(stores.id, (await getHiddenStores()).storeIds));
   if (storeRows.length === 0) return [];
 
   const [workRows, taskRows, ledgerRows, closingRows] = await Promise.all([

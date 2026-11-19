@@ -52,6 +52,7 @@ import { periodDays } from '@/lib/task-progress';
 import { PROCESSES, buildStoreReports, type Process } from '@/lib/transfer-order-report';
 import { visitCycleView } from '@/lib/store-visit/cycles';
 import { dueTone } from '@/lib/store-visit/upcoming';
+import { getHiddenStores, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 
 type Scope = Extract<OpsScope, { ok: true }>;
 
@@ -122,7 +123,10 @@ async function pettyCashQueue(
       .from(tx)
       .innerJoin(stores, eq(stores.id, tx.storeId))
       .innerJoin(areas, eq(areas.id, stores.areaId))
-      .where(and(eq(tx.status, 'pending_ops'), areaId != null ? eq(stores.areaId, areaId) : undefined))
+      .where(and(
+        eq(tx.status, 'pending_ops'),
+        areaId != null ? eq(stores.areaId, areaId) : notHiddenStore(stores.id, (await getHiddenStores()).storeIds),
+      ))
       .orderBy(asc(tx.createdAt), asc(tx.id)),
     getOpsRefillRows({ areaId, month: NO_MONTH }),
   ]);
@@ -189,7 +193,11 @@ async function issueQueue(areaId: number | null, qs: (r: StoreRow) => QueueStore
     .innerJoin(stores, eq(issues.storeId, stores.id))
     .innerJoin(areas, eq(areas.id, stores.areaId))
     .innerJoin(users, eq(issues.userId, users.id))
-    .where(and(eq(issues.status, 'reported'), or(...routing), areaId != null ? eq(stores.areaId, areaId) : undefined))
+    .where(and(
+      eq(issues.status, 'reported'),
+      or(...routing),
+      areaId != null ? eq(stores.areaId, areaId) : notHiddenStore(stores.id, (await getHiddenStores()).storeIds),
+    ))
     .orderBy(asc(issues.createdAt), asc(issues.id));
 
   return {
@@ -271,7 +279,7 @@ async function visitQueue(qs: (r: StoreRow) => QueueStore): Promise<NonNullable<
     .from(stores)
     .innerJoin(areas, eq(areas.id, stores.areaId))
     .innerJoin(storeVisitPolicies, eq(storeVisitPolicies.storeNo, stores.storeNo))
-    .where(eq(stores.status, 'active'));
+    .where(and(eq(stores.status, 'active'), notHiddenStore(stores.id, (await getHiddenStores()).storeIds)));
 
   const horizon = Math.max(7, ...policyRows.map((p) => p.intervalDays));
   const visitRows = policyRows.length

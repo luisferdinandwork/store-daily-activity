@@ -15,6 +15,7 @@ import { db } from '@/lib/db';
 import { stores } from '@/lib/db/schema';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
 import { addAllStoreStaffToRoster } from '@/lib/performance/target-utils';
+import { isStoreHidden } from '@/lib/db/utils/it-only-stores';
 
 type Params = { params: Promise<{ storeId: string }> };
 
@@ -35,7 +36,7 @@ export async function POST(req: NextRequest, { params }: Params) {
     .where(eq(stores.id, storeId))
     .limit(1);
 
-  if (!store || (scope.scope === 'area' && store.areaId !== scope.areaId)) {
+  if (!store || (scope.scope === 'area' && store.areaId !== scope.areaId) || (await isStoreHidden(storeId))) {
     return NextResponse.json({ success: false, error: 'Store not found or out of scope.' }, { status: 404 });
   }
 

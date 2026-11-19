@@ -21,6 +21,7 @@ import {
   serializeIssue,
   type IssueStatus,
 } from '@/lib/db/utils/issues';
+import { isStoreHidden } from '@/lib/db/utils/it-only-stores';
 
 const VALID_STATUSES: IssueStatus[] = ['in_review', 'completed'];
 
@@ -77,7 +78,7 @@ export async function PATCH(
       .where(eq(issues.id, issueId))
       .limit(1);
 
-    if (!target) {
+    if (!target || await isStoreHidden(target.storeId)) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 });
     }
 

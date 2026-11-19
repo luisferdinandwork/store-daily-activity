@@ -17,6 +17,7 @@ import { areas, storeMonthlyTargets, stores } from '@/lib/db/schema';
 import { getStoreActuals } from '@/lib/performance/employee-actuals';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
 import { listStoreRoster, toYearMonth } from '@/lib/performance/target-utils';
+import { getHiddenStores, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 
 export async function GET(req: NextRequest) {
   const scope = await resolveOpsScope();
@@ -46,7 +47,10 @@ export async function GET(req: NextRequest) {
     })
     .from(stores)
     .leftJoin(areas, eq(areas.id, stores.areaId))
-    .where(scope.scope === 'area' ? eq(stores.areaId, scope.areaId) : undefined);
+    .where(scope.scope === 'area'
+      ? eq(stores.areaId, scope.areaId)
+      // IT-only test stores (DUMMY…) are hidden from OPS HO (IT sees them).
+      : notHiddenStore(stores.id, (await getHiddenStores()).storeIds));
 
   const plans = await db
     .select()

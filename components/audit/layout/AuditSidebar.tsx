@@ -14,6 +14,7 @@
 //
 //   Cek Bin & Stock Opname
 //     Hasil Cek Bin     /audit/cek-bin          (every store's daily Cek Bin from BC: right vs wrong, averages)
+//     Progres Cek Bin   /audit/bin-progress     (the monthly bin round: every bin checked once a month, right / wrong)
 //     Stock Opname      /audit/stock-opname     (the audit's count of one store-day, pre-filled from BC)
 //     Berita Acara SO   /audit/berita-acara-so  (BA Stock Opname + Surat Pernyataan, printable)
 //
@@ -30,6 +31,7 @@ import {
   ClipboardCheck,
   FileText,
   KeyRound,
+  ListChecks,
   LayoutDashboard,
   LogOut,
   ScanLine,
@@ -78,6 +80,7 @@ const NAV: NavSection[] = [
     section: 'Cek Bin & Stock Opname',
     items: [
       { href: '/audit/cek-bin', label: 'Hasil Cek Bin', icon: ScanLine },
+      { href: '/audit/bin-progress', label: 'Progres Cek Bin', icon: ListChecks },
       { href: '/audit/stock-opname', label: 'Stock Opname', icon: ClipboardCheck },
       { href: '/audit/berita-acara-so', label: 'Berita Acara SO', icon: FileText },
     ],

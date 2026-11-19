@@ -11,6 +11,7 @@ import { db } from '@/lib/db';
 import { issues, stores, areas, users, userRoles, issueRoleAssignments } from '@/lib/db/schema';
 import { resolveAuditScope } from '@/lib/audit/scope';
 import { loadIssueAssignedRoles } from '@/lib/db/utils/issues';
+import { getHiddenStores, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 
 function parseUrls(value: unknown): string[] {
   if (!value) return [];
@@ -60,6 +61,8 @@ export async function GET() {
     }
 
     const conditions = [ne(issues.status, 'draft'), or(...routingConditions)!];
+    // IT-only test stores (DUMMY…) are hidden from non-IT viewers.
+    conditions.push(notHiddenStore(issues.storeId, (await getHiddenStores()).storeIds));
 
     const rows = await db
       .select({

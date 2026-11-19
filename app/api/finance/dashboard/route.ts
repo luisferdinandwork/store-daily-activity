@@ -19,6 +19,7 @@ import {
 } from '@/lib/db/schema/core';
 import { pettyCashTransactions } from '@/lib/db/schema';
 import { userRoles } from '@/lib/db/schema/lookups';
+import { getHiddenStores, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 
 export type FinanceDashboardData = {
   pendingPettyCash: number;
@@ -39,17 +40,20 @@ export async function GET(): Promise<NextResponse<FinanceDashboardResponse>> {
     );
   }
 
+  // IT-only test stores (DUMMY…) are left out for Finance (IT sees them).
+  const hidden = await getHiddenStores();
+
   // 1. Pending petty-cash transactions (no approvedAt set yet)
   const [pettyCashRow] = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(pettyCashTransactions)
-    .where(isNull(pettyCashTransactions.approvedAt));
+    .where(and(isNull(pettyCashTransactions.approvedAt), notHiddenStore(pettyCashTransactions.storeId, hidden.storeIds)));
 
   // 2. Daily reports pending Finance verification
   const [reportsRow] = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(dailyReports)
-    .where(eq(dailyReports.status, 'submitted'));
+    .where(and(eq(dailyReports.status, 'submitted'), notHiddenStore(dailyReports.storeId, hidden.storeIds)));
 
   // 3. Open issues routed to Finance role (not resolved/draft)
   //    Join issueRoleAssignments to find issues where Finance role is a target.
@@ -77,6 +81,7 @@ export async function GET(): Promise<NextResponse<FinanceDashboardResponse>> {
           and(
             inArray(issues.id, ids),
             inArray(issues.status, ['reported', 'in_review', 'completed']),
+            notHiddenStore(issues.storeId, hidden.storeIds),
           ),
         );
       openIssueCount = issuesRow?.count ?? 0;

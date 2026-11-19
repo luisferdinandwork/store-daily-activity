@@ -1,8 +1,10 @@
 'use client';
 // app/employee/tasks/cek-bin/[id]/page.tsx
 //
-// Cek Bin: the bins are scanned in Business Central; this page shows what BC says is
-// still WRONG (components/employee/BinCheckResults.tsx). There is nothing to fill in
+// Cek Bin: the bins are scanned in Business Central. This page shows the day's 20 bins to scan
+// (monthly bin round — components/employee/DailyBinList.tsx: only bins not checked yet this month,
+// random, in walking order) and what BC says is still WRONG (components/employee/BinCheckResults.tsx).
+// There is nothing to fill in
 // and no submit button — the task is marked done by itself the moment the employee
 // opens it (once they are checked in / inside the store), see completeCekBin().
 
@@ -21,6 +23,7 @@ import {
   EmptyState, Notice, PageBody, SkeletonBlocks, TaskReviewNotices,
 } from '@/components/employee/ui';
 import BinCheckResults from '@/components/employee/BinCheckResults';
+import DailyBinList from '@/components/employee/DailyBinList';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -184,16 +187,17 @@ export default function CekBinDetailPage() {
               <Notice tone="neutral" icon={Spinner}>Mencatat Cek BIN selesai…</Notice>
             ) : finished ? (
               <Notice tone="success" icon={CheckCircle2} title="Cek BIN sudah selesai">
-                Task ini tercatat selesai otomatis saat dibuka. Barang yang masih salah di bawah tetap bisa
-                diperbaiki — scan ulang di BC, lalu tekan Muat ulang.
+                Task ini tercatat selesai otomatis saat dibuka. Lanjutkan scan bin hari ini di BC — barang yang
+                masih salah tetap bisa diperbaiki: scan ulang di BC, lalu tekan Muat ulang.
               </Notice>
             ) : !locked && !completeError ? (
               <Notice tone="info" icon={Box}>
-                Task ini selesai otomatis begitu dibuka. Scan BIN di BC — barang yang masih salah muncul di bawah.
+                Task ini selesai otomatis begitu dibuka. Scan bin hari ini di BC — barang yang masih salah muncul di bawah.
               </Notice>
             ) : null}
 
-            {/* What Business Central says is wrong in today's scans (never blocks the task) */}
+            {/* The day's 20 bins of the monthly round, then what BC says is wrong in today's scans (never blocks the task) */}
+            <DailyBinList taskId={taskData.id} />
             <BinCheckResults taskId={taskData.id} />
           </div>
         )}

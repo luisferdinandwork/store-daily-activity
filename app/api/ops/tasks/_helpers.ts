@@ -2,6 +2,7 @@
 import { db } from '@/lib/db';
 import { stores } from '@/lib/db/schema';
 import { loadOpsActor } from '@/lib/auth/ops-actor';
+import { isStoreHidden } from '@/lib/db/utils/it-only-stores';
 import { eq } from 'drizzle-orm';
 
 export interface OpsActor {
@@ -31,6 +32,9 @@ export async function assertStoreInActorArea(
   actor: OpsActor,
   storeId: number,
 ): Promise<string | null> {
+  // IT-only test stores (DUMMY…) don't exist for non-IT viewers.
+  if (await isStoreHidden(storeId)) return 'Store not found.';
+
   /**
    * OPS HO can access every store.
    */

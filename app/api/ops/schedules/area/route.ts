@@ -19,6 +19,7 @@ import {
   getOpsActor,
   listStoresForActor,
 } from '../_helpers';
+import { getHiddenStores, notHiddenArea } from '@/lib/db/utils/it-only-stores';
 
 function currentYearMonth() {
   const now = new Date();
@@ -53,6 +54,8 @@ export async function GET() {
     ? await db
         .select({ id: areas.id, name: areas.name })
         .from(areas)
+        // IT-only test stores' area (DUMMY AREA) is hidden from OPS HO (IT sees it).
+        .where(notHiddenArea(areas.id, (await getHiddenStores()).areaIds))
         .orderBy(asc(areas.name))
     : actor.areaId
       ? await db

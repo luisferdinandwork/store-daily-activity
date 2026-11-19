@@ -28,6 +28,7 @@
     "test:sales-returns": "tsx scripts/test-sales-returns.ts",
     "test:transfer-report": "tsx scripts/test-transfer-order-report.ts",
     "test:bin-check": "tsx scripts/test-bin-check.ts",
+    "test:bin-round": "tsx scripts/test-bin-round.ts",
     "test:audit-so": "tsx scripts/test-audit-stock-opname.ts",
     "test:ops-dashboard": "tsx scripts/test-ops-dashboard.ts",
     "mock:bc-bin": "tsx scripts/mock-bc-bin-check.ts",

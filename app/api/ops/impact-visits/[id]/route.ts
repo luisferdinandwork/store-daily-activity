@@ -27,6 +27,7 @@ import {
 } from '@/lib/db/utils/impact-visits';
 import type { ChecklistResponses } from '@/lib/impact-visit/scoring';
 import type { CashMoneyData } from '@/lib/impact-visit/checklist-config';
+import { isStoreHidden } from '@/lib/db/utils/it-only-stores';
 
 async function loadVisitWithStoreArea(id: number) {
   const [row] = await db
@@ -42,6 +43,8 @@ async function loadVisitWithStoreArea(id: number) {
     .leftJoin(areas, eq(stores.areaId, areas.id))
     .where(eq(impactVisits.id, id))
     .limit(1);
+  // IT-only test stores (DUMMY…) don't exist for non-IT viewers.
+  if (row && (await isStoreHidden(row.visit.storeId))) return null;
   return row ?? null;
 }
 

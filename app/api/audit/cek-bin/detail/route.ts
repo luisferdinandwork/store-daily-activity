@@ -18,6 +18,7 @@ import { areas, stores } from '@/lib/db/schema';
 import { isDayKey, jakartaTodayKey } from '@/lib/day-bucket';
 import { getBinCheckDayHeaders } from '@/lib/bc/bin-check-audit';
 import { buildBinDetail } from '@/lib/audit-bin-detail';
+import { isStoreHidden } from '@/lib/db/utils/it-only-stores';
 
 export async function GET(req: Request) {
   const scope = await resolveAuditScope();
@@ -37,7 +38,7 @@ export async function GET(req: Request) {
       .leftJoin(areas, eq(areas.id, stores.areaId))
       .where(eq(stores.id, storeId))
       .limit(1);
-    if (!store) return NextResponse.json({ success: false, error: 'Toko tidak ditemukan.' }, { status: 404 });
+    if (!store || (await isStoreHidden(store.id))) return NextResponse.json({ success: false, error: 'Toko tidak ditemukan.' }, { status: 404 });
 
     const bc = await getBinCheckDayHeaders({ location: store.storeNo, day: date, force: url.searchParams.get('refresh') === '1' });
     const detail = buildBinDetail(bc.headers);

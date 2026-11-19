@@ -31,6 +31,7 @@ import {
   type ClosingMoneySetoran,
 } from '@/lib/store-closing-money';
 import type { StoreMoneySheet } from '@/lib/store-money-sheet';
+import { getHiddenStores, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 
 const toInt = (v: string | number | null | undefined): number =>
   v == null || v === '' || !Number.isFinite(Number(v)) ? 0 : Math.round(Number(v));
@@ -154,7 +155,8 @@ export async function getClosingMoneyReport(
     .select({ id: stores.id, name: stores.name, storeNo: stores.storeNo, areaName: areas.name })
     .from(stores)
     .innerJoin(areas, eq(areas.id, stores.areaId))
-    .where(inArray(stores.id, storeIds));
+    // IT-only test stores (DUMMY…) are hidden from Finance (IT sees them).
+    .where(and(inArray(stores.id, storeIds), notHiddenStore(stores.id, (await getHiddenStores()).storeIds)));
   const storeMap = new Map(storeRows.map((s) => [s.id, s]));
 
   const rows: ClosingMoneyRow[] = [];
@@ -201,7 +203,8 @@ export async function getStoreMoneySheet(
 ): Promise<StoreMoneySheet | null> {
   const all = await db
     .select({ id: stores.id, storeNo: stores.storeNo, name: stores.name })
-    .from(stores);
+    .from(stores)
+    .where(notHiddenStore(stores.id, (await getHiddenStores()).storeIds));
   all.sort((a, b) => a.storeNo.localeCompare(b.storeNo, undefined, { numeric: true }));
 
   if (storeId == null) return { from, to, stores: all, store: null, rows: [], openingSisa: 0 };

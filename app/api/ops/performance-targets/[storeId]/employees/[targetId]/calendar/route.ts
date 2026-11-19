@@ -16,6 +16,7 @@ import { db } from '@/lib/db';
 import { employeeMonthlyTargets, stores, users } from '@/lib/db/schema';
 import { getEmployeeDailyActualsForRange } from '@/lib/performance/employee-actuals';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
+import { isStoreHidden } from '@/lib/db/utils/it-only-stores';
 
 type Params = { params: Promise<{ storeId: string; targetId: string }> };
 
@@ -54,7 +55,7 @@ export async function GET(req: NextRequest, { params }: Params) {
     )
     .limit(1);
 
-  if (!row) {
+  if (!row || (await isStoreHidden(storeId))) {
     return NextResponse.json({ success: false, error: 'Target not found.' }, { status: 404 });
   }
 

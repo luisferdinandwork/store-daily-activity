@@ -21,6 +21,7 @@ import {
   type SalesReturnRow,
   type SalesReturnsPage,
 } from '@/lib/sales-returns';
+import { getHiddenStores, notHiddenArea, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 
 export const SALES_RETURN_PAGE_SIZE = 50;
 
@@ -123,7 +124,9 @@ function filterCondition(f: SalesReturnFilters): SQL | undefined {
 }
 
 export async function getSalesReturns(f: SalesReturnFilters): Promise<SalesReturnsPage> {
-  const where = filterCondition(f);
+  // IT-only test stores (DUMMY…) are hidden from Ops HO / Finance (IT sees them).
+  const hidden = await getHiddenStores();
+  const where = and(filterCondition(f), notHiddenStore(sr.storeId, hidden.storeIds));
 
   const today = todayJakarta();
   const todayBounds = jakartaRangeBounds(today, today);
@@ -159,12 +162,18 @@ export async function getSalesReturns(f: SalesReturnFilters): Promise<SalesRetur
     db
       .select({ id: stores.id, areaId: stores.areaId, storeNo: stores.storeNo, name: stores.name })
       .from(stores)
-      .where(f.pickableAreaId != null ? eq(stores.areaId, f.pickableAreaId) : undefined)
+      .where(and(
+        f.pickableAreaId != null ? eq(stores.areaId, f.pickableAreaId) : undefined,
+        notHiddenStore(stores.id, hidden.storeIds),
+      ))
       .orderBy(stores.storeNo),
     db
       .select({ id: areas.id, name: areas.name })
       .from(areas)
-      .where(f.pickableAreaId != null ? eq(areas.id, f.pickableAreaId) : undefined)
+      .where(and(
+        f.pickableAreaId != null ? eq(areas.id, f.pickableAreaId) : undefined,
+        notHiddenArea(areas.id, hidden.areaIds),
+      ))
       .orderBy(areas.name),
   ]);
 

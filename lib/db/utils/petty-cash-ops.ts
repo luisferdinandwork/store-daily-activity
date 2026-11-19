@@ -41,6 +41,7 @@ import { isRefillLate, refillDeadline } from '@/lib/petty-cash-period';
 import { isFinanceReview, leavesOutOfTransfer } from '@/lib/petty-cash-review';
 import { refillStateOf } from '@/lib/petty-cash-report';
 import { addMonths } from './petty-cash-period';
+import { getHiddenStores, notHiddenStore } from './it-only-stores';
 
 const rupiah = (v: string | number | null | undefined) => Math.round(Number(v ?? 0));
 
@@ -52,6 +53,7 @@ const iso = (d: Date | null) => (d ? new Date(d).toISOString() : null);
 export async function getOpsRequestRows(opts: { areaId: number | null; month: string }): Promise<OpsRequestRow[]> {
   const { start, end } = jakartaMonthBounds(opts.month);
   const tx = pettyCashTransactions;
+  const hidden = await getHiddenStores();
 
   const rows = await db
     .select({
@@ -86,6 +88,7 @@ export async function getOpsRequestRows(opts: { areaId: number | null; month: st
     .where(
       and(
         opts.areaId != null ? eq(stores.areaId, opts.areaId) : undefined,
+        notHiddenStore(stores.id, hidden.storeIds),
         or(and(gte(tx.createdAt, start), lt(tx.createdAt, end)), eq(tx.status, 'pending_ops')),
       ),
     )
@@ -183,6 +186,8 @@ export async function getRefillRowsByIds(ids: number[]): Promise<OpsRefillRow[]>
 
 async function buildRefillRows(where: SQL | undefined): Promise<OpsRefillRow[]> {
   const req = pettyCashRefillRequests;
+  // IT-only test stores (DUMMY…) never reach Ops HO / Finance (IT sees them).
+  const hidden = await getHiddenStores();
 
   const requestRows = await db
     .select({
@@ -197,7 +202,7 @@ async function buildRefillRows(where: SQL | undefined): Promise<OpsRefillRow[]> 
     .innerJoin(stores, eq(stores.id, req.storeId))
     .innerJoin(areas, eq(areas.id, stores.areaId))
     .leftJoin(users, eq(users.id, req.requestedBy))
-    .where(where)
+    .where(and(where, notHiddenStore(stores.id, hidden.storeIds)))
     .orderBy(desc(req.requestedAt), desc(req.id));
 
   if (requestRows.length === 0) return [];
@@ -377,7 +382,11 @@ async function buildRefillRows(where: SQL | undefined): Promise<OpsRefillRow[]> 
 
 /** Everything waiting on Ops right now, any month — the count on each tab. */
 export async function countPendingForOps(areaId: number | null): Promise<PettyCashPending> {
-  const inArea = areaId != null ? eq(stores.areaId, areaId) : undefined;
+  const hidden = await getHiddenStores();
+  const inArea = and(
+    areaId != null ? eq(stores.areaId, areaId) : undefined,
+    notHiddenStore(stores.id, hidden.storeIds),
+  );
 
   const [[requests], [refills]] = await Promise.all([
     db

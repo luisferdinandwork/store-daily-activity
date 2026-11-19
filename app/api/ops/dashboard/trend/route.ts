@@ -18,6 +18,7 @@ import { db } from '@/lib/db';
 import { attendance, schedules, stores } from '@/lib/db/schema';
 import { addDaysKey, jakartaDateKey, jakartaDayStart, jakartaDaysRange, jakartaTodayKey } from '@/lib/day-bucket';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
+import { getHiddenStores, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 import { AUTO_ABSENT_LOOKBACK_DAYS } from '@/lib/schedule-utils';
 import { getStoreSummariesForRange } from '@/lib/db/utils/tasks';
 import { EMPTY_COUNTS, showedUp, tallyPeople, type AttendanceCounts } from '@/lib/attendance-health';
@@ -38,12 +39,13 @@ export async function GET(req: NextRequest) {
     const today = jakartaTodayKey();
     const { from, to } = trendRange(raw, today);
 
+    const hidden = await getHiddenStores();
     const storeRows = await db
       .select({ id: stores.id })
       .from(stores)
       .where(scope.scope === 'area'
         ? and(eq(stores.areaId, scope.areaId), eq(stores.status, 'active'))
-        : eq(stores.status, 'active'));
+        : and(eq(stores.status, 'active'), notHiddenStore(stores.id, hidden.storeIds)));
     const storeIds = storeRows.map((s) => s.id);
 
     const tasksByDay = new Map<string, { completed: number; total: number }>();

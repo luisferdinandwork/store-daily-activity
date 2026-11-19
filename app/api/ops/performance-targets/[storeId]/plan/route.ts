@@ -18,6 +18,7 @@ import { db } from '@/lib/db';
 import { stores, storeMonthlyTargets } from '@/lib/db/schema';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
 import { ensureStoreMonthlyTargetPlan, safeNumber } from '@/lib/performance/target-utils';
+import { isStoreHidden } from '@/lib/db/utils/it-only-stores';
 
 type Params = { params: Promise<{ storeId: string }> };
 
@@ -40,7 +41,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     .where(eq(stores.id, storeId))
     .limit(1);
 
-  if (!store) {
+  if (!store || (await isStoreHidden(storeId))) {
     return NextResponse.json({ success: false, error: 'Store not found.' }, { status: 404 });
   }
 

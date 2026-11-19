@@ -29,6 +29,7 @@ import {
 import { addDaysKey, jakartaDateKey, jakartaDaysRange, jakartaTodayKey } from '@/lib/day-bucket';
 import { baseShiftCode, type TaskType } from '@/lib/shift-tasks';
 import { getShiftCodeById } from '@/lib/db/utils/shift-lookup';
+import { getHiddenStores, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 import { getExpectedTaskSlots, missingTaskSlots, storeDayKey } from '@/lib/db/utils/task-expectations';
 import {
   BOARD_TASK,
@@ -66,6 +67,7 @@ export type StoreMeta = Omit<TaskProgressStore, 'slots'>;
 /** Active stores (only `storeIds` when given), by area then name. */
 export async function loadActiveStores(storeIds?: number[]): Promise<StoreMeta[]> {
   if (storeIds && !storeIds.length) return [];
+  const hidden = await getHiddenStores();
   return db
     .select({
       storeId: stores.id,
@@ -76,7 +78,11 @@ export async function loadActiveStores(storeIds?: number[]): Promise<StoreMeta[]
     })
     .from(stores)
     .leftJoin(areas, eq(areas.id, stores.areaId))
-    .where(and(eq(stores.status, 'active'), storeIds ? inArray(stores.id, storeIds) : undefined))
+    .where(and(
+      eq(stores.status, 'active'),
+      storeIds ? inArray(stores.id, storeIds) : undefined,
+      notHiddenStore(stores.id, hidden.storeIds),
+    ))
     .orderBy(asc(areas.name), asc(stores.name));
 }
 

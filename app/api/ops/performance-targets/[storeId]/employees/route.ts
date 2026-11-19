@@ -28,6 +28,7 @@ import {
   syncRosterPercentages,
   toYearMonth,
 } from '@/lib/performance/target-utils';
+import { isStoreHidden } from '@/lib/db/utils/it-only-stores';
 
 type Params = { params: Promise<{ storeId: string }> };
 
@@ -35,6 +36,7 @@ const VALID_ROLES = new Set(['PIC1', 'PIC2', 'SA']);
 
 async function loadStoreInScope(storeId: number, scope: Awaited<ReturnType<typeof resolveOpsScope>>) {
   if (!scope.ok) return null;
+  if (await isStoreHidden(storeId)) return null;
 
   const [store] = await db
     .select({ id: stores.id, areaId: stores.areaId })

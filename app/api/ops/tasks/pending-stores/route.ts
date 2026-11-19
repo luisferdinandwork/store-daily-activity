@@ -15,6 +15,7 @@ import { db } from '@/lib/db';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { getOpsActor } from '../_helpers';
+import { getHiddenStores, notHiddenStoreSql } from '@/lib/db/utils/it-only-stores';
 
 type Granularity = 'store_date' | 'store_date_shift' | 'schedule';
 
@@ -57,7 +58,11 @@ export async function GET(req: NextRequest) {
     }
 
     // Empty only for confirmed OPS HO / IT — everyone else is area-scoped.
-    const areaFilter = actor.isOpsHo ? sql`` : sql`AND s.area_id = ${actor.areaId}`;
+    // OPS HO also never sees IT-only test stores (DUMMY…); IT does.
+    const hidden = await getHiddenStores();
+    const areaFilter = actor.isOpsHo
+      ? sql`AND ${notHiddenStoreSql(sql`s.id`, hidden.storeIds)}`
+      : sql`AND s.area_id = ${actor.areaId}`;
 
     const taskTable = sql.identifier(desc.table);
 

@@ -13,6 +13,7 @@ import { resolveOpsScope } from '@/lib/performance/ops-scope';
 import { computeImpactVisitPermissionFlags, serializeImpactVisit } from '@/lib/db/utils/impact-visits';
 import { assertInGeofence } from '@/lib/db/utils/geofence';
 import { parseAccuracy } from '@/lib/geo';
+import { isStoreHidden } from '@/lib/db/utils/it-only-stores';
 
 async function loadVisitWithStoreArea(id: number) {
   const [row] = await db
@@ -28,6 +29,8 @@ async function loadVisitWithStoreArea(id: number) {
     .leftJoin(areas, eq(stores.areaId, areas.id))
     .where(eq(impactVisits.id, id))
     .limit(1);
+  // IT-only test stores (DUMMY…) don't exist for non-IT viewers.
+  if (row && (await isStoreHidden(row.visit.storeId))) return null;
   return row ?? null;
 }
 

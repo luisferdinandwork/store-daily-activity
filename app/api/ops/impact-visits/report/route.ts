@@ -33,6 +33,7 @@ import type {
 } from '@/lib/impact-visit/report';
 import type { ChecklistResponses } from '@/lib/impact-visit/scoring';
 import { jakartaDateKey, jakartaDayStart } from '@/lib/day-bucket';
+import { getHiddenStores, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 
 const countTidak = (r: ChecklistResponses) => Object.values(r).filter((x) => x?.answer === 'tidak').length;
 
@@ -58,7 +59,10 @@ export async function GET(req: NextRequest) {
   const yearStart = jakartaDayStart(`${year}-01-01`);
   const yearEnd = jakartaDayStart(`${year + 1}-01-01`);
 
-  const inScope: SQL | undefined = scope.scope === 'area' ? eq(stores.areaId, scope.areaId) : undefined;
+  // IT-only test stores (DUMMY…) are hidden from OPS HO (IT sees them).
+  const inScope: SQL | undefined = scope.scope === 'area'
+    ? eq(stores.areaId, scope.areaId)
+    : notHiddenStore(stores.id, (await getHiddenStores()).storeIds);
   const oneStore: SQL | undefined = storeId != null ? eq(stores.id, storeId) : undefined;
 
   const [rows, storeRows, historyRows] = await Promise.all([

@@ -66,6 +66,7 @@ import {
 } from "drizzle-orm";
 import { createNotification, deleteNotificationsByRelated } from "@/lib/db/utils/notifications";
 import { assertStoreOperational } from "@/lib/db/utils/store-status";
+import { getHiddenStores, isStoreHidden, notHiddenStore } from "@/lib/db/utils/it-only-stores";
 import { collectScheduleImageUrls, deleteManagedImages } from "@/lib/db/utils/task-image-cleanup";
 
 export type { BreakType } from "@/lib/db/schema";
@@ -574,7 +575,12 @@ export async function getStoresForOps(opsUserId: string): Promise<number[]> {
   const isAllAreas = opsUser.roleCode === "it" || opsUser.employeeTypeCode === "ops_ho";
 
   if (isAllAreas) {
-    const allStores = await db.select({ id: stores.id }).from(stores);
+    // IT-only test stores (DUMMY…) are left out for OPS HO (IT sees them).
+    const hidden = await getHiddenStores();
+    const allStores = await db
+      .select({ id: stores.id })
+      .from(stores)
+      .where(notHiddenStore(stores.id, hidden.storeIds));
     return allStores.map((s) => s.id);
   }
 
@@ -642,7 +648,9 @@ export async function canManageSchedule(
       .from(stores)
       .where(eq(stores.id, storeId))
       .limit(1);
-    if (!targetStore) return { allowed: false, reason: "Store not found." };
+    // OPS HO never reaches an IT-only test store (DUMMY…); IT does.
+    if (!targetStore || (!isAdmin && (await isStoreHidden(storeId))))
+      return { allowed: false, reason: "Store not found." };
 
     if (targetEntryStoreId && targetEntryStoreId !== storeId) {
       const [entryStore] = await db

@@ -358,6 +358,13 @@
       "when": 1794795973187,
       "tag": "0050_audit_so_super_reward",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1795055752806,
+      "tag": "0051_bin_check_rounds",
+      "breakpoints": true
     }
   ]
 }

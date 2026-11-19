@@ -26,6 +26,7 @@ import { getPettyCashCategory } from './petty-cash-categories';
 import { rollRequestToActivePeriod } from './petty-cash-period';
 import { getSpendable } from './petty-cash-refill';
 import { financeUserIds } from './petty-cash-review';
+import { onlyUsersWhoSeeStore } from './it-only-stores';
 
 const money = (n: number) => n.toFixed(2);
 const rp = (n: number) => `Rp ${Math.round(n).toLocaleString('id-ID')}`;
@@ -244,7 +245,7 @@ export async function approveFixedRequest(input: { txId: number; actorId: string
     throw err;
   }
 
-  await createNotificationsForUsers(await financeUserIds(), {
+  await createNotificationsForUsers(await onlyUsersWhoSeeStore(await financeUserIds(), tx.storeId), {
     type: 'petty_cash_tx_re_request',
     title: 'Request petty cash yang diperbaiki sudah disetujui OPS',
     body: `${storeName}: ${tx.categoryName ?? 'Request petty cash'} (${rp(amount)}) sudah diperbaiki PIC 1 setelah Perlu Perbaikan dan disetujui OPS — periode ${periodLabel(period.yearMonth)}, menunggu keputusan Finance.`,

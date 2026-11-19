@@ -32,6 +32,7 @@ import {
   type StoreClosingRow,
 } from '@/lib/store-closing-review';
 import { toEdcEntries, type EdcEntry } from '@/lib/store-closing-edc';
+import { getHiddenStores } from '@/lib/db/utils/it-only-stores';
 
 const iso = (d: Date | null | undefined): string | null =>
   d instanceof Date && !Number.isNaN(d.getTime()) ? d.toISOString() : null;
@@ -46,7 +47,10 @@ async function toRows(
   staffByStore: Map<number, { userId: string; name: string }[]>,
   dateStr: string | null,
 ): Promise<StoreClosingRow[]> {
-  const storeIds = [...new Set([...tasks.map((t) => t.storeId), ...extraStoreIds])];
+  // IT-only test stores (DUMMY…) are hidden from Finance (IT sees them); build() skips them.
+  const hidden = await getHiddenStores();
+  const storeIds = [...new Set([...tasks.map((t) => t.storeId), ...extraStoreIds])]
+    .filter((id) => !hidden.storeIds.includes(id));
   if (storeIds.length === 0) return [];
 
   const userIds = new Set<string>();

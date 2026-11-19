@@ -1,15 +1,16 @@
 'use client';
 // components/audit/stock-opname/SoTabs.tsx — the page tabs of the Audit "Cek Bin & Stock Opname" section:
-// Hasil Cek Bin (period report) · Stock Opname (the count of one store-day) · Berita Acara SO (list + print).
+// Hasil Cek Bin (period report) · Progres Cek Bin (the monthly bin round) · Stock Opname (the count of one store-day) · Berita Acara SO (list + print).
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { ClipboardCheck, FileText, ScanLine } from 'lucide-react';
+import { ClipboardCheck, FileText, ListChecks, ScanLine } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 
 const TABS = [
   { href: '/audit/cek-bin', label: 'Hasil Cek Bin', short: 'Cek Bin', icon: ScanLine, keepQuery: false },
+  { href: '/audit/bin-progress', label: 'Progres Cek Bin', short: 'Progres', icon: ListChecks, keepQuery: false },
   { href: '/audit/stock-opname', label: 'Stock Opname', short: 'SO', icon: ClipboardCheck, keepQuery: true },
   { href: '/audit/berita-acara-so', label: 'Berita Acara SO', short: 'BA SO', icon: FileText, keepQuery: false },
 ] as const;

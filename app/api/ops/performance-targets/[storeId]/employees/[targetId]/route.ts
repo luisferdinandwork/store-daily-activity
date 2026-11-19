@@ -28,6 +28,7 @@ import {
   setEmployeeMonthlyPercentage,
   syncRosterPercentages,
 } from '@/lib/performance/target-utils';
+import { isStoreHidden } from '@/lib/db/utils/it-only-stores';
 
 type Params = { params: Promise<{ storeId: string; targetId: string }> };
 
@@ -35,6 +36,7 @@ const VALID_ROLES = new Set(['PIC1', 'PIC2', 'SA']);
 
 async function loadTargetInScope(storeId: number, targetId: number, scope: Awaited<ReturnType<typeof resolveOpsScope>>) {
   if (!scope.ok) return null;
+  if (await isStoreHidden(storeId)) return null;
 
   const [row] = await db
     .select({

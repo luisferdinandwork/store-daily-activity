@@ -11,7 +11,7 @@
 // answers 200 when the period is valid — BC being down is `state`, not an error. Audit + IT only.
 
 import { NextResponse } from 'next/server';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 
 import { resolveAuditScope } from '@/lib/audit/scope';
 import { db } from '@/lib/db';
@@ -24,6 +24,7 @@ import {
   type BinReportRow,
   type BinReportStore,
 } from '@/lib/audit-bin-report';
+import { getHiddenStores, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 
 export async function GET(req: Request) {
   const scope = await resolveAuditScope();
@@ -40,7 +41,8 @@ export async function GET(req: Request) {
       .select({ id: stores.id, storeNo: stores.storeNo, name: stores.name, areaId: stores.areaId, areaName: areas.name })
       .from(stores)
       .leftJoin(areas, eq(areas.id, stores.areaId))
-      .where(eq(stores.status, 'active'))
+      // IT-only test stores (DUMMY…) are hidden from Audit (IT sees them).
+      .where(and(eq(stores.status, 'active'), notHiddenStore(stores.id, (await getHiddenStores()).storeIds)))
       .orderBy(stores.storeNo);
     const list: BinReportStore[] = storeRows.map((s) => ({ ...s, areaName: s.areaName ?? null }));
     const byCode = new Map(list.map((s) => [s.storeNo.trim().toUpperCase(), s]));

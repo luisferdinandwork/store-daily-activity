@@ -43,6 +43,7 @@ import {
 } from '@/lib/db/schema';
 import { and, asc, desc, eq, inArray, isNotNull } from 'drizzle-orm';
 import { createNotificationsForUsers, getOpsUserIdsForArea, getUserIdsForRole } from './notifications';
+import { onlyUsersWhoSeeStore } from './it-only-stores';
 
 export type IssueStatus = 'draft' | 'reported' | 'in_review' | 'completed' | 'solved';
 
@@ -492,7 +493,8 @@ export async function getIssueNotificationRecipients(
     ),
   );
 
-  return [...new Set(recipientSets.flat())];
+  // An IT-only test store (DUMMY…) only notifies IT + its own test accounts.
+  return onlyUsersWhoSeeStore(recipientSets.flat(), storeId);
 }
 
 export async function notifyIssueEvent(input: {

@@ -14,6 +14,7 @@ import {
 } from "@/lib/impact-visit/follow-up";
 import { toImpactVisitResult } from "./impact-visit-results";
 import { loadImpactChecks } from "./impact-visit-checks";
+import { getHiddenStores, notHiddenStore } from "@/lib/db/utils/it-only-stores";
 
 export type ResultScope = Extract<OpsScope, { ok: true }>;
 function selectResults() {
@@ -43,9 +44,14 @@ function scopeConditions(scope: ResultScope) {
   );
 }
 
+/** IT-only test stores (DUMMY…) are hidden from non-IT viewers. */
+async function visibleStores() {
+  return notHiddenStore(impactVisits.storeId, (await getHiddenStores()).storeIds);
+}
+
 export async function listOpsImpactResults(scope: ResultScope) {
   const rows = await selectResults()
-    .where(scopeConditions(scope))
+    .where(and(scopeConditions(scope), await visibleStores()))
     .orderBy(desc(impactVisits.visitDate), desc(impactVisits.id));
   const checks = await loadImpactChecks(rows.map((r) => r.visit.id));
   return rows.map((r) => {
@@ -71,7 +77,7 @@ export async function listOpsImpactResults(scope: ResultScope) {
 
 export async function getOpsImpactResult(scope: ResultScope, id: number) {
   const [row] = await selectResults()
-    .where(and(scopeConditions(scope), eq(impactVisits.id, id)))
+    .where(and(scopeConditions(scope), eq(impactVisits.id, id), await visibleStores()))
     .limit(1);
   if (!row) return null;
   const checks = await loadImpactChecks([id], true);

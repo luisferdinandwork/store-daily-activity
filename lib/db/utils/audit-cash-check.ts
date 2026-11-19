@@ -63,6 +63,7 @@ import { countsAsUsed } from './petty-cash-used';
 import { getActivePeriod } from './petty-cash-period';
 import { getSpendable } from './petty-cash-refill';
 import { isStorageUrl } from '@/lib/storage';
+import { getHiddenStores, isStoreHidden, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 
 type Result<T> = { success: true; data: T } | { success: false; error: string; status?: number };
 
@@ -85,7 +86,8 @@ export async function listAuditStores(): Promise<AuditStoreOption[]> {
   return db
     .select({ id: stores.id, storeNo: stores.storeNo, name: stores.name })
     .from(stores)
-    .where(eq(stores.status, 'active'))
+    // IT-only test stores (DUMMY…) are hidden from Audit (IT sees them).
+    .where(and(eq(stores.status, 'active'), notHiddenStore(stores.id, (await getHiddenStores()).storeIds)))
     .orderBy(stores.storeNo);
 }
 
@@ -112,7 +114,7 @@ export async function getStoreContext(storeId: number): Promise<StoreContext | n
     .from(stores)
     .where(eq(stores.id, storeId))
     .limit(1);
-  if (!store) return null;
+  if (!store || (await isStoreHidden(storeId))) return null;
 
   const rows = await db
     .select({
@@ -218,7 +220,7 @@ export async function getCashCheck(storeId: number, day: string): Promise<CashCh
 
 export async function getCashCheckById(id: number): Promise<CashCheckRecord | null> {
   const [row] = await db.select().from(auditCashChecks).where(eq(auditCashChecks.id, id)).limit(1);
-  return row ? toRecord(row) : null;
+  return row && !(await isStoreHidden(row.storeId)) ? toRecord(row) : null;
 }
 
 // ─── Creating the row (first save of either half) ────────────────────────────
@@ -699,8 +701,8 @@ const HEADER_FIELDS = [
 ] as const satisfies ReadonlyArray<readonly [keyof typeof auditCashChecks.$inferInsert, number, string | null]>;
 
 export async function updateHeader(id: number, input: Record<string, unknown>): Promise<Result<CashCheckRecord>> {
-  const [row] = await db.select({ id: auditCashChecks.id }).from(auditCashChecks).where(eq(auditCashChecks.id, id)).limit(1);
-  if (!row) return fail('Berita Acara tidak ditemukan.', 404);
+  const [row] = await db.select({ id: auditCashChecks.id, storeId: auditCashChecks.storeId }).from(auditCashChecks).where(eq(auditCashChecks.id, id)).limit(1);
+  if (!row || (await isStoreHidden(row.storeId))) return fail('Berita Acara tidak ditemukan.', 404);
 
   const patch: Partial<typeof auditCashChecks.$inferInsert> = {};
   for (const [key, max, requiredLabel] of HEADER_FIELDS) {
@@ -724,6 +726,7 @@ export async function updateHeader(id: number, input: Record<string, unknown>): 
 }
 
 export async function deleteCashCheck(id: number): Promise<Result<{ id: number }>> {
+  if (!(await getCashCheckById(id))) return fail('Berita Acara tidak ditemukan.', 404);
   const deleted = await db.delete(auditCashChecks).where(eq(auditCashChecks.id, id)).returning({ id: auditCashChecks.id });
   return deleted.length ? { success: true, data: { id } } : fail('Berita Acara tidak ditemukan.', 404);
 }
@@ -736,7 +739,11 @@ export async function listCashChecks(month: string): Promise<CashCheckListRow[]>
     .select({ row: auditCashChecks, storeNo: stores.storeNo, storeName: stores.name })
     .from(auditCashChecks)
     .innerJoin(stores, eq(stores.id, auditCashChecks.storeId))
-    .where(and(gte(auditCashChecks.checkDate, from), lt(auditCashChecks.checkDate, to)))
+    .where(and(
+      gte(auditCashChecks.checkDate, from),
+      lt(auditCashChecks.checkDate, to),
+      notHiddenStore(auditCashChecks.storeId, (await getHiddenStores()).storeIds),
+    ))
     .orderBy(desc(auditCashChecks.checkDate), stores.storeNo);
 
   return rows.map(({ row, storeNo, storeName }) => {

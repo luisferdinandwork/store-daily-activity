@@ -8,6 +8,7 @@ import { jakartaDateKey, jakartaTodayKey } from '@/lib/day-bucket';
 import { areas, employeeTypes, stores, storeVisitConfig, storeVisitPolicies, storeVisits, userRoles, users } from '@/lib/db/schema';
 import { buildReportStore, calendarWeeks, type VisitReport, type VisitUpcoming } from './report';
 import { visitProgress } from './rules';
+import { getHiddenStores, isStoreHidden, notHiddenArea, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 import type { VisitResult, VisitStore } from './types';
 
 export async function visitActor() {
@@ -25,17 +26,23 @@ export async function visitConfiguration() {
 }
 
 export async function visitStores(areaId: number | null) {
+  // IT-only test stores (DUMMY…) are hidden from OPS HO (IT sees them).
+  const hidden = await getHiddenStores();
+  const inScope = and(
+    eq(stores.status, 'active'),
+    areaId == null ? notHiddenStore(stores.id, hidden.storeIds) : eq(stores.areaId, areaId),
+  );
   const rows = await db.select({
     id: stores.id, storeNo: stores.storeNo, name: stores.name,
     areaId: stores.areaId, areaName: areas.name, lat: stores.latitude, lng: stores.longitude,
     policy: storeVisitPolicies,
   }).from(stores).innerJoin(areas, eq(areas.id, stores.areaId))
     .leftJoin(storeVisitPolicies, eq(storeVisitPolicies.storeNo, stores.storeNo))
-    .where(and(eq(stores.status, 'active'), areaId == null ? undefined : eq(stores.areaId, areaId)))
+    .where(inScope)
     .orderBy(stores.name);
   const dates = await db.select({ storeId: storeVisits.storeId, visitedAt: storeVisits.visitedAt })
     .from(storeVisits).innerJoin(stores, eq(stores.id, storeVisits.storeId))
-    .where(and(eq(stores.status, 'active'), areaId == null ? undefined : eq(stores.areaId, areaId)))
+    .where(inScope)
     .orderBy(desc(storeVisits.visitedAt));
   const byStore = new Map<number, Date[]>();
   for (const row of dates) {
@@ -59,7 +66,12 @@ async function loadVisitScope(actor: OpsActorRecord) {
   const areaId = actor.isHO ? null : actor.areaId;
   const visitorScope = actor.isHO ? undefined : eq(storeVisits.visitedBy, actor.id);
   const today = jakartaTodayKey();
-  const scope = and(eq(stores.status, 'active'), areaId == null ? undefined : eq(stores.areaId, areaId));
+  // IT-only test stores (DUMMY…) and their Ops Area accounts are hidden from OPS HO (IT sees them).
+  const hidden = await getHiddenStores();
+  const scope = and(
+    eq(stores.status, 'active'),
+    areaId == null ? notHiddenStore(stores.id, hidden.storeIds) : eq(stores.areaId, areaId),
+  );
 
   const rows = await db.select({
     id: stores.id, storeNo: stores.storeNo, name: stores.name,
@@ -81,7 +93,7 @@ async function loadVisitScope(actor: OpsActorRecord) {
     db.select({ id: users.id, name: users.name, areaId: users.areaId }).from(users)
       .innerJoin(userRoles, eq(users.roleId, userRoles.id))
       .innerJoin(employeeTypes, eq(users.employeeTypeId, employeeTypes.id))
-      .where(and(eq(userRoles.code, 'ops'), eq(employeeTypes.code, 'ops_area'), eq(users.isActive, true), isNull(users.deletedAt), areaId == null ? undefined : eq(users.areaId, areaId), actor.isHO ? undefined : eq(users.id, actor.id))),
+      .where(and(eq(userRoles.code, 'ops'), eq(employeeTypes.code, 'ops_area'), eq(users.isActive, true), isNull(users.deletedAt), areaId == null ? notHiddenArea(users.areaId, hidden.areaIds) : eq(users.areaId, areaId), actor.isHO ? undefined : eq(users.id, actor.id))),
   ]);
 
   // Visits are only judged from the day the programme began (the roster import or the
@@ -164,7 +176,7 @@ export async function visitResult(visitId: string, actor: OpsActorRecord): Promi
     .innerJoin(areas, eq(areas.id, stores.areaId))
     .leftJoin(users, eq(users.id, storeVisits.visitedBy))
     .where(eq(storeVisits.id, visitId));
-  if (!row) return null;
+  if (!row || (await isStoreHidden(row.visit.storeId))) return null;
   if (!actor.isHO && (row.areaId !== actor.areaId || row.visit.visitedBy !== actor.id)) return null;
   const { visit } = row;
   return {

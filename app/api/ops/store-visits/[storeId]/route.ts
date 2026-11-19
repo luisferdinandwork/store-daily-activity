@@ -9,6 +9,7 @@ import { evaluateGeofence, geofenceErrorMessage, parseGeoPoint } from '@/lib/geo
 import { uploadToStorage, deleteFromStorage } from '@/lib/storage';
 import { sniffImageOf } from '@/lib/upload-validation';
 import type { VisitPhotoGeo } from '@/lib/store-visit/types';
+import { isStoreHidden } from '@/lib/db/utils/it-only-stores';
 
 type Context = { params: Promise<{ storeId: string }> };
 const fail = (error: string, status = 400) => NextResponse.json({ success: false, error }, { status });
@@ -19,7 +20,7 @@ async function access(ctx: Context) {
   const id = Number((await ctx.params).storeId);
   if (!Number.isInteger(id) || id < 1) return { ok: false as const, response: fail('Toko tidak valid.') };
   const [store] = await db.select({ id: stores.id, areaId: stores.areaId, status: stores.status }).from(stores).where(eq(stores.id, id));
-  if (!store) return { ok: false as const, response: fail('Toko tidak ditemukan.', 404) };
+  if (!store || (await isStoreHidden(store.id))) return { ok: false as const, response: fail('Toko tidak ditemukan.', 404) };
   if (!guard.actor.isHO && store.areaId !== guard.actor.areaId) return { ok: false as const, response: fail('Toko berada di luar area Anda.', 403) };
   if (store.status !== 'active') return { ok: false as const, response: fail('Visit hanya tersedia untuk toko aktif.', 409) };
   return { ...guard, store };

@@ -30,6 +30,7 @@ import {
   type UangModalMonthRow,
   type UangModalRow,
 } from '@/lib/uang-modal-review';
+import { getHiddenStores, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 
 const toInt = (v: string | number | null | undefined): number =>
   v == null || v === '' || !Number.isFinite(Number(v)) ? 0 : Math.round(Number(v));
@@ -80,7 +81,10 @@ export async function getUangModalDay(dateStr: string): Promise<UangModalRow[]> 
     db.select().from(cekUangModalTasks).where(and(gte(cekUangModalTasks.date, start), lt(cekUangModalTasks.date, end))),
   ]);
 
-  const storeIds = [...new Set([...scheduleRows.map((r) => r.storeId), ...taskRows.map((t) => t.storeId)])];
+  // IT-only test stores (DUMMY…) are hidden from Finance (IT sees them).
+  const hidden = await getHiddenStores();
+  const storeIds = [...new Set([...scheduleRows.map((r) => r.storeId), ...taskRows.map((t) => t.storeId)])]
+    .filter((id) => !hidden.storeIds.includes(id));
   if (storeIds.length === 0) return [];
 
   const tasksByStore = new Map<number, CekUangModalTask[]>();
@@ -174,7 +178,8 @@ export async function getUangModalMonth(month: string, todayStr: string): Promis
   const storeRows = await db
     .select({ id: stores.id, storeNo: stores.storeNo, name: stores.name, areaName: areas.name })
     .from(stores)
-    .innerJoin(areas, eq(areas.id, stores.areaId));
+    .innerJoin(areas, eq(areas.id, stores.areaId))
+    .where(notHiddenStore(stores.id, (await getHiddenStores()).storeIds));
   if (storeRows.length === 0) return [];
 
   const [workRows, taskRows] = await Promise.all([

@@ -12,6 +12,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveFinanceScope } from '@/lib/finance/scope';
 import { financeAcceptTransaction, financeRejectTransaction } from '@/lib/db/utils/petty-cash-review';
+import { db } from '@/lib/db';
+import { pettyCashTransactions } from '@/lib/db/schema';
+import { eq } from 'drizzle-orm';
+import { isStoreHidden } from '@/lib/db/utils/it-only-stores';
 
 type Params = { params: Promise<{ txId: string }> };
 
@@ -33,6 +37,16 @@ export async function POST(req: NextRequest, { params }: Params) {
   }
 
   try {
+    // IT-only test stores (DUMMY…) don't exist for Finance (IT sees them).
+    const [tx] = await db
+      .select({ storeId: pettyCashTransactions.storeId })
+      .from(pettyCashTransactions)
+      .where(eq(pettyCashTransactions.id, txId))
+      .limit(1);
+    if (tx && (await isStoreHidden(tx.storeId))) {
+      return NextResponse.json({ success: false, error: 'Request not found.' }, { status: 404 });
+    }
+
     const result =
       action === 'accept'
         ? await financeAcceptTransaction({ txId, actorId: scope.userId })

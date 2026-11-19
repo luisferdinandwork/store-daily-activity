@@ -11,6 +11,7 @@ import { db } from '@/lib/db';
 import { impactVisits, stores } from '@/lib/db/schema';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
 import { listPreviousImpactVisitResults } from '@/lib/db/utils/impact-visit-results';
+import { isStoreHidden } from '@/lib/db/utils/it-only-stores';
 
 export async function GET(
   _req: NextRequest,
@@ -39,7 +40,7 @@ export async function GET(
     .where(eq(impactVisits.id, visitId))
     .limit(1);
 
-  if (!found) {
+  if (!found || (await isStoreHidden(found.storeId))) {
     return NextResponse.json({ success: false, error: 'Not found' }, { status: 404 });
   }
   if (scope.scope === 'area' && found.storeAreaId !== scope.areaId) {

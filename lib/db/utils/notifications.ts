@@ -2,6 +2,7 @@
 import { db } from '@/lib/db';
 import { and, desc, eq, lt } from 'drizzle-orm';
 import { notifications, users, employeeTypes, type Notification } from '@/lib/db/schema';
+import { isItOnlyArea } from '@/lib/db/utils/it-only-stores';
 
 /**
  * Every active user directly assigned to `roleId` — no area scoping.
@@ -50,6 +51,8 @@ export async function createNotificationsForUsers(
  * own areaId matches the store's area.
  */
 export async function getOpsUserIdsForArea(storeAreaId: number | null): Promise<string[]> {
+  // An area of IT-only test stores (DUMMY AREA) only notifies its own Ops Area account.
+  const testArea = await isItOnlyArea(storeAreaId);
   const rows = await db
     .select({ id: users.id, employeeTypeCode: employeeTypes.code, areaId: users.areaId })
     .from(users)
@@ -58,7 +61,7 @@ export async function getOpsUserIdsForArea(storeAreaId: number | null): Promise<
 
   return rows
     .filter((row) => {
-      if (row.employeeTypeCode === 'ops_ho') return true;
+      if (row.employeeTypeCode === 'ops_ho') return !testArea;
       if (row.employeeTypeCode === 'ops_area') return storeAreaId != null && row.areaId === storeAreaId;
       return false;
     })

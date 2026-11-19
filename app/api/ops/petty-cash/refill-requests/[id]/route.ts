@@ -14,6 +14,7 @@ import { resolveOpsScope } from '@/lib/performance/ops-scope';
 import { stores } from '@/lib/db/schema/core';
 import { pettyCashRefillRequests } from '@/lib/db/schema/petty-cash';
 import { approveRefillRequest, rejectRefillRequest } from '@/lib/db/utils/petty-cash-refill';
+import { isStoreHidden } from '@/lib/db/utils/it-only-stores';
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -29,19 +30,20 @@ export async function PATCH(req: NextRequest, { params }: Params) {
     return NextResponse.json({ success: false, error: 'Invalid id.' }, { status: 400 });
   }
 
-  if (scope.scope === 'area') {
+  {
     const [row] = await db
-      .select({ storeAreaId: stores.areaId })
+      .select({ storeId: stores.id, storeAreaId: stores.areaId })
       .from(pettyCashRefillRequests)
       .innerJoin(stores, eq(stores.id, pettyCashRefillRequests.storeId))
       .where(eq(pettyCashRefillRequests.id, id))
       .limit(1);
 
-    if (!row) {
+    // IT-only test stores (DUMMY…) don't exist for non-IT viewers.
+    if (!row || (await isStoreHidden(row.storeId))) {
       return NextResponse.json({ success: false, error: 'Request not found.' }, { status: 404 });
     }
 
-    if (row.storeAreaId !== scope.areaId) {
+    if (scope.scope === 'area' && row.storeAreaId !== scope.areaId) {
       return NextResponse.json(
         { success: false, error: 'You can only act on refill requests from your assigned area.' },
         { status: 403 },

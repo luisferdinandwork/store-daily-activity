@@ -52,6 +52,7 @@ import {
   breakSessions,
 } from '@/lib/db/schema';
 import { and, eq, gte, inArray, isNotNull, isNull, lte, lt, sql } from 'drizzle-orm';
+import { getHiddenStores, isStoreHidden, notHiddenArea, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -159,7 +160,7 @@ async function assertCanTransfer(actorId: string, userId: string, toStoreId: num
     .where(eq(stores.id, toStoreId))
     .limit(1);
 
-  if (!toStore) return { allowed: false as const, error: 'Destination store not found.' };
+  if (!toStore || (await isStoreHidden(toStore.id))) return { allowed: false as const, error: 'Destination store not found.' };
 
   // The target user — must be an employee
   const [target] = await db
@@ -181,7 +182,7 @@ async function assertCanTransfer(actorId: string, userId: string, toStoreId: num
     .where(eq(users.id, userId))
     .limit(1);
 
-  if (!target) return { allowed: false as const, error: 'Target user not found.' };
+  if (!target || (await isStoreHidden(target.homeStoreId))) return { allowed: false as const, error: 'Target user not found.' };
 
   if (target.targetRoleCode !== 'employee') {
     return { allowed: false as const, error: 'OPS users cannot be managed through this flow.' };
@@ -598,10 +599,12 @@ export async function listManageData(actorId: string): Promise<TransferResult<{
   if (!access.allowed) return { success: false, error: access.error };
 
   const { isHO, areaId: actorAreaId } = access.actor;
+  // IT-only test stores (DUMMY…), their area and staff are hidden from OPS HO (IT sees them).
+  const hidden = await getHiddenStores();
 
   // Areas
   const areaRows = isHO
-    ? await db.select().from(areas).orderBy(areas.name)
+    ? await db.select().from(areas).where(notHiddenArea(areas.id, hidden.areaIds)).orderBy(areas.name)
     : await db.select().from(areas).where(eq(areas.id, actorAreaId!));
 
   const areaIds = areaRows.map((a) => a.id);
@@ -619,7 +622,7 @@ export async function listManageData(actorId: string): Promise<TransferResult<{
         })
         .from(stores)
         .innerJoin(areas, eq(areas.id, stores.areaId))
-        .where(inArray(stores.areaId, areaIds))
+        .where(and(inArray(stores.areaId, areaIds), notHiddenStore(stores.id, hidden.storeIds)))
         .orderBy(areas.name, stores.name)
     : [];
 
@@ -652,6 +655,7 @@ export async function listManageData(actorId: string): Promise<TransferResult<{
         eq(users.roleId, employeeRoleId),
         isNull(users.deletedAt),
         isHO ? undefined : inArray(stores.areaId, areaIds.length ? areaIds : [-1]),
+        notHiddenStore(users.homeStoreId, hidden.storeIds),
       ),
     );
 
@@ -773,14 +777,15 @@ export async function getUserTransferHistory(actorId: string, userId: string): P
   if (!access.allowed) return { success: false, error: access.error };
 
   const [target] = await db
-    .select({ id: users.id, roleCode: userRoles.code, homeStoreAreaId: stores.areaId, userAreaId: users.areaId })
+    .select({ id: users.id, roleCode: userRoles.code, homeStoreId: users.homeStoreId, homeStoreAreaId: stores.areaId, userAreaId: users.areaId })
     .from(users)
     .innerJoin(userRoles, eq(userRoles.id, users.roleId))
     .leftJoin(stores, eq(stores.id, users.homeStoreId))
     .where(eq(users.id, userId))
     .limit(1);
 
-  if (!target) return { success: false, error: 'User not found.' };
+  // Staff of an IT-only test store (DUMMY…) don't exist for OPS HO (IT sees them).
+  if (!target || (await isStoreHidden(target.homeStoreId))) return { success: false, error: 'User not found.' };
   if (target.roleCode !== 'employee') return { success: false, error: 'Not an employee.' };
 
   if (!access.actor.isHO) {

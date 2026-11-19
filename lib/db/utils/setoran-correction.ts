@@ -49,6 +49,7 @@ import {
   type SetoranDayRow,
   type SetoranLedgerView,
 } from '@/lib/setoran-correction';
+import { getHiddenStores, isStoreHidden, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 
 export type CorrectionResult<T> =
   | { success: true; data: T }
@@ -86,8 +87,10 @@ export async function listCorrectableStores(): Promise<CorrectableStore[]> {
       .innerJoin(stores, eq(stores.id, setoranMoneyStorage.storeId)),
   ]);
 
+  // IT-only test stores (DUMMY…) are hidden from Finance (IT sees them).
+  const hidden = await getHiddenStores();
   const byId = new Map<number, CorrectableStore>();
-  for (const s of [...active, ...withLedger]) byId.set(s.id, s);
+  for (const s of [...active, ...withLedger]) if (!hidden.storeIds.includes(s.id)) byId.set(s.id, s);
   return [...byId.values()].sort(byStoreNo);
 }
 
@@ -105,7 +108,7 @@ export async function getSetoranLedger(
     .from(stores)
     .where(eq(stores.id, storeId))
     .limit(1);
-  if (!store) return null;
+  if (!store || (await isStoreHidden(storeId))) return null;
 
   const today = todayJakarta();
   const firstDay = shiftDate(today, -(days - 1));
@@ -279,7 +282,10 @@ export async function getCorrectionHistory(
     .innerJoin(stores, eq(stores.id, c.storeId))
     .leftJoin(users, eq(users.id, c.correctedBy))
     .leftJoin(userRoles, eq(userRoles.id, users.roleId))
-    .where(bounds ? and(gte(c.createdAt, bounds.start), lt(c.createdAt, bounds.end)) : undefined)
+    .where(and(
+      bounds ? and(gte(c.createdAt, bounds.start), lt(c.createdAt, bounds.end)) : undefined,
+      notHiddenStore(c.storeId, (await getHiddenStores()).storeIds),
+    ))
     .orderBy(desc(c.createdAt), desc(c.id))
     .limit(CORRECTION_HISTORY_LIMIT + 1);
 

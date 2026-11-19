@@ -10,6 +10,7 @@ import { and, count, eq, inArray, or } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { issues, issueRoleAssignments, stores, userRoles } from '@/lib/db/schema';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
+import { getHiddenStores, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 
 export async function GET() {
   const scope = await resolveOpsScope();
@@ -37,6 +38,7 @@ export async function GET() {
 
   const conditions = [eq(issues.status, 'reported'), or(...routing)!];
   if (scope.scope === 'area') conditions.push(eq(stores.areaId, scope.areaId));
+  conditions.push(notHiddenStore(issues.storeId, (await getHiddenStores()).storeIds));
 
   const [row] = await db
     .select({ n: count() })

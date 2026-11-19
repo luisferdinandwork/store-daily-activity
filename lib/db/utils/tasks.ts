@@ -35,6 +35,7 @@ import { getShiftCodeById } from '@/lib/db/utils/shift-lookup';
 import { jakartaDateKey, jakartaDayRange, jakartaDaysRange } from '@/lib/day-bucket';
 import type { GeoPoint } from '@/lib/geo';
 import { assertInGeofence, checkStoreGeofence } from '@/lib/db/utils/geofence';
+import { getHiddenStores, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -1211,6 +1212,7 @@ async function getStoreDaySummaries(storeIds: number[], date: Date): Promise<Map
 
 
 export async function getAllTaskOverview(date: Date) {
+  const hidden = await getHiddenStores();
   const allStores = await db
     .select({
       id: stores.id,
@@ -1222,7 +1224,7 @@ export async function getAllTaskOverview(date: Date) {
     })
     .from(stores)
     .leftJoin(areas, eq(stores.areaId, areas.id))
-    .where(eq(stores.status, 'active'))
+    .where(and(eq(stores.status, 'active'), notHiddenStore(stores.id, hidden.storeIds)))
     .orderBy(areas.name, stores.name);
 
   const summaryByStoreId = await getStoreDaySummaries(allStores.map((s) => s.id), date);

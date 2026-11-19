@@ -14,6 +14,7 @@ import { and, eq, gte, inArray, lt } from 'drizzle-orm';
 
 import { db } from '@/lib/db';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
+import { getHiddenStores, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 import { resolveItScope } from '@/lib/auth/it-scope';
 import {
   areas,
@@ -161,10 +162,13 @@ export async function GET(): Promise<NextResponse<StoresApiResponse>> {
     .from(areas)
     .orderBy(areas.name);
 
-  const visibleAreas =
+  // IT-only test stores (DUMMY…) and their area are hidden from non-IT viewers.
+  const hidden = await getHiddenStores();
+  const visibleAreas = (
     scope.scope === 'area'
       ? allAreas.filter((a) => a.id === scope.areaId)
-      : allAreas;
+      : allAreas
+  ).filter((a) => !hidden.areaIds.includes(a.id));
 
   if (visibleAreas.length === 0) {
     return NextResponse.json({ success: true, data: [] });
@@ -176,7 +180,7 @@ export async function GET(): Promise<NextResponse<StoresApiResponse>> {
   const storeRows = await db
     .select()
     .from(stores)
-    .where(inArray(stores.areaId, areaIds))
+    .where(and(inArray(stores.areaId, areaIds), notHiddenStore(stores.id, hidden.storeIds)))
     .orderBy(stores.name);
 
   if (storeRows.length === 0) {

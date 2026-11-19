@@ -18,6 +18,7 @@ import { db } from '@/lib/db';
 import { areas, stores, users } from '@/lib/db/schema/core';
 import { employeeTypes } from '@/lib/db/schema/lookups';
 import { getOpsActor } from '@/app/api/ops/tasks/_helpers';
+import { getHiddenStores, notHiddenArea, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 
 export const dynamic = 'force-dynamic';
 
@@ -62,14 +63,16 @@ export async function GET() {
   }
 
   try {
+    // IT-only test stores (DUMMY…), their area and its Ops Area accounts are hidden from non-IT.
+    const hidden = await getHiddenStores();
     const [areaRows, storeRows, opsUserRows, picRows] = await Promise.all([
-      db.select().from(areas).orderBy(areas.name),
-      db.select({ id: stores.id, name: stores.name, storeNo: stores.storeNo, areaId: stores.areaId }).from(stores).orderBy(stores.name),
+      db.select().from(areas).where(notHiddenArea(areas.id, hidden.areaIds)).orderBy(areas.name),
+      db.select({ id: stores.id, name: stores.name, storeNo: stores.storeNo, areaId: stores.areaId }).from(stores).where(notHiddenStore(stores.id, hidden.storeIds)).orderBy(stores.name),
       db
         .select({ id: users.id, name: users.name, nik: users.nik, areaId: users.areaId })
         .from(users)
         .innerJoin(employeeTypes, eq(employeeTypes.id, users.employeeTypeId))
-        .where(and(eq(employeeTypes.code, 'ops_area'), isNull(users.deletedAt)))
+        .where(and(eq(employeeTypes.code, 'ops_area'), isNull(users.deletedAt), notHiddenArea(users.areaId, hidden.areaIds)))
         .orderBy(users.name),
       db
         .select({ name: users.name, nik: users.nik, storeId: users.homeStoreId, type: employeeTypes.code })

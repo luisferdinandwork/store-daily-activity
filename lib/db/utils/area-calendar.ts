@@ -23,16 +23,18 @@ import {
 } from '@/lib/day-bucket';
 import { AUTO_ABSENT_LOOKBACK_DAYS } from '@/lib/schedule-utils';
 import { getStoreSummariesForRange } from '@/lib/db/utils/tasks';
+import { getHiddenStores, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 import { EMPTY_COUNTS, tallyPeople, type AttendanceCounts } from '@/lib/attendance-health';
 import type { AreaCalendarData, CalendarStore, StoreDayFigures } from '@/lib/area-calendar';
 
 export async function getAreaCalendar(month: string): Promise<AreaCalendarData> {
   const today = jakartaTodayKey();
 
+  const hidden = await getHiddenStores();
   const storeRows = await db
     .select({ id: stores.id, name: stores.name, storeNo: stores.storeNo, areaId: stores.areaId })
     .from(stores)
-    .where(eq(stores.status, 'active'))
+    .where(and(eq(stores.status, 'active'), notHiddenStore(stores.id, hidden.storeIds)))
     .orderBy(asc(stores.name));
   const storeList: CalendarStore[] = storeRows.filter((s): s is CalendarStore => s.areaId != null);
 

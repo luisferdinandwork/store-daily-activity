@@ -4,6 +4,7 @@ import { asc, eq } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { areas, stores } from '@/lib/db/schema';
 import { loadOpsActor } from '@/lib/auth/ops-actor';
+import { getHiddenStores, isStoreHidden, notHiddenArea, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 import { isDayKey, jakartaDayStart } from '@/lib/day-bucket';
 
 export interface OpsActor {
@@ -44,7 +45,7 @@ export async function assertStoreInActorArea(
     .where(eq(stores.id, storeId))
     .limit(1);
 
-  if (!store) return 'Store not found.';
+  if (!store || await isStoreHidden(store.id)) return 'Store not found.';
   if (actor.isHO) return null;
 
   if (!actor.areaId) return 'OPS user has no area assigned.';
@@ -85,6 +86,7 @@ export function normalizeShiftCode(value: unknown): string | null {
 
 export async function listStoresForActor(actor: OpsActor) {
   if (actor.isHO) {
+    const hidden = await getHiddenStores();
     return db
       .select({
         id: stores.id,
@@ -96,6 +98,7 @@ export async function listStoresForActor(actor: OpsActor) {
       })
       .from(stores)
       .leftJoin(areas, eq(areas.id, stores.areaId))
+      .where(notHiddenStore(stores.id, hidden.storeIds))
       .orderBy(asc(areas.name), asc(stores.name));
   }
 
@@ -118,12 +121,14 @@ export async function listStoresForActor(actor: OpsActor) {
 
 export async function listAreasForActor(actor: OpsActor) {
   if (actor.isHO) {
+    const hidden = await getHiddenStores();
     return db
       .select({
         id: areas.id,
         name: areas.name,
       })
       .from(areas)
+      .where(notHiddenArea(areas.id, hidden.areaIds))
       .orderBy(asc(areas.name));
   }
 

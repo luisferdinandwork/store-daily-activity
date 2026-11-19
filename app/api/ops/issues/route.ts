@@ -25,6 +25,7 @@ import {
   issueRoleAssignments,
 } from '@/lib/db/schema';
 import { loadIssueAssignedRoles } from '@/lib/db/utils/issues';
+import { getHiddenStores, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 
 function parseUrls(value: unknown): string[] {
   if (!value) return [];
@@ -107,6 +108,8 @@ export async function GET() {
 
       conditions.push(eq(stores.areaId, actor.areaId));
     }
+    // IT-only test stores (DUMMY…) are hidden from non-IT viewers.
+    conditions.push(notHiddenStore(issues.storeId, (await getHiddenStores()).storeIds));
 
     const rows = await db
       .select({

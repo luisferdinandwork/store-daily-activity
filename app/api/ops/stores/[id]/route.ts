@@ -21,6 +21,7 @@ import { resolveItScope } from '@/lib/auth/it-scope';
 import { changeStoreStatus } from '@/lib/db/utils/store-status';
 import { isStoreStatus } from '@/lib/store-status';
 import { parseStoreEmail } from '@/lib/store-email';
+import { isStoreHidden } from '@/lib/db/utils/it-only-stores';
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -50,7 +51,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   }
 
   const [existing] = await db.select().from(stores).where(eq(stores.id, id)).limit(1);
-  if (!existing) {
+  if (!existing || await isStoreHidden(id)) {
     return NextResponse.json({ success: false, error: 'Store not found.' }, { status: 404 });
   }
 

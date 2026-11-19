@@ -33,10 +33,13 @@ import {
   toDateOnly,
   toYearMonth,
 } from '@/lib/performance/target-utils';
+import { isStoreHidden } from '@/lib/db/utils/it-only-stores';
 
 type Params = { params: Promise<{ storeId: string }> };
 
 async function loadStore(storeId: number) {
+  // IT-only test stores (DUMMY…) don't exist for non-IT viewers.
+  if (await isStoreHidden(storeId)) return null;
   const [row] = await db
     .select({
       id: stores.id,

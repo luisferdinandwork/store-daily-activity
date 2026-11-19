@@ -112,10 +112,18 @@ export async function GET() {
   // hiccup here shouldn't block the page from loading.
   await syncReceivingStatus([schedule.storeId]);
 
-  const [droppingRaw, returnRaw] = await Promise.all([
+  const [droppingAll, returnAll] = await Promise.all([
     getItemDroppingEntriesWithTransferOrder(droppingTask.id),
     getItemReturnEntriesWithTransferOrder(returnTask.id),
   ]);
+
+  // Only live progress is listed: a TO whose Warehouse Receipt BC has already
+  // posted (receivedAt) is finished — whether the store confirmed it or PRISM
+  // completed it by itself ("Selesai Otomatis") — and is gone from this page.
+  // What stays: transfers still needing the store's photo, and ones the store
+  // confirmed that BC has not posted yet.
+  const droppingRaw = droppingAll.filter((r) => !r.transferOrder?.receivedAt);
+  const returnRaw = returnAll.filter((r) => !r.transferOrder?.receivedAt);
 
   await ensureWarehouseCodes();
   // A warehouse code ("DM…" or listed at /it/warehouse-codes) is never a store, whatever store row it once matched.
@@ -162,7 +170,6 @@ export async function GET() {
     // (receivedAt), not when this store's employee locally taps "confirm
     // receiving" (that's just the physical hand-off scan).
     inTransitSince: (transferOrder?.returnSubmittedAt ?? transferOrder?.droppingDetectedAt)?.toISOString() ?? null,
-    receivedAt: transferOrder?.receivedAt?.toISOString() ?? null,
   }));
 
   const returnEntries = returnRaw.map(({ entry, transferOrder }) => ({
@@ -180,16 +187,6 @@ export async function GET() {
     transferToCode: transferOrder?.transferToCode ?? null,
     bcStatus: transferOrder?.bcStatus ?? null,
     returnDetectedAt: (transferOrder?.returnDetectedAt ?? entry.createdAt)?.toISOString() ?? null,
-    // BC already posted the receipt: the order is finished, whether or not
-    // this store sent its Foto Serah Terima (no photo = completed by itself,
-    // shown as "Tidak diproses di PRISM").
-    receivedAt: transferOrder?.receivedAt?.toISOString() ?? null,
-    // Where the clock of an Item Return PRISM completed by itself stops: the
-    // destination's Terima Fisik photo when there is one (the hand-off was over
-    // by then), else WR Diposting (lib/transfer-order-metrics.ts).
-    autoDoneAt: transferOrder?.receivedAt
-      ? (transferOrder.droppingSubmittedAt ?? transferOrder.receivedAt).toISOString()
-      : null,
   }));
 
   return NextResponse.json({

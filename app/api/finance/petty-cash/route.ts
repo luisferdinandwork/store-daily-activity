@@ -22,6 +22,7 @@ import {
   type FinanceReview,
 } from '@/lib/petty-cash-review';
 import type { StoreStatus } from '@/lib/store-status';
+import { getHiddenStores, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 
 function getJakartaMonth() {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -159,7 +160,8 @@ export async function GET(
     .from(stores)
     .innerJoin(areas, eq(stores.areaId, areas.id))
     // A store that is still getting ready to open has no petty cash yet — it is left out of the whole tab.
-    .where(ne(stores.status, 'ready_to_open'))
+    // IT-only test stores (DUMMY…) are hidden from Finance (IT sees them).
+    .where(and(ne(stores.status, 'ready_to_open'), notHiddenStore(stores.id, (await getHiddenStores()).storeIds)))
     .orderBy(stores.name);
 
   if (storeRows.length === 0) {

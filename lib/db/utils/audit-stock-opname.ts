@@ -46,6 +46,7 @@ import { DOC_NUMBER_MAX } from '@/lib/audit-cash-check';
 import { DEFAULT_IR, cleanRewardRows } from '@/lib/audit-super-reward';
 import { getStoreContext, type StoreContext } from './audit-cash-check';
 import { newAuditDocNumber } from './audit-doc-number';
+import { getHiddenStores, isStoreHidden, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 
 type Result<T> = { success: true; data: T } | { success: false; error: string; status?: number };
 
@@ -188,7 +189,8 @@ export async function getStockOpname(storeId: number, day: string): Promise<Stoc
 
 export async function getStockOpnameById(id: number): Promise<StockOpnameRecord | null> {
   const [row] = await db.select().from(auditStockOpnames).where(eq(auditStockOpnames.id, id)).limit(1);
-  return row ? toRecord(row) : null;
+  // IT-only test stores (DUMMY…) are hidden from Audit (IT sees them).
+  return row && !(await isStoreHidden(row.storeId)) ? toRecord(row) : null;
 }
 
 // ─── Save ────────────────────────────────────────────────────────────────────
@@ -383,8 +385,8 @@ const HEADER_FIELDS = [
 ] as const satisfies ReadonlyArray<readonly [keyof typeof auditStockOpnames.$inferInsert, number, string | null]>;
 
 export async function updateSoHeader(id: number, input: Record<string, unknown>): Promise<Result<StockOpnameRecord>> {
-  const [row] = await db.select({ id: auditStockOpnames.id }).from(auditStockOpnames).where(eq(auditStockOpnames.id, id)).limit(1);
-  if (!row) return fail('Berita Acara SO tidak ditemukan.', 404);
+  const [row] = await db.select({ id: auditStockOpnames.id, storeId: auditStockOpnames.storeId }).from(auditStockOpnames).where(eq(auditStockOpnames.id, id)).limit(1);
+  if (!row || (await isStoreHidden(row.storeId))) return fail('Berita Acara SO tidak ditemukan.', 404);
 
   const patch: Partial<typeof auditStockOpnames.$inferInsert> = {};
   for (const [key, max, requiredLabel] of HEADER_FIELDS) {
@@ -409,6 +411,7 @@ export async function updateSoHeader(id: number, input: Record<string, unknown>)
 }
 
 export async function deleteStockOpname(id: number): Promise<Result<{ id: number }>> {
+  if (!(await getStockOpnameById(id))) return fail('Berita Acara SO tidak ditemukan.', 404);
   const deleted = await db.delete(auditStockOpnames).where(eq(auditStockOpnames.id, id)).returning({ id: auditStockOpnames.id });
   return deleted.length ? { success: true, data: { id } } : fail('Berita Acara SO tidak ditemukan.', 404);
 }
@@ -419,7 +422,11 @@ export async function listStockOpnames(month: string): Promise<StockOpnameListRo
     .select({ row: auditStockOpnames, storeNo: stores.storeNo, storeName: stores.name })
     .from(auditStockOpnames)
     .innerJoin(stores, eq(stores.id, auditStockOpnames.storeId))
-    .where(and(gte(auditStockOpnames.soDate, `${month}-01`), lt(auditStockOpnames.soDate, `${addMonths(month, 1)}-01`)))
+    .where(and(
+      gte(auditStockOpnames.soDate, `${month}-01`),
+      lt(auditStockOpnames.soDate, `${addMonths(month, 1)}-01`),
+      notHiddenStore(auditStockOpnames.storeId, (await getHiddenStores()).storeIds),
+    ))
     .orderBy(desc(auditStockOpnames.soDate), stores.storeNo);
 
   return rows.map(({ row, storeNo, storeName }) => {

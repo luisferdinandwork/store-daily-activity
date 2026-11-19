@@ -19,6 +19,7 @@ import { effectiveToCreatedAt } from '@/lib/transfer-order-metrics';
 import { legsNotProcessedInPrism, resolveTransferPhase } from '@/lib/transfer-order-phase';
 import { refreshReceivingStatus, refreshTransferRegistry } from '@/lib/db/utils/transfer-order-refresh';
 import { getOpsActor } from '@/app/api/ops/tasks/_helpers';
+import { getHiddenStores, withoutHiddenStores } from '@/lib/db/utils/it-only-stores';
 
 // The cron (every 5 min) keeps both warm; a load only re-sweeps BC when the
 // last sweep is older than this, so OPS opening/refreshing the page no longer
@@ -81,7 +82,13 @@ export async function GET(req: Request) {
   // matching against stores.storeNo (see lib/db/utils/item-transfers.ts); a
   // row where BOTH stay null is between locations we don't manage (e.g. a
   // central "DM-RETURN" warehouse) and isn't actionable by any OPS user.
-  const rows = allRows.filter((r) => r.fromStoreId != null || r.toStoreId != null);
+  // IT-only test stores (DUMMY…): a transfer touching one is hidden from non-IT viewers.
+  const hidden = await getHiddenStores();
+  const rows = withoutHiddenStores(
+    withoutHiddenStores(allRows.filter((r) => r.fromStoreId != null || r.toStoreId != null), hidden, (r) => r.fromStoreId),
+    hidden,
+    (r) => r.toStoreId,
+  );
 
   const storeIds = [...new Set(
     rows.flatMap((r) => [r.fromStoreId, r.toStoreId]).filter((v): v is number => v != null),

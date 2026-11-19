@@ -19,6 +19,7 @@ import { and, eq, gte, inArray, isNull, lt } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { jakartaDateKey, jakartaDayRange } from '@/lib/day-bucket';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
+import { getHiddenStores, notHiddenStore } from '@/lib/db/utils/it-only-stores';
 import { todayInStoreTimezone } from '@/lib/schedule-utils';
 import { attendance, monthlyScheduleEntries, schedules, stores, userRoles, users } from '@/lib/db/schema';
 import { getAllTaskOverview, getAreaTaskOverview } from '@/lib/db/utils/tasks';
@@ -48,13 +49,14 @@ export async function GET(req: NextRequest) {
 
   const date = dateParsed.date;
 
+  const hidden = await getHiddenStores();
   const storeRows = await db
     .select({ id: stores.id, storeNo: stores.storeNo, name: stores.name, areaId: stores.areaId })
     .from(stores)
     .where(
       scope.scope === 'area'
         ? and(eq(stores.areaId, scope.areaId), eq(stores.status, 'active'))
-        : eq(stores.status, 'active'),
+        : and(eq(stores.status, 'active'), notHiddenStore(stores.id, hidden.storeIds)),
     );
 
   const storeIds = storeRows.map((s) => s.id);

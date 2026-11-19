@@ -19,6 +19,7 @@ import { jakartaRangeBounds } from '@/lib/finance/dates';
 import { jakartaDateKey } from '@/lib/day-bucket';
 import { pettyCashDescription } from '@/lib/petty-cash-categories';
 import { categoryIsCodeSql } from './petty-cash-categories';
+import { getHiddenStores, notHiddenStore } from './it-only-stores';
 import {
   TX_STATUS_ORDER,
   isTxStatus,
@@ -58,6 +59,11 @@ const isCode = categoryIsCodeSql(tx.categoryId, tx.categoryName);
  * The WHERE clauses of the filters. `withStatus: false` leaves the status out — the summary counts every status
  * under the other filters, so the status pills keep showing the whole breakdown while one is picked.
  */
+/** IT-only test stores (DUMMY…) never reach Finance (IT sees them). */
+async function visibleStoresWhere(): Promise<SQL> {
+  return notHiddenStore(tx.storeId, (await getHiddenStores()).storeIds);
+}
+
 function filterWhere(f: TransactionFilters, withStatus: boolean): SQL | undefined {
   const { start, end } = jakartaRangeBounds(f.from, f.to);
   const conditions: (SQL | undefined)[] = [
@@ -167,12 +173,13 @@ async function selectTransactionRows(
 
 /** Every request matching the filters (page ignored) — what the Excel export writes. */
 export async function getPettyCashTransactionsForExport(f: TransactionFilters): Promise<TransactionRow[]> {
-  return selectTransactionRows(filterWhere(f, true), orderBy(f.sort, f.dir));
+  return selectTransactionRows(and(filterWhere(f, true), await visibleStoresWhere()), orderBy(f.sort, f.dir));
 }
 
 export async function getPettyCashTransactions(f: TransactionQuery): Promise<TransactionsPage> {
   // Every filter except the status drives the summary; the status only narrows the rows below.
-  const scope = filterWhere(f, false);
+  const visible = await visibleStoresWhere();
+  const scope = and(filterWhere(f, false), visible);
 
   const [storeOptions, categoryRows, statusRows] = await Promise.all([
     db
@@ -185,7 +192,7 @@ export async function getPettyCashTransactions(f: TransactionQuery): Promise<Tra
       })
       .from(stores)
       .innerJoin(areas, eq(areas.id, stores.areaId))
-      .where(ne(stores.status, 'ready_to_open'))
+      .where(and(ne(stores.status, 'ready_to_open'), notHiddenStore(stores.id, (await getHiddenStores()).storeIds)))
       .orderBy(stores.storeNo),
     db
       .selectDistinct({ name: tx.categoryName })
@@ -237,7 +244,7 @@ export async function getPettyCashTransactions(f: TransactionQuery): Promise<Tra
   const data =
     matching === 0
       ? []
-      : await selectTransactionRows(filterWhere(f, true), orderBy(f.sort, f.dir), {
+      : await selectTransactionRows(and(filterWhere(f, true), visible), orderBy(f.sort, f.dir), {
           limit: TX_PAGE_SIZE,
           offset: (page - 1) * TX_PAGE_SIZE,
         });

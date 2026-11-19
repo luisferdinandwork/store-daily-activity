@@ -13,6 +13,7 @@ import { impactVisits, stores, areas } from '@/lib/db/schema';
 import { resolveOpsScope } from '@/lib/performance/ops-scope';
 import { computeImpactVisitPermissionFlags, serializeImpactVisit } from '@/lib/db/utils/impact-visits';
 import { uploadToStorage } from '@/lib/storage';
+import { isStoreHidden } from '@/lib/db/utils/it-only-stores';
 
 const ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp'];
 const MAX_SIZE_MB = 10;
@@ -31,6 +32,8 @@ async function loadVisitWithStoreArea(id: number) {
     .leftJoin(areas, eq(stores.areaId, areas.id))
     .where(eq(impactVisits.id, id))
     .limit(1);
+  // IT-only test stores (DUMMY…) don't exist for non-IT viewers.
+  if (row && (await isStoreHidden(row.visit.storeId))) return null;
   return row ?? null;
 }
 
