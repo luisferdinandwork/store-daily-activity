@@ -285,9 +285,10 @@ export async function submitCekUangModal(
 
     const total = totalAmount(normalized);
 
-    // Employees no longer have to stock every denomination. They just need
-    // some cash in the drawer; a total below the daily max is allowed and the
-    // task is flagged `isPartial` for Ops (status still completes normally).
+    // Employees don't have to stock every denomination, but the float must
+    // add up to exactly the daily amount (Rp 500.000) before it can be
+    // submitted (2026-11-20, by request — a below-max total used to complete
+    // as `isPartial`). Over the max is refused by assertWithinDailyLimit.
     if (total <= 0) {
       return {
         success: false,
@@ -296,6 +297,15 @@ export async function submitCekUangModal(
     }
 
     const summary = assertWithinDailyLimit(total);
+
+    if (summary.remainingAmount > 0) {
+      return {
+        success: false,
+        error:
+          `Uang modal harus penuh ${formatRupiah(CEK_UANG_MODAL_MAX_TOTAL)} sebelum submit. ` +
+          `Total saat ini ${formatRupiah(total)}, kurang ${formatRupiah(summary.remainingAmount)}.`,
+      };
+    }
 
     const now = new Date();
 

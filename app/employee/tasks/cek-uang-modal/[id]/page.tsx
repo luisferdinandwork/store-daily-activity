@@ -300,18 +300,20 @@ export default function CekUangModalDetailPage() {
   const isEmpty = totalAmount <= 0;
   // Some denominations left at 0 — only a warning once the task is done.
   const hasEmptyDenoms = readonly && emptyRows > 0 && totalAmount > 0;
-  // "Uang modal belum penuh" — below the daily max. Allowed: the task still
-  // completes, it's just marked for Ops. `taskData.isPartial` is the stored
-  // mark after submit; before that we derive it live from the running total.
+  // "Uang modal belum penuh" — below the daily max. Since 2026-11-20 it blocks
+  // submit (the float must be exactly the daily amount). `taskData.isPartial`
+  // is the stored mark on tasks submitted before that rule.
   const isPartial = readonly
     ? taskData?.isPartial === true
     : (!isEmpty && !isOverLimit && totalAmount < maxAmount);
-  const canSubmit = !disabled && Number.isSafeInteger(taskIdNum) && taskIdNum > 0 && !isEmpty && !isOverLimit;
+  const isFull = totalAmount === maxAmount;
+  const canSubmit = !disabled && Number.isSafeInteger(taskIdNum) && taskIdNum > 0 && isFull;
 
   const submitHint = (() => {
     if (locked) return 'Selesaikan validasi akses di atas sebelum submit.';
-    if (isEmpty) return 'Isi minimal satu pecahan uang modal.';
+    if (isEmpty) return `Isi pecahan uang modal sampai ${formatRupiah(maxAmount)}.`;
     if (isOverLimit) return `Total uang modal maksimal ${formatRupiah(maxAmount)}.`;
+    if (!isFull) return `Kurang ${formatRupiah(remainingAmount)} — uang modal harus penuh ${formatRupiah(maxAmount)}.`;
     return '';
   })();
 
@@ -510,7 +512,7 @@ export default function CekUangModalDetailPage() {
                     <p>
                       {readonly
                         ? 'Task tetap selesai — ditandai untuk Ops.'
-                        : 'Tidak masalah — task tetap bisa diselesaikan dan akan ditandai.'}
+                        : `Task baru bisa disubmit setelah total uang modal penuh ${formatRupiah(maxAmount)}.`}
                     </p>
                   </Notice>
                 )}

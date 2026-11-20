@@ -153,7 +153,7 @@ async function run() {
     check('Submit API accepts valid colleague attendance and location', inside.body.success, true);
     check('Submission records the checked-in actor schedule', inside.body.data?.completedByScheduleId, checked.id);
   } else {
-    const modalSubmitted = await submitCekUangModal({ taskId: modal.id, scheduleId: creator.id, userId: ids[1], storeId: store.id, geo: { lat: -6.17, lng: 106.75 }, denominations: [{ denominationValue: 100000, quantity: 2 }] });
+    const modalSubmitted = await submitCekUangModal({ taskId: modal.id, scheduleId: creator.id, userId: ids[1], storeId: store.id, geo: { lat: -6.17, lng: 106.75 }, denominations: [{ denominationValue: 100000, quantity: 5 }] });
     check('Cek Uang Modal utility resolves actor despite stale creator schedule', modalSubmitted.success && modalSubmitted.data.task.scheduleId, checked.id);
     const submitted = await submitSetoran({ scheduleId: checked.id, userId: ids[1], storeId: store.id, actualReceivedAmount: '0', storedAmount: '0', resiPhoto: '', atmCardSelfiePhoto: '', cashierPhoto: 'test/cash.jpg', atmCardPhoto: 'test/atm.jpg' });
     check('Checked-in colleague can submit creator\'s shared task', submitted.success, true);
